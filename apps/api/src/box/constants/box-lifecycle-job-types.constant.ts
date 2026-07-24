@@ -17,3 +17,15 @@ export const BOX_LIFECYCLE_JOB_TYPES: ReadonlySet<JobType> = new Set([
 export function isBoxLifecycleJobType(jobType: JobType): boolean {
   return BOX_LIFECYCLE_JOB_TYPES.has(jobType)
 }
+
+export const BOX_RUNTIME_GENERATION_JOB_TYPES: ReadonlySet<JobType> = new Set([
+  JobType.CREATE_BOX,
+  JobType.START_BOX,
+  JobType.STOP_BOX,
+  JobType.DESTROY_BOX,
+  JobType.RECOVER_BOX,
+])
+
+export function advancesBoxRuntimeGeneration(jobType: JobType): boolean {
+  return BOX_RUNTIME_GENERATION_JOB_TYPES.has(jobType)
+}

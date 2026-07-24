@@ -40,12 +40,15 @@ export const JobsApiAxiosParamCreator = function (configuration?: Configuration)
          * 
          * @summary Get job details
          * @param {string} jobId ID of the job
+         * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        getJob: async (jobId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        getJob: async (jobId: string, xBoxLiteRunnerEpoch: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'jobId' is not null or undefined
             assertParamExists('getJob', 'jobId', jobId)
+            // verify required parameter 'xBoxLiteRunnerEpoch' is not null or undefined
+            assertParamExists('getJob', 'xBoxLiteRunnerEpoch', xBoxLiteRunnerEpoch)
             const localVarPath = `/jobs/{jobId}`
                 .replace('{jobId}', encodeURIComponent(String(jobId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
@@ -67,6 +70,9 @@ export const JobsApiAxiosParamCreator = function (configuration?: Configuration)
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
+            if (xBoxLiteRunnerEpoch != null) {
+                localVarHeaderParameter['X-BoxLite-Runner-Epoch'] = String(xBoxLiteRunnerEpoch);
+            }
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -79,6 +85,7 @@ export const JobsApiAxiosParamCreator = function (configuration?: Configuration)
         /**
          * Returns a paginated list of jobs for the runner, optionally filtered by status.
          * @summary List jobs for the runner
+         * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
          * @param {number} [page] Page number of the results
          * @param {number} [limit] Maximum number of jobs to return (default: 100, max: 500)
          * @param {JobStatus} [status] Filter jobs by status
@@ -86,7 +93,9 @@ export const JobsApiAxiosParamCreator = function (configuration?: Configuration)
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        listJobs: async (page?: number, limit?: number, status?: JobStatus, offset?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        listJobs: async (xBoxLiteRunnerEpoch: string, page?: number, limit?: number, status?: JobStatus, offset?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'xBoxLiteRunnerEpoch' is not null or undefined
+            assertParamExists('listJobs', 'xBoxLiteRunnerEpoch', xBoxLiteRunnerEpoch)
             const localVarPath = `/jobs`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -123,6 +132,9 @@ export const JobsApiAxiosParamCreator = function (configuration?: Configuration)
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
+            if (xBoxLiteRunnerEpoch != null) {
+                localVarHeaderParameter['X-BoxLite-Runner-Epoch'] = String(xBoxLiteRunnerEpoch);
+            }
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -135,12 +147,15 @@ export const JobsApiAxiosParamCreator = function (configuration?: Configuration)
         /**
          * Long poll endpoint for runners to fetch pending jobs. Returns immediately if jobs are available, otherwise waits up to timeout seconds.
          * @summary Long poll for jobs
+         * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
          * @param {number} [timeout] Timeout in seconds for long polling (default: 30, max: 60)
          * @param {number} [limit] Maximum number of jobs to return (default: 10, max: 100)
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        pollJobs: async (timeout?: number, limit?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        pollJobs: async (xBoxLiteRunnerEpoch: string, timeout?: number, limit?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'xBoxLiteRunnerEpoch' is not null or undefined
+            assertParamExists('pollJobs', 'xBoxLiteRunnerEpoch', xBoxLiteRunnerEpoch)
             const localVarPath = `/jobs/poll`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -169,6 +184,9 @@ export const JobsApiAxiosParamCreator = function (configuration?: Configuration)
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
+            if (xBoxLiteRunnerEpoch != null) {
+                localVarHeaderParameter['X-BoxLite-Runner-Epoch'] = String(xBoxLiteRunnerEpoch);
+            }
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -182,13 +200,16 @@ export const JobsApiAxiosParamCreator = function (configuration?: Configuration)
          * 
          * @summary Update job status
          * @param {string} jobId ID of the job
+         * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
          * @param {UpdateJobStatus} updateJobStatus 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        updateJobStatus: async (jobId: string, updateJobStatus: UpdateJobStatus, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        updateJobStatus: async (jobId: string, xBoxLiteRunnerEpoch: string, updateJobStatus: UpdateJobStatus, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'jobId' is not null or undefined
             assertParamExists('updateJobStatus', 'jobId', jobId)
+            // verify required parameter 'xBoxLiteRunnerEpoch' is not null or undefined
+            assertParamExists('updateJobStatus', 'xBoxLiteRunnerEpoch', xBoxLiteRunnerEpoch)
             // verify required parameter 'updateJobStatus' is not null or undefined
             assertParamExists('updateJobStatus', 'updateJobStatus', updateJobStatus)
             const localVarPath = `/jobs/{jobId}/status`
@@ -213,6 +234,9 @@ export const JobsApiAxiosParamCreator = function (configuration?: Configuration)
             localVarHeaderParameter['Content-Type'] = 'application/json';
             localVarHeaderParameter['Accept'] = 'application/json';
 
+            if (xBoxLiteRunnerEpoch != null) {
+                localVarHeaderParameter['X-BoxLite-Runner-Epoch'] = String(xBoxLiteRunnerEpoch);
+            }
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -236,11 +260,12 @@ export const JobsApiFp = function(configuration?: Configuration) {
          * 
          * @summary Get job details
          * @param {string} jobId ID of the job
+         * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async getJob(jobId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Job>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getJob(jobId, options);
+        async getJob(jobId: string, xBoxLiteRunnerEpoch: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Job>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getJob(jobId, xBoxLiteRunnerEpoch, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['JobsApi.getJob']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -248,6 +273,7 @@ export const JobsApiFp = function(configuration?: Configuration) {
         /**
          * Returns a paginated list of jobs for the runner, optionally filtered by status.
          * @summary List jobs for the runner
+         * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
          * @param {number} [page] Page number of the results
          * @param {number} [limit] Maximum number of jobs to return (default: 100, max: 500)
          * @param {JobStatus} [status] Filter jobs by status
@@ -255,8 +281,8 @@ export const JobsApiFp = function(configuration?: Configuration) {
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async listJobs(page?: number, limit?: number, status?: JobStatus, offset?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PaginatedJobs>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.listJobs(page, limit, status, offset, options);
+        async listJobs(xBoxLiteRunnerEpoch: string, page?: number, limit?: number, status?: JobStatus, offset?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PaginatedJobs>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.listJobs(xBoxLiteRunnerEpoch, page, limit, status, offset, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['JobsApi.listJobs']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -264,13 +290,14 @@ export const JobsApiFp = function(configuration?: Configuration) {
         /**
          * Long poll endpoint for runners to fetch pending jobs. Returns immediately if jobs are available, otherwise waits up to timeout seconds.
          * @summary Long poll for jobs
+         * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
          * @param {number} [timeout] Timeout in seconds for long polling (default: 30, max: 60)
          * @param {number} [limit] Maximum number of jobs to return (default: 10, max: 100)
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async pollJobs(timeout?: number, limit?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PollJobsResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.pollJobs(timeout, limit, options);
+        async pollJobs(xBoxLiteRunnerEpoch: string, timeout?: number, limit?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PollJobsResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.pollJobs(xBoxLiteRunnerEpoch, timeout, limit, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['JobsApi.pollJobs']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -279,12 +306,13 @@ export const JobsApiFp = function(configuration?: Configuration) {
          * 
          * @summary Update job status
          * @param {string} jobId ID of the job
+         * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
          * @param {UpdateJobStatus} updateJobStatus 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async updateJobStatus(jobId: string, updateJobStatus: UpdateJobStatus, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Job>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.updateJobStatus(jobId, updateJobStatus, options);
+        async updateJobStatus(jobId: string, xBoxLiteRunnerEpoch: string, updateJobStatus: UpdateJobStatus, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Job>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.updateJobStatus(jobId, xBoxLiteRunnerEpoch, updateJobStatus, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['JobsApi.updateJobStatus']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -302,15 +330,17 @@ export const JobsApiFactory = function (configuration?: Configuration, basePath?
          * 
          * @summary Get job details
          * @param {string} jobId ID of the job
+         * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        getJob(jobId: string, options?: RawAxiosRequestConfig): AxiosPromise<Job> {
-            return localVarFp.getJob(jobId, options).then((request) => request(axios, basePath));
+        getJob(jobId: string, xBoxLiteRunnerEpoch: string, options?: RawAxiosRequestConfig): AxiosPromise<Job> {
+            return localVarFp.getJob(jobId, xBoxLiteRunnerEpoch, options).then((request) => request(axios, basePath));
         },
         /**
          * Returns a paginated list of jobs for the runner, optionally filtered by status.
          * @summary List jobs for the runner
+         * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
          * @param {number} [page] Page number of the results
          * @param {number} [limit] Maximum number of jobs to return (default: 100, max: 500)
          * @param {JobStatus} [status] Filter jobs by status
@@ -318,30 +348,32 @@ export const JobsApiFactory = function (configuration?: Configuration, basePath?
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        listJobs(page?: number, limit?: number, status?: JobStatus, offset?: number, options?: RawAxiosRequestConfig): AxiosPromise<PaginatedJobs> {
-            return localVarFp.listJobs(page, limit, status, offset, options).then((request) => request(axios, basePath));
+        listJobs(xBoxLiteRunnerEpoch: string, page?: number, limit?: number, status?: JobStatus, offset?: number, options?: RawAxiosRequestConfig): AxiosPromise<PaginatedJobs> {
+            return localVarFp.listJobs(xBoxLiteRunnerEpoch, page, limit, status, offset, options).then((request) => request(axios, basePath));
         },
         /**
          * Long poll endpoint for runners to fetch pending jobs. Returns immediately if jobs are available, otherwise waits up to timeout seconds.
          * @summary Long poll for jobs
+         * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
          * @param {number} [timeout] Timeout in seconds for long polling (default: 30, max: 60)
          * @param {number} [limit] Maximum number of jobs to return (default: 10, max: 100)
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        pollJobs(timeout?: number, limit?: number, options?: RawAxiosRequestConfig): AxiosPromise<PollJobsResponse> {
-            return localVarFp.pollJobs(timeout, limit, options).then((request) => request(axios, basePath));
+        pollJobs(xBoxLiteRunnerEpoch: string, timeout?: number, limit?: number, options?: RawAxiosRequestConfig): AxiosPromise<PollJobsResponse> {
+            return localVarFp.pollJobs(xBoxLiteRunnerEpoch, timeout, limit, options).then((request) => request(axios, basePath));
         },
         /**
          * 
          * @summary Update job status
          * @param {string} jobId ID of the job
+         * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
          * @param {UpdateJobStatus} updateJobStatus 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        updateJobStatus(jobId: string, updateJobStatus: UpdateJobStatus, options?: RawAxiosRequestConfig): AxiosPromise<Job> {
-            return localVarFp.updateJobStatus(jobId, updateJobStatus, options).then((request) => request(axios, basePath));
+        updateJobStatus(jobId: string, xBoxLiteRunnerEpoch: string, updateJobStatus: UpdateJobStatus, options?: RawAxiosRequestConfig): AxiosPromise<Job> {
+            return localVarFp.updateJobStatus(jobId, xBoxLiteRunnerEpoch, updateJobStatus, options).then((request) => request(axios, basePath));
         },
     };
 };
@@ -354,16 +386,18 @@ export class JobsApi extends BaseAPI {
      * 
      * @summary Get job details
      * @param {string} jobId ID of the job
+     * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public getJob(jobId: string, options?: RawAxiosRequestConfig) {
-        return JobsApiFp(this.configuration).getJob(jobId, options).then((request) => request(this.axios, this.basePath));
+    public getJob(jobId: string, xBoxLiteRunnerEpoch: string, options?: RawAxiosRequestConfig) {
+        return JobsApiFp(this.configuration).getJob(jobId, xBoxLiteRunnerEpoch, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Returns a paginated list of jobs for the runner, optionally filtered by status.
      * @summary List jobs for the runner
+     * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
      * @param {number} [page] Page number of the results
      * @param {number} [limit] Maximum number of jobs to return (default: 100, max: 500)
      * @param {JobStatus} [status] Filter jobs by status
@@ -371,32 +405,34 @@ export class JobsApi extends BaseAPI {
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public listJobs(page?: number, limit?: number, status?: JobStatus, offset?: number, options?: RawAxiosRequestConfig) {
-        return JobsApiFp(this.configuration).listJobs(page, limit, status, offset, options).then((request) => request(this.axios, this.basePath));
+    public listJobs(xBoxLiteRunnerEpoch: string, page?: number, limit?: number, status?: JobStatus, offset?: number, options?: RawAxiosRequestConfig) {
+        return JobsApiFp(this.configuration).listJobs(xBoxLiteRunnerEpoch, page, limit, status, offset, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * Long poll endpoint for runners to fetch pending jobs. Returns immediately if jobs are available, otherwise waits up to timeout seconds.
      * @summary Long poll for jobs
+     * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
      * @param {number} [timeout] Timeout in seconds for long polling (default: 30, max: 60)
      * @param {number} [limit] Maximum number of jobs to return (default: 10, max: 100)
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public pollJobs(timeout?: number, limit?: number, options?: RawAxiosRequestConfig) {
-        return JobsApiFp(this.configuration).pollJobs(timeout, limit, options).then((request) => request(this.axios, this.basePath));
+    public pollJobs(xBoxLiteRunnerEpoch: string, timeout?: number, limit?: number, options?: RawAxiosRequestConfig) {
+        return JobsApiFp(this.configuration).pollJobs(xBoxLiteRunnerEpoch, timeout, limit, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
      * 
      * @summary Update job status
      * @param {string} jobId ID of the job
+     * @param {string} xBoxLiteRunnerEpoch Fences runner job polling and status updates to the current process epoch
      * @param {UpdateJobStatus} updateJobStatus 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public updateJobStatus(jobId: string, updateJobStatus: UpdateJobStatus, options?: RawAxiosRequestConfig) {
-        return JobsApiFp(this.configuration).updateJobStatus(jobId, updateJobStatus, options).then((request) => request(this.axios, this.basePath));
+    public updateJobStatus(jobId: string, xBoxLiteRunnerEpoch: string, updateJobStatus: UpdateJobStatus, options?: RawAxiosRequestConfig) {
+        return JobsApiFp(this.configuration).updateJobStatus(jobId, xBoxLiteRunnerEpoch, updateJobStatus, options).then((request) => request(this.axios, this.basePath));
     }
 }
 

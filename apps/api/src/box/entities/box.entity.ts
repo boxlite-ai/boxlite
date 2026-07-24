@@ -165,6 +165,19 @@ export class Box {
   @Column({ type: 'uuid', nullable: true })
   lifecycleJobId: string | null = null
 
+  @Column({
+    type: 'bigint',
+    default: 0,
+    transformer: { to: (value: number) => value, from: (value: string) => Number(value) },
+  })
+  runtimeGeneration = 0
+
+  @Column({ type: 'boolean', default: false })
+  runtimeAuthorized = false
+
+  @Column({ type: 'boolean', default: false })
+  runtimeUnavailable = false
+
   @Column({ type: 'character varying' })
   authToken = nanoid(32).toLowerCase()
 
@@ -274,6 +287,8 @@ export class Box {
 
     if (this.state === BoxState.DESTROYED || this.state === BoxState.ARCHIVED) {
       changes.runnerId = null
+      changes.runtimeAuthorized = false
+      changes.runtimeUnavailable = false
     }
 
     return changes

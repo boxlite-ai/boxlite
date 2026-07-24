@@ -30,6 +30,14 @@ export abstract class BoxAction {
 
   abstract run(box: Box, lockCode: LockCode): Promise<SyncState>
 
+  protected async reloadBoxAfterRunnerJob(boxId: string): Promise<Box> {
+    const currentBox = await this.boxRepository.findOne({ where: { id: boxId } })
+    if (!currentBox) {
+      throw new Error(`box ${boxId} disappeared after creating its runner job`)
+    }
+    return currentBox
+  }
+
   protected async updateBoxState(
     box: Box,
     state: BoxState,

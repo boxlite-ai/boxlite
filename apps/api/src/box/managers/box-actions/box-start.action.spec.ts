@@ -28,7 +28,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     box.desiredState = BoxDesiredState.STARTED
     box.pending = true
 
-    const ownRunner = { id: ownRunnerId, state: RunnerState.READY } as Runner
+    const ownRunner = { id: ownRunnerId, state: RunnerState.READY, apiVersion: '2' } as Runner
 
     // findOneOrFail must return the runner that matches the requested id so we can
     // prove the action selected box.runnerId and nothing else.
@@ -54,6 +54,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     const lockCode = new LockCode('lock-1')
     const updatedFields: Partial<Box>[] = []
     const boxRepository = {
+      findOne: jest.fn(async () => box),
       update: jest.fn(async (_id: string, opts: { updateData: Partial<Box> }) => {
         updatedFields.push(opts.updateData)
         return box
@@ -101,6 +102,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     const lockCode = new LockCode('lock-2')
     const updatedFields: Partial<Box>[] = []
     const boxRepository = {
+      findOne: jest.fn(async () => box),
       update: jest.fn(async (_id: string, opts: { updateData: Partial<Box> }) => {
         updatedFields.push(opts.updateData)
         return box
@@ -126,6 +128,51 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     expect(runnerAdapterFactory.create).not.toHaveBeenCalled()
     expect(updatedFields.some((u) => u.state === BoxState.ERROR)).toBe(true)
   })
+
+  it('rejects a v0 runner before invoking the external start side effect', async () => {
+    const box = new Box('region-1', 'legacy-box')
+    Object.assign(box, {
+      runnerId: 'runner-v0',
+      state: BoxState.STOPPED,
+      desiredState: BoxDesiredState.STARTED,
+      pending: true,
+    })
+    const runnerService = {
+      findOneOrFail: jest.fn(async () => ({
+        id: 'runner-v0',
+        state: RunnerState.READY,
+        apiVersion: '0',
+      })),
+    }
+    const runnerAdapterFactory = { create: jest.fn() }
+    const lockCode = new LockCode('lock-v0')
+    const updatedFields: Partial<Box>[] = []
+    const boxRepository = {
+      update: jest.fn(async (_id: string, opts: { updateData: Partial<Box> }) => {
+        updatedFields.push(opts.updateData)
+        return box
+      }),
+    }
+    const action = new BoxStartAction(
+      runnerService as any,
+      runnerAdapterFactory as any,
+      boxRepository as any,
+      { findOne: jest.fn() } as any,
+      {} as any,
+      { getCode: jest.fn(async () => lockCode) } as any,
+      {} as any,
+    )
+
+    await (action as BoxAction).run(box, lockCode)
+
+    expect(runnerAdapterFactory.create).not.toHaveBeenCalled()
+    expect(updatedFields).toContainEqual(
+      expect.objectContaining({
+        state: BoxState.ERROR,
+        errorReason: expect.stringContaining('cannot prove actual runtime state'),
+      }),
+    )
+  })
 })
 
 describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => {
@@ -139,7 +186,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
     box.desiredState = BoxDesiredState.STARTED
     box.pending = true
 
-    const runner = { id: runnerId, state: RunnerState.READY } as Runner
+    const runner = { id: runnerId, state: RunnerState.READY, apiVersion: '2' } as Runner
     const runnerService = { findOneOrFail: jest.fn(async () => runner) }
 
     const createBox = jest.fn(async () => undefined)
@@ -148,6 +195,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
     const lockCode = new LockCode('lock-boot-1')
     const updatedFields: Partial<Box>[] = []
     const boxRepository = {
+      findOne: jest.fn(async () => box),
       update: jest.fn(async (_id: string, opts: { updateData: Partial<Box> }) => {
         updatedFields.push(opts.updateData)
         return box
@@ -182,7 +230,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
     box.desiredState = BoxDesiredState.STARTED
     box.pending = true
 
-    const runner = { id: runnerId, state: RunnerState.READY } as Runner
+    const runner = { id: runnerId, state: RunnerState.READY, apiVersion: '2' } as Runner
     const runnerService = { findOneOrFail: jest.fn(async () => runner) }
 
     const createBox = jest.fn(async () => undefined)
@@ -213,5 +261,69 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
 
     expect(createBox).not.toHaveBeenCalled()
     expect(updatedFields.some((u) => u.state === BoxState.ERROR)).toBe(true)
+  })
+})
+
+describe('BoxStartAction previous runner cleanup', () => {
+  it('does not create a destructive lifecycle job when the previous runner is v2', async () => {
+    const currentRunnerId = 'runner-current'
+    const previousRunnerId = 'runner-previous'
+    const box = new Box('region-1', 'transferred-box')
+    Object.assign(box, {
+      runnerId: currentRunnerId,
+      prevRunnerId: previousRunnerId,
+      state: BoxState.STARTING,
+      desiredState: BoxDesiredState.STARTED,
+      pending: true,
+      runtimeGeneration: 8,
+      runtimeAuthorized: false,
+      lifecycleJobId: 'current-start-job',
+    })
+    const currentRunner = {
+      id: currentRunnerId,
+      apiVersion: '2',
+      state: RunnerState.READY,
+    } as Runner
+    const previousRunner = {
+      id: previousRunnerId,
+      apiVersion: '2',
+      state: RunnerState.READY,
+    } as Runner
+    const runnerService = {
+      findOneOrFail: jest.fn(async () => currentRunner),
+      findOne: jest.fn(async () => previousRunner),
+    }
+    const destroyBox = jest.fn(async () => undefined)
+    const runnerAdapterFactory = {
+      create: jest.fn(async (runner: Runner) =>
+        runner.id === currentRunnerId
+          ? ({ boxInfo: jest.fn(async () => ({ state: BoxState.STARTED })) } as any)
+          : ({ destroyBox } as any),
+      ),
+    }
+    const lockCode = new LockCode('lock-transfer')
+    const boxRepository = {
+      update: jest.fn(async (_id: string, opts: { updateData: Partial<Box> }) => {
+        Object.assign(box, opts.updateData)
+        return box
+      }),
+    }
+    const redisLockProvider = { getCode: jest.fn(async () => lockCode) }
+    const action = new BoxStartAction(
+      runnerService as any,
+      runnerAdapterFactory as any,
+      boxRepository as any,
+      {} as any,
+      {} as any,
+      redisLockProvider as any,
+      {} as any,
+    )
+
+    await (action as BoxAction).run(box, lockCode)
+
+    expect(destroyBox).not.toHaveBeenCalled()
+    expect(box.prevRunnerId).toBeNull()
+    expect(box.runtimeGeneration).toBe(8)
+    expect(box.lifecycleJobId).toBe('current-start-job')
   })
 })

@@ -104,6 +104,7 @@ model_region.go
 model_region_type.go
 model_resize_box.go
 model_runner.go
+model_runner_box_observation.go
 model_runner_full.go
 model_runner_health_metrics.go
 model_runner_healthcheck.go

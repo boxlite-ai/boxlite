@@ -16,7 +16,7 @@ export enum MeteringMode {
   PRESERVE = 'preserve',
 }
 
-type MeteringBox = Pick<Box, 'organizationId' | 'state' | 'desiredState'>
+type MeteringBox = Pick<Box, 'organizationId' | 'state' | 'desiredState' | 'runtimeUnavailable'>
 
 const NON_BILLABLE_STATES = new Set([BoxState.ERROR, BoxState.ARCHIVED, BoxState.DESTROYING, BoxState.DESTROYED])
 
@@ -25,6 +25,14 @@ export class MeteringPolicy {
   resolve(box: MeteringBox): MeteringMode {
     if (box.organizationId === BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
       return MeteringMode.NONE
+    }
+
+    if (box.state === BoxState.ERROR && box.runtimeUnavailable && box.desiredState === BoxDesiredState.STARTED) {
+      return MeteringMode.DISK_ONLY
+    }
+
+    if (box.state === BoxState.ERROR && box.desiredState === BoxDesiredState.STOPPED) {
+      return MeteringMode.DISK_ONLY
     }
 
     if (box.desiredState === BoxDesiredState.DESTROYED || NON_BILLABLE_STATES.has(box.state)) {

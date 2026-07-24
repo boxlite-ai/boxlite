@@ -436,6 +436,7 @@ type BillingAPIBillingPaymentControllerCreateTopUpRequest struct {
 	idempotencyKey *string
 }
 
+// Stable client-generated key reused when retrying the same top-up request
 func (r BillingAPIBillingPaymentControllerCreateTopUpRequest) IdempotencyKey(idempotencyKey string) BillingAPIBillingPaymentControllerCreateTopUpRequest {
 	r.idempotencyKey = &idempotencyKey
 	return r

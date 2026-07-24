@@ -81,6 +81,7 @@ export * from './region';
 export * from './region-type';
 export * from './resize-box';
 export * from './runner';
+export * from './runner-box-observation';
 export * from './runner-full';
 export * from './runner-health-metrics';
 export * from './runner-healthcheck';

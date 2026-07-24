@@ -189,7 +189,7 @@ const configuration = new Configuration();
 const apiInstance = new BillingApi(configuration);
 
 let organizationId: string; // (default to undefined)
-let idempotencyKey: string; // (default to undefined)
+let idempotencyKey: string; //Stable client-generated key reused when retrying the same top-up request (default to undefined)
 
 const { status, data } = await apiInstance.billingPaymentControllerCreateTopUp(
     organizationId,
@@ -202,7 +202,7 @@ const { status, data } = await apiInstance.billingPaymentControllerCreateTopUp(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **organizationId** | [**string**] |  | defaults to undefined|
-| **idempotencyKey** | [**string**] |  | defaults to undefined|
+| **idempotencyKey** | [**string**] | Stable client-generated key reused when retrying the same top-up request | defaults to undefined|
 
 
 ### Return type

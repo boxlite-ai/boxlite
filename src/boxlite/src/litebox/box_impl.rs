@@ -181,8 +181,22 @@ impl BoxImpl {
     }
 
     pub(crate) fn info(&self) -> BoxInfo {
-        let state = self.state.read();
+        let state = self.state.read().clone();
         BoxInfo::new(&self.config, &state)
+    }
+
+    pub(crate) fn runtime_info(&self) -> BoxInfo {
+        let state = self.state.read().clone();
+        let probe = crate::runtime::liveness::RuntimeLivenessProbe::capture();
+        probe.project(&self.config, &state)
+    }
+
+    pub(crate) fn info_with_probe(
+        &self,
+        probe: &crate::runtime::liveness::RuntimeLivenessProbe,
+    ) -> BoxInfo {
+        let state = self.state.read().clone();
+        probe.project(&self.config, &state)
     }
 
     // ========================================================================

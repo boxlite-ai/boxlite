@@ -148,6 +148,37 @@ make test:rest:e2e AUTH=oidc
 Both modes call `/v1/me` to refresh the route `path_prefix`; set
 `BOXLITE_E2E_PREFIX` only when you need to override that discovery.
 
+### Local billing system tests
+
+The authoritative billing ST is skipped unless explicitly enabled. The normal
+workload-failure, stop, destroy, theoretical-pricing, and wallet-ledger case
+does not require root:
+
+```bash
+source .venv/bin/activate
+BOXLITE_E2E_BILLING_ST=1 \
+  make test:rest:e2e AUTH=api-key FILTER=failed_workload_keeps_full_billing
+```
+
+The shim-crash, runner-outage, and PostgreSQL-outage cases inject host faults
+and require root plus a second opt-in:
+
+```bash
+sudo env \
+  HOME="$HOME" USER="$USER" LOGNAME="$LOGNAME" \
+  BOXLITE_E2E_AUTH=api-key \
+  BOXLITE_E2E_BILLING_ST=1 \
+  BOXLITE_E2E_PRIVILEGED_FAULTS=1 \
+  PYTHONDONTWRITEBYTECODE=1 \
+  .venv/bin/python -m pytest \
+  -p no:cacheprovider scripts/test/e2e/cases/test_billing_metering_st.py -v
+```
+
+The privileged cases refuse to run unless the API and PostgreSQL targets are
+loopback, the database is exactly `boxlite_dev`, and the runtime home is
+`/var/lib/boxlite`. The PostgreSQL case also arms a bounded systemd recovery
+guard before stopping the database.
+
 The C, Go, and Node SDK entry-point cases currently skip under `AUTH=oidc`
 because those SDK smoke drivers still expose only API-key credential types.
 The Python SDK REST path does run under both auth modes because its

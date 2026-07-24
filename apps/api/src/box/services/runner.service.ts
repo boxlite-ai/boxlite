@@ -36,6 +36,7 @@ import { RunnerDto } from '../dto/runner.dto'
 import { RunnerEvents } from '../constants/runner-events'
 import { RunnerStateUpdatedEvent } from '../events/runner-state-updated.event'
 import { RunnerDeletedEvent } from '../events/runner-deleted.event'
+import { RunnerUnschedulableUpdatedEvent } from '../events/runner-unschedulable-updated.event'
 import { generateApiKeyValue } from '../../common/utils/api-key'
 import { RunnerFullDto } from '../dto/runner-full.dto'
 import { InjectRedis } from '@nestjs-modules/ioredis'
@@ -44,6 +45,9 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import { RunnerBoxObservationDto } from '../dto/runner-health.dto'
+import { RuntimeLeaseService } from './runtime-lease.service'
+import { RuntimeOrphanCleanupService } from './runtime-orphan-cleanup.service'
 
 @Injectable()
 export class RunnerService {
@@ -64,6 +68,8 @@ export class RunnerService {
     private readonly dataSource: DataSource,
     @InjectRedis()
     private readonly redis: Redis,
+    private readonly runtimeLeaseService: RuntimeLeaseService,
+    private readonly runtimeOrphanCleanupService: RuntimeOrphanCleanupService,
   ) {
     this.scoreConfig = this.getAvailabilityScoreConfig()
   }
@@ -282,6 +288,7 @@ export class RunnerService {
 
   async findAvailableRunners(params: GetRunnerParams): Promise<Runner[]> {
     const runnerFilter: FindOptionsWhere<Runner> = {
+      apiVersion: '2',
       state: RunnerState.READY,
       unschedulable: Not(true),
       draining: Not(true),
@@ -370,6 +377,10 @@ export class RunnerService {
       diskGiB?: number
     },
     appVersion?: string,
+    runnerEpoch?: string,
+    runnerIncarnation?: number,
+    sequence?: number,
+    boxes?: RunnerBoxObservationDto[],
   ): Promise<void> {
     const runner = await this.findOne(runnerId)
     if (!runner) {
@@ -380,6 +391,21 @@ export class RunnerService {
     if (runner.state === RunnerState.DECOMMISSIONED) {
       this.logger.debug(`Runner ${runnerId} is decommissioned, not updating health`)
       return
+    }
+
+    if (runnerEpoch !== undefined && runnerIncarnation !== undefined && sequence !== undefined) {
+      const observation = await this.runtimeLeaseService.observeRunnerSnapshot({
+        runnerId,
+        runnerEpoch,
+        runnerIncarnation,
+        sequence,
+        boxes,
+      })
+      if (!observation.accepted) {
+        this.logger.debug(`Ignored stale runtime snapshot ${runnerEpoch}/${sequence} for runner ${runnerId}`)
+        return
+      }
+      await this.runtimeOrphanCleanupService.enqueueTargets(observation.cleanupTargets)
     }
 
     const updateData: Partial<Runner> = {
@@ -614,8 +640,8 @@ export class RunnerService {
       return
     }
 
-    // v2 runners report health every ~10 seconds via the healthcheck endpoint
-    // Allow 60 seconds (6 missed healthchecks) before marking as UNRESPONSIVE
+    // v2 runners report health every ~30 seconds via the healthcheck endpoint.
+    // Allow 60 seconds (2 missed healthchecks) before marking as UNRESPONSIVE.
     const healthCheckThresholdMs = 60 * 1000
 
     if (runner.lastChecked < this.serviceStartTime) {
@@ -707,15 +733,22 @@ export class RunnerService {
 
   async updateSchedulingStatus(id: string, unschedulable: boolean): Promise<Runner> {
     const runner = await this.findOneOrFail(id)
+    const previousUnschedulable = runner.unschedulable
+    await this.updateRunner(id, { unschedulable })
     runner.unschedulable = unschedulable
-    await this.runnerRepository.save(runner)
+    if (previousUnschedulable !== unschedulable) {
+      this.eventEmitter.emit(
+        RunnerEvents.UNSCHEDULABLE_UPDATED,
+        new RunnerUnschedulableUpdatedEvent(runner, previousUnschedulable, unschedulable),
+      )
+    }
     return runner
   }
 
   async updateDrainingStatus(id: string, draining: boolean): Promise<Runner> {
     const runner = await this.findOneOrFail(id)
+    await this.updateRunner(id, { draining })
     runner.draining = draining
-    await this.runnerRepository.save(runner)
     return runner
   }
 

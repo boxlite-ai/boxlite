@@ -10,6 +10,8 @@ The type of the job
 
 * `STOP_BOX` (value: `'STOP_BOX'`)
 
+* `STOP_ORPHAN_RUNTIME` (value: `'STOP_ORPHAN_RUNTIME'`)
+
 * `DESTROY_BOX` (value: `'DESTROY_BOX'`)
 
 * `RESIZE_BOX` (value: `'RESIZE_BOX'`)

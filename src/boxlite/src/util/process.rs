@@ -164,6 +164,121 @@ pub fn process_start_time(pid: u32) -> Option<u64> {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy)]
+struct ProcessTreeNode {
+    parent: u32,
+    executable_dev: u64,
+    executable_ino: u64,
+    owner_uid: u32,
+}
+
+/// One read-only `/proc` snapshot used to validate every box in an inventory.
+///
+/// A jailed box has a unique copied `boxlite-shim` inode. Requiring that inode
+/// to be executed by the fingerprint-verified launcher's process tree detects
+/// an inner shim/VM crash even when an outer bwrap process remains alive.
+#[cfg(target_os = "linux")]
+pub(crate) struct ProcessTreeSnapshot {
+    nodes: std::collections::HashMap<u32, ProcessTreeNode>,
+}
+
+#[cfg(target_os = "linux")]
+impl ProcessTreeSnapshot {
+    pub(crate) fn capture() -> Option<Self> {
+        use std::os::unix::fs::MetadataExt;
+
+        let entries = std::fs::read_dir("/proc").ok()?;
+        let mut nodes = std::collections::HashMap::new();
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(pid) = name
+                .to_str()
+                .and_then(|name| name.parse::<u32>().ok())
+                .filter(|pid| *pid > 1)
+            else {
+                continue;
+            };
+            if !is_process_alive(pid) {
+                continue;
+            }
+            let proc_dir = entry.path();
+            let Some(parent) = process_parent_pid_linux(pid) else {
+                continue;
+            };
+            let Ok(executable) = std::fs::metadata(proc_dir.join("exe")) else {
+                continue;
+            };
+            let Ok(owner) = std::fs::metadata(&proc_dir) else {
+                continue;
+            };
+            nodes.insert(
+                pid,
+                ProcessTreeNode {
+                    parent,
+                    executable_dev: executable.dev(),
+                    executable_ino: executable.ino(),
+                    owner_uid: owner.uid(),
+                },
+            );
+        }
+        Some(Self { nodes })
+    }
+
+    pub(crate) fn has_unique_runtime_executable(
+        &self,
+        launcher_pid: u32,
+        paths: &[std::path::PathBuf],
+    ) -> bool {
+        use std::os::unix::fs::MetadataExt;
+
+        let Some(launcher_owner) = self.nodes.get(&launcher_pid).map(|node| node.owner_uid) else {
+            return false;
+        };
+        let expected: std::collections::HashSet<(u64, u64)> = paths
+            .iter()
+            .filter_map(|path| std::fs::metadata(path).ok())
+            .map(|metadata| (metadata.dev(), metadata.ino()))
+            .collect();
+        if expected.is_empty() {
+            return false;
+        }
+
+        let mut matches = 0_u8;
+        for (&pid, node) in &self.nodes {
+            if node.owner_uid != launcher_owner
+                || !expected.contains(&(node.executable_dev, node.executable_ino))
+            {
+                continue;
+            }
+            if pid != launcher_pid && !self.is_descendant_of(pid, launcher_pid) {
+                continue;
+            }
+            matches = matches.saturating_add(1);
+            if matches > 1 {
+                return false;
+            }
+        }
+        matches == 1
+    }
+
+    fn is_descendant_of(&self, mut pid: u32, ancestor: u32) -> bool {
+        for _ in 0..=self.nodes.len() {
+            let Some(node) = self.nodes.get(&pid) else {
+                return false;
+            };
+            if node.parent == ancestor {
+                return true;
+            }
+            if node.parent <= 1 || node.parent == pid {
+                return false;
+            }
+            pid = node.parent;
+        }
+        false
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn process_start_time_linux(pid: u32) -> Option<u64> {
     // `/proc/PID/stat` format:  PID (COMM) STATE PPID ... STARTTIME(22) ...
     // COMM is the only parenthesized field — split on the last `)` to skip
@@ -176,6 +291,14 @@ fn process_start_time_linux(pid: u32) -> Option<u64> {
     // (fields 1 and 2 — pid and comm — are already consumed).
     let tail_str = std::str::from_utf8(tail).ok()?;
     tail_str.split_whitespace().nth(19)?.parse::<u64>().ok()
+}
+
+#[cfg(target_os = "linux")]
+fn process_parent_pid_linux(pid: u32) -> Option<u32> {
+    let raw = std::fs::read(format!("/proc/{pid}/stat")).ok()?;
+    let after_comm_pos = raw.iter().rposition(|&byte| byte == b')')?;
+    let tail = std::str::from_utf8(&raw[after_comm_pos + 1..]).ok()?;
+    tail.split_whitespace().nth(1)?.parse::<u32>().ok()
 }
 
 #[cfg(target_os = "macos")]
@@ -301,6 +424,79 @@ mod tests {
         // Note: PID 0 might exist on some systems (kernel/scheduler)
         assert!(!is_process_alive(999999999));
         assert!(!is_process_alive(888888888));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_process_tree_snapshot_matches_unique_runtime_inode() {
+        let dir = tempfile::TempDir::new().expect("create temp directory");
+        let executable = dir.path().join("boxlite-shim");
+        std::fs::copy("/bin/sleep", &executable).expect("copy unique executable");
+
+        assert!(
+            !ProcessTreeSnapshot::capture()
+                .expect("capture process tree")
+                .has_unique_runtime_executable(
+                    std::process::id(),
+                    std::slice::from_ref(&executable),
+                ),
+            "an executable file alone is not a running process"
+        );
+
+        let mut child = std::process::Command::new(&executable)
+            .arg("300")
+            .spawn()
+            .expect("spawn copied executable");
+        assert!(
+            ProcessTreeSnapshot::capture()
+                .expect("capture process tree")
+                .has_unique_runtime_executable(child.id(), std::slice::from_ref(&executable))
+        );
+
+        child.kill().ok();
+        child.wait().ok();
+        assert!(
+            !ProcessTreeSnapshot::capture()
+                .expect("capture process tree")
+                .has_unique_runtime_executable(child.id(), std::slice::from_ref(&executable))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_process_tree_snapshot_matches_descendant_runtime_inode() {
+        use std::os::unix::process::CommandExt;
+        use std::time::Duration;
+
+        let dir = tempfile::TempDir::new().expect("create temp directory");
+        let executable = dir.path().join("boxlite-shim");
+        let unused = dir.path().join("unused-shim");
+        std::fs::copy("/bin/sleep", &executable).expect("copy unique executable");
+        std::fs::copy("/bin/true", &unused).expect("copy unused candidate");
+
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg(format!("\"{}\" 300 & wait", executable.display()))
+            .process_group(0);
+        let mut launcher = command.spawn().expect("spawn launcher and inner shim");
+
+        let candidates = [unused, executable];
+        let matched = (0..100).any(|_| {
+            let result = ProcessTreeSnapshot::capture()
+                .expect("capture process tree")
+                .has_unique_runtime_executable(launcher.id(), &candidates);
+            if !result {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result
+        });
+        assert!(matched, "launcher descendant should match a shim candidate");
+
+        unsafe {
+            libc::kill(-(launcher.id() as i32), libc::SIGTERM);
+        }
+        launcher.wait().ok();
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -22,6 +22,9 @@ export interface JobTypeMap {
   [JobType.STOP_BOX]: {
     resourceType: [ResourceType.BOX]
   }
+  [JobType.STOP_ORPHAN_RUNTIME]: {
+    resourceType: [ResourceType.BOX]
+  }
   [JobType.DESTROY_BOX]: {
     resourceType: [ResourceType.BOX]
   }

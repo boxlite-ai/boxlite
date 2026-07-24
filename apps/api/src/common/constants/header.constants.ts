@@ -38,4 +38,12 @@ export const CustomHeaders: {
       type: 'string',
     },
   },
+  RUNNER_EPOCH: {
+    name: 'X-BoxLite-Runner-Epoch',
+    description: 'Fences runner job polling and status updates to the current process epoch',
+    required: true,
+    schema: {
+      type: 'string',
+    },
+  },
 }

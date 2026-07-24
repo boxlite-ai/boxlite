@@ -28,6 +28,22 @@ export class BoxUsagePeriodArchive {
   @Column({ type: 'timestamp with time zone' })
   endAt: Date
 
+  @Column({ type: 'timestamp with time zone', nullable: true })
+  computeBillableUntil: Date | null
+
+  @Column({
+    type: 'bigint',
+    nullable: true,
+    transformer: {
+      to: (value: number | null) => value,
+      from: (value: string | null) => (value === null ? null : Number(value)),
+    },
+  })
+  runtimeGeneration: number | null
+
+  @Column({ type: 'uuid', nullable: true })
+  runnerEpoch: string | null
+
   @Column({ type: 'float' })
   cpu: number
 
@@ -56,6 +72,9 @@ export class BoxUsagePeriodArchive {
     usagePeriodEntity.organizationId = usagePeriod.organizationId
     usagePeriodEntity.startAt = usagePeriod.startAt
     usagePeriodEntity.endAt = usagePeriod.endAt as Date
+    usagePeriodEntity.computeBillableUntil = usagePeriod.computeBillableUntil
+    usagePeriodEntity.runtimeGeneration = usagePeriod.runtimeGeneration
+    usagePeriodEntity.runnerEpoch = usagePeriod.runnerEpoch
     usagePeriodEntity.cpu = usagePeriod.cpu
     usagePeriodEntity.gpu = usagePeriod.gpu
     usagePeriodEntity.mem = usagePeriod.mem

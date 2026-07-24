@@ -151,6 +151,23 @@ export class Runner {
   })
   lastChecked: Date
 
+  @Column({ type: 'uuid', nullable: true })
+  runtimeEpoch: string | null
+
+  @Column({
+    type: 'bigint',
+    default: 0,
+    transformer: { to: (value: number) => value, from: (value: string) => Number(value) },
+  })
+  runtimeIncarnation = 0
+
+  @Column({
+    type: 'bigint',
+    default: 0,
+    transformer: { to: (value: number) => value, from: (value: string) => Number(value) },
+  })
+  runtimeSequence = 0
+
   @Column({
     default: false,
   })

@@ -12,6 +12,14 @@ import { RegionType } from '../../region/enums/region-type.enum'
 @Index('box_usage_period_organization_end_idx', ['organizationId', 'endAt'])
 @Index('box_usage_period_one_open_per_box_idx', ['boxId'], { unique: true, where: '"endAt" IS NULL' })
 @Check('box_usage_period_non_negative_duration', '"endAt" IS NULL OR "endAt" >= "startAt"')
+@Check(
+  'box_usage_period_compute_cap',
+  '(cpu = 0 AND gpu = 0 AND mem = 0) OR ("computeBillableUntil" IS NOT NULL AND "runtimeGeneration" IS NOT NULL AND "runnerEpoch" IS NOT NULL)',
+)
+@Check(
+  'box_usage_period_compute_duration',
+  '"computeBillableUntil" IS NULL OR ("computeBillableUntil" >= "startAt" AND ("endAt" IS NULL OR "endAt" <= "computeBillableUntil"))',
+)
 export class BoxUsagePeriod {
   @PrimaryGeneratedColumn('uuid')
   id: string
@@ -28,6 +36,22 @@ export class BoxUsagePeriod {
 
   @Column({ type: 'timestamp with time zone', nullable: true })
   endAt: Date | null
+
+  @Column({ type: 'timestamp with time zone', nullable: true })
+  computeBillableUntil: Date | null
+
+  @Column({
+    type: 'bigint',
+    nullable: true,
+    transformer: {
+      to: (value: number | null) => value,
+      from: (value: string | null) => (value === null ? null : Number(value)),
+    },
+  })
+  runtimeGeneration: number | null
+
+  @Column({ type: 'uuid', nullable: true })
+  runnerEpoch: string | null
 
   @Column({ type: 'float' })
   cpu: number
@@ -56,6 +80,9 @@ export class BoxUsagePeriod {
     usagePeriodEntity.organizationId = usagePeriod.organizationId
     usagePeriodEntity.startAt = usagePeriod.startAt
     usagePeriodEntity.endAt = usagePeriod.endAt
+    usagePeriodEntity.computeBillableUntil = usagePeriod.computeBillableUntil
+    usagePeriodEntity.runtimeGeneration = usagePeriod.runtimeGeneration
+    usagePeriodEntity.runnerEpoch = usagePeriod.runnerEpoch
     usagePeriodEntity.cpu = usagePeriod.cpu
     usagePeriodEntity.gpu = usagePeriod.gpu
     usagePeriodEntity.mem = usagePeriod.mem

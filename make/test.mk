@@ -361,18 +361,26 @@ BILLING_METERING_TEST_FILES = \
 	api/src/box/repositories/box.repository.spec.ts \
 	api/src/box/services/job.service.spec.ts \
 	api/src/box/services/job-state-handler.service.spec.ts \
+	api/src/box/services/runner.service.spec.ts \
 	api/src/box/services/box.service.spec.ts \
 	api/src/box/managers/box.manager.spec.ts \
 	api/src/box/guards/box-access.guard.spec.ts \
 	api/src/box/guards/region-box-access.guard.spec.ts \
 	api/src/boxlite-rest/boxlite-proxy.controller.spec.ts \
 	api/src/migrations/pre-deploy/1784707200000-migration.spec.ts \
+	api/src/migrations/pre-deploy/1784793600000-migration.spec.ts \
 	api/src/usage/usage.service.spec.ts \
 	api/src/billing/access/billing-access.service.spec.ts
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
 	@cd apps && GOFLAGS=-tags=boxlite_dev yarn nx run-many --target=test --all --parallel=$$(getconf _NPROCESSORS_ONLN) $(if $(FILTER),-- --testNamePattern '$(FILTER)',)
+
+RUNNER_TEST_PACKAGES ?= ./...
+
+test\:apps\:runner: dev\:go
+	@cd apps/runner && GOFLAGS=-tags=boxlite_dev go test -count=1 \
+		$(if $(FILTER),-run '$(FILTER)',) $(RUNNER_TEST_PACKAGES)
 
 test\:apps\:billing-archive: _ensure-apps-deps
 	@cd apps && yarn jest --config api/jest.config.ts --runInBand \

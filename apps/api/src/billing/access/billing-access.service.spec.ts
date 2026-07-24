@@ -34,6 +34,7 @@ function makeService(
     archives?: any[]
     ratedPeriods?: any[]
     boxes?: any[]
+    pricingPlans?: any[]
     activeOrganizationIds?: string[]
     enabled?: boolean
   } = {},
@@ -67,6 +68,7 @@ function makeService(
           boxId: 'box-1',
           startAt: new Date('2026-07-12T23:59:50.000Z'),
           endAt: null,
+          computeBillableUntil: new Date('2026-07-13T00:00:05.000Z'),
           cpu: 1,
           mem: 0,
           disk: 0,
@@ -100,17 +102,19 @@ function makeService(
       .mockReturnValue(queryBuilder(overrides.ratedPeriods ?? [{ organizationId: 'org-1', preciseCents: '3' }])),
   }
   const pricingPlans = {
-    find: jest.fn().mockResolvedValue([
-      {
-        version: 1,
-        cpuRateCentsPerSec: '1',
-        memRateCentsPerSec: '0',
-        diskRateCentsPerSec: '0',
-        gpuRateCentsPerSec: '0',
-        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
-        effectiveTo: null,
-      },
-    ]),
+    find: jest.fn().mockResolvedValue(
+      overrides.pricingPlans ?? [
+        {
+          version: 1,
+          cpuRateCentsPerSec: '1',
+          memRateCentsPerSec: '0',
+          diskRateCentsPerSec: '0',
+          gpuRateCentsPerSec: '0',
+          effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+          effectiveTo: null,
+        },
+      ],
+    ),
   }
   const boxes = {
     findBy: jest
@@ -132,17 +136,19 @@ function makeService(
     }),
   }
 
+  const service = new BillingAccessService(
+    wallets as never,
+    walletService as never,
+    periods as never,
+    archives as never,
+    ratedPeriods as never,
+    pricingPlans as never,
+    boxes as never,
+    config as never,
+  )
+
   return {
-    service: new BillingAccessService(
-      wallets as never,
-      walletService as never,
-      periods as never,
-      archives as never,
-      ratedPeriods as never,
-      pricingPlans as never,
-      boxes as never,
-      config as never,
-    ),
+    service,
     wallets,
     walletService,
     periods,
@@ -197,13 +203,143 @@ describe('BillingAccessService', () => {
   })
 
   it('uses only confirmed STARTED Boxes as fallback running allocations', async () => {
-    const { service, boxes } = makeService({ periods: [], boxes: [] })
+    const { service, boxes } = makeService({
+      periods: [],
+      archives: [],
+      ratedPeriods: [],
+      boxes: [{ id: 'box-1', organizationId: 'org-1', cpu: 8, mem: 16, disk: 2, gpu: 1 }],
+      pricingPlans: [
+        {
+          version: 1,
+          cpuRateCentsPerSec: '1',
+          memRateCentsPerSec: '1',
+          diskRateCentsPerSec: '1',
+          gpuRateCentsPerSec: '1',
+          effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+          effectiveTo: null,
+        },
+      ],
+    })
 
-    await service.evaluate('org-1', null, now)
+    const result = await service.evaluate('org-1', null, now)
 
     expect(boxes.findBy).toHaveBeenCalledWith(
       expect.objectContaining({ desiredState: 'started', state: BoxState.STARTED }),
     )
+    expect(result).toMatchObject({
+      unbilledUsageCents: '0.5',
+      safetyBufferCents: '20',
+    })
+  })
+
+  it('caps open FULL compute usage at its hard deadline while continuing disk usage', async () => {
+    const { service } = makeService({
+      periods: [
+        {
+          id: 'period-open',
+          organizationId: 'org-1',
+          boxId: 'box-1',
+          startAt: new Date('2026-07-12T23:59:50.000Z'),
+          endAt: null,
+          computeBillableUntil: new Date('2026-07-12T23:59:55.000Z'),
+          cpu: 1,
+          mem: 0,
+          disk: 1,
+          gpu: 0,
+        },
+      ],
+      archives: [],
+      ratedPeriods: [],
+      boxes: [{ id: 'box-1', organizationId: 'org-1', cpu: 1, mem: 0, disk: 1, gpu: 0 }],
+      pricingPlans: [
+        {
+          version: 1,
+          cpuRateCentsPerSec: '1',
+          memRateCentsPerSec: '0',
+          diskRateCentsPerSec: '1',
+          gpuRateCentsPerSec: '0',
+          effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+          effectiveTo: null,
+        },
+      ],
+    })
+
+    const result = await service.evaluate('org-1', null, now)
+
+    expect(result).toMatchObject({
+      unbilledUsageCents: '15.5',
+      safetyBufferCents: '10',
+      availableCents: '974.5',
+    })
+  })
+
+  it('does not cap open FULL usage before its hard deadline', async () => {
+    const { service } = makeService({
+      archives: [],
+      ratedPeriods: [],
+      periods: [
+        {
+          id: 'period-open',
+          organizationId: 'org-1',
+          boxId: 'box-1',
+          startAt: new Date('2026-07-12T23:59:50.000Z'),
+          endAt: null,
+          computeBillableUntil: new Date('2026-07-13T00:00:05.000Z'),
+          cpu: 1,
+          mem: 0,
+          disk: 0,
+          gpu: 0,
+        },
+      ],
+    })
+
+    const result = await service.evaluate('org-1', null, now)
+
+    expect(result).toMatchObject({
+      unbilledUsageCents: '10.5',
+      safetyBufferCents: '10',
+      availableCents: '979.5',
+    })
+  })
+
+  it('fails closed for compute when an open FULL period has no hard deadline', async () => {
+    const { service } = makeService({
+      periods: [
+        {
+          id: 'period-open',
+          organizationId: 'org-1',
+          boxId: 'box-1',
+          startAt: new Date('2026-07-12T23:59:50.000Z'),
+          endAt: null,
+          cpu: 1,
+          mem: 0,
+          disk: 1,
+          gpu: 0,
+        },
+      ],
+      archives: [],
+      ratedPeriods: [],
+      boxes: [{ id: 'box-1', organizationId: 'org-1', cpu: 1, mem: 0, disk: 1, gpu: 0 }],
+      pricingPlans: [
+        {
+          version: 1,
+          cpuRateCentsPerSec: '1',
+          memRateCentsPerSec: '0',
+          diskRateCentsPerSec: '1',
+          gpuRateCentsPerSec: '0',
+          effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+          effectiveTo: null,
+        },
+      ],
+    })
+
+    const result = await service.evaluate('org-1', null, now)
+
+    expect(result).toMatchObject({
+      unbilledUsageCents: '10.5',
+      safetyBufferCents: '10',
+      availableCents: '979.5',
+    })
   })
 
   it('throws HTTP 402 when enforcement is enabled and a requested allocation cannot be funded', async () => {

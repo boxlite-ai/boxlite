@@ -3167,6 +3167,15 @@ paths:
         schema:
           $ref: "#/components/schemas/JobStatus"
         style: form
+      - description: Fences runner job polling and status updates to the current process
+          epoch
+        explode: false
+        in: header
+        name: X-BoxLite-Runner-Epoch
+        required: true
+        schema:
+          type: string
+        style: simple
       - description: "Number of jobs to skip for pagination (default: 0)"
         explode: true
         in: query
@@ -3197,6 +3206,15 @@ paths:
         \ immediately if jobs are available, otherwise waits up to timeout seconds."
       operationId: pollJobs
       parameters:
+      - description: Fences runner job polling and status updates to the current process
+          epoch
+        explode: false
+        in: header
+        name: X-BoxLite-Runner-Epoch
+        required: true
+        schema:
+          type: string
+        style: simple
       - description: "Timeout in seconds for long polling (default: 30, max: 60)"
         explode: true
         in: query
@@ -3241,6 +3259,15 @@ paths:
         schema:
           type: string
         style: simple
+      - description: Fences runner job polling and status updates to the current process
+          epoch
+        explode: false
+        in: header
+        name: X-BoxLite-Runner-Epoch
+        required: true
+        schema:
+          type: string
+        style: simple
       responses:
         "200":
           content:
@@ -3265,6 +3292,15 @@ paths:
         explode: false
         in: path
         name: jobId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Fences runner job polling and status updates to the current process
+          epoch
+        explode: false
+        in: header
+        name: X-BoxLite-Runner-Epoch
         required: true
         schema:
           type: string
@@ -3455,7 +3491,9 @@ paths:
         schema:
           type: string
         style: simple
-      - explode: false
+      - description: Stable client-generated key reused when retrying the same top-up
+          request
+        explode: false
         in: header
         name: idempotency-key
         required: true
@@ -7530,6 +7568,33 @@ components:
       - updatedAt
       - version
       type: object
+    RunnerBoxObservation:
+      example:
+        boxId: box000000001
+        actualState: started
+        runtimeGeneration: 12
+      properties:
+        boxId:
+          description: Control-plane box ID observed on the runner
+          example: box000000001
+          type: string
+        actualState:
+          allOf:
+          - $ref: "#/components/schemas/BoxState"
+          description: Actual box state observed by the runner
+          example: started
+        runtimeGeneration:
+          description: Control-plane runtime generation associated with the observed
+            instance. Zero means the runner cannot provide generation evidence.
+          example: 12
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+      - actualState
+      - boxId
+      - runtimeGeneration
+      type: object
     RunnerHealthMetrics:
       properties:
         currentCpuLoadAverage:
@@ -7613,6 +7678,16 @@ components:
       type: object
     RunnerHealthcheck:
       example:
+        runnerEpoch: 32b49a8e-2cf8-44af-9484-e2f52aa985ea
+        runnerIncarnation: 3
+        sequence: 42
+        boxes:
+        - boxId: box000000001
+          actualState: started
+          runtimeGeneration: 12
+        - boxId: box000000001
+          actualState: started
+          runtimeGeneration: 12
         metrics: ""
         serviceHealth:
         - serviceName: runner
@@ -7626,6 +7701,33 @@ components:
         apiUrl: http://api.boxlite.example.com:8080
         appVersion: v0.0.0-dev
       properties:
+        runnerEpoch:
+          description: Unique epoch generated when the runner process starts
+          example: 32b49a8e-2cf8-44af-9484-e2f52aa985ea
+          format: uuid
+          type: string
+        runnerIncarnation:
+          description: Monotonically increasing process incarnation persisted by the
+            runner
+          example: 3
+          format: int64
+          maximum: 9007199254740991
+          minimum: 1
+          type: integer
+        sequence:
+          description: Monotonically increasing healthcheck sequence within the runner
+            epoch
+          example: 42
+          format: int64
+          maximum: 9007199254740991
+          minimum: 1
+          type: integer
+        boxes:
+          description: Complete local box inventory. Omitted when inventory collection
+            fails; an empty array is a successful empty snapshot.
+          items:
+            $ref: "#/components/schemas/RunnerBoxObservation"
+          type: array
         metrics:
           allOf:
           - $ref: "#/components/schemas/RunnerHealthMetrics"
@@ -7653,6 +7755,9 @@ components:
           type: string
       required:
       - appVersion
+      - runnerEpoch
+      - runnerIncarnation
+      - sequence
       type: object
     VolumeState:
       description: Volume state
@@ -7742,6 +7847,7 @@ components:
       - CREATE_BOX
       - START_BOX
       - STOP_BOX
+      - STOP_ORPHAN_RUNTIME
       - DESTROY_BOX
       - RESIZE_BOX
       - CREATE_BACKUP

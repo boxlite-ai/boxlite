@@ -25,9 +25,11 @@ const configuration = new Configuration();
 const apiInstance = new JobsApi(configuration);
 
 let jobId: string; //ID of the job (default to undefined)
+let xBoxLiteRunnerEpoch: string; //Fences runner job polling and status updates to the current process epoch (default to undefined)
 
 const { status, data } = await apiInstance.getJob(
-    jobId
+    jobId,
+    xBoxLiteRunnerEpoch
 );
 ```
 
@@ -36,6 +38,7 @@ const { status, data } = await apiInstance.getJob(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **jobId** | [**string**] | ID of the job | defaults to undefined|
+| **xBoxLiteRunnerEpoch** | [**string**] | Fences runner job polling and status updates to the current process epoch | defaults to undefined|
 
 
 ### Return type
@@ -75,12 +78,14 @@ import {
 const configuration = new Configuration();
 const apiInstance = new JobsApi(configuration);
 
+let xBoxLiteRunnerEpoch: string; //Fences runner job polling and status updates to the current process epoch (default to undefined)
 let page: number; //Page number of the results (optional) (default to 1)
 let limit: number; //Maximum number of jobs to return (default: 100, max: 500) (optional) (default to 100)
 let status: JobStatus; //Filter jobs by status (optional) (default to undefined)
 let offset: number; //Number of jobs to skip for pagination (default: 0) (optional) (default to undefined)
 
 const { status, data } = await apiInstance.listJobs(
+    xBoxLiteRunnerEpoch,
     page,
     limit,
     status,
@@ -92,6 +97,7 @@ const { status, data } = await apiInstance.listJobs(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
+| **xBoxLiteRunnerEpoch** | [**string**] | Fences runner job polling and status updates to the current process epoch | defaults to undefined|
 | **page** | [**number**] | Page number of the results | (optional) defaults to 1|
 | **limit** | [**number**] | Maximum number of jobs to return (default: 100, max: 500) | (optional) defaults to 100|
 | **status** | **JobStatus** | Filter jobs by status | (optional) defaults to undefined|
@@ -135,10 +141,12 @@ import {
 const configuration = new Configuration();
 const apiInstance = new JobsApi(configuration);
 
+let xBoxLiteRunnerEpoch: string; //Fences runner job polling and status updates to the current process epoch (default to undefined)
 let timeout: number; //Timeout in seconds for long polling (default: 30, max: 60) (optional) (default to undefined)
 let limit: number; //Maximum number of jobs to return (default: 10, max: 100) (optional) (default to undefined)
 
 const { status, data } = await apiInstance.pollJobs(
+    xBoxLiteRunnerEpoch,
     timeout,
     limit
 );
@@ -148,6 +156,7 @@ const { status, data } = await apiInstance.pollJobs(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
+| **xBoxLiteRunnerEpoch** | [**string**] | Fences runner job polling and status updates to the current process epoch | defaults to undefined|
 | **timeout** | [**number**] | Timeout in seconds for long polling (default: 30, max: 60) | (optional) defaults to undefined|
 | **limit** | [**number**] | Maximum number of jobs to return (default: 10, max: 100) | (optional) defaults to undefined|
 
@@ -190,10 +199,12 @@ const configuration = new Configuration();
 const apiInstance = new JobsApi(configuration);
 
 let jobId: string; //ID of the job (default to undefined)
+let xBoxLiteRunnerEpoch: string; //Fences runner job polling and status updates to the current process epoch (default to undefined)
 let updateJobStatus: UpdateJobStatus; //
 
 const { status, data } = await apiInstance.updateJobStatus(
     jobId,
+    xBoxLiteRunnerEpoch,
     updateJobStatus
 );
 ```
@@ -204,6 +215,7 @@ const { status, data } = await apiInstance.updateJobStatus(
 |------------- | ------------- | ------------- | -------------|
 | **updateJobStatus** | **UpdateJobStatus**|  | |
 | **jobId** | [**string**] | ID of the job | defaults to undefined|
+| **xBoxLiteRunnerEpoch** | [**string**] | Fences runner job polling and status updates to the current process epoch | defaults to undefined|
 
 
 ### Return type

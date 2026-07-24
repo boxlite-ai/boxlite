@@ -18,7 +18,12 @@ import { RatedPeriod } from '../entities/rated-period.entity'
 import { WalletTransaction } from '../entities/wallet-transaction.entity'
 import { Wallet } from '../entities/wallet.entity'
 import { WalletService } from '../wallet.service'
-import { calculateBillingAccess, type BillingAccessResult, type BillingAllocation } from './billing-access'
+import {
+  calculateBillingAccess,
+  type BillingAccessResult,
+  type BillingAllocation,
+  type UnbilledUsagePeriod,
+} from './billing-access'
 
 export interface BillingAccessEvaluation extends BillingAccessResult {
   organizationId: string
@@ -95,10 +100,17 @@ export class BillingAccessService {
       const ongoingAllocations = new Map<string, BillingAllocation>()
 
       for (const period of organizationUsagePeriods) {
-        if (!period.endAt) ongoingAllocations.set(period.boxId, this.allocation(period.boxId, period))
+        if (!period.endAt) {
+          ongoingAllocations.set(
+            period.boxId,
+            this.ongoingAllocation(period.boxId, period, period.computeBillableUntil, now),
+          )
+        }
       }
       for (const box of organizationBoxes) {
-        if (!ongoingAllocations.has(box.id)) ongoingAllocations.set(box.id, this.allocation(box.id, box))
+        if (!ongoingAllocations.has(box.id)) {
+          ongoingAllocations.set(box.id, { boxId: box.id, cpu: 0, mem: 0, disk: box.disk, gpu: 0 })
+        }
       }
 
       const result = calculateBillingAccess({
@@ -107,11 +119,7 @@ export class BillingAccessService {
         paidBalanceCents: wallet.paidBalanceCents,
         settlementRemainderCents: wallet.settlementRemainderCents,
         unbilledPeriods: [
-          ...organizationUsagePeriods.map((period) => ({
-            ...this.allocation(period.boxId, period),
-            startAt: period.startAt,
-            endAt: period.endAt ?? now,
-          })),
+          ...organizationUsagePeriods.flatMap((period) => this.unbilledPeriods(period, now)),
           ...organizationArchives.map((period) => ({
             ...this.allocation(period.boxId, period),
             startAt: period.startAt,
@@ -190,6 +198,59 @@ export class BillingAccessService {
       .where('rated."organizationId" IN (:...organizationIds)', { organizationIds })
       .andWhere('transaction.id IS NULL')
       .getMany()
+  }
+
+  private unbilledPeriods(period: BoxUsagePeriod, now: Date): UnbilledUsagePeriod[] {
+    const endAt = period.endAt ?? now
+    if (endAt.getTime() < period.startAt.getTime() || !this.hasComputeAllocation(period)) {
+      return [{ ...this.allocation(period.boxId, period), startAt: period.startAt, endAt }]
+    }
+
+    const computeBillableUntil = period.computeBillableUntil
+    const computeEndAt = computeBillableUntil
+      ? new Date(Math.min(endAt.getTime(), computeBillableUntil.getTime()))
+      : period.startAt
+    const boundedComputeEndAt = computeEndAt.getTime() > period.startAt.getTime() ? computeEndAt : period.startAt
+    const billablePeriods: UnbilledUsagePeriod[] = []
+
+    if (boundedComputeEndAt.getTime() > period.startAt.getTime()) {
+      billablePeriods.push({
+        ...this.allocation(period.boxId, period),
+        startAt: period.startAt,
+        endAt: boundedComputeEndAt,
+      })
+    }
+    if (endAt.getTime() > boundedComputeEndAt.getTime() && period.disk > 0) {
+      billablePeriods.push({
+        boxId: period.boxId,
+        cpu: 0,
+        mem: 0,
+        disk: period.disk,
+        gpu: 0,
+        startAt: boundedComputeEndAt,
+        endAt,
+      })
+    }
+    return billablePeriods
+  }
+
+  private ongoingAllocation(
+    boxId: string,
+    resources: Pick<Box | BoxUsagePeriod, 'cpu' | 'mem' | 'disk' | 'gpu'>,
+    computeBillableUntil: Date | null | undefined,
+    now: Date,
+  ): BillingAllocation {
+    if (
+      !this.hasComputeAllocation(resources) ||
+      (computeBillableUntil != null && computeBillableUntil.getTime() > now.getTime())
+    ) {
+      return this.allocation(boxId, resources)
+    }
+    return { boxId, cpu: 0, mem: 0, disk: resources.disk, gpu: 0 }
+  }
+
+  private hasComputeAllocation(resources: Pick<Box | BoxUsagePeriod, 'cpu' | 'mem' | 'gpu'>): boolean {
+    return resources.cpu > 0 || resources.mem > 0 || resources.gpu > 0
   }
 
   private allocation(

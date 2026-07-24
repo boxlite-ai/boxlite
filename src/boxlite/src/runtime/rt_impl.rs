@@ -504,35 +504,39 @@ impl RuntimeImpl {
     /// Checks in-memory cache first (for boxes not yet persisted), then database.
     pub async fn get_info(self: &Arc<Self>, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
         // Check in-memory cache first (for boxes created but not yet persisted)
-        {
+        let cached_box = {
             let sync = self.sync_state.read().unwrap();
 
-            // Try as BoxID first
-            if let Some(box_id) = BoxID::parse(id_or_name)
-                && let Some(weak) = sync.active_boxes_by_id.get(&box_id)
-                && let Some(strong) = weak.upgrade()
-            {
-                return Ok(Some(strong.info()));
-            }
-
-            // Try as name
-            if let Some(weak) = sync.active_boxes_by_name.get(id_or_name)
-                && let Some(strong) = weak.upgrade()
-            {
-                return Ok(Some(strong.info()));
-            }
+            BoxID::parse(id_or_name)
+                .and_then(|box_id| sync.active_boxes_by_id.get(&box_id))
+                .and_then(|weak| weak.upgrade())
+                .or_else(|| {
+                    sync.active_boxes_by_name
+                        .get(id_or_name)
+                        .and_then(|weak| weak.upgrade())
+                })
+        };
+        if let Some(strong) = cached_box {
+            return tokio::task::spawn_blocking(move || strong.runtime_info())
+                .await
+                .map(Some)
+                .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)));
         }
 
         // Fall back to DB lookup - run on blocking thread pool
         let this = Arc::clone(self);
         let id_or_name_owned = id_or_name.to_string();
-        let db_result =
-            tokio::task::spawn_blocking(move || this.box_manager.lookup_box(&id_or_name_owned))
-                .await
-                .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
+        let (db_result, probe) = tokio::task::spawn_blocking(move || {
+            Ok::<_, BoxliteError>((
+                this.box_manager.lookup_box(&id_or_name_owned)?,
+                crate::runtime::liveness::RuntimeLivenessProbe::capture(),
+            ))
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
 
         if let Some((config, state)) = db_result {
-            return Ok(Some(BoxInfo::new(&config, &state)));
+            return Ok(Some(probe.project(&config, &state)));
         }
         Ok(None)
     }
@@ -546,14 +550,19 @@ impl RuntimeImpl {
 
         // Get boxes from database - run on blocking thread pool
         let this = Arc::clone(self);
-        let db_boxes = tokio::task::spawn_blocking(move || this.box_manager.all_boxes(true))
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
+        let (db_boxes, probe) = tokio::task::spawn_blocking(move || {
+            Ok::<_, BoxliteError>((
+                this.box_manager.all_boxes(true)?,
+                crate::runtime::liveness::RuntimeLivenessProbe::capture(),
+            ))
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
 
         let mut seen_ids: HashSet<BoxID> = db_boxes.iter().map(|(c, _)| c.id.clone()).collect();
         let mut infos: Vec<_> = db_boxes
             .into_iter()
-            .map(|(config, state)| BoxInfo::new(&config, &state))
+            .map(|(config, state)| probe.project(&config, &state))
             .collect();
 
         // Add in-memory boxes not yet persisted
@@ -563,7 +572,7 @@ impl RuntimeImpl {
                 if !seen_ids.contains(box_id)
                     && let Some(strong) = weak.upgrade()
                 {
-                    infos.push(strong.info());
+                    infos.push(strong.info_with_probe(&probe));
                     seen_ids.insert(box_id.clone());
                 }
             }
@@ -2264,6 +2273,146 @@ mod tests {
         }
         let st = crate::util::process_start_time(pid).expect("OS reports start_time");
         std::fs::write(pid_file, format!("{pid}\n{st}\n")).expect("write shim.pid");
+    }
+
+    #[cfg(target_os = "linux")]
+    fn spawn_copied_test_shim(
+        config: &BoxConfig,
+    ) -> (u32, std::process::Child, std::path::PathBuf) {
+        let shim = config.box_home.join("bin").join("boxlite-shim");
+        std::fs::create_dir_all(shim.parent().expect("shim parent"))
+            .expect("create shim directory");
+        std::fs::copy("/bin/sleep", &shim).expect("copy unique test executable");
+        let child = std::process::Command::new(&shim)
+            .arg("300")
+            .spawn()
+            .expect("spawn copied test shim");
+        (child.id(), child, shim)
+    }
+
+    #[tokio::test]
+    async fn test_list_info_runtime_liveness_downgrades_absent_pid_identity() {
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config_in_layout(true, &runtime);
+        let state = running_state(999_999_999);
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add stale running box");
+
+        let infos = runtime.list_info().await.expect("list box info");
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].status, BoxStatus::Unknown);
+        assert!(infos[0].pid.is_none());
+
+        let (_, persisted) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("read persisted box")
+            .expect("persisted box exists");
+        assert_eq!(
+            persisted.status,
+            BoxStatus::Running,
+            "read-only inventory must not overwrite a concurrent lifecycle transition"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn test_list_info_runtime_liveness_preserves_verified_process() {
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config_in_layout(true, &runtime);
+        let (pid, mut child, _shim) = spawn_copied_test_shim(&config);
+        let state = running_state(pid.saturating_add(1));
+        let pid_file = config.box_home.join("shim.pid");
+        write_pid_file_with_fingerprint(&pid_file, pid);
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add live running box");
+
+        let infos = runtime.list_info().await.expect("list box info");
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].status, BoxStatus::Running);
+        assert_eq!(infos[0].pid, Some(pid));
+
+        child.kill().ok();
+        child.wait().ok();
+        runtime
+            .box_manager
+            .remove_box(&config.id)
+            .expect("remove test database row");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn test_list_info_runtime_liveness_rejects_live_launcher_without_inner_shim() {
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config_in_layout(true, &runtime);
+        let (pid, mut child) = spawn_dummy_process();
+        let state = running_state(pid);
+        let pid_file = config.box_home.join("shim.pid");
+        write_pid_file_with_fingerprint(&pid_file, pid);
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add box with launcher only");
+
+        let infos = runtime.list_info().await.expect("list box info");
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].status, BoxStatus::Unknown);
+        assert!(infos[0].pid.is_none());
+        assert!(
+            crate::util::is_process_alive(pid),
+            "the verified outer launcher is intentionally still alive"
+        );
+
+        child.kill().ok();
+        child.wait().ok();
+        runtime
+            .box_manager
+            .remove_box(&config.id)
+            .expect("remove test database row");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn test_list_info_runtime_liveness_rejects_pid_fingerprint_mismatch() {
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config_in_layout(true, &runtime);
+        let (pid, mut child, _shim) = spawn_copied_test_shim(&config);
+        let state = running_state(pid);
+        let pid_file = config.box_home.join("shim.pid");
+        let actual_start = crate::util::process_start_time(pid).expect("read process start time");
+        std::fs::write(
+            &pid_file,
+            format!("{pid}\n{}\n", actual_start.saturating_add(1)),
+        )
+        .expect("write mismatched PID fingerprint");
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add box with reused PID identity");
+
+        let infos = runtime.list_info().await.expect("list box info");
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].status, BoxStatus::Unknown);
+        assert!(infos[0].pid.is_none());
+        assert!(
+            crate::util::is_process_alive(pid),
+            "fingerprint mismatch must not kill an unrelated live process"
+        );
+
+        child.kill().ok();
+        child.wait().ok();
+        runtime
+            .box_manager
+            .remove_box(&config.id)
+            .expect("remove test database row");
     }
 
     #[tokio::test]

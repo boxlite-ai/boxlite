@@ -7,6 +7,8 @@ import 'reflect-metadata'
 import Decimal from 'decimal.js'
 import { randomUUID } from 'node:crypto'
 import { DataSource, IsNull, Not } from 'typeorm'
+import { BoxClass } from '../box/enums/box-class.enum'
+import { RegionType } from '../region/enums/region-type.enum'
 import { BoxUsagePeriod } from '../usage/entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../usage/entities/box-usage-period-archive.entity'
 import { UsageService } from '../usage/services/usage.service'
@@ -203,6 +205,7 @@ describeWithDatabase('Billing common edge cases with PostgreSQL', () => {
     const rows = await billingDataSource.query<Array<{ id: string }>>(
       `INSERT INTO "${schemaName}"."box_usage_period" (
         id, "boxId", "organizationId", "startAt", "endAt",
+        "computeBillableUntil", "runtimeGeneration", "runnerEpoch",
         cpu, gpu, mem, disk, region, "boxClass", "regionType"
       )
       SELECT
@@ -211,6 +214,9 @@ describeWithDatabase('Billing common edge cases with PostgreSQL', () => {
         $3,
         $4::timestamptz,
         $5::timestamptz,
+        COALESCE($5::timestamptz, $4::timestamptz + interval '1 hour'),
+        1,
+        md5($1 || ':runner')::uuid,
         1, 0, 0, 0, 'us', 'small', 'shared'
       FROM generate_series(1, $6::int) AS series(value)
       RETURNING id`,
@@ -435,6 +441,107 @@ describeWithDatabase('Billing common edge cases with PostgreSQL', () => {
       expect(wallet.paidBalanceCents).toBe('98500')
       expect(new Decimal(wallet.settlementRemainderCents).isZero()).toBe(true)
     }, 60_000)
+
+    it('matches the theoretical FULL and DISK_ONLY charges through archive, rating, and wallet debit', async () => {
+      const organizationId = randomUUID()
+      const boxId = `edge-box-${randomUUID()}`
+      const fullStart = new Date('1900-04-01T00:00:00.000Z')
+      const fullEnd = new Date('1900-04-01T00:01:00.000Z')
+      const diskEnd = new Date('1900-04-01T00:02:00.000Z')
+      const usageRepository = billingDataSource.getRepository(BoxUsagePeriod)
+      await usageRepository.save([
+        usageRepository.create({
+          boxId,
+          organizationId,
+          startAt: fullStart,
+          endAt: fullEnd,
+          computeBillableUntil: fullEnd,
+          runtimeGeneration: 1,
+          runnerEpoch: randomUUID(),
+          cpu: 2,
+          mem: 4,
+          disk: 10,
+          gpu: 1,
+          region: 'us',
+          boxClass: BoxClass.SMALL,
+          regionType: RegionType.SHARED,
+        }),
+        usageRepository.create({
+          boxId,
+          organizationId,
+          startAt: fullEnd,
+          endAt: diskEnd,
+          computeBillableUntil: null,
+          runtimeGeneration: null,
+          runnerEpoch: null,
+          cpu: 0,
+          mem: 0,
+          disk: 10,
+          gpu: 0,
+          region: 'us',
+          boxClass: BoxClass.SMALL,
+          regionType: RegionType.SHARED,
+        }),
+      ])
+      await createWallet(organizationId, { paidBalanceCents: '2000' })
+
+      const planRepository = billingDataSource.getRepository(PricingPlan)
+      await planRepository.save(
+        planRepository.create({
+          version: 4,
+          cpuRateCentsPerSec: '2',
+          memRateCentsPerSec: '1',
+          diskRateCentsPerSec: '0.5',
+          gpuRateCentsPerSec: '10',
+          effectiveFrom: new Date('1900-01-01T00:00:00.000Z'),
+          effectiveTo: new Date('1901-01-01T00:00:00.000Z'),
+        }),
+      )
+      const archiveRepository = billingDataSource.getRepository(BoxUsagePeriodArchive)
+      const ratedRepository = billingDataSource.getRepository(RatedPeriod)
+      const settlement = new SettlementService(
+        new RatingService(archiveRepository, ratedRepository, planRepository),
+        walletService(),
+      )
+
+      await usageService().archiveBoxUsagePeriods()
+      await settlement.settleClosedPeriods()
+
+      const ratedPeriods = await ratedRepository.findBy({ organizationId })
+      expect(ratedPeriods).toHaveLength(2)
+      const full = ratedPeriods.find((period) => period.usageTotals.cpuSeconds === '120')
+      const diskOnly = ratedPeriods.find((period) => period.usageTotals.cpuSeconds === '0')
+      expect(full).toMatchObject({
+        billedSeconds: '60.000',
+        usageTotals: {
+          cpuSeconds: '120',
+          memGibSeconds: '240',
+          diskGibSeconds: '600',
+          gpuSeconds: '60',
+        },
+        preciseCents: '1380.000000000000000000',
+        ratedCents: '1380',
+      })
+      expect(diskOnly).toMatchObject({
+        billedSeconds: '60.000',
+        usageTotals: {
+          cpuSeconds: '0',
+          memGibSeconds: '0',
+          diskGibSeconds: '600',
+          gpuSeconds: '0',
+        },
+        preciseCents: '300.000000000000000000',
+        ratedCents: '300',
+      })
+      const transactions = await billingDataSource
+        .getRepository(WalletTransaction)
+        .findBy({ organizationId, kind: 'usage_debit' })
+      expect(transactions.map((transaction) => transaction.amountCents).sort()).toEqual(['-1380', '-300'])
+      await expect(billingDataSource.getRepository(Wallet).findOneByOrFail({ organizationId })).resolves.toMatchObject({
+        paidBalanceCents: '320',
+        settlementRemainderCents: '0.000000000000000000',
+      })
+    })
   })
 
   it('creates exactly one immutable rating when two workers rate the same archived period', async () => {

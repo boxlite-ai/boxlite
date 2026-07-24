@@ -161,7 +161,7 @@ export const BillingApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * 
          * @param {string} organizationId 
-         * @param {string} idempotencyKey 
+         * @param {string} idempotencyKey Stable client-generated key reused when retrying the same top-up request
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -460,7 +460,7 @@ export const BillingApiFp = function(configuration?: Configuration) {
         /**
          * 
          * @param {string} organizationId 
-         * @param {string} idempotencyKey 
+         * @param {string} idempotencyKey Stable client-generated key reused when retrying the same top-up request
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -575,7 +575,7 @@ export const BillingApiFactory = function (configuration?: Configuration, basePa
         /**
          * 
          * @param {string} organizationId 
-         * @param {string} idempotencyKey 
+         * @param {string} idempotencyKey Stable client-generated key reused when retrying the same top-up request
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -673,7 +673,7 @@ export class BillingApi extends BaseAPI {
     /**
      * 
      * @param {string} organizationId 
-     * @param {string} idempotencyKey 
+     * @param {string} idempotencyKey Stable client-generated key reused when retrying the same top-up request
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */

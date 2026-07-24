@@ -10,6 +10,7 @@ import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { JobStateHandlerService } from './job-state-handler.service'
+import { RuntimeStartFinalizationStatus } from './runtime-lease.service'
 
 function createJob(overrides: Record<string, unknown> = {}) {
   const job = {
@@ -34,13 +35,17 @@ describe('JobStateHandlerService', () => {
     findOne: jest.fn(),
     update: jest.fn(),
   }
+  const runtimeLeaseService = {
+    finalizeStartedJob: jest.fn(),
+  }
   let service: JobStateHandlerService
 
   beforeEach(() => {
     jest.clearAllMocks()
     boxRepository.findOne.mockReset()
     boxRepository.update.mockReset()
-    service = new JobStateHandlerService(boxRepository as never)
+    runtimeLeaseService.finalizeStartedJob.mockReset().mockResolvedValue(RuntimeStartFinalizationStatus.CONFIRMED)
+    service = new JobStateHandlerService(boxRepository as never, runtimeLeaseService as never)
   })
 
   it('propagates a Box transaction failure so the lifecycle callback can retry', async () => {
@@ -51,7 +56,7 @@ describe('JobStateHandlerService', () => {
       state: BoxState.STOPPED,
       lifecycleJobId: 'job-1',
     })
-    boxRepository.update.mockRejectedValue(transactionError)
+    runtimeLeaseService.finalizeStartedJob.mockRejectedValue(transactionError)
 
     await expect(service.handleJobCompletion(createJob() as never)).rejects.toBe(transactionError)
   })
@@ -104,16 +109,16 @@ describe('JobStateHandlerService', () => {
   it('treats a lifecycle conflict as an idempotent replay when another callback already cleared ownership', async () => {
     const ownedBox = {
       id: 'box000000001',
-      desiredState: BoxDesiredState.STARTED,
-      state: BoxState.STARTING,
+      desiredState: BoxDesiredState.STOPPED,
+      state: BoxState.STOPPING,
       lifecycleJobId: 'job-1',
     }
     boxRepository.findOne
       .mockResolvedValueOnce(ownedBox)
-      .mockResolvedValueOnce({ ...ownedBox, state: BoxState.STARTED, lifecycleJobId: null })
+      .mockResolvedValueOnce({ ...ownedBox, state: BoxState.STOPPED, lifecycleJobId: null })
     boxRepository.update.mockRejectedValueOnce(new BoxConflictError())
 
-    await expect(service.handleJobCompletion(createJob() as never)).resolves.toBeUndefined()
+    await expect(service.handleJobCompletion(createJob({ type: JobType.STOP_BOX }) as never)).resolves.toBeUndefined()
 
     expect(boxRepository.update).toHaveBeenCalledTimes(1)
   })
@@ -121,14 +126,61 @@ describe('JobStateHandlerService', () => {
   it('propagates a lifecycle conflict while the same job still owns the Box', async () => {
     const ownedBox = {
       id: 'box000000001',
-      desiredState: BoxDesiredState.STARTED,
-      state: BoxState.STARTING,
+      desiredState: BoxDesiredState.STOPPED,
+      state: BoxState.STOPPING,
       lifecycleJobId: 'job-1',
     }
     const conflict = new BoxConflictError()
     boxRepository.findOne.mockResolvedValue(ownedBox)
     boxRepository.update.mockRejectedValueOnce(conflict)
 
-    await expect(service.handleJobCompletion(createJob() as never)).rejects.toBe(conflict)
+    await expect(service.handleJobCompletion(createJob({ type: JobType.STOP_BOX }) as never)).rejects.toBe(conflict)
+  })
+
+  it('leaves a completed start unapproved when its runtime confirmation is not yet valid', async () => {
+    const box = {
+      id: 'box000000001',
+      desiredState: BoxDesiredState.STARTED,
+      state: BoxState.STARTING,
+      runtimeAuthorized: false,
+      lifecycleJobId: 'job-1',
+    }
+    boxRepository.findOne.mockResolvedValue(box)
+    runtimeLeaseService.finalizeStartedJob.mockResolvedValue(RuntimeStartFinalizationStatus.WAITING)
+
+    await expect(service.handleJobCompletion(createJob() as never)).rejects.toThrow(
+      'Runtime confirmation is not yet valid',
+    )
+
+    expect(boxRepository.update).not.toHaveBeenCalled()
+  })
+
+  it('leaves a completed start unapproved when runtime confirmation fails', async () => {
+    const confirmationError = new Error('runtime lease write failed')
+    boxRepository.findOne.mockResolvedValue({
+      id: 'box000000001',
+      desiredState: BoxDesiredState.STARTED,
+      state: BoxState.STARTING,
+      runtimeAuthorized: false,
+      lifecycleJobId: 'job-1',
+    })
+    runtimeLeaseService.finalizeStartedJob.mockRejectedValue(confirmationError)
+
+    await expect(service.handleJobCompletion(createJob() as never)).rejects.toBe(confirmationError)
+    expect(boxRepository.update).not.toHaveBeenCalled()
+  })
+
+  it('accepts a rejected runtime proof after the lease service atomically converges the Box', async () => {
+    boxRepository.findOne.mockResolvedValue({
+      id: 'box000000001',
+      desiredState: BoxDesiredState.STARTED,
+      state: BoxState.STARTING,
+      runtimeAuthorized: false,
+      lifecycleJobId: 'job-1',
+    })
+    runtimeLeaseService.finalizeStartedJob.mockResolvedValue(RuntimeStartFinalizationStatus.REJECTED)
+
+    await expect(service.handleJobCompletion(createJob() as never)).resolves.toBeUndefined()
+    expect(boxRepository.update).not.toHaveBeenCalled()
   })
 })

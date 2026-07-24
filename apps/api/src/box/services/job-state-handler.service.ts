@@ -16,6 +16,7 @@ import { Box } from '../entities/box.entity'
 import { ResourceType } from '../enums/resource-type.enum'
 import { isBoxLifecycleJobType } from '../constants/box-lifecycle-job-types.constant'
 import { BoxConflictError } from '../errors/box-conflict.error'
+import { RuntimeLeaseService, RuntimeStartFinalizationStatus } from './runtime-lease.service'
 
 /**
  * Service for handling entity state updates based on job completion (v2 runners only).
@@ -25,7 +26,10 @@ import { BoxConflictError } from '../errors/box-conflict.error'
 export class JobStateHandlerService {
   private readonly logger = new Logger(JobStateHandlerService.name)
 
-  constructor(private readonly boxRepository: BoxRepository) {}
+  constructor(
+    private readonly boxRepository: BoxRepository,
+    private readonly runtimeLeaseService?: RuntimeLeaseService,
+  ) {}
 
   /**
    * Handle job completion and update entity state accordingly.
@@ -115,16 +119,13 @@ export class JobStateHandlerService {
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`CREATE_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
-        updateData.state = BoxState.STARTED
-        updateData.errorReason = null
-        const metadata = job.getResultMetadata()
-        if (metadata?.daemonVersion && typeof metadata.daemonVersion === 'string') {
-          updateData.daemonVersion = metadata.daemonVersion
-        }
+        await this.finalizeStartedRuntime(job)
+        return
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`CREATE_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
+        updateData.runtimeAuthorized = false
+        updateData.runtimeUnavailable = false
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
         updateData.errorReason = errorReason || 'Failed to create box'
         updateData.recoverable = recoverable
@@ -161,16 +162,13 @@ export class JobStateHandlerService {
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`START_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
-        updateData.state = BoxState.STARTED
-        updateData.errorReason = null
-        const metadata = job.getResultMetadata()
-        if (metadata?.daemonVersion && typeof metadata.daemonVersion === 'string') {
-          updateData.daemonVersion = metadata.daemonVersion
-        }
+        await this.finalizeStartedRuntime(job)
+        return
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`START_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
+        updateData.runtimeAuthorized = false
+        updateData.runtimeUnavailable = false
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
         updateData.errorReason = errorReason || 'Failed to start box'
         updateData.recoverable = recoverable
@@ -210,9 +208,13 @@ export class JobStateHandlerService {
         this.logger.debug(`STOP_BOX job ${job.id} completed successfully, marking box ${boxId} as STOPPED`)
         updateData.state = BoxState.STOPPED
         updateData.errorReason = null
+        updateData.runtimeAuthorized = false
+        updateData.runtimeUnavailable = false
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`STOP_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
+        updateData.runtimeAuthorized = false
+        updateData.runtimeUnavailable = false
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
         updateData.errorReason = errorReason || 'Failed to stop box'
         updateData.recoverable = recoverable
@@ -244,9 +246,13 @@ export class JobStateHandlerService {
           this.logger.debug(`DESTROY_BOX job ${job.id} completed successfully, marking box ${boxId} as DESTROYED`)
           updateData.state = BoxState.DESTROYED
           updateData.errorReason = null
+          updateData.runtimeAuthorized = false
+          updateData.runtimeUnavailable = false
         } else if (job.status === JobStatus.FAILED) {
           this.logger.error(`DESTROY_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
           updateData.state = BoxState.ERROR
+          updateData.runtimeAuthorized = false
+          updateData.runtimeUnavailable = false
           const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
           updateData.errorReason = errorReason || 'Failed to destroy box'
           updateData.recoverable = recoverable
@@ -287,13 +293,14 @@ export class JobStateHandlerService {
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`RECOVER_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
-        updateData.state = BoxState.STARTED
-        updateData.errorReason = null
+        await this.finalizeStartedRuntime(job)
+        return
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`RECOVER_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
         updateData.errorReason = job.errorMessage || 'Failed to recover box'
+        updateData.runtimeAuthorized = false
+        updateData.runtimeUnavailable = false
       }
 
       await this.applyLifecycleUpdate(job, box, updateData)
@@ -360,6 +367,20 @@ export class JobStateHandlerService {
         this.logger.error(`Error handling RESIZE_BOX job completion for box ${boxId}:`, error)
       }
       throw error
+    }
+  }
+
+  private async finalizeStartedRuntime(job: Job): Promise<void> {
+    if (!this.runtimeLeaseService) {
+      throw new Error(
+        `Runtime confirmation is not yet valid for ${job.type} job ${job.id}; leaving Box unapproved for compute billing`,
+      )
+    }
+    const status = await this.runtimeLeaseService.finalizeStartedJob(job)
+    if (status === RuntimeStartFinalizationStatus.WAITING) {
+      throw new Error(
+        `Runtime confirmation is not yet valid for ${job.type} job ${job.id}; leaving Box unapproved for compute billing`,
+      )
     }
   }
 

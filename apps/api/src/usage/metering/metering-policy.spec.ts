@@ -10,7 +10,7 @@ import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.c
 import { MeteringMode, MeteringPolicy } from './metering-policy'
 
 function box(state: BoxState, desiredState: BoxDesiredState, organizationId = 'org-1'): Box {
-  return { state, desiredState, organizationId } as Box
+  return { state, desiredState, organizationId, runtimeUnavailable: false } as Box
 }
 
 describe('MeteringPolicy', () => {
@@ -24,8 +24,12 @@ describe('MeteringPolicy', () => {
     [BoxState.STARTING, BoxDesiredState.STARTED, MeteringMode.PRESERVE],
     [BoxState.RESIZING, BoxDesiredState.STARTED, MeteringMode.PRESERVE],
     [BoxState.ERROR, BoxDesiredState.STARTED, MeteringMode.NONE],
-    [BoxState.ERROR, BoxDesiredState.STOPPED, MeteringMode.NONE],
+    [BoxState.ERROR, BoxDesiredState.STOPPED, MeteringMode.DISK_ONLY],
     [BoxState.STARTED, BoxDesiredState.DESTROYED, MeteringMode.NONE],
+    [BoxState.ERROR, BoxDesiredState.DESTROYED, MeteringMode.NONE],
+    [BoxState.ARCHIVED, BoxDesiredState.STOPPED, MeteringMode.NONE],
+    [BoxState.DESTROYING, BoxDesiredState.STOPPED, MeteringMode.NONE],
+    [BoxState.DESTROYED, BoxDesiredState.STOPPED, MeteringMode.NONE],
   ])('maps %s with desired %s to %s', (state, desiredState, expected) => {
     expect(policy.resolve(box(state, desiredState))).toBe(expected)
   })
@@ -34,5 +38,17 @@ describe('MeteringPolicy', () => {
     expect(policy.resolve(box(BoxState.STARTED, BoxDesiredState.STARTED, BOX_WARM_POOL_UNASSIGNED_ORGANIZATION))).toBe(
       MeteringMode.NONE,
     )
+    expect(policy.resolve(box(BoxState.ERROR, BoxDesiredState.STOPPED, BOX_WARM_POOL_UNASSIGNED_ORGANIZATION))).toBe(
+      MeteringMode.NONE,
+    )
+  })
+
+  it('continues disk-only metering while an expected runtime is unavailable', () => {
+    expect(
+      policy.resolve({
+        ...box(BoxState.ERROR, BoxDesiredState.STARTED),
+        runtimeUnavailable: true,
+      }),
+    ).toBe(MeteringMode.DISK_ONLY)
   })
 })

@@ -60,7 +60,7 @@ export class BillingPaymentController {
 
   @Post('top-ups')
   @ApiHeader({
-    name: 'Idempotency-Key',
+    name: 'idempotency-key',
     required: true,
     description: 'Stable client-generated key reused when retrying the same top-up request',
   })

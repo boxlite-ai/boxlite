@@ -118,6 +118,7 @@ docs/RegionType.md
 docs/RegionsApi.md
 docs/ResizeBox.md
 docs/Runner.md
+docs/RunnerBoxObservation.md
 docs/RunnerFull.md
 docs/RunnerHealthMetrics.md
 docs/RunnerHealthcheck.md
@@ -237,6 +238,7 @@ models/regenerate-api-key-response.ts
 models/region-type.ts
 models/region.ts
 models/resize-box.ts
+models/runner-box-observation.ts
 models/runner-full.ts
 models/runner-health-metrics.ts
 models/runner-healthcheck.ts

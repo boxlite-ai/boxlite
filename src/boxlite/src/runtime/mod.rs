@@ -5,6 +5,7 @@ pub mod constants;
 pub mod id;
 pub mod images;
 pub mod layout;
+pub(crate) mod liveness;
 pub(crate) mod lock;
 pub mod options;
 pub(crate) mod signal_handler;

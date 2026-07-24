@@ -15,12 +15,31 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
+import type { RunnerBoxObservation } from './runner-box-observation';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { RunnerHealthMetrics } from './runner-health-metrics';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { RunnerServiceHealth } from './runner-service-health';
 
 export interface RunnerHealthcheck {
+    /**
+     * Unique epoch generated when the runner process starts
+     */
+    'runnerEpoch': string;
+    /**
+     * Monotonically increasing process incarnation persisted by the runner
+     */
+    'runnerIncarnation': number;
+    /**
+     * Monotonically increasing healthcheck sequence within the runner epoch
+     */
+    'sequence': number;
+    /**
+     * Complete local box inventory. Omitted when inventory collection fails; an empty array is a successful empty snapshot.
+     */
+    'boxes'?: Array<RunnerBoxObservation>;
     /**
      * Runner metrics
      */

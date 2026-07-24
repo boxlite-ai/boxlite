@@ -53,6 +53,11 @@ import { BillingModule } from '../billing/billing.module'
 import { BillingEnforcementService } from './services/billing-enforcement.service'
 import { UsageMeteringModule } from '../usage/metering/usage-metering.module'
 import { UsagePeriodWriter } from '../usage/metering/usage-period-writer'
+import { BoxRuntimeLease } from './entities/box-runtime-lease.entity'
+import { RunnerRuntimeEpoch } from './entities/runner-runtime-epoch.entity'
+import { BoxRuntimeCleanup } from './entities/box-runtime-cleanup.entity'
+import { RuntimeLeaseService } from './services/runtime-lease.service'
+import { RuntimeOrphanCleanupService } from './services/runtime-orphan-cleanup.service'
 
 @Module({
   imports: [
@@ -61,7 +66,19 @@ import { UsagePeriodWriter } from '../usage/metering/usage-period-writer'
     RegionModule,
     BillingModule,
     UsageMeteringModule,
-    TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, SshAccess, Region, Job, BoxLastActivity]),
+    TypeOrmModule.forFeature([
+      Box,
+      Runner,
+      WarmPool,
+      Volume,
+      SshAccess,
+      Region,
+      Job,
+      BoxLastActivity,
+      BoxRuntimeLease,
+      RunnerRuntimeEpoch,
+      BoxRuntimeCleanup,
+    ]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
   providers: [
@@ -84,6 +101,8 @@ import { UsagePeriodWriter } from '../usage/metering/usage-period-writer'
     BoxActivityService,
     BoxStateWaiterService,
     BillingEnforcementService,
+    RuntimeLeaseService,
+    RuntimeOrphanCleanupService,
     BoxAccessGuard,
     RunnerAccessGuard,
     RegionRunnerAccessGuard,
@@ -111,6 +130,7 @@ import { UsagePeriodWriter } from '../usage/metering/usage-period-writer'
     RunnerAdapterFactory,
     BoxActivityService,
     BoxStateWaiterService,
+    RuntimeLeaseService,
   ],
 })
 export class BoxModule {}

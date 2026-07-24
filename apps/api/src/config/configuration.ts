@@ -171,6 +171,7 @@ const configuration = {
     trialDurationDays: parseInt(process.env.BILLING_TRIAL_DURATION_DAYS || '30', 10),
     enforcementEnabled: process.env.BILLING_ENFORCEMENT_ENABLED === 'true',
     enforcementRiskWindowSeconds: parseInt(process.env.BILLING_ENFORCEMENT_RISK_WINDOW_SECONDS || '120', 10),
+    runtimeLeaseSeconds: parseInt(process.env.BILLING_RUNTIME_LEASE_SECONDS || '60', 10),
     paymentProvider:
       process.env.BILLING_PAYMENT_PROVIDER ||
       (process.env.NODE_ENV === 'production' || process.env.ENVIRONMENT === 'production' ? undefined : 'fake'),

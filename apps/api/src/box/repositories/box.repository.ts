@@ -46,6 +46,9 @@ const METERING_FIELDS = new Set<keyof Box>([
   'disk',
   'region',
   'class',
+  'runtimeGeneration',
+  'runtimeAuthorized',
+  'runtimeUnavailable',
 ])
 
 @Injectable()
@@ -333,6 +336,9 @@ export class BoxRepository extends BaseRepository<Box> {
       snapshot.disk === persisted.disk &&
       snapshot.region === persisted.region &&
       snapshot.class === persisted.class &&
+      snapshot.runtimeGeneration === persisted.runtimeGeneration &&
+      snapshot.runtimeAuthorized === persisted.runtimeAuthorized &&
+      snapshot.runtimeUnavailable === persisted.runtimeUnavailable &&
       (!ownsLifecycleJob || snapshot.lifecycleJobId === persisted.lifecycleJobId)
     )
   }
@@ -427,5 +433,13 @@ export class BoxRepository extends BaseRepository<Box> {
         new BoxOrganizationUpdatedEvent(updatedBox, previousBox.organizationId, updatedBox.organizationId),
       )
     }
+  }
+
+  publishCommittedUpdate(
+    updatedBox: Box,
+    previousBox: Pick<Box, 'state' | 'desiredState' | 'public' | 'organizationId' | 'name' | 'authToken'>,
+  ): void {
+    this.invalidateLookupCacheOnUpdate(updatedBox, previousBox)
+    this.emitUpdateEvents(updatedBox, previousBox)
   }
 }

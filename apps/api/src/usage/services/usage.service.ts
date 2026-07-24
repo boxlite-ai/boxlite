@@ -123,6 +123,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
       const rows = await transactionalEntityManager.query<ArchiveBatchResult[]>(
         `WITH claimed AS (
           SELECT p.id, p."boxId", p."organizationId", p."startAt", p."endAt",
+                 p."computeBillableUntil", p."runtimeGeneration", p."runnerEpoch",
                  p.cpu, p.gpu, p.mem, p.disk, p.region, p."boxClass", p."regionType"
           FROM ${activeTable} p
           WHERE p."endAt" IS NOT NULL
@@ -132,9 +133,11 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
         ), inserted AS (
           INSERT INTO ${archiveTable} (
             id, "boxId", "organizationId", "startAt", "endAt",
+            "computeBillableUntil", "runtimeGeneration", "runnerEpoch",
             cpu, gpu, mem, disk, region, "boxClass", "regionType"
           )
           SELECT id, "boxId", "organizationId", "startAt", "endAt",
+                 "computeBillableUntil", "runtimeGeneration", "runnerEpoch",
                  cpu, gpu, mem, disk, region, "boxClass", "regionType"
           FROM claimed
           ON CONFLICT (id) DO NOTHING
