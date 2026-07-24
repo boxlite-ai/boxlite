@@ -10,7 +10,7 @@
 #     Wait for runner online           50-min timeout               if: always()
 #
 # Concurrency: only ONE e2e run at a time (single persistent instance).
-# Queued runs wait; in-progress runs are cancelled by newer pushes.
+# A newer push queues behind the in-progress run instead of cancelling it.
 #
 # Cost: c8i.4xlarge on-demand rate only while running + ~$4/mo EBS storage.
 # Subsequent runs skip setup/compilation (cached) → ~5-10 min → ~$0.03/run.
@@ -63,11 +63,14 @@ on:
         type: boolean
         default: false
 
-# Single global concurrency group — only one e2e run at a time.
-# The persistent instance can only serve one job. Newer pushes cancel older runs.
+# Single global concurrency group — only one e2e run at a time (the
+# persistent instance can only serve one job). A newer push queues behind
+# the in-progress run instead of cancelling it, so an in-flight run keeps
+# its VM work and the earlier commit still gets a result. GitHub keeps only
+# the newest pending run, so intermediate queued pushes are superseded.
 concurrency:
   group: e2e-runner
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 # pull_request_target's default token is write-capable and e2e-tests runs
 # labeled fork code — keep the inherited token read-only. start-runner and
