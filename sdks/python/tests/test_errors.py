@@ -5,7 +5,7 @@ Tests the error hierarchy and exception behavior.
 """
 
 import pytest
-from boxlite.errors import BoxliteError, ExecError, TimeoutError, ParseError
+from boxlite.errors import BoxliteError, ExecError, ParseError, TimeoutError
 
 
 class TestBoxliteError:

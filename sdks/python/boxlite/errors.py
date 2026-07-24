@@ -7,6 +7,14 @@ Provides a hierarchy of exceptions for different failure modes.
 __all__ = ["BoxliteError", "ExecError", "TimeoutError", "ParseError"]
 
 
+def _exec_start_exit_code(stderr: str) -> int:
+    """Map command-start errors to shell-compatible exit codes."""
+    detail = stderr.lower()
+    if "no such file or directory" in detail:
+        return 127
+    return 126
+
+
 class BoxliteError(Exception):
     """Base exception for all boxlite errors."""
 

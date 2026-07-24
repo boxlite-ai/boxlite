@@ -11,7 +11,7 @@ import pytest
 
 # Try to import sync API - skip if greenlet not installed
 try:
-    from boxlite import SyncSimpleBox
+    from boxlite import ExecError, SyncSimpleBox
 
     SYNC_AVAILABLE = True
 except ImportError:
@@ -81,6 +81,25 @@ class TestSyncSimpleBox:
             metrics = box.metrics()
             assert metrics is not None
             assert metrics.commands_executed_total >= 1
+
+    def test_command_not_found_raises_exec_error(self, shared_sync_runtime):
+        """Direct command start failures raise ExecError, not bare RuntimeError."""
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            with pytest.raises(ExecError) as exc:
+                box.exec("definitely-not-a-boxlite-command-xyz")
+            assert exc.value.exit_code == 127
+
+    def test_unexecutable_command_raises_exit_code_126(self, shared_sync_runtime):
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            box.exec(
+                "sh",
+                "-c",
+                "printf '#!/bin/sh\\n' > /tmp/noexec && chmod 644 /tmp/noexec",
+            )
+            with pytest.raises(ExecError) as exc:
+                box.exec("/tmp/noexec")
+            assert exc.value.exit_code == 126
+            assert "permission" in exc.value.stderr.lower()
 
     def test_custom_working_dir(self, shared_sync_runtime):
         """Can set custom working directory."""
