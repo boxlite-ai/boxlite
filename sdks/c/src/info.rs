@@ -30,6 +30,8 @@ pub struct CBoxInfo {
     pub auto_delete: u32,
     pub auto_resume: c_int,
     pub created_at: i64,
+    /// JSON array of active `PortSpec` objects.
+    pub ports_json: *mut c_char,
 }
 
 #[repr(C)]
@@ -58,6 +60,8 @@ fn status_to_str(status: BoxStatus) -> &'static str {
 
 impl CBoxInfo {
     pub fn from_box_info(info: &boxlite::runtime::types::BoxInfo) -> Self {
+        let ports_json =
+            serde_json::to_string(&info.ports).expect("PortSpec serialization cannot fail");
         CBoxInfo {
             id: to_c_str(info.id.as_ref()),
             name: info
@@ -71,6 +75,7 @@ impl CBoxInfo {
             pid: info.pid.map(|p| p as c_int).unwrap_or(0),
             cpus: info.cpus as c_int,
             memory_mib: info.memory_mib as c_int,
+            ports_json: to_c_str(&ports_json),
             auto_pause: info.auto_pause,
             auto_delete: info.auto_delete,
             auto_resume: if info.auto_resume { 1 } else { 0 },
@@ -89,6 +94,7 @@ pub unsafe fn free_box_info(info: *mut CBoxInfo) {
         free_str(info_ref.name);
         free_str(info_ref.image);
         free_str(info_ref.status);
+        free_str(info_ref.ports_json);
     }
 }
 

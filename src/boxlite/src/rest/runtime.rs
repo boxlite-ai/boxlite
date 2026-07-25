@@ -31,6 +31,18 @@ impl RestRuntime {
     }
 }
 
+fn validate_remote_box_options(options: &BoxOptions) -> BoxliteResult<()> {
+    if options.ports.is_empty() {
+        return Ok(());
+    }
+
+    Err(BoxliteError::Unsupported(
+        "Host port publication (-p/ports) is local-only for remote runtimes. \
+         Use box.network.tunnel(port) or `boxlite tunnel BOX PORT` instead."
+            .to_string(),
+    ))
+}
+
 #[async_trait::async_trait]
 impl AuthBackend for RestRuntime {
     async fn whoami(&self) -> BoxliteResult<Principal> {
@@ -81,6 +93,8 @@ fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
+        validate_remote_box_options(&options)?;
+
         // Validate only the caller's requested policy. An unset auto_pause means
         // "no auto-pause", so it must not borrow the server's default here —
         // otherwise a plain remove-on-stop box (`--rm` → auto_delete=1) is
@@ -103,6 +117,8 @@ impl RuntimeBackend for RestRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        validate_remote_box_options(&options)?;
+
         // Try to get existing box by name first
         if let Some(ref box_name) = name
             && let Some(litebox) = self.get(box_name).await?
@@ -227,6 +243,25 @@ fn runtime_metrics_from_response(resp: &RuntimeMetricsResponse) -> RuntimeMetric
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::options::{PortProtocol, PortSpec};
+
+    #[test]
+    fn remote_runtime_rejects_host_port_publication_with_tunnel_guidance() {
+        let options = BoxOptions {
+            ports: vec![PortSpec {
+                host_port: None,
+                guest_port: 3000,
+                protocol: PortProtocol::Tcp,
+                host_ip: None,
+            }],
+            ..Default::default()
+        };
+
+        let err = validate_remote_box_options(&options).unwrap_err();
+        assert!(err.to_string().contains("-p/ports"));
+        assert!(err.to_string().contains("network.tunnel"));
+        assert!(err.to_string().contains("boxlite tunnel"));
+    }
 
     #[tokio::test]
     async fn test_import_box_requires_capability() {

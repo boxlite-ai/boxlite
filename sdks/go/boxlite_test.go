@@ -291,13 +291,27 @@ func TestWithPortExplicitSpec(t *testing.T) {
 	}
 }
 
+func TestPortSpecAcceptsHostIPAndAutomaticHostPort(t *testing.T) {
+	cPort, err := (PortSpec{
+		Host:     0,
+		Guest:    3000,
+		Protocol: PortProtocolTcp,
+		HostIP:   "127.0.0.1",
+	}).toCSpec()
+	if err != nil {
+		t.Fatalf("toCSpec: %v", err)
+	}
+	if cPort.host_port != 0 || cPort.host_ip != "127.0.0.1" {
+		t.Fatalf("c port: got host_port=%d host_ip=%q", cPort.host_port, cPort.host_ip)
+	}
+}
+
 func TestPortSpecRejectsInvalidValues(t *testing.T) {
 	tests := []struct {
 		name string
 		port PortSpec
 	}{
 		{"udp unsupported", PortSpec{Host: 5353, Guest: 53, Protocol: PortProtocolUdp}},
-		{"host ip unsupported", PortSpec{Host: 8080, Guest: 80, Protocol: PortProtocolTcp, HostIP: "127.0.0.1"}},
 		{"guest zero", PortSpec{Host: 8080, Guest: 0, Protocol: PortProtocolTcp}},
 		{"guest too high", PortSpec{Host: 8080, Guest: 65536, Protocol: PortProtocolTcp}},
 		{"host negative", PortSpec{Host: -1, Guest: 80, Protocol: PortProtocolTcp}},
@@ -327,6 +341,23 @@ func TestPortProtocolString(t *testing.T) {
 		if got := tt.protocol.String(); got != tt.want {
 			t.Errorf("portProtocol(%d).String(): got %q, want %q", tt.protocol, got, tt.want)
 		}
+	}
+}
+
+func TestDecodePortsJSONSupportsCurrentAndLegacyProtocols(t *testing.T) {
+	ports := decodePortsJSON(
+		`[{"host_port":49152,"guest_port":3000,"protocol":"tcp","host_ip":"127.0.0.1"},` +
+			`{"host_port":5353,"guest_port":53,"protocol":"Udp","host_ip":null}]`,
+	)
+
+	if len(ports) != 2 {
+		t.Fatalf("ports: got %d", len(ports))
+	}
+	if ports[0].Host != 49152 || ports[0].Guest != 3000 || ports[0].Protocol != PortProtocolTcp || ports[0].HostIP != "127.0.0.1" {
+		t.Errorf("current port: got %+v", ports[0])
+	}
+	if ports[1].Host != 5353 || ports[1].Guest != 53 || ports[1].Protocol != PortProtocolUdp || ports[1].HostIP != "" {
+		t.Errorf("legacy port: got %+v", ports[1])
 	}
 }
 

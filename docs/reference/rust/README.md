@@ -21,6 +21,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [BoxInfo](#boxinfo)
   - [BoxStatus](#boxstatus)
   - [BoxState](#boxstate)
+- [Network Tunnels](#network-tunnels)
 - [Command Execution](#command-execution)
   - [BoxCommand](#boxcommand)
   - [Execution](#execution)
@@ -192,6 +193,7 @@ pub struct LiteBox {
 | `id` | `fn id(&self) -> &BoxID` | Get box ID |
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `fn info(&self) -> BoxInfo` | Get box info (no VM init) |
+| `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
@@ -252,6 +254,9 @@ pub struct BoxInfo {
 
     /// Allocated memory in MiB
     pub memory_mib: u32,
+
+    /// Active local TCP mappings; empty while stopped
+    pub ports: Vec<PortSpec>,
 
     /// User-defined labels
     pub labels: HashMap<String, String>,
@@ -325,6 +330,22 @@ pub struct BoxState {
     pub lock_id: Option<LockId>,
 }
 ```
+
+---
+
+## Network Tunnels
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Get handle | `LiteBox::network(&self) -> NetworkHandle` | Get box-scoped network operations |
+| Prepare | `async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>` | Prepare one TCP connection |
+| Inspect | `BoxTunnel::endpoint(&self) -> BoxEndpoint` | Return `Uri` for remote or a borrowed `FileDescriptor` for local |
+| Connect | `BoxTunnel::connect(self) -> BoxliteResult<Box<dyn BoxConnection>>` | Consume the tunnel into its bidirectional byte stream |
+
+`BoxTunnel` represents exactly one connection; its consuming `connect(self)`
+enforces that at the type boundary. Request another tunnel for each additional
+or concurrent connection. This differs from `BoxOptions.ports`, which creates a
+persistent, local-only host listener that accepts repeated connections.
 
 ---
 
@@ -666,7 +687,7 @@ pub struct PortSpec {
     /// Guest port to expose
     pub guest_port: u16,
 
-    /// Protocol (TCP/UDP)
+    /// Protocol (TCP; UDP is currently rejected)
     pub protocol: PortProtocol,
 
     /// Bind IP (None = 0.0.0.0)

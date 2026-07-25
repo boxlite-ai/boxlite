@@ -336,6 +336,10 @@ pub struct BoxInfo {
     /// Allocated memory in MiB.
     pub memory_mib: u32,
 
+    /// Active host-to-guest port mappings. Empty when the box is not running.
+    #[serde(default)]
+    pub ports: Vec<crate::runtime::options::PortSpec>,
+
     /// User-defined labels for filtering and organization.
     pub labels: HashMap<String, String>,
 
@@ -375,6 +379,7 @@ impl BoxInfo {
             },
             cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
+            ports: load_resolved_ports(config, state),
             labels: HashMap::new(),
             // Local runtimes do not sweep lifecycle deadlines, but metadata keeps
             // the configured values so callers can inspect the effective policy.
@@ -396,12 +401,50 @@ impl PartialEq for BoxInfo {
             && self.image == other.image
             && self.cpus == other.cpus
             && self.memory_mib == other.memory_mib
+            && self.ports == other.ports
             && self.labels == other.labels
             && self.auto_pause == other.auto_pause
             && self.auto_delete == other.auto_delete
             && self.auto_resume == other.auto_resume
             && self.health_status == other.health_status
     }
+}
+
+fn load_resolved_ports(
+    config: &crate::litebox::config::BoxConfig,
+    state: &BoxState,
+) -> Vec<crate::runtime::options::PortSpec> {
+    if !state.status.is_active() {
+        return Vec::new();
+    }
+
+    let path = config
+        .box_home
+        .join(crate::runtime::layout::dirs::LOGS_DIR)
+        .join(crate::runtime::layout::dirs::RESOLVED_PORTS_FILE);
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => {
+            tracing::warn!(
+                box_id = %config.id,
+                path = %path.display(),
+                %error,
+                "Failed to read resolved port mappings"
+            );
+            return Vec::new();
+        }
+    };
+
+    serde_json::from_str(&contents).unwrap_or_else(|error| {
+        tracing::warn!(
+            box_id = %config.id,
+            path = %path.display(),
+            %error,
+            "Failed to parse resolved port mappings"
+        );
+        Vec::new()
+    })
 }
 
 // ============================================================================
@@ -568,6 +611,44 @@ mod tests {
         assert_eq!(info.image, "python:3.11");
         assert_eq!(info.cpus, 4);
         assert_eq!(info.memory_mib, 1024);
+        assert!(info.ports.is_empty());
+    }
+
+    #[test]
+    fn running_box_info_reads_resolved_ports_snapshot() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let logs_dir = temp_dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        let expected = vec![crate::runtime::options::PortSpec {
+            host_port: Some(49152),
+            guest_port: 3000,
+            protocol: crate::runtime::options::PortProtocol::Tcp,
+            host_ip: Some("0.0.0.0".to_string()),
+        }];
+        std::fs::write(
+            logs_dir.join("resolved-ports.json"),
+            serde_json::to_vec(&expected).unwrap(),
+        )
+        .unwrap();
+
+        let config = BoxConfig {
+            id: BoxID::parse("01HJK4TNRPQSXYZ8WM6NCVT9R5").unwrap(),
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions::default(),
+            engine_kind: crate::vmm::VmmKind::Libkrun,
+            box_home: temp_dir.path().to_path_buf(),
+        };
+        let mut state = BoxState::new();
+        state.transition_to(BoxStatus::Running).unwrap();
+
+        assert_eq!(BoxInfo::new(&config, &state).ports, expected);
+
+        state.transition_to(BoxStatus::Stopping).unwrap();
+        assert!(BoxInfo::new(&config, &state).ports.is_empty());
     }
 
     #[test]

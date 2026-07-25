@@ -624,13 +624,13 @@ Used by `run` and `create` (defined at `src/cli/src/cli.rs:287-310`).
 
 ### `PublishFlags`
 
-Used by `run` and `create` (defined at `src/cli/src/cli.rs:316-337`).
+Used by `run` and `create` (defined at `src/cli/src/cli.rs:489-559`).
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--publish PORT` | `-p` | Publish a box port to the host; repeatable (see [Port Publish Syntax](#port-publish-syntax)) |
 
-UDP is accepted syntactically but currently forwarded as TCP — a warning is printed on the first UDP mapping.
+TCP is the only supported publication protocol; UDP is rejected.
 
 ### `VolumeFlags`
 
@@ -679,20 +679,25 @@ The anonymous-volume base directory is resolved as: `--home`, else `$BOXLITE_HOM
 
 ## Port Publish Syntax
 
-`-p`/`--publish` accepts the grammar implemented at `src/cli/src/cli.rs:344-394`:
+`-p`/`--publish` accepts the grammar implemented at
+`src/cli/src/cli.rs:489-559`:
 
 ```
-PORT := [HOST_PORT ':'] BOX_PORT ['/' ('tcp' | 'udp')]
+PORT := [HOST_PORT ':'] BOX_PORT ['/tcp']
 ```
 
 | Form | Example | Behavior |
 |------|---------|----------|
-| `BOX_PORT` | `80` | Forward to the same port on the host |
+| `BOX_PORT` | `80` | Let the OS select an available host port and forward it to box port `80` |
 | `HOST_PORT:BOX_PORT` | `8080:80` | Forward host port `8080` to box port `80` |
-| `BOX_PORT/PROTO` | `5353/udp` | Specify protocol (default: `tcp`) |
 | `HOST_PORT:BOX_PORT/PROTO` | `8080:80/tcp` | Full form |
 
-Ports must be in `1..=65535`. Protocols are case-insensitive. UDP entries are accepted but currently forwarded as TCP (warning is printed once per UDP mapping).
+Ports must be in `1..=65535`. TCP is the only supported protocol; UDP is rejected.
+`-p` is explicit local publication and is rejected for remote REST runtimes.
+For a remote box, use `boxlite tunnel BOX PORT` to obtain its public service
+URL. For SDK code that must run with either runtime, use the box network tunnel
+API; each tunnel handle represents one connection.
+Image `EXPOSE` declarations remain metadata and do not open host listeners.
 
 ---
 

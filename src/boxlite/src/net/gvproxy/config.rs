@@ -30,10 +30,25 @@ pub struct DnsRecord {
 /// Port mapping configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortMapping {
-    /// Host port to bind
+    /// Host port to bind. Zero asks the OS to select an available port.
     pub host_port: u16,
     /// Guest port to forward to
     pub guest_port: u16,
+    /// Transport protocol.
+    pub protocol: crate::runtime::options::PortProtocol,
+    /// Host bind address. `None` binds all IPv4 interfaces.
+    pub host_ip: Option<String>,
+}
+
+impl From<&crate::runtime::options::PortSpec> for PortMapping {
+    fn from(spec: &crate::runtime::options::PortSpec) -> Self {
+        Self {
+            host_port: spec.host_port.unwrap_or(0),
+            guest_port: spec.guest_port,
+            protocol: spec.protocol,
+            host_ip: spec.host_ip.clone(),
+        }
+    }
 }
 
 /// Network configuration for gvproxy instance
@@ -234,6 +249,8 @@ impl GvproxyConfig {
                 .map(|(host_port, guest_port)| PortMapping {
                     host_port,
                     guest_port,
+                    protocol: crate::runtime::options::PortProtocol::Tcp,
+                    host_ip: None,
                 })
                 .collect(),
             ..defaults_with_socket_path(socket_path)
@@ -257,6 +274,12 @@ impl GvproxyConfig {
         }
 
         config
+    }
+
+    /// Replace tuple mappings with the full public port specification.
+    pub fn with_port_specs(mut self, port_mappings: &[crate::runtime::options::PortSpec]) -> Self {
+        self.port_mappings = port_mappings.iter().map(PortMapping::from).collect();
+        self
     }
 
     /// Enable debug logging

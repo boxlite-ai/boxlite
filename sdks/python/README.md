@@ -228,8 +228,10 @@ Configuration options for creating a box.
 - `volumes: List[Tuple[str, str, str]]` - Volume mounts as (host_path, guest_path, mode)
   - Mode: `"ro"` (read-only) or `"rw"` (read-write)
 - `network: NetworkSpec | None` - Structured network configuration
-- `ports: List[Tuple[int, int, str]]` - Port forwarding as (host_port, guest_port, protocol)
-  - Protocol: `"tcp"` or `"udp"`
+- `ports: List[Tuple | Dict]` - Local TCP forwarding; omit `host_port` in a dict for automatic allocation
+  - Protocol: `"tcp"`; UDP is rejected
+  - Portable local/remote code uses `box.network.tunnel(port)`; each tunnel
+    handle represents one connection
 - `secrets: List[Secret]` - Host-side HTTP(S) secret substitution rules
 - `auto_remove: bool` - Auto cleanup after stop (default: True)
 
@@ -296,6 +298,7 @@ Handle to a running or stopped box.
 
 - `info() -> BoxInfo`
   Get box metadata (async)
+  - `info.ports` contains active local TCP mappings and is empty while stopped
 
 - `metrics() -> BoxMetrics`
   Get box resource usage metrics (async)
@@ -617,10 +620,8 @@ boxlite.BoxOptions(
 ```python
 boxlite.BoxOptions(
     ports=[
-        (8080, 80, "tcp"),      # HTTP
-        (8443, 443, "tcp"),     # HTTPS
-        (5432, 5432, "tcp"),    # PostgreSQL
-        (53, 53, "udp"),        # DNS
+        (8080, 80, "tcp"),  # Fixed host port
+        {"guest_port": 3000},  # OS-selected host port
     ]
 )
 ```

@@ -95,7 +95,25 @@ for _, image := range cached {
 
 - `WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled, AllowNet: []string{"api.openai.com"}})` restricts outbound traffic while keeping networking enabled.
 - `WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeDisabled})` disables the guest network interface entirely.
+- `WithPort(boxlite.PortSpec{Guest: 3000})` publishes TCP locally on an OS-selected host port; use `BoxInfo.Ports` to read the resolved mapping.
 - `WithSecret(boxlite.Secret{...})` configures host-side HTTP(S) secret substitution; `Placeholder` defaults to `<BOXLITE_SECRET:{Name}>`.
+
+Port publication is local-only. Remote runtimes reject it with guidance to use
+the existing network tunnel API. Each tunnel handle represents one connection.
+OCI `EXPOSE` metadata does not publish ports.
+
+## Service Tunnels
+
+The same one-connection workflow works with local and remote runtimes:
+
+- `box.Network() (*Network, error)` returns box-scoped network operations.
+- `network.Tunnel(ctx, port) (*BoxTunnel, error)` prepares one TCP connection.
+- `tunnel.Endpoint() (BoxEndpoint, error)` returns a remote URI or borrowed local file descriptor.
+- `tunnel.Connect(ctx) (net.Conn, error)` consumes the tunnel's single connection.
+
+Call `Tunnel` again for each additional or concurrent connection, and close the
+returned `net.Conn`. This differs from `WithPort`, which creates a persistent,
+local-only host listener that accepts repeated connections.
 
 ## Development
 

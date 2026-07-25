@@ -67,6 +67,12 @@ extern "C" {
     /// - Do not use pointer after calling gvproxy_free_string
     pub fn gvproxy_get_stats(id: c_longlong) -> *mut c_char;
 
+    /// Get the resolved host port mappings for an instance as JSON.
+    ///
+    /// Automatic host ports are returned as their actual non-zero values.
+    /// The returned string must be freed with `gvproxy_free_string`.
+    pub fn gvproxy_get_resolved_port_mappings(id: c_longlong) -> *mut c_char;
+
     /// Get the libgvproxy version string
     ///
     /// # Returns

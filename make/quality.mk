@@ -186,16 +186,21 @@ lint\:c:
 	done
 
 fmt\:go:
-	@echo "🔧 Formatting Go SDK..."
+	@echo "🔧 Formatting Go code..."
 	@cd sdks/go && go fmt ./...
+	@cd src/deps/libgvproxy-sys/gvproxy-bridge && gofmt -w port_mapping.go port_mapping_test.go
 
 fmt\:check\:go:
-	@echo "🔍 Checking Go SDK formatting..."
+	@echo "🔍 Checking Go formatting..."
 	@cd sdks/go && test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
+	@cd src/deps/libgvproxy-sys/gvproxy-bridge && \
+		test -z "$$(gofmt -l port_mapping.go port_mapping_test.go)" || \
+		(gofmt -l port_mapping.go port_mapping_test.go && exit 1)
 
 lint\:go:
-	@echo "🔍 Linting Go SDK (vet)..."
+	@echo "🔍 Linting Go code (vet)..."
 	@cd sdks/go && go vet -tags boxlite_dev ./...
+	@cd src/deps/libgvproxy-sys/gvproxy-bridge && go vet ./...
 
 clippy: _ensure-python-deps
 	@echo "🔍 Running Rust clippy checks..."

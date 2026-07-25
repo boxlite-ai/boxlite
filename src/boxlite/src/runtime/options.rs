@@ -327,6 +327,10 @@ pub struct BoxOptions {
     pub rootfs: RootfsSpec,
     pub volumes: Vec<VolumeSpec>,
     pub network: NetworkSpec,
+    /// Explicit host publication for the local runtime.
+    ///
+    /// Remote runtimes reject port mappings; use a box network tunnel for
+    /// portable local/remote access to a guest service.
     pub ports: Vec<PortSpec>,
     /// Automatically remove the box when stopped.
     ///
@@ -571,6 +575,33 @@ impl BoxOptions {
                 "isolate_mounts is only supported on Linux".to_string(),
             ));
         }
+
+        if matches!(self.network, NetworkSpec::Disabled) && !self.ports.is_empty() {
+            return Err(boxlite_shared::errors::BoxliteError::Config(
+                "ports require network.mode=\"enabled\"".to_string(),
+            ));
+        }
+
+        for port in &self.ports {
+            if port.guest_port == 0 {
+                return Err(boxlite_shared::errors::BoxliteError::Config(
+                    "guest port must be in range 1-65535".to_string(),
+                ));
+            }
+            if matches!(port.protocol, PortProtocol::Udp) {
+                return Err(boxlite_shared::errors::BoxliteError::Unsupported(
+                    "UDP port forwarding is not implemented; use TCP".to_string(),
+                ));
+            }
+            if let Some(host_ip) = port.host_ip.as_deref()
+                && host_ip.parse::<std::net::IpAddr>().is_err()
+            {
+                return Err(boxlite_shared::errors::BoxliteError::Config(format!(
+                    "invalid port host_ip {host_ip:?}; expected an IPv4 or IPv6 address"
+                )));
+            }
+        }
+
         Ok(())
     }
 }
@@ -699,10 +730,12 @@ impl Default for NetworkSpec {
     }
 }
 
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PortProtocol {
     #[default]
+    #[serde(rename = "tcp", alias = "Tcp")]
     Tcp,
+    #[serde(rename = "udp", alias = "Udp")]
     Udp,
     // Sctp,
 }
@@ -711,14 +744,59 @@ fn default_protocol() -> PortProtocol {
     PortProtocol::Tcp
 }
 
-/// Port mapping specification (host -> guest).
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+/// Local host-to-guest port publication.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PortSpec {
-    pub host_port: Option<u16>, // None => same as guest_port
+    /// Host port to bind. `None` asks the OS to select an available port.
+    pub host_port: Option<u16>,
     pub guest_port: u16,
     #[serde(default = "default_protocol")]
     pub protocol: PortProtocol,
     pub host_ip: Option<String>, // Optional bind IP, defaults to 0.0.0.0/:: if None
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct LegacyPortNormalization {
+    pub same_port_defaults: usize,
+    pub udp_coercions: usize,
+    pub discarded_host_ips: usize,
+    pub duplicate_host_ports: usize,
+}
+
+/// Canonicalize mappings written before `host_port=None` meant automatic
+/// allocation. The old backend ignored protocol and bind IP, and duplicate
+/// host ports were resolved by the final entry inserted into its map.
+pub(crate) fn normalize_legacy_ports(ports: &mut Vec<PortSpec>) -> LegacyPortNormalization {
+    let mut report = LegacyPortNormalization::default();
+    let mut by_host_port = std::collections::BTreeMap::new();
+
+    for (index, mut port) in ports.drain(..).enumerate() {
+        let host_port = match port.host_port {
+            Some(host_port) => host_port,
+            None => {
+                report.same_port_defaults += 1;
+                port.guest_port
+            }
+        };
+
+        if port.protocol == PortProtocol::Udp {
+            report.udp_coercions += 1;
+            port.protocol = PortProtocol::Tcp;
+        }
+        if port.host_ip.take().is_some() {
+            report.discarded_host_ips += 1;
+        }
+        port.host_port = Some(host_port);
+
+        if by_host_port.insert(host_port, (index, port)).is_some() {
+            report.duplicate_host_ports += 1;
+        }
+    }
+
+    let mut normalized: Vec<_> = by_host_port.into_values().collect();
+    normalized.sort_by_key(|(index, _)| *index);
+    *ports = normalized.into_iter().map(|(_, port)| port).collect();
+    report
 }
 
 /// A portable box archive (`.boxlite` file).
@@ -758,6 +836,56 @@ pub struct CloneOptions {}
 mod tests {
     use super::*;
     use crate::runtime::advanced_options::{SecurityOptions, SecurityOptionsBuilder};
+
+    #[test]
+    fn legacy_ports_keep_old_same_port_and_last_write_wins_semantics() {
+        let mut ports = vec![
+            PortSpec {
+                host_port: None,
+                guest_port: 3000,
+                protocol: PortProtocol::Tcp,
+                host_ip: Some("127.0.0.1".to_string()),
+            },
+            PortSpec {
+                host_port: Some(3000),
+                guest_port: 4000,
+                protocol: PortProtocol::Udp,
+                host_ip: None,
+            },
+        ];
+
+        let report = normalize_legacy_ports(&mut ports);
+
+        assert_eq!(
+            ports,
+            vec![PortSpec {
+                host_port: Some(3000),
+                guest_port: 4000,
+                protocol: PortProtocol::Tcp,
+                host_ip: None,
+            }]
+        );
+        assert_eq!(report.same_port_defaults, 1);
+        assert_eq!(report.udp_coercions, 1);
+        assert_eq!(report.discarded_host_ips, 1);
+        assert_eq!(report.duplicate_host_ports, 1);
+    }
+
+    #[test]
+    fn port_protocol_serializes_lowercase_and_reads_legacy_names() {
+        assert_eq!(
+            serde_json::to_string(&PortProtocol::Tcp).unwrap(),
+            r#""tcp""#
+        );
+        assert_eq!(
+            serde_json::from_str::<PortProtocol>(r#""Tcp""#).unwrap(),
+            PortProtocol::Tcp
+        );
+        assert_eq!(
+            serde_json::from_str::<PortProtocol>(r#""Udp""#).unwrap(),
+            PortProtocol::Udp
+        );
+    }
 
     #[test]
     #[allow(deprecated)]

@@ -9,7 +9,8 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::config::GvproxyConfig;
 use libgvproxy_sys::{
-    gvproxy_create, gvproxy_destroy, gvproxy_free_string, gvproxy_get_stats, gvproxy_get_version,
+    gvproxy_create, gvproxy_destroy, gvproxy_free_string, gvproxy_get_resolved_port_mappings,
+    gvproxy_get_stats, gvproxy_get_version,
 };
 
 /// Create a new gvproxy instance with full configuration
@@ -77,6 +78,29 @@ pub fn destroy_instance(id: i64) -> BoxliteResult<()> {
     tracing::info!(id, "Destroyed gvproxy instance via FFI");
 
     Ok(())
+}
+
+/// Read the actual host endpoints bound by gvproxy.
+pub fn get_resolved_port_mappings(
+    id: i64,
+) -> BoxliteResult<Vec<crate::runtime::options::PortSpec>> {
+    let c_str = unsafe { gvproxy_get_resolved_port_mappings(id) };
+    if c_str.is_null() {
+        return Err(BoxliteError::Network(format!(
+            "gvproxy_get_resolved_port_mappings failed for instance {id}"
+        )));
+    }
+
+    let json = unsafe { CStr::from_ptr(c_str) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { gvproxy_free_string(c_str) };
+
+    serde_json::from_str(&json).map_err(|e| {
+        BoxliteError::Network(format!(
+            "failed to parse gvproxy resolved port mappings: {e} (JSON: {json})"
+        ))
+    })
 }
 
 /// Get the gvproxy version string

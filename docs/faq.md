@@ -272,7 +272,7 @@ boxlite.BoxOptions(
     ports=[
         (8080, 80, "tcp"),      # Host 8080 → Guest 80
         (5432, 5432, "tcp"),    # PostgreSQL
-        (53, 53, "udp"),        # DNS (UDP)
+        {"guest_port": 3000},   # OS-selected host port
     ]
 )
 ```
@@ -281,6 +281,12 @@ boxlite.BoxOptions(
 ```bash
 curl http://localhost:8080
 ```
+
+Port publication is local-only and TCP-only. It creates a listener that ordinary
+host applications can use for repeated connections. Remote runtimes reject
+`ports`; use `box.network.tunnel(port)` for portable SDK access. Each tunnel
+handle carries one connection.
+Image `EXPOSE` declarations do not publish host ports.
 
 See [Configuring Networking](./guides/README.md#configuring-networking) for details.
 

@@ -41,6 +41,8 @@ struct InspectPresenter {
     cpus: u8,
     #[serde(rename = "Memory")]
     memory: u64,
+    #[serde(rename = "Ports")]
+    ports: Vec<boxlite::runtime::options::PortSpec>,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,6 +75,7 @@ impl From<&BoxInfo> for InspectPresenter {
             },
             cpus: info.cpus,
             memory: info.memory_mib as u64 * 1024 * 1024,
+            ports: info.ports.clone(),
         }
     }
 }

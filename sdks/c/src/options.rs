@@ -90,7 +90,7 @@ pub enum BoxlitePortProtocol {
 
 /// Forward `host_port` on the host to `guest_port` inside the box.
 ///
-/// - `host_port`: 0 = use the same number as `guest_port`.
+/// - `host_port`: 0 = let the OS select an available host port.
 /// - `guest_port`: required, 1-65535.
 /// - `host_ip`: bind address; NULL or "" = all host interfaces.
 ///

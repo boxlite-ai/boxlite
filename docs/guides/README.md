@@ -229,11 +229,13 @@ BoxLite uses gvproxy for NAT networking by default. All boxes can:
 - Resolve DNS
 - Make outbound connections
 
-### Port Forwarding
+### Port Publication
 
-Map host ports to guest ports for incoming connections.
+Explicitly publish guest ports when ordinary host applications need a local TCP
+listener. The local runtime owns the listener for the lifetime of the running
+box and accepts repeated connections.
 
-**Basic Port Forwarding:**
+**Basic Port Publication:**
 
 ```python
 import boxlite
@@ -258,7 +260,7 @@ ports=[
     (8443, 443, "tcp"),     # HTTPS
     (5432, 5432, "tcp"),    # PostgreSQL
     (6379, 6379, "tcp"),    # Redis
-    (53, 53, "udp"),        # DNS (UDP)
+    {"guest_port": 3000},   # Automatic host port
 ]
 ```
 
@@ -268,6 +270,18 @@ ports=[
 # Map host port 3000 to guest port 8000
 ports=[(3000, 8000, "tcp")]
 ```
+
+Port publication is available only with the local runtime and supports TCP. It
+is appropriate for browsers, database clients, and other programs that expect a
+normal host address.
+
+For SDK code that must work with local and remote runtimes, use
+`box.network.tunnel(port)` and consume its byte stream with `connect()`. A tunnel
+handle represents one connection; request another handle for another connection.
+Remote CLI users can run `boxlite tunnel BOX PORT` to obtain the public service
+URL.
+
+Image `EXPOSE` declarations are metadata only and never create host listeners.
 
 ### Testing Connectivity
 

@@ -350,7 +350,8 @@ Box                    gvproxy                  Internet
 **Features:**
 
 - Full outbound internet access
-- Port forwarding (TCP/UDP)
+- Local port publication (TCP)
+- Local one-shot service tunnels
 - Built-in DHCP and DNS
 - Network metrics (bytes sent/received)
 
@@ -359,6 +360,16 @@ Box                    gvproxy                  Internet
 QEMU's user-mode networking stack.
 
 **Use case:** Environments where gvproxy isn't available.
+
+### Service Access Across Runtimes
+
+The box network tunnel API is portable across local and REST runtimes, but its
+transport is backend-specific. Local tunnels return a prepared gvproxy
+connection; REST tunnels connect through the remote service proxy and also
+carry its public URI. Each SDK tunnel handle represents one connection.
+
+Explicit host port publication is a separate local-runtime feature that owns a
+TCP listener and accepts repeated connections.
 
 ### Network Configuration
 

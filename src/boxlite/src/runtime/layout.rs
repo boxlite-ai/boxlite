@@ -37,6 +37,12 @@ pub mod dirs {
     /// Subdirectory for log files
     pub const LOGS_DIR: &str = "logs";
 
+    /// Resolved host-to-guest port mapping snapshot.
+    pub const RESOLVED_PORTS_FILE: &str = "resolved-ports.json";
+
+    /// Shim process identity file.
+    pub const SHIM_PID_FILE: &str = "shim.pid";
+
     /// Subdirectory for disk images
     pub const DISKS_DIR: &str = "disks";
 
@@ -488,6 +494,11 @@ impl BoxFilesystemLayout {
         self.box_dir.join("logs")
     }
 
+    /// Last shim-verified host port mappings for the active VM lifecycle.
+    pub fn resolved_ports_path(&self) -> PathBuf {
+        self.logs_dir().join(dirs::RESOLVED_PORTS_FILE)
+    }
+
     /// Per-box temp directory: ~/.boxlite/boxes/{box_id}/tmp
     ///
     /// Used for shim/libkrun transient files when jailer is enabled with the
@@ -531,7 +542,7 @@ impl BoxFilesystemLayout {
     /// This is the single source of truth for the shim process PID.
     /// Database PID is a cache that can be reconstructed from this file.
     pub fn pid_file_path(&self) -> PathBuf {
-        self.box_dir.join("shim.pid")
+        self.box_dir.join(dirs::SHIM_PID_FILE)
     }
 
     /// Exit file path: ~/.boxlite/boxes/{box_id}/exit

@@ -312,7 +312,8 @@ volumes=[
 
 Port forwarding as (host_port, guest_port, protocol) tuples.
 
-**Format:** `(host_port, guest_port, "tcp"|"udp")`
+**Format:** `(host_port, guest_port, "tcp")`, or a dictionary with
+`guest_port` and no `host_port` to request an automatic host port.
 
 **Default:** `[]` (no port forwarding)
 
@@ -322,16 +323,20 @@ ports=[
     (8080, 80, "tcp"),      # HTTP
     (8443, 443, "tcp"),     # HTTPS
     (5432, 5432, "tcp"),    # PostgreSQL
-    (53, 53, "udp"),        # DNS
     (3000, 8000, "tcp"),    # Custom mapping
+    {"guest_port": 3000},   # OS-selected host port
 ]
 ```
 
 **Notes:**
 - Uses gvproxy for NAT port mapping
 - Host port must be available (not in use)
-- Multiple boxes can forward to same host port (error if conflict)
-- Supports both TCP and UDP protocols
+- Fixed host ports must be unique and available
+- TCP is supported; UDP is rejected
+- Port publication is local-only and owns a listener that accepts repeated
+  connections. For portable local/remote SDK code, use
+  `box.network.tunnel(port)`; each tunnel handle represents one connection.
+- OCI `EXPOSE` is metadata and does not publish a host port.
 - Port mappings are only for host → box traffic. Use
   `host.boxlite.internal:<port>` for box → host loopback traffic.
 

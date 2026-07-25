@@ -57,10 +57,12 @@ pub enum NetworkBackendEndpoint {
 /// can derive.
 #[derive(Debug, Clone)]
 pub struct NetworkBackendConfig {
-    /// Port mappings: (host_port, guest_port).
-    pub port_mappings: Vec<(u16, u16)>,
+    /// Requested host-to-guest port mappings.
+    pub port_mappings: Vec<crate::runtime::options::PortSpec>,
     /// Unix socket path for the network backend (`net.sock`).
     pub socket_path: PathBuf,
+    /// Shim-written snapshot of resolved host port mappings.
+    pub resolved_ports_path: PathBuf,
     /// Network allowlist. When non-empty, DNS sinkhole blocks unlisted hosts.
     pub allow_net: Vec<String>,
     /// Secrets for MITM proxy injection.
@@ -79,10 +81,14 @@ pub struct NetworkBackendConfig {
 /// line. `secrets` already redacts via [`Secret`](crate::runtime::options::Secret).
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct NetworkBackendSpec {
-    /// Port mappings: (host_port, guest_port).
-    pub port_mappings: Vec<(u16, u16)>,
+    /// Requested host-to-guest port mappings.
+    #[serde(default, deserialize_with = "deserialize_port_mappings")]
+    pub port_mappings: Vec<crate::runtime::options::PortSpec>,
     /// Unix socket path for the network backend.
     pub socket_path: PathBuf,
+    /// Shim-written snapshot of resolved host port mappings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_ports_path: Option<PathBuf>,
     /// Network allowlist. When non-empty, DNS sinkhole blocks unlisted hosts.
     #[serde(default)]
     pub allow_net: Vec<String>,
@@ -97,11 +103,40 @@ pub struct NetworkBackendSpec {
     pub ca_key_pem: Option<String>,
 }
 
+fn deserialize_port_mappings<'de, D>(
+    deserializer: D,
+) -> Result<Vec<crate::runtime::options::PortSpec>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum WirePortMapping {
+        Current(crate::runtime::options::PortSpec),
+        Legacy((u16, u16)),
+    }
+
+    let mappings = <Vec<WirePortMapping> as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(mappings
+        .into_iter()
+        .map(|mapping| match mapping {
+            WirePortMapping::Current(port) => port,
+            WirePortMapping::Legacy((host_port, guest_port)) => crate::runtime::options::PortSpec {
+                host_port: Some(host_port),
+                guest_port,
+                protocol: crate::runtime::options::PortProtocol::Tcp,
+                host_ip: None,
+            },
+        })
+        .collect())
+}
+
 impl std::fmt::Debug for NetworkBackendSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NetworkBackendSpec")
             .field("port_mappings", &self.port_mappings)
             .field("socket_path", &self.socket_path)
+            .field("resolved_ports_path", &self.resolved_ports_path)
             .field("allow_net", &self.allow_net)
             .field("secrets", &self.secrets)
             .field(
@@ -452,6 +487,16 @@ pub fn default_factory() -> Arc<dyn NetworkBackendFactory> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::options::{PortProtocol, PortSpec};
+
+    fn fixed_port(host_port: u16, guest_port: u16) -> PortSpec {
+        PortSpec {
+            host_port: Some(host_port),
+            guest_port,
+            protocol: PortProtocol::Tcp,
+            host_ip: None,
+        }
+    }
 
     /// Defense-in-depth: `Debug` on the wire spec must not print the CA private
     /// key or cert PEM. The derived `Debug` would; the manual impl redacts.
@@ -460,8 +505,9 @@ mod tests {
         let key_sentinel = "----BEGIN PRIVATE KEY----TOPSECRETPKCS8";
         let cert_sentinel = "----BEGIN CERTIFICATE----TOPSECRETCERT";
         let spec = NetworkBackendSpec {
-            port_mappings: vec![(8080, 80)],
+            port_mappings: vec![fixed_port(8080, 80)],
             socket_path: PathBuf::from("/tmp/test-net.sock"),
+            resolved_ports_path: None,
             allow_net: Vec::new(),
             secrets: Vec::new(),
             ca_cert_pem: Some(cert_sentinel.to_string()),
@@ -493,8 +539,9 @@ mod tests {
     #[test]
     fn spec_serde_carries_ca_pems_that_debug_redacts() {
         let spec = NetworkBackendSpec {
-            port_mappings: vec![(8080, 80)],
+            port_mappings: vec![fixed_port(8080, 80)],
             socket_path: PathBuf::from("/tmp/net.sock"),
+            resolved_ports_path: None,
             allow_net: Vec::new(),
             secrets: Vec::new(),
             ca_cert_pem: Some("CERTDATA".to_string()),
@@ -511,8 +558,9 @@ mod tests {
         let json = r#"{"port_mappings":[[8080,80]],"socket_path":"/tmp/net.sock"}"#;
         let spec: NetworkBackendSpec = serde_json::from_str(json).unwrap();
 
-        assert_eq!(spec.port_mappings, vec![(8080, 80)]);
+        assert_eq!(spec.port_mappings, vec![fixed_port(8080, 80)]);
         assert_eq!(spec.socket_path, PathBuf::from("/tmp/net.sock"));
+        assert!(spec.resolved_ports_path.is_none());
         assert!(spec.allow_net.is_empty());
         assert!(spec.secrets.is_empty());
         assert!(spec.ca_cert_pem.is_none());
@@ -522,8 +570,9 @@ mod tests {
     #[test]
     fn default_factory_creates_runtime_gvproxy_backend_without_ffi_feature() {
         let config = NetworkBackendConfig {
-            port_mappings: vec![(8080, 80)],
+            port_mappings: vec![fixed_port(8080, 80)],
             socket_path: PathBuf::from("/tmp/default-factory/net.sock"),
+            resolved_ports_path: PathBuf::from("/tmp/default-factory/resolved-ports.json"),
             allow_net: vec!["example.com".to_string()],
             secrets: Vec::new(),
             ca_dir: PathBuf::from("/tmp/default-factory/ca"),
@@ -605,6 +654,7 @@ mod tests {
             NetworkBackendSpec {
                 port_mappings: Vec::new(),
                 socket_path: PathBuf::from("/tmp/net.sock"),
+                resolved_ports_path: None,
                 allow_net: Vec::new(),
                 secrets: Vec::new(),
                 ca_cert_pem: None,

@@ -177,6 +177,8 @@ pub(crate) struct PyBoxInfo {
     #[pyo3(get)]
     pub(crate) memory_mib: u32,
     #[pyo3(get)]
+    pub(crate) ports: Vec<(Option<u16>, u16, String, Option<String>)>,
+    #[pyo3(get)]
     pub(crate) auto_pause: u32,
     #[pyo3(get)]
     pub(crate) auto_delete: u32,
@@ -200,6 +202,7 @@ impl PyBoxInfo {
             "image": self.image,
             "cpus": self.cpus,
             "memory_mib": self.memory_mib,
+            "ports": self.ports,
             "auto_pause": self.auto_pause,
             "auto_delete": self.auto_delete,
             "auto_resume": self.auto_resume,
@@ -232,6 +235,22 @@ impl From<BoxInfo> for PyBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
+            ports: info
+                .ports
+                .into_iter()
+                .map(|port| {
+                    let protocol = match port.protocol {
+                        boxlite::runtime::options::PortProtocol::Tcp => "tcp",
+                        boxlite::runtime::options::PortProtocol::Udp => "udp",
+                    };
+                    (
+                        port.host_port,
+                        port.guest_port,
+                        protocol.to_string(),
+                        port.host_ip,
+                    )
+                })
+                .collect(),
             auto_pause: info.auto_pause,
             auto_delete: info.auto_delete,
             auto_resume: info.auto_resume,

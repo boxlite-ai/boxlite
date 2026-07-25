@@ -52,10 +52,29 @@ pub(crate) async fn import_box(
         .map_err(|e| BoxliteError::Internal(format!("Import install task panicked: {}", e)))??;
 
     // Use full BoxOptions from v3+ manifest, or reconstruct from image for v1/v2.
-    let options = manifest.box_options.unwrap_or_else(|| BoxOptions {
+    let archive_version = manifest.version;
+    let mut options = manifest.box_options.unwrap_or_else(|| BoxOptions {
         rootfs: RootfsSpec::Image(manifest.image),
         ..Default::default()
     });
+    if archive_version <= 3 {
+        let report = crate::runtime::options::normalize_legacy_ports(&mut options.ports);
+        if report.same_port_defaults
+            + report.udp_coercions
+            + report.discarded_host_ips
+            + report.duplicate_host_ports
+            > 0
+        {
+            tracing::warn!(
+                archive_version,
+                same_port_defaults = report.same_port_defaults,
+                udp_coercions = report.udp_coercions,
+                discarded_host_ips = report.discarded_host_ips,
+                duplicate_host_ports = report.duplicate_host_ports,
+                "Canonicalized legacy archive port mappings"
+            );
+        }
+    }
 
     let litebox = runtime
         .provision_box(staging_dir, name, options, BoxStatus::Stopped)

@@ -1,5 +1,7 @@
 use clap::Args;
 
+use super::print_resolved_ports;
+
 #[derive(Args, Debug)]
 pub struct RestartArgs {
     /// Name or ID of the box(es) to restart
@@ -45,6 +47,7 @@ pub async fn execute(args: RestartArgs, global: &crate::cli::GlobalFlags) -> any
             eprintln!("Error restarting box '{}': {}", target, e);
             errors.push(format!("{}: {}", target, e));
         } else {
+            print_resolved_ports(&litebox);
             println!("{}", target);
             success_count += 1;
         }

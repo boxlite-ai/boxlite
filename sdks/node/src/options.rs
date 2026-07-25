@@ -288,7 +288,7 @@ pub struct JsPortSpec {
     #[napi(js_name = "guestPort")]
     pub guest_port: u16,
 
-    /// Protocol ("tcp" or "udp", default: "tcp")
+    /// Protocol ("tcp"; UDP is rejected)
     pub protocol: Option<String>,
 
     /// Bind IP address (default: 0.0.0.0)
@@ -337,6 +337,22 @@ impl From<JsPortSpec> for PortSpec {
             guest_port: p.guest_port,
             protocol,
             host_ip: p.host_ip,
+        }
+    }
+}
+
+impl From<PortSpec> for JsPortSpec {
+    fn from(port: PortSpec) -> Self {
+        let protocol = match port.protocol {
+            PortProtocol::Tcp => "tcp",
+            PortProtocol::Udp => "udp",
+        };
+
+        Self {
+            host_port: port.host_port,
+            guest_port: port.guest_port,
+            protocol: Some(protocol.to_string()),
+            host_ip: port.host_ip,
         }
     }
 }

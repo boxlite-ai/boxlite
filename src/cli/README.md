@@ -318,13 +318,16 @@ silently restarting it, because restarting would run the command a second time.
 | `--tty` | `-t` | Allocate a pseudo-TTY |
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
 | `--workdir PATH` | `-w` | Working directory in the box |
-| `--publish PORT` | `-p` | Publish box port to host (e.g. `8080:80`, `8080:80/tcp`) |
+| `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
 | `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, `boxPath` for anonymous) |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--name NAME` | | Name the box |
 | `--detach` | `-d` | Run in background, print box ID |
 | `--rm` | | Remove the box when it exits |
+
+`-p` is explicit local publication. Remote REST profiles reject it and direct
+the caller to `boxlite tunnel`.
 
 **Examples:**
 
@@ -357,12 +360,15 @@ default, and `exec` still starts it on demand.
 | `--name NAME` | | Name the box |
 | `--env KEY=VALUE` | `-e` | Environment variables |
 | `--workdir PATH` | `-w` | Working directory |
-| `--publish PORT` | `-p` | Publish box port to host (e.g. `8080:80`) |
+| `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
 | `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, or box path for anonymous) |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--detach` | `-d` | (create always “detaches”) |
 | `--rm` | | Auto-remove when stopped |
+
+`-p` is explicit local publication. Remote REST profiles reject it and direct
+the caller to `boxlite tunnel`.
 
 **Examples:**
 
@@ -499,6 +505,16 @@ boxlite cp ./local.txt mybox:/tmp/
 boxlite cp mybox:/app/out ./output
 ```
 
+### `boxlite tunnel`
+
+Print the public URL for a service port on a remote box.
+
+**Usage:** `boxlite tunnel BOX PORT`
+
+This command requires a remote REST profile (`--url` or `--profile`). It does
+not create a local listener. Local users who need a normal host address should
+publish the port explicitly with `-p`; portable SDK code can use the box network
+tunnel API for one connection at a time.
 
 ### `boxlite info`
 

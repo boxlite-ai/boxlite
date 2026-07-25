@@ -1185,6 +1185,7 @@ mod owned_ffi_ptr_nested_leak_tests {
             pid: 0,
             cpus: 1,
             memory_mib: 256,
+            ports_json: test_cstr("[]"),
             created_at: 0,
             auto_pause: 900,
             auto_delete: 0,
@@ -1197,9 +1198,9 @@ mod owned_ffi_ptr_nested_leak_tests {
         let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
         assert_eq!(
             after - before,
-            4,
+            5,
             "OwnedFfiPtr<CBoxInfo>::drop reclaimed {} inner CStrings; \
-             expected 4 (id + name + image + status). Inner allocations leak.",
+             expected 5 (id + name + image + status + ports). Inner allocations leak.",
             after - before
         );
     }
@@ -1255,6 +1256,7 @@ mod owned_ffi_ptr_nested_leak_tests {
             pid: 0,
             cpus: 2,
             memory_mib: 512,
+            ports_json: test_cstr("[]"),
             created_at: 0,
             auto_pause: 900,
             auto_delete: 0,
@@ -1275,9 +1277,9 @@ mod owned_ffi_ptr_nested_leak_tests {
         let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
         assert_eq!(
             after - before,
-            4,
+            5,
             "OwnedFfiPtr<CBoxInfoList>::drop reclaimed {} inner CStrings; \
-             expected 4 (1 item × 4 fields). Inner allocations leak.",
+             expected 5 (1 item × 5 fields). Inner allocations leak.",
             after - before
         );
     }

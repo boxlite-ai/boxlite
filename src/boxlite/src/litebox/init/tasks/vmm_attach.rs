@@ -93,6 +93,7 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
             let config = NetworkBackendConfig {
                 port_mappings: Vec::new(),
                 socket_path: layout.net_backend_socket_path(),
+                resolved_ports_path: layout.resolved_ports_path(),
                 allow_net,
                 secrets,
                 ca_dir: layout.ca_dir(),

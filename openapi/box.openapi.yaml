@@ -1536,6 +1536,13 @@ components:
           minimum: 128
           description: Allocated memory in MiB
           example: 512
+        ports:
+          type: array
+          description: |
+            Active local TCP port mappings. Empty when the box is not running.
+            Older servers may omit this field.
+          items:
+            $ref: "#/components/schemas/PortSpec"
         labels:
           type: object
           additionalProperties:
@@ -1576,7 +1583,11 @@ components:
 
     CreateBoxRequest:
       type: object
-      description: Configuration for creating a new box (maps to BoxOptions)
+      description: |
+        REST-supported configuration for creating a new box. Host port
+        publication is intentionally absent; use the box network tunnel
+        endpoint for remote service access.
+      additionalProperties: false
       properties:
         name:
           type: string
@@ -1639,10 +1650,6 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/VolumeSpec"
-        ports:
-          type: array
-          items:
-            $ref: "#/components/schemas/PortSpec"
         network:
           $ref: "#/components/schemas/NetworkSpec"
         secrets:
@@ -1710,22 +1717,22 @@ components:
 
     PortSpec:
       type: object
-      description: Port forwarding rule (host → guest)
-      required: [guest_port]
+      description: Active local TCP port mapping (host → guest)
+      required: [host_port, guest_port, protocol]
       properties:
         host_port:
           type: integer
-          minimum: 0
+          minimum: 1
           maximum: 65535
-          description: Host port (0 or omit for dynamic assignment)
+          description: Host port selected for the active mapping
         guest_port:
           type: integer
           minimum: 1
           maximum: 65535
-          description: Container port to expose
+          description: Target guest TCP port
         protocol:
           type: string
-          enum: [tcp, udp]
+          enum: [tcp]
           default: tcp
         host_ip:
           type: string

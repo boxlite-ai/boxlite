@@ -240,6 +240,8 @@ pub(crate) struct BoxResponse {
     pub cpus: u8,
     pub memory_mib: u32,
     #[serde(default)]
+    pub ports: Vec<crate::runtime::options::PortSpec>,
+    #[serde(default)]
     pub labels: HashMap<String, String>,
     /// Absent while the box's main command is still running. An older server
     /// omits it entirely, which reads the same as "still running" — the
@@ -287,6 +289,7 @@ impl BoxResponse {
             image: self.image.clone(),
             cpus: self.cpus,
             memory_mib: self.memory_mib,
+            ports: self.ports.clone(),
             labels: self.labels.clone(),
             auto_pause: self.auto_pause,
             auto_delete: self.auto_delete,
@@ -739,6 +742,7 @@ mod tests {
         assert_eq!(resp.status, "running");
         assert_eq!(resp.pid, Some(1234));
         assert_eq!(resp.cpus, 2);
+        assert!(resp.ports.is_empty());
         assert_eq!(resp.auto_pause, 900);
         assert_eq!(resp.auto_delete, 0);
     }
@@ -755,6 +759,7 @@ mod tests {
             image: "python:3.11".to_string(),
             cpus: 2,
             memory_mib: 512,
+            ports: Vec::new(),
             labels: HashMap::new(),
             exit_code: None,
             auto_pause: 1800,
@@ -784,6 +789,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 1,
             memory_mib: 256,
+            ports: Vec::new(),
             labels: HashMap::new(),
             exit_code: None,
             auto_pause: 900,
@@ -812,6 +818,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 1,
             memory_mib: 256,
+            ports: Vec::new(),
             labels: HashMap::new(),
             exit_code: None,
             auto_pause: 900,
@@ -884,6 +891,7 @@ mod tests {
             image: "python:3.11".to_string(),
             cpus: 2,
             memory_mib: 512,
+            ports: Vec::new(),
             labels: HashMap::new(),
             exit_code: None,
             auto_pause: 900,

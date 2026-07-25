@@ -10,6 +10,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from pydantic import ValidationError
+
 
 SERVER_PATH = Path(__file__).resolve().parents[1] / "server.py"
 SERVER_DIR = SERVER_PATH.parent
@@ -70,6 +72,7 @@ def _make_box_info(box_id: str, *, name: str = "test-box", status: str = "create
         image="alpine:latest",
         cpus=2,
         memory_mib=512,
+        ports=[],
     )
 
 
@@ -154,6 +157,30 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(payload["box_id"], "box-create")
         self.assertIn("box-create", SERVER.state.active_boxes_by_id)
+
+    def test_create_request_rejects_remote_port_publication(self) -> None:
+        with self.assertRaises(ValidationError):
+            SERVER.CreateBoxRequest.model_validate(
+                {"ports": [{"guest_port": 3000}]}
+            )
+
+    def test_box_info_response_includes_active_port_mappings(self) -> None:
+        info = _make_box_info("box-ports", status="running")
+        info.ports = [(49152, 3000, "tcp", "127.0.0.1")]
+
+        payload = SERVER.box_info_to_dict(info)
+
+        self.assertEqual(
+            payload["ports"],
+            [
+                {
+                    "host_port": 49152,
+                    "guest_port": 3000,
+                    "protocol": "tcp",
+                    "host_ip": "127.0.0.1",
+                }
+            ],
+        )
 
     async def test_clone_box_caches_cloned_handle(self) -> None:
         source = _make_box_handle("box-source")

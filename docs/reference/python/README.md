@@ -9,6 +9,7 @@ Complete API reference for the BoxLite Python SDK.
 
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
+- [Network Tunnels](#network-tunnels)
 - [Command Execution](#command-execution)
 - [Box Types](#box-types)
 - [Sync API](#sync-api)
@@ -130,7 +131,7 @@ Configuration options for creating a box.
 | `env` | `List[Tuple[str, str]]` | `[]` | Environment variables as (key, value) pairs |
 | `volumes` | `List[Tuple[str, str, str]]` | `[]` | Volume mounts as (host_path, guest_path, mode) |
 | `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
-| `ports` | `List[Tuple[int, int, str]]` | `[]` | Port forwarding as (host_port, guest_port, protocol) |
+| `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
 | `secrets` | `List[Secret]` | `[]` | Outbound HTTP(S) secret substitution rules |
 | `auto_remove` | `bool` | `True` | Auto cleanup when stopped |
 | `detach` | `bool` | `False` | Survive parent process exit |
@@ -168,9 +169,12 @@ volumes=[
 ports=[
     (8080, 80, "tcp"),    # HTTP
     (5432, 5432, "tcp"),  # PostgreSQL
-    (53, 53, "udp"),      # DNS
+    {"guest_port": 3000},  # OS-selected host port
 ]
 ```
+
+Port publication is local-only and TCP-only. For portable local/remote access,
+use `box.network.tunnel(port)`; each tunnel handle represents one connection.
 
 #### Secret Format
 
@@ -200,6 +204,7 @@ Handle to a running or stopped box.
 | Property | Type | Description |
 |----------|------|-------------|
 | `id` | `str` | Unique box identifier (ULID format) |
+| `network` | `NetworkHandle` | Box-scoped tunnel operations |
 
 #### Methods
 
@@ -227,6 +232,7 @@ Metadata about a box.
 | `image` | `str` | OCI image used |
 | `cpus` | `int` | Allocated CPU cores |
 | `memory_mib` | `int` | Allocated memory in MiB |
+| `ports` | `List[Tuple[Optional[int], int, str, Optional[str]]]` | Active local TCP mappings; empty while stopped |
 
 ---
 
@@ -242,6 +248,25 @@ Detailed state information for a box.
 | `Stopping` | Box is shutting down |
 | `Stopped` | Box is stopped |
 | `Failed` | Box encountered an error |
+
+---
+
+## Network Tunnels
+
+Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.network`.
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Prepare | `await box.network.tunnel(port) -> BoxTunnel` | Prepare one connection to a TCP service in the box |
+| Inspect | `tunnel.endpoint() -> str \| int` | Return the remote URI or borrowed local file descriptor |
+| Connect | `await tunnel.connect() -> BoxConnection` | Consume the tunnel and return its bidirectional byte stream |
+| Read/write | `await connection.read(max_bytes)`, `await connection.write(data)` | Exchange bytes with the service |
+| Close | `await connection.close()` | Close the connection |
+
+Each `BoxTunnel` carries exactly one connection. Call `tunnel()` again for each
+additional or concurrent connection. This differs from `BoxOptions.ports`,
+which creates a persistent, local-only host listener that accepts repeated
+connections from ordinary host applications.
 
 ---
 

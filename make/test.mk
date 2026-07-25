@@ -167,10 +167,10 @@ test\:stress:
 	@echo ""
 	@echo "✅ Stress test matrix passed"
 
-# Core unit suites: Rust unit + FFI unit.
+# Core unit suites: Rust unit + FFI unit + gvproxy bridge unit.
 test\:unit\:core:
-	@echo "── Core unit suites (rust, ffi) ──"
-	$(call run_suites,test:unit:rust test:unit:ffi)
+	@echo "── Core unit suites (rust, ffi, gvproxy) ──"
+	$(call run_suites,test:unit:rust test:unit:ffi test:unit:gvproxy)
 
 # Core integration suites: Rust integration + CLI integration.
 test\:integration\:core:
@@ -239,6 +239,11 @@ test\:unit\:ffi:
 	else \
 		cargo test -p boxlite-c $(CARGOTEST_FILTER); \
 	fi
+
+# Go bridge unit tests for the embedded gvproxy library.
+test\:unit\:gvproxy:
+	@echo "🧪 Running gvproxy bridge unit tests..."
+	@cd src/deps/libgvproxy-sys/gvproxy-bridge && go test ./... $(GOTEST_FILTER)
 
 # CLI integration tests.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)

@@ -136,7 +136,6 @@ class CreateBoxRequest(BaseModel):
     cmd: Optional[list[str]] = None
     user: Optional[str] = None
     volumes: Optional[list[dict]] = None
-    ports: Optional[list[dict]] = None
     network: Optional[NetworkSpec] = None
     secrets: Optional[list[SecretSpec]] = None
     auto_pause: Optional[int] = Field(default=None, ge=0)
@@ -339,6 +338,15 @@ def box_info_to_dict(info) -> dict:
         "image": info.image,
         "cpus": info.cpus,
         "memory_mib": info.memory_mib,
+        "ports": [
+            {
+                "host_port": host_port,
+                "guest_port": guest_port,
+                "protocol": protocol,
+                "host_ip": host_ip,
+            }
+            for host_port, guest_port, protocol, host_ip in info.ports
+        ],
         "labels": {},
     }
 
@@ -392,11 +400,6 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
         kwargs["volumes"] = [
             (v["host_path"], v["guest_path"], v.get("read_only", False))
             for v in req.volumes
-        ]
-    if req.ports:
-        kwargs["ports"] = [
-            (p.get("host_port", 0), p["guest_port"], p.get("protocol", "tcp"))
-            for p in req.ports
         ]
     if req.security:
         presets = {

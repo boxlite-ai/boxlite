@@ -9,6 +9,7 @@ Complete API reference for the BoxLite Node.js/TypeScript SDK.
 
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
+- [Network Tunnels](#network-tunnels)
 - [Command Execution](#command-execution)
 - [Box Types](#box-types)
 - [Error Types](#error-types)
@@ -104,7 +105,7 @@ Configuration options for creating a box.
 | `env` | `JsEnvVar[]` | `[]` | Environment variables |
 | `volumes` | `JsVolumeSpec[]` | `[]` | Volume mounts |
 | `network` | `NetworkSpec` | `{ mode: "enabled" }` | Structured network configuration |
-| `ports` | `JsPortSpec[]` | `[]` | Port mappings |
+| `ports` | `JsPortSpec[]` | `[]` | Local TCP port mappings; omit `hostPort` for automatic allocation |
 | `secrets` | `Secret[]` | `[]` | Outbound HTTP(S) secret substitution rules |
 | `autoRemove` | `boolean` | `false` | Auto cleanup when stopped |
 | `detach` | `boolean` | `false` | Survive parent process exit |
@@ -145,10 +146,15 @@ interface JsVolumeSpec {
 interface JsPortSpec {
   hostPort?: number;   // None = auto-assign
   guestPort: number;   // Port inside container
-  protocol?: string;   // "tcp" or "udp" (default: "tcp")
+  protocol?: string;   // "tcp" (UDP is rejected)
   hostIp?: string;     // Default: "0.0.0.0"
 }
 ```
+
+Port publication is available only with a local runtime. For code that should
+work with both local and remote runtimes, use `box.network.tunnel(port)`; each
+tunnel handle represents one connection.
+OCI `EXPOSE` declarations do not publish host ports.
 
 #### `Secret`
 
@@ -175,6 +181,7 @@ Handle to a running or stopped box.
 |----------|------|-------------|
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| null` | User-defined name |
+| `network` | `JsNetworkHandle` | Box-scoped tunnel operations |
 
 #### Methods
 
@@ -199,6 +206,26 @@ Metadata about a box.
 | `createdAt` | `string` | Creation timestamp (ISO 8601) |
 | `lastUpdated` | `string` | Last state change (ISO 8601) |
 | `pid` | `number \| undefined` | Process ID (if running) |
+| `ports` | `JsPortSpec[]` | Active local TCP mappings; empty while stopped |
+
+---
+
+## Network Tunnels
+
+`JsBox` and `SimpleBox` expose the same `box.network` workflow.
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Prepare | `await box.network.tunnel(port)` | Return a `JsBoxTunnel` or `BoxTunnel` for one TCP connection |
+| Inspect | `tunnel.endpoint(): string \| number` | Return the remote URI or borrowed local file descriptor |
+| Connect | `await tunnel.connect()` | Consume the tunnel and return its bidirectional connection |
+| Read/write | `await connection.read(maxBytes)`, `await connection.write(data)` | Exchange bytes with the service |
+| Close | `await connection.close()` | Close the connection |
+
+Each tunnel handle carries exactly one connection. Call `tunnel()` again for
+each additional or concurrent connection. This differs from `ports`, which
+creates a persistent, local-only host listener that accepts repeated
+connections from ordinary host applications.
 
 ---
 

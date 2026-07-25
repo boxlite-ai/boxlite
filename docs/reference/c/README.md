@@ -41,6 +41,7 @@ The SDK provides two API styles:
 - [Native API](#native-api)
   - [Runtime Management](#runtime-management)
   - [Box Management](#box-management)
+  - [Network Tunnels](#network-tunnels)
   - [Command Execution](#command-execution)
   - [Discovery & Introspection](#discovery--introspection)
   - [Metrics](#metrics)
@@ -660,6 +661,52 @@ Safe to call with NULL. Use when you need to release a box handle without freein
 
 ---
 
+### Network Tunnels
+
+```c
+BoxliteErrorCode boxlite_box_network(
+    CBoxHandle* handle,
+    CBoxNetworkHandle** out_network,
+    CBoxliteError* out_error
+);
+void boxlite_network_free(CBoxNetworkHandle* network);
+
+BoxliteErrorCode boxlite_network_tunnel(
+    CBoxNetworkHandle* network,
+    uint16_t port,
+    CBoxTunnelHandle** out_tunnel,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_tunnel_endpoint(
+    CBoxTunnelHandle* tunnel,
+    BoxliteEndpointType* out_type,
+    char** out_uri,
+    int32_t* out_fd,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_tunnel_connect(
+    CBoxTunnelHandle* tunnel,
+    int32_t* out_fd,
+    CBoxliteError* out_error
+);
+void boxlite_tunnel_free(CBoxTunnelHandle* tunnel);
+```
+
+Each `CBoxTunnelHandle` owns exactly one connection.
+`boxlite_tunnel_connect()` consumes that connection and returns an owned file
+descriptor that the caller must close; a second call returns `InvalidState`.
+Release the tunnel handle with `boxlite_tunnel_free()` after connecting or when
+discarding an unconsumed tunnel.
+`boxlite_tunnel_endpoint()` returns either an allocated remote URI or a borrowed
+local descriptor. Free the URI with `boxlite_free_string()`, and keep the tunnel
+alive while using a borrowed descriptor.
+
+Create another tunnel handle for each additional or concurrent connection.
+This differs from `boxlite_options_add_port()`, which creates a persistent,
+local-only host listener that accepts repeated connections.
+
+---
+
 ### Command Execution
 
 #### boxlite_execute
@@ -836,6 +883,9 @@ if (boxlite_box_info(box, &info, &error) == Ok) {
     boxlite_free_box_info(info);
 }
 ```
+
+`info->ports_json` contains the active local TCP mappings as a JSON array. It
+is `"[]"` while the box is stopped and is freed with the rest of `CBoxInfo`.
 
 ---
 

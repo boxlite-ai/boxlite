@@ -100,12 +100,11 @@ func (p PortProtocol) String() string {
 
 // PortSpec configures a host-to-guest port forwarding rule.
 //
-// Host is the host-side port number. Use 0 to forward from the same number as
-// Guest; explicit host ports must be in 1..65535. Guest is the guest-side port
+// Host is the host-side port number. Use 0 to let the OS select an available
+// port; explicit host ports must be in 1..65535. Guest is the guest-side port
 // number and must be in 1..65535. Protocol selects the transport protocol;
 // PortProtocolUnknown defaults to TCP. The boxlite runtime currently forwards
-// TCP only and binds all host interfaces, so PortProtocolUdp and a non-empty
-// HostIP are rejected when options are built.
+// TCP only. HostIP defaults to all host interfaces when empty.
 type PortSpec struct {
 	Host     int
 	Guest    int
@@ -137,10 +136,6 @@ func (p PortSpec) toCSpec() (cPortSpec, error) {
 	default:
 		return cPortSpec{}, fmt.Errorf("invalid port protocol %s", p.Protocol)
 	}
-	if p.HostIP != "" {
-		return cPortSpec{}, fmt.Errorf("host IP binding is not supported by the boxlite runtime yet")
-	}
-
 	return cPortSpec{
 		host_port:  p.Host,
 		guest_port: p.Guest,
@@ -256,9 +251,8 @@ func WithVolumeReadOnly(hostPath, containerPath string) BoxOption {
 
 // WithPort publishes a guest port on a host port.
 //
-// The boxlite runtime currently forwards TCP only on all host interfaces;
-// specs using PortProtocolUdp or a non-empty HostIP are rejected when options
-// are built, before crossing the FFI boundary.
+// The boxlite runtime currently forwards TCP only. Host 0 asks the OS to select
+// an available local port.
 func WithPort(spec PortSpec) BoxOption {
 	return func(c *boxConfig) {
 		c.ports = append(c.ports, spec)

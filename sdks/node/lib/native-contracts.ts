@@ -226,6 +226,7 @@ export interface JsBoxInfo {
   image: string;
   cpus: number;
   memoryMib: number;
+  ports: JsPortSpec[];
   autoPause: number;
   autoDelete: number;
   autoResume: boolean;

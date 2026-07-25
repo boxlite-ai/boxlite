@@ -154,6 +154,7 @@ impl NetworkBackend for GvproxyBackend {
         let mut spec = NetworkBackendSpec {
             port_mappings: cfg.port_mappings.clone(),
             socket_path: cfg.socket_path.clone(),
+            resolved_ports_path: Some(cfg.resolved_ports_path.clone()),
             allow_net: cfg.allow_net.clone(),
             secrets: cfg.secrets.clone(),
             ca_cert_pem: None,
@@ -349,6 +350,16 @@ fn dns_zone_to_wire(zone: &DnsZoneSpec) -> Value {
 mod tests {
     use super::*;
     use crate::net::DnsRecordSpec;
+    use crate::runtime::options::{PortProtocol, PortSpec};
+
+    fn fixed_port(host_port: u16, guest_port: u16) -> PortSpec {
+        PortSpec {
+            host_port: Some(host_port),
+            guest_port,
+            protocol: PortProtocol::Tcp,
+            host_ip: None,
+        }
+    }
 
     #[test]
     fn dns_zone_maps_to_capitalized_wire_keys() {
@@ -400,8 +411,9 @@ mod tests {
         // `spec()` turns the held config into the wire spec. Without secrets it
         // copies the fields through and mints no CA (never touching `ca_dir`).
         let config = NetworkBackendConfig {
-            port_mappings: vec![(8080, 80), (2222, 22)],
+            port_mappings: vec![fixed_port(8080, 80), fixed_port(2222, 22)],
             socket_path: PathBuf::from("/tmp/bl-box/net.sock"),
+            resolved_ports_path: PathBuf::from("/tmp/bl-box/resolved-ports.json"),
             allow_net: vec!["example.com".to_string()],
             secrets: Vec::new(),
             ca_dir: PathBuf::from("/tmp/bl-box/does-not-exist"),
@@ -480,6 +492,7 @@ mod tests {
         let config = NetworkBackendConfig {
             port_mappings: Vec::new(),
             socket_path: net_sock.clone(),
+            resolved_ports_path: dir.path().join("resolved-ports.json"),
             allow_net: Vec::new(),
             secrets: Vec::new(),
             ca_dir: dir.path().to_path_buf(),
@@ -550,6 +563,7 @@ mod tests {
         let config = NetworkBackendConfig {
             port_mappings: Vec::new(),
             socket_path: PathBuf::from("/tmp/bl-box/net.sock"),
+            resolved_ports_path: ca_dir.path().join("resolved-ports.json"),
             allow_net: Vec::new(),
             secrets: vec![test_secret()],
             ca_dir: ca_dir.path().to_path_buf(),
@@ -582,6 +596,7 @@ mod tests {
         let config = NetworkBackendConfig {
             port_mappings: Vec::new(),
             socket_path: PathBuf::from("/tmp/bl-box/net.sock"),
+            resolved_ports_path: dir.path().join("resolved-ports.json"),
             allow_net: Vec::new(),
             secrets: vec![test_secret()],
             ca_dir,
@@ -890,6 +905,7 @@ mod tests {
         let config = NetworkBackendConfig {
             port_mappings: Vec::new(),
             socket_path: net_sock,
+            resolved_ports_path: dir.path().join("resolved-ports.json"),
             allow_net: Vec::new(),
             secrets: Vec::new(),
             ca_dir: dir.path().to_path_buf(),
@@ -940,6 +956,7 @@ mod tests {
         let config = NetworkBackendConfig {
             port_mappings: Vec::new(),
             socket_path: net_sock,
+            resolved_ports_path: dir.path().join("resolved-ports.json"),
             allow_net: Vec::new(),
             secrets: Vec::new(),
             ca_dir: dir.path().to_path_buf(),
@@ -979,6 +996,7 @@ mod tests {
         let config = NetworkBackendConfig {
             port_mappings: Vec::new(),
             socket_path: net_sock.clone(),
+            resolved_ports_path: dir.path().join("resolved-ports.json"),
             allow_net: Vec::new(),
             secrets: Vec::new(),
             ca_dir: dir.path().to_path_buf(),
@@ -1044,6 +1062,7 @@ mod tests {
         let config = NetworkBackendConfig {
             port_mappings: Vec::new(),
             socket_path: net_sock.clone(),
+            resolved_ports_path: dir.path().join("resolved-ports.json"),
             allow_net: Vec::new(),
             secrets: Vec::new(),
             ca_dir: dir.path().to_path_buf(),

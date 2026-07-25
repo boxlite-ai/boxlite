@@ -16,19 +16,20 @@ use crate::disk::constants::filenames as disk_filenames;
 pub(crate) const MANIFEST_FILENAME: &str = "manifest.json";
 
 /// Current archive format version.
-pub(crate) const ARCHIVE_VERSION: u32 = 3;
+pub(crate) const ARCHIVE_VERSION: u32 = 4;
 
 /// Maximum archive version this build can import.
-pub(crate) const MAX_SUPPORTED_VERSION: u32 = 3;
+pub(crate) const MAX_SUPPORTED_VERSION: u32 = 4;
 
 /// Archive manifest stored as `manifest.json` inside exported archives.
 ///
 /// v1: plain tar, no checksums
 /// v2: tar.zst with checksums
 /// v3: adds `box_options` for full configuration preservation
+/// v4: `host_port: null` requests automatic host-port allocation
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArchiveManifest {
-    /// Archive format version (1, 2, or 3).
+    /// Archive format version (1 through 4).
     pub version: u32,
     /// Original box name (optional, may be renamed on import).
     pub box_name: Option<String>,

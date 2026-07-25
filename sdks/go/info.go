@@ -6,6 +6,7 @@ package boxlite
 import "C"
 import (
 	"context"
+	"encoding/json"
 	"runtime/cgo"
 	"time"
 	"unsafe"
@@ -31,6 +32,7 @@ type BoxInfo struct {
 	PID        int
 	CPUs       int
 	MemoryMiB  int
+	Ports      []PortSpec
 	AutoPause  uint32
 	AutoDelete uint32
 	AutoResume bool
@@ -123,11 +125,45 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 		PID:        pid,
 		CPUs:       int(info.cpus),
 		MemoryMiB:  int(info.memory_mib),
+		Ports:      decodePortsJSON(cString(info.ports_json)),
 		AutoPause:  uint32(info.auto_pause),
 		AutoDelete: uint32(info.auto_delete),
 		AutoResume: info.auto_resume != 0,
 		CreatedAt:  time.Unix(int64(info.created_at), 0),
 	}
+}
+
+type portInfoJSON struct {
+	HostPort  *int   `json:"host_port"`
+	GuestPort int    `json:"guest_port"`
+	Protocol  string `json:"protocol"`
+	HostIP    string `json:"host_ip"`
+}
+
+func decodePortsJSON(value string) []PortSpec {
+	var wirePorts []portInfoJSON
+	if value == "" || json.Unmarshal([]byte(value), &wirePorts) != nil {
+		return nil
+	}
+
+	ports := make([]PortSpec, 0, len(wirePorts))
+	for _, wire := range wirePorts {
+		host := 0
+		if wire.HostPort != nil {
+			host = *wire.HostPort
+		}
+		protocol := PortProtocolTcp
+		if wire.Protocol == "Udp" || wire.Protocol == "udp" {
+			protocol = PortProtocolUdp
+		}
+		ports = append(ports, PortSpec{
+			Host:     host,
+			Guest:    wire.GuestPort,
+			Protocol: protocol,
+			HostIP:   wire.HostIP,
+		})
+	}
+	return ports
 }
 
 // convertBoxInfoList materialises a CBoxInfoList* into Go BoxInfo slice.

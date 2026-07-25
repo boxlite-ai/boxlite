@@ -2,6 +2,7 @@ use crate::cli::{
     GlobalFlags, ManagementFlags, NetworkFlags, ProcessFlags, PublishFlags, ResourceFlags,
     VolumeFlags,
 };
+use crate::commands::print_resolved_ports;
 use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
 use boxlite::{BoxOptions, BoxliteRuntime, LiteBox, RootfsSpec};
@@ -79,6 +80,7 @@ impl BoxRunner {
         // output, so there is nothing to be attached for.
         if self.args.management.detach {
             litebox.start().await?;
+            print_resolved_ports(&litebox);
             println!("{}", litebox.id());
             return Ok(0);
         }
