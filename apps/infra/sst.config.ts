@@ -872,6 +872,17 @@ export default $config({
     // (+ GHCR_USERNAME) in apps/infra/.env to enable; unset = no ghcr auth wired.
     const ghcrUsername = process.env.GHCR_USERNAME?.trim() || ''
     const ghcrToken = process.env.GHCR_TOKEN?.trim() || ''
+
+    // ── Guest SSH enablement (design: 2026-07-23-boxlite-direct-tunnel-real-ssh) ──
+    // Not a secret, just a controlled-rollout toggle read directly by the
+    // boxlite runtime embedded in the runner process (BOXLITE_GUEST_SSH_ENABLED,
+    // see src/boxlite/src/litebox/init/tasks/vmm_spawn.rs). Unset = disabled
+    // (the runtime's own default -- opt in explicitly per environment); set
+    // to 1/true/yes/on here to enable new guest SSH listeners across all
+    // runners. Unsetting it again and restarting is also the rollback
+    // drill's primary lever; this never touches Proxy/Runner-tunnel/
+    // gvproxy/load-balancer config.
+    const guestSshEnabled = process.env.BOXLITE_GUEST_SSH_ENABLED?.trim() || undefined
     const ghcrSecret =
       ghcrUsername && ghcrToken
         ? // 7-day recovery window: an accidental delete during rotation is undoable
@@ -900,7 +911,14 @@ export default $config({
       otelCollectorOtlpHttpUrl,
       ghcrSecret ? ghcrSecret.arn : '',
     ]).apply(([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-      buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
+      buildRunnerUserData({
+        apiUrl,
+        token,
+        otelEndpoint,
+        ghcrSecretArn: ghcrSecretArn || undefined,
+        ghcrUsername,
+        guestSshEnabled,
+      }),
     )
 
     // Runners hold load-bearing box state (/var/lib/boxlite + in-memory libkrun VMs).
@@ -971,7 +989,14 @@ export default $config({
         `boxlite-runner-${index}`,
         $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
           ([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-            buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
+            buildRunnerUserData({
+              apiUrl,
+              token,
+              otelEndpoint,
+              ghcrSecretArn: ghcrSecretArn || undefined,
+              ghcrUsername,
+              guestSshEnabled,
+            }),
         ),
       )
       return { name, apiKey, instance }
@@ -1012,6 +1037,7 @@ async function buildRunnerUserData(input: {
   otelEndpoint: string
   ghcrSecretArn?: string
   ghcrUsername?: string
+  guestSshEnabled?: string
 }): Promise<string> {
   const { readFileSync } = await import('fs')
   const { resolve } = await import('path')
@@ -1127,7 +1153,8 @@ Environment=API_VERSION=2
 Environment=API_PORT=${PORTS.RUNNER}
 Environment=RUNNER_DOMAIN=\$HOST_IP
 Environment=BOXLITE_HOME_DIR=/var/lib/boxlite
-Environment=AWS_REGION=${REGION}
+Environment=AWS_REGION=${REGION}${input.guestSshEnabled ? `
+Environment=BOXLITE_GUEST_SSH_ENABLED=${input.guestSshEnabled}` : ''}
 Environment=OTEL_LOGGING_ENABLED=true
 Environment=OTEL_TRACING_ENABLED=true
 Environment=OTEL_EXPORTER_OTLP_ENDPOINT=${input.otelEndpoint}${input.ghcrSecretArn ? `

@@ -4,7 +4,6 @@ All URIs are relative to *http://localhost:3000*
 
 |Method | HTTP request | Description|
 |------------- | ------------- | -------------|
-|[**createSshAccess**](#createsshaccess) | **POST** /box/{boxIdOrName}/ssh-access | Create SSH access for box|
 |[**expireSignedPortPreviewUrl**](#expiresignedportpreviewurl) | **POST** /box/{boxIdOrName}/ports/{port}/signed-preview-url/{token}/expire | Expire signed preview URL for a box port|
 |[**getBox**](#getbox) | **GET** /box/{boxIdOrName} | Get box details|
 |[**getBoxLogs**](#getboxlogs) | **GET** /box/{boxId}/telemetry/logs | Get box logs|
@@ -20,69 +19,12 @@ All URIs are relative to *http://localhost:3000*
 |[**recoverBox**](#recoverbox) | **POST** /box/{boxIdOrName}/recover | Recover box from error state|
 |[**replaceLabels**](#replacelabels) | **PUT** /box/{boxIdOrName}/labels | Replace box labels|
 |[**resizeBox**](#resizebox) | **POST** /box/{boxIdOrName}/resize | Resize box resources|
-|[**revokeSshAccess**](#revokesshaccess) | **DELETE** /box/{boxIdOrName}/ssh-access | Revoke SSH access for box|
 |[**setAutoDeleteInterval**](#setautodeleteinterval) | **POST** /box/{boxIdOrName}/autodelete/{interval} | Set box auto-delete interval|
 |[**setAutostopInterval**](#setautostopinterval) | **POST** /box/{boxIdOrName}/autostop/{interval} | Set box auto-stop interval|
 |[**updateBoxState**](#updateboxstate) | **PUT** /box/{boxId}/state | Update box state|
 |[**updateLastActivity**](#updatelastactivity) | **POST** /box/{boxId}/last-activity | Update box last activity|
 |[**updatePublicStatus**](#updatepublicstatus) | **POST** /box/{boxIdOrName}/public/{isPublic} | Update public status|
 |[**validateSshAccess**](#validatesshaccess) | **GET** /box/ssh-access/validate | Validate SSH access for box|
-
-# **createSshAccess**
-> SshAccessDto createSshAccess()
-
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxIdOrName: string; //ID or name of the box (default to undefined)
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-let expiresInMinutes: number; //Expiration time in minutes (default: 60) (optional) (default to undefined)
-
-const { status, data } = await apiInstance.createSshAccess(
-    boxIdOrName,
-    xBoxLiteOrganizationID,
-    expiresInMinutes
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-| **expiresInMinutes** | [**number**] | Expiration time in minutes (default: 60) | (optional) defaults to undefined|
-
-
-### Return type
-
-**SshAccessDto**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | SSH access has been created |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **expireSignedPortPreviewUrl**
 > expireSignedPortPreviewUrl()
@@ -1008,62 +950,6 @@ const { status, data } = await apiInstance.resizeBox(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | Box has been resized |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **revokeSshAccess**
-> Box revokeSshAccess()
-
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxIdOrName: string; //ID or name of the box (default to undefined)
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-let token: string; //SSH access token to revoke. If not provided, all SSH access for the box will be revoked. (optional) (default to undefined)
-
-const { status, data } = await apiInstance.revokeSshAccess(
-    boxIdOrName,
-    xBoxLiteOrganizationID,
-    token
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-| **token** | [**string**] | SSH access token to revoke. If not provided, all SSH access for the box will be revoked. | (optional) defaults to undefined|
-
-
-### Return type
-
-**Box**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | SSH access has been revoked |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

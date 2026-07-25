@@ -41,7 +41,7 @@ import { BoxDto, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
 import { SshAccess } from '../entities/ssh-access.entity'
-import { SshAccessDto, SshAccessValidationDto } from '../dto/ssh-access.dto'
+import { SshAccessValidationDto } from '../dto/ssh-access.dto'
 import { VolumeService } from './volume.service'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import {
@@ -1493,43 +1493,13 @@ export class BoxService {
     return volumes
   }
 
-  async createSshAccess(boxIdOrName: string, expiresInMinutes = 60, organizationId?: string): Promise<SshAccessDto> {
-    //  check if box exists
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    // Revoke any existing SSH access for this box
-    await this.revokeSshAccess(box.id)
-
-    const sshAccess = new SshAccess()
-    sshAccess.boxId = box.id
-    // Generate a safe token that can't doesn't have _ or - to avoid CLI issues
-    sshAccess.token = customNanoid(urlAlphabet.replace('_', '').replace('-', ''))(32)
-    sshAccess.expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000)
-
-    await this.sshAccessRepository.save(sshAccess)
-
-    const region = await this.regionService.findOne(box.region, true)
-    if (region && region.sshGatewayUrl) {
-      return SshAccessDto.fromSshAccess(sshAccess, region.sshGatewayUrl)
-    }
-
-    return SshAccessDto.fromSshAccess(sshAccess, this.configService.getOrThrow('sshGateway.url'))
-  }
-
-  async revokeSshAccess(boxIdOrName: string, token?: string, organizationId?: string): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    if (token) {
-      // Revoke specific SSH access by token
-      await this.sshAccessRepository.delete({ boxId: box.id, token })
-    } else {
-      // Revoke all SSH access for the box
-      await this.sshAccessRepository.delete({ boxId: box.id })
-    }
-
-    return box
-  }
-
+  // `createSshAccess`/`revokeSshAccess` (the legacy Gateway plaintext-token
+  // issuance flow) were replaced by `TemporarySshCredentialService`, which
+  // guest-ack's real keypair-based credentials over the direct tunnel
+  // instead of minting a shared token for a separate SSH Gateway. The
+  // `SshAccess` rows and `validateSshAccess` below stay: rollback isolation
+  // requires the legacy table untouched, and `validateSshAccess` is still
+  // the live validation path for whatever still calls the SSH Gateway.
   async validateSshAccess(token: string): Promise<SshAccessValidationDto> {
     const sshAccess = await this.sshAccessRepository.findOne({
       where: {
@@ -1564,6 +1534,6 @@ export class BoxService {
   }
 }
 
-function encodeDirectPreviewBoxId(boxId: string): string {
+export function encodeDirectPreviewBoxId(boxId: string): string {
   return `d-${Buffer.from(boxId, 'utf8').toString('hex')}`
 }

@@ -18,7 +18,7 @@ use crate::litebox::{
     BoxCommand, BoxTunnel, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution,
 };
 use crate::metrics::BoxMetrics;
-use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
+use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, BoxSshBackend, SnapshotBackend};
 use crate::runtime::id::BoxID;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 
@@ -379,11 +379,13 @@ impl BoxBackend for RestBox {
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         let box_backend: Arc<dyn BoxBackend> = rest_box.clone();
         let network_backend: Arc<dyn BoxNetworkBackend> = rest_box.clone();
+        let ssh_backend: Arc<dyn BoxSshBackend> = rest_box.clone();
         let snapshot_backend: Arc<dyn SnapshotBackend> = rest_box;
         Ok(crate::LiteBox::new(
             box_backend,
             network_backend,
             snapshot_backend,
+            ssh_backend,
         ))
     }
 
@@ -457,6 +459,30 @@ impl BoxNetworkBackend for RestBox {
         let endpoint = self.client.prepare_box_tunnel(&box_id, port).await?;
         let connection = self.client.connect_box_network_tunnel(&endpoint).await?;
         Ok(BoxTunnel::remote(endpoint, connection))
+    }
+}
+
+#[async_trait]
+impl BoxSshBackend for RestBox {
+    // The SSH access-set control facade is Runner-only and internal (see
+    // `litebox::ssh`'s docs): the public SDK issues temporary credentials
+    // through the Hosted API, a separate client, never through a REST-backed
+    // `LiteBox`. Failing closed here (rather than silently no-op'ing) makes
+    // any accidental call surface immediately instead of looking like a
+    // no-credentials-applied success.
+    async fn ssh_replace_access_set(
+        &self,
+        _request: crate::litebox::SshAccessSetRequest,
+    ) -> BoxliteResult<crate::litebox::SshStatus> {
+        Err(BoxliteError::Unsupported(
+            "SSH access-set control is a local Runner-only facade, not available over REST".into(),
+        ))
+    }
+
+    async fn ssh_status(&self) -> BoxliteResult<crate::litebox::SshStatus> {
+        Err(BoxliteError::Unsupported(
+            "SSH access-set control is a local Runner-only facade, not available over REST".into(),
+        ))
     }
 }
 

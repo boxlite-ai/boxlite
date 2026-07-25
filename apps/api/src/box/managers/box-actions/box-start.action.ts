@@ -17,6 +17,7 @@ import { TypedConfigService } from '../../../config/typed-config.service'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
 import { WithSpan } from '../../../common/decorators/otel.decorator'
 import { BoxActivityService } from '../../services/box-activity.service'
+import { BoxSshReconciliationService } from '../../services/box-ssh-reconciliation.service'
 
 @Injectable()
 export class BoxStartAction extends BoxAction {
@@ -29,6 +30,7 @@ export class BoxStartAction extends BoxAction {
     protected readonly configService: TypedConfigService,
     protected readonly redisLockProvider: RedisLockProvider,
     private readonly boxActivityService: BoxActivityService,
+    private readonly boxSshReconciliationService: BoxSshReconciliationService,
   ) {
     super(runnerService, runnerAdapterFactory, boxRepository, redisLockProvider)
   }
@@ -134,6 +136,14 @@ export class BoxStartAction extends BoxAction {
         if (box.prevRunnerId) {
           await this.removeBoxFromPreviousRunner(box)
         }
+
+        // Best-effort: SSH is a secondary capability, so a reconciliation
+        // failure here must not fail box startup (see
+        // BoxSshReconciliationService.reconcileOnStart). `box.state` here is
+        // still the state this box was in when the sync loop reached
+        // this case (STARTING/CREATING/RESTORING) -- RESTORING is the
+        // approved-rotation signal for a snapshot restore/import.
+        await this.boxSshReconciliationService.reconcileOnStart(runner, box.id, box.state === BoxState.RESTORING)
 
         return DONT_SYNC_AGAIN
       }

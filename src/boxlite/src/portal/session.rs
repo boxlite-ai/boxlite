@@ -4,6 +4,7 @@
 
 use crate::portal::connection::Connection;
 use crate::portal::interfaces::FilesInterface;
+use crate::portal::interfaces::SshInterface;
 use crate::portal::interfaces::{ContainerInterface, ExecutionInterface, GuestInterface};
 use boxlite_shared::{BoxTransport, BoxliteResult};
 
@@ -45,6 +46,12 @@ impl GuestSession {
     pub async fn files(&self) -> BoxliteResult<FilesInterface> {
         let channel = self.connection.channel().await?;
         Ok(FilesInterface::new(channel))
+    }
+
+    /// Get SSH access-set control interface.
+    pub async fn ssh(&self) -> BoxliteResult<SshInterface> {
+        let channel = self.connection.channel().await?;
+        Ok(SshInterface::new(channel))
     }
 }
 

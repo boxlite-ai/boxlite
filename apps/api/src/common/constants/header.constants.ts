@@ -38,4 +38,13 @@ export const CustomHeaders: {
       type: 'string',
     },
   },
+  APP_KEY: {
+    name: 'X-BoxLite-App-Key',
+    description:
+      'Box-scoped app key issued by a prior access-grant create call. Alternative to account authorization for creating an SSH credential; providing both is rejected.',
+    required: false,
+    schema: {
+      type: 'string',
+    },
+  },
 }

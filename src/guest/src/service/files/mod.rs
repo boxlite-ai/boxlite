@@ -2,22 +2,68 @@
 //! Files service implementation.
 //!
 //! Provides tar-based upload/download between host and the single container
-//! running inside the guest.
+//! running inside the guest. Path resolution is delegated to the shared
+//! [`backend::GuestFilesystem`] so this RPC surface and the SSH SFTP adapter
+//! can never drift into two different path/symlink/permission policies.
 
+pub(crate) mod backend;
+
+use crate::container::Container;
 use crate::service::server::GuestServer;
+use backend::GuestFsError;
 use boxlite_shared::{
     files_server::Files, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
 };
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::info;
 
 const CHUNK_SIZE: usize = 1 << 20; // 1 MiB
 const MAX_UPLOAD_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB safety cap
+
+impl From<GuestFsError> for Status {
+    fn from(e: GuestFsError) -> Self {
+        match e {
+            GuestFsError::InvalidPath => Status::invalid_argument(e.to_string()),
+            GuestFsError::NotFound => Status::not_found(e.to_string()),
+            GuestFsError::PermissionDenied => Status::permission_denied(e.to_string()),
+            GuestFsError::AlreadyExists => Status::already_exists(e.to_string()),
+            GuestFsError::IsADirectory | GuestFsError::NotADirectory => {
+                Status::failed_precondition(e.to_string())
+            }
+            GuestFsError::DirectoryNotEmpty => Status::failed_precondition(e.to_string()),
+            GuestFsError::HandleLimitExceeded => Status::resource_exhausted(e.to_string()),
+            GuestFsError::UnknownHandle => Status::not_found(e.to_string()),
+            GuestFsError::TooLarge => Status::resource_exhausted(e.to_string()),
+            GuestFsError::Io(_) => Status::internal(e.to_string()),
+        }
+    }
+}
+
+/// Resolve `requested` to a concrete container id, auto-selecting the sole
+/// running container when empty. Shared by the tar RPCs here and the SSH
+/// SFTP adapter so "which container" logic isn't duplicated a third time.
+pub(crate) async fn resolve_container_id(
+    containers: &Mutex<HashMap<String, Arc<Mutex<Container>>>>,
+    requested: &str,
+) -> Result<String, String> {
+    if !requested.is_empty() {
+        return Ok(requested.to_string());
+    }
+
+    let containers = containers.lock().await;
+    if containers.len() == 1 {
+        if let Some((id, _)) = containers.iter().next() {
+            return Ok(id.clone());
+        }
+    }
+    Err("container_id required when multiple containers present".into())
+}
 
 #[tonic::async_trait]
 impl Files for GuestServer {
@@ -39,13 +85,12 @@ impl Files for GuestServer {
                 "dest_path is required in first chunk",
             ));
         }
-        let container_id = self
-            .resolve_container_id(first.container_id.as_str())
+        let container_id = resolve_container_id(&self.containers, first.container_id.as_str())
             .await
             .map_err(Status::failed_precondition)?;
 
         // Build absolute dest root under container rootfs
-        let dest_root = self.container_rootfs(&container_id, &dest_path)?;
+        let dest_root = self.filesystem.resolve_path(&container_id, &dest_path)?;
 
         // Overwrite / mkdir flags
         let mkdir_parents = first.mkdir_parents;
@@ -127,12 +172,11 @@ impl Files for GuestServer {
         if req.src_path.is_empty() {
             return Err(Status::invalid_argument("src_path is required"));
         }
-        let container_id = self
-            .resolve_container_id(req.container_id.as_str())
+        let container_id = resolve_container_id(&self.containers, req.container_id.as_str())
             .await
             .map_err(Status::failed_precondition)?;
 
-        let src_path = self.container_rootfs(&container_id, &req.src_path)?;
+        let src_path = self.filesystem.resolve_path(&container_id, &req.src_path)?;
         if !src_path.exists() {
             return Err(Status::not_found("source path does not exist"));
         }
@@ -206,43 +250,5 @@ impl Files for GuestServer {
         );
 
         Ok(Response::new(ReceiverStream::new(rx)))
-    }
-}
-
-impl GuestServer {
-    async fn resolve_container_id(&self, requested: &str) -> Result<String, String> {
-        if !requested.is_empty() {
-            return Ok(requested.to_string());
-        }
-
-        let containers = self.containers.lock().await;
-        if containers.len() == 1 {
-            if let Some((id, _)) = containers.iter().next() {
-                return Ok(id.clone());
-            }
-        }
-        Err("container_id required when multiple containers present".into())
-    }
-
-    #[allow(clippy::result_large_err)]
-    fn container_rootfs(&self, container_id: &str, path: &str) -> Result<PathBuf, Status> {
-        let guest_layout = self.layout.shared().container(container_id);
-        let rootfs = guest_layout.rootfs_dir();
-
-        let path_obj = Path::new(path);
-        if path_obj
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
-            return Err(Status::invalid_argument("path must not contain .."));
-        }
-
-        let rel = if path_obj.is_absolute() {
-            path_obj.strip_prefix("/").unwrap_or(path_obj).to_path_buf()
-        } else {
-            path_obj.to_path_buf()
-        };
-
-        Ok(rootfs.join(rel))
     }
 }

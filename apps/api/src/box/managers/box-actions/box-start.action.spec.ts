@@ -74,6 +74,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       {} as any, // configService
       redisLockProvider as any,
       {} as any, // boxActivityService
+      {} as any, // boxSshReconciliationService
     )
 
     const result = await (action as BoxAction).run(box, lockCode)
@@ -116,6 +117,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       organizationService as any,
       {} as any,
       redisLockProvider as any,
+      {} as any,
       {} as any,
     )
 
@@ -164,6 +166,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
       {} as any,
       redisLockProvider as any,
       {} as any,
+      {} as any,
     )
 
     const result = await (action as BoxAction).run(box, lockCode)
@@ -207,11 +210,63 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
       {} as any,
       redisLockProvider as any,
       {} as any,
+      {} as any,
     )
 
     await (action as BoxAction).run(box, lockCode)
 
     expect(createBox).not.toHaveBeenCalled()
     expect(updatedFields.some((u) => u.state === BoxState.ERROR)).toBe(true)
+  })
+})
+
+describe('BoxStartAction.handleRunnerBoxStartedStateCheck', () => {
+  function setUp(box: Box) {
+    const runner = { id: box.runnerId, state: RunnerState.READY } as Runner
+    const runnerService = { findOneOrFail: jest.fn(async () => runner) }
+    const boxInfo = jest.fn(async () => ({ state: BoxState.STARTED, daemonVersion: '1.0.0' }))
+    const runnerAdapterFactory = { create: jest.fn(async () => ({ boxInfo }) as any) }
+    const lockCode = new LockCode('lock-started')
+    const boxRepository = { update: jest.fn(async () => box) }
+    const redisLockProvider = { getCode: jest.fn(async () => lockCode) }
+    const reconcileOnStart = jest.fn(async () => undefined)
+    const boxSshReconciliationService = { reconcileOnStart }
+
+    const action = new BoxStartAction(
+      runnerService as any,
+      runnerAdapterFactory as any,
+      boxRepository as any,
+      {} as any,
+      {} as any,
+      redisLockProvider as any,
+      {} as any,
+      boxSshReconciliationService as any,
+    )
+
+    return { action, lockCode, reconcileOnStart, runner }
+  }
+
+  it('reconciles SSH with wasRestoring=false for a normal STARTING -> STARTED transition', async () => {
+    const box = new Box('region-1', 'normal-start')
+    box.runnerId = 'runner-1'
+    box.state = BoxState.STARTING
+    box.pending = true
+
+    const { action, lockCode, reconcileOnStart, runner } = setUp(box)
+    await (action as BoxAction).run(box, lockCode)
+
+    expect(reconcileOnStart).toHaveBeenCalledWith(runner, box.id, false)
+  })
+
+  it('reconciles SSH with wasRestoring=true for a snapshot RESTORING -> STARTED transition', async () => {
+    const box = new Box('region-1', 'restore-start')
+    box.runnerId = 'runner-1'
+    box.state = BoxState.RESTORING
+    box.pending = true
+
+    const { action, lockCode, reconcileOnStart, runner } = setUp(box)
+    await (action as BoxAction).run(box, lockCode)
+
+    expect(reconcileOnStart).toHaveBeenCalledWith(runner, box.id, true)
   })
 })

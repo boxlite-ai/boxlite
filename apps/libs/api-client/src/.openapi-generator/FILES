@@ -6,6 +6,7 @@ api/admin-api.ts
 api/api-keys-api.ts
 api/audit-api.ts
 api/auth-api.ts
+api/box-access-grant-api.ts
 api/box-api.ts
 api/config-api.ts
 api/health-api.ts
@@ -15,6 +16,7 @@ api/organizations-api.ts
 api/preview-api.ts
 api/regions-api.ts
 api/runners-api.ts
+api/ssh-access-api.ts
 api/users-api.ts
 api/volumes-api.ts
 api/webhooks-api.ts
@@ -59,6 +61,9 @@ docs/AuditApi.md
 docs/AuditLog.md
 docs/AuthApi.md
 docs/Box.md
+docs/BoxAccessGrant.md
+docs/BoxAccessGrantApi.md
+docs/BoxAccessGrantCreated.md
 docs/BoxApi.md
 docs/BoxClass.md
 docs/BoxDesiredState.md
@@ -68,6 +73,7 @@ docs/BoxVolume.md
 docs/BoxliteConfiguration.md
 docs/ConfigApi.md
 docs/CreateApiKey.md
+docs/CreateBoxAccessGrant.md
 docs/CreateLinkedAccount.md
 docs/CreateOrganization.md
 docs/CreateOrganizationInvitation.md
@@ -76,6 +82,7 @@ docs/CreateRegion.md
 docs/CreateRegionResponse.md
 docs/CreateRunner.md
 docs/CreateRunnerResponse.md
+docs/CreateTemporarySshCredential.md
 docs/CreateUser.md
 docs/CreateVolume.md
 docs/HealthApi.md
@@ -124,10 +131,12 @@ docs/RunnerState.md
 docs/RunnersApi.md
 docs/SendWebhookDto.md
 docs/SignedPortPreviewUrl.md
-docs/SshAccessDto.md
+docs/SshAccessApi.md
 docs/SshAccessValidationDto.md
 docs/StorageAccessDto.md
 docs/SystemRole.md
+docs/TemporarySshCredential.md
+docs/TemporarySshCredentialCreated.md
 docs/ToolboxProxyUrl.md
 docs/TraceSpan.md
 docs/TraceSummary.md
@@ -185,6 +194,8 @@ models/announcement.ts
 models/api-key-list.ts
 models/api-key-response.ts
 models/audit-log.ts
+models/box-access-grant-created.ts
+models/box-access-grant.ts
 models/box-class.ts
 models/box-desired-state.ts
 models/box-labels.ts
@@ -193,6 +204,7 @@ models/box-volume.ts
 models/box.ts
 models/boxlite-configuration.ts
 models/create-api-key.ts
+models/create-box-access-grant.ts
 models/create-linked-account.ts
 models/create-organization-invitation.ts
 models/create-organization-role.ts
@@ -201,6 +213,7 @@ models/create-region-response.ts
 models/create-region.ts
 models/create-runner-response.ts
 models/create-runner.ts
+models/create-temporary-ssh-credential.ts
 models/create-user.ts
 models/create-volume.ts
 models/health-controller-check200-response-info-value.ts
@@ -243,10 +256,11 @@ models/runner-state.ts
 models/runner.ts
 models/send-webhook-dto.ts
 models/signed-port-preview-url.ts
-models/ssh-access-dto.ts
 models/ssh-access-validation-dto.ts
 models/storage-access-dto.ts
 models/system-role.ts
+models/temporary-ssh-credential-created.ts
+models/temporary-ssh-credential.ts
 models/toolbox-proxy-url.ts
 models/trace-span.ts
 models/trace-summary.ts

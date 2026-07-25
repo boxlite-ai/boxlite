@@ -1,0 +1,28 @@
+# BoxAccessGrantCreated
+
+
+## Properties
+
+Name | Type | Description | Notes
+------------ | ------------- | ------------- | -------------
+**id** | **string** | Unique identifier for the access grant | [default to undefined]
+**boxId** | **string** | ID of the box this grant is scoped to | [default to undefined]
+**scopes** | **Array&lt;string&gt;** | Capability scopes granted | [default to undefined]
+**expiresAt** | **Date** | When the grant expires | [default to undefined]
+**appKey** | **string** | One-time plaintext app key. Not recoverable after this response; store it now. | [default to undefined]
+
+## Example
+
+```typescript
+import { BoxAccessGrantCreated } from './api';
+
+const instance: BoxAccessGrantCreated = {
+    id,
+    boxId,
+    scopes,
+    expiresAt,
+    appKey,
+};
+```
+
+[[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)

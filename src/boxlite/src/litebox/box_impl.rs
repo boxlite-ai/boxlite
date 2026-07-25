@@ -1396,6 +1396,71 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::runtime::backend::BoxSshBackend for BoxImpl {
+    async fn ssh_replace_access_set(
+        &self,
+        request: crate::litebox::ssh::SshAccessSetRequest,
+    ) -> BoxliteResult<crate::litebox::ssh::SshStatus> {
+        let guest_session = self.live_state().await?.guest_session.clone();
+        let mut ssh = guest_session.ssh().await?;
+        let response = ssh
+            .replace_access_set(boxlite_shared::SshAccessSetRequest {
+                generation: request.generation,
+                accesses: request
+                    .accesses
+                    .into_iter()
+                    .map(ssh_access_entry_to_proto)
+                    .collect(),
+            })
+            .await?;
+        Ok(ssh_status_from_proto(response))
+    }
+
+    async fn ssh_status(&self) -> BoxliteResult<crate::litebox::ssh::SshStatus> {
+        let guest_session = self.live_state().await?.guest_session.clone();
+        let mut ssh = guest_session.ssh().await?;
+        let response = ssh.status().await?;
+        Ok(ssh_status_from_proto(response))
+    }
+}
+
+fn ssh_access_entry_to_proto(
+    entry: crate::litebox::ssh::SshAccessEntry,
+) -> boxlite_shared::SshAccessEntry {
+    let expires_at_unix_seconds = entry
+        .expires_at
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    boxlite_shared::SshAccessEntry {
+        credential_id: entry.credential_id,
+        grant_id: entry.grant_id,
+        public_key: entry.public_key,
+        fingerprint: entry.fingerprint,
+        unix_user: entry.unix_user,
+        expires_at_unix_seconds,
+    }
+}
+
+fn ssh_status_from_proto(
+    response: boxlite_shared::SshStatusResponse,
+) -> crate::litebox::ssh::SshStatus {
+    use crate::litebox::ssh::SshIdentityStatus as DomainStatus;
+    let identity_status = match response.identity_status() {
+        boxlite_shared::SshIdentityStatus::Unspecified => DomainStatus::Unknown,
+        boxlite_shared::SshIdentityStatus::Ready => DomainStatus::Ready,
+        boxlite_shared::SshIdentityStatus::Degraded => DomainStatus::Degraded,
+    };
+    crate::litebox::ssh::SshStatus {
+        applied_generation: response.applied_generation,
+        listener_ready: response.listener_ready,
+        host_public_key: response.host_public_key,
+        host_fingerprint: response.host_fingerprint,
+        identity_status,
+    }
+}
+
 // ============================================================================
 // TESTS
 // ============================================================================

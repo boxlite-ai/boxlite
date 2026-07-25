@@ -14,6 +14,10 @@ export const queryKeys = {
     all: ['api-keys'] as const,
     list: (organizationId: string) => [...queryKeys.apiKeys.all, organizationId, 'list'] as const,
   },
+  sshCredentials: {
+    all: ['ssh-credentials'] as const,
+    list: (boxId: string) => [...queryKeys.sshCredentials.all, boxId, 'list'] as const,
+  },
   webhooks: {
     all: ['webhooks'] as const,
     appPortalAccess: (organizationId: string) =>

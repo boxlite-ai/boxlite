@@ -34,5 +34,10 @@ pub use generated::execution_server::{Execution, ExecutionServer};
 pub use generated::files_client::FilesClient;
 pub use generated::files_server::{Files, FilesServer};
 
+// Ssh service (control plane only -- SSH bytes stay on the existing
+// generic network tunnel)
+pub use generated::ssh_client::SshClient;
+pub use generated::ssh_server::{Ssh, SshServer};
+
 // All generated types
 pub use generated::*;

@@ -11,6 +11,14 @@ function csvEnv(value?: string): string[] {
     .filter(Boolean)
 }
 
+// Opt-in boolean flag: only a recognized truthy spelling enables; unset,
+// empty, or anything else (including garbage input) stays disabled -- fail
+// closed, not open. Exported for direct unit testing of rollout toggles
+// (e.g. SSH_ISSUANCE_ENABLED) where the default matters for safety.
+export function isEnabledFlag(value: string | undefined): boolean {
+  return ['1', 'true', 'yes', 'on'].includes((value ?? '').trim().toLowerCase())
+}
+
 const configuration = {
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
@@ -287,6 +295,15 @@ const configuration = {
     userCacheTtlSeconds: parseInt(process.env.API_KEY_USER_CACHE_TTL_SECONDS || '60', 10),
   },
   runnerHealthTimeout: parseInt(process.env.RUNNER_HEALTH_TIMEOUT_SECONDS || '3', 10),
+  sshAccessSetTimeoutSeconds: parseInt(process.env.SSH_ACCESS_SET_TIMEOUT_SECONDS || '10', 10),
+  // Paired with the guest-side BOXLITE_GUEST_SSH_ENABLED
+  // (src/boxlite/src/litebox/init/tasks/vmm_spawn.rs): gates whether new app
+  // grants and temporary SSH credentials can be minted at all, without
+  // touching existing rows, revoke, or the generic direct-tunnel data path.
+  // Default **disabled** -- controlled rollout per the design: dev/staging
+  // opt in explicitly, production stays off until approved. Set to
+  // 1/true/yes/on to enable.
+  sshIssuanceEnabled: isEnabledFlag(process.env.SSH_ISSUANCE_ENABLED),
   warmPool: {
     candidateLimit: parseInt(process.env.WARM_POOL_CANDIDATE_LIMIT || '300', 10),
   },

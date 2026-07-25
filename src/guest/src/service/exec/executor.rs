@@ -134,12 +134,22 @@ fn spawn_with_pipes(req: &ExecRequest) -> BoxliteResult<ExecHandle> {
         cmd.current_dir(&req.workdir);
     }
 
-    // Create pipes for stdin/stdout/stderr
-    let (stdin_read, stdin_write) = nix::unistd::pipe()
+    // Create pipes for stdin/stdout/stderr with O_CLOEXEC: plain `pipe()` fds
+    // survive fork+exec on *every* descriptor still open in this process,
+    // not just the ones explicitly wired to the child's 0/1/2 below. Without
+    // CLOEXEC, the child inherits a stray copy of e.g. its own stdin's write
+    // end (from the pre-dup2 pipe fd, which fork() copies into the child
+    // regardless of Stdio routing), so it never observes EOF on its own
+    // stdin even after we close our copy -- and by the same mechanism never
+    // releases stdout/stderr either. `dup2` (used internally by `Stdio` to
+    // land these on fd 0/1/2) always creates a fresh, non-CLOEXEC
+    // descriptor, so the intended redirection is unaffected.
+    use nix::fcntl::OFlag;
+    let (stdin_read, stdin_write) = nix::unistd::pipe2(OFlag::O_CLOEXEC)
         .map_err(|e| BoxliteError::Internal(format!("Failed to create stdin pipe: {}", e)))?;
-    let (stdout_read, stdout_write) = nix::unistd::pipe()
+    let (stdout_read, stdout_write) = nix::unistd::pipe2(OFlag::O_CLOEXEC)
         .map_err(|e| BoxliteError::Internal(format!("Failed to create stdout pipe: {}", e)))?;
-    let (stderr_read, stderr_write) = nix::unistd::pipe()
+    let (stderr_read, stderr_write) = nix::unistd::pipe2(OFlag::O_CLOEXEC)
         .map_err(|e| BoxliteError::Internal(format!("Failed to create stderr pipe: {}", e)))?;
 
     // Configure command to use our pipes.
@@ -183,6 +193,18 @@ fn spawn_with_pty(req: &ExecRequest, config: PtyConfig) -> BoxliteResult<ExecHan
 
     let OpenptyResult { master, slave } = openpty(Some(&winsize), None)
         .map_err(|e| BoxliteError::Internal(format!("Failed to create PTY: {}", e)))?;
+
+    // `openpty()` fds aren't O_CLOEXEC; without marking them, fork() copies
+    // this exact `master`/`slave` pair into the child alongside the three
+    // `dup()`s below that intentionally become its stdin/stdout/stderr --
+    // same class of leak as the pipe path above (see its comment), and it
+    // would leave the child holding its own spare copy of the PTY master.
+    use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+    for fd in [master.as_raw_fd(), slave.as_raw_fd()] {
+        fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(|e| {
+            BoxliteError::Internal(format!("Failed to set CLOEXEC on PTY fd: {}", e))
+        })?;
+    }
 
     // Get raw FD for use in pre_exec closure
     let slave_raw_fd = slave.as_raw_fd();
@@ -264,4 +286,61 @@ fn spawn_with_pty(req: &ExecRequest, config: PtyConfig) -> BoxliteResult<ExecHan
     handle.set_pty(pty_controller, config);
 
     Ok(handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    fn cat_request() -> ExecRequest {
+        ExecRequest {
+            execution_id: None,
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), "cat".to_string()],
+            env: HashMap::new(),
+            workdir: String::new(),
+            timeout_ms: 0,
+            tty: None,
+            user: None,
+        }
+    }
+
+    /// Regression test for a missing `O_CLOEXEC` on the manually created
+    /// stdin/stdout/stderr pipes: plain `pipe()` fds survive fork *and*
+    /// exec on every descriptor still open in this process, not just the
+    /// ones explicitly dup2'd to the child's 0/1/2. Without `O_CLOEXEC`,
+    /// the child inherits a stray copy of its own stdin's write end (from
+    /// the pre-dup2 pipe fd), so it never observes EOF on its own stdin --
+    /// `cat` blocks forever, and this test would hang instead of failing.
+    #[tokio::test]
+    async fn closing_stdin_delivers_eof_to_the_spawned_process() {
+        let mut handle = spawn_with_pipes(&cat_request()).expect("spawn cat");
+
+        let mut stdin = handle.stdin().expect("stdin available");
+        stdin
+            .write_all(b"hello\xffworld")
+            .await
+            .expect("write stdin");
+        drop(stdin); // close our copy of the write end -> EOF to cat's stdin
+
+        let mut stdout = handle.stdout().expect("stdout available");
+        let mut collected = Vec::new();
+        let drained = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(chunk) = stdout.next().await {
+                collected.extend_from_slice(&chunk);
+            }
+        })
+        .await;
+
+        assert!(
+            drained.is_ok(),
+            "stdout must reach EOF once cat exits, not hang"
+        );
+        assert_eq!(collected, b"hello\xffworld");
+
+        let _ = handle.kill(nix::sys::signal::Signal::SIGKILL);
+    }
 }

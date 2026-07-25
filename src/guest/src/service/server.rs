@@ -1,6 +1,7 @@
 use crate::container::Container;
 use crate::layout::GuestLayout;
 use crate::service::exec::registry::ExecutionRegistry;
+use crate::service::files::backend::GuestFilesystem;
 use boxlite_shared::{BoxTransport, BoxliteResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -55,6 +56,23 @@ pub(crate) struct GuestServer {
     /// ExitCode 137 after a `docker stop`), and that must be ordered, not
     /// lucky.
     pub init_exits: Arc<Mutex<HashMap<String, crate::reaper::ExitSlot>>>,
+
+    /// Shared, bounded file-access backend rooted at each container's
+    /// rootfs. Both the tar `Upload`/`Download` RPCs and the SSH SFTP
+    /// adapter delegate here so they can never drift into two different
+    /// path/symlink/permission policies.
+    pub filesystem: Arc<GuestFilesystem>,
+
+    /// SSH access snapshot, shared between the `Ssh.ReplaceAccessSet`/
+    /// `Status` gRPC handlers (`service::ssh::rpc`) and the russh listener
+    /// (`service::ssh::spawn`) -- owned here, not by the listener, so it
+    /// exists (and is queryable/updatable) whether or not `--ssh-listen`
+    /// ever starts a listener.
+    pub ssh_access: Arc<crate::service::ssh::access::AccessState>,
+
+    /// Live status the `Ssh.Status` RPC reports (listener readiness, host
+    /// identity, degraded state) -- see `service::ssh::SshRuntimeStatus`.
+    pub ssh_status: crate::service::ssh::SshStatusCell,
 }
 
 impl GuestServer {
@@ -63,6 +81,7 @@ impl GuestServer {
     /// Server starts uninitialized. Guest.Init must be called first to setup
     /// the environment, then Container.Init to start the container.
     pub fn new(layout: GuestLayout) -> Self {
+        let filesystem = Arc::new(GuestFilesystem::new(layout.clone()));
         Self {
             layout,
             init_state: Arc::new(Mutex::new(GuestInitState::default())),
@@ -71,6 +90,11 @@ impl GuestServer {
             frozen_mounts: Mutex::new(Vec::new()),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             init_exits: Arc::new(Mutex::new(HashMap::new())),
+            filesystem,
+            ssh_access: Arc::new(crate::service::ssh::access::AccessState::new()),
+            ssh_status: Arc::new(std::sync::RwLock::new(
+                crate::service::ssh::SshRuntimeStatus::default(),
+            )),
         }
     }
 
@@ -81,7 +105,17 @@ impl GuestServer {
     ///
     /// If `notify_uri` is provided, connects to that URI after the server
     /// is ready to serve, signaling readiness to the host.
-    pub async fn run(self, listen_uri: String, notify_uri: Option<String>) -> BoxliteResult<()> {
+    ///
+    /// If `ssh_listen` is provided, also starts the guest SSH listener on
+    /// that TCP address (production entrypoint assembly passes
+    /// `0.0.0.0:22`; tests override it). `None` leaves guest SSH disabled,
+    /// matching Phase 1's "only listens once configured" contract.
+    pub async fn run(
+        self,
+        listen_uri: String,
+        notify_uri: Option<String>,
+        ssh_listen: Option<std::net::SocketAddr>,
+    ) -> BoxliteResult<()> {
         info!("Starting tonic gRPC server");
 
         // Parse the listen URI to determine transport type
@@ -97,11 +131,38 @@ impl GuestServer {
         // Wrap self in Arc for sharing across services
         let server = Arc::new(self);
 
+        if let Some(ssh_addr) = ssh_listen {
+            match crate::service::ssh::spawn(
+                server.clone(),
+                ssh_addr,
+                server.ssh_access.clone(),
+                server.ssh_status.clone(),
+            )
+            .await
+            {
+                Ok(handle) => {
+                    info!(
+                        addr = %handle.bound_addr,
+                        fingerprint = %handle.host_fingerprint,
+                        "SSH listener started"
+                    );
+                }
+                Err(e) => {
+                    // Fail closed: an unreadable/corrupt host key or bind
+                    // failure must not silently leave SSH unreachable while
+                    // claiming readiness, nor crash the whole guest agent
+                    // (Execution/Files/Container must keep working).
+                    warn!(error = %e, "SSH listener failed to start; guest SSH unavailable");
+                }
+            }
+        }
+
         let server_builder = Server::builder()
             .add_service(boxlite_shared::ContainerServer::from_arc(server.clone()))
             .add_service(boxlite_shared::GuestServer::from_arc(server.clone()))
             .add_service(boxlite_shared::ExecutionServer::from_arc(server.clone()))
-            .add_service(boxlite_shared::FilesServer::from_arc(server.clone()));
+            .add_service(boxlite_shared::FilesServer::from_arc(server.clone()))
+            .add_service(boxlite_shared::SshServer::from_arc(server.clone()));
 
         match transport {
             BoxTransport::Vsock { port } => {

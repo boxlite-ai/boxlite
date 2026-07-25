@@ -134,7 +134,13 @@ jobs:
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install protobuf
+        run: |
+          brew install protobuf
+          # boxlite-guest's cross-target clippy check now pulls in russh's
+          # `ring` crypto backend, whose build.rs cross-compiles C/asm for
+          # the guest's musl target — needs the same musl-cross toolchain
+          # scripts/setup/setup-macos.sh installs for local dev.
+          brew install FiloSottile/musl-cross/musl-cross
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
@@ -150,6 +156,9 @@ jobs:
             core.exportVariable('CARGO_INCREMENTAL', '0');
 
       - name: Run clippy checks
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: x86_64-linux-musl-gcc
         run: make clippy
 
   python:

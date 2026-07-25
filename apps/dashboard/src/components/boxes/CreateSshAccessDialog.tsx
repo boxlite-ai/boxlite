@@ -4,9 +4,9 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { SshAccessDto } from '@boxlite-ai/api-client'
+import { TemporarySshCredentialCreated } from '@boxlite-ai/api-client'
 import { useForm } from '@tanstack/react-form'
-import { CheckIcon, CopyIcon, InfoIcon } from '@/components/ui/icon'
+import { CheckIcon, CopyIcon, DownloadIcon, InfoIcon } from '@/components/ui/icon'
 import { AnimatePresence, motion } from 'motion/react'
 import { NumericFormat } from 'react-number-format'
 import { z } from 'zod'
@@ -40,6 +40,8 @@ interface CreateSshAccessDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
+type CreatedSshAccess = TemporarySshCredentialCreated & { privateKeyPem: string }
+
 const MotionCopyIcon = motion(CopyIcon)
 const MotionCheckIcon = motion(CheckIcon)
 
@@ -51,17 +53,17 @@ const iconProps = {
 }
 
 const formSchema = z.object({
-  expiryMinutes: z.number().int('Must be a whole number').min(1, 'Minimum 1 minute').max(1440, 'Maximum 1440 minutes'),
+  expiryMinutes: z.number().int('Must be a whole number').min(1, 'Minimum 1 minute').max(60, 'Maximum 60 minutes'),
 })
 
 type FormValues = z.infer<typeof formSchema>
 
 const defaultValues: FormValues = {
-  expiryMinutes: 60,
+  expiryMinutes: 5,
 }
 
 export function CreateSshAccessDialog({ boxId, open, onOpenChange }: CreateSshAccessDialogProps) {
-  const [sshAccess, setSshAccess] = useState<SshAccessDto | null>(null)
+  const [sshAccess, setSshAccess] = useState<CreatedSshAccess | null>(null)
   const { reset: resetMutation, ...createMutation } = useCreateSshAccessMutation()
 
   const form = useForm({
@@ -73,7 +75,7 @@ export function CreateSshAccessDialog({ boxId, open, onOpenChange }: CreateSshAc
       try {
         const result = await createMutation.mutateAsync({
           boxId,
-          expiresInMinutes: value.expiryMinutes,
+          expiresInSeconds: value.expiryMinutes * 60,
         })
         setSshAccess(result)
       } catch (error) {
@@ -167,14 +169,27 @@ export function CreateSshAccessDialog({ boxId, open, onOpenChange }: CreateSshAc
   )
 }
 
-function SshAccessCreated({ sshAccess }: { sshAccess: SshAccessDto }) {
+function SshAccessCreated({ sshAccess }: { sshAccess: CreatedSshAccess }) {
   const [copiedCommand, copyCommand] = useCopyToClipboard()
+  const [copiedKey, copyKey] = useCopyToClipboard()
+
+  const downloadPrivateKey = () => {
+    const blob = new Blob([sshAccess.privateKeyPem], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `boxlite_${sshAccess.boxId}_ed25519`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <div className="space-y-4">
       <Alert variant="warning">
         <InfoIcon />
-        <AlertDescription>Store the token safely — you won't be able to view it again.</AlertDescription>
+        <AlertDescription>
+          Save the private key now — it cannot be recovered after you close this dialog.
+        </AlertDescription>
       </Alert>
       <Field>
         <FieldLabel htmlFor="ssh-command">SSH Command</FieldLabel>
@@ -188,6 +203,24 @@ function SshAccessCreated({ sshAccess }: { sshAccess: SshAccessDto }) {
                 <MotionCopyIcon className="size-4" key="copy" {...iconProps} />
               )}
             </AnimatePresence>
+          </InputGroupButton>
+        </InputGroup>
+      </Field>
+      <Field>
+        <FieldLabel htmlFor="ssh-private-key">Private Key</FieldLabel>
+        <InputGroup className="pr-1">
+          <InputGroupInput id="ssh-private-key" value="•••••• (ed25519 private key)" readOnly />
+          <InputGroupButton variant="ghost" size="icon-xs" onClick={() => copyKey(sshAccess.privateKeyPem)}>
+            <AnimatePresence initial={false} mode="wait">
+              {copiedKey ? (
+                <MotionCheckIcon className="size-4" key="copied" {...iconProps} />
+              ) : (
+                <MotionCopyIcon className="size-4" key="copy" {...iconProps} />
+              )}
+            </AnimatePresence>
+          </InputGroupButton>
+          <InputGroupButton variant="ghost" size="icon-xs" onClick={downloadPrivateKey}>
+            <DownloadIcon className="size-4" />
           </InputGroupButton>
         </InputGroup>
       </Field>

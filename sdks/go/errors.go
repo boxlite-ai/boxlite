@@ -75,6 +75,20 @@ func IsStopped(err error) bool {
 	return errors.As(err, &e) && e.Code == ErrStopped
 }
 
+// IsInvalidArgument reports whether err indicates the caller supplied a
+// malformed or unsupported argument (e.g. an unparseable SSH public key).
+func IsInvalidArgument(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Code == ErrInvalidArgument
+}
+
+// IsResourceExhausted reports whether err indicates a bound was exceeded
+// (e.g. too many entries in one SSH access-set replace).
+func IsResourceExhausted(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Code == ErrResourceExhausted
+}
+
 // ErrRuntimeClosed is returned by async operations when Runtime.Close is
 // called while the operation is in flight. Callers select on r.closing
 // alongside their result channel and ctx.Done(); when closing fires, the

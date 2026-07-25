@@ -106,6 +106,18 @@ vi.mock('@/hooks/mutations/useDeleteBoxMutation', () => ({
   useDeleteBoxMutation: () => ({ isPending: false, mutateAsync: mocks.mutateAsync }),
 }))
 
+vi.mock('@/hooks/mutations/useCreateSshAccessMutation', () => ({
+  useCreateSshAccessMutation: () => ({ isPending: false, mutateAsync: mocks.mutateAsync, reset: vi.fn() }),
+}))
+
+vi.mock('@/hooks/mutations/useRevokeSshAccessMutation', () => ({
+  useRevokeSshAccessMutation: () => ({ isPending: false, mutateAsync: mocks.mutateAsync, reset: vi.fn() }),
+}))
+
+vi.mock('@/hooks/queries/useSshCredentialsQuery', () => ({
+  useSshCredentialsQuery: () => ({ data: [], isLoading: false }),
+}))
+
 vi.mock('./BoxTerminalFrame', () => ({
   BoxTerminalFrame: ({ sessionUrl }: { sessionUrl: string }) => <div data-testid="terminal-frame">{sessionUrl}</div>,
 }))

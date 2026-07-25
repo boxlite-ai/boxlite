@@ -101,6 +101,9 @@ test\:changed\:rust:
 	@$(MAKE) test:unit:rust
 	@$(MAKE) test:integration:rust
 
+test\:changed\:guest:
+	@$(MAKE) test:unit:guest
+
 test\:changed\:cli:
 	@$(MAKE) test:integration:cli
 
@@ -205,6 +208,22 @@ test\:unit\:rust:
 		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 	fi; \
 	exit $$rc
+
+# boxlite-guest unit tests. The crate is Linux-only (compile_error!s on any
+# other OS); tests build natively for the host's own glibc target, not the
+# musl target used for shipping inside a VM, so this is skippable — not a
+# hard failure — on a macOS dev machine.
+test\:unit\:guest:
+	@if [ "$$(uname)" != "Linux" ]; then \
+		echo "⏭️  Skipping boxlite-guest tests (Linux-only, host is $$(uname))"; \
+		exit 0; \
+	fi; \
+	echo "🧪 Running boxlite-guest unit tests..."; \
+	if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run --no-tests=warn -p boxlite-guest --profile ci $(NEXTEST_FILTER); \
+	else \
+		cargo test -p boxlite-guest -- --test-threads=1 $(CARGOTEST_FILTER); \
+	fi
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
 test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)
@@ -429,3 +448,14 @@ test\:stress\:api-vm-lifecycle-local:
 	BOXLITE_STRESS_P95_MS=$${BOXLITE_STRESS_P95_MS:-60000} \
 	BOXLITE_STRESS_P99_MS=$${BOXLITE_STRESS_P99_MS:-90000} \
 	k6 run --summary-trend-stats 'avg,min,med,p(90),p(95),p(99),max' scripts/test/stress/api-vm-lifecycle.k6.js
+
+# Real SSH (design: 2026-07-23-boxlite-direct-tunnel-real-ssh, Phase 4
+# "Scale"): 100 concurrent connections, an auth-rejection burst, and
+# connect/disconnect churn against a box with real SSH already enabled. Not
+# k6 -- see scripts/test/stress/ssh-load.py's header for why.
+test\:stress\:ssh:
+	@command -v ssh >/dev/null 2>&1 || { echo "ssh is required."; exit 2; }
+	@command -v proxytunnel >/dev/null 2>&1 || { echo "proxytunnel is required. Install with: brew install proxytunnel"; exit 2; }
+	@BOX_ID=$${BOX_ID:?must set BOX_ID=<box-id>} \
+	GRANT_ID=$${GRANT_ID:?must set GRANT_ID=<access-grant-id>} \
+	python3 scripts/test/stress/ssh-load.py "$$BOX_ID" "$$GRANT_ID"

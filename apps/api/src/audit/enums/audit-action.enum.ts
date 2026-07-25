@@ -40,6 +40,8 @@ export enum AuditAction {
   UPDATE_BOX_DEFAULT_LIMITED_NETWORK_EGRESS = 'update_box_default_limited_network_egress',
   CREATE_SSH_ACCESS = 'create_ssh_access',
   REVOKE_SSH_ACCESS = 'revoke_ssh_access',
+  CREATE_ACCESS_GRANT = 'create_access_grant',
+  REVOKE_ACCESS_GRANT = 'revoke_access_grant',
   RECOVER = 'recover',
   REGENERATE_PROXY_API_KEY = 'regenerate_proxy_api_key',
   REGENERATE_SSH_GATEWAY_API_KEY = 'regenerate_ssh_gateway_api_key',

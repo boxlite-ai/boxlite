@@ -67,6 +67,14 @@ struct GuestArgs {
     ///   --notify unix:///var/run/boxlite-ready.sock
     #[arg(short, long)]
     notify: Option<String>,
+
+    /// Guest TCP address for the embedded SSH listener (e.g. `0.0.0.0:22`).
+    ///
+    /// Disabled when omitted. Production entrypoint assembly passes the
+    /// standard guest SSH port; tests override it (e.g. an ephemeral
+    /// `127.0.0.1:0`).
+    #[arg(long)]
+    ssh_listen: Option<String>,
 }
 
 #[cfg(target_os = "linux")]
@@ -132,9 +140,21 @@ async fn async_main() -> BoxliteResult<()> {
     // Parse command-line arguments with clap
     let args = GuestArgs::parse();
     info!(
-        "Arguments parsed: listen={}, notify={:?}",
-        args.listen, args.notify
+        "Arguments parsed: listen={}, notify={:?}, ssh_listen={:?}",
+        args.listen, args.notify, args.ssh_listen
     );
+
+    let ssh_listen = args
+        .ssh_listen
+        .as_deref()
+        .map(|addr| {
+            addr.parse::<std::net::SocketAddr>().map_err(|e| {
+                boxlite_shared::errors::BoxliteError::Internal(format!(
+                    "invalid --ssh-listen address '{addr}': {e}"
+                ))
+            })
+        })
+        .transpose()?;
 
     // Prepare guest layout directories
     let layout = layout::GuestLayout::new();
@@ -145,7 +165,7 @@ async fn async_main() -> BoxliteResult<()> {
     // All initialization (mounts, rootfs, network) will happen via Guest.Init RPC
     info!("Starting guest server on: {}", args.listen);
     let server = GuestServer::new(layout);
-    server.run(args.listen, args.notify).await
+    server.run(args.listen, args.notify, ssh_listen).await
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -158,8 +178,10 @@ mod tests {
         let args = GuestArgs {
             listen: "vsock://2695".to_string(),
             notify: Some("vsock://2696".to_string()),
+            ssh_listen: Some("0.0.0.0:22".to_string()),
         };
         assert_eq!(args.listen, "vsock://2695");
         assert_eq!(args.notify, Some("vsock://2696".to_string()));
+        assert_eq!(args.ssh_listen, Some("0.0.0.0:22".to_string()));
     }
 }

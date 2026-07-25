@@ -5,6 +5,7 @@ api_api_keys.go
 api_audit.go
 api_auth.go
 api_box.go
+api_box_access_grant.go
 api_config.go
 api_health.go
 api_jobs.go
@@ -13,6 +14,7 @@ api_organizations.go
 api_preview.go
 api_regions.go
 api_runners.go
+api_ssh_access.go
 api_users.go
 api_volumes.go
 api_webhooks.go
@@ -54,6 +56,8 @@ model_api_key_list.go
 model_api_key_response.go
 model_audit_log.go
 model_box.go
+model_box_access_grant.go
+model_box_access_grant_created.go
 model_box_class.go
 model_box_desired_state.go
 model_box_labels.go
@@ -61,6 +65,7 @@ model_box_state.go
 model_box_volume.go
 model_boxlite_configuration.go
 model_create_api_key.go
+model_create_box_access_grant.go
 model_create_linked_account.go
 model_create_organization.go
 model_create_organization_invitation.go
@@ -69,6 +74,7 @@ model_create_region.go
 model_create_region_response.go
 model_create_runner.go
 model_create_runner_response.go
+model_create_temporary_ssh_credential.go
 model_create_user.go
 model_create_volume.go
 model_health_controller_check_200_response.go
@@ -110,10 +116,11 @@ model_runner_service_health.go
 model_runner_state.go
 model_send_webhook_dto.go
 model_signed_port_preview_url.go
-model_ssh_access_dto.go
 model_ssh_access_validation_dto.go
 model_storage_access_dto.go
 model_system_role.go
+model_temporary_ssh_credential.go
+model_temporary_ssh_credential_created.go
 model_toolbox_proxy_url.go
 model_trace_span.go
 model_trace_summary.go

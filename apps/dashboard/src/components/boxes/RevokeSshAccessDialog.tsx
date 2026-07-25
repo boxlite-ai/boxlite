@@ -4,9 +4,10 @@
  */
 
 import { useState } from 'react'
+import { TemporarySshCredentialStatusEnum } from '@boxlite-ai/api-client'
 import { toast } from 'sonner'
 import { Field, FieldLabel } from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
 import {
   Dialog,
@@ -19,6 +20,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useRevokeSshAccessMutation } from '@/hooks/mutations/useRevokeSshAccessMutation'
+import { useSshCredentialsQuery } from '@/hooks/queries/useSshCredentialsQuery'
 import { handleApiError } from '@/lib/error-handling'
 
 interface RevokeSshAccessDialogProps {
@@ -28,24 +30,27 @@ interface RevokeSshAccessDialogProps {
 }
 
 export function RevokeSshAccessDialog({ boxId, open, onOpenChange }: RevokeSshAccessDialogProps) {
-  const [token, setToken] = useState('')
+  const [credentialId, setCredentialId] = useState('')
+  const { data: credentials, isLoading } = useSshCredentialsQuery(boxId, open)
   const revokeMutation = useRevokeSshAccessMutation()
+
+  const activeCredentials = (credentials ?? []).filter((c) => c.status === TemporarySshCredentialStatusEnum.ACTIVE)
 
   const handleOpenChange = (isOpen: boolean) => {
     onOpenChange(isOpen)
     if (!isOpen) {
-      setToken('')
+      setCredentialId('')
       revokeMutation.reset()
     }
   }
 
   const handleRevoke = async () => {
-    if (!token.trim()) {
-      toast.error('Please enter a token to revoke')
+    if (!credentialId) {
+      toast.error('Please select a credential to revoke')
       return
     }
     try {
-      await revokeMutation.mutateAsync({ boxId, token })
+      await revokeMutation.mutateAsync({ boxId, credentialId })
       toast.success('SSH access revoked successfully')
       handleOpenChange(false)
     } catch (error) {
@@ -58,22 +63,36 @@ export function RevokeSshAccessDialog({ boxId, open, onOpenChange }: RevokeSshAc
       <DialogContent className="max-w-sm">
         <DialogHeader>
           <DialogTitle>Revoke SSH Access</DialogTitle>
-          <DialogDescription>Enter the SSH access token you want to revoke.</DialogDescription>
+          <DialogDescription>Select the SSH credential you want to revoke.</DialogDescription>
         </DialogHeader>
         <Field>
-          <FieldLabel htmlFor="ssh-revoke-token">SSH Token</FieldLabel>
-          <Input
-            id="ssh-revoke-token"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="Paste token here"
-          />
+          <FieldLabel htmlFor="ssh-revoke-credential">Credential</FieldLabel>
+          <Select value={credentialId} onValueChange={setCredentialId} disabled={isLoading}>
+            <SelectTrigger id="ssh-revoke-credential">
+              <SelectValue
+                placeholder={
+                  isLoading
+                    ? 'Loading credentials…'
+                    : activeCredentials.length === 0
+                      ? 'No active credentials'
+                      : 'Select a credential'
+                }
+              />
+            </SelectTrigger>
+            <SelectContent>
+              {activeCredentials.map((credential) => (
+                <SelectItem key={credential.id} value={credential.id}>
+                  {credential.publicKeyFingerprint}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Field>
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="secondary">Cancel</Button>
           </DialogClose>
-          <Button variant="destructive" onClick={handleRevoke} disabled={!token.trim() || revokeMutation.isPending}>
+          <Button variant="destructive" onClick={handleRevoke} disabled={!credentialId || revokeMutation.isPending}>
             {revokeMutation.isPending && <Spinner />}
             Revoke
           </Button>

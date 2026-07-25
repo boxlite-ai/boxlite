@@ -10,3 +10,4 @@ pub(crate) mod exec;
 pub(crate) mod files;
 mod guest;
 pub(crate) mod server;
+pub(crate) mod ssh;

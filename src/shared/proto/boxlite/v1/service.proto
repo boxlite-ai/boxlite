@@ -77,6 +77,21 @@ service Files {
   rpc Download(DownloadRequest) returns (stream DownloadChunk);
 }
 
+// Guest SSH access-set control plane. SSH bytes never cross this service --
+// they stay on the existing generic network tunnel (guest TCP 22). This is
+// control-plane only: apply/query which temporary SSH credentials are
+// currently authorized.
+service Ssh {
+  // Full-set replace of the active SSH access snapshot. Idempotent for a
+  // retry of the same generation with identical content; rejects (with a
+  // typed error, snapshot left unchanged) any generation older than the
+  // currently applied one, or the same generation with different content.
+  rpc ReplaceAccessSet(SshAccessSetRequest) returns (SshStatusResponse);
+
+  // Query applied generation, listener readiness, and host identity.
+  rpc Status(SshStatusRequest) returns (SshStatusResponse);
+}
+
 // ============================================================================
 // Guest Service Messages
 // ============================================================================
@@ -457,4 +472,46 @@ message DownloadRequest {
 message DownloadChunk {
   // Raw tar archive bytes
   bytes data = 1;
+}
+
+// ============================================================================
+// Ssh Service Messages
+// ============================================================================
+
+// One box-scoped temporary SSH credential in the desired access set.
+message SshAccessEntry {
+  string credential_id = 1;    // TemporarySshCredential id (list/revoke/audit)
+  string grant_id = 2;         // parent BoxAccessGrant id
+  string public_key = 3;       // canonical OpenSSH public key line
+  string fingerprint = 4;      // SHA-256 fingerprint, for logs/UI only
+  string unix_user = 5;        // fixed to "root" in this design
+  int64 expires_at_unix_seconds = 6;
+}
+
+// Full-set replace request. `generation` must be strictly newer than the
+// guest's currently applied generation, or identical generation with
+// byte-identical `accesses` (idempotent retry).
+message SshAccessSetRequest {
+  uint64 generation = 1;
+  repeated SshAccessEntry accesses = 2;
+}
+
+message SshStatusRequest {}
+
+enum SshIdentityStatus {
+  SSH_IDENTITY_STATUS_UNSPECIFIED = 0;
+  // Host key loaded/created normally; unchanged since first observed on
+  // this guest-rootfs disk (or this is an approved rotation).
+  SSH_IDENTITY_STATUS_READY = 1;
+  // Host key file missing/corrupt/changed unexpectedly on an ordinary
+  // restart; new SSH credential creation must be refused upstream.
+  SSH_IDENTITY_STATUS_DEGRADED = 2;
+}
+
+message SshStatusResponse {
+  uint64 applied_generation = 1;
+  bool listener_ready = 2;
+  string host_public_key = 3;   // OpenSSH format, e.g. "ssh-ed25519 AAAA... "
+  string host_fingerprint = 4;  // SHA256:...
+  SshIdentityStatus identity_status = 5;
 }

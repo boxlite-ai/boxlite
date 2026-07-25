@@ -74,8 +74,9 @@ impl VolumeBackend for RestRuntime {
 fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
     let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = rest_box.clone();
     let network_backend: Arc<dyn crate::runtime::backend::BoxNetworkBackend> = rest_box.clone();
+    let ssh_backend: Arc<dyn crate::runtime::backend::BoxSshBackend> = rest_box.clone();
     let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> = rest_box;
-    LiteBox::new(box_backend, network_backend, snapshot_backend)
+    LiteBox::new(box_backend, network_backend, snapshot_backend, ssh_backend)
 }
 
 #[async_trait::async_trait]

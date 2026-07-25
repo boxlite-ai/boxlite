@@ -81,6 +81,13 @@ typedef enum BoxliteRegistryTransport {
   BoxliteRegistryTransportHttp = 1,
 } BoxliteRegistryTransport;
 
+// Guest-observed SSH host identity health.
+typedef enum CBoxliteSshIdentityStatus {
+  Unknown = 0,
+  Ready = 1,
+  Degraded = 2,
+} CBoxliteSshIdentityStatus;
+
 // Opaque handle wrapping an `AdvancedBoxOptions`. Allocated via
 // `boxlite_advanced_options_new`, freed via `boxlite_advanced_options_free`.
 typedef struct AdvancedBoxOptionsHandle AdvancedBoxOptionsHandle;
@@ -96,6 +103,9 @@ typedef struct BoxNetworkHandle BoxNetworkHandle;
 
 // Opaque handle for Runner API (auto-manages runtime)
 typedef struct BoxRunner BoxRunner;
+
+// Opaque handle for SSH access-set operations on a box.
+typedef struct BoxSshHandle BoxSshHandle;
 
 // Opaque handle for a one-shot box service tunnel.
 typedef struct BoxTunnelHandle BoxTunnelHandle;
@@ -341,6 +351,30 @@ typedef struct VolumeHandle CBoxliteVolumeHandle;
 
 // Runtime shutdown completion.
 typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
+
+typedef struct BoxSshHandle CBoxSshHandle;
+
+// One box-scoped temporary SSH credential to authorize. Mirrors
+// `boxlite::litebox::SshAccessEntry` at the FFI boundary.
+typedef struct CBoxliteSshAccessEntry {
+  const char *credential_id;
+  const char *grant_id;
+  // Canonical OpenSSH public-key line.
+  const char *public_key;
+  const char *fingerprint;
+  const char *unix_user;
+  int64_t expires_at_unix_seconds;
+} CBoxliteSshAccessEntry;
+
+// Applied generation, listener readiness, and host identity, as last
+// observed from the guest. Heap-allocated; free with `boxlite_ssh_status_free`.
+typedef struct CBoxliteSshStatus {
+  uint64_t applied_generation;
+  bool listener_ready;
+  char *host_public_key;
+  char *host_fingerprint;
+  enum CBoxliteSshIdentityStatus identity_status;
+} CBoxliteSshStatus;
 
 // C ABI representation of volume metadata.
 //
@@ -599,57 +633,25 @@ enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
                                               void *user_data,
                                               CBoxliteError *out_error);
 
-/**
- * Borrow the box's network capability into a new owned handle.
- *
- * On success, `*out_network` must be released with `boxlite_network_free`.
- * Returns `InvalidArgument` for null input/output pointers and writes details
- * to `out_error` when provided.
- */
 enum BoxliteErrorCode boxlite_box_network(CBoxHandle *handle,
                                           CBoxNetworkHandle **out_network,
                                           CBoxliteError *out_error);
 
-/** Release a network handle. Accepts NULL and does not affect the box handle. */
 void boxlite_network_free(CBoxNetworkHandle *network);
 
-/**
- * Prepare a one-shot tunnel to `port` in the box.
- *
- * On success, `*out_tunnel` owns a handle that must be released with
- * `boxlite_tunnel_free`. Returns `InvalidArgument` for a null network/output
- * pointer or port zero, with details written to `out_error` when provided.
- */
 enum BoxliteErrorCode boxlite_network_tunnel(CBoxNetworkHandle *network,
                                              uint16_t port,
                                              CBoxTunnelHandle **out_tunnel,
                                              CBoxliteError *out_error);
 
-/** Release a tunnel handle and any unconsumed connection. Accepts NULL. */
 void boxlite_tunnel_free(CBoxTunnelHandle *tunnel);
 
-/**
- * Inspect a prepared tunnel without transferring ownership.
- *
- * `out_type` selects the valid output: URI returns an allocated `*out_uri`
- * that the caller must release with `boxlite_free_string`; FileDescriptor
- * returns a borrowed `*out_fd` valid only while the tunnel remains alive.
- * Unused outputs are initialized to NULL and -1. Errors are returned as a
- * `BoxliteErrorCode` and described through `out_error` when provided.
- */
 enum BoxliteErrorCode boxlite_tunnel_endpoint(CBoxTunnelHandle *tunnel,
                                               enum BoxliteEndpointType *out_type,
                                               char **out_uri,
                                               int32_t *out_fd,
                                               CBoxliteError *out_error);
 
-/**
- * Consume a tunnel's single connection and return its owned file descriptor.
- *
- * On success, the caller owns `*out_fd` and must close it. A second call
- * returns `InvalidState`. On failure `*out_fd` remains -1 and `out_error`
- * receives details when provided.
- */
 enum BoxliteErrorCode boxlite_tunnel_connect(CBoxTunnelHandle *tunnel,
                                              int32_t *out_fd,
                                              CBoxliteError *out_error);
@@ -704,7 +706,7 @@ void boxlite_options_add_secret(CBoxliteOptions *opts,
                                 const char *const *hosts,
                                 int hosts_count);
 
-// Deprecated: use boxlite_options_set_auto_delete_interval.
+// Deprecated: use `boxlite_options_set_auto_delete_interval`.
 void boxlite_options_set_auto_remove(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_auto_pause_interval(CBoxliteOptions *opts, uint32_t seconds);
@@ -870,6 +872,25 @@ void boxlite_runtime_free(CBoxliteRuntime *runtime);
 //
 // Returns the number of dispatched events, or `-1` on error.
 int boxlite_runtime_drain(CBoxliteRuntime *runtime, int timeout_ms, CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_box_ssh(CBoxHandle *handle,
+                                      CBoxSshHandle **out_ssh,
+                                      CBoxliteError *out_error);
+
+void boxlite_ssh_free(CBoxSshHandle *ssh);
+
+enum BoxliteErrorCode boxlite_ssh_replace_access_set(CBoxSshHandle *ssh,
+                                                     uint64_t generation,
+                                                     const struct CBoxliteSshAccessEntry *accesses,
+                                                     size_t accesses_count,
+                                                     struct CBoxliteSshStatus **out_status,
+                                                     CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_ssh_status(CBoxSshHandle *ssh,
+                                         struct CBoxliteSshStatus **out_status,
+                                         CBoxliteError *out_error);
+
+void boxlite_ssh_status_free(struct CBoxliteSshStatus *status);
 
 void boxlite_free_string(char *s);
 

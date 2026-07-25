@@ -20,6 +20,7 @@ mod network;
 mod options;
 mod rest;
 mod runtime;
+mod ssh;
 #[cfg(test)]
 mod tests;
 mod util;
@@ -46,6 +47,7 @@ pub type CBoxliteRuntime = runtime::RuntimeHandle;
 pub type CBoxHandle = box_handle::BoxHandle;
 pub type CBoxNetworkHandle = network::BoxNetworkHandle;
 pub type CBoxTunnelHandle = network::BoxTunnelHandle;
+pub type CBoxSshHandle = ssh::BoxSshHandle;
 pub type CBoxliteImageHandle = images::ImageHandle;
 pub type CBoxliteVolumeHandle = volumes::VolumeHandle;
 pub type CBoxliteOptions = options::OptionsHandle;

@@ -309,6 +309,11 @@ fn build_guest_entrypoint(
     builder.with_arg("--notify");
     builder.with_arg(&ready_notify_uri);
 
+    if let Some(ssh_listen_addr) = guest_ssh_listen_addr() {
+        builder.with_arg("--ssh-listen");
+        builder.with_arg(&ssh_listen_addr);
+    }
+
     // Debug vars first (prioritized - guaranteed space)
     if let Ok(v) = std::env::var("RUST_LOG") {
         builder.with_env("RUST_LOG", &v);
@@ -329,6 +334,36 @@ fn build_guest_entrypoint(
     // The guest init process inherits them from the container environment.
 
     Ok(builder.build())
+}
+
+/// Guest-agent SSH listener enablement, per design's Phase 4 deployment
+/// config: additive only, never a new BoxLite command or per-box API
+/// surface. Fixed at port 22 -- the direct-tunnel hostname format
+/// (`<port>-d-<box-id>.<proxy-domain>`) already routes that port, and the
+/// design's invariants forbid introducing a second port convention.
+/// `BOXLITE_GUEST_SSH_ENABLED` defaults to **disabled** -- the design
+/// requires the listener off unless explicitly turned on, matching a
+/// controlled rollout (dev/staging opt in explicitly; production stays off
+/// until approved). Set to `1`/`true`/`yes`/`on` to enable.
+fn guest_ssh_listen_addr() -> Option<String> {
+    const GUEST_SSH_PORT: u16 = 22;
+    let enabled = guest_ssh_enabled(std::env::var("BOXLITE_GUEST_SSH_ENABLED").ok().as_deref());
+    enabled.then(|| format!("0.0.0.0:{GUEST_SSH_PORT}"))
+}
+
+/// Pure parser for `BOXLITE_GUEST_SSH_ENABLED`, split out from
+/// [`guest_ssh_listen_addr`] so the rollout toggle's parsing rules are
+/// unit-testable without mutating process-global env state. Opt-in: only
+/// a recognized truthy spelling enables; unset, empty, or anything else
+/// (including garbage input) stays disabled -- fail closed, not open.
+fn guest_ssh_enabled(env_value: Option<&str>) -> bool {
+    match env_value {
+        Some(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        None => false,
+    }
 }
 
 /// Create the box's **one** network backend by routing box-level policy (port
@@ -399,4 +434,34 @@ async fn spawn_vm(
     )?;
 
     controller.start(config).await
+}
+
+#[cfg(test)]
+mod guest_ssh_enablement_tests {
+    use super::guest_ssh_enabled;
+
+    #[test]
+    fn defaults_to_disabled_when_unset() {
+        assert!(!guest_ssh_enabled(None));
+    }
+
+    #[test]
+    fn accepts_common_truthy_spellings_case_and_whitespace_insensitively() {
+        for value in ["1", "true", "True", "TRUE", "yes", "on", "  on  "] {
+            assert!(
+                guest_ssh_enabled(Some(value)),
+                "expected {value:?} to enable guest SSH"
+            );
+        }
+    }
+
+    #[test]
+    fn anything_else_stays_disabled() {
+        for value in ["0", "false", "no", "off", "garbage", ""] {
+            assert!(
+                !guest_ssh_enabled(Some(value)),
+                "expected {value:?} to leave guest SSH disabled"
+            );
+        }
+    }
 }

@@ -145,6 +145,21 @@ pub(crate) trait BoxNetworkBackend: Send + Sync {
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
 }
 
+/// Backend abstraction for the box-scoped SSH access-set control facade.
+///
+/// Kept separate from `BoxBackend`/`BoxNetworkBackend`: this is control
+/// plane only (apply/query which credentials the guest's russh listener
+/// authenticates), never the SSH byte stream itself.
+#[async_trait]
+pub(crate) trait BoxSshBackend: Send + Sync {
+    async fn ssh_replace_access_set(
+        &self,
+        request: crate::litebox::SshAccessSetRequest,
+    ) -> BoxliteResult<crate::litebox::SshStatus>;
+
+    async fn ssh_status(&self) -> BoxliteResult<crate::litebox::SshStatus>;
+}
+
 /// Backend abstraction for snapshot lifecycle operations on a box.
 ///
 /// Kept separate from `BoxBackend` so lifecycle/exec/file operations can evolve

@@ -8,6 +8,11 @@ import { Module } from '@nestjs/common'
 import { DataSource } from 'typeorm'
 import { BoxController } from './controllers/box.controller'
 import { BoxService } from './services/box.service'
+import { BoxAccessGrantController } from './controllers/box-access-grant.controller'
+import { BoxAccessGrantService } from './services/box-access-grant.service'
+import { TemporarySshCredentialController } from './controllers/temporary-ssh-credential.controller'
+import { TemporarySshCredentialService } from './services/temporary-ssh-credential.service'
+import { SshCredentialAuthGuard } from './guards/ssh-credential-auth.guard'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { Box } from './entities/box.entity'
 import { UserModule } from '../user/user.module'
@@ -31,6 +36,12 @@ import { BoxStartAction } from './managers/box-actions/box-start.action'
 import { BoxStopAction } from './managers/box-actions/box-stop.action'
 import { BoxDestroyAction } from './managers/box-actions/box-destroy.action'
 import { SshAccess } from './entities/ssh-access.entity'
+import { BoxAccessGrant } from './entities/box-access-grant.entity'
+import { TemporarySshCredential } from './entities/temporary-ssh-credential.entity'
+import { BoxSshIdentity } from './entities/box-ssh-identity.entity'
+import { BoxSshAccessGeneration } from './entities/box-ssh-access-generation.entity'
+import { SshAccessSetAdapter } from './runner-adapter/ssh-access-set.adapter'
+import { BoxSshReconciliationService } from './services/box-ssh-reconciliation.service'
 import { BoxRepository } from './repositories/box.repository'
 import { RegionModule } from '../region/region.module'
 import { Region } from '../region/entities/region.entity'
@@ -55,11 +66,35 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     UserModule,
     OrganizationModule,
     RegionModule,
-    TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, SshAccess, Region, Job, BoxLastActivity]),
+    TypeOrmModule.forFeature([
+      Box,
+      Runner,
+      WarmPool,
+      Volume,
+      SshAccess,
+      Region,
+      Job,
+      BoxLastActivity,
+      BoxAccessGrant,
+      TemporarySshCredential,
+      BoxSshIdentity,
+      BoxSshAccessGeneration,
+    ]),
   ],
-  controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
+  controllers: [
+    BoxController,
+    RunnerController,
+    PreviewController,
+    VolumeController,
+    JobController,
+    BoxAccessGrantController,
+    TemporarySshCredentialController,
+  ],
   providers: [
     BoxService,
+    BoxAccessGrantService,
+    TemporarySshCredentialService,
+    SshCredentialAuthGuard,
     BoxManager,
     BoxWarmPoolService,
     RunnerService,
@@ -83,6 +118,8 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     RegionBoxAccessGuard,
     ProxyGuard,
     SshGatewayGuard,
+    SshAccessSetAdapter,
+    BoxSshReconciliationService,
     {
       provide: BoxRepository,
       inject: [DataSource, EventEmitter2, BoxLookupCacheInvalidationService],
@@ -103,6 +140,8 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     RunnerAdapterFactory,
     BoxActivityService,
     BoxStateWaiterService,
+    SshAccessSetAdapter,
+    BoxSshReconciliationService,
   ],
 })
 export class BoxModule {}

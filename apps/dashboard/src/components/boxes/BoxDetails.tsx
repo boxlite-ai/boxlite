@@ -39,10 +39,23 @@ import {
   type OnboardingProgress,
 } from '@/lib/onboarding-progress'
 import { getRelativeTimeString } from '@/lib/utils'
-import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
+import { isRecoverable, isSshAccessible, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
 import { Box, BoxState, OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { isAxiosError } from 'axios'
-import { Check, Container, Copy, MoreVertical, Pause, Play, RefreshCw, RotateCcw, Trash2 } from '@/components/ui/icon'
+import {
+  Check,
+  Container,
+  Copy,
+  KeyRound,
+  MoreVertical,
+  Pause,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Trash2,
+} from '@/components/ui/icon'
+import { CreateSshAccessDialog } from './CreateSshAccessDialog'
+import { RevokeSshAccessDialog } from './RevokeSshAccessDialog'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -115,6 +128,8 @@ export default function BoxDetails() {
   const { getRegionName } = useRegions()
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [createSshAccessDialogOpen, setCreateSshAccessDialogOpen] = useState(false)
+  const [revokeSshAccessDialogOpen, setRevokeSshAccessDialogOpen] = useState(false)
   const [showOnboardingDialog, setShowOnboardingDialog] = useState(false)
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
   const [copied, setCopied] = useState(false)
@@ -371,7 +386,7 @@ export default function BoxDetails() {
                     <RefreshCw className="size-[14px] animate-spin" /> working…
                   </button>
                 )}
-              {deletePermitted && (
+              {(writePermitted || deletePermitted) && (
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     aria-label="Open box actions"
@@ -380,12 +395,28 @@ export default function BoxDetails() {
                     <MoreVertical className="size-[18px]" />
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="min-w-[12rem]">
-                    <DropdownMenuItem
-                      className="cursor-pointer text-destructive focus:text-destructive"
-                      onClick={() => setDeleteDialogOpen(true)}
-                    >
-                      <Trash2 className="size-4" /> Delete
-                    </DropdownMenuItem>
+                    {writePermitted && (
+                      <DropdownMenuItem
+                        className="cursor-pointer"
+                        disabled={!isSshAccessible(box)}
+                        onClick={() => setCreateSshAccessDialogOpen(true)}
+                      >
+                        <KeyRound className="size-4" /> Create SSH Access
+                      </DropdownMenuItem>
+                    )}
+                    {writePermitted && (
+                      <DropdownMenuItem className="cursor-pointer" onClick={() => setRevokeSshAccessDialogOpen(true)}>
+                        <KeyRound className="size-4" /> Revoke SSH Access
+                      </DropdownMenuItem>
+                    )}
+                    {deletePermitted && (
+                      <DropdownMenuItem
+                        className="cursor-pointer text-destructive focus:text-destructive"
+                        onClick={() => setDeleteDialogOpen(true)}
+                      >
+                        <Trash2 className="size-4" /> Delete
+                      </DropdownMenuItem>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}
@@ -486,6 +517,21 @@ export default function BoxDetails() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {box && (
+        <>
+          <CreateSshAccessDialog
+            boxId={box.id}
+            open={createSshAccessDialogOpen}
+            onOpenChange={setCreateSshAccessDialogOpen}
+          />
+          <RevokeSshAccessDialog
+            boxId={box.id}
+            open={revokeSshAccessDialogOpen}
+            onOpenChange={setRevokeSshAccessDialogOpen}
+          />
+        </>
+      )}
     </div>
   )
 }

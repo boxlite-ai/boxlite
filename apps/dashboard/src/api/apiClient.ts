@@ -14,11 +14,13 @@ import {
 import {
   ApiKeysApi,
   AuditApi,
+  BoxAccessGrantApi,
   Configuration,
   OrganizationsApi,
   RegionsApi,
   RunnersApi,
   BoxApi,
+  SshAccessApi,
   UsersApi,
   VolumesApi,
   WebhooksApi,
@@ -78,6 +80,8 @@ export class ApiClient {
   private _regionsApi: RegionsApi
   private _runnersApi: RunnersApi
   private _webhooksApi: WebhooksApi
+  private _sshAccessApi: SshAccessApi
+  private _boxAccessGrantApi: BoxAccessGrantApi
   private _analyticsUsageApi: AnalyticsUsageApi | null
   private _analyticsTelemetryApi: AnalyticsTelemetryApi | null
 
@@ -137,6 +141,8 @@ export class ApiClient {
     this._regionsApi = new RegionsApi(this.config, undefined, axiosInstance)
     this._runnersApi = new RunnersApi(this.config, undefined, axiosInstance)
     this._webhooksApi = new WebhooksApi(this.config, undefined, axiosInstance)
+    this._sshAccessApi = new SshAccessApi(this.config, undefined, axiosInstance)
+    this._boxAccessGrantApi = new BoxAccessGrantApi(this.config, undefined, axiosInstance)
 
     if (config.analyticsApiUrl) {
       const analyticsConfig = new AnalyticsConfiguration({
@@ -241,6 +247,14 @@ export class ApiClient {
 
   public get webhooksApi() {
     return this._webhooksApi
+  }
+
+  public get sshAccessApi() {
+    return this._sshAccessApi
+  }
+
+  public get boxAccessGrantApi() {
+    return this._boxAccessGrantApi
   }
 
   public get analyticsUsageApi() {

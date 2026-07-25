@@ -18,7 +18,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { getBoxDisplayName } from '@/lib/box-identity'
-import { isRecoverable, isStartable, isStoppable } from '@/lib/utils/box'
+import { isRecoverable, isSshAccessible, isStartable, isStoppable } from '@/lib/utils/box'
 import { Box } from '@boxlite-ai/api-client'
 import { ArrowLeft, MoreHorizontal, Play, RefreshCw, Square, Wrench } from '@/components/ui/icon'
 
@@ -35,6 +35,8 @@ interface BoxHeaderProps {
   onDelete: () => void
   onRefresh: () => void
   onBack: () => void
+  onCreateSshAccess: () => void
+  onRevokeSshAccess: () => void
   mutations: {
     start: boolean
     stop: boolean
@@ -55,6 +57,8 @@ export function BoxHeader({
   onDelete,
   onRefresh,
   onBack,
+  onCreateSshAccess,
+  onRevokeSshAccess,
   mutations,
 }: BoxHeaderProps) {
   return (
@@ -120,6 +124,18 @@ export function BoxHeader({
                             Refresh
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
+                        </DropdownMenuGroup>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuGroup>
+                          <DropdownMenuItem
+                            onClick={onCreateSshAccess}
+                            disabled={actionsDisabled || !isSshAccessible(box)}
+                          >
+                            Create SSH Access
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={onRevokeSshAccess} disabled={actionsDisabled}>
+                            Revoke SSH Access
+                          </DropdownMenuItem>
                         </DropdownMenuGroup>
                         {deletePermitted && (
                           <>

@@ -5,20 +5,25 @@
 
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { useMutation } from '@tanstack/react-query'
+import { queryKeys } from '@/hooks/queries/queryKeys'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 interface RevokeSshAccessVariables {
   boxId: string
-  token: string
+  credentialId: string
 }
 
 export const useRevokeSshAccessMutation = () => {
-  const { boxApi } = useApi()
+  const { sshAccessApi } = useApi()
   const { selectedOrganization } = useSelectedOrganization()
+  const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ boxId, token }: RevokeSshAccessVariables) => {
-      await boxApi.revokeSshAccess(boxId, selectedOrganization?.id, token)
+    mutationFn: async ({ boxId, credentialId }: RevokeSshAccessVariables) => {
+      await sshAccessApi.revokeTemporarySshCredential(boxId, credentialId, selectedOrganization?.id)
+    },
+    onSuccess: (_data, { boxId }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.sshCredentials.list(boxId) })
     },
   })
 }

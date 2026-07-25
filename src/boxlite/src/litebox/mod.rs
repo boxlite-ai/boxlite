@@ -15,6 +15,7 @@ mod manager;
 mod network;
 mod snapshot;
 pub(crate) mod snapshot_mgr;
+mod ssh;
 mod state;
 mod watcher;
 
@@ -24,6 +25,7 @@ pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execut
 pub(crate) use manager::BoxManager;
 pub use network::{BoxConnection, BoxEndpoint, BoxTunnel, NetworkHandle};
 pub use snapshot::SnapshotHandle;
+pub use ssh::{SshAccessEntry, SshAccessSetRequest, SshHandle, SshIdentityStatus, SshStatus};
 pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
 
 pub(crate) use box_impl::SharedBoxImpl;
@@ -34,7 +36,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::metrics::BoxMetrics;
-use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
+use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, BoxSshBackend, SnapshotBackend};
 use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
 use crate::{BoxID, BoxInfo};
 use boxlite_shared::errors::BoxliteResult;
@@ -57,6 +59,8 @@ pub struct LiteBox {
     network_backend: Arc<dyn BoxNetworkBackend>,
     /// Backend for snapshot lifecycle operations.
     snapshot_backend: Arc<dyn SnapshotBackend>,
+    /// Backend for the SSH access-set control facade.
+    ssh_backend: Arc<dyn BoxSshBackend>,
 }
 
 impl LiteBox {
@@ -65,6 +69,7 @@ impl LiteBox {
         box_backend: Arc<dyn BoxBackend>,
         network_backend: Arc<dyn BoxNetworkBackend>,
         snapshot_backend: Arc<dyn SnapshotBackend>,
+        ssh_backend: Arc<dyn BoxSshBackend>,
     ) -> Self {
         let id = box_backend.id().clone();
         let name = box_backend.name().map(|s| s.to_string());
@@ -74,6 +79,7 @@ impl LiteBox {
             box_backend,
             network_backend,
             snapshot_backend,
+            ssh_backend,
         }
     }
 
@@ -159,6 +165,11 @@ impl LiteBox {
     /// Get a network handle for raw tunnel operations.
     pub fn network(&self) -> NetworkHandle {
         NetworkHandle::new(Arc::clone(&self.network_backend))
+    }
+
+    /// Get an SSH handle for the box-scoped access-set control facade.
+    pub fn ssh(&self) -> SshHandle {
+        SshHandle::new(Arc::clone(&self.ssh_backend))
     }
 
     /// Get a snapshot handle for snapshot operations.

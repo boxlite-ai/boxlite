@@ -2387,94 +2387,6 @@ paths:
       summary: Expire signed preview URL for a box port
       tags:
       - box
-  /box/{boxIdOrName}/ssh-access:
-    delete:
-      operationId: revokeSshAccess
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: "SSH access token to revoke. If not provided, all SSH access\
-          \ for the box will be revoked."
-        explode: true
-        in: query
-        name: token
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-          description: SSH access has been revoked
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Revoke SSH access for box
-      tags:
-      - box
-    post:
-      operationId: createSshAccess
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: "Expiration time in minutes (default: 60)"
-        explode: true
-        in: query
-        name: expiresInMinutes
-        required: false
-        schema:
-          type: number
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SshAccessDto"
-          description: SSH access has been created
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Create SSH access for box
-      tags:
-      - box
   /box/ssh-access/validate:
     get:
       operationId: validateSshAccess
@@ -3292,6 +3204,256 @@ paths:
       summary: Update job status
       tags:
       - jobs
+  /box/{boxIdOrName}/access-grants:
+    get:
+      operationId: listBoxAccessGrants
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: ID or name of the box
+        explode: false
+        in: path
+        name: boxIdOrName
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/BoxAccessGrant"
+                type: array
+          description: Access grants for the box. Never includes the app key or its
+            digest.
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List box-scoped access grants
+      tags:
+      - box-access-grant
+    post:
+      operationId: createBoxAccessGrant
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: ID or name of the box
+        explode: false
+        in: path
+        name: boxIdOrName
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBoxAccessGrant"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BoxAccessGrantCreated"
+          description: Access grant created. The plaintext app key is returned once
+            and cannot be recovered later.
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Create a box-scoped access grant
+      tags:
+      - box-access-grant
+  /box/{boxIdOrName}/access-grants/{grantId}:
+    delete:
+      operationId: revokeBoxAccessGrant
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: ID or name of the box
+        explode: false
+        in: path
+        name: boxIdOrName
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: ID of the access grant to revoke
+        explode: false
+        in: path
+        name: grantId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: Access grant has been revoked
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Revoke a box-scoped access grant
+      tags:
+      - box-access-grant
+  /box/{boxIdOrName}/ssh-access:
+    get:
+      operationId: listTemporarySshCredentials
+      parameters:
+      - description: ID or name of the box
+        explode: false
+        in: path
+        name: boxIdOrName
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/TemporarySshCredential"
+                type: array
+          description: SSH credentials for the box. Never includes the key body.
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List temporary SSH credentials for a box
+      tags:
+      - ssh-access
+    post:
+      operationId: createTemporarySshCredential
+      parameters:
+      - description: ID or name of the box
+        explode: false
+        in: path
+        name: boxIdOrName
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Box-scoped app key issued by a prior access-grant create call.
+          Alternative to account authorization for creating an SSH credential; providing
+          both is rejected.
+        explode: false
+        in: header
+        name: X-BoxLite-App-Key
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTemporarySshCredential"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemporarySshCredentialCreated"
+          description: SSH credential created and applied to the running guest.
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Create a temporary SSH credential for a box
+      tags:
+      - ssh-access
+  /box/{boxIdOrName}/ssh-access/{credentialId}:
+    delete:
+      operationId: revokeTemporarySshCredential
+      parameters:
+      - description: ID or name of the box
+        explode: false
+        in: path
+        name: boxIdOrName
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: ID of the SSH credential to revoke
+        explode: false
+        in: path
+        name: credentialId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: SSH credential has been revoked
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Revoke a temporary SSH credential
+      tags:
+      - ssh-access
   /admin/runners:
     get:
       operationId: adminListRunners
@@ -6758,56 +6920,6 @@ components:
       - token
       - url
       type: object
-    SshAccessDto:
-      example:
-        id: 123e4567-e89b-12d3-a456-426614174000
-        boxId: 123e4567-e89b-12d3-a456-426614174000
-        token: abc123def456ghi789jkl012mno345pqr678stu901vwx234yz
-        expiresAt: 2025-01-01T12:00:00Z
-        createdAt: 2025-01-01T11:00:00Z
-        updatedAt: 2025-01-01T11:00:00Z
-        sshCommand: ssh -p 2222 token@localhost
-      properties:
-        id:
-          description: Unique identifier for the SSH access
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-        boxId:
-          description: ID of the box this SSH access is for
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-        token:
-          description: SSH access token
-          example: abc123def456ghi789jkl012mno345pqr678stu901vwx234yz
-          type: string
-        expiresAt:
-          description: When the SSH access expires
-          example: 2025-01-01T12:00:00Z
-          format: date-time
-          type: string
-        createdAt:
-          description: When the SSH access was created
-          example: 2025-01-01T11:00:00Z
-          format: date-time
-          type: string
-        updatedAt:
-          description: When the SSH access was last updated
-          example: 2025-01-01T11:00:00Z
-          format: date-time
-          type: string
-        sshCommand:
-          description: SSH command to connect to the box
-          example: ssh -p 2222 token@localhost
-          type: string
-      required:
-      - boxId
-      - createdAt
-      - expiresAt
-      - id
-      - sshCommand
-      - token
-      - updatedAt
-      type: object
     SshAccessValidationDto:
       example:
         valid: true
@@ -7607,6 +7719,271 @@ components:
           description: Result metadata for the job
           type: string
       required:
+      - status
+      type: object
+    CreateBoxAccessGrant:
+      example:
+        scopes:
+        - ssh
+        expiresInSeconds: 3600
+      properties:
+        scopes:
+          description: Capability scopes requested for this box-scoped app key. Only
+            "ssh" is supported today.
+          example:
+          - ssh
+          items:
+            enum:
+            - ssh
+            type: string
+          type: array
+        expiresInSeconds:
+          description: "Grant lifetime in seconds (default 3600, min 60, max 86400)"
+          example: 3600
+          maximum: 86400
+          minimum: 60
+          type: number
+      required:
+      - scopes
+      type: object
+    BoxAccessGrantCreated:
+      example:
+        id: 123e4567-e89b-12d3-a456-426614174000
+        boxId: 123e4567-e89b-12d3-a456-426614174000
+        scopes:
+        - ssh
+        - ssh
+        expiresAt: 2025-01-01T12:00:00Z
+        appKey: bag_svc_1234567890abcdef
+      properties:
+        id:
+          description: Unique identifier for the access grant
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        boxId:
+          description: ID of the box this grant is scoped to
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        scopes:
+          description: Capability scopes granted
+          items:
+            enum:
+            - ssh
+            type: string
+          type: array
+        expiresAt:
+          description: When the grant expires
+          example: 2025-01-01T12:00:00Z
+          format: date-time
+          type: string
+        appKey:
+          description: One-time plaintext app key. Not recoverable after this response;
+            store it now.
+          example: bag_svc_1234567890abcdef
+          type: string
+      required:
+      - appKey
+      - boxId
+      - expiresAt
+      - id
+      - scopes
+      type: object
+    BoxAccessGrant:
+      example:
+        id: 123e4567-e89b-12d3-a456-426614174000
+        boxId: 123e4567-e89b-12d3-a456-426614174000
+        scopes:
+        - ssh
+        - ssh
+        status: ACTIVE
+        expiresAt: 2025-01-01T12:00:00Z
+        createdBy: 123e4567-e89b-12d3-a456-426614174000
+        createdAt: 2025-01-01T11:00:00Z
+      properties:
+        id:
+          description: Unique identifier for the access grant
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        boxId:
+          description: ID of the box this grant is scoped to
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        scopes:
+          description: Capability scopes granted
+          items:
+            enum:
+            - ssh
+            type: string
+          type: array
+        status:
+          description: Grant status
+          enum:
+          - ACTIVE
+          - REVOKING
+          - REVOKED
+          type: string
+        expiresAt:
+          description: When the grant expires
+          example: 2025-01-01T12:00:00Z
+          format: date-time
+          type: string
+        createdBy:
+          description: ID of the authenticated user that created the grant
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        createdAt:
+          description: When the grant was created
+          example: 2025-01-01T11:00:00Z
+          format: date-time
+          type: string
+      required:
+      - boxId
+      - createdAt
+      - createdBy
+      - expiresAt
+      - id
+      - scopes
+      - status
+      type: object
+    CreateTemporarySshCredential:
+      example:
+        grantId: 123e4567-e89b-12d3-a456-426614174000
+        publicKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBb2... user@host
+        expiresInSeconds: 300
+      properties:
+        grantId:
+          description: "ID of a previously issued, active `ssh`-scoped access grant\
+            \ for this box"
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        publicKey:
+          description: "Canonical OpenSSH public key line, e.g. \"ssh-ed25519 AAAA...\
+            \ user@host\""
+          example: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBb2... user@host
+          type: string
+        expiresInSeconds:
+          description: "Credential lifetime in seconds (default 300, max bounded by\
+            \ the parent grant expiry)"
+          example: 300
+          maximum: 3600
+          minimum: 30
+          type: number
+      required:
+      - grantId
+      - publicKey
+      type: object
+    TemporarySshCredentialCreated:
+      example:
+        id: 123e4567-e89b-12d3-a456-426614174000
+        grantId: 123e4567-e89b-12d3-a456-426614174000
+        boxId: 123e4567-e89b-12d3-a456-426614174000
+        unixUser: root
+        publicKeyFingerprint: SHA256:abcd1234...
+        expiresAt: 2025-01-01T12:00:00Z
+        endpoint: 22-d-<hex-box-id>.proxy.dev.boxlite.ai
+        proxyCommand: proxytunnel -q -E -p proxy.dev.boxlite.ai:443 -d %h:%p
+        hostKeyFingerprint: SHA256:efgh5678...
+        knownHostsEntry: 22-d-<hex-box-id>.proxy.dev.boxlite.ai ssh-ed25519 AAAA...
+        sshCommand: ssh -i <private-key> -o 'ProxyCommand=proxytunnel -q -E -p proxy.dev.boxlite.ai:443
+          -d %h:%p' root@22-d-<hex-box-id>.proxy.dev.boxlite.ai
+      properties:
+        id:
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        grantId:
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        boxId:
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        unixUser:
+          example: root
+          type: string
+        publicKeyFingerprint:
+          example: SHA256:abcd1234...
+          type: string
+        expiresAt:
+          example: 2025-01-01T12:00:00Z
+          format: date-time
+          type: string
+        endpoint:
+          example: 22-d-<hex-box-id>.proxy.dev.boxlite.ai
+          type: string
+        proxyCommand:
+          example: proxytunnel -q -E -p proxy.dev.boxlite.ai:443 -d %h:%p
+          type: string
+        hostKeyFingerprint:
+          example: SHA256:efgh5678...
+          type: string
+        knownHostsEntry:
+          example: 22-d-<hex-box-id>.proxy.dev.boxlite.ai ssh-ed25519 AAAA...
+          type: string
+        sshCommand:
+          example: ssh -i <private-key> -o 'ProxyCommand=proxytunnel -q -E -p proxy.dev.boxlite.ai:443
+            -d %h:%p' root@22-d-<hex-box-id>.proxy.dev.boxlite.ai
+          type: string
+      required:
+      - boxId
+      - endpoint
+      - expiresAt
+      - grantId
+      - hostKeyFingerprint
+      - id
+      - knownHostsEntry
+      - proxyCommand
+      - publicKeyFingerprint
+      - sshCommand
+      - unixUser
+      type: object
+    TemporarySshCredential:
+      example:
+        id: 123e4567-e89b-12d3-a456-426614174000
+        grantId: 123e4567-e89b-12d3-a456-426614174000
+        boxId: 123e4567-e89b-12d3-a456-426614174000
+        publicKeyFingerprint: SHA256:abcd1234...
+        status: PENDING
+        expiresAt: 2025-01-01T12:00:00Z
+        createdBy: 123e4567-e89b-12d3-a456-426614174000
+        createdAt: 2025-01-01T11:00:00Z
+      properties:
+        id:
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        grantId:
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        boxId:
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        publicKeyFingerprint:
+          example: SHA256:abcd1234...
+          type: string
+        status:
+          enum:
+          - PENDING
+          - ACTIVE
+          - REVOKING
+          - REVOKED
+          type: string
+        expiresAt:
+          example: 2025-01-01T12:00:00Z
+          format: date-time
+          type: string
+        createdBy:
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        createdAt:
+          example: 2025-01-01T11:00:00Z
+          format: date-time
+          type: string
+      required:
+      - boxId
+      - createdAt
+      - createdBy
+      - expiresAt
+      - grantId
+      - id
+      - publicKeyFingerprint
       - status
       type: object
     AdminCreateRunner:

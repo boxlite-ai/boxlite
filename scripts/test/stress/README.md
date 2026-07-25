@@ -151,3 +151,48 @@ make test:stress:api-vm-lifecycle
 
 Do not set `BOXLITE_STRESS_VM_LIMIT` above `RUNNER_CPUS * 8`; exceeding that
 runner limit can require a runner restart.
+
+## SSH load and security scenarios
+
+`ssh-load.py` exercises the real guest SSH listener (design:
+`2026-07-23-boxlite-direct-tunnel-real-ssh`, Phase 4 "Scale"): 100 concurrent
+connections, an auth-rejection burst, and connect/disconnect churn with
+latency measurements. This is a plain Python script, not k6 — k6 speaks
+HTTP/WebSocket and has no module for raw SSH, so this drives the real
+OpenSSH client the same way `scripts/test/e2e/cases/test_real_ssh.py` does
+(real `known_hosts` pinning, no `StrictHostKeyChecking=no`), fanned out
+concurrently via a thread pool.
+
+Prereqs: a box with real SSH already enabled and reachable
+(`SSH_ISSUANCE_ENABLED` and `BOXLITE_GUEST_SSH_ENABLED` both on for that
+environment), `ssh`/`ssh-keygen`/`proxytunnel` on PATH, and a Hosted API
+access grant already issued for the box.
+
+```bash
+brew install proxytunnel
+```
+
+Run:
+
+```bash
+export BOXLITE_E2E_API_URL=https://api.dev.boxlite.ai
+export BOXLITE_E2E_API_KEY=<api-key-or-oidc-access-token>
+
+BOX_ID=<box-id> GRANT_ID=<access-grant-id> make test:stress:ssh
+```
+
+Scenarios and default thresholds:
+
+- **Concurrent** — `BOXLITE_SSH_LOAD_CONCURRENT=100` simultaneous legitimate
+  connections; fails if the failure rate exceeds
+  `BOXLITE_SSH_LOAD_MAX_FAILURE_RATE=0.01` or latency exceeds
+  `BOXLITE_SSH_LOAD_P95_MS=2000` / `BOXLITE_SSH_LOAD_P99_MS=4000`.
+- **Auth-rejection burst** — `BOXLITE_SSH_LOAD_AUTH_REJECT_BURST=50` rapid
+  wrong-key attempts; fails if even one is wrongly accepted.
+- **Churn** — `BOXLITE_SSH_LOAD_CHURN_CYCLES=200` connect/disconnect cycles at
+  `BOXLITE_SSH_LOAD_CHURN_CONCURRENCY=10` in flight; compares the first half
+  against the second half as a leak smoke signal (2x tolerance on failures
+  and P95 latency).
+
+Other knobs: `BOXLITE_SSH_LOAD_TIMEOUT_SECONDS=20` (per-attempt SSH timeout).
+Exit status is non-zero if any scenario breaches its threshold.
