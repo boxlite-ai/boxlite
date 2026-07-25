@@ -8,6 +8,7 @@ import { Injectable, ExecutionContext } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import { ThrottlerGuard, ThrottlerModuleOptions, ThrottlerRequest, ThrottlerStorage } from '@nestjs/throttler'
 import { Request } from 'express'
+import { getClientIp } from '../utils/client-ip.util'
 
 @Injectable()
 export class AnonymousRateLimitGuard extends ThrottlerGuard {
@@ -17,8 +18,7 @@ export class AnonymousRateLimitGuard extends ThrottlerGuard {
 
   protected async getTracker(req: Request): Promise<string> {
     // For anonymous requests, use IP address as tracker
-    const ip = req.ips.length ? req.ips[0] : req.ip
-    return `anonymous:${ip}`
+    return `anonymous:${getClientIp(req)}`
   }
 
   protected generateKey(context: ExecutionContext, suffix: string, name: string): string {

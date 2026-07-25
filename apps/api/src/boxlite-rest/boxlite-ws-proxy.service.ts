@@ -22,6 +22,7 @@ import { UserService } from '../user/user.service'
 import { hasRequiredOrganizationResourcePermissions } from '../organization/guards/organization-resource-action.guard'
 import { BoxAutoResumeService } from './box-auto-resume.service'
 import { BOXLITE_BOX_WRITE_PERMISSIONS } from './boxlite-permission.policy'
+import { BoxliteRequestThrottleService } from './boxlite-request-throttle.service'
 
 type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunner?: Runner
@@ -69,6 +70,7 @@ export class BoxliteWsProxyService {
     // when `skipConnections` is set, so the JWT path guards on it.
     @Inject(JwtStrategy) private readonly jwtStrategy: JwtStrategy | undefined,
     private readonly userService: UserService,
+    private readonly requestThrottle: BoxliteRequestThrottleService,
   ) {
     this.proxy = createProxyMiddleware({
       ws: true,
@@ -123,6 +125,19 @@ export class BoxliteWsProxyService {
       return
     }
 
+    let anonymousThrottle
+    try {
+      anonymousThrottle = await this.requestThrottle.consumeAnonymous(req)
+    } catch (err) {
+      this.logger.warn(`anonymous upgrade throttle failed for ${req.url}: ${(err as Error).message}`)
+      this.respondAndClose(socket, 503, 'Service Unavailable')
+      return
+    }
+    if (!anonymousThrottle.allowed) {
+      this.respondRateLimited(socket, anonymousThrottle.retryAfterSeconds)
+      return
+    }
+
     const auth = await this.authenticate(req, match.tenant)
     if (!auth) {
       this.respondAndClose(socket, 401, 'Unauthorized')
@@ -140,6 +155,19 @@ export class BoxliteWsProxyService {
     }
     if (!hasRequiredOrganizationResourcePermissions(permissionContext, BOXLITE_BOX_WRITE_PERMISSIONS)) {
       this.respondAndClose(socket, 403, 'Forbidden')
+      return
+    }
+
+    let authenticatedThrottle
+    try {
+      authenticatedThrottle = await this.requestThrottle.consumeAuthenticated(auth.organization.id)
+    } catch (err) {
+      this.logger.warn(`authenticated upgrade throttle failed for ${req.url}: ${(err as Error).message}`)
+      this.respondAndClose(socket, 503, 'Service Unavailable')
+      return
+    }
+    if (!authenticatedThrottle.allowed) {
+      this.respondRateLimited(socket, authenticatedThrottle.retryAfterSeconds)
       return
     }
 
@@ -269,6 +297,17 @@ export class BoxliteWsProxyService {
   private respondAndClose(socket: Socket, status: number, reason: string): void {
     try {
       socket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
+    } catch {
+      // Socket may already be torn down — ignore.
+    }
+    socket.destroy()
+  }
+
+  private respondRateLimited(socket: Socket, retryAfterSeconds = 1): void {
+    try {
+      socket.write(
+        `HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nRetry-After: ${retryAfterSeconds}\r\nContent-Length: 0\r\n\r\n`,
+      )
     } catch {
       // Socket may already be torn down — ignore.
     }

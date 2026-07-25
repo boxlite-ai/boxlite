@@ -44,12 +44,14 @@ import {
   BOXLITE_BOX_READ_PERMISSIONS,
   BOXLITE_BOX_WRITE_PERMISSIONS,
 } from './boxlite-permission.policy'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
+import { ThrottlerScope } from '../common/decorators/throttler-scope.decorator'
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
 @ApiExcludeController()
 @ApiTags('BoxLite REST')
 @Controller(['v1/boxes', 'v1/:prefix/boxes'])
-@UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
+@UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard, AuthenticatedRateLimitGuard)
 @FailClosedOnMissingOrganizationResourcePermissions(true)
 @ApiBearerAuth()
 export class BoxliteBoxController {
@@ -62,6 +64,7 @@ export class BoxliteBoxController {
 
   @Post()
   @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
+  @ThrottlerScope('box-create')
   @HttpCode(201)
   @ApiResponse({
     status: 201,
@@ -158,6 +161,7 @@ export class BoxliteBoxController {
 
   @Delete(':boxId')
   @RequiredOrganizationResourcePermissions(BOXLITE_BOX_DELETE_PERMISSIONS)
+  @ThrottlerScope('box-lifecycle')
   @HttpCode(204)
   @Audit({
     action: AuditAction.DELETE,
@@ -170,6 +174,7 @@ export class BoxliteBoxController {
 
   @Post(':boxId/start')
   @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
+  @ThrottlerScope('box-lifecycle')
   @ApiResponse({
     status: 201,
     description: 'Box start requested',
@@ -202,6 +207,7 @@ export class BoxliteBoxController {
 
   @Post(':boxId/stop')
   @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
+  @ThrottlerScope('box-lifecycle')
   @ApiResponse({
     status: 201,
     description: 'Box stop requested',

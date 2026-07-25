@@ -10,6 +10,7 @@ import { Redis } from 'ioredis'
 import { Request, Response } from 'express'
 import { ThrottlerException } from '@nestjs/throttler'
 import { TypedConfigService } from '../config/typed-config.service'
+import { getClientIp } from '../common/utils/client-ip.util'
 import { setRateLimitHeaders } from '../common/utils/rate-limit-headers.util'
 
 /**
@@ -27,7 +28,7 @@ export class FailedAuthTrackerService {
 
   async incrementFailedAuth(request: Request, response: Response): Promise<void> {
     try {
-      const ip = request.ips.length ? request.ips[0] : request.ip
+      const ip = getClientIp(request)
       const throttlerName = 'failed-auth'
       const tracker = `${throttlerName}:${ip}`
 

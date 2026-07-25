@@ -16,6 +16,7 @@ import { MetricsInterceptor } from './interceptors/metrics.interceptor'
 import { HttpsOptions } from '@nestjs/common/interfaces/external/https-options.interface'
 import { TypedConfigService } from './config/typed-config.service'
 import { FailedAuthTrackerService } from './auth/failed-auth-tracker.service'
+import { trustPrivateIngress } from './common/utils/client-ip.util'
 import { DataSource, MigrationExecutor } from 'typeorm'
 import { getOpenApiConfig } from './openapi.config'
 import { AuditInterceptor } from './audit/interceptors/audit.interceptor'
@@ -82,7 +83,7 @@ async function bootstrap() {
 
   const configService = app.get(TypedConfigService)
   const failedAuthTracker = app.get(FailedAuthTrackerService)
-  app.set('trust proxy', true)
+  app.set('trust proxy', trustPrivateIngress)
   app.useGlobalFilters(new AllExceptionsFilter(failedAuthTracker))
   app.useGlobalInterceptors(new LoggerErrorInterceptor())
   app.useGlobalInterceptors(new ObservabilityContextInterceptor())
