@@ -1,12 +1,12 @@
 use crate::service::exec::error::ExecutionError;
 use crate::service::exec::exec_handle::ExecHandle;
+use crate::service::exec::output::OutputManager;
 use boxlite_shared::ExecOutput;
-use futures::Stream;
+use futures::{Stream, StreamExt as _};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::{AbortHandle, JoinHandle};
-use tracing::info;
 
 /// Abstraction for checking container init health.
 ///
@@ -26,6 +26,7 @@ pub(crate) trait InitHealthCheck: Send + Sync {
 struct Inner {
     /// The process handle (owns pid, pty_controller, stdin, stdout, stderr)
     handle: Option<ExecHandle>,
+    output: OutputManager,
     /// Abort handles for stdin forwarding tasks that may own the taken stdin FD.
     input_tasks: Vec<AbortHandle>,
     /// Stdout/stderr forwarding tasks (set on attach)
@@ -54,7 +55,6 @@ pub(crate) struct ExecutionExit {
 /// Execution state.
 ///
 /// Handle owns pid, pty_controller, stdin, stdout, stderr.
-/// stdin is taken on send_input(), stdout/stderr are taken on attach().
 #[derive(Clone)]
 pub(crate) struct ExecutionState {
     inner: Arc<Mutex<Inner>>,
@@ -65,26 +65,28 @@ pub(crate) struct ExecutionState {
 }
 
 impl ExecutionState {
-    fn from_inner(inner: Inner, exit: crate::reaper::ExitSlot) -> Self {
+    fn from_handle(
+        mut handle: ExecHandle,
+        init_health: Option<Arc<Mutex<dyn InitHealthCheck>>>,
+        exit: crate::reaper::ExitSlot,
+    ) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(inner)),
+            inner: Arc::new(Mutex::new(Inner {
+                output: OutputManager::new(handle.stdout(), handle.stderr()),
+                handle: Some(handle),
+                input_tasks: Vec::new(),
+                output_tasks: Vec::new(),
+                released: false,
+                timed_out: false,
+                init_health,
+            })),
             exit,
         }
     }
 
     /// Create new execution state for a guest-side process.
     pub(super) fn new(handle: ExecHandle, exit: crate::reaper::ExitSlot) -> Self {
-        Self::from_inner(
-            Inner {
-                handle: Some(handle),
-                input_tasks: Vec::new(),
-                output_tasks: Vec::new(),
-                released: false,
-                timed_out: false,
-                init_health: None,
-            },
-            exit,
-        )
+        Self::from_handle(handle, None, exit)
     }
 
     #[cfg(test)]
@@ -104,17 +106,7 @@ impl ExecutionState {
         init_health: Arc<Mutex<dyn InitHealthCheck>>,
         exit: crate::reaper::ExitSlot,
     ) -> Self {
-        Self::from_inner(
-            Inner {
-                handle: Some(handle),
-                input_tasks: Vec::new(),
-                output_tasks: Vec::new(),
-                released: false,
-                timed_out: false,
-                init_health: Some(init_health),
-            },
-            exit,
-        )
+        Self::from_handle(handle, Some(init_health), exit)
     }
 
     /// Create execution state for the container's init process itself.
@@ -123,17 +115,7 @@ impl ExecutionState {
     /// reparents to guest main (the boxlite-guest agent process), which owns
     /// `waitpid(-1)`. See `wait_process`.
     pub(crate) fn new_init_session(handle: ExecHandle, exit: crate::reaper::ExitSlot) -> Self {
-        Self::from_inner(
-            Inner {
-                handle: Some(handle),
-                input_tasks: Vec::new(),
-                output_tasks: Vec::new(),
-                released: false,
-                timed_out: false,
-                init_health: None,
-            },
-            exit,
-        )
+        Self::from_handle(handle, None, exit)
     }
 
     /// Check if the container init process died.
@@ -288,88 +270,38 @@ impl ExecutionState {
     }
 
     /// Attach to execution output.
-    ///
-    /// Takes stdout/stderr from handle and starts forwarding tasks.
-    /// Returns stream of output chunks.
     pub async fn attach(
         &self,
-        exec_id: &str,
+        _exec_id: &str,
     ) -> Result<mpsc::Receiver<ExecOutput>, ExecutionError> {
-        use boxlite_shared::{exec_output, Stderr, Stdout};
-        use futures::StreamExt;
-
-        let (tx, rx) = mpsc::channel(100);
-
-        // Take stdout/stderr from handle
-        let (stdout, stderr) = {
-            let mut inner = self.inner.lock().await;
-
-            if !inner.output_tasks.is_empty() {
-                return Err(ExecutionError::AlreadyAttached);
-            }
-
-            let handle = inner
-                .handle
-                .as_mut()
-                .ok_or(ExecutionError::HandleUnavailable)?;
-
-            let stdout = handle.stdout();
-            let stderr = handle.stderr();
-
-            (stdout, stderr)
-        };
-
-        // Spawn forwarding tasks
-        let mut tasks = Vec::new();
-
-        // Spawn stdout forwarding task
-        let exec_id_string = exec_id.to_string();
-        if let Some(mut stdout) = stdout {
-            let tx = tx.clone();
-            let handle = tokio::spawn(async move {
-                while let Some(chunk) = stdout.next().await {
-                    let msg = ExecOutput {
-                        event: Some(exec_output::Event::Stdout(Stdout { data: chunk })),
-                    };
-                    if tx.send(msg).await.is_err() {
-                        break;
-                    }
-                }
-                info!(execution = ?exec_id_string, "Stdout forwarding task ended");
-            });
-            tasks.push(handle);
-        }
-
-        // Spawn stderr forwarding task
-        let exec_id_string = exec_id.to_string();
-        if let Some(mut stderr) = stderr {
-            let tx = tx.clone();
-            let handle = tokio::spawn(async move {
-                while let Some(chunk) = stderr.next().await {
-                    let msg = ExecOutput {
-                        event: Some(exec_output::Event::Stderr(Stderr { data: chunk })),
-                    };
-                    if tx.send(msg).await.is_err() {
-                        break;
-                    }
-                }
-                info!(execution = ?exec_id_string, "Stderr forwarding task ended");
-            });
-            tasks.push(handle);
-        }
-
-        // Store tasks
-        {
-            let mut inner = self.inner.lock().await;
+        let output = {
+            let inner = self.inner.lock().await;
             if inner.released {
-                for task in tasks {
-                    task.abort();
-                }
-            } else {
-                inner.output_tasks = tasks;
+                return Err(ExecutionError::HandleUnavailable);
             }
-        }
+            inner.output.clone()
+        };
+        let mut output = output
+            .attach()
+            .await
+            .map_err(|_| ExecutionError::AlreadyAttached)?;
+        let (tx, rx) = mpsc::channel(100);
+        let task = tokio::spawn(async move {
+            while let Some(message) = output.next().await {
+                match message {
+                    Ok(message) if tx.send(message).await.is_err() => break,
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+        });
 
+        let mut inner = self.inner.lock().await;
+        if inner.released {
+            task.abort();
+            return Err(ExecutionError::HandleUnavailable);
+        }
+        inner.output_tasks.push(task);
         Ok(rx)
     }
 

@@ -414,6 +414,23 @@ impl ExecProtocol {
                 tracing::trace!(len = chunk.data.len(), "Received exec stderr");
                 stderr.send_bytes(chunk.data);
             }
+            Some(exec_output::Event::Dropped(dropped)) => {
+                tracing::warn!(
+                    stdout_bytes = dropped.stdout_bytes,
+                    stderr_bytes = dropped.stderr_bytes,
+                    "Guest output buffer dropped older output"
+                );
+                if dropped.stdout_bytes > 0 {
+                    stdout.flush();
+                }
+                if dropped.stderr_bytes > 0 {
+                    stderr.flush();
+                }
+                let _ = stderr.tx.send(format!(
+                    "[boxlite] output dropped (stdout: {} bytes, stderr: {} bytes)\n",
+                    dropped.stdout_bytes, dropped.stderr_bytes
+                ));
+            }
             None => {}
         }
     }
@@ -1165,6 +1182,45 @@ mod tests {
         }
         assert_eq!(received, "─");
         assert!(stderr_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn output_drop_only_flushes_the_affected_utf8_decoder() {
+        use boxlite_shared::{OutputDropped, Stderr as StderrMsg, exec_output};
+
+        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+        let mut stdout = DecodedStream::new(stdout_tx);
+        let mut stderr = DecodedStream::new(stderr_tx);
+
+        let output = |event| ExecOutput { event: Some(event) };
+        ExecProtocol::route_output(
+            output(exec_output::Event::Stderr(StderrMsg { data: vec![0xE2] })),
+            &mut stdout,
+            &mut stderr,
+        );
+        ExecProtocol::route_output(
+            output(exec_output::Event::Dropped(OutputDropped {
+                stdout_bytes: 1,
+                stderr_bytes: 0,
+            })),
+            &mut stdout,
+            &mut stderr,
+        );
+        ExecProtocol::route_output(
+            output(exec_output::Event::Stderr(StderrMsg {
+                data: vec![0x94, 0x80],
+            })),
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert!(stdout_rx.try_recv().is_err());
+        assert_eq!(
+            stderr_rx.try_recv().ok(),
+            Some("[boxlite] output dropped (stdout: 1 bytes, stderr: 0 bytes)\n".to_string())
+        );
+        assert_eq!(stderr_rx.try_recv().ok(), Some("─".to_string()));
     }
 
     /// Flushing a DecodedStream must drain held-over bytes, leave the

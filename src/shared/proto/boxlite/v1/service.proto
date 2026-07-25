@@ -447,7 +447,13 @@ message ExecOutput {
   oneof event {
     Stdout stdout = 1;
     Stderr stderr = 2;
+    OutputDropped dropped = 3;
   }
+}
+
+message OutputDropped {
+  uint64 stdout_bytes = 1;
+  uint64 stderr_bytes = 2;
 }
 
 message Stdout {

@@ -63,6 +63,92 @@ async fn attached_stdout(opts: BoxOptions) -> String {
     stdout
 }
 
+#[tokio::test]
+async fn main_command_exits_after_large_output_without_attach() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime
+        .create(
+            main_command_opts(&["sh", "-c", "head -c 1048576 /dev/zero; exit 23"], false),
+            None,
+        )
+        .await
+        .expect("create box");
+
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        handle.start().await.expect("start box");
+        loop {
+            if handle.info().status == boxlite::BoxStatus::Stopped {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    let _ = handle.stop().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+
+    assert!(
+        completed,
+        "a main command that has no Attach consumer must still drain and exit"
+    );
+}
+
+#[tokio::test]
+async fn late_attach_reports_output_dropped() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime
+        .create(
+            main_command_opts(&["sh", "-c", "head -c 2097152 /dev/zero; sleep 30"], false),
+            None,
+        )
+        .await
+        .expect("create box");
+
+    handle.start().await.expect("start box");
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    let mut execution = handle
+        .attach(None)
+        .await
+        .expect("attach to the main command");
+    let mut stderr = execution.stderr().expect("stderr stream");
+    let dropped = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Some(chunk) = stderr.next().await {
+            if chunk.contains("[boxlite] output dropped") {
+                return Some(chunk);
+            }
+        }
+        None
+    })
+    .await
+    .unwrap_or(None);
+
+    let _ = handle.stop().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+
+    let dropped = dropped.expect("late attach must report overwritten output");
+    assert!(
+        dropped.contains("stdout:") && dropped.contains("stderr: 0 bytes"),
+        "stdout-only loss must preserve the stderr decoder: {dropped:?}"
+    );
+}
+
 /// `tty: true` must give the *main command* a real terminal.
 ///
 /// `test -t 0` asks the kernel, so this cannot pass unless init's fd 0 really
