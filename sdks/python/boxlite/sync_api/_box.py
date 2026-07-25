@@ -4,13 +4,13 @@ SyncBox - Synchronous wrapper for Box.
 Mirrors the native Box API exactly, but with synchronous methods.
 """
 
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from ..boxlite import Box, BoxInfo, BoxMetrics
     from ._boxlite import SyncBoxlite
     from ._execution import SyncExecution
     from ._network import SyncNetworkHandle
-    from ..boxlite import Box, BoxInfo, BoxMetrics
 
 __all__ = ["SyncBox"]
 
@@ -70,7 +70,7 @@ class SyncBox:
         return self._box.id
 
     @property
-    def name(self) -> Optional[str]:
+    def name(self) -> str | None:
         """Get the box name (if set)."""
         return self._box.name
 
@@ -93,8 +93,8 @@ class SyncBox:
     def exec(
         self,
         cmd: str,
-        args: Optional[List[str]] = None,
-        env: Optional[List[Tuple[str, str]]] = None,
+        args: list[str] | None = None,
+        env: list[tuple[str, str]] | None = None,
         tty: bool = False,
     ) -> "SyncExecution":
         """
@@ -144,7 +144,7 @@ class SyncBox:
         return self.network.tunnel(port)
 
     # Context manager support
-    def __enter__(self) -> "SyncBox":
+    def __enter__(self) -> "SyncBox":  # noqa: PYI034 - typing.Self needs 3.11+; project supports 3.10+
         """Enter context - starts the box."""
         self._sync(self._box.__aenter__())
         return self

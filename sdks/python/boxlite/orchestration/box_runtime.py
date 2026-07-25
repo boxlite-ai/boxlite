@@ -5,12 +5,16 @@ BoxRuntime - Multi-box orchestration with Ray-style decorator API.
 import asyncio
 import base64
 import json
+import logging
 import sys
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 import cloudpickle
 
 from ..simplebox import SimpleBox
+
+logger = logging.getLogger("boxlite.orchestration")
 
 __all__ = ["BoxRuntime", "ManagedBox"]
 
@@ -22,13 +26,13 @@ class ManagedBox:
         self._runtime = runtime
         self._name = name
         self._kwargs = kwargs
-        self._box: Optional[SimpleBox] = None
+        self._box: SimpleBox | None = None
         self._execution = None
         self._stdin = None
         self._stdout = None
-        self._pump_task: Optional[asyncio.Task] = None
+        self._pump_task: asyncio.Task | None = None
         self._pending: dict[str, asyncio.Future] = {}
-        self._task_func: Optional[Callable] = None
+        self._task_func: Callable | None = None
         self._message_handlers: list[Callable] = []
         self._event_handlers: dict[str, list[Callable]] = {}
 
@@ -49,7 +53,7 @@ class ManagedBox:
         return self
 
     async def _inject_sdk(self) -> None:
-        from importlib.resources import files, as_file
+        from importlib.resources import as_file, files
 
         result = await self._box.exec("pip", "install", "-q", "cloudpickle")
         if result.exit_code != 0:
@@ -80,7 +84,7 @@ class ManagedBox:
 
         return decorator
 
-    async def run(self, env: Optional[dict[str, str]] = None) -> None:
+    async def run(self, env: dict[str, str] | None = None) -> None:
         """Run with registered task and/or handlers."""
         if (
             not self._task_func
@@ -160,7 +164,7 @@ if _d["message_handlers"] or _d["event_handlers"]: run_forever()
                 raise ValueError("Cannot send to self")
             result = await target_box._deliver_message(self._name, data)
             response = {"request_id": request_id, "result": result}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - RPC boundary: report failure to sender instead of crashing the pump loop
             response = {"request_id": request_id, "error": str(e)}
         await self._send(response)
 
@@ -170,8 +174,8 @@ if _d["message_handlers"] or _d["event_handlers"]: run_forever()
             if name != self._name and box._execution:
                 try:
                     await box._send({"type": "event", "event": event, "data": data})
-                except Exception:
-                    pass
+                except Exception as e:  # noqa: BLE001 - one box's failure must not stop the broadcast to others
+                    logger.debug(f"Failed to publish event to {name}: {e}")
 
     def _handle_response(self, msg: dict) -> None:
         request_id = msg.get("request_id")
@@ -226,14 +230,14 @@ if _d["message_handlers"] or _d["event_handlers"]: run_forever()
         if self._execution:
             try:
                 await self._send({"type": "shutdown"})
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001 - best-effort shutdown notice; kill() below is the real teardown
+                logger.debug(f"Failed to send shutdown message to {self._name}: {e}")
             if self._pump_task:
                 self._pump_task.cancel()
             try:
                 await self._execution.kill()
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001 - stop() must not raise; box is already going away
+                logger.debug(f"Failed to kill execution for {self._name}: {e}")
         self._execution = None
         if self._box:
             await self._box._box.stop()
@@ -248,7 +252,7 @@ class BoxRuntime:
         self._python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
         self._image = f"python:{self._python_version}-slim"
 
-    async def __aenter__(self) -> "BoxRuntime":
+    async def __aenter__(self) -> "BoxRuntime":  # noqa: PYI034 - typing.Self needs 3.11+; project supports 3.10+
         return self
 
     async def __aexit__(self, *_):
@@ -269,7 +273,7 @@ class BoxRuntime:
         """Get list of all box names."""
         return list(self._boxes.keys())
 
-    async def wait_all(self, timeout: float = None) -> list[int]:
+    async def wait_all(self, timeout: float | None = None) -> list[int]:
         if not self._boxes:
             return []
         tasks = [box.wait() for box in self._boxes.values()]

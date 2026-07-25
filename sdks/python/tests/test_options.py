@@ -8,8 +8,9 @@ These tests verify the behavior of:
 
 from __future__ import annotations
 
-import boxlite
 import pytest
+
+import boxlite
 
 pytestmark = pytest.mark.integration
 

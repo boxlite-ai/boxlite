@@ -12,8 +12,9 @@ integration job (same convention as test_options.py / test_images.py).
 
 from __future__ import annotations
 
-import boxlite
 import pytest
+
+import boxlite
 
 pytestmark = pytest.mark.integration
 
@@ -79,5 +80,5 @@ def test_rest_options_from_env(monkeypatch):
 
 def test_rest_options_from_env_requires_url(monkeypatch):
     monkeypatch.delenv("BOXLITE_REST_URL", raising=False)
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError):
         boxlite.BoxliteRestOptions.from_env()

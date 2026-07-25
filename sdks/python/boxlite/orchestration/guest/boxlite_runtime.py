@@ -14,20 +14,21 @@ Protocol (JSON over stdin/stdout):
         {"type": "shutdown"}
 """
 
-import sys
 import json
 import os
+import sys
 import uuid
-from typing import Callable, Any
+from collections.abc import Callable
+from typing import Any
 
 __all__ = [
-    "send_message",
-    "publish_event",
-    "on_message",
-    "on_event",
-    "run_forever",
-    "stop",
     "BOX_NAME",
+    "on_event",
+    "on_message",
+    "publish_event",
+    "run_forever",
+    "send_message",
+    "stop",
 ]
 
 _message_handlers: list[Callable] = []
@@ -114,7 +115,7 @@ def run_forever():
                     try:
                         result = handler(sender, data)
                         break
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - RPC boundary: report failure to sender instead of crashing the loop
                         error = str(e)
                 if error:
                     print(
@@ -144,13 +145,15 @@ def run_forever():
                 for handler in _event_handlers.get(event, []):
                     try:
                         handler(data)
-                    except Exception:
-                        pass
+                    except Exception as e:  # noqa: BLE001 - one handler's failure must not stop the others
+                        print(
+                            f"event handler for {event!r} failed: {e}", file=sys.stderr
+                        )
 
             elif msg_type == "shutdown":
                 break
 
         except json.JSONDecodeError:
             pass
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - top-level loop guard: report failure via protocol instead of crashing
             print(json.dumps({"type": "error", "error": str(e)}), flush=True)

@@ -13,7 +13,7 @@ import os
 import random
 import socket
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from . import constants as const
 from .errors import TimeoutError
@@ -94,7 +94,7 @@ class SkillBox(SimpleBox):
         gui_http_port: int = 0,
         gui_https_port: int = 0,
         auto_remove: bool = True,
-        runtime: Optional["Boxlite"] = None,
+        runtime: Boxlite | None = None,
         **kwargs,
     ):
         """
@@ -175,13 +175,13 @@ class SkillBox(SimpleBox):
         )
 
         # Runtime state for Claude CLI process
-        self._process: Optional["Execution"] = None
+        self._process: Execution | None = None
         self._stdin = None
         self._stdout = None
         self._session_id: str = "default"
         self._setup_complete: bool = False
 
-    async def __aenter__(self) -> "SkillBox":
+    async def __aenter__(self) -> SkillBox:  # noqa: PYI034 - typing.Self needs 3.11+; project supports 3.10+
         """Enter context - creates/reuses box but defers setup to first call()."""
         if not self._oauth_token:
             raise ValueError(
@@ -444,14 +444,14 @@ class SkillBox(SimpleBox):
         if self._stdin:
             try:
                 await self._stdin.close()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - teardown must not raise if the process already died
                 logger.debug("Error closing stdin: %s", e)
             self._stdin = None
 
         if self._process:
             try:
                 await self._process.wait()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - teardown must not raise if the process already died
                 logger.debug("Error waiting for process: %s", e)
             self._process = None
 

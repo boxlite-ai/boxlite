@@ -4,13 +4,11 @@ BoxLite error types.
 Provides a hierarchy of exceptions for different failure modes.
 """
 
-__all__ = ["BoxliteError", "ExecError", "TimeoutError", "ParseError"]
+__all__ = ["BoxliteError", "ExecError", "ParseError", "TimeoutError"]
 
 
 class BoxliteError(Exception):
     """Base exception for all boxlite errors."""
-
-    pass
 
 
 class ExecError(BoxliteError):
@@ -35,10 +33,6 @@ class ExecError(BoxliteError):
 class TimeoutError(BoxliteError):
     """Raised when an operation times out."""
 
-    pass
-
 
 class ParseError(BoxliteError):
     """Raised when output parsing fails."""
-
-    pass

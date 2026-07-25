@@ -41,17 +41,17 @@ Note:
     Use the async API (CodeBox, SimpleBox) in those cases.
 """
 
-from ._boxlite import SyncBoxlite
-from ._sync_base import SyncBase, SyncContextManager
 from ._box import SyncBox
+from ._boxlite import SyncBoxlite
+from ._codebox import SyncCodeBox
+from ._execution import SyncExecStderr, SyncExecStdout, SyncExecution
 from ._images import SyncImageHandle
 from ._network import SyncNetworkHandle
-from ._execution import SyncExecution, SyncExecStdout, SyncExecStderr
 from ._simplebox import SyncSimpleBox
-from ._codebox import SyncCodeBox
 from ._skillbox import SyncSkillBox
+from ._sync_base import SyncBase, SyncContextManager
 
-__all__ = [
+__all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
     # Entry point
     "SyncBoxlite",
     # Base classes
