@@ -167,7 +167,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install ruff
-        run: pip install ruff
+        # Pinned: an unpinned install silently upgrades to a new ruff whose newly
+        # stabilized rules can red the lint on unchanged code (0.16.0 did exactly this).
+        run: pip install ruff==0.15.4
 
       - name: Run Python lint
         run: make lint:python
