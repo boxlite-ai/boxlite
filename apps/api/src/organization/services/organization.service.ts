@@ -156,13 +156,18 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     return this.findDefaultForUserWithEntityManager(this.organizationRepository.manager, userId)
   }
 
-  async findByUserWithDefaultFlag(
-    userId: string,
-  ): Promise<{ organization: Organization; isDefaultForAuthenticatedUser: boolean }[]> {
+  async findByUserWithDefaultFlag(userId: string): Promise<
+    {
+      organization: Organization
+      organizationUser: OrganizationUser
+      isDefaultForAuthenticatedUser: boolean
+    }[]
+  > {
     const memberships = await this.organizationRepository.manager.find(OrganizationUser, {
       where: { userId },
       relations: {
         organization: true,
+        assignedRoles: true,
       },
       order: {
         createdAt: 'ASC',
@@ -171,6 +176,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
 
     return memberships.map((membership) => ({
       organization: membership.organization,
+      organizationUser: membership,
       isDefaultForAuthenticatedUser: membership.isDefaultForUser,
     }))
   }

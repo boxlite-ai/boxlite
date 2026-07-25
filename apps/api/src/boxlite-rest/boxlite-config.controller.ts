@@ -6,6 +6,8 @@
 
 import { Controller, Get } from '@nestjs/common'
 import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
+import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
+import { BOXLITE_BOX_READ_PERMISSIONS } from './boxlite-permission.policy'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml.
 @ApiExcludeController()
@@ -13,6 +15,7 @@ import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
 @Controller('v1')
 export class BoxliteConfigController {
   @Get('config')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_READ_PERMISSIONS)
   getConfig() {
     return {
       capabilities: {

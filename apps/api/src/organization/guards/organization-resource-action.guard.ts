@@ -8,8 +8,12 @@ import { CanActivate, Injectable, ExecutionContext, Logger, Type } from '@nestjs
 import { GUARDS_METADATA } from '@nestjs/common/constants'
 import { Reflector } from '@nestjs/core'
 import { OrganizationAccessGuard } from './organization-access.guard'
-import { RequiredOrganizationResourcePermissions } from '../decorators/required-organization-resource-permissions.decorator'
+import {
+  FailClosedOnMissingOrganizationResourcePermissions,
+  RequiredOrganizationResourcePermissions,
+} from '../decorators/required-organization-resource-permissions.decorator'
 import { OrganizationMemberRole } from '../enums/organization-member-role.enum'
+import { OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
 import { OrganizationService } from '../services/organization.service'
 import { OrganizationUserService } from '../services/organization-user.service'
 import { OrganizationAuthContext } from '../../common/interfaces/auth-context.interface'
@@ -19,6 +23,48 @@ import { isRunnerContext } from '../../common/interfaces/runner-context.interfac
 import { OR_GUARD_INNER_GUARDS } from '../../auth/or.guard'
 
 const RUNNER_COMPATIBLE_RESOURCE_GUARD_NAMES = new Set(['RunnerAuthGuard', 'BoxAccessGuard'])
+
+export function hasRequiredOrganizationResourcePermissions(
+  authContext: OrganizationAuthContext,
+  requiredPermissions: OrganizationResourcePermission[],
+): boolean {
+  if (authContext.apiKey) {
+    if (!authContext.organizationUser) {
+      return false
+    }
+    return hasEveryRequiredPermission(authContext.apiKey.permissions, requiredPermissions)
+  }
+
+  if (authContext.role === SystemRole.ADMIN) {
+    return true
+  }
+
+  if (!authContext.organizationUser) {
+    return false
+  }
+
+  if (authContext.organizationUser.role === OrganizationMemberRole.OWNER) {
+    return true
+  }
+
+  const permissions = authContext.organizationUser.assignedRoles?.flatMap((role) => role.permissions)
+  return hasEveryRequiredPermission(permissions, requiredPermissions)
+}
+
+function hasEveryRequiredPermission(
+  permissions: OrganizationResourcePermission[] | undefined,
+  requiredPermissions: OrganizationResourcePermission[],
+): boolean {
+  if (requiredPermissions.length === 0) {
+    return true
+  }
+  if (!Array.isArray(permissions)) {
+    return false
+  }
+
+  const assignedPermissions = new Set(permissions)
+  return requiredPermissions.every((permission) => assignedPermissions.has(permission))
+}
 
 @Injectable()
 export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
@@ -45,7 +91,20 @@ export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
       return false
     }
 
-    if (authContext.role === SystemRole.ADMIN) {
+    const requiredPermissions =
+      this.reflector.get(RequiredOrganizationResourcePermissions, context.getHandler()) ||
+      this.reflector.get(RequiredOrganizationResourcePermissions, context.getClass())
+
+    if (!requiredPermissions) {
+      const failClosed =
+        this.reflector.get(FailClosedOnMissingOrganizationResourcePermissions, context.getHandler()) ||
+        this.reflector.get(FailClosedOnMissingOrganizationResourcePermissions, context.getClass())
+      if (failClosed) {
+        return false
+      }
+    }
+
+    if (authContext.role === SystemRole.ADMIN && !authContext.apiKey) {
       return true
     }
 
@@ -53,27 +112,7 @@ export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
       return false
     }
 
-    if (!authContext.organizationUser) {
-      return false
-    }
-
-    if (authContext.organizationUser.role === OrganizationMemberRole.OWNER && !authContext.apiKey) {
-      return true
-    }
-
-    const requiredPermissions =
-      this.reflector.get(RequiredOrganizationResourcePermissions, context.getHandler()) ||
-      this.reflector.get(RequiredOrganizationResourcePermissions, context.getClass())
-
-    if (!requiredPermissions) {
-      return true
-    }
-
-    const assignedPermissions = authContext.apiKey
-      ? new Set(authContext.apiKey.permissions)
-      : new Set(authContext.organizationUser.assignedRoles.flatMap((role) => role.permissions))
-
-    return requiredPermissions.every((permission) => assignedPermissions.has(permission))
+    return requiredPermissions ? hasRequiredOrganizationResourcePermissions(authContext, requiredPermissions) : true
   }
 
   private handlerAllowsRunnerResourceAccess(context: ExecutionContext): boolean {

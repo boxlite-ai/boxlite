@@ -12,14 +12,29 @@ import { JwtStrategy } from '../auth/jwt.strategy'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { OrganizationService } from '../organization/services/organization.service'
 import { Organization } from '../organization/entities/organization.entity'
+import type { OrganizationUser } from '../organization/entities/organization-user.entity'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import type { Runner } from '../box/entities/runner.entity'
+import type { ApiKey } from '../api-key/api-key.entity'
+import { SystemRole } from '../user/enums/system-role.enum'
+import { UserService } from '../user/user.service'
+import { hasRequiredOrganizationResourcePermissions } from '../organization/guards/organization-resource-action.guard'
 import { BoxAutoResumeService } from './box-auto-resume.service'
+import { BOXLITE_BOX_WRITE_PERMISSIONS } from './boxlite-permission.policy'
 
 type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunner?: Runner
   __boxliteRunnerBoxId?: string
+}
+
+type WebSocketAuthContext = {
+  organization: Organization
+  organizationUser?: OrganizationUser
+  userId: string
+  email: string
+  role: SystemRole
+  apiKey?: ApiKey
 }
 
 // Matches /api/v1/boxes/<id>/executions/<id>/attach and the
@@ -53,6 +68,7 @@ export class BoxliteWsProxyService {
     // Exported by AuthModule (already imported here). Resolves to `undefined`
     // when `skipConnections` is set, so the JWT path guards on it.
     @Inject(JwtStrategy) private readonly jwtStrategy: JwtStrategy | undefined,
+    private readonly userService: UserService,
   ) {
     this.proxy = createProxyMiddleware({
       ws: true,
@@ -113,6 +129,20 @@ export class BoxliteWsProxyService {
       return
     }
 
+    const permissionContext = {
+      organizationId: auth.organization.id,
+      organization: auth.organization,
+      organizationUser: auth.organizationUser,
+      userId: auth.userId,
+      email: auth.email,
+      role: auth.role,
+      apiKey: auth.apiKey,
+    }
+    if (!hasRequiredOrganizationResourcePermissions(permissionContext, BOXLITE_BOX_WRITE_PERMISSIONS)) {
+      this.respondAndClose(socket, 403, 'Forbidden')
+      return
+    }
+
     try {
       const box = await this.boxService.findOneByIdOrName(match.boxId, auth.organization.id)
       if (!box?.runnerId) {
@@ -148,8 +178,8 @@ export class BoxliteWsProxyService {
 
   /**
    * Inline authentication for WS upgrades, mirroring the API-key + JWT halves of
-   * CombinedAuthGuard. Membership-only, like the HTTP exec/attach routes
-   * (`BoxliteProxyController`), which carry no resource-permission decorator.
+   * CombinedAuthGuard, then enforcing the same Box write permission required by
+   * the HTTP exec routes.
    * Never throws — any failure resolves to `null` (a 401), so the fire-and-forget
    * `upgrade` caller can't leak a hung socket.
    *
@@ -164,13 +194,15 @@ export class BoxliteWsProxyService {
    * organization is taken from the URL `{prefix}` (`urlTenant`); a request with
    * no tenant (or the legacy `default`) is rejected since the org is ambiguous
    * for a multi-org user. Membership in that org is then required, identically to
-   * the API-key path. `jwtStrategy` is absent when `skipConnections` is set.
+   * the API-key path, except that a database-backed system administrator keeps
+   * the same cross-organization access granted by the HTTP guard. `jwtStrategy`
+   * is absent when `skipConnections` is set.
    *
    * Unlike the HTTP path, this does not consult the Redis cache used by
    * ApiKeyStrategy / OrganizationAccessGuard. Upgrade frequency is low; if
    * upgrade latency becomes a concern, add caching as a follow-up.
    */
-  private async authenticate(req: IncomingMessage, urlTenant?: string): Promise<{ organization: Organization } | null> {
+  private async authenticate(req: IncomingMessage, urlTenant?: string): Promise<WebSocketAuthContext | null> {
     try {
       const header = req.headers['authorization']
       const headerValue = Array.isArray(header) ? header[0] : header
@@ -186,8 +218,19 @@ export class BoxliteWsProxyService {
         if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null
         const membership = await this.organizationUserService.findOne(apiKey.organizationId, apiKey.userId)
         if (!membership) return null
+        const user = await this.userService.findOne(apiKey.userId)
+        if (!user) return null
         const organization = await this.organizationService.findOne(apiKey.organizationId)
-        return organization ? { organization } : null
+        return organization
+          ? {
+              organization,
+              organizationUser: membership,
+              userId: user.id,
+              email: user.email,
+              role: user.role,
+              apiKey,
+            }
+          : null
       }
 
       // 2. JWT (OIDC) — org comes from the URL tenant; membership required.
@@ -200,10 +243,20 @@ export class BoxliteWsProxyService {
       if (claims.cid && claims.uid) userId = claims.uid
       if (!userId) return null
 
+      const user = await this.userService.findOne(userId)
+      if (!user) return null
       const membership = await this.organizationUserService.findOne(urlTenant, userId)
-      if (!membership) return null
+      if (!membership && user.role !== SystemRole.ADMIN) return null
       const organization = await this.organizationService.findOne(urlTenant)
-      return organization ? { organization } : null
+      return organization
+        ? {
+            organization,
+            organizationUser: membership ?? undefined,
+            userId: user.id,
+            email: user.email,
+            role: user.role,
+          }
+        : null
     } catch {
       // Any failure (invalid JWT signature, a DB error, …) → 401. This single
       // guard is why authenticate never throws — `upgrade` calls it before its
