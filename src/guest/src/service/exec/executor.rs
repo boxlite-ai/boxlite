@@ -168,12 +168,12 @@ fn spawn_with_pipes(req: &ExecRequest) -> BoxliteResult<ExecHandle> {
     let pid = child.id();
 
     // Non-PTY mode: stdout and stderr are separate pipes
-    Ok(ExecHandle::new(
+    ExecHandle::new(
         Pid::from_raw(pid as i32),
         stdin_write,
         stdout_read,
         Some(stderr_read),
-    ))
+    )
 }
 
 /// Spawn process with PTY (interactive mode).
@@ -265,7 +265,7 @@ fn spawn_with_pty(req: &ExecRequest, config: PtyConfig) -> BoxliteResult<ExecHan
     let stdout = unsafe { OwnedFd::from_raw_fd(stdout_fd) };
 
     // PTY mode: stderr is None (merged into stdout)
-    let mut handle = ExecHandle::new(Pid::from_raw(pid as i32), stdin, stdout, None);
+    let mut handle = ExecHandle::new(Pid::from_raw(pid as i32), stdin, stdout, None)?;
 
     // Keep master FD for resize operations
     let pty_controller = {

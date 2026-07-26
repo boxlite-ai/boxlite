@@ -7,26 +7,25 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use futures::stream::{Stream, StreamExt};
 use nix::sys::signal::Signal;
 use nix::unistd::Pid;
-use std::os::unix::io::OwnedFd;
+use std::io;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{unix::AsyncFd, Interest};
 
 /// Stdin writer for executed process
 ///
 /// Async wrapper around file descriptor for writing to process stdin.
 pub struct ExecStdin {
-    inner: tokio::fs::File,
+    inner: AsyncFd<OwnedFd>,
 }
 
 impl ExecStdin {
     /// Create from file descriptor
-    pub fn new(fd: OwnedFd) -> Self {
-        use std::os::fd::{FromRawFd, IntoRawFd};
-        let std_file = unsafe { std::fs::File::from_raw_fd(fd.into_raw_fd()) };
-        Self {
-            inner: tokio::fs::File::from_std(std_file),
-        }
+    pub fn new(fd: OwnedFd) -> BoxliteResult<Self> {
+        Ok(Self {
+            inner: async_fd(fd, "stdin")?,
+        })
     }
 
     /// Write all data to stdin
@@ -35,11 +34,52 @@ impl ExecStdin {
     ///
     /// - I/O error (pipe closed, etc.)
     pub async fn write_all(&mut self, data: &[u8]) -> BoxliteResult<()> {
-        self.inner
-            .write_all(data)
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("Failed to write to stdin: {}", e)))
+        let mut written = 0;
+        while written < data.len() {
+            let count = self
+                .inner
+                .async_io(Interest::WRITABLE, |fd| write_fd(fd, &data[written..]))
+                .await
+                .map_err(|error| {
+                    BoxliteError::Internal(format!("Failed to write to stdin: {error}"))
+                })?;
+            if count == 0 {
+                return Err(BoxliteError::Internal(
+                    "Failed to write to stdin: write returned zero bytes".into(),
+                ));
+            }
+            written += count;
+        }
+        Ok(())
     }
+}
+
+fn async_fd(fd: OwnedFd, stream_name: &str) -> BoxliteResult<AsyncFd<OwnedFd>> {
+    set_nonblocking(&fd)?;
+    AsyncFd::new(fd).map_err(|error| {
+        BoxliteError::Internal(format!(
+            "Failed to register {stream_name} with Tokio I/O reactor: {error}"
+        ))
+    })
+}
+
+fn set_nonblocking(fd: &OwnedFd) -> BoxliteResult<()> {
+    let flags = nix::fcntl::fcntl(fd.as_raw_fd(), nix::fcntl::FcntlArg::F_GETFL)
+        .map_err(|error| BoxliteError::Internal(format!("Failed to read fd flags: {error}")))?;
+    let mut flags = nix::fcntl::OFlag::from_bits_truncate(flags);
+    flags.insert(nix::fcntl::OFlag::O_NONBLOCK);
+    nix::fcntl::fcntl(fd.as_raw_fd(), nix::fcntl::FcntlArg::F_SETFL(flags)).map_err(|error| {
+        BoxliteError::Internal(format!("Failed to set fd non-blocking: {error}"))
+    })?;
+    Ok(())
+}
+
+fn read_fd(fd: &OwnedFd, buffer: &mut [u8]) -> io::Result<usize> {
+    nix::unistd::read(fd.as_raw_fd(), buffer).map_err(Into::into)
+}
+
+fn write_fd(fd: &OwnedFd, buffer: &[u8]) -> io::Result<usize> {
+    nix::unistd::write(fd, buffer).map_err(Into::into)
 }
 
 // Shared output stream implementation
@@ -48,21 +88,15 @@ struct OutputStream {
 }
 
 impl OutputStream {
-    fn new(fd: OwnedFd) -> Self {
+    fn new(fd: OwnedFd) -> BoxliteResult<Self> {
         use async_stream::stream;
-        use std::os::fd::{FromRawFd, IntoRawFd};
-        use tokio::io::AsyncReadExt;
 
-        // Convert OwnedFd to tokio file
-        let std_file = unsafe { std::fs::File::from_raw_fd(fd.into_raw_fd()) };
-        let file = tokio::fs::File::from_std(std_file);
-        let mut reader = tokio::io::BufReader::new(file);
+        let reader = async_fd(fd, "output")?;
 
-        // Read chunks as they arrive (works for both PTY and pipes)
         let stream = stream! {
             let mut buf = [0u8; 1024];
             loop {
-                match reader.read(&mut buf).await {
+                match reader.async_io(Interest::READABLE, |fd| read_fd(fd, &mut buf)).await {
                     Ok(0) => break,  // EOF
                     Ok(n) => yield buf[..n].to_vec(),
                     Err(_) => break,
@@ -70,9 +104,9 @@ impl OutputStream {
             }
         };
 
-        Self {
+        Ok(Self {
             inner: Box::pin(stream),
-        }
+        })
     }
 }
 
@@ -93,10 +127,10 @@ pub struct ExecStdout {
 
 impl ExecStdout {
     /// Create from file descriptor
-    pub fn new(fd: OwnedFd) -> Self {
-        Self {
-            inner: OutputStream::new(fd),
-        }
+    pub fn new(fd: OwnedFd) -> BoxliteResult<Self> {
+        Ok(Self {
+            inner: OutputStream::new(fd)?,
+        })
     }
 }
 
@@ -117,10 +151,10 @@ pub struct ExecStderr {
 
 impl ExecStderr {
     /// Create from file descriptor
-    pub fn new(fd: OwnedFd) -> Self {
-        Self {
-            inner: OutputStream::new(fd),
-        }
+    pub fn new(fd: OwnedFd) -> BoxliteResult<Self> {
+        Ok(Self {
+            inner: OutputStream::new(fd)?,
+        })
     }
 }
 
@@ -265,17 +299,22 @@ impl ExecHandle {
     /// * `stdin` - Stdin file descriptor
     /// * `stdout` - Stdout file descriptor
     /// * `stderr` - Stderr file descriptor, or `None` in PTY mode (merged into stdout)
-    pub fn new(pid: Pid, stdin: OwnedFd, stdout: OwnedFd, stderr: Option<OwnedFd>) -> Self {
-        Self {
+    pub fn new(
+        pid: Pid,
+        stdin: OwnedFd,
+        stdout: OwnedFd,
+        stderr: Option<OwnedFd>,
+    ) -> BoxliteResult<Self> {
+        Ok(Self {
             pid,
-            stdin: Some(ExecStdin::new(stdin)),
-            stdout: Some(ExecStdout::new(stdout)),
+            stdin: Some(ExecStdin::new(stdin)?),
+            stdout: Some(ExecStdout::new(stdout)?),
             // In PTY mode, stderr is None because stdout/stderr are merged
             // at the PTY level (single reader from PTY master)
-            stderr: stderr.map(ExecStderr::new),
+            stderr: stderr.map(ExecStderr::new).transpose()?,
             pty_controller: None,
             pty_config: None,
-        }
+        })
     }
 
     /// Set PTY controller and config
@@ -502,5 +541,42 @@ mod process_group_tests {
             is_gone_or_zombie(descendant),
             "background descendant survived process-group SIGKILL"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+    use std::time::Duration;
+
+    #[test]
+    fn output_read_does_not_occupy_blocking_pool() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (read_fd, _write_fd) = nix::unistd::pipe().unwrap();
+        let mut stdout = ExecStdout::new(read_fd).unwrap();
+
+        runtime.block_on(async {
+            let output_read = tokio::spawn(async move { stdout.next().await });
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            let temporary_file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(temporary_file.path(), b"ready").unwrap();
+            let read_file = tokio::fs::read(temporary_file.path());
+
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), read_file)
+                    .await
+                    .is_ok(),
+                "an idle output stream must not occupy a blocking-pool worker"
+            );
+
+            output_read.abort();
+        });
     }
 }

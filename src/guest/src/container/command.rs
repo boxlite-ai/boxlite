@@ -307,12 +307,7 @@ impl ContainerCommand {
 
         tracing::debug!(pid = pid.as_raw(), "spawned with pipes");
         // Non-PTY mode: stdout and stderr are separate pipes
-        Ok(ExecHandle::new(
-            pid,
-            stdin_write,
-            stdout_read,
-            Some(stderr_read),
-        ))
+        ExecHandle::new(pid, stdin_write, stdout_read, Some(stderr_read))
     }
 
     /// Build phase of PTY spawn: zygote IPC only, no console-socket handshake.
@@ -515,7 +510,7 @@ pub(crate) fn create_pty_child(
     let (stdin, stdout) = reconcile_pty_fds(&pty_master)?;
 
     // PTY mode: stderr is None (merged into stdout)
-    let mut child = ExecHandle::new(pid, stdin, stdout, None);
+    let mut child = ExecHandle::new(pid, stdin, stdout, None)?;
     let pty_controller = pty_master_to_file(pty_master);
     child.set_pty(pty_controller, config);
 

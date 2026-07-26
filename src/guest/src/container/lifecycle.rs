@@ -339,7 +339,7 @@ impl Container {
                 stdin,
                 stdout,
                 stderr,
-            } => ExecHandle::new(pid, stdin, stdout, Some(stderr)),
+            } => ExecHandle::new(pid, stdin, stdout, Some(stderr))?,
             // Mirrors the tenant PTY path: the master becomes stdin+stdout and
             // is retained for window-size ioctls, so ResizeTty reaches the main
             // command exactly as it reaches an exec.
