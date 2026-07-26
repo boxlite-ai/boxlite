@@ -1486,7 +1486,7 @@ components:
     # =======================================================================
     Box:
       type: object
-      description: Box metadata (maps to BoxInfo)
+      description: Tenant-safe Box metadata
       required: [box_id, status, created_at, updated_at, image, cpus, memory_mib]
       properties:
         box_id:
@@ -1517,14 +1517,10 @@ components:
           type: string
           format: date-time
           description: Last state change timestamp (UTC)
-        pid:
-          type: integer
-          nullable: true
-          description: VMM subprocess PID (null if not running)
         image:
           type: string
-          description: OCI image reference or rootfs path
-          example: python:3.11-slim
+          description: Operator-approved image selected for the box
+          example: python
         cpus:
           type: integer
           minimum: 1
@@ -1576,7 +1572,8 @@ components:
 
     CreateBoxRequest:
       type: object
-      description: Configuration for creating a new box (maps to BoxOptions)
+      description: Tenant-safe configuration for creating a BoxLite Apps box
+      additionalProperties: false
       properties:
         name:
           type: string
@@ -1587,32 +1584,26 @@ components:
           example: dev-box
         image:
           type: string
-          description: OCI image reference
-          default: "alpine:latest"
-          example: python:3.11-slim
-        rootfs_path:
-          type: string
           description: |
-            Path to a pre-built rootfs (alternative to `image`).
-            Mutually exclusive with `image`.
+            Operator-approved image name or exact approved reference.
+            Arbitrary image pulls are not supported.
+          default: base
+          example: python
         cpus:
           type: integer
           minimum: 1
           maximum: 32
-          description: Number of vCPUs to allocate
+          description: Number of vCPUs to allocate, subject to organization limits
           example: 2
         memory_mib:
           type: integer
-          minimum: 128
-          description: Memory in MiB to allocate
+          minimum: 256
+          description: Memory in MiB to allocate, subject to organization limits
           example: 512
         disk_size_gb:
           type: integer
           minimum: 1
-          description: Disk size in GB (sparse, grows as needed)
-        working_dir:
-          type: string
-          description: Default working directory inside the container
+          description: Disk size in GB, subject to organization limits
         env:
           type: object
           additionalProperties:
@@ -1621,41 +1612,12 @@ components:
           example:
             PYTHONPATH: /app
             DEBUG: "1"
-        entrypoint:
-          type: array
-          items:
-            type: string
-          description: Override image ENTRYPOINT
-        cmd:
-          type: array
-          items:
-            type: string
-          description: Override image CMD
         user:
           type: string
           description: "User to run as (format: <name|uid>[:<group|gid>])"
           example: "1000:1000"
-        volumes:
-          type: array
-          items:
-            $ref: "#/components/schemas/VolumeSpec"
-        ports:
-          type: array
-          items:
-            $ref: "#/components/schemas/PortSpec"
         network:
           $ref: "#/components/schemas/NetworkSpec"
-        secrets:
-          type: array
-          items:
-            $ref: "#/components/schemas/SecretSpec"
-          description: |
-            Secret placeholder rules for outbound HTTP(S) requests.
-            Matching requests replace `placeholder` with `value` on the host side.
-        detach:
-          type: boolean
-          description: Box survives parent process exit
-          default: false
         auto_pause:
           type: integer
           minimum: 0
@@ -1670,23 +1632,6 @@ components:
           type: boolean
           default: true
           description: Whether the box automatically resumes when accessed after AutoPause
-        security:
-          $ref: "#/components/schemas/SecurityPreset"
-
-    VolumeSpec:
-      type: object
-      description: Host-to-guest filesystem mount
-      required: [host_path, guest_path]
-      properties:
-        host_path:
-          type: string
-          description: Path on the host filesystem
-        guest_path:
-          type: string
-          description: Mount point inside the container
-        read_only:
-          type: boolean
-          default: false
 
     NetworkSpec:
       type: object
@@ -1707,64 +1652,6 @@ components:
             Optional outbound allowlist used only when `mode=enabled`.
             Empty or omitted means full outbound access.
             Supports hostnames, wildcard hostnames, IPs, and CIDRs.
-
-    PortSpec:
-      type: object
-      description: Port forwarding rule (host → guest)
-      required: [guest_port]
-      properties:
-        host_port:
-          type: integer
-          minimum: 0
-          maximum: 65535
-          description: Host port (0 or omit for dynamic assignment)
-        guest_port:
-          type: integer
-          minimum: 1
-          maximum: 65535
-          description: Container port to expose
-        protocol:
-          type: string
-          enum: [tcp, udp]
-          default: tcp
-        host_ip:
-          type: string
-          description: Host IP to bind (defaults to 0.0.0.0)
-
-    SecretSpec:
-      type: object
-      description: Outbound HTTP(S) secret substitution rule
-      required: [name, value]
-      properties:
-        name:
-          type: string
-          description: Human-readable secret name
-        value:
-          type: string
-          description: Real secret value. Never enters the guest VM.
-        hosts:
-          type: array
-          items:
-            type: string
-          description: Matching hosts for this secret. Empty means no host restriction.
-        placeholder:
-          type: string
-          description: |
-            Placeholder string visible inside the guest.
-            Defaults to `<BOXLITE_SECRET:{name}>` when omitted.
-
-    SecurityPreset:
-      type: string
-      description: |
-        Security isolation preset:
-        - `development`: Minimal isolation for debugging
-        - `standard`: Recommended for most use cases (jailer + seccomp on Linux)
-        - `maximum`: All isolation features enabled (untrusted workloads)
-      enum:
-        - development
-        - standard
-        - maximum
-      default: standard
 
     Snapshot:
       type: object

@@ -11,7 +11,6 @@ import {
   IsString,
   IsNumber,
   IsBoolean,
-  IsObject,
   IsArray,
   Min,
   IsIn,
@@ -30,6 +29,22 @@ class IsNetworkAllowEntryConstraint implements ValidatorConstraintInterface {
 
   defaultMessage(): string {
     return 'each allow_net entry must be an IPv4 address, IPv4 CIDR, hostname, or wildcard hostname'
+  }
+}
+
+@ValidatorConstraint({ name: 'isStringRecord', async: false })
+class IsStringRecordConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    return (
+      typeof value === 'object' &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Object.values(value).every((entry) => typeof entry === 'string')
+    )
+  }
+
+  defaultMessage(): string {
+    return 'env must be an object whose values are strings'
   }
 }
 
@@ -73,25 +88,16 @@ export class CreateBoxDto {
   disk_size_gb?: number
 
   @IsOptional()
-  @IsString()
-  working_dir?: string
-
-  @IsOptional()
-  @IsObject()
+  @Validate(IsStringRecordConstraint)
   env?: Record<string, string>
-
-  @IsOptional()
-  @IsArray()
-  entrypoint?: string[]
-
-  @IsOptional()
-  @IsArray()
-  cmd?: string[]
 
   @IsOptional()
   @IsString()
   user?: string
 
+  // Released Rust REST clients send detach on every create. Apps boxes are
+  // control-plane owned, so accept this legacy field as a validated no-op but
+  // keep it out of the published contract and downstream mapper.
   @IsOptional()
   @IsBoolean()
   detach?: boolean
