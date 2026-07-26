@@ -301,6 +301,7 @@ impl FilesystemLayout {
 /// Each box has its own directory containing:
 /// - sockets/: Unix sockets for communication
 /// - tmp/: Per-box temp directory for shim/libkrun transient files
+/// - boot/: Immutable generations of staged custom kernel assets
 /// - mounts/: Host preparation area (writable by host)
 /// - shared/: Guest-visible directory (bind mount or symlink to mounts/)
 /// - disk.qcow2: Virtual disk for the box
@@ -319,6 +320,12 @@ impl FilesystemLayout {
 /// │   ├── box.sock        # gRPC communication
 /// │   └── ready.sock      # Ready notification
 /// ├── tmp/                # Per-box temp files for shim/libkrun
+/// ├── boot/               # Custom direct-boot assets (when configured)
+/// │   ├── current.json        # Atomically published active generation
+/// │   └── generations/
+/// │       └── {generation}/
+/// │           ├── kernel
+/// │           └── initramfs   # Optional
 /// ├── mounts/             # Host preparation (SharedGuestLayout)
 /// │   └── containers/
 /// │       └── {cid}/
@@ -473,8 +480,9 @@ impl BoxFilesystemLayout {
 
     /// Boot assets directory: ~/.boxlite/boxes/{box_id}/boot
     ///
-    /// Contains box-scoped copies of a custom kernel and optional initramfs.
-    /// The shim receives read-only access to this directory.
+    /// Contains immutable generations of a custom kernel and optional
+    /// initramfs. `current.json` publishes one complete generation atomically,
+    /// and the shim receives read-only access to the directory.
     pub fn boot_dir(&self) -> PathBuf {
         self.box_dir.join("boot")
     }

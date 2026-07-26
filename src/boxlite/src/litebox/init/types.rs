@@ -11,7 +11,7 @@ use crate::portal::interfaces::ContainerRootfsInitConfig;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::VolumeSpec;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
-use crate::vmm::controller::VmmHandler;
+use crate::vmm::{PreparedKernel, controller::VmmHandler};
 use crate::volumes::{ContainerMount, GuestVolumeManager, VolumeShare, classify_volume_share};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::path::PathBuf;
@@ -142,6 +142,12 @@ pub enum ContainerRootfsPrepResult {
         /// Size of the disk in bytes (for creating COW overlay)
         disk_size: u64,
     },
+}
+
+/// Boot assets prepared by the init pipeline for `VmmSpawnTask`.
+#[derive(Clone, Debug, Default)]
+pub struct PreparedBootAssets {
+    pub kernel: Option<PreparedKernel>,
 }
 
 /// RAII guard for cleanup on initialization failure.
@@ -292,6 +298,7 @@ pub struct InitPipelineContext {
     pub skip_guest_wait: bool,
 
     pub layout: Option<BoxFilesystemLayout>,
+    pub boot_assets: Option<PreparedBootAssets>,
     pub container_image_config: Option<ContainerImageConfig>,
     pub container_disk: Option<Disk>,
     pub guest_disk: Option<Disk>,
@@ -324,6 +331,7 @@ impl InitPipelineContext {
             reuse_rootfs,
             skip_guest_wait,
             layout: None,
+            boot_assets: None,
             container_image_config: None,
             container_disk: None,
             guest_disk: None,

@@ -196,8 +196,7 @@ impl Krun {
             return Ok(());
         };
 
-        let resolved_format = kernel.resolve_format()?;
-        let format = match resolved_format {
+        let format = match kernel.format {
             KernelFormat::Auto => {
                 return Err(BoxliteError::Engine(
                     "custom kernel format was not resolved".to_string(),
@@ -231,7 +230,7 @@ impl Krun {
 
         tracing::info!(
             kernel = %kernel.path.display(),
-            format = resolved_format.as_str(),
+            format = kernel.format.as_str(),
             initramfs = ?kernel.initramfs,
             has_custom_command_line = kernel.command_line.is_some(),
             "Configuring custom guest kernel"

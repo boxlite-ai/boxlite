@@ -8,7 +8,6 @@ use crate::{
     vmm::{InstanceSpec, VmmKind},
 };
 
-use super::boot::BootAssets;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::watchdog;
@@ -320,8 +319,6 @@ impl VmmController for ShimController {
         let mut guest_entrypoint = config.guest_entrypoint.clone();
         guest_entrypoint.env = env; // Use the modified env with RUST_LOG
 
-        let kernel = BootAssets::new(&self.layout).stage(config.kernel.as_ref())?;
-
         let serializable_config = InstanceSpec {
             engine: self.engine_type,
             // Box identification and security (from ShimController)
@@ -330,7 +327,7 @@ impl VmmController for ShimController {
             // VM configuration
             cpus: config.cpus,
             memory_mib: config.memory_mib,
-            kernel,
+            kernel: config.kernel.clone(),
             fs_shares: config.fs_shares.clone(),
             block_devices: config.block_devices.clone(),
             guest_entrypoint,
@@ -409,52 +406,7 @@ impl VmmController for ShimController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::options::{KernelFormat, KernelOptions};
     use std::sync::{Arc, Mutex};
-
-    #[test]
-    fn custom_boot_assets_are_staged_inside_the_box() {
-        let temp = tempfile::tempdir().unwrap();
-        let layout = BoxFilesystemLayout::new(
-            temp.path().join("box"),
-            crate::runtime::layout::FsLayoutConfig::without_bind_mount(),
-            false,
-        );
-        let kernel_source = temp.path().join("vmlinux");
-        let initramfs_source = temp.path().join("initramfs.img");
-        #[cfg(target_arch = "x86_64")]
-        std::fs::write(&kernel_source, b"\x7fELFkernel bytes").unwrap();
-        #[cfg(target_arch = "aarch64")]
-        std::fs::write(&kernel_source, b"arm64-header\x1f\x8b\x08kernel bytes").unwrap();
-        std::fs::write(&initramfs_source, b"initramfs bytes").unwrap();
-
-        #[cfg(target_arch = "x86_64")]
-        let format = KernelFormat::Elf;
-        #[cfg(target_arch = "aarch64")]
-        let format = KernelFormat::PeGz;
-        let configured = KernelOptions::new(&kernel_source)
-            .with_format(format)
-            .with_initramfs(&initramfs_source)
-            .with_command_line("console=ttyS0");
-
-        let staged = crate::vmm::controller::boot::BootAssets::new(&layout)
-            .stage(Some(&configured))
-            .unwrap()
-            .expect("staged boot configuration");
-
-        assert_eq!(staged.path, layout.boot_dir().join("kernel"));
-        assert_eq!(staged.initramfs, Some(layout.boot_dir().join("initramfs")));
-        assert_eq!(
-            std::fs::read(staged.path).unwrap(),
-            std::fs::read(&kernel_source).unwrap()
-        );
-        assert_eq!(
-            std::fs::read(staged.initramfs.unwrap()).unwrap(),
-            b"initramfs bytes"
-        );
-        assert_eq!(staged.format, format);
-        assert_eq!(staged.command_line.as_deref(), Some("console=ttyS0"));
-    }
 
     /// Captures `tracing` output into a shared byte buffer so a test can
     /// assert what was (and wasn't) written by an event emitted within

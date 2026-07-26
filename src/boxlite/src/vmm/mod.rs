@@ -1,6 +1,6 @@
 //! Engine abstraction for Boxlite runtime.
 
-use boxlite_shared::errors::BoxliteError;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -16,10 +16,53 @@ pub mod registry;
 
 use crate::jailer::SecurityOptions;
 use crate::rootfs::guest::GuestRootfs;
+use crate::runtime::options::KernelFormat;
 pub use engine::{Vmm, VmmConfig, VmmInstance};
 pub use exit_info::ExitInfo;
 pub use factory::VmmFactory;
 pub use registry::create_engine;
+
+/// Box-scoped direct-boot configuration prepared before VMM spawn.
+///
+/// Unlike `KernelOptions`, these paths never refer to caller-owned host files
+/// and `format` is always resolved.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreparedKernel {
+    pub(crate) path: PathBuf,
+    pub(crate) format: KernelFormat,
+    pub(crate) initramfs: Option<PathBuf>,
+    pub(crate) command_line: Option<String>,
+}
+
+impl PreparedKernel {
+    pub(crate) fn new(
+        path: PathBuf,
+        format: KernelFormat,
+        initramfs: Option<PathBuf>,
+        command_line: Option<String>,
+    ) -> BoxliteResult<Self> {
+        if format == KernelFormat::Auto {
+            return Err(BoxliteError::Config(
+                "prepared custom kernel format must be resolved".to_string(),
+            ));
+        }
+
+        let staged = crate::runtime::options::KernelOptions {
+            path: path.clone(),
+            format,
+            initramfs: initramfs.clone(),
+            command_line: command_line.clone(),
+        };
+        staged.sanitize()?;
+
+        Ok(Self {
+            path,
+            format,
+            initramfs,
+            command_line,
+        })
+    }
+}
 
 /// Available sandbox engine implementations.
 #[derive(
@@ -159,10 +202,10 @@ pub struct InstanceSpec {
     pub security: SecurityOptions,
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
-    /// Optional direct Linux boot configuration. Paths are staged inside the
-    /// box directory before this specification is sent to the shim.
+    /// Optional direct Linux boot configuration prepared inside the box before
+    /// this specification is assembled.
     #[serde(default)]
-    pub kernel: Option<crate::runtime::options::KernelOptions>,
+    pub kernel: Option<PreparedKernel>,
     /// Filesystem shares from host to guest
     pub fs_shares: FsShares,
     /// Block device attachments via virtio-blk

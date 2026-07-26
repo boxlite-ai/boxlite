@@ -474,13 +474,18 @@ impl KernelOptions {
         }
     }
 
-    pub(crate) fn sanitize(&self) -> BoxliteResult<()> {
-        if !self.path.is_file() {
-            return Err(BoxliteError::Config(format!(
-                "custom kernel must be a regular file: {}",
-                self.path.display()
-            )));
+    /// Validate persisted configuration without reopening host source files.
+    pub(crate) fn sanitize_persisted(&self) -> BoxliteResult<()> {
+        self.sanitize_shape()?;
+
+        if self.format != KernelFormat::Auto {
+            self.validate_resolved_format(self.format)?;
         }
+
+        Ok(())
+    }
+
+    fn sanitize_shape(&self) -> BoxliteResult<()> {
         if self.path.to_str().is_none() {
             return Err(BoxliteError::Config(format!(
                 "custom kernel path must be valid UTF-8: {}",
@@ -488,19 +493,13 @@ impl KernelOptions {
             )));
         }
 
-        if let Some(initramfs) = &self.initramfs {
-            if !initramfs.is_file() {
-                return Err(BoxliteError::Config(format!(
-                    "custom initramfs must be a regular file: {}",
-                    initramfs.display()
-                )));
-            }
-            if initramfs.to_str().is_none() {
-                return Err(BoxliteError::Config(format!(
-                    "custom initramfs path must be valid UTF-8: {}",
-                    initramfs.display()
-                )));
-            }
+        if let Some(initramfs) = &self.initramfs
+            && initramfs.to_str().is_none()
+        {
+            return Err(BoxliteError::Config(format!(
+                "custom initramfs path must be valid UTF-8: {}",
+                initramfs.display()
+            )));
         }
 
         if self
@@ -513,7 +512,33 @@ impl KernelOptions {
             ));
         }
 
+        Ok(())
+    }
+
+    /// Validate the caller-owned source files at the ingestion boundary.
+    pub(crate) fn sanitize(&self) -> BoxliteResult<()> {
+        self.sanitize_shape()?;
+
+        if !self.path.is_file() {
+            return Err(BoxliteError::Config(format!(
+                "custom kernel must be a regular file: {}",
+                self.path.display()
+            )));
+        }
+        if let Some(initramfs) = &self.initramfs
+            && !initramfs.is_file()
+        {
+            return Err(BoxliteError::Config(format!(
+                "custom initramfs must be a regular file: {}",
+                initramfs.display()
+            )));
+        }
+
         let resolved = self.resolve_format()?;
+        self.validate_resolved_format(resolved)
+    }
+
+    fn validate_resolved_format(&self, resolved: KernelFormat) -> BoxliteResult<()> {
         #[cfg(target_arch = "x86_64")]
         if !matches!(
             resolved,
@@ -802,7 +827,7 @@ impl BoxOptions {
     /// - effective remove-on-stop (`auto_delete>0`, or deprecated `auto_remove`)
     ///   with `detach=true` is invalid
     /// - `advanced.isolate_mounts=true` is only supported on Linux
-    pub fn sanitize(&self) -> BoxliteResult<()> {
+    fn sanitize_common(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::Config(
                 "remove-on-stop is incompatible with detach=true. Detached boxes should use \
@@ -817,6 +842,22 @@ impl BoxOptions {
                 "isolate_mounts is only supported on Linux".to_string(),
             ));
         }
+
+        Ok(())
+    }
+
+    /// Validate a persisted box without requiring ingestion sources to remain.
+    pub(crate) fn sanitize_persisted(&self) -> BoxliteResult<()> {
+        self.sanitize_common()?;
+
+        if let Some(kernel) = &self.advanced.kernel {
+            kernel.sanitize_persisted()?;
+        }
+        Ok(())
+    }
+
+    pub fn sanitize(&self) -> BoxliteResult<()> {
+        self.sanitize_common()?;
 
         if let Some(kernel) = &self.advanced.kernel {
             kernel.sanitize()?;
@@ -1072,6 +1113,29 @@ mod tests {
         let error = opts.sanitize().unwrap_err().to_string();
         assert!(error.contains("custom kernel"), "unexpected error: {error}");
         assert!(error.contains("regular file"), "unexpected error: {error}");
+    }
+
+    #[test]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    fn persisted_custom_kernel_boot_assets_do_not_require_original_source() {
+        #[cfg(target_arch = "x86_64")]
+        let format = KernelFormat::Elf;
+        #[cfg(target_arch = "aarch64")]
+        let format = KernelFormat::PeGz;
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                kernel: Some(
+                    KernelOptions::new("/source/removed/after-create")
+                        .with_format(format)
+                        .with_command_line("console=ttyS0"),
+                ),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        opts.sanitize_persisted().unwrap();
+        assert!(opts.sanitize().is_err());
     }
 
     #[test]

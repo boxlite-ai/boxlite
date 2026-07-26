@@ -7,16 +7,18 @@
 //! ```text
 //! Starting (new box):
 //!   1. Filesystem           (create layout)
-//!   2. ContainerRootfs ─┬─  (pull image, create COW disk)
-//!      GuestRootfs     ─┘   (prepare guest, create COW disk)
+//!   2. BootAssets       ─┬─  (stage custom kernel/initramfs)
+//!      ContainerRootfs  ├─  (pull image, create COW disk)
+//!      GuestRootfs      ─┘  (prepare guest, create COW disk)
 //!   3. VmmSpawn             (build config + spawn VM)
 //!   4. GuestConnect         (wait for guest ready)
 //!   5. GuestInit            (initialize container)
 //!
 //! Stopped (restart):
 //!   1. Filesystem           (load existing layout)
-//!   2. ContainerRootfs ─┬─  (reuse existing COW disk - preserves user data)
-//!      GuestRootfs     ─┘   (reuse existing COW disk)
+//!   2. BootAssets       ─┬─  (reuse box-scoped boot assets)
+//!      ContainerRootfs  ├─  (reuse existing COW disk - preserves user data)
+//!      GuestRootfs      ─┘  (reuse existing COW disk)
 //!   3. VmmSpawn             (build config + spawn NEW VM)
 //!   4. GuestConnect         (wait for guest ready)
 //!   5. GuestInit            (re-initialize container in new VM)
@@ -46,8 +48,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use tasks::{
-    ContainerRootfsTask, FilesystemTask, GuestConnectTask, GuestInitTask, GuestRootfsTask, InitCtx,
-    VmmAttachTask, VmmSpawnTask,
+    BootAssetsTask, ContainerRootfsTask, FilesystemTask, GuestConnectTask, GuestInitTask,
+    GuestRootfsTask, InitCtx, VmmAttachTask, VmmSpawnTask,
 };
 use types::InitPipelineContext;
 
@@ -66,8 +68,10 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
             // First start: Full pipeline
             // Phase 1: Setup filesystem layout first
             Stage::sequential(vec![Box::new(FilesystemTask)]),
-            // Phase 2: Prepare rootfs (now has access to layout for disk paths)
+            // Phase 2: Prepare independent boot and rootfs inputs after the
+            // filesystem task has established their box-scoped destinations.
             Stage::parallel(vec![
+                Box::new(BootAssetsTask),
                 Box::new(ContainerRootfsTask),
                 Box::new(GuestRootfsTask),
             ]),
@@ -85,6 +89,7 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
             // (preserves user modifications from previous run)
             Stage::sequential(vec![Box::new(FilesystemTask)]),
             Stage::parallel(vec![
+                Box::new(BootAssetsTask),
                 Box::new(ContainerRootfsTask),
                 Box::new(GuestRootfsTask),
             ]),
@@ -170,9 +175,11 @@ impl BoxBuilder {
         config: BoxConfig,
         state: BoxState,
     ) -> BoxliteResult<Self> {
-        // Get options reference from config (no reconstruction needed!)
+        // External source paths were validated at create time. Persisted boxes
+        // validate only their stored shape here; the boot-assets task reopens a
+        // source only when no complete box-scoped generation exists.
         let options = &config.options;
-        options.sanitize()?;
+        options.sanitize_persisted()?;
 
         Ok(Self {
             runtime,
@@ -295,5 +302,72 @@ impl BoxBuilder {
                 Err(e)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+    use crate::pipeline::ExecutionMode;
+
+    fn plan_shape(status: BoxStatus) -> Vec<(ExecutionMode, Vec<String>)> {
+        get_execution_plan(status)
+            .unwrap()
+            .stages()
+            .into_iter()
+            .map(|stage| {
+                (
+                    stage.execution,
+                    stage
+                        .tasks
+                        .into_iter()
+                        .map(|task| task.name().to_string())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn boot_pipeline_shape() -> Vec<(ExecutionMode, Vec<String>)> {
+        vec![
+            (
+                ExecutionMode::Sequential,
+                vec!["filesystem_setup".to_string()],
+            ),
+            (
+                ExecutionMode::Parallel,
+                vec![
+                    "boot_assets_prepare".to_string(),
+                    "container_rootfs_prep".to_string(),
+                    "guest_rootfs_init".to_string(),
+                ],
+            ),
+            (ExecutionMode::Sequential, vec!["vmm_spawn".to_string()]),
+            (ExecutionMode::Sequential, vec!["guest_connect".to_string()]),
+            (ExecutionMode::Sequential, vec!["guest_init".to_string()]),
+        ]
+    }
+
+    #[test]
+    fn configured_box_prepares_boot_assets_before_vmm_spawn() {
+        assert_eq!(plan_shape(BoxStatus::Configured), boot_pipeline_shape());
+    }
+
+    #[test]
+    fn restartable_boxes_prepare_boot_assets_before_vmm_spawn() {
+        let expected = boot_pipeline_shape();
+        assert_eq!(plan_shape(BoxStatus::Stopped), expected);
+        assert_eq!(plan_shape(BoxStatus::Failed), boot_pipeline_shape());
+    }
+
+    #[test]
+    fn running_box_reattach_does_not_prepare_boot_assets() {
+        assert_eq!(
+            plan_shape(BoxStatus::Running),
+            vec![
+                (ExecutionMode::Sequential, vec!["vmm_attach".to_string()]),
+                (ExecutionMode::Sequential, vec!["guest_connect".to_string()],),
+            ]
+        );
     }
 }

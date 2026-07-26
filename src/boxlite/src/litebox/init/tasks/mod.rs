@@ -3,26 +3,27 @@
 //! ## Dependency Graph
 //!
 //! ```text
-//! Filesystem ─────┐
-//!                 │
-//! ContainerRootfs ┼──→ VmmSpawn ──→ GuestConnect ──→ GuestInit
-//!                 │
-//! GuestRootfs ────┘
+//! Filesystem ───────┐
+//!                   │
+//! BootAssets ───────┤
+//! ContainerRootfs ──┼──→ VmmSpawn ──→ GuestConnect ──→ GuestInit
+//! GuestRootfs ──────┘
 //!
 //! Starting (new box):
 //! - Stage 1 (sequential): [Filesystem]
-//! - Stage 2 (parallel):   [ContainerRootfs, GuestRootfs]
-//! - Stage 3 (sequential): [VmmSpawn, GuestConnect, GuestInit]
+//! - Stage 2 (parallel):   [BootAssets, ContainerRootfs, GuestRootfs]
+//! - Stages 3-5 (sequential): [VmmSpawn], [GuestConnect], [GuestInit]
 //!
 //! Stopped (restart):
 //! - Stage 1 (sequential): [Filesystem]
-//! - Stage 2 (parallel):   [ContainerRootfs, GuestRootfs]
-//! - Stage 3 (sequential): [VmmSpawn, GuestConnect]
+//! - Stage 2 (parallel):   [BootAssets, ContainerRootfs, GuestRootfs]
+//! - Stages 3-5 (sequential): [VmmSpawn], [GuestConnect], [GuestInit]
 //!
 //! Running (reattach):
-//! - Stage 1 (sequential): [VmmAttach, GuestConnect]
+//! - Stages 1-2 (sequential): [VmmAttach], [GuestConnect]
 //! ```
 
+mod boot_assets;
 mod container_rootfs;
 mod filesystem;
 mod guest_connect;
@@ -50,6 +51,7 @@ fn log_task_error(box_id: &BoxID, task_name: &str, err: &BoxliteError) {
     tracing::error!(box_id = %box_id, task = %task_name, "Task failed: {}", err);
 }
 
+pub use boot_assets::BootAssetsTask;
 pub use container_rootfs::ContainerRootfsTask;
 pub use filesystem::FilesystemTask;
 pub use guest_connect::GuestConnectTask;
