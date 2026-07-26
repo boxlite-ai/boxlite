@@ -159,6 +159,10 @@ pub struct InstanceSpec {
     pub security: SecurityOptions,
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
+    /// Optional direct Linux boot configuration. Paths are staged inside the
+    /// box directory before this specification is sent to the shim.
+    #[serde(default)]
+    pub kernel: Option<crate::runtime::options::KernelOptions>,
     /// Filesystem shares from host to guest
     pub fs_shares: FsShares,
     /// Block device attachments via virtio-blk

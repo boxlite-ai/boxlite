@@ -235,6 +235,7 @@ async fn build_config(
         // VM resources
         cpus: options.cpus,
         memory_mib: options.memory_mib,
+        kernel: options.advanced.kernel.clone(),
         // Filesystem and devices
         fs_shares: vmm_config.fs_shares,
         block_devices: vmm_config.block_devices,

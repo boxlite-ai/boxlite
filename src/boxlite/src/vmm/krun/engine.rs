@@ -3,6 +3,7 @@
 use super::context::KrunContext;
 use crate::runtime::constants::network;
 use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
+use crate::runtime::options::KernelFormat;
 use crate::vmm::{InstanceSpec, Vmm, VmmConfig, VmmInstance, engine::VmmInstanceImpl};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -189,6 +190,62 @@ impl Krun {
         }
         Ok(())
     }
+
+    fn set_kernel(config: &InstanceSpec, ctx: &KrunContext) -> BoxliteResult<()> {
+        let Some(kernel) = &config.kernel else {
+            return Ok(());
+        };
+
+        let resolved_format = kernel.resolve_format()?;
+        let format = match resolved_format {
+            KernelFormat::Auto => {
+                return Err(BoxliteError::Engine(
+                    "custom kernel format was not resolved".to_string(),
+                ));
+            }
+            KernelFormat::Raw => libkrun_sys::KRUN_KERNEL_FORMAT_RAW,
+            KernelFormat::Elf => libkrun_sys::KRUN_KERNEL_FORMAT_ELF,
+            KernelFormat::PeGz => libkrun_sys::KRUN_KERNEL_FORMAT_PE_GZ,
+            KernelFormat::ImageBz2 => libkrun_sys::KRUN_KERNEL_FORMAT_IMAGE_BZ2,
+            KernelFormat::ImageGz => libkrun_sys::KRUN_KERNEL_FORMAT_IMAGE_GZ,
+            KernelFormat::ImageZstd => libkrun_sys::KRUN_KERNEL_FORMAT_IMAGE_ZSTD,
+        };
+        let kernel_path = kernel.path.to_str().ok_or_else(|| {
+            BoxliteError::Engine(format!(
+                "custom kernel path is not valid UTF-8: {}",
+                kernel.path.display()
+            ))
+        })?;
+        let initramfs = kernel
+            .initramfs
+            .as_deref()
+            .map(|path| {
+                path.to_str().ok_or_else(|| {
+                    BoxliteError::Engine(format!(
+                        "custom initramfs path is not valid UTF-8: {}",
+                        path.display()
+                    ))
+                })
+            })
+            .transpose()?;
+
+        tracing::info!(
+            kernel = %kernel.path.display(),
+            format = resolved_format.as_str(),
+            initramfs = ?kernel.initramfs,
+            has_custom_command_line = kernel.command_line.is_some(),
+            "Configuring custom guest kernel"
+        );
+        unsafe {
+            ctx.set_kernel(
+                kernel_path,
+                format,
+                initramfs,
+                kernel.command_line.as_deref(),
+            )?;
+        }
+        Ok(())
+    }
 }
 
 impl Vmm for Krun {
@@ -248,6 +305,8 @@ impl Vmm for Krun {
                 config.cpus.unwrap_or(DEFAULT_CPUS),
                 config.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
             )?;
+
+            Self::set_kernel(&config, &ctx)?;
 
             // Configure net from connection info passed by parent process
             if let Some(connection) = &config.network_backend_endpoint {

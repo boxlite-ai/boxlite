@@ -471,6 +471,14 @@ impl BoxFilesystemLayout {
         self.box_dir.join("bin")
     }
 
+    /// Boot assets directory: ~/.boxlite/boxes/{box_id}/boot
+    ///
+    /// Contains box-scoped copies of a custom kernel and optional initramfs.
+    /// The shim receives read-only access to this directory.
+    pub fn boot_dir(&self) -> PathBuf {
+        self.box_dir.join("boot")
+    }
+
     /// CA directory: ~/.boxlite/boxes/{box_id}/ca
     ///
     /// Stores ephemeral MITM CA cert+key for secret substitution.
@@ -996,6 +1004,15 @@ mod tests {
     }
 
     #[test]
+    fn test_box_layout_boot_dir() {
+        let layout = test_box_layout("/home/.boxlite/boxes/mybox");
+        assert_eq!(
+            layout.boot_dir(),
+            PathBuf::from("/home/.boxlite/boxes/mybox/boot")
+        );
+    }
+
+    #[test]
     fn test_box_layout_tmp_dir() {
         let layout = test_box_layout("/home/.boxlite/boxes/mybox");
         assert_eq!(
@@ -1041,6 +1058,7 @@ mod tests {
         let paths = [
             layout.logs_dir(),
             layout.bin_dir(),
+            layout.boot_dir(),
             layout.sockets_dir(),
             layout.tmp_dir(),
             layout.guest_rootfs_disk_path(),

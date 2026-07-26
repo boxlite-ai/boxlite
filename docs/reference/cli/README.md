@@ -246,7 +246,7 @@ The box's lifetime is that command's lifetime. When it exits, the box stops and
 takes the command's exit code; `boxlite ps` shows it stopped and
 `boxlite inspect -f '{{.State.ExitCode}}'` gives the code.
 
-**Options:** Uses [`ProcessFlags`](#processflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags), plus:
+**Options:** Uses [`ProcessFlags`](#processflags) + [`ResourceFlags`](#resourceflags) + [`KernelFlags`](#kernelflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags), plus:
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -321,7 +321,7 @@ implicitly, because starting it runs that command. Start it deliberately with
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
 | `--workdir PATH` | `-w` | Working directory inside the box |
 
-Also uses [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
+Also uses [`ResourceFlags`](#resourceflags) + [`KernelFlags`](#kernelflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
 
 > Note: `create` accepts `--env` and `--workdir` directly rather than via `ProcessFlags` (no `-i`/`-t`/`-u` here, since no command is being executed).
 
@@ -621,6 +621,20 @@ Used by `run` and `create` (defined at `src/cli/src/cli.rs:287-310`).
 |------|------|-------------|
 | `--cpus N` | u32 | Number of CPUs (capped at 255; values above 255 log a warning) |
 | `--memory MiB` | u32 | Memory limit in mebibytes |
+| `--disk-size GB` | u64 | Sparse root filesystem disk size in gigabytes |
+
+### `KernelFlags`
+
+Used by `run` and `create`, where they appear under **Advanced boot options**
+in command help. Custom boot files are copied into the box before the shim
+starts and are supported by the local runtime only.
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--kernel PATH` | path | Linux kernel image; enables direct custom-kernel boot |
+| `--kernel-format FORMAT` | enum | `auto` (default), `raw`, `elf`, `pe-gz`, `image-bz2`, `image-gz`, or `image-zstd` |
+| `--initramfs PATH` | path | Optional initial ramdisk; requires `--kernel` |
+| `--kernel-args ARGS` | string | Replaces libkrun's default kernel command line; requires `--kernel` |
 
 ### `PublishFlags`
 

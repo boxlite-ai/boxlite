@@ -1,6 +1,6 @@
 use crate::cli::{
-    GlobalFlags, ManagementFlags, NetworkFlags, ProcessFlags, PublishFlags, ResourceFlags,
-    VolumeFlags,
+    GlobalFlags, KernelFlags, ManagementFlags, NetworkFlags, ProcessFlags, PublishFlags,
+    ResourceFlags, VolumeFlags,
 };
 use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
@@ -35,6 +35,9 @@ pub struct RunArgs {
     /// Image and command, or command only when --rootfs is set
     #[arg(index = 1, trailing_var_arg = true, value_name = "IMAGE|COMMAND")]
     pub args: Vec<String>,
+
+    #[command(flatten, next_help_heading = "Advanced boot options")]
+    pub boot: KernelFlags,
 }
 
 /// Entry point.
@@ -121,6 +124,7 @@ impl BoxRunner {
     ) -> anyhow::Result<LiteBox> {
         let mut options = BoxOptions::default();
         self.args.resource.apply_to(&mut options);
+        self.args.boot.apply_to(&mut options);
         self.args.management.apply_to(&mut options)?;
         self.args.publish.apply_to(&mut options)?;
         self.args

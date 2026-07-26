@@ -25,6 +25,14 @@ pub const KRUN_LOG_STYLE_NEVER: u32 = 2;
 pub const KRUN_DISK_FORMAT_RAW: u32 = 0;
 pub const KRUN_DISK_FORMAT_QCOW2: u32 = 1;
 
+// External kernel format constants from libkrun.h
+pub const KRUN_KERNEL_FORMAT_RAW: u32 = 0;
+pub const KRUN_KERNEL_FORMAT_ELF: u32 = 1;
+pub const KRUN_KERNEL_FORMAT_PE_GZ: u32 = 2;
+pub const KRUN_KERNEL_FORMAT_IMAGE_BZ2: u32 = 3;
+pub const KRUN_KERNEL_FORMAT_IMAGE_GZ: u32 = 4;
+pub const KRUN_KERNEL_FORMAT_IMAGE_ZSTD: u32 = 5;
+
 extern "C" {
     pub fn krun_init_log(target: i32, level: u32, style: u32, flags: u32) -> i32;
     pub fn krun_set_log_level(level: u32) -> i32;

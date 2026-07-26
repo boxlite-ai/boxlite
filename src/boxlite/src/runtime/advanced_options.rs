@@ -2,7 +2,8 @@
 //!
 //! This module contains [`AdvancedBoxOptions`], [`SecurityOptions`], [`ResourceLimits`],
 //! and [`SecurityOptionsBuilder`] — configuration that entry-level users can safely
-//! ignore. Defaults prioritize compatibility.
+//! ignore. Defaults prioritize compatibility. Direct custom-kernel boot is also
+//! grouped here because it changes the VM boot contract.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -599,4 +600,9 @@ pub struct AdvancedBoxOptions {
     /// Most users should rely on the defaults.
     #[serde(default)]
     pub health_check: Option<HealthCheckOptions>,
+
+    /// Direct Linux boot configuration. When unset, BoxLite uses its bundled
+    /// kernel and default boot command line.
+    #[serde(default)]
+    pub kernel: Option<crate::runtime::options::KernelOptions>,
 }

@@ -14,6 +14,7 @@
 //! - Clear lifecycle boundaries (spawn vs runtime)
 //! - Caller-controlled GuestSession creation
 
+pub(crate) mod boot;
 mod handler;
 mod shim;
 mod spawn;

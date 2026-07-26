@@ -81,6 +81,12 @@ fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
+        if options.advanced.kernel.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "custom kernels are only supported by the local runtime".to_string(),
+            ));
+        }
+
         // Validate only the caller's requested policy. An unset auto_pause means
         // "no auto-pause", so it must not borrow the server's default here —
         // otherwise a plain remove-on-stop box (`--rm` → auto_delete=1) is
@@ -270,5 +276,28 @@ mod tests {
                 .contains("auto_delete must be greater than auto_pause"),
             "remove-on-stop without auto_pause must pass client validation; got: {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_custom_kernel_for_rest_runtime() {
+        let temp = tempfile::tempdir().unwrap();
+        let kernel = temp.path().join("vmlinux");
+        std::fs::write(&kernel, b"custom kernel").unwrap();
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let opts = BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                kernel: Some(crate::runtime::options::KernelOptions::new(kernel)),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, opts, None)
+            .await
+            .err()
+            .expect("REST runtime must reject a host-local custom kernel path");
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
     }
 }

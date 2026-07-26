@@ -5,12 +5,12 @@
 use boxlite::runtime::options::{NetworkConfig, NetworkMode, PortProtocol, PortSpec, VolumeSpec};
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime, ImageRegistry,
-    NetworkSpec,
+    KernelFormat, KernelOptions, NetworkSpec,
 };
 use clap::{Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::shells::{Bash, Fish, Zsh};
 use std::io::{IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Helper to parse CLI environment variables and apply them to BoxOptions
 pub fn apply_env_vars(env: &[String], opts: &mut BoxOptions) {
@@ -53,6 +53,7 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 #[non_exhaustive]
 pub enum Commands {
+    /// Run a command in a new box
     Run(crate::commands::run::RunArgs),
     /// Execute a command in a running box
     Exec(crate::commands::exec::ExecArgs),
@@ -445,6 +446,70 @@ impl ResourceFlags {
 }
 
 // ============================================================================
+// KERNEL FLAGS
+// ============================================================================
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum KernelFormatArg {
+    Auto,
+    Raw,
+    Elf,
+    PeGz,
+    ImageBz2,
+    ImageGz,
+    ImageZstd,
+}
+
+impl From<KernelFormatArg> for KernelFormat {
+    fn from(format: KernelFormatArg) -> Self {
+        match format {
+            KernelFormatArg::Auto => Self::Auto,
+            KernelFormatArg::Raw => Self::Raw,
+            KernelFormatArg::Elf => Self::Elf,
+            KernelFormatArg::PeGz => Self::PeGz,
+            KernelFormatArg::ImageBz2 => Self::ImageBz2,
+            KernelFormatArg::ImageGz => Self::ImageGz,
+            KernelFormatArg::ImageZstd => Self::ImageZstd,
+        }
+    }
+}
+
+// Direct Linux boot options. Companion flags are valid only with `--kernel`.
+#[derive(Args, Debug, Clone, Default)]
+pub struct KernelFlags {
+    /// Boot with this Linux kernel image instead of BoxLite's bundled kernel.
+    #[arg(long, value_name = "PATH")]
+    pub kernel: Option<PathBuf>,
+
+    /// Kernel image format. Auto-detected by default.
+    #[arg(long, value_enum, value_name = "FORMAT", requires = "kernel")]
+    pub kernel_format: Option<KernelFormatArg>,
+
+    /// Initial ramdisk to load with the custom kernel.
+    #[arg(long, value_name = "PATH", requires = "kernel")]
+    pub initramfs: Option<PathBuf>,
+
+    /// Replace libkrun's default Linux kernel command line.
+    #[arg(long = "kernel-args", value_name = "ARGS", requires = "kernel")]
+    pub kernel_args: Option<String>,
+}
+
+impl KernelFlags {
+    pub fn apply_to(&self, opts: &mut BoxOptions) {
+        let Some(path) = &self.kernel else {
+            return;
+        };
+        opts.advanced.kernel = Some(KernelOptions {
+            path: path.clone(),
+            format: self.kernel_format.map(Into::into).unwrap_or_default(),
+            initramfs: self.initramfs.clone(),
+            command_line: self.kernel_args.clone(),
+        });
+    }
+}
+
+// ============================================================================
 // NETWORK FLAGS
 // ============================================================================
 
@@ -801,6 +866,7 @@ impl ManagementFlags {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
@@ -1008,6 +1074,74 @@ mod tests {
         flags.apply_to(&mut opts);
 
         assert_eq!(opts.disk_size_gb, None);
+    }
+
+    #[test]
+    fn custom_kernel_flags_are_applied_as_one_boot_configuration() {
+        let flags = KernelFlags {
+            kernel: Some(PathBuf::from("/tmp/vmlinux")),
+            kernel_format: Some(KernelFormatArg::Elf),
+            initramfs: Some(PathBuf::from("/tmp/initramfs.img")),
+            kernel_args: Some("console=ttyS0 panic=-1".to_string()),
+        };
+
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+
+        let kernel = opts.advanced.kernel.expect("custom kernel configuration");
+        assert_eq!(kernel.path, PathBuf::from("/tmp/vmlinux"));
+        assert_eq!(kernel.format, boxlite::KernelFormat::Elf);
+        assert_eq!(kernel.initramfs, Some(PathBuf::from("/tmp/initramfs.img")));
+        assert_eq!(
+            kernel.command_line.as_deref(),
+            Some("console=ttyS0 panic=-1")
+        );
+    }
+
+    #[test]
+    fn custom_kernel_help_uses_an_advanced_boot_section() {
+        for command in ["run", "create"] {
+            let error = Cli::try_parse_from(["boxlite", command, "--help"]).unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+
+            let help = error.to_string();
+            assert!(
+                help.contains("\nAdvanced boot options:\n"),
+                "{command} help did not group advanced boot flags:\n{help}"
+            );
+            assert!(help.contains("--kernel <PATH>"));
+            assert!(help.contains("--kernel-format <FORMAT>"));
+            assert!(help.contains("--initramfs <PATH>"));
+            assert!(help.contains("--kernel-args <ARGS>"));
+
+            let advanced = help
+                .split_once("\nAdvanced boot options:\n")
+                .expect("advanced boot heading")
+                .1;
+            for regular_flag in ["--publish", "--volume", "--network", "--rootfs"] {
+                assert!(
+                    !advanced.contains(regular_flag),
+                    "{regular_flag} leaked into {command}'s advanced boot section:\n{help}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kernel_companion_flags_require_kernel() {
+        let error = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "--initramfs",
+            "/tmp/initramfs.img",
+            "alpine",
+        ])
+        .unwrap_err();
+
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
     }
 
     fn network_flags(network: Option<&str>, allow_net: &[&str]) -> NetworkFlags {
