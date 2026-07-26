@@ -311,12 +311,6 @@ message ContainerConfig {
   // ResizeTty sets the real one.
   bool tty = 5;
 
-  // Tags used by an early flat capability-policy prototype. They must not be
-  // reused because repeated strings and nested messages share the same wire
-  // type and could be silently misread by mixed-version peers.
-  reserved 6, 7;
-  reserved "cap_add", "cap_drop";
-
   // Expert-only container process options.
   ContainerAdvancedOptions advanced = 8;
 }

@@ -70,12 +70,9 @@ every box response that omits `advanced.capabilities`. Legacy read routes stay
 available for older clients, but capability-aware clients deliberately trade
 old-server inspection compatibility for authoritative security metadata.
 
-The structured host/guest protobuf reserves the prototype's flat field names
-and tags 6/7, then carries `advanced` on tag 8. The nested message and the old
-repeated strings share a length-delimited wire type, so reusing either tag
-could let a mixed-version guest interpret an encoded message as a capability
-name. The `-v2` feature token and capability-specific v2 job kinds similarly
-keep queued flat prototype payloads from being reinterpreted as the nested
+The structured host/guest protobuf carries the policy under an `advanced`
+message. The `-v2` feature token and capability-specific v2 job kinds keep
+mixed-version guests and queued jobs from silently ignoring the nested
 contract.
 
 Persistence has explicit downgrade barriers. Opening a local database migrates
