@@ -1,8 +1,75 @@
+use boxlite::NetworkMode;
 use boxlite::litebox::HealthState as CoreHealthState;
-use boxlite::runtime::types::{BoxInfo, BoxStateInfo, BoxStatus};
+use boxlite::runtime::options::PortProtocol;
+use boxlite::runtime::types::{BoxInfo, BoxStateInfo, BoxStatus, NetworkInfo, PublishedPort};
+use napi::bindgen_prelude::{Either, Null};
 use napi_derive::napi;
 
-use crate::options::JsPortSpec;
+fn port_protocol_to_string(protocol: PortProtocol) -> String {
+    match protocol {
+        PortProtocol::Tcp => "tcp",
+        PortProtocol::Udp => "udp",
+    }
+    .to_string()
+}
+
+fn network_mode_to_string(mode: NetworkMode) -> String {
+    match mode {
+        NetworkMode::Enabled => "enabled",
+        NetworkMode::Disabled => "disabled",
+    }
+    .to_string()
+}
+
+// ============================================================================
+// PublishedPort / NetworkInfo - Resolved network metadata
+// ============================================================================
+
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsPublishedPort {
+    #[napi(js_name = "guestPort")]
+    pub guest_port: u16,
+    #[napi(js_name = "hostIp")]
+    pub host_ip: String,
+    #[napi(js_name = "hostPort")]
+    pub host_port: u16,
+    pub protocol: String,
+}
+
+impl From<PublishedPort> for JsPublishedPort {
+    fn from(port: PublishedPort) -> Self {
+        Self {
+            guest_port: port.guest_port,
+            host_ip: port.host_ip,
+            host_port: port.host_port,
+            protocol: port_protocol_to_string(port.protocol),
+        }
+    }
+}
+
+#[napi(object, use_nullable = true)]
+#[derive(Clone, Debug)]
+pub struct JsNetworkInfo {
+    pub mode: String,
+    #[napi(js_name = "allowNet")]
+    pub allow_net: Vec<String>,
+    /// `None` becomes `null`; an empty array is an authoritative no-publications result.
+    #[napi(js_name = "publishedPorts")]
+    pub published_ports: Option<Vec<JsPublishedPort>>,
+}
+
+impl From<NetworkInfo> for JsNetworkInfo {
+    fn from(network: NetworkInfo) -> Self {
+        Self {
+            mode: network_mode_to_string(network.mode),
+            allow_net: network.allow_net,
+            published_ports: network
+                .published_ports
+                .map(|ports| ports.into_iter().map(JsPublishedPort::from).collect()),
+        }
+    }
+}
 
 // ============================================================================
 // HealthState - Health check state enumeration
@@ -125,12 +192,8 @@ pub struct JsBoxInfo {
     /// Allocated memory in MiB
     pub memory_mib: u32,
 
-    /// Active host-to-guest port mappings.
-    pub ports: Vec<JsPortSpec>,
-
-    /// Whether active port mappings were resolved for the current lifecycle.
-    #[napi(js_name = "portsResolved")]
-    pub ports_resolved: bool,
+    /// Network configuration and resolved local publications, when available.
+    pub network: Either<JsNetworkInfo, Null>,
 
     /// Idle time in seconds before AutoPause; 0 disables it.
     #[napi(js_name = "autoPause")]
@@ -166,8 +229,10 @@ impl From<BoxInfo> for JsBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
-            ports: info.ports.into_iter().map(JsPortSpec::from).collect(),
-            ports_resolved: info.ports_resolved,
+            network: match info.network {
+                Some(network) => Either::A(JsNetworkInfo::from(network)),
+                None => Either::B(Null),
+            },
             auto_pause: info.auto_pause,
             auto_delete: info.auto_delete,
             auto_resume: info.auto_resume,
@@ -181,12 +246,16 @@ mod tests {
     use std::collections::HashMap;
     use std::time::SystemTime;
 
-    use boxlite::runtime::options::{PortProtocol, PortSpec};
-    use boxlite::{BoxID, BoxInfo, BoxStatus, HealthStatus};
+    use boxlite::runtime::options::PortProtocol;
+    use boxlite::{
+        BoxID, BoxInfo, BoxStatus, HealthStatus, NetworkInfo, NetworkMode, PublishedPort,
+    };
+
+    use napi::bindgen_prelude::Either;
 
     use super::JsBoxInfo;
 
-    fn core_info(ports: Vec<PortSpec>, ports_resolved: bool) -> BoxInfo {
+    fn core_info(network: Option<NetworkInfo>) -> BoxInfo {
         BoxInfo {
             id: BoxID::parse("box-node-info").unwrap(),
             name: Some("node-info".to_string()),
@@ -197,8 +266,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 2,
             memory_mib: 512,
-            ports,
-            ports_resolved,
+            network,
             labels: HashMap::new(),
             auto_pause: 0,
             auto_delete: 0,
@@ -209,26 +277,61 @@ mod tests {
     }
 
     #[test]
-    fn box_info_conversion_preserves_ports_and_resolution() {
-        let resolved = JsBoxInfo::from(core_info(
-            vec![PortSpec {
-                host_port: Some(49152),
+    fn box_info_conversion_preserves_network_and_publication_state() {
+        let resolved = JsBoxInfo::from(core_info(Some(NetworkInfo {
+            mode: NetworkMode::Enabled,
+            allow_net: vec!["api.example.com".to_string()],
+            published_ports: Some(vec![PublishedPort {
                 guest_port: 3000,
+                host_ip: "127.0.0.1".to_string(),
+                host_port: 49152,
                 protocol: PortProtocol::Tcp,
-                host_ip: Some("127.0.0.1".to_string()),
-            }],
-            true,
+            }]),
+        })));
+
+        let network = match resolved.network {
+            Either::A(network) => network,
+            Either::B(_) => panic!("network metadata missing"),
+        };
+        assert_eq!(network.mode, "enabled");
+        assert_eq!(network.allow_net, vec!["api.example.com"]);
+        let ports = network.published_ports.expect("resolved publications");
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].guest_port, 3000);
+        assert_eq!(ports[0].host_ip, "127.0.0.1");
+        assert_eq!(ports[0].host_port, 49152);
+        assert_eq!(ports[0].protocol, "tcp");
+
+        let resolved_empty = JsBoxInfo::from(core_info(Some(NetworkInfo {
+            mode: NetworkMode::Disabled,
+            allow_net: Vec::new(),
+            published_ports: Some(Vec::new()),
+        })));
+        let network = match resolved_empty.network {
+            Either::A(network) => network,
+            Either::B(_) => panic!("network metadata missing"),
+        };
+        assert!(
+            network
+                .published_ports
+                .expect("resolved publications")
+                .is_empty()
+        );
+
+        let unresolved = JsBoxInfo::from(core_info(Some(NetworkInfo {
+            mode: NetworkMode::Enabled,
+            allow_net: Vec::new(),
+            published_ports: None,
+        })));
+        let network = match unresolved.network {
+            Either::A(network) => network,
+            Either::B(_) => panic!("network metadata missing"),
+        };
+        assert!(network.published_ports.is_none());
+
+        assert!(matches!(
+            JsBoxInfo::from(core_info(None)).network,
+            Either::B(_)
         ));
-
-        assert_eq!(resolved.ports.len(), 1);
-        assert_eq!(resolved.ports[0].host_port, Some(49152));
-        assert_eq!(resolved.ports[0].guest_port, 3000);
-        assert_eq!(resolved.ports[0].protocol.as_deref(), Some("tcp"));
-        assert_eq!(resolved.ports[0].host_ip.as_deref(), Some("127.0.0.1"));
-        assert!(resolved.ports_resolved);
-
-        let unresolved = JsBoxInfo::from(core_info(Vec::new(), false));
-        assert!(unresolved.ports.is_empty());
-        assert!(!unresolved.ports_resolved);
     }
 }

@@ -10,6 +10,7 @@ use std::hash::Hash;
 
 pub use crate::litebox::{BoxState, BoxStatus, HealthStatus};
 use crate::runtime::id::BoxID;
+use crate::runtime::options::{NetworkConfig, NetworkMode, PortProtocol};
 /// Re-exported here so the CLI can reach volume metadata the same way it
 /// reaches [`ImageInfo`] (`boxlite::runtime::types::VolumeInfo`). The type
 /// itself lives with the store in [`crate::volumes`].
@@ -306,6 +307,44 @@ impl BoxLifecyclePolicy {
     }
 }
 
+/// A concrete host listener published to a guest port.
+///
+/// Unlike request-side [`crate::runtime::options::PortSpec`], every field here
+/// describes a binding that the network backend has already resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishedPort {
+    /// Guest port receiving traffic from the host listener.
+    pub guest_port: u16,
+
+    /// Concrete host address bound by the network backend.
+    pub host_ip: String,
+
+    /// Concrete host port bound by the network backend.
+    pub host_port: u16,
+
+    /// Transport protocol used by the publication.
+    pub protocol: PortProtocol,
+}
+
+/// Public network metadata for a box.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkInfo {
+    /// Whether the guest network interface is enabled.
+    pub mode: NetworkMode,
+
+    /// Configured outbound network allowlist. Empty means unrestricted when
+    /// [`Self::mode`] is [`NetworkMode::Enabled`].
+    #[serde(default)]
+    pub allow_net: Vec<String>,
+
+    /// Concrete publications for the current runtime lifecycle.
+    ///
+    /// `None` means the runtime could not authoritatively resolve the current
+    /// bindings. `Some([])` means there are authoritatively no publications.
+    #[serde(default)]
+    pub published_ports: Option<Vec<PublishedPort>>,
+}
+
 /// Public metadata about a box (returned by list operations).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxInfo {
@@ -336,19 +375,12 @@ pub struct BoxInfo {
     /// Allocated memory in MiB.
     pub memory_mib: u32,
 
-    /// Active host-to-guest mappings when [`Self::ports_resolved`] is true;
-    /// otherwise empty.
-    #[serde(default)]
-    pub ports: Vec<crate::runtime::options::PortSpec>,
-
-    /// Whether [`Self::ports`] is authoritative for the current box lifecycle.
+    /// Network configuration and current runtime publication metadata.
     ///
-    /// Active boxes return `false` with an empty `ports` list when the runtime
-    /// cannot verify or refresh their concrete host bindings. Configured,
-    /// stopped, and failed boxes without a live shim are known-empty, as are
-    /// boxes without configured mappings.
+    /// Local producers always populate this field. `None` indicates metadata
+    /// from an older or remote producer that did not include `network`.
     #[serde(default)]
-    pub ports_resolved: bool,
+    pub network: Option<NetworkInfo>,
 
     /// User-defined labels for filtering and organization.
     pub labels: HashMap<String, String>,
@@ -377,6 +409,7 @@ impl BoxInfo {
         use crate::runtime::options::RootfsSpec;
 
         let port_resolution = crate::litebox::ports::PortResolution::load(config, state);
+        let network_config = NetworkConfig::from(&config.options.network);
 
         Self {
             id: config.id.clone(),
@@ -391,8 +424,11 @@ impl BoxInfo {
             },
             cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
-            ports: port_resolution.ports,
-            ports_resolved: port_resolution.is_resolved,
+            network: Some(NetworkInfo {
+                mode: network_config.mode,
+                allow_net: network_config.allow_net,
+                published_ports: port_resolution.published_ports,
+            }),
             labels: HashMap::new(),
             // Local runtimes do not sweep lifecycle deadlines, but metadata keeps
             // the configured values so callers can inspect the effective policy.
@@ -414,8 +450,7 @@ impl PartialEq for BoxInfo {
             && self.image == other.image
             && self.cpus == other.cpus
             && self.memory_mib == other.memory_mib
-            && self.ports == other.ports
-            && self.ports_resolved == other.ports_resolved
+            && self.network == other.network
             && self.labels == other.labels
             && self.auto_pause == other.auto_pause
             && self.auto_delete == other.auto_delete
@@ -515,6 +550,12 @@ mod tests {
     use crate::runtime::options::{BoxOptions, RootfsSpec};
     use std::path::PathBuf;
 
+    fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
+        info.network
+            .as_ref()
+            .and_then(|network| network.published_ports.as_deref())
+    }
+
     #[test]
     fn lifecycle_policy_enforces_public_sentinels_and_ordering() {
         assert!(
@@ -588,11 +629,51 @@ mod tests {
         assert_eq!(info.image, "python:3.11");
         assert_eq!(info.cpus, 4);
         assert_eq!(info.memory_mib, 1024);
-        assert!(info.ports.is_empty());
         assert!(
-            info.ports_resolved,
+            published_ports(&info).is_some_and(<[PublishedPort]>::is_empty),
             "a box with no requested mappings is known-empty"
         );
+    }
+
+    #[test]
+    fn box_info_reports_network_configuration_and_resolved_empty_publications() {
+        let config = BoxConfig {
+            id: BoxID::parse("01HJK4TNRPQSXYZ8WM6NCVT9R5").unwrap(),
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions {
+                network: crate::runtime::options::NetworkSpec::Enabled {
+                    allow_net: vec!["api.example.com".to_string()],
+                },
+                ..Default::default()
+            },
+            engine_kind: crate::vmm::VmmKind::Libkrun,
+            box_home: PathBuf::from("/tmp/box"),
+        };
+
+        let info = BoxInfo::new(&config, &BoxState::new());
+        let network = info.network.as_ref().expect("local network metadata");
+
+        assert_eq!(network.mode, crate::runtime::options::NetworkMode::Enabled);
+        assert_eq!(network.allow_net, vec!["api.example.com".to_string()]);
+        assert_eq!(network.published_ports, Some(Vec::new()));
+
+        let serialized = serde_json::to_value(&info).unwrap();
+        assert_eq!(serialized["network"]["mode"], "enabled");
+        assert_eq!(
+            serialized["network"]["published_ports"],
+            serde_json::json!([])
+        );
+        assert!(serialized.get("ports").is_none());
+        assert!(serialized.get("ports_resolved").is_none());
+
+        let mut legacy = serialized;
+        legacy.as_object_mut().unwrap().remove("network");
+        let legacy: BoxInfo = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.network.is_none());
     }
 
     #[test]
@@ -643,44 +724,41 @@ mod tests {
         state.transition_to(BoxStatus::Running).unwrap();
 
         let info = BoxInfo::new(&config, &state);
-        assert!(
-            info.ports.is_empty(),
-            "an untagged snapshot cannot prove that its host ports belong to the active VM lifecycle"
-        );
+        assert!(published_ports(&info).is_none());
         assert_eq!(
-            serde_json::to_value(&info).unwrap()["ports_resolved"],
-            serde_json::Value::Bool(false),
+            serde_json::to_value(&info).unwrap()["network"]["published_ports"],
+            serde_json::Value::Null,
             "BoxInfo must distinguish unresolved bindings from confirmed-empty bindings"
         );
 
         state.transition_to(BoxStatus::Stopping).unwrap();
         let stopping = BoxInfo::new(&config, &state);
-        assert!(stopping.ports.is_empty());
         assert!(
-            !stopping.ports_resolved,
+            published_ports(&stopping).is_none(),
             "a stopping lifecycle may still own active mappings"
         );
         state.transition_to(BoxStatus::Stopped).unwrap();
         let stopped_with_live_shim = BoxInfo::new(&config, &state);
-        assert!(!stopped_with_live_shim.ports_resolved);
+        assert!(published_ports(&stopped_with_live_shim).is_none());
 
         std::fs::write(temp_dir.path().join("shim.pid"), format!("{pid}\n")).unwrap();
         let stopped_with_legacy_shim = BoxInfo::new(&config, &state);
         assert!(
-            !stopped_with_legacy_shim.ports_resolved,
+            published_ports(&stopped_with_legacy_shim).is_none(),
             "an alive legacy shim is uncertain, never confirmed-empty"
         );
 
         std::fs::remove_file(temp_dir.path().join("shim.pid")).unwrap();
         let stopped = BoxInfo::new(&config, &state);
-        assert!(stopped.ports.is_empty());
-        assert!(stopped.ports_resolved, "a stopped box is known-empty");
+        assert!(
+            published_ports(&stopped).is_some_and(<[PublishedPort]>::is_empty),
+            "a stopped box is known-empty"
+        );
 
         state.status = BoxStatus::Unknown;
         let unknown = BoxInfo::new(&config, &state);
-        assert!(unknown.ports.is_empty());
         assert!(
-            !unknown.ports_resolved,
+            published_ports(&unknown).is_none(),
             "unknown lifecycle state cannot prove that mappings are absent"
         );
     }
@@ -697,11 +775,11 @@ mod tests {
             format!("{pid}\n{start_time}\nservices-mux-v1\n"),
         )
         .unwrap();
-        let expected = vec![crate::runtime::options::PortSpec {
-            host_port: Some(49152),
+        let expected = vec![PublishedPort {
             guest_port: 3000,
+            host_ip: "0.0.0.0".to_string(),
+            host_port: 49152,
             protocol: crate::runtime::options::PortProtocol::Tcp,
-            host_ip: Some("0.0.0.0".to_string()),
         }];
         std::fs::write(
             logs_dir.join("resolved-ports.json"),
@@ -745,10 +823,10 @@ mod tests {
         state.transition_to(BoxStatus::Running).unwrap();
 
         let info = BoxInfo::new(&config, &state);
-        assert_eq!(info.ports, expected);
+        assert_eq!(published_ports(&info), Some(expected.as_slice()));
         assert_eq!(
-            serde_json::to_value(&info).unwrap()["ports_resolved"],
-            serde_json::Value::Bool(true)
+            serde_json::to_value(&info).unwrap()["network"]["published_ports"],
+            serde_json::to_value(&expected).unwrap()
         );
 
         std::fs::write(
@@ -769,9 +847,8 @@ mod tests {
         )
         .unwrap();
         let prior_runtime = BoxInfo::new(&config, &state);
-        assert!(prior_runtime.ports.is_empty());
         assert!(
-            !prior_runtime.ports_resolved,
+            published_ports(&prior_runtime).is_none(),
             "a replacement core must confirm the live mapping before exposing it"
         );
 
@@ -793,13 +870,11 @@ mod tests {
         )
         .unwrap();
         let mismatched = BoxInfo::new(&config, &state);
-        assert!(mismatched.ports.is_empty());
-        assert!(!mismatched.ports_resolved);
+        assert!(published_ports(&mismatched).is_none());
 
         std::fs::write(logs_dir.join("resolved-ports.json"), b"not-json").unwrap();
         let malformed = BoxInfo::new(&config, &state);
-        assert!(malformed.ports.is_empty());
-        assert!(!malformed.ports_resolved);
+        assert!(published_ports(&malformed).is_none());
     }
 
     #[test]

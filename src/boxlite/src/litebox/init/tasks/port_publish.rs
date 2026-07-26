@@ -10,6 +10,7 @@ use crate::net::constants::GUEST_IP;
 use crate::net::{Forward, NetworkBackend, TransportProtocol};
 use crate::pipeline::PipelineTask;
 use crate::runtime::options::{PortProtocol, PortSpec};
+use crate::runtime::types::PublishedPort;
 use crate::util::{PidFileReader, ShimPidRecord};
 use async_trait::async_trait;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -56,7 +57,7 @@ impl PortPublishTask {
         requested: &[PortSpec],
         snapshot_path: &Path,
         lifecycle: ShimPidRecord,
-    ) -> BoxliteResult<Vec<PortSpec>> {
+    ) -> BoxliteResult<Vec<PublishedPort>> {
         let planned = plan_ports(requested)?;
         if planned.is_empty() {
             return Ok(Vec::new());
@@ -94,11 +95,11 @@ impl PortPublishTask {
             })?;
             claimed_active[active_index] = true;
             let local = validate_forward(&active_forwards[active_index], mapping)?;
-            resolved[mapping.request_index] = Some(PortSpec {
-                host_port: Some(local.port()),
+            resolved[mapping.request_index] = Some(PublishedPort {
                 guest_port: mapping.request.guest_port,
+                host_ip: local.ip().to_string(),
+                host_port: local.port(),
                 protocol: mapping.request.protocol,
-                host_ip: Some(local.ip().to_string()),
             });
         }
 
@@ -201,7 +202,7 @@ async fn publish_ports(
     snapshot_path: &Path,
     lifecycle: ShimPidRecord,
     is_reattach: bool,
-) -> BoxliteResult<Vec<PortSpec>> {
+) -> BoxliteResult<Vec<PublishedPort>> {
     // Validate the complete request before the first backend call. In
     // particular, a bad later mapping must not strand earlier forwards.
     let planned = plan_ports(requested)?;
@@ -305,11 +306,11 @@ async fn publish_ports(
                 return Err(error);
             }
         };
-        resolved[mapping.request_index] = Some(PortSpec {
-            host_port: Some(local.port()),
+        resolved[mapping.request_index] = Some(PublishedPort {
             guest_port: mapping.request.guest_port,
+            host_ip: local.ip().to_string(),
+            host_port: local.port(),
             protocol: mapping.request.protocol,
-            host_ip: Some(local.ip().to_string()),
         });
     }
 
@@ -355,7 +356,7 @@ fn finish_publication(
     box_id: &crate::BoxID,
     task_name: &str,
     is_reattach: bool,
-    result: BoxliteResult<Vec<PortSpec>>,
+    result: BoxliteResult<Vec<PublishedPort>>,
 ) -> BoxliteResult<()> {
     match result {
         Ok(_) => Ok(()),
@@ -406,21 +407,18 @@ fn plan_ports(requested: &[PortSpec]) -> BoxliteResult<Vec<PlannedPort>> {
         .collect()
 }
 
-fn legacy_bindings(planned: &[PlannedPort], snapshot: &[PortSpec]) -> Option<Vec<PortSpec>> {
+fn legacy_bindings(
+    planned: &[PlannedPort],
+    snapshot: &[PublishedPort],
+) -> Option<Vec<PublishedPort>> {
     if snapshot.len() != planned.len() {
         return None;
     }
 
     for mapping in planned {
         let binding = snapshot.get(mapping.request_index)?;
-        let host_ip = binding
-            .host_ip
-            .as_deref()
-            .map(str::parse::<IpAddr>)
-            .transpose()
-            .ok()?
-            .unwrap_or(DEFAULT_HOST_IP);
-        let host_port = binding.host_port.filter(|port| *port != 0)?;
+        let host_ip = binding.host_ip.parse::<IpAddr>().ok()?;
+        let host_port = (binding.host_port != 0).then_some(binding.host_port)?;
 
         if binding.guest_port != mapping.request.guest_port
             || binding.protocol != mapping.request.protocol
@@ -439,7 +437,7 @@ fn legacy_bindings(planned: &[PlannedPort], snapshot: &[PortSpec]) -> Option<Vec
 
 fn find_existing_forward(
     planned: &PlannedPort,
-    previous_snapshot: &[PortSpec],
+    previous_snapshot: &[PublishedPort],
     active: &[Forward],
     claimed: &[bool],
 ) -> Option<usize> {
@@ -451,8 +449,8 @@ fn find_existing_forward(
                     && binding.protocol == planned.request.protocol
             })
             .and_then(|binding| {
-                let host_ip = binding.host_ip.as_deref()?.parse::<IpAddr>().ok()?;
-                let host_port = binding.host_port.filter(|port| *port != 0)?;
+                let host_ip = binding.host_ip.parse::<IpAddr>().ok()?;
+                let host_port = (binding.host_port != 0).then_some(binding.host_port)?;
                 (host_ip == planned.host_ip).then_some(SocketAddr::new(host_ip, host_port))
             })
     } else {
@@ -760,6 +758,15 @@ mod tests {
         }
     }
 
+    fn published_port(host_port: u16, guest_port: u16) -> PublishedPort {
+        PublishedPort {
+            guest_port,
+            host_ip: "127.0.0.1".to_string(),
+            host_port,
+            protocol: PortProtocol::Tcp,
+        }
+    }
+
     fn active_forward(local: &str, guest_port: u16) -> Forward {
         Forward {
             local: local.to_string(),
@@ -783,7 +790,7 @@ mod tests {
         ShimPidRecord::legacy(identity(pid, start_time))
     }
 
-    fn persisted_ports(snapshot: &Path) -> Vec<PortSpec> {
+    fn persisted_ports(snapshot: &Path) -> Vec<PublishedPort> {
         let document: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(snapshot).unwrap()).unwrap();
         serde_json::from_value(document["ports"].clone()).unwrap()
@@ -814,9 +821,9 @@ mod tests {
             *backend.exposed.lock().unwrap(),
             vec!["127.0.0.1:18080", "127.0.0.1:0"]
         );
-        assert_eq!(resolved[0].host_port, Some(49152));
+        assert_eq!(resolved[0].host_port, 49152);
         assert_eq!(resolved[0].guest_port, 3000);
-        assert_eq!(resolved[1].host_port, Some(18080));
+        assert_eq!(resolved[1].host_port, 18080);
         assert_eq!(resolved[1].guest_port, 8080);
         assert_eq!(persisted_ports(&snapshot), resolved);
         let document: serde_json::Value =
@@ -917,8 +924,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(*backend.exposed.lock().unwrap(), vec!["127.0.0.1:0"]);
-        assert_eq!(resolved[0].host_port, Some(49152));
-        assert_eq!(resolved[1].host_port, Some(18080));
+        assert_eq!(resolved[0].host_port, 49152);
+        assert_eq!(resolved[1].host_port, 18080);
         assert!(backend.unexposed.lock().unwrap().is_empty());
     }
 
@@ -940,7 +947,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(resolved[0].host_port, Some(49152));
+        assert_eq!(resolved[0].host_port, 49152);
         assert!(backend.exposed.lock().unwrap().is_empty());
         assert_eq!(persisted_ports(&snapshot), resolved);
     }
@@ -963,7 +970,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(*backend.exposed.lock().unwrap(), vec!["127.0.0.1:0"]);
-        assert_eq!(resolved, vec![mapping(Some(49152), 3000)]);
+        assert_eq!(resolved, vec![published_port(49152, 3000)]);
         assert_eq!(persisted_ports(&snapshot), resolved);
     }
 
@@ -989,7 +996,7 @@ mod tests {
 
         assert_eq!(backend.list_call_count(), 3);
         assert_eq!(*backend.exposed.lock().unwrap(), vec!["127.0.0.1:0"]);
-        assert_eq!(resolved, vec![mapping(Some(49152), 3000)]);
+        assert_eq!(resolved, vec![published_port(49152, 3000)]);
     }
 
     #[tokio::test]
@@ -1031,7 +1038,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(resolved, vec![mapping(Some(49152), 3000)]);
+        assert_eq!(resolved, vec![published_port(49152, 3000)]);
         assert!(backend.exposed.lock().unwrap().is_empty());
         assert!(!snapshot.exists(), "metadata discovery is not persistence");
     }
@@ -1075,7 +1082,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(*backend.exposed.lock().unwrap(), vec!["127.0.0.1:0"]);
-        assert_eq!(resolved, vec![mapping(Some(49152), 3000)]);
+        assert_eq!(resolved, vec![published_port(49152, 3000)]);
         assert_eq!(persisted_ports(&snapshot), resolved);
     }
 
@@ -1181,7 +1188,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resolved, legacy);
+        assert_eq!(
+            resolved,
+            vec![published_port(49152, 3000), published_port(18080, 8080)]
+        );
         assert!(backend.exposed.lock().unwrap().is_empty());
         assert!(!lifecycle.has_runtime_port_control());
     }
@@ -1203,7 +1213,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resolved[0].host_port, Some(49152));
+        assert_eq!(resolved[0].host_port, 49152);
         assert_eq!(*backend.exposed.lock().unwrap(), vec!["127.0.0.1:0"]);
         assert!(lifecycle.has_runtime_port_control());
     }
@@ -1227,7 +1237,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(resolved, stale);
+        assert_eq!(resolved, vec![published_port(49152, 9999)]);
         assert!(backend.exposed.lock().unwrap().is_empty());
         assert!(!lifecycle.has_runtime_port_control());
     }

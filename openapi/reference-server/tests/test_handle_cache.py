@@ -72,8 +72,6 @@ def _make_box_info(box_id: str, *, name: str = "test-box", status: str = "create
         image="alpine:latest",
         cpus=2,
         memory_mib=512,
-        ports=[],
-        ports_resolved=True,
     )
 
 
@@ -164,44 +162,6 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
             SERVER.CreateBoxRequest.model_validate(
                 {"ports": [{"guest_port": 3000}]}
             )
-
-    def test_box_info_response_includes_active_port_mappings(self) -> None:
-        info = _make_box_info("box-ports", status="running")
-        info.ports = [(49152, 3000, "tcp", "127.0.0.1")]
-
-        payload = SERVER.box_info_to_dict(info)
-
-        self.assertEqual(
-            payload["ports"],
-            [
-                {
-                    "host_port": 49152,
-                    "guest_port": 3000,
-                    "protocol": "tcp",
-                    "host_ip": "127.0.0.1",
-                }
-            ],
-        )
-        self.assertTrue(payload["ports_resolved"])
-
-    def test_older_box_info_never_exposes_unverified_active_ports(self) -> None:
-        info = _make_box_info("box-ports", status="running")
-        info.ports = [(49152, 3000, "tcp", "127.0.0.1")]
-        del info.ports_resolved
-
-        active = SERVER.box_info_to_dict(info)
-        self.assertEqual(active["ports"], [])
-        self.assertFalse(active["ports_resolved"])
-
-        info.state.status = "stopped"
-        stopped = SERVER.box_info_to_dict(info)
-        self.assertEqual(stopped["ports"], [])
-        self.assertFalse(stopped["ports_resolved"])
-
-        info.state.status = "unknown"
-        unknown = SERVER.box_info_to_dict(info)
-        self.assertEqual(unknown["ports"], [])
-        self.assertFalse(unknown["ports_resolved"])
 
     def test_dedicated_ports_route_is_removed(self) -> None:
         paths = {route.path for route in SERVER.app.routes}

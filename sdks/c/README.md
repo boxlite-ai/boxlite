@@ -551,12 +551,13 @@ BoxliteErrorCode boxlite_box_metrics(
 );
 ```
 
-`CBoxInfo.ports_json` is an owned JSON value: an array contains the active local
-TCP mappings, JSON `null` means unresolved for the current lifecycle, and `[]`
-means confirmed empty. It is released by the existing `boxlite_free_box_info()`
-/ `boxlite_free_box_info_list()` functions. `boxlite_box_info()` is a snapshot;
-`boxlite_get_info()` observes the live backend without publishing when a
-running box's mapping state is unresolved.
+`CBoxInfo.network_json` is an owned JSON `NetworkInfo` object with `mode`,
+`allow_net`, and `published_ports`. The whole value is JSON `null` when network
+metadata is unavailable. Inside the object, `published_ports: null` means
+unresolved, `[]` means authoritatively empty, and an array contains concrete
+`PublishedPort` objects. The existing `boxlite_free_box_info()` and
+`boxlite_free_box_info_list()` functions release it. `boxlite_get_info()`
+observes the live backend without publishing.
 
 ### Error Handling
 

@@ -12,7 +12,6 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::{Migration, db_err};
 use crate::runtime::options::{PortSpec, normalize_legacy_ports};
-use crate::util::{PidFileReader, ProcessIdentity};
 
 pub(crate) struct PreservePublishedPorts;
 
@@ -29,9 +28,7 @@ impl Migration for PreservePublishedPorts {
         "Preserve legacy published-port behavior"
     }
 
-    fn run(&self, conn: &Connection, home_dir: Option<&Path>) -> BoxliteResult<()> {
-        ensure_no_live_legacy_shims(home_dir)?;
-
+    fn run(&self, conn: &Connection, _home_dir: Option<&Path>) -> BoxliteResult<()> {
         let configs = {
             let mut statement = db_err!(conn.prepare("SELECT id, json FROM box_config"))?;
             let rows = db_err!(statement.query_map([], |row| {
@@ -105,60 +102,12 @@ impl Migration for PreservePublishedPorts {
     }
 }
 
-fn ensure_no_live_legacy_shims(home_dir: Option<&Path>) -> BoxliteResult<()> {
-    let Some(home_dir) = home_dir else {
-        return Ok(());
-    };
-    let boxes_dir = home_dir.join(crate::runtime::layout::dirs::BOXES_DIR);
-    let entries = match std::fs::read_dir(&boxes_dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(BoxliteError::Storage(format!(
-                "scan {} before published-port migration: {error}",
-                boxes_dir.display()
-            )));
-        }
-    };
-
-    let mut live = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            BoxliteError::Storage(format!(
-                "scan {} before published-port migration: {error}",
-                boxes_dir.display()
-            ))
-        })?;
-        let pid_path = entry
-            .path()
-            .join(crate::runtime::layout::dirs::SHIM_PID_FILE);
-        let pid = match PidFileReader::at(pid_path).process_identity() {
-            ProcessIdentity::Verified(pid) | ProcessIdentity::Legacy(pid) => pid,
-            ProcessIdentity::Absent => continue,
-        };
-        live.push(format!(
-            "{} (pid {pid})",
-            entry.file_name().to_string_lossy()
-        ));
-    }
-
-    if live.is_empty() {
-        return Ok(());
-    }
-
-    Err(BoxliteError::Database(format!(
-        "cannot migrate published-port behavior while a running box uses the previous runtime: {}. \
-         Stop these boxes with the previous BoxLite version, then retry",
-        live.join(", ")
-    )))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn migration_requires_legacy_shims_to_be_stopped() {
+    fn migration_does_not_block_on_live_legacy_shims() {
         let home = tempfile::tempdir().unwrap();
         let box_dir = home.path().join("boxes/box1");
         std::fs::create_dir_all(&box_dir).unwrap();
@@ -179,11 +128,9 @@ mod tests {
         )
         .unwrap();
 
-        let error = PreservePublishedPorts
+        PreservePublishedPorts
             .run(&conn, Some(home.path()))
-            .unwrap_err();
-        assert!(error.to_string().contains("running box"));
-        assert!(error.to_string().contains("box1"));
+            .unwrap();
     }
 
     #[test]

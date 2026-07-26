@@ -38,7 +38,10 @@ export type {
   VolumeInfo,
   JsImageRegistry,
   JsImageRegistryAuth,
+  JsBoxInfo,
+  JsNetworkInfo,
   JsOptions,
+  JsPublishedPort,
 } from "./native-contracts.js";
 
 // The public `rest` takes the cross-SDK `BoxliteRestOptions` bag. The

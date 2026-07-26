@@ -6,8 +6,9 @@ exported and structured without requiring a working libkrun/VM setup.
 Requires the native Rust extension to be compiled (maturin develop).
 """
 
-import boxlite
 import pytest
+
+import boxlite
 
 # Native extension types are only available when the Rust extension is compiled.
 # In CI unit-test jobs the extension is not built, so skip gracefully.
@@ -56,6 +57,12 @@ class TestExports:
 
         assert BoxStateInfo is not None
 
+    def test_network_info_types_importable(self):
+        from boxlite import NetworkInfo, PublishedPort
+
+        assert NetworkInfo is not None
+        assert PublishedPort is not None
+
     def test_all_contains_key_types(self):
         """Key management types are listed in __all__."""
         assert hasattr(boxlite, "__all__")
@@ -64,6 +71,8 @@ class TestExports:
             "Box",
             "BoxInfo",
             "BoxStateInfo",
+            "NetworkInfo",
+            "PublishedPort",
             "ImageHandle",
             "ImageInfo",
             "ImagePullResult",
@@ -99,8 +108,25 @@ class TestBoxInfoStructure:
     def test_has_memory_mib(self, box_info_cls):
         assert "memory_mib" in dir(box_info_cls)
 
+    def test_has_network(self, box_info_cls):
+        assert "network" in dir(box_info_cls)
+
     def test_has_repr(self, box_info_cls):
         assert hasattr(box_info_cls, "__repr__")
+
+
+class TestNetworkInfoStructure:
+    """Test that resolved publications use named Python objects."""
+
+    @pytest.mark.parametrize("field", ["mode", "allow_net", "published_ports"])
+    def test_network_info_fields(self, field):
+        assert field in dir(boxlite.NetworkInfo)
+
+    @pytest.mark.parametrize(
+        "field", ["guest_port", "host_ip", "host_port", "protocol"]
+    )
+    def test_published_port_fields(self, field):
+        assert field in dir(boxlite.PublishedPort)
 
 
 class TestBoxStateInfoStructure:

@@ -78,8 +78,6 @@ pub(super) struct BoxResponse {
     pub image: String,
     pub cpus: u8,
     pub memory_mib: u32,
-    pub ports: Vec<boxlite::runtime::options::PortSpec>,
-    pub ports_resolved: bool,
     pub labels: HashMap<String, String>,
     pub auto_pause: u32,
     pub auto_delete: u32,

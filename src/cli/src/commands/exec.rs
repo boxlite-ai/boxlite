@@ -1,5 +1,4 @@
 use crate::cli::{GlobalFlags, ProcessFlags};
-use crate::commands::print_resolved_ports;
 use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
 use boxlite::{BoxCommand, BoxliteRuntime, LiteBox};
@@ -50,12 +49,8 @@ impl BoxExecutor {
     async fn execute(&mut self) -> anyhow::Result<i32> {
         self.args.process.validate(self.args.detach)?;
         let litebox = self.get_box().await?;
-        let was_active = litebox.info().status.is_active();
         let cmd = self.prepare_command();
         let mut execution = litebox.exec(cmd).await?;
-        if self.args.detach && !was_active {
-            print_resolved_ports(&litebox);
-        }
 
         // Detach mode: Exit immediately without waiting
         if self.args.detach {

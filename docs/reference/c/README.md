@@ -884,11 +884,16 @@ if (boxlite_box_info(box, &info, &error) == Ok) {
 }
 ```
 
-`info->ports_json` is an owned JSON value: an array contains the active local
-TCP mappings, JSON `null` means unresolved for the current lifecycle, and `[]`
-means confirmed empty. It is freed with the rest of `CBoxInfo`.
-`boxlite_box_info()` is a snapshot; `boxlite_get_info()` observes the live
-backend without publishing when a running box's mappings are unresolved.
+`info->network_json` is an owned JSON value freed with the rest of `CBoxInfo`.
+It is JSON `null` when network information is unavailable; otherwise it is an
+object containing `mode`, `allow_net`, and `published_ports`. Within that
+object, `published_ports: null` means unresolved for the current lifecycle,
+`[]` means authoritatively no local publications, and a populated array contains
+concrete `guest_port`, `host_ip`, `host_port`, and `protocol` fields.
+
+`boxlite_box_info()` is a snapshot. For a running local box with unresolved
+`published_ports`, `boxlite_get_info()` attempts an observation-only refresh
+without publishing a listener or starting, stopping, or restarting the box.
 
 ---
 

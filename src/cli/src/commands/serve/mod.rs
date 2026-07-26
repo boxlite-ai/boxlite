@@ -709,8 +709,6 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         image: info.image.clone(),
         cpus: info.cpus,
         memory_mib: info.memory_mib,
-        ports: info.ports.clone(),
-        ports_resolved: info.ports_resolved,
         labels: info.labels.clone(),
         auto_pause: info.auto_pause,
         auto_delete: info.auto_delete,

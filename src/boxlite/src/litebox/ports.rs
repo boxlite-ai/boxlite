@@ -15,6 +15,7 @@ use super::config::BoxConfig;
 use super::state::BoxState;
 use crate::runtime::layout::dirs;
 use crate::runtime::options::PortSpec;
+use crate::runtime::types::PublishedPort;
 use crate::util::{PidFileReader, PidRecord, ProcessIdentity};
 
 const SNAPSHOT_VERSION: u8 = 1;
@@ -25,7 +26,7 @@ struct SnapshotEnvelope {
     version: u8,
     lifecycle: PidRecord,
     runtime: PidRecord,
-    ports: Vec<PortSpec>,
+    ports: Vec<PublishedPort>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,22 +38,19 @@ enum SnapshotDocument {
 
 /// Resolved-port view safe to expose through [`crate::BoxInfo`].
 pub(crate) struct PortResolution {
-    pub(crate) ports: Vec<PortSpec>,
-    pub(crate) is_resolved: bool,
+    pub(crate) published_ports: Option<Vec<PublishedPort>>,
 }
 
 impl PortResolution {
-    fn resolved(ports: Vec<PortSpec>) -> Self {
+    fn resolved(published_ports: Vec<PublishedPort>) -> Self {
         Self {
-            ports,
-            is_resolved: true,
+            published_ports: Some(published_ports),
         }
     }
 
     fn unresolved() -> Self {
         Self {
-            ports: Vec::new(),
-            is_resolved: false,
+            published_ports: None,
         }
     }
 
@@ -150,15 +148,23 @@ impl ResolvedPortsSnapshot {
     /// Read bindings only as reconciliation hints. Both the versioned format
     /// and the prior bare-array format are accepted here because gvproxy's live
     /// `/all` response remains the authority before any hint is adopted.
-    pub(crate) fn previous_bindings_best_effort(&self) -> Vec<PortSpec> {
+    pub(crate) fn previous_bindings_best_effort(&self) -> Vec<PublishedPort> {
         match self.read_document_best_effort() {
             Some(SnapshotDocument::Current(envelope)) => envelope.ports,
-            Some(SnapshotDocument::Legacy(ports)) => ports,
+            Some(SnapshotDocument::Legacy(ports)) => ports
+                .into_iter()
+                .map(legacy_published_port)
+                .collect::<Option<Vec<_>>>()
+                .unwrap_or_default(),
             None => Vec::new(),
         }
     }
 
-    pub(crate) fn replace(&self, lifecycle: PidRecord, ports: &[PortSpec]) -> BoxliteResult<()> {
+    pub(crate) fn replace(
+        &self,
+        lifecycle: PidRecord,
+        ports: &[PublishedPort],
+    ) -> BoxliteResult<()> {
         let parent = self.path.parent().ok_or_else(|| {
             BoxliteError::Storage(format!(
                 "resolved port snapshot path has no parent: {}",
@@ -249,26 +255,35 @@ impl ResolvedPortsSnapshot {
     }
 }
 
-fn bindings_match_requests(requested: &[PortSpec], resolved: &[PortSpec]) -> bool {
+fn bindings_match_requests(requested: &[PortSpec], resolved: &[PublishedPort]) -> bool {
     requested.len() == resolved.len()
         && requested.iter().zip(resolved).all(|(request, binding)| {
-            let Some(host_port) = binding.host_port.filter(|port| *port != 0) else {
+            if binding.host_port == 0 {
                 return false;
-            };
+            }
             let Some(request_host_ip) = normalized_host_ip(request) else {
                 return false;
             };
-            let Some(binding_host_ip) = normalized_host_ip(binding) else {
+            let Ok(binding_host_ip) = binding.host_ip.parse::<IpAddr>() else {
                 return false;
             };
 
             binding.guest_port == request.guest_port
                 && binding.protocol == request.protocol
                 && binding_host_ip == request_host_ip
-                && request
-                    .host_port
-                    .is_none_or(|requested_port| requested_port == 0 || requested_port == host_port)
+                && request.host_port.is_none_or(|requested_port| {
+                    requested_port == 0 || requested_port == binding.host_port
+                })
         })
+}
+
+fn legacy_published_port(port: PortSpec) -> Option<PublishedPort> {
+    Some(PublishedPort {
+        guest_port: port.guest_port,
+        host_ip: normalized_host_ip(&port)?.to_string(),
+        host_port: port.host_port.filter(|host_port| *host_port != 0)?,
+        protocol: port.protocol,
+    })
 }
 
 fn normalized_host_ip(port: &PortSpec) -> Option<IpAddr> {
@@ -294,16 +309,28 @@ mod tests {
         }
     }
 
+    fn published_port(host_port: u16) -> PublishedPort {
+        PublishedPort {
+            guest_port: 3000,
+            host_ip: "127.0.0.1".to_string(),
+            host_port,
+            protocol: PortProtocol::Tcp,
+        }
+    }
+
     #[test]
     fn binding_validation_distinguishes_concrete_results_from_requests() {
         assert!(bindings_match_requests(
             &[mapping(None)],
-            &[mapping(Some(49152))]
+            &[published_port(49152)]
         ));
-        assert!(!bindings_match_requests(&[mapping(None)], &[mapping(None)]));
+        assert!(!bindings_match_requests(
+            &[mapping(None)],
+            &[published_port(0)]
+        ));
         assert!(!bindings_match_requests(
             &[mapping(Some(8080))],
-            &[mapping(Some(8081))]
+            &[published_port(8081)]
         ));
     }
 
@@ -314,7 +341,7 @@ mod tests {
         let snapshot = ResolvedPortsSnapshot::at(logs_dir.join("resolved-ports.json"));
 
         let error = snapshot
-            .replace(PidRecord::current(), &[mapping(Some(49152))])
+            .replace(PidRecord::current(), &[published_port(49152)])
             .unwrap_err();
 
         assert!(
@@ -325,6 +352,21 @@ mod tests {
         assert!(
             !logs_dir.exists(),
             "a late metadata write must not resurrect a removed box"
+        );
+    }
+
+    #[test]
+    fn invalid_legacy_snapshot_is_rejected_without_shifting_binding_indexes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let snapshot_path = temp_dir.path().join("resolved-ports.json");
+        let legacy = vec![mapping(Some(49152)), mapping(None), mapping(Some(49154))];
+        std::fs::write(&snapshot_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+        let bindings = ResolvedPortsSnapshot::at(snapshot_path).previous_bindings_best_effort();
+
+        assert!(
+            bindings.is_empty(),
+            "one invalid positional entry must invalidate the whole legacy snapshot"
         );
     }
 }

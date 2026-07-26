@@ -1,4 +1,3 @@
-use super::format_ports;
 use crate::cli::GlobalFlags;
 use crate::formatter::{self, OutputFormat};
 use boxlite::BoxInfo;
@@ -40,10 +39,6 @@ struct BoxPresenter {
     #[serde(rename = "CreatedAt")]
     created: String,
 
-    #[tabled(rename = "PORTS")]
-    #[serde(rename = "Ports")]
-    ports: String,
-
     #[tabled(rename = "NAMES")]
     #[serde(rename = "Names")]
     names: String,
@@ -56,7 +51,6 @@ impl From<BoxInfo> for BoxPresenter {
             image: info.image,
             status: format!("{:?}", info.status),
             created: formatter::format_time(&info.created_at),
-            ports: format_ports(&info.ports),
             names: info.name.unwrap_or_default(),
         }
     }

@@ -252,22 +252,30 @@ impl BoxImpl {
     }
 
     fn unresolved_port_info(&self, mut info: BoxInfo) -> BoxInfo {
-        if info.status == BoxStatus::Running && !self.config.options.ports.is_empty() {
-            info.ports.clear();
-            info.ports_resolved = false;
+        if info.status == BoxStatus::Running
+            && !self.config.options.ports.is_empty()
+            && let Some(network) = info.network.as_mut()
+        {
+            network.published_ports = None;
         }
         info
     }
 
+    fn has_resolved_port_info(info: &BoxInfo) -> bool {
+        info.network
+            .as_ref()
+            .is_some_and(|network| network.published_ports.is_some())
+    }
+
     /// Return metadata after attempting an attach-only discovery of unresolved
-    /// port bindings. Failure is represented in `BoxInfo` as
-    /// `ports_resolved=false`; a metadata read must never restart or tear down
-    /// an otherwise healthy workload.
+    /// port bindings. Failure is represented by `published_ports=None`; a
+    /// metadata read must never restart or tear down an otherwise healthy
+    /// workload.
     pub(crate) async fn authoritative_info(&self) -> BoxInfo {
         let info = self.info();
         if info.status != BoxStatus::Running
             || self.config.options.ports.is_empty()
-            || info.ports_resolved
+            || Self::has_resolved_port_info(&info)
         {
             return info;
         }
@@ -278,7 +286,7 @@ impl BoxImpl {
         let info = self.snapshot_info();
         if info.status != BoxStatus::Running
             || self.config.options.ports.is_empty()
-            || info.ports_resolved
+            || Self::has_resolved_port_info(&info)
         {
             return info;
         }
@@ -303,9 +311,9 @@ impl BoxImpl {
             && crate::util::PidFileReader::at(self.layout.pid_file_path())
                 .verified_shim()
                 .is_some_and(|shim| shim.identity() == lifecycle)
+            && let Some(network) = refreshed.network.as_mut()
         {
-            refreshed.ports = ports;
-            refreshed.ports_resolved = true;
+            network.published_ports = Some(ports);
         }
         refreshed
     }
@@ -317,7 +325,7 @@ impl BoxImpl {
         &self,
     ) -> BoxliteResult<(
         crate::util::PidRecord,
-        Vec<crate::runtime::options::PortSpec>,
+        Vec<crate::runtime::types::PublishedPort>,
     )> {
         let initial_state = self.state.read().clone();
         if initial_state.status != BoxStatus::Running || self.config.options.ports.is_empty() {
@@ -1591,11 +1599,17 @@ mod tests {
     use crate::runtime::id::BoxIDMint;
     use crate::runtime::options::{BoxOptions, BoxliteOptions, PortProtocol, PortSpec, RootfsSpec};
     use crate::runtime::rt_impl::RuntimeImpl;
-    use crate::runtime::types::ContainerID;
+    use crate::runtime::types::{ContainerID, PublishedPort};
     use crate::util::{PidFileWriter, PidRecord, ShimPidRecord, is_process_alive};
     use crate::vmm::VmmKind;
     use chrono::Utc;
     use tempfile::TempDir;
+
+    fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
+        info.network
+            .as_ref()
+            .and_then(|network| network.published_ports.as_deref())
+    }
 
     /// RAII guard so a panic between spawn and the end of the test still
     /// reaps the helper process — without it a failed assertion would leak a
@@ -1848,9 +1862,11 @@ mod tests {
             protocol: PortProtocol::Tcp,
             host_ip: Some("127.0.0.1".to_string()),
         };
-        let resolved = PortSpec {
-            host_port: Some(49152),
-            ..requested.clone()
+        let resolved = PublishedPort {
+            guest_port: requested.guest_port,
+            host_ip: requested.host_ip.clone().unwrap(),
+            host_port: 49152,
+            protocol: requested.protocol,
         };
         let (child, id, pid) = running_box_with_standin(&runtime, false, 0, vec![requested]);
         let layout = runtime
@@ -1876,9 +1892,8 @@ mod tests {
             .await
             .expect("query box")
             .expect("box remains registered");
-        assert!(info.ports.is_empty());
         assert!(
-            !info.ports_resolved,
+            published_ports(&info).is_none(),
             "failed discovery must remain explicit instead of exposing an unverified snapshot"
         );
         assert!(
@@ -1938,18 +1953,17 @@ mod tests {
             .await
             .expect("first query")
             .expect("box exists");
-        assert!(first.ports_resolved);
-        assert_eq!(first.ports.len(), 1);
-        assert_eq!(first.ports[0].host_port, Some(49152));
+        let first_ports = published_ports(&first).expect("resolved first observation");
+        assert_eq!(first_ports.len(), 1);
+        assert_eq!(first_ports[0].host_port, 49152);
 
         let second = runtime
             .get_info(id.as_str())
             .await
             .expect("second query")
             .expect("box exists");
-        assert!(second.ports.is_empty());
         assert!(
-            !second.ports_resolved,
+            published_ports(&second).is_none(),
             "a prior observation must not outlive the backend state it observed"
         );
         assert_eq!(list_calls.load(Ordering::SeqCst), 2);
@@ -1972,9 +1986,11 @@ mod tests {
             protocol: PortProtocol::Tcp,
             host_ip: Some("127.0.0.1".to_string()),
         };
-        let resolved = PortSpec {
-            host_port: Some(49152),
-            ..requested.clone()
+        let resolved = PublishedPort {
+            guest_port: requested.guest_port,
+            host_ip: requested.host_ip.clone().unwrap(),
+            host_port: 49152,
+            protocol: requested.protocol,
         };
         let (child, id, _pid) = running_box_with_standin(&runtime, false, 0, vec![requested]);
         let (config, state) = runtime
@@ -2000,16 +2016,13 @@ mod tests {
 
         let gate = box_impl.port_info_refresh.lock().await;
         let synchronous = box_impl.info();
-        assert!(synchronous.ports.is_empty());
-        assert!(!synchronous.ports_resolved);
+        assert!(published_ports(&synchronous).is_none());
         let authoritative = box_impl.authoritative_info().await;
-        assert!(authoritative.ports.is_empty());
-        assert!(!authoritative.ports_resolved);
+        assert!(published_ports(&authoritative).is_none());
         drop(gate);
 
         let committed = box_impl.info();
-        assert_eq!(committed.ports, vec![resolved]);
-        assert!(committed.ports_resolved);
+        assert_eq!(published_ports(&committed), Some([resolved].as_slice()));
 
         drop(child);
     }

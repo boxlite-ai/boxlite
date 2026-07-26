@@ -1,7 +1,5 @@
 use clap::Args;
 
-use super::print_resolved_ports;
-
 #[derive(Args, Debug)]
 pub struct StartArgs {
     /// Name or ID of the box(es) to start
@@ -29,7 +27,6 @@ pub async fn execute(args: StartArgs, global: &crate::cli::GlobalFlags) -> anyho
             eprintln!("Error starting box '{}': {}", target, e);
             errors.push(format!("{}: {}", target, e));
         } else {
-            print_resolved_ports(&litebox);
             println!("{}", target);
             success_count += 1;
         }

@@ -1486,7 +1486,7 @@ components:
     # =======================================================================
     Box:
       type: object
-      description: Box metadata (maps to BoxInfo)
+      description: REST box metadata
       required: [box_id, status, created_at, updated_at, image, cpus, memory_mib]
       properties:
         box_id:
@@ -1536,20 +1536,6 @@ components:
           minimum: 128
           description: Allocated memory in MiB
           example: 512
-        ports:
-          type: array
-          description: |
-            Active local TCP port mappings. Treat this list as authoritative
-            only when `ports_resolved` is true. Older servers may omit this
-            field.
-          items:
-            $ref: "#/components/schemas/PortSpec"
-        ports_resolved:
-          type: boolean
-          default: false
-          description: |
-            Whether `ports` was resolved for the current box lifecycle.
-            False distinguishes unavailable state from a confirmed empty list.
         labels:
           type: object
           additionalProperties:
@@ -1723,29 +1709,6 @@ components:
             Optional outbound allowlist used only when `mode=enabled`.
             Empty or omitted means full outbound access.
             Supports hostnames, wildcard hostnames, IPs, and CIDRs.
-
-    PortSpec:
-      type: object
-      description: Active local TCP port mapping (host → guest)
-      required: [host_port, guest_port, protocol]
-      properties:
-        host_port:
-          type: integer
-          minimum: 1
-          maximum: 65535
-          description: Host port selected for the active mapping
-        guest_port:
-          type: integer
-          minimum: 1
-          maximum: 65535
-          description: Target guest TCP port
-        protocol:
-          type: string
-          enum: [tcp]
-          default: tcp
-        host_ip:
-          type: string
-          description: Host IP to bind (defaults to 0.0.0.0)
 
     SecretSpec:
       type: object

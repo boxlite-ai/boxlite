@@ -30,8 +30,8 @@ pub struct CBoxInfo {
     pub auto_delete: u32,
     pub auto_resume: c_int,
     pub created_at: i64,
-    /// JSON array of active `PortSpec` objects; JSON `null` when unresolved.
-    pub ports_json: *mut c_char,
+    /// Owned JSON `NetworkInfo` object; JSON `null` when network metadata is unavailable.
+    pub network_json: *mut c_char,
 }
 
 #[repr(C)]
@@ -46,12 +46,8 @@ fn to_c_str(s: &str) -> *mut c_char {
         .unwrap_or(ptr::null_mut())
 }
 
-fn ports_to_c_str(
-    ports_resolved: bool,
-    ports: &[boxlite::runtime::options::PortSpec],
-) -> *mut c_char {
-    let ports = ports_resolved.then_some(ports);
-    let json = serde_json::to_string(&ports).expect("PortSpec serialization cannot fail");
+fn network_to_c_str(network: &Option<boxlite::NetworkInfo>) -> *mut c_char {
+    let json = serde_json::to_string(network).expect("NetworkInfo serialization cannot fail");
     to_c_str(&json)
 }
 
@@ -69,8 +65,8 @@ fn status_to_str(status: BoxStatus) -> &'static str {
 
 impl CBoxInfo {
     pub fn from_box_info(info: &boxlite::runtime::types::BoxInfo) -> Self {
-        // Keep the existing owned-string contract: JSON `null` carries the
-        // unresolved bit without adding a field or exposing a null C pointer.
+        // Keep one owned JSON value so C callers receive the same nested
+        // NetworkInfo shape as the other SDKs without a parallel resolution flag.
         CBoxInfo {
             id: to_c_str(info.id.as_ref()),
             name: info
@@ -84,7 +80,7 @@ impl CBoxInfo {
             pid: info.pid.map(|p| p as c_int).unwrap_or(0),
             cpus: info.cpus as c_int,
             memory_mib: info.memory_mib as c_int,
-            ports_json: ports_to_c_str(info.ports_resolved, &info.ports),
+            network_json: network_to_c_str(&info.network),
             auto_pause: info.auto_pause,
             auto_delete: info.auto_delete,
             auto_resume: if info.auto_resume { 1 } else { 0 },
@@ -103,7 +99,7 @@ pub unsafe fn free_box_info(info: *mut CBoxInfo) {
         free_str(info_ref.name);
         free_str(info_ref.image);
         free_str(info_ref.status);
-        free_str(info_ref.ports_json);
+        free_str(info_ref.network_json);
     }
 }
 
@@ -310,12 +306,13 @@ unsafe fn box_list(
 mod tests {
     use std::ffi::CStr;
 
-    use boxlite::runtime::options::{PortProtocol, PortSpec};
+    use boxlite::runtime::options::PortProtocol;
+    use boxlite::{NetworkInfo, NetworkMode, PublishedPort};
 
-    use super::{free_str, ports_to_c_str};
+    use super::{free_str, network_to_c_str};
 
-    fn encoded_ports(is_resolved: bool, ports: &[PortSpec]) -> String {
-        let encoded = ports_to_c_str(is_resolved, ports);
+    fn encoded_network(network: Option<NetworkInfo>) -> String {
+        let encoded = network_to_c_str(&network);
         assert!(
             !encoded.is_null(),
             "successful BoxInfo conversion owns a JSON string"
@@ -329,19 +326,41 @@ mod tests {
     }
 
     #[test]
-    fn ports_json_preserves_resolution_without_a_new_c_field() {
-        assert_eq!(encoded_ports(false, &[]), "null");
-        assert_eq!(encoded_ports(true, &[]), "[]");
+    fn network_json_preserves_network_and_publication_state() {
+        assert_eq!(encoded_network(None), "null");
 
-        let ports = [PortSpec {
-            host_port: Some(49152),
-            guest_port: 3000,
-            protocol: PortProtocol::Tcp,
-            host_ip: Some("127.0.0.1".to_string()),
-        }];
-        let encoded = encoded_ports(true, &ports);
-        let value: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
-        assert_eq!(value[0]["host_port"], 49152);
-        assert_eq!(value[0]["guest_port"], 3000);
+        let unresolved: serde_json::Value =
+            serde_json::from_str(&encoded_network(Some(NetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: vec!["api.example.com".to_string()],
+                published_ports: None,
+            })))
+            .expect("valid JSON");
+        assert_eq!(unresolved["mode"], "enabled");
+        assert_eq!(unresolved["allow_net"][0], "api.example.com");
+        assert!(unresolved["published_ports"].is_null());
+
+        let resolved_empty: serde_json::Value =
+            serde_json::from_str(&encoded_network(Some(NetworkInfo {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+                published_ports: Some(Vec::new()),
+            })))
+            .expect("valid JSON");
+        assert_eq!(resolved_empty["published_ports"], serde_json::json!([]));
+
+        let resolved = encoded_network(Some(NetworkInfo {
+            mode: NetworkMode::Enabled,
+            allow_net: Vec::new(),
+            published_ports: Some(vec![PublishedPort {
+                guest_port: 3000,
+                host_ip: "127.0.0.1".to_string(),
+                host_port: 49152,
+                protocol: PortProtocol::Tcp,
+            }]),
+        }));
+        let resolved: serde_json::Value = serde_json::from_str(&resolved).expect("valid JSON");
+        assert_eq!(resolved["published_ports"][0]["host_port"], 49152);
+        assert_eq!(resolved["published_ports"][0]["guest_port"], 3000);
     }
 }

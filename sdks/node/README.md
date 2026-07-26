@@ -214,10 +214,11 @@ console.log(pwdResult.stdout); // "/tmp\n"
 console.log(box.id);    // ULID
 console.log(box.name);  // Optional name
 const info = box.info(); // Metadata
-console.log(info.ports, info.portsResolved); // Current lifecycle mappings and resolution state
-// If unresolved while running, getInfo observes the backend without publishing.
+// null means unresolved; [] means authoritatively no active publications.
+console.log(info.network?.publishedPorts);
+// getInfo observes the live backend without publishing.
 const refreshed = await runtime.getInfo(box.id);
-console.log(refreshed?.ports, refreshed?.portsResolved);
+console.log(refreshed?.network?.publishedPorts);
 
 // Cleanup
 await box.stop();

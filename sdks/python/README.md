@@ -298,9 +298,11 @@ Handle to a running or stopped box.
 
 - `info() -> BoxInfo`
   Get a synchronous metadata snapshot
-  - `info.ports` contains active local TCP mappings
-  - `info.ports_resolved` says whether those mappings belong to the current box lifecycle
-  - If unresolved on a running box, ignore `ports`; `await runtime.get_info(box.id)` observes the live backend without publishing
+  - `info.network` contains `NetworkInfo` when network metadata is available
+  - When `info.network` is not `None`, `published_ports` is `None` when
+    unresolved, `[]` when authoritatively empty, or a list of named
+    `PublishedPort` objects
+  - `await runtime.get_info(box.id)` observes the live backend without publishing
 
 - `metrics() -> BoxMetrics`
   Get box resource usage metrics (async)

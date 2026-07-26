@@ -327,41 +327,17 @@ async def require_auth(
 # ============================================================================
 
 
-def port_specs_to_dict(ports) -> list[dict]:
-    return [
-        {
-            "host_port": host_port,
-            "guest_port": guest_port,
-            "protocol": protocol,
-            "host_ip": host_ip,
-        }
-        for host_port, guest_port, protocol, host_ip in ports
-    ]
-
-
 def box_info_to_dict(info) -> dict:
-    status = info.state.status
-    ports_resolved = getattr(
-        info,
-        "ports_resolved",
-        False,
-    )
     return {
         "box_id": info.id,
         "name": info.name,
-        "status": status,
+        "status": info.state.status,
         "created_at": info.created_at,
         "updated_at": info.created_at,
         "pid": info.state.pid,
         "image": info.image,
         "cpus": info.cpus,
         "memory_mib": info.memory_mib,
-        "ports": (
-            port_specs_to_dict(info.ports)
-            if status in ("running", "paused") and ports_resolved
-            else []
-        ),
-        "ports_resolved": ports_resolved,
         "labels": {},
     }
 

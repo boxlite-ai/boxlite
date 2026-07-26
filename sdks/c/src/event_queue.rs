@@ -1185,7 +1185,7 @@ mod owned_ffi_ptr_nested_leak_tests {
             pid: 0,
             cpus: 1,
             memory_mib: 256,
-            ports_json: test_cstr("[]"),
+            network_json: test_cstr("null"),
             created_at: 0,
             auto_pause: 900,
             auto_delete: 0,
@@ -1200,7 +1200,7 @@ mod owned_ffi_ptr_nested_leak_tests {
             after - before,
             5,
             "OwnedFfiPtr<CBoxInfo>::drop reclaimed {} inner CStrings; \
-             expected 5 (id + name + image + status + ports). Inner allocations leak.",
+             expected 5 (id + name + image + status + network). Inner allocations leak.",
             after - before
         );
     }
@@ -1256,7 +1256,7 @@ mod owned_ffi_ptr_nested_leak_tests {
             pid: 0,
             cpus: 2,
             memory_mib: 512,
-            ports_json: test_cstr("[]"),
+            network_json: test_cstr("null"),
             created_at: 0,
             auto_pause: 900,
             auto_delete: 0,

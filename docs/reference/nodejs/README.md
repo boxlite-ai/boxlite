@@ -206,12 +206,33 @@ Metadata about a box.
 | `createdAt` | `string` | Creation timestamp (ISO 8601) |
 | `lastUpdated` | `string` | Last state change (ISO 8601) |
 | `pid` | `number \| undefined` | Process ID (if running) |
-| `ports` | `JsPortSpec[]` | Active local TCP mappings; authoritative when `portsResolved` is true |
-| `portsResolved` | `boolean` | Whether `ports` was resolved for the current box lifecycle |
+| `network` | `JsNetworkInfo \| null` | Current network configuration and resolved local publications |
 
-`box.info()` is a synchronous snapshot. If `portsResolved` is false, ignore
-`ports`; for a running box, `await runtime.getInfo(id)` attempts an attach-only
-refresh without publishing, starting, or stopping it.
+```typescript
+interface JsNetworkInfo {
+  mode: string;
+  allowNet: string[];
+  publishedPorts: JsPublishedPort[] | null;
+}
+
+interface JsPublishedPort {
+  guestPort: number;
+  hostIp: string;
+  hostPort: number;
+  protocol: string;
+}
+```
+
+`network === null` means network information is unavailable. Within
+`JsNetworkInfo`, `publishedPorts === null` means unresolved for the current box
+lifecycle, `[]` means authoritatively no publications, and a populated array
+contains concrete active local bindings. `JsPortSpec` remains the request type;
+resolved output uses `JsPublishedPort` so every reported host port is concrete.
+
+`box.info()` is a synchronous snapshot. When a running local box reports
+`network.publishedPorts === null`, `await runtime.getInfo(id)` attempts an
+observation-only refresh without publishing a listener or starting, stopping,
+or restarting the box.
 
 ---
 

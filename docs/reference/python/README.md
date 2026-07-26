@@ -232,12 +232,22 @@ Metadata about a box.
 | `image` | `str` | OCI image used |
 | `cpus` | `int` | Allocated CPU cores |
 | `memory_mib` | `int` | Allocated memory in MiB |
-| `ports` | `List[Tuple[Optional[int], int, str, Optional[str]]]` | Active local TCP mappings; authoritative when `ports_resolved` is true |
-| `ports_resolved` | `bool` | Whether `ports` was resolved for the current box lifecycle |
+| `network` | `NetworkInfo \| None` | Current network configuration and resolved local publications |
 
-`box.info()` is a synchronous snapshot. If `ports_resolved` is false, ignore
-`ports`; for a running box, `await runtime.get_info(id)` attempts an attach-only
-refresh without publishing, starting, or stopping it.
+`NetworkInfo` has `mode: str`, `allow_net: List[str]`, and
+`published_ports: List[PublishedPort] | None`. Each `PublishedPort` has named
+`guest_port`, `host_ip`, `host_port`, and `protocol` attributes.
+
+`network is None` means network information is unavailable. Within
+`NetworkInfo`, `published_ports is None` means unresolved for the current box
+lifecycle, `[]` means authoritatively no publications, and a populated list
+contains concrete active local bindings. `BoxOptions.ports` remains the request
+API; its optional host port is not reused in resolved output.
+
+`box.info()` is a synchronous snapshot. When a running local box reports
+`network.published_ports is None`, `await runtime.get_info(id)` attempts an
+observation-only refresh without publishing a listener or starting, stopping,
+or restarting the box.
 
 ---
 

@@ -255,22 +255,38 @@ pub struct BoxInfo {
     /// Allocated memory in MiB
     pub memory_mib: u32,
 
-    /// Active local TCP mappings; authoritative when ports_resolved is true
-    pub ports: Vec<PortSpec>,
-
-    /// Whether ports was resolved for the current box lifecycle
-    pub ports_resolved: bool,
+    /// Current network configuration and resolved local publications
+    pub network: Option<NetworkInfo>,
 
     /// User-defined labels
     pub labels: HashMap<String, String>,
 }
+
+pub struct NetworkInfo {
+    pub mode: NetworkMode,
+    pub allow_net: Vec<String>,
+    pub published_ports: Option<Vec<PublishedPort>>,
+}
+
+pub struct PublishedPort {
+    pub guest_port: u16,
+    pub host_ip: String,
+    pub host_port: u16,
+    pub protocol: PortProtocol,
+}
 ```
 
-`LiteBox::info()` is a synchronous snapshot. If `ports_resolved` is false,
-ignore `ports`; for a running box, `BoxliteRuntime::get_info()` attempts an
-observation-only refresh without publishing, starting, or stopping it. A box kept running across
-an upgrade from the legacy listener implementation remains unresolved until its
-next normal restart; BoxLite does not risk publishing a duplicate listener.
+`network: None` means network information is unavailable, such as metadata from
+an older or remote producer. Within `NetworkInfo`, `published_ports: None`
+means the current lifecycle's publications are unresolved. `Some(vec![])` means
+there are authoritatively none, and a populated vector contains concrete active
+local bindings. `PortSpec` remains the request type; resolved output uses
+`PublishedPort` so every reported host port is concrete.
+
+`LiteBox::info()` is a synchronous snapshot. When a running local box reports
+`network.published_ports: None`, `BoxliteRuntime::get_info()` attempts an
+observation-only refresh without publishing a listener or starting, stopping,
+or restarting the box.
 
 ### BoxStatus
 

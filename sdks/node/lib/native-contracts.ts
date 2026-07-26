@@ -218,6 +218,20 @@ export interface JsBoxStateInfo {
   pid?: number;
 }
 
+export interface JsPublishedPort {
+  guestPort: number;
+  hostIp: string;
+  hostPort: number;
+  protocol: "tcp" | "udp";
+}
+
+export interface JsNetworkInfo {
+  mode: "enabled" | "disabled";
+  allowNet: string[];
+  /** `null` means unresolved; `[]` means authoritatively no publications. */
+  publishedPorts: JsPublishedPort[] | null;
+}
+
 export interface JsBoxInfo {
   id: string;
   name?: string;
@@ -226,8 +240,7 @@ export interface JsBoxInfo {
   image: string;
   cpus: number;
   memoryMib: number;
-  ports: JsPortSpec[];
-  portsResolved: boolean;
+  network: JsNetworkInfo | null;
   autoPause: number;
   autoDelete: number;
   autoResume: boolean;

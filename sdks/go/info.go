@@ -23,23 +23,38 @@ const (
 	StateStopped    State = "stopped"
 )
 
+// PublishedPort is a concrete host publication for a guest service port.
+type PublishedPort struct {
+	GuestPort int
+	HostIP    string
+	HostPort  int
+	Protocol  PortProtocol
+}
+
+// NetworkInfo describes the box network and its resolved local publications.
+type NetworkInfo struct {
+	Mode     NetworkMode
+	AllowNet []string
+	// PublishedPorts is nil when publications are unresolved. A non-nil empty
+	// slice authoritatively means that the box has no active publications.
+	PublishedPorts []PublishedPort
+}
+
 // BoxInfo holds information about a box.
 type BoxInfo struct {
-	ID        string
-	Name      string
-	Image     string
-	State     State
-	Running   bool
-	PID       int
-	CPUs      int
-	MemoryMiB int
-	Ports     []PortSpec
-	// PortsResolved reports whether Ports belongs to the current box lifecycle.
-	PortsResolved bool
-	AutoPause     uint32
-	AutoDelete    uint32
-	AutoResume    bool
-	CreatedAt     time.Time
+	ID         string
+	Name       string
+	Image      string
+	State      State
+	Running    bool
+	PID        int
+	CPUs       int
+	MemoryMiB  int
+	Network    *NetworkInfo
+	AutoPause  uint32
+	AutoDelete uint32
+	AutoResume bool
+	CreatedAt  time.Time
 }
 
 // Info returns information about the box.
@@ -119,61 +134,70 @@ func (r *Runtime) GetInfo(ctx context.Context, idOrName string) (*BoxInfo, error
 
 func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 	pid := int(info.pid)
-	ports, portsResolved := decodePortsJSON(cString(info.ports_json))
+	network := decodeNetworkJSON(cString(info.network_json))
 	return BoxInfo{
-		ID:            cString(info.id),
-		Name:          cString(info.name),
-		Image:         cString(info.image),
-		State:         State(cString(info.status)),
-		Running:       info.running != 0,
-		PID:           pid,
-		CPUs:          int(info.cpus),
-		MemoryMiB:     int(info.memory_mib),
-		Ports:         ports,
-		PortsResolved: portsResolved,
-		AutoPause:     uint32(info.auto_pause),
-		AutoDelete:    uint32(info.auto_delete),
-		AutoResume:    info.auto_resume != 0,
-		CreatedAt:     time.Unix(int64(info.created_at), 0),
+		ID:         cString(info.id),
+		Name:       cString(info.name),
+		Image:      cString(info.image),
+		State:      State(cString(info.status)),
+		Running:    info.running != 0,
+		PID:        pid,
+		CPUs:       int(info.cpus),
+		MemoryMiB:  int(info.memory_mib),
+		Network:    network,
+		AutoPause:  uint32(info.auto_pause),
+		AutoDelete: uint32(info.auto_delete),
+		AutoResume: info.auto_resume != 0,
+		CreatedAt:  time.Unix(int64(info.created_at), 0),
 	}
 }
 
-type portInfoJSON struct {
-	HostPort  *int   `json:"host_port"`
+type publishedPortJSON struct {
 	GuestPort int    `json:"guest_port"`
-	Protocol  string `json:"protocol"`
 	HostIP    string `json:"host_ip"`
+	HostPort  int    `json:"host_port"`
+	Protocol  string `json:"protocol"`
 }
 
-func decodePortsJSON(value string) ([]PortSpec, bool) {
+type networkInfoJSON struct {
+	Mode           NetworkMode         `json:"mode"`
+	AllowNet       []string            `json:"allow_net"`
+	PublishedPorts []publishedPortJSON `json:"published_ports"`
+}
+
+func decodeNetworkJSON(value string) *NetworkInfo {
 	value = strings.TrimSpace(value)
 	if value == "" || value == "null" {
-		return nil, false
+		return nil
 	}
 
-	var wirePorts []portInfoJSON
-	if json.Unmarshal([]byte(value), &wirePorts) != nil || wirePorts == nil {
-		return nil, false
+	var wire networkInfoJSON
+	if json.Unmarshal([]byte(value), &wire) != nil {
+		return nil
 	}
 
-	ports := make([]PortSpec, 0, len(wirePorts))
-	for _, wire := range wirePorts {
-		host := 0
-		if wire.HostPort != nil {
-			host = *wire.HostPort
-		}
+	var publishedPorts []PublishedPort
+	if wire.PublishedPorts != nil {
+		publishedPorts = make([]PublishedPort, 0, len(wire.PublishedPorts))
+	}
+	for _, port := range wire.PublishedPorts {
 		protocol := PortProtocolTcp
-		if wire.Protocol == "Udp" || wire.Protocol == "udp" {
+		if strings.EqualFold(port.Protocol, "udp") {
 			protocol = PortProtocolUdp
 		}
-		ports = append(ports, PortSpec{
-			Host:     host,
-			Guest:    wire.GuestPort,
-			Protocol: protocol,
-			HostIP:   wire.HostIP,
+		publishedPorts = append(publishedPorts, PublishedPort{
+			GuestPort: port.GuestPort,
+			HostIP:    port.HostIP,
+			HostPort:  port.HostPort,
+			Protocol:  protocol,
 		})
 	}
-	return ports, true
+
+	return &NetworkInfo{
+		Mode:           wire.Mode,
+		AllowNet:       wire.AllowNet,
+		PublishedPorts: publishedPorts,
+	}
 }
 
 // convertBoxInfoList materialises a CBoxInfoList* into Go BoxInfo slice.
