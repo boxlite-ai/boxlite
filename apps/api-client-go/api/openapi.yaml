@@ -1955,48 +1955,6 @@ paths:
       summary: Recover box from error state
       tags:
       - box
-  /box/{boxIdOrName}/resize:
-    post:
-      operationId: resizeBox
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ResizeBox"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-          description: Box has been resized
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Resize box resources
-      tags:
-      - box
   /box/{boxIdOrName}/labels:
     put:
       operationId: replaceLabels
@@ -6631,28 +6589,6 @@ components:
       - page
       - total
       - totalPages
-      type: object
-    ResizeBox:
-      example:
-        cpu: 2
-        memory: 4
-        disk: 20
-      properties:
-        cpu:
-          description: "CPU cores to allocate to the box (minimum: 1)"
-          example: 2
-          minimum: 1
-          type: integer
-        memory:
-          description: "Memory in GB to allocate to the box (minimum: 1)"
-          example: 4
-          minimum: 1
-          type: integer
-        disk:
-          description: Disk space in GB to allocate to the box (can only be increased)
-          example: 20
-          minimum: 1
-          type: integer
       type: object
     BoxLabels:
       example:

@@ -96,8 +96,8 @@ pub enum Commands {
     /// Display resource usage statistics for a box
     Stats(crate::commands::stats::StatsArgs),
 
-    /// Print the public URL for a box service port
-    Tunnel(crate::commands::tunnel::TunnelArgs),
+    /// Manage box networking
+    Network(crate::commands::network::NetworkArgs),
 
     /// Start a long-running REST API server
     Serve(crate::commands::serve::ServeArgs),
@@ -1357,24 +1357,37 @@ mod tests {
 
     // ─── auth subcommand parse tests ───────────────────────────────────────
 
-    use crate::commands::auth::AuthCommand;
+    use crate::commands::{auth::AuthCommand, network::NetworkCommand};
     use clap::Parser;
 
     // ─── tunnel parse tests ────────────────────────────────────────────────
 
     #[test]
-    fn tunnel_parses_box_and_port() {
-        let cli = Cli::try_parse_from(["boxlite", "tunnel", "mybox", "3000"]).expect("parse");
-        let Commands::Tunnel(args) = cli.command else {
-            panic!("expected Commands::Tunnel");
+    fn network_tunnel_parses_box_and_port() {
+        Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "3000"]).expect("parse");
+    }
+
+    #[test]
+    fn network_tunnel_preserves_box_and_port() {
+        let cli =
+            Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "3000"]).expect("parse");
+        let Commands::Network(args) = cli.command else {
+            panic!("expected Commands::Network");
         };
+        let NetworkCommand::Tunnel(args) = args.command;
         assert_eq!(args.target, "mybox");
         assert_eq!(args.port, 3000);
     }
 
     #[test]
-    fn tunnel_rejects_port_zero_at_parse() {
-        let result = Cli::try_parse_from(["boxlite", "tunnel", "mybox", "0"]);
+    fn tunnel_is_not_a_top_level_command() {
+        let result = Cli::try_parse_from(["boxlite", "tunnel", "mybox", "3000"]);
+        assert!(result.is_err(), "tunnel must be nested under network");
+    }
+
+    #[test]
+    fn network_tunnel_rejects_port_zero_at_parse() {
+        let result = Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "0"]);
         assert!(result.is_err(), "port 0 must be rejected by the parser");
     }
 

@@ -31,7 +31,6 @@ import {
   ApiBearerAuth,
 } from '@nestjs/swagger'
 import { BoxDto, BoxLabelsDto } from '../dto/box.dto'
-import { ResizeBoxDto } from '../dto/resize-box.dto'
 import { UpdateBoxStateDto } from '../dto/update-box-state.dto'
 import { PaginatedBoxesDto } from '../dto/paginated-boxes.dto'
 import { RunnerService } from '../services/runner.service'
@@ -67,8 +66,6 @@ import { ToolboxProxyUrlDto } from '../dto/toolbox-proxy-url.dto'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
-import { RequireFlagsEnabled } from '@openfeature/nestjs-sdk'
-import { FeatureFlags } from '../../common/constants/feature-flags'
 import { RegionBoxAccessGuard } from '../guards/region-box-access.guard'
 
 @ApiTags('box')
@@ -327,50 +324,6 @@ export class BoxController {
     }
 
     return boxDto
-  }
-
-  @Post(':boxIdOrName/resize')
-  @HttpCode(200)
-  @UseInterceptors(ContentTypeInterceptor)
-  @SkipThrottle({ authenticated: true })
-  @ThrottlerScope('box-lifecycle')
-  @ApiOperation({
-    summary: 'Resize box resources',
-    operationId: 'resizeBox',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Box has been resized',
-    type: BoxDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @UseGuards(BoxAccessGuard)
-  @RequireFlagsEnabled({ flags: [{ flagKey: FeatureFlags.BOX_RESIZE, defaultValue: false }] })
-  @Audit({
-    action: AuditAction.RESIZE,
-    targetType: AuditTarget.BOX,
-    targetIdFromRequest: (req) => req.params.boxIdOrName,
-    targetIdFromResult: (result: BoxDto) => result?.id,
-    requestMetadata: {
-      body: (req: TypedRequest<ResizeBoxDto>) => ({
-        cpu: req.body?.cpu,
-        memory: req.body?.memory,
-        disk: req.body?.disk,
-      }),
-    },
-  })
-  async resizeBox(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Body() resizeBoxDto: ResizeBoxDto,
-  ): Promise<BoxDto> {
-    const box = await this.boxService.resize(boxIdOrName, resizeBoxDto, authContext.organization)
-    return this.boxService.toBoxDto(box)
   }
 
   @Put(':boxIdOrName/labels')

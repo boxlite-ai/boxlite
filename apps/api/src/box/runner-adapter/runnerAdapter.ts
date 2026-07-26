@@ -64,8 +64,6 @@ export interface RunnerAdapter {
   ): Promise<void>
 
   recoverBox(box: Box): Promise<void>
-
-  resizeBox(boxId: string, cpu?: number, memory?: number, disk?: number): Promise<void>
 }
 
 @Injectable()

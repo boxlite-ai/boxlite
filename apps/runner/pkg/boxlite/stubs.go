@@ -6,74 +6,10 @@ package boxlite
 
 import (
 	"context"
-	"fmt"
 
-	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/containerd/errdefs"
 )
-
-// Resize changes the CPU/memory/disk allocation of a box.
-// BoxLite VMs don't support hot-resize, so this stops, removes, and recreates.
-func (c *Client) Resize(ctx context.Context, boxId string, resizeDto dto.ResizeBoxDTO) error {
-	c.logger.Info("resize box (stop/recreate)", "box", boxId)
-
-	bx, err := c.getOrFetchBox(ctx, boxId)
-	if err != nil {
-		return fmt.Errorf("failed to get box for resize: %w", err)
-	}
-
-	info, err := bx.Info(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get box info for resize: %w", err)
-	}
-
-	if err := bx.Stop(ctx); err != nil {
-		c.logger.Warn("failed to stop box during resize", "error", err)
-	}
-
-	if err := c.Destroy(ctx, boxId); err != nil {
-		return fmt.Errorf("failed to destroy box during resize: %w", err)
-	}
-
-	// API sends cores / GB / GB as small integers (see apps/api ResizeBoxDto).
-	cpus := info.CPUs
-	if resizeDto.Cpu > 0 {
-		cpus = int(resizeDto.Cpu)
-	}
-	memoryMiB := info.MemoryMiB
-	if resizeDto.Memory > 0 {
-		memoryMiB = int(resizeDto.Memory * 1024)
-	}
-
-	opts := []boxlite.BoxOption{
-		boxlite.WithName(boxId),
-		boxlite.WithCPUs(cpus),
-		boxlite.WithMemory(memoryMiB),
-		boxlite.WithAutoRemove(false),
-		boxlite.WithDetach(true),
-		boxlite.WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled}),
-	}
-
-	if resizeDto.Disk > 0 {
-		opts = append(opts, boxlite.WithDiskSize(int(resizeDto.Disk)))
-	}
-
-	newBox, err := c.runtime.Create(ctx, info.Image, opts...)
-	if err != nil {
-		return fmt.Errorf("failed to recreate box during resize: %w", err)
-	}
-
-	c.mu.Lock()
-	c.boxes[boxId] = newBox
-	c.mu.Unlock()
-
-	if err := newBox.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start resized box: %w", err)
-	}
-
-	return nil
-}
 
 // RecoverBox destroys and recreates a box.
 func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error {

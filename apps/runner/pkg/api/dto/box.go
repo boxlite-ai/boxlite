@@ -29,13 +29,6 @@ type CreateBoxDTO struct {
 	RegionId       *string `json:"regionId,omitempty"`
 } //	@name	CreateBoxDTO
 
-type ResizeBoxDTO struct {
-	Cpu    int64 `json:"cpu,omitempty" validate:"omitempty,min=1"`
-	Gpu    int64 `json:"gpu,omitempty" validate:"omitempty,min=0"`
-	Memory int64 `json:"memory,omitempty" validate:"omitempty,min=1"`
-	Disk   int64 `json:"disk,omitempty" validate:"omitempty,min=1"`
-} //	@name	ResizeBoxDTO
-
 type UpdateNetworkSettingsDTO struct {
 	NetworkBlockAll    *bool   `json:"networkBlockAll,omitempty"`
 	NetworkAllowList   *string `json:"networkAllowList,omitempty"`

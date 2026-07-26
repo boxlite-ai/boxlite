@@ -11,7 +11,6 @@ All URIs are relative to *http://localhost*
 |[**info**](#info) | **GET** /boxes/{boxId} | Get box info|
 |[**isRecoverable**](#isrecoverable) | **POST** /boxes/{boxId}/is-recoverable | Check if box error is recoverable|
 |[**recover**](#recover) | **POST** /boxes/{boxId}/recover | Recover box from error state|
-|[**resize**](#resize) | **POST** /boxes/{boxId}/resize | Resize box|
 |[**start**](#start) | **POST** /boxes/{boxId}/start | Start box|
 |[**stop**](#stop) | **POST** /boxes/{boxId}/stop | Stop box|
 |[**updateNetworkSettings**](#updatenetworksettings) | **POST** /boxes/{boxId}/network-settings | Update box network settings|
@@ -417,66 +416,6 @@ const { status, data } = await apiInstance.recover(
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
-# **resize**
-> string resize(box)
-
-Resize box
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration,
-    ResizeBoxDTO
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxId: string; //Box ID (default to undefined)
-let box: ResizeBoxDTO; //Resize box
-
-const { status, data } = await apiInstance.resize(
-    boxId,
-    box
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **box** | **ResizeBoxDTO**| Resize box | |
-| **boxId** | [**string**] | Box ID | defaults to undefined|
-
-
-### Return type
-
-**string**
-
-### Authorization
-
-[Bearer](../README.md#Bearer)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Box resized |  -  |
-|**400** | Bad Request |  -  |
-|**401** | Unauthorized |  -  |
-|**404** | Not Found |  -  |
-|**409** | Conflict |  -  |
-|**500** | Internal Server Error |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
 # **start**
 > StartBoxResponse start()
 
@@ -658,4 +597,3 @@ const { status, data } = await apiInstance.updateNetworkSettings(
 |**500** | Internal Server Error |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-

@@ -114,7 +114,6 @@ docs/RegenerateApiKeyResponse.md
 docs/Region.md
 docs/RegionType.md
 docs/RegionsApi.md
-docs/ResizeBox.md
 docs/Runner.md
 docs/RunnerFull.md
 docs/RunnerHealthMetrics.md
@@ -234,7 +233,6 @@ models/rate-limit-entry.ts
 models/regenerate-api-key-response.ts
 models/region-type.ts
 models/region.ts
-models/resize-box.ts
 models/runner-full.ts
 models/runner-health-metrics.ts
 models/runner-healthcheck.ts

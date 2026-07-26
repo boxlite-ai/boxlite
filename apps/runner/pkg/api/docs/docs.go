@@ -476,75 +476,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/boxes/{boxId}/resize": {
-            "post": {
-                "description": "Resize box",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "box"
-                ],
-                "summary": "Resize box",
-                "operationId": "Resize",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Box ID",
-                        "name": "boxId",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Resize box",
-                        "name": "box",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/ResizeBoxDTO"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Box resized",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/boxes/{boxId}/start": {
             "post": {
                 "description": "Start box",
@@ -1552,27 +1483,6 @@ const docTemplate = `{
                 },
                 "username": {
                     "type": "string"
-                }
-            }
-        },
-        "ResizeBoxDTO": {
-            "type": "object",
-            "properties": {
-                "cpu": {
-                    "type": "integer",
-                    "minimum": 1
-                },
-                "disk": {
-                    "type": "integer",
-                    "minimum": 1
-                },
-                "gpu": {
-                    "type": "integer",
-                    "minimum": 0
-                },
-                "memory": {
-                    "type": "integer",
-                    "minimum": 1
                 }
             }
         },
