@@ -10,7 +10,6 @@ import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike } 
 import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { CreateBoxDto } from '../dto/create-box.dto'
-import { ResizeBoxDto } from '../dto/resize-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
@@ -966,126 +965,6 @@ export class BoxService {
     // Now that box is in STOPPED state, use the normal start flow
     // This handles quota validation, pending usage, event emission, etc.
     return await this.start(box.id, organization)
-  }
-
-  async resize(boxIdOrName: string, resizeDto: ResizeBoxDto, organization: Organization): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
-
-    const region = await this.regionService.findOne(box.region)
-    if (!region) {
-      throw new NotFoundException(`Region with ID ${box.region} not found`)
-    }
-
-    // Validate box is in a valid state for resize
-    if (box.state !== BoxState.STARTED && box.state !== BoxState.STOPPED) {
-      throw new BadRequestError('Box must be in started or stopped state to resize')
-    }
-
-    if (box.pending) {
-      throw new BoxError('Box state change in progress')
-    }
-
-    // If no resize parameters provided, throw error
-    if (resizeDto.cpu === undefined && resizeDto.memory === undefined && resizeDto.disk === undefined) {
-      throw new BadRequestError('No resource changes specified - box is already at the desired configuration')
-    }
-
-    // Disk resize requires stopped box (cold resize only)
-    if (resizeDto.disk !== undefined && box.state !== BoxState.STOPPED) {
-      throw new BadRequestError('Disk resize can only be performed on a stopped box')
-    }
-
-    // Hot resize (box is running): only CPU and memory can be increased
-    const isHotResize = box.state === BoxState.STARTED
-
-    // Validate hot resize constraints
-    if (isHotResize) {
-      if (resizeDto.cpu !== undefined && resizeDto.cpu < box.cpu) {
-        throw new BadRequestError('Box must be in stopped state to decrease the number of CPU cores')
-      }
-
-      if (resizeDto.memory !== undefined && resizeDto.memory < box.mem) {
-        throw new BadRequestError('Box must be in stopped state to decrease memory')
-      }
-    }
-
-    // Disk can only be increased (never decreased)
-    if (resizeDto.disk !== undefined && resizeDto.disk < box.disk) {
-      throw new BadRequestError('Box disk size cannot be decreased')
-    }
-
-    // Calculate new resource values
-    const newCpu = resizeDto.cpu ?? box.cpu
-    const newMem = resizeDto.memory ?? box.mem
-    const newDisk = resizeDto.disk ?? box.disk
-
-    // Throw if nothing actually changes
-    if (newCpu === box.cpu && newMem === box.mem && newDisk === box.disk) {
-      throw new BadRequestError('No resource changes specified - box is already at the desired configuration')
-    }
-
-    this.organizationService.assertOrganizationIsNotSuspended(organization)
-
-    // Get runner and validate before changing state
-    if (!box.runnerId) {
-      throw new BadRequestError('Box has no runner assigned')
-    }
-
-    const runner = await this.runnerService.findOneOrFail(box.runnerId)
-
-    // Capture the previous state before transitioning to RESIZING (STARTED or STOPPED)
-    const previousState =
-      box.state === BoxState.STARTED ? BoxState.STARTED : box.state === BoxState.STOPPED ? BoxState.STOPPED : null
-
-    if (!previousState) {
-      throw new BadRequestError('Box must be in started or stopped state to resize')
-    }
-
-    // Now transition to RESIZING state
-    const updateData: Partial<Box> = {
-      state: BoxState.RESIZING,
-    }
-
-    await this.boxRepository.updateWhere(box.id, {
-      updateData,
-      whereCondition: { pending: false, state: previousState },
-    })
-
-    try {
-      const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-
-      await runnerAdapter.resizeBox(box.id, resizeDto.cpu, resizeDto.memory, resizeDto.disk)
-
-      // For V0 runners, update resources immediately (subscriber emits STATE_UPDATED)
-      // For V2 runners, job handler will update resources on completion
-      if (runner.apiVersion === '0') {
-        const updateData: Partial<Box> = {
-          cpu: newCpu,
-          mem: newMem,
-          disk: newDisk,
-          state: previousState,
-        }
-
-        await this.boxRepository.updateWhere(box.id, {
-          updateData,
-          whereCondition: { state: BoxState.RESIZING },
-        })
-      }
-
-      return await this.findOneByIdOrName(box.id, organization.id)
-    } catch (error) {
-      // Return to previous state on error
-      const updateData: Partial<Box> = {
-        state: previousState,
-      }
-
-      await this.boxRepository.updateWhere(box.id, {
-        updateData,
-        whereCondition: { state: BoxState.RESIZING },
-      })
-
-      throw error
-    }
   }
 
   async updatePublicStatus(boxIdOrName: string, isPublic: boolean, organizationId?: string): Promise<Box> {

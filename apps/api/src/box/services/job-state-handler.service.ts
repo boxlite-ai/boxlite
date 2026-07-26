@@ -302,7 +302,7 @@ export class JobStateHandlerService {
         return
       }
 
-      const payload = job.payload as { cpu?: number; memory?: number; disk?: number }
+      const payload = job.getPayload<{ cpu?: number; memory?: number; disk?: number }>() ?? {}
 
       const updateData: Partial<Box> = {}
 
@@ -314,7 +314,6 @@ export class JobStateHandlerService {
         updateData.mem = payload.memory ?? box.mem
         updateData.disk = payload.disk ?? box.disk
         updateData.state = previousState
-        return
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`RESIZE_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
 

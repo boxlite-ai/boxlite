@@ -42,10 +42,6 @@ func (a *BoxliteAdapter) Destroy(ctx context.Context, boxId string) error {
 	return a.client.Destroy(ctx, boxId)
 }
 
-func (a *BoxliteAdapter) Resize(ctx context.Context, boxId string, resizeDto dto.ResizeBoxDTO) error {
-	return a.client.Resize(ctx, boxId, resizeDto)
-}
-
 func (a *BoxliteAdapter) RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error {
 	return a.client.RecoverBox(ctx, boxId, recoverDto)
 }

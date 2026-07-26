@@ -12,7 +12,6 @@ export * from './is-recoverable-response';
 export * from './pull-snapshot-request-dto';
 export * from './recover-box-dto';
 export * from './registry-dto';
-export * from './resize-box-dto';
 export * from './runner-info-response-dto';
 export * from './runner-metrics';
 export * from './runner-service-info';

@@ -6,5 +6,4 @@
 
 export const FeatureFlags = {
   ORGANIZATION_INFRASTRUCTURE: 'organization_infrastructure',
-  BOX_RESIZE: 'box_resize',
 } as const

@@ -224,21 +224,6 @@ definitions:
     required:
       - url
     type: object
-  ResizeBoxDTO:
-    properties:
-      cpu:
-        minimum: 1
-        type: integer
-      disk:
-        minimum: 1
-        type: integer
-      gpu:
-        minimum: 0
-        type: integer
-      memory:
-        minimum: 1
-        type: integer
-    type: object
   RunnerInfoResponseDTO:
     properties:
       appVersion:
@@ -717,52 +702,6 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Recover box from error state
-      tags:
-        - box
-  /boxes/{boxId}/resize:
-    post:
-      description: Resize box
-      operationId: Resize
-      parameters:
-        - description: Box ID
-          in: path
-          name: boxId
-          required: true
-          type: string
-        - description: Resize box
-          in: body
-          name: box
-          required: true
-          schema:
-            $ref: '#/definitions/ResizeBoxDTO'
-      produces:
-        - application/json
-      responses:
-        '200':
-          description: Box resized
-          schema:
-            type: string
-        '400':
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '401':
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '404':
-          description: Not Found
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '409':
-          description: Conflict
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '500':
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-      summary: Resize box
       tags:
         - box
   /boxes/{boxId}/start:

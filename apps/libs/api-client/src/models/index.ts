@@ -79,7 +79,6 @@ export * from './rate-limit-entry';
 export * from './regenerate-api-key-response';
 export * from './region';
 export * from './region-type';
-export * from './resize-box';
 export * from './runner';
 export * from './runner-full';
 export * from './runner-health-metrics';
