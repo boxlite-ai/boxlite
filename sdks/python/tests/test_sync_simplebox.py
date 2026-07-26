@@ -11,7 +11,7 @@ import pytest
 
 # Try to import sync API - skip if greenlet not installed
 try:
-    from boxlite import SyncSimpleBox
+    from boxlite import SyncSimpleBox, TimeoutError as BoxliteTimeoutError
 
     SYNC_AVAILABLE = True
 except ImportError:
@@ -115,10 +115,10 @@ class TestSyncSimpleBox:
             assert "nobody" in result.stdout
 
     def test_exec_with_timeout(self, shared_sync_runtime):
-        """Per-exec timeout kills long-running commands."""
+        """Per-exec timeout raises a typed TimeoutError."""
         with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
-            result = box.exec("sleep", "60", timeout=2)
-            assert result.exit_code != 0
+            with pytest.raises(BoxliteTimeoutError):
+                box.exec("sleep", "60", timeout=2)
 
     def test_exec_combined_options(self, shared_sync_runtime):
         """Per-exec cwd and user can be combined."""

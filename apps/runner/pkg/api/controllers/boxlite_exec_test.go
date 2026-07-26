@@ -135,6 +135,33 @@ func TestBoxliteGetExecutionReturnsRunningThenExited(t *testing.T) {
 	}
 }
 
+func TestBoxliteGetExecutionReportsTimedOut(t *testing.T) {
+	mgr := withFreshExecManager(t)
+	exec := seedManagedExec(mgr, "exec-timeout", &signalCapturingExec{})
+	exec.ExitCode = -15
+	exec.TimedOut = true
+	close(exec.Done)
+
+	w := runHandler(http.MethodGet,
+		"/v1/boxes/:boxId/executions/:execId",
+		"/v1/boxes/box/executions/exec-timeout",
+		nil, BoxliteGetExecution)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var info ExecutionInfoResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
+		t.Fatalf("unmarshal failed: %v body=%s", err, w.Body.String())
+	}
+	if info.Status != "timed_out" {
+		t.Fatalf("expected status=timed_out, got %+v", info)
+	}
+	if info.ExitCode == nil || *info.ExitCode != -15 {
+		t.Fatalf("expected exit_code=-15, got %+v", info)
+	}
+}
+
 // Phase 2.1: missing exec id returns 404 instead of 200/empty body.
 func TestBoxliteGetExecutionNotFound(t *testing.T) {
 	withFreshExecManager(t)

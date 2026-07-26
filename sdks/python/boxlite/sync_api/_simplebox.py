@@ -9,6 +9,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Optional
 
+from ..errors import TimeoutError
 from ..exec import ExecResult
 
 if TYPE_CHECKING:
@@ -190,6 +191,7 @@ class SyncSimpleBox:
 
         # Access the underlying async Box directly
         async_box = self._box._box
+        command_display = " ".join([cmd, *args])
 
         async def _exec_and_collect():
             execution = await async_box.exec(
@@ -238,18 +240,30 @@ class SyncSimpleBox:
             await asyncio.gather(collect_stdout(), collect_stderr())
 
             error_message = None
+            timed_out = False
             try:
                 exec_result = await execution.wait()
                 exit_code = exec_result.exit_code
+                timed_out = exec_result.timed_out
                 error_message = exec_result.error_message
             except Exception as e:  # noqa: BLE001 - native binding call; report failure via exit_code instead of raising
                 logger.error(f"failed to wait execution: {e}")
                 exit_code = -1
+                error_message = None
+
+            if timed_out:
+                timeout_detail = (
+                    f" after {timeout:g} seconds" if timeout is not None else ""
+                )
+                raise TimeoutError(
+                    f"Command '{command_display}' timed out{timeout_detail}"
+                )
 
             return ExecResult(
                 exit_code=exit_code,
                 stdout="".join(stdout_lines),
                 stderr="".join(stderr_lines),
+                timed_out=timed_out,
                 error_message=error_message,
             )
 

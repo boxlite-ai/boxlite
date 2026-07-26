@@ -27,8 +27,7 @@ struct Inner {
     handle: Option<ExecHandle>,
     /// Stdout/stderr forwarding tasks (set on attach)
     output_tasks: Vec<JoinHandle<()>>,
-    /// Timeout flag
-    #[allow(dead_code)] // Will be used for timeout handling
+    /// Set once the execution timeout watcher has signaled this process.
     timed_out: bool,
     /// Optional init health checker for the container this exec runs in.
     /// Used to detect container init death when exec gets SIGKILL.
@@ -192,6 +191,11 @@ impl ExecutionState {
         self.exit.get().await
     }
 
+    pub async fn was_timed_out(&self) -> bool {
+        let inner = self.inner.lock().await;
+        inner.timed_out
+    }
+
     /// Attach to execution output.
     ///
     /// Takes stdout/stderr from handle and starts forwarding tasks.
@@ -280,6 +284,26 @@ impl ExecutionState {
 
         if let Some(ref handle) = inner.handle {
             handle.kill(signal).is_ok()
+        } else {
+            false
+        }
+    }
+
+    /// Kill process for timeout handling and record the timeout under the
+    /// same lock so wait cannot observe a signal-caused exit as completed.
+    pub async fn kill_for_timeout(&self, signal: nix::sys::signal::Signal) -> bool {
+        let mut inner = self.inner.lock().await;
+
+        if self.exit.try_get().is_some() {
+            return false;
+        }
+
+        if let Some(ref handle) = inner.handle {
+            let sent = handle.kill(signal).is_ok();
+            if sent {
+                inner.timed_out = true;
+            }
+            sent
         } else {
             false
         }

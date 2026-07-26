@@ -453,6 +453,27 @@ func goBoxliteOnExecutionWait(exitCode C.int, errPtr *C.CBoxliteError, userData 
 	}
 }
 
+//export goBoxliteOnExecutionWaitResult
+func goBoxliteOnExecutionWaitResult(exitCode C.int, timedOut C.bool, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimHandleForDispatch(h) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan executionWaitResult)
+	if !ok {
+		return
+	}
+	ch <- executionWaitResult{
+		exitCode: int(exitCode),
+		timedOut: bool(timedOut),
+		err:      errorFromCError(errPtr),
+	}
+}
+
 //export goBoxliteOnExecutionKill
 func goBoxliteOnExecutionKill(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	deliverUnitResult(userData, errPtr)
@@ -582,5 +603,6 @@ type runtimeMetricsResult struct {
 
 type executionWaitResult struct {
 	exitCode int
+	timedOut bool
 	err      error
 }

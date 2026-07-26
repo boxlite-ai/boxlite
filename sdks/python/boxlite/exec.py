@@ -20,6 +20,7 @@ class ExecResult:
         exit_code: Exit code from the command (negative if terminated by signal)
         stdout: Standard output as string
         stderr: Standard error as string
+        timed_out: True if the configured execution timeout terminated the command.
         error_message: Diagnostic message when process died unexpectedly
             (e.g., container init death). None if normal exit.
     """
@@ -27,4 +28,5 @@ class ExecResult:
     exit_code: int
     stdout: str
     stderr: str
+    timed_out: bool = False
     error_message: str | None = None

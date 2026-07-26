@@ -649,6 +649,24 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                     crate::boxlite_error_free(&mut err);
                 }
             }
+            RuntimeEvent::WaitResult {
+                cb,
+                user_data,
+                result,
+            } => {
+                let mut err = FFIError::default();
+                let (exit_code, timed_out) = match result {
+                    Ok((code, timed_out)) => (code, timed_out),
+                    Err(e) => {
+                        err = crate::error::error_to_c_error(e);
+                        (-1, false)
+                    }
+                };
+                cb(exit_code, timed_out, &mut err, user_data as *mut c_void);
+                if !err.message.is_null() {
+                    crate::boxlite_error_free(&mut err);
+                }
+            }
             RuntimeEvent::Kill {
                 cb,
                 user_data,

@@ -31,6 +31,7 @@ type stubAttachExec struct {
 	stdinW     *io.PipeWriter
 	done       chan struct{}
 	exitCode   int
+	timedOut   bool
 	tty        bool
 	connected  atomic.Bool
 	disconnect atomic.Int32
@@ -147,6 +148,7 @@ func (s *stubAttachExec) WriteStdin(data []byte) (int, error) {
 }
 func (s *stubAttachExec) DoneCh() <-chan struct{} { return s.done }
 func (s *stubAttachExec) ExitCodeValue() int      { return s.exitCode }
+func (s *stubAttachExec) TimedOutValue() bool     { return s.timedOut }
 func (s *stubAttachExec) IsTTY() bool             { return s.tty }
 func (s *stubAttachExec) Resize(rows, cols int) error {
 	s.mu.Lock()
@@ -227,6 +229,7 @@ func readNextDataFrame(t *testing.T, conn *websocket.Conn, deadline time.Duratio
 func TestBoxliteExecAttach_StdinAndExit(t *testing.T) {
 	stub := newStubAttachExec()
 	stub.exitCode = 42
+	stub.timedOut = true
 	cleanup := withStubExec(t, "exec-1", stub)
 	defer cleanup()
 
@@ -301,6 +304,9 @@ func TestBoxliteExecAttach_StdinAndExit(t *testing.T) {
 			if ev["type"] == "exit" {
 				if got, want := int(ev["exit_code"].(float64)), 42; got != want {
 					t.Fatalf("expected exit_code %d, got %d", want, got)
+				}
+				if got, want := ev["timed_out"].(bool), true; got != want {
+					t.Fatalf("expected timed_out %v, got %v", want, got)
 				}
 				gotExit = true
 				continue

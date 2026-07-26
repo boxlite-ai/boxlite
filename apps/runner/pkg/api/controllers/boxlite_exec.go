@@ -185,9 +185,8 @@ func BoxliteGetExecution(ctx *gin.Context) {
 // ExecutionInfoResponse describes an execution's current state.
 // Field names match the OpenAPI ExecutionInfo schema:
 // execution_id, status, exit_code, error_message. Statuses are
-// running | completed | killed | timed_out per spec; today we only
-// emit running and completed (the latter covers any non-running state
-// the kernel surfaced — exit-code semantics distinguish them).
+// running | completed | killed | timed_out per spec; today killed falls
+// back to completed with signal-shaped exit-code semantics.
 // exit_code and error_message are populated only after Done fires so
 // callers can distinguish "still running" from "exited cleanly with
 // code 0".
@@ -202,7 +201,11 @@ func executionInfoFromManagedExec(exec *boxlite.ManagedExec) ExecutionInfoRespon
 	resp := ExecutionInfoResponse{ExecutionID: exec.ID}
 	select {
 	case <-exec.Done:
-		resp.Status = "completed"
+		if exec.TimedOut {
+			resp.Status = "timed_out"
+		} else {
+			resp.Status = "completed"
+		}
 		code := exec.ExitCode
 		resp.ExitCode = &code
 		if exec.Err != nil {

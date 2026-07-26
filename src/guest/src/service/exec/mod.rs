@@ -139,6 +139,7 @@ impl Execution for GuestServer {
 
         // Wait for process to exit
         let exit_status = state.wait_process().await;
+        let timed_out = state.was_timed_out().await;
 
         let (exit_code, signal, error_message) = match exit_status {
             ExitStatus::Code(code) => {
@@ -178,7 +179,7 @@ impl Execution for GuestServer {
         Ok(Response::new(WaitResponse {
             exit_code,
             signal,
-            timed_out: false,
+            timed_out,
             duration_ms: 0,
             error_message,
         }))

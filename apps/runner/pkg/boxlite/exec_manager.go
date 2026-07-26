@@ -70,6 +70,9 @@ func (s sdkExec) ResizeTTY(ctx context.Context, rows, cols int) error {
 }
 func (s sdkExec) Close() error                          { return s.inner.Close() }
 func (s sdkExec) Wait(ctx context.Context) (int, error) { return s.inner.Wait(ctx) }
+func (s sdkExec) WaitResult(ctx context.Context) (*boxlite.ExecutionWaitResult, error) {
+	return s.inner.WaitResult(ctx)
+}
 
 type ExecManager struct {
 	mu    sync.RWMutex
@@ -95,6 +98,7 @@ type ManagedExec struct {
 	execution execHandle
 	Done      chan struct{}
 	ExitCode  int
+	TimedOut  bool
 	Err       error
 	TTY       bool
 	created   time.Time
@@ -395,8 +399,11 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 			exec.handleMu.Unlock()
 		}()
 
-		exitCode, err := handle.Wait(context.Background())
-		exec.ExitCode = exitCode
+		result, err := handle.WaitResult(context.Background())
+		if result != nil {
+			exec.ExitCode = result.ExitCode
+			exec.TimedOut = result.TimedOut
+		}
 		exec.Err = err
 	}()
 

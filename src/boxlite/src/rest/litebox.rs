@@ -601,7 +601,7 @@ const WS_CLIENT_PING_INTERVAL: std::time::Duration = std::time::Duration::from_m
 ///   control (`resize`, `signal`, `stdin_eof`).
 /// - Server → Client: binary frames have a 1-byte channel prefix
 ///   (`0x01` = stdout, `0x02` = stderr); text JSON frames are
-///   `{"type":"exit","exit_code":N}` (terminal) or
+///   `{"type":"exit","exit_code":N,"timed_out":bool}` (terminal) or
 ///   `{"type":"error","message":"..."}` (informational, connection stays open).
 ///
 /// Always emits exactly one `ExecResult` to `result_tx` before returning,
@@ -812,10 +812,14 @@ async fn attach_ws_pump(
                             }
                         }
                         Message::Text(text) => match parse_control_frame(&text) {
-                            ControlFrame::Exit { exit_code } => {
-                                tracing::debug!(exit_code, "WS attach: exit control frame");
+                            ControlFrame::Exit {
+                                exit_code,
+                                timed_out,
+                            } => {
+                                tracing::debug!(exit_code, timed_out, "WS attach: exit control frame");
                                 let _ = result_tx.send(ExecResult {
                                     exit_code,
+                                    timed_out,
                                     error_message: None,
                                 });
                                 return;
@@ -937,13 +941,17 @@ async fn probe_execution_status(
         client.get::<ExecutionStatusResponse>(&status_path),
     );
     match status_probe.await {
-        Ok(Ok(info)) => match info.status.as_str() {
-            "completed" | "killed" | "timed_out" => ProbeResult::Terminal(ExecResult {
-                exit_code: info.exit_code.unwrap_or(-1),
-                error_message: None,
-            }),
-            _ => ProbeResult::StillRunning,
-        },
+        Ok(Ok(info)) => {
+            let timed_out = info.status == "timed_out";
+            match info.status.as_str() {
+                "completed" | "killed" | "timed_out" => ProbeResult::Terminal(ExecResult {
+                    exit_code: info.exit_code.unwrap_or(-1),
+                    timed_out,
+                    error_message: None,
+                }),
+                _ => ProbeResult::StillRunning,
+            }
+        }
         // A definitive 404 means the box or exec genuinely does not
         // exist — distinct from a transient probe failure. Don't loop
         // the reconnect budget against something that isn't there.
@@ -954,7 +962,7 @@ async fn probe_execution_status(
 
 /// Decoded form of a Server→Client text-JSON frame.
 enum ControlFrame {
-    Exit { exit_code: i32 },
+    Exit { exit_code: i32, timed_out: bool },
     Error { message: String },
     Unknown,
 }
@@ -969,7 +977,14 @@ fn parse_control_frame(text: &str) -> ControlFrame {
                 .get("exit_code")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(-1) as i32;
-            ControlFrame::Exit { exit_code }
+            let timed_out = value
+                .get("timed_out")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            ControlFrame::Exit {
+                exit_code,
+                timed_out,
+            }
         }
         Some("error") => {
             let message = value
@@ -1012,6 +1027,7 @@ async fn emit_or_fallback(
                 // lost the output". The real exit code is still preserved.
                 let _ = result_tx.send(ExecResult {
                     exit_code: info.exit_code.unwrap_or(-1),
+                    timed_out: info.status == "timed_out",
                     error_message: Some(cause.clone()),
                 });
                 return;
@@ -1024,6 +1040,7 @@ async fn emit_or_fallback(
     }
     let _ = result_tx.send(ExecResult {
         exit_code: -1,
+        timed_out: false,
         error_message: Some(cause),
     });
 }
@@ -1455,8 +1472,8 @@ mod tests {
     // ─── ws_clean_exit_emits_result ───────────────────────────────────────
     //
     // Server sends one stdout binary frame, one exit text frame, then
-    // closes. Client must observe `ExecResult { exit_code: 7 }`, the
-    // stdout payload, and stdin bytes must round-trip back as binary.
+    // closes. Client must observe `ExecResult { exit_code: 7, timed_out: true }`,
+    // the stdout payload, and stdin bytes must round-trip back as binary.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ws_clean_exit_emits_result() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1476,9 +1493,11 @@ mod tests {
                 ws.send(Message::Binary(vec![0x01, b'h', b'i']))
                     .await
                     .unwrap();
-                ws.send(Message::Text(r#"{"type":"exit","exit_code":7}"#.into()))
-                    .await
-                    .unwrap();
+                ws.send(Message::Text(
+                    r#"{"type":"exit","exit_code":7,"timed_out":true}"#.into(),
+                ))
+                .await
+                .unwrap();
                 let _ = ws.close(None).await;
             })
             .await;
@@ -1506,6 +1525,7 @@ mod tests {
             .expect("result channel timed out")
             .expect("result channel closed without value");
         assert_eq!(res.exit_code, 7);
+        assert!(res.timed_out);
         assert!(res.error_message.is_none());
 
         let out = tokio::time::timeout(Duration::from_secs(1), stdout_rx.recv())
