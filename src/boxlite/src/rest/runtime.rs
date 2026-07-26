@@ -68,7 +68,7 @@ impl RestRuntime {
                 ));
             };
             let box_name = resp.name.as_deref().unwrap_or(&resp.box_id);
-            options.ensure_capability_policy_matches(&advanced.capability_policy(), box_name)?;
+            options.sanitize_against(&advanced.capability_policy(), box_name)?;
         }
         let info = resp.to_box_info()?;
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
@@ -147,10 +147,7 @@ impl RuntimeBackend for RestRuntime {
                                 .into(),
                         ));
                     };
-                    options.ensure_capability_policy_matches(
-                        &advanced.capability_policy(),
-                        box_name,
-                    )?;
+                    options.sanitize_against(&advanced.capability_policy(), box_name)?;
                     let info = resp.to_box_info()?;
                     let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
                     return Ok((litebox_from_rest(rest_box), false));

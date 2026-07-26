@@ -391,10 +391,7 @@ impl RuntimeImpl {
             && let Some((config, state)) = self.box_manager.lookup_box(name)?
         {
             return if reuse_existing {
-                options.ensure_capability_policy_matches(
-                    &config.options.advanced.capabilities,
-                    name,
-                )?;
+                options.sanitize_against(&config.options.advanced.capabilities, name)?;
                 let (box_impl, _) = self.get_or_create_box_impl(config, state);
                 Ok((litebox_from_impl(box_impl), false))
             } else {
@@ -435,10 +432,7 @@ impl RuntimeImpl {
                 && let Some(ref name) = name
                 && let Some((config, state)) = self.box_manager.lookup_box(name)?
             {
-                options.ensure_capability_policy_matches(
-                    &config.options.advanced.capabilities,
-                    name,
-                )?;
+                options.sanitize_against(&config.options.advanced.capabilities, name)?;
                 let (box_impl, _) = self.get_or_create_box_impl(config, state);
                 return Ok((litebox_from_impl(box_impl), false));
             }

@@ -578,15 +578,17 @@ impl BoxOptions {
         Ok(())
     }
 
-    /// Validate the security policy before `get_or_create` adopts an existing box.
-    pub(crate) fn ensure_capability_policy_matches(
+    /// Sanitize options and verify the requested capability policy against an
+    /// authoritative policy returned by the local or remote backend.
+    pub(crate) fn sanitize_against(
         &self,
-        existing: &crate::runtime::advanced_options::ContainerCapabilities,
+        authoritative: &crate::runtime::advanced_options::ContainerCapabilities,
         box_name: &str,
     ) -> BoxliteResult<()> {
+        self.sanitize()?;
         self.advanced
             .capabilities
-            .ensure_matches(existing, box_name)
+            .ensure_matches(authoritative, box_name)
     }
 }
 
@@ -940,11 +942,26 @@ mod tests {
     }
 
     #[test]
-    fn get_or_create_rejects_capability_policy_drift() {
+    fn sanitize_against_rejects_capability_policy_drift() {
+        let malformed = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                capabilities: ContainerCapabilities {
+                    add: vec!["NET-ADMIN".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let error = malformed
+            .sanitize_against(&malformed.advanced.capabilities, "malformed-policy")
+            .expect_err("contextual sanitization must reject malformed capability names");
+        assert!(error.to_string().contains("NET-ADMIN"));
+
         let baseline = BoxOptions::default();
         assert!(
             baseline
-                .ensure_capability_policy_matches(&ContainerCapabilities::default(), "same-policy")
+                .sanitize_against(&ContainerCapabilities::default(), "same-policy")
                 .is_ok()
         );
 
@@ -960,7 +977,7 @@ mod tests {
         };
         assert!(
             spelling_variant
-                .ensure_capability_policy_matches(
+                .sanitize_against(
                     &ContainerCapabilities {
                         add: vec!["NET_ADMIN".into(), "CAP_SYS_ADMIN".into()],
                         ..Default::default()
@@ -981,15 +998,12 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            restricted.ensure_capability_policy_matches(
-                &ContainerCapabilities::default(),
-                "baseline-box"
-            ),
+            restricted.sanitize_against(&ContainerCapabilities::default(), "baseline-box"),
             Err(boxlite_shared::errors::BoxliteError::InvalidArgument(_))
         ));
 
         assert!(matches!(
-            baseline.ensure_capability_policy_matches(
+            baseline.sanitize_against(
                 &ContainerCapabilities {
                     add: vec!["CAP_SYS_ADMIN".into()],
                     ..Default::default()

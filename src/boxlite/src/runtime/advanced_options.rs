@@ -620,8 +620,8 @@ impl ContainerCapabilities {
 
         Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
             format!(
-                "capability policy does not match existing box '{box_name}'; \
-                 get_or_create never changes an existing box's security policy"
+                "requested capability policy does not match the authoritative policy for box \
+                 '{box_name}'"
             ),
         ))
     }
