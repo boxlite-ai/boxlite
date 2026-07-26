@@ -5,7 +5,7 @@ use crate::runtime::layout::dirs as const_dirs;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::runtime::advanced_options::AdvancedBoxOptions;
@@ -343,6 +343,7 @@ impl KernelFormat {
 
     fn detect(path: &Path) -> BoxliteResult<Self> {
         const READ_SIZE: usize = 64 * 1024;
+        const HEADER_SCAN_LIMIT: u64 = 1024 * 1024;
         const MAX_MAGIC_LEN: usize = 4;
 
         let mut file = std::fs::File::open(path).map_err(|error| {
@@ -352,13 +353,17 @@ impl KernelFormat {
             ))
         })?;
         let mut prefix = [0_u8; 4];
-        let prefix_len = file.read(&mut prefix).map_err(|error| {
-            BoxliteError::Config(format!(
-                "failed to read custom kernel {}: {error}",
-                path.display()
-            ))
-        })?;
-        if prefix_len == prefix.len() && prefix == *b"\x7fELF" {
+        match file.read_exact(&mut prefix) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::UnexpectedEof => {}
+            Err(error) => {
+                return Err(BoxliteError::Config(format!(
+                    "failed to read custom kernel {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+        if prefix == *b"\x7fELF" {
             return Ok(Self::Elf);
         }
 
@@ -381,13 +386,16 @@ impl KernelFormat {
                 },
             ),
         ];
+        // Linux keeps the x86 setup code within 32 KiB. One MiB leaves ample
+        // headroom for PE stubs while preventing an Auto probe from reading an
+        // arbitrarily large caller-owned image.
+        let mut inspected = file.take(HEADER_SCAN_LIMIT);
         let mut buffer = vec![0_u8; READ_SIZE];
         let mut overlap = Vec::with_capacity(MAX_MAGIC_LEN - 1);
         let mut absolute_offset = 0_u64;
-        let mut earliest: Option<(u64, Self)> = None;
 
         loop {
-            let read = file.read(&mut buffer).map_err(|error| {
+            let read = inspected.read(&mut buffer).map_err(|error| {
                 BoxliteError::Config(format!(
                     "failed to inspect custom kernel {}: {error}",
                     path.display()
@@ -402,6 +410,7 @@ impl KernelFormat {
             window.extend_from_slice(&overlap);
             window.extend_from_slice(&buffer[..read]);
             let window_offset = absolute_offset.saturating_sub(overlap_len as u64);
+            let mut earliest: Option<(u64, Self)> = None;
 
             for (magic, format) in signatures {
                 if let Some(position) = window
@@ -414,6 +423,9 @@ impl KernelFormat {
                     }
                 }
             }
+            if let Some((_, format)) = earliest {
+                return Ok(format);
+            }
 
             let keep = window.len().min(MAX_MAGIC_LEN - 1);
             overlap.clear();
@@ -421,7 +433,7 @@ impl KernelFormat {
             absolute_offset += read as u64;
         }
 
-        Ok(earliest.map_or(Self::Raw, |(_, format)| format))
+        Ok(Self::Raw)
     }
 }
 
@@ -827,7 +839,7 @@ impl BoxOptions {
     /// - effective remove-on-stop (`auto_delete>0`, or deprecated `auto_remove`)
     ///   with `detach=true` is invalid
     /// - `advanced.isolate_mounts=true` is only supported on Linux
-    fn sanitize_common(&self) -> BoxliteResult<()> {
+    pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::Config(
                 "remove-on-stop is incompatible with detach=true. Detached boxes should use \
@@ -1063,6 +1075,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     fn custom_kernel_configuration_roundtrips() {
         let temp = tempfile::tempdir().unwrap();
         let kernel = temp.path().join("vmlinux");
@@ -1173,6 +1186,21 @@ mod tests {
         assert_eq!(format, KernelFormat::ImageGz);
         #[cfg(target_arch = "aarch64")]
         assert_eq!(format, KernelFormat::PeGz);
+    }
+
+    #[test]
+    fn custom_kernel_auto_detection_is_bounded_to_the_header() {
+        const EXPECTED_HEADER_LIMIT: usize = 1024 * 1024;
+
+        let temp = tempfile::tempdir().unwrap();
+        let kernel = temp.path().join("kernel-image");
+        let mut image = vec![0_u8; EXPECTED_HEADER_LIMIT];
+        image.extend_from_slice(b"\x1f\x8b\x08compressed-kernel");
+        std::fs::write(&kernel, image).unwrap();
+
+        let format = KernelOptions::new(kernel).resolve_format().unwrap();
+
+        assert_eq!(format, KernelFormat::Raw);
     }
 
     #[test]

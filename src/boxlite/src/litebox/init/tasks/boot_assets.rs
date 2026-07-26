@@ -274,6 +274,8 @@ impl BootAssetStore {
                 ))
             })?;
 
+            self.cleanup_after_publish(&generation);
+
             tracing::info!(
                 kernel_source = %kernel_source.display(),
                 initramfs_source = ?initramfs_source,
@@ -291,6 +293,79 @@ impl BootAssetStore {
             let _ = std::fs::remove_file(&manifest_staging);
         }
         result
+    }
+
+    fn cleanup_after_publish(&self, current_generation: &str) {
+        let boot_dir = self.layout.boot_dir();
+        let generations_dir = boot_dir.join(GENERATIONS_DIR);
+        self.prune_superseded_generations(&generations_dir, current_generation);
+        self.remove_legacy_assets(&boot_dir);
+    }
+
+    fn prune_superseded_generations(&self, generations_dir: &Path, current_generation: &str) {
+        let entries = match std::fs::read_dir(generations_dir) {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::warn!(
+                    path = %generations_dir.display(),
+                    %error,
+                    "Failed to inspect superseded boot asset generations"
+                );
+                return;
+            }
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %generations_dir.display(),
+                        %error,
+                        "Failed to inspect a boot asset generation"
+                    );
+                    continue;
+                }
+            };
+            if entry.file_name() == std::ffi::OsStr::new(current_generation) {
+                continue;
+            }
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %entry.path().display(),
+                        %error,
+                        "Failed to inspect a superseded boot asset generation"
+                    );
+                    continue;
+                }
+            };
+            if file_type.is_dir()
+                && let Err(error) = std::fs::remove_dir_all(entry.path())
+            {
+                tracing::warn!(
+                    path = %entry.path().display(),
+                    %error,
+                    "Failed to remove a superseded boot asset generation"
+                );
+            }
+        }
+    }
+
+    fn remove_legacy_assets(&self, boot_dir: &Path) {
+        for name in [LEGACY_KERNEL_FILE, LEGACY_INITRAMFS_FILE] {
+            let path = boot_dir.join(name);
+            match std::fs::remove_file(&path) {
+                Ok(()) => tracing::debug!(path = %path.display(), "Removed legacy boot asset"),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => tracing::warn!(
+                    path = %path.display(),
+                    %error,
+                    "Failed to remove legacy boot asset"
+                ),
+            }
+        }
     }
 }
 
@@ -429,6 +504,24 @@ mod tests {
     }
 
     #[test]
+    fn stage_prunes_superseded_generations_after_publishing_manifest() {
+        let (_temp, layout, configured, _kernel, _initramfs) = fixture();
+        let store = BootAssetStore::new(layout.clone());
+        let first = store.stage(&configured).unwrap();
+
+        let second = store.stage(&configured).unwrap();
+
+        assert_ne!(first.path, second.path);
+        assert!(!first.path.exists());
+        assert!(second.path.is_file());
+        let generations = std::fs::read_dir(layout.boot_dir().join(GENERATIONS_DIR))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(generations.len(), 1);
+    }
+
+    #[test]
     fn restart_reuses_generation_after_sources_are_removed() {
         let (_temp, layout, configured, kernel, initramfs) = fixture();
         let store = BootAssetStore::new(layout);
@@ -473,6 +566,8 @@ mod tests {
                 .path
                 .starts_with(layout.boot_dir().join(GENERATIONS_DIR))
         );
+        assert!(!layout.boot_dir().join(LEGACY_KERNEL_FILE).exists());
+        assert!(!layout.boot_dir().join(LEGACY_INITRAMFS_FILE).exists());
     }
 
     #[test]

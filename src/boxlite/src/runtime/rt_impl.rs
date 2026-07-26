@@ -1621,10 +1621,25 @@ fn reject_local_lifecycle_policy(options: &BoxOptions) -> BoxliteResult<()> {
     }
     Ok(())
 }
+
+async fn sanitize_local_options(options: BoxOptions) -> BoxliteResult<BoxOptions> {
+    tokio::task::spawn_blocking(move || {
+        options.sanitize()?;
+        Ok(options)
+    })
+    .await
+    .map_err(|error| {
+        BoxliteError::Internal(format!(
+            "failed to join box option validation task: {error}"
+        ))
+    })?
+}
+
 #[async_trait::async_trait]
 impl super::backend::RuntimeBackend for LocalRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
         reject_local_lifecycle_policy(&options)?;
+        let options = sanitize_local_options(options).await?;
         self.0.create(options, name).await
     }
 
@@ -1634,6 +1649,7 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
         reject_local_lifecycle_policy(&options)?;
+        let options = sanitize_local_options(options).await?;
         self.0.get_or_create(options, name).await
     }
 
