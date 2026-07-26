@@ -7,7 +7,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
-use super::super::types::{CreateBoxRequest, ListBoxesResponse, RemoveQuery};
+use super::super::types::{CreateBoxRequest, ListBoxesResponse, PortBindingsResponse, RemoveQuery};
 use super::super::{
     AppState, box_info_to_response, build_box_options, error_from_boxlite, error_response,
     get_or_fetch_box,
@@ -78,6 +78,21 @@ pub(in crate::commands::serve) async fn head_box(
         Ok(Some(_)) => StatusCode::NO_CONTENT.into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => error_from_boxlite(&e),
+    }
+}
+
+pub(in crate::commands::serve) async fn get_port_bindings(
+    State(state): State<Arc<AppState>>,
+    Path(box_id): Path<String>,
+) -> Response {
+    let litebox = match get_or_fetch_box(&state, &box_id).await {
+        Ok(box_handle) => box_handle,
+        Err(response) => return response,
+    };
+
+    match litebox.port_bindings().await {
+        Ok(ports) => Json(PortBindingsResponse { ports }).into_response(),
+        Err(error) => error_from_boxlite(&error),
     }
 }
 

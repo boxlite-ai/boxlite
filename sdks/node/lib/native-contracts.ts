@@ -342,6 +342,7 @@ export interface JsBox {
   readonly id: string;
   readonly name: string | null;
   info(): JsBoxInfo;
+  portBindings(): Promise<JsPortSpec[]>;
   exec(
     command: string,
     args?: string[] | null,

@@ -25,7 +25,7 @@
 
 use crate::jailer::common;
 use crate::runtime::advanced_options::ResourceLimits;
-use crate::util::{PidFileWriter, PidRecord};
+use crate::util::{PidFileWriter, ShimPidRecord};
 use std::os::fd::RawFd;
 use std::process::Command;
 
@@ -109,7 +109,7 @@ pub fn add_pre_exec_hook(
             // 3. Write PID file
             if let Some(ref writer) = pid_writer {
                 writer
-                    .write(&PidRecord::current())
+                    .write_shim(&ShimPidRecord::current())
                     .map_err(std::io::Error::from_raw_os_error)?;
             }
 
@@ -145,6 +145,39 @@ mod tests {
         let limits = ResourceLimits::default();
         let writer = PidFileWriter::at(std::path::Path::new("/tmp/test.pid")).ok();
         add_pre_exec_hook(&mut cmd, limits, writer, vec![], false);
+    }
+
+    #[test]
+    fn pre_exec_pid_record_declares_runtime_port_control() {
+        use std::os::fd::AsRawFd;
+
+        let dir = tempfile::tempdir().expect("create temp directory");
+        let pid_path = dir.path().join("shim.pid");
+        let writer = PidFileWriter::at(&pid_path).expect("create PID writer");
+        let keepalive = std::fs::File::open("/dev/null").expect("open preserved descriptor");
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "true"]);
+
+        add_pre_exec_hook(
+            &mut cmd,
+            ResourceLimits::default(),
+            Some(writer),
+            // Keep the test harness's private Command error pipe below the
+            // cleanup boundary. Production supplies its own preserved transport
+            // descriptors; this stand-in otherwise has none.
+            vec![(keepalive.as_raw_fd(), 1023)],
+            false,
+        );
+        let status = cmd.status().expect("spawn child with pre-exec hook");
+        assert!(status.success());
+
+        let contents = std::fs::read_to_string(pid_path).expect("read shim PID record");
+        assert_eq!(
+            contents.lines().nth(2),
+            Some("services-mux-v1"),
+            "the spawn boundary must identify ServicesMux ownership before the parent can recover \
+             the live shim"
+        );
     }
 
     #[test]

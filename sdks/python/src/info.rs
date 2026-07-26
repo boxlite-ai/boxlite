@@ -1,5 +1,21 @@
+use boxlite::runtime::options::{PortProtocol, PortSpec};
 use boxlite::{BoxInfo, BoxStateInfo, BoxStatus, HealthState as CoreHealthState};
 use pyo3::prelude::*;
+
+pub(crate) type PyPortBinding = (Option<u16>, u16, String, Option<String>);
+
+pub(crate) fn port_binding_from_spec(port: PortSpec) -> PyPortBinding {
+    let protocol = match port.protocol {
+        PortProtocol::Tcp => "tcp",
+        PortProtocol::Udp => "udp",
+    };
+    (
+        port.host_port,
+        port.guest_port,
+        protocol.to_string(),
+        port.host_ip,
+    )
+}
 
 // ============================================================================
 // HealthState - Health check state enumeration
@@ -177,7 +193,7 @@ pub(crate) struct PyBoxInfo {
     #[pyo3(get)]
     pub(crate) memory_mib: u32,
     #[pyo3(get)]
-    pub(crate) ports: Vec<(Option<u16>, u16, String, Option<String>)>,
+    pub(crate) ports: Vec<PyPortBinding>,
     #[pyo3(get)]
     pub(crate) auto_pause: u32,
     #[pyo3(get)]
@@ -235,22 +251,7 @@ impl From<BoxInfo> for PyBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
-            ports: info
-                .ports
-                .into_iter()
-                .map(|port| {
-                    let protocol = match port.protocol {
-                        boxlite::runtime::options::PortProtocol::Tcp => "tcp",
-                        boxlite::runtime::options::PortProtocol::Udp => "udp",
-                    };
-                    (
-                        port.host_port,
-                        port.guest_port,
-                        protocol.to_string(),
-                        port.host_ip,
-                    )
-                })
-                .collect(),
+            ports: info.ports.into_iter().map(port_binding_from_spec).collect(),
             auto_pause: info.auto_pause,
             auto_delete: info.auto_delete,
             auto_resume: info.auto_resume,

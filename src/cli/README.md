@@ -471,6 +471,14 @@ boxlite inspect --latest -f yaml
 boxlite inspect box1 box2 -f json
 ```
 
+### `boxlite port`
+
+Display active host-to-guest port bindings with resolved host ports.
+
+**Usage:** `boxlite port BOX`
+
+Each binding is printed on its own line, for example
+`127.0.0.1:49152->3000/tcp`. Stopped boxes print no bindings.
 
 ### `boxlite images`
 

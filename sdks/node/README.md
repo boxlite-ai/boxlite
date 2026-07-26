@@ -214,6 +214,7 @@ console.log(pwdResult.stdout); // "/tmp\n"
 console.log(box.id);    // ULID
 console.log(box.name);  // Optional name
 console.log(box.info()); // Metadata
+console.log(await box.portBindings()); // Active mappings with resolved host ports
 
 // Cleanup
 await box.stop();

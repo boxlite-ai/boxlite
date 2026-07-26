@@ -503,6 +503,14 @@ export class SimpleBox {
   }
 
   /**
+   * Return active host-to-guest bindings with resolved host ports.
+   */
+  async portBindings() {
+    const box = await this._ensureBox();
+    return box.portBindings();
+  }
+
+  /**
    * Execute a command in the box and collect the output.
    *
    * This is a convenience method that:

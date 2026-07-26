@@ -12,15 +12,15 @@
 //! Starting (new box):
 //! - Stage 1 (sequential): [Filesystem]
 //! - Stage 2 (parallel):   [ContainerRootfs, GuestRootfs]
-//! - Stage 3 (sequential): [VmmSpawn, GuestConnect, GuestInit]
+//! - Stage 3 (sequential): [VmmSpawn, GuestConnect, PortPublish, GuestInit]
 //!
 //! Stopped (restart):
 //! - Stage 1 (sequential): [Filesystem]
 //! - Stage 2 (parallel):   [ContainerRootfs, GuestRootfs]
-//! - Stage 3 (sequential): [VmmSpawn, GuestConnect]
+//! - Stage 3 (sequential): [VmmSpawn, GuestConnect, PortPublish, GuestInit]
 //!
 //! Running (reattach):
-//! - Stage 1 (sequential): [VmmAttach, GuestConnect]
+//! - Stage 1 (sequential): [VmmAttach, GuestConnect, PortPublish]
 //! ```
 
 mod container_rootfs;
@@ -29,6 +29,7 @@ mod guest_connect;
 mod guest_entrypoint;
 mod guest_init;
 mod guest_rootfs;
+mod port_publish;
 mod vmm_attach;
 mod vmm_spawn;
 
@@ -55,5 +56,6 @@ pub use filesystem::FilesystemTask;
 pub use guest_connect::GuestConnectTask;
 pub use guest_init::GuestInitTask;
 pub use guest_rootfs::GuestRootfsTask;
+pub use port_publish::PortPublishTask;
 pub use vmm_attach::VmmAttachTask;
 pub use vmm_spawn::VmmSpawnTask;

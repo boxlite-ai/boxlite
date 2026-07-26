@@ -1822,6 +1822,15 @@ mod tests {
         (pid, child)
     }
 
+    struct ChildGuard(std::process::Child);
+
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
     /// Spawn a process that ignores SIGTERM (for force-kill testing).
     fn spawn_sigterm_ignoring_process() -> (u32, std::process::Child) {
         let child = std::process::Command::new("sh")
@@ -2372,6 +2381,43 @@ mod tests {
         }
         let st = crate::util::process_start_time(pid).expect("OS reports start_time");
         std::fs::write(pid_file, format!("{pid}\n{st}\n")).expect("write shim.pid");
+    }
+
+    #[test]
+    fn test_recovery_promotes_configured_box_with_verified_live_shim() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, child) = spawn_dummy_process();
+        let child = ChildGuard(child);
+        let config = test_box_config_in_layout(false, &runtime);
+        let state = BoxState::new();
+
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .expect("box_layout is infallible");
+        let pid_file = layout.pid_file_path();
+        write_pid_file_with_fingerprint(&pid_file, pid);
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        let (_, persisted_before) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
+        assert_eq!(persisted_before.status, BoxStatus::Configured);
+        assert!(persisted_before.pid.is_none());
+
+        runtime.recover_boxes().expect("Failed to recover boxes");
+
+        let (_, recovered) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
+        assert_eq!(recovered.status, BoxStatus::Running);
+        assert_eq!(recovered.pid, Some(pid));
+        assert!(
+            crate::util::is_process_alive(pid),
+            "Recovery must adopt, not stop, the verified live shim"
+        );
+
+        drop(child);
     }
 
     #[tokio::test]

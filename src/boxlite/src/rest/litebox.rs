@@ -27,7 +27,7 @@ use super::exec::RestExecControl;
 use super::types::{
     BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest, ExecRequest,
     ExecResponse, ExecutionStatusResponse, ExportBoxRequest, ListSnapshotsResponse,
-    SnapshotResponse,
+    PortBindingsResponse, SnapshotResponse,
 };
 
 /// REST-backed box handle.
@@ -117,6 +117,31 @@ impl BoxBackend for RestBox {
 
     fn info(&self) -> BoxInfo {
         self.cached_info.read().clone()
+    }
+
+    async fn port_bindings(&self) -> BoxliteResult<Vec<crate::runtime::options::PortSpec>> {
+        let box_id = self.box_id_str();
+        let ports_path = format!("/boxes/{box_id}/ports");
+
+        let ports = match self.client.get::<PortBindingsResponse>(&ports_path).await {
+            Ok(response) => response.ports,
+            // Box metadata has carried resolved ports since before the
+            // dedicated endpoint. Re-fetch it on a 404 so clients remain
+            // compatible with older servers without returning stale cache
+            // data when the box itself was removed.
+            Err(BoxliteError::NotFound(_)) => {
+                let box_path = format!("/boxes/{box_id}");
+                let response: BoxResponse = self.client.get(&box_path).await?;
+                let info = response.to_box_info()?;
+                let ports = info.ports.clone();
+                *self.cached_info.write() = info;
+                return Ok(ports);
+            }
+            Err(error) => return Err(error),
+        };
+
+        self.cached_info.write().ports = ports.clone();
+        Ok(ports)
     }
 
     async fn start(&self) -> BoxliteResult<()> {
@@ -1323,6 +1348,78 @@ mod tests {
         );
         let _ = stream.write_all(resp.as_bytes()).await;
         let _ = stream.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn port_bindings_refreshes_from_dedicated_endpoint() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let head = read_request_head(&mut stream).await;
+            write_status_response(
+                &mut stream,
+                r#"{"ports":[{"host_port":49152,"guest_port":3000,"protocol":"tcp","host_ip":"127.0.0.1"}]}"#,
+            )
+            .await;
+            String::from_utf8(head).unwrap()
+        });
+        let rest_box = rest_box_for(port, "box1");
+
+        let ports = rest_box.port_bindings().await.unwrap();
+
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].host_port, Some(49152));
+        assert_eq!(ports[0].guest_port, 3000);
+        assert_eq!(rest_box.info().ports, ports);
+        let request = server.await.unwrap();
+        assert!(
+            request.starts_with("GET /v1/boxes/box1/ports HTTP/1.1"),
+            "unexpected request: {request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn port_bindings_falls_back_to_box_metadata_for_older_server() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut first, _) = listener.accept().await.unwrap();
+            let first_head = read_request_head(&mut first).await;
+            first
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            first.shutdown().await.unwrap();
+
+            let (mut second, _) = listener.accept().await.unwrap();
+            let second_head = read_request_head(&mut second).await;
+            write_status_response(
+                &mut second,
+                r#"{"box_id":"box1","name":null,"status":"running",
+                    "created_at":"2026-07-14T00:00:00Z",
+                    "updated_at":"2026-07-14T00:00:00Z",
+                    "pid":null,"image":"alpine:latest","cpus":1,"memory_mib":512,
+                    "ports":[{"host_port":49153,"guest_port":8080,"protocol":"tcp","host_ip":null}]}"#,
+            )
+            .await;
+            (
+                String::from_utf8(first_head).unwrap(),
+                String::from_utf8(second_head).unwrap(),
+            )
+        });
+        let rest_box = rest_box_for(port, "box1");
+
+        let ports = rest_box.port_bindings().await.unwrap();
+
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].host_port, Some(49153));
+        assert_eq!(ports[0].guest_port, 8080);
+        let (first, second) = server.await.unwrap();
+        assert!(first.starts_with("GET /v1/boxes/box1/ports HTTP/1.1"));
+        assert!(second.starts_with("GET /v1/boxes/box1 HTTP/1.1"));
     }
 
     /// Stream wrapper that replays a buffered prefix before delegating to the

@@ -10,7 +10,7 @@ use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{BoxCommand, BoxTunnel, Execution, LiteBox};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
-    BoxArchive, BoxOptions, CloneOptions, ExportOptions, SnapshotOptions,
+    BoxArchive, BoxOptions, CloneOptions, ExportOptions, PortSpec, SnapshotOptions,
 };
 use crate::runtime::types::BoxInfo;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -74,6 +74,15 @@ pub(crate) trait BoxBackend: Send + Sync {
     fn name(&self) -> Option<&str>;
 
     fn info(&self) -> BoxInfo;
+
+    /// Return the active, resolved host-to-guest port bindings.
+    ///
+    /// Local backends persist these alongside the running box state, so the
+    /// metadata snapshot is authoritative. Remote backends may override this
+    /// to refresh the bindings from the server.
+    async fn port_bindings(&self) -> BoxliteResult<Vec<PortSpec>> {
+        Ok(self.info().ports)
+    }
 
     async fn start(&self) -> BoxliteResult<()>;
 

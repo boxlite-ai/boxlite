@@ -3,7 +3,6 @@
 //! This module provides a safe, RAII-style wrapper around gvproxy instances.
 //! Instances are automatically cleaned up when dropped.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -46,21 +45,18 @@ use super::stats::NetworkStats;
 pub struct GvproxyInstance {
     id: i64,
     socket_path: PathBuf,
-    resolved_port_mappings: Vec<crate::runtime::options::PortSpec>,
 }
 
 impl GvproxyInstance {
-    /// Create a new gvproxy instance with the given socket path and port mappings
+    /// Create a new gvproxy instance with the given socket path.
     ///
     /// This automatically initializes the logging bridge on first use.
     ///
     /// # Arguments
     ///
     /// * `socket_path` - Caller-provided Unix socket path (must be unique per box)
-    /// * `port_mappings` - Requested host-to-guest TCP forwards
     pub(crate) fn new(
         socket_path: PathBuf,
-        port_mappings: &[crate::runtime::options::PortSpec],
         allow_net: Vec<String>,
         secrets: Vec<super::config::GvproxySecretConfig>,
         ca_cert_pem: Option<&str>,
@@ -72,8 +68,7 @@ impl GvproxyInstance {
         // Derive gvproxy's control socket as a sibling of the data socket, so the
         // path is never plumbed through neutral config/layout/socket types.
         let control_socket_path = super::control_socket_path(&socket_path);
-        let mut config = super::config::GvproxyConfig::new(socket_path.clone(), Vec::new())
-            .with_port_specs(port_mappings)
+        let mut config = super::config::GvproxyConfig::new(socket_path.clone())
             .with_control_socket_path(control_socket_path)
             .with_allow_net(allow_net)
             .with_secrets(secrets);
@@ -83,21 +78,10 @@ impl GvproxyInstance {
         }
 
         let id = ffi::create_instance(&config)?;
-        let resolved_port_mappings = match ffi::get_resolved_port_mappings(id) {
-            Ok(mappings) => mappings,
-            Err(error) => {
-                let _ = ffi::destroy_instance(id);
-                return Err(error);
-            }
-        };
 
         tracing::info!(id, ?socket_path, "Created GvproxyInstance");
 
-        Ok(Self {
-            id,
-            socket_path,
-            resolved_port_mappings,
-        })
+        Ok(Self { id, socket_path })
     }
 
     /// Unix socket path for the network tap interface.
@@ -120,7 +104,6 @@ impl GvproxyInstance {
         let secrets = spec.secrets.iter().map(Into::into).collect();
         let instance = Self::new(
             spec.socket_path.clone(),
-            &spec.port_mappings,
             spec.allow_net.clone(),
             secrets,
             spec.ca_cert_pem.as_deref(),
@@ -199,45 +182,6 @@ impl GvproxyInstance {
     pub fn id(&self) -> i64 {
         self.id
     }
-
-    /// Actual host endpoints held by this instance.
-    pub fn resolved_port_mappings(&self) -> &[crate::runtime::options::PortSpec] {
-        &self.resolved_port_mappings
-    }
-
-    /// Atomically persist the resolved mapping snapshot for existing info/list
-    /// surfaces. The shim owns this write because it owns the listeners.
-    pub fn persist_resolved_port_mappings(&self, path: &Path) -> BoxliteResult<()> {
-        let parent = path.parent().ok_or_else(|| {
-            BoxliteError::Storage(format!(
-                "resolved port mapping path has no parent: {}",
-                path.display()
-            ))
-        })?;
-        std::fs::create_dir_all(parent)?;
-
-        let temporary = path.with_extension(format!("tmp.{}.{}", std::process::id(), self.id));
-        match std::fs::remove_file(&temporary) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-
-        let mut file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)?;
-        serde_json::to_writer(&mut file, &self.resolved_port_mappings).map_err(|error| {
-            BoxliteError::Storage(format!(
-                "serialize resolved port mappings for {}: {error}",
-                path.display()
-            ))
-        })?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, path)?;
-        Ok(())
-    }
 }
 
 impl Drop for GvproxyInstance {
@@ -261,16 +205,6 @@ unsafe impl Send for GvproxyInstance {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::options::{PortProtocol, PortSpec};
-
-    fn fixed_port(host_port: u16, guest_port: u16) -> PortSpec {
-        PortSpec {
-            host_port: Some(host_port),
-            guest_port,
-            protocol: PortProtocol::Tcp,
-            host_ip: None,
-        }
-    }
 
     #[test]
     #[ignore] // Requires libgvproxy.dylib to be available
@@ -284,15 +218,8 @@ mod tests {
     #[ignore] // Requires libgvproxy.dylib to be available
     fn test_gvproxy_create_destroy() {
         let socket_path = PathBuf::from("/tmp/test-gvproxy-instance.sock");
-        let instance = GvproxyInstance::new(
-            socket_path.clone(),
-            &[fixed_port(8080, 80), fixed_port(8443, 443)],
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-        )
-        .unwrap();
+        let instance =
+            GvproxyInstance::new(socket_path.clone(), Vec::new(), Vec::new(), None, None).unwrap();
 
         // Socket path matches what we provided
         assert_eq!(instance.socket_path(), socket_path);
@@ -306,24 +233,10 @@ mod tests {
         let path1 = PathBuf::from("/tmp/test-gvproxy-1.sock");
         let path2 = PathBuf::from("/tmp/test-gvproxy-2.sock");
 
-        let instance1 = GvproxyInstance::new(
-            path1.clone(),
-            &[fixed_port(8080, 80)],
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-        )
-        .unwrap();
-        let instance2 = GvproxyInstance::new(
-            path2.clone(),
-            &[fixed_port(9090, 90)],
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-        )
-        .unwrap();
+        let instance1 =
+            GvproxyInstance::new(path1.clone(), Vec::new(), Vec::new(), None, None).unwrap();
+        let instance2 =
+            GvproxyInstance::new(path2.clone(), Vec::new(), Vec::new(), None, None).unwrap();
 
         assert_ne!(instance1.id(), instance2.id());
         assert_ne!(instance1.socket_path(), instance2.socket_path());

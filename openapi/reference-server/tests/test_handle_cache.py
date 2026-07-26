@@ -182,6 +182,41 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_get_box_ports_returns_active_port_bindings(self) -> None:
+        handle = _make_box_handle("box-ports")
+        handle.port_bindings = AsyncMock(
+            return_value=[
+                (49152, 3000, "tcp", "127.0.0.1"),
+                (49153, 8080, "tcp", None),
+            ]
+        )
+        runtime = SimpleNamespace(get=AsyncMock(return_value=handle))
+        SERVER.state.runtime = runtime
+
+        response = await SERVER.get_box_ports("demo", "box-ports", _auth={})
+
+        self.assertEqual(
+            response,
+            {
+                "ports": [
+                    {
+                        "host_port": 49152,
+                        "guest_port": 3000,
+                        "protocol": "tcp",
+                        "host_ip": "127.0.0.1",
+                    },
+                    {
+                        "host_port": 49153,
+                        "guest_port": 8080,
+                        "protocol": "tcp",
+                        "host_ip": None,
+                    },
+                ]
+            },
+        )
+        runtime.get.assert_awaited_once_with("box-ports")
+        handle.port_bindings.assert_awaited_once_with()
+
     async def test_clone_box_caches_cloned_handle(self) -> None:
         source = _make_box_handle("box-source")
         cloned = _make_box_handle("box-cloned")

@@ -15,17 +15,17 @@ use std::os::raw::{c_char, c_int, c_longlong, c_void};
 pub type LogCallbackFn = extern "C" fn(level: c_int, message: *const c_char);
 
 extern "C" {
-    /// Create a new gvproxy instance with port mappings
+    /// Create a new gvproxy instance from its JSON configuration.
     ///
     /// # Arguments
-    /// * `portMappingsJSON` - JSON string describing port mappings
+    /// * `config_json` - JSON string describing the gvproxy configuration
     /// * `errOut` - On failure, receives a heap-allocated C string with the
     ///   underlying error message. Caller must free via `gvproxy_free_string`.
     ///   Pass null to discard the message.
     ///
     /// # Returns
     /// Instance ID (handle) or -1 on error
-    pub fn gvproxy_create(portMappingsJSON: *const c_char, errOut: *mut *mut c_char) -> c_longlong;
+    pub fn gvproxy_create(config_json: *const c_char, errOut: *mut *mut c_char) -> c_longlong;
 
     /// Free a string allocated by libgvproxy
     ///
@@ -66,12 +66,6 @@ extern "C" {
     /// - Returned pointer must be freed with gvproxy_free_string
     /// - Do not use pointer after calling gvproxy_free_string
     pub fn gvproxy_get_stats(id: c_longlong) -> *mut c_char;
-
-    /// Get the resolved host port mappings for an instance as JSON.
-    ///
-    /// Automatic host ports are returned as their actual non-zero values.
-    /// The returned string must be freed with `gvproxy_free_string`.
-    pub fn gvproxy_get_resolved_port_mappings(id: c_longlong) -> *mut c_char;
 
     /// Get the libgvproxy version string
     ///

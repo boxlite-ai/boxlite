@@ -327,6 +327,18 @@ async def require_auth(
 # ============================================================================
 
 
+def port_bindings_to_dict(ports) -> list[dict]:
+    return [
+        {
+            "host_port": host_port,
+            "guest_port": guest_port,
+            "protocol": protocol,
+            "host_ip": host_ip,
+        }
+        for host_port, guest_port, protocol, host_ip in ports
+    ]
+
+
 def box_info_to_dict(info) -> dict:
     return {
         "box_id": info.id,
@@ -338,15 +350,7 @@ def box_info_to_dict(info) -> dict:
         "image": info.image,
         "cpus": info.cpus,
         "memory_mib": info.memory_mib,
-        "ports": [
-            {
-                "host_port": host_port,
-                "guest_port": guest_port,
-                "protocol": protocol,
-                "host_ip": host_ip,
-            }
-            for host_port, guest_port, protocol, host_ip in info.ports
-        ],
+        "ports": port_bindings_to_dict(info.ports),
         "labels": {},
     }
 
@@ -619,6 +623,17 @@ async def get_box(
     if info is None:
         return error_response(404, f"box not found: {box_id}", "NotFoundError")
     return box_info_to_dict(info)
+
+
+@app.get("/v1/{prefix}/boxes/{box_id}/ports")
+async def get_box_ports(
+    prefix: str,
+    box_id: str,
+    _auth: dict = Depends(require_auth),
+):
+    box_handle = await get_box_or_404(box_id)
+    ports = await box_handle.port_bindings()
+    return {"ports": port_bindings_to_dict(ports)}
 
 
 @app.head("/v1/{prefix}/boxes/{box_id}")

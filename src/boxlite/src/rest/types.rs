@@ -319,6 +319,11 @@ pub(crate) struct ListBoxesResponse {
     pub next_page_token: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct PortBindingsResponse {
+    pub ports: Vec<crate::runtime::options::PortSpec>,
+}
+
 // ============================================================================
 // Named volumes (`/v1/volumes`)
 // ============================================================================

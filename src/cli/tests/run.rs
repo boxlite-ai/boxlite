@@ -485,6 +485,59 @@ fn test_run_with_publish_success() {
 }
 
 #[test]
+fn test_run_with_automatic_publish_reports_concrete_port() {
+    let mut ctx = common::boxlite();
+    let name = "run-auto-publish";
+    ctx.cmd.args([
+        "run",
+        "-d",
+        "--name",
+        name,
+        "-p",
+        "18789",
+        "alpine:latest",
+        "sleep",
+        "300",
+    ]);
+
+    let assert = ctx.cmd.assert().success();
+    let box_id = String::from_utf8_lossy(&assert.get_output().stdout)
+        .trim()
+        .to_owned();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    let mapping = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("Port "))
+        .expect("detached run must report its resolved binding");
+    let host_port = mapping
+        .strip_prefix("0.0.0.0:")
+        .and_then(|mapping| mapping.split_once("->18789/tcp"))
+        .map(|(host_port, _)| host_port)
+        .expect("resolved binding must use the expected mapping shape")
+        .parse::<u16>()
+        .expect("resolved host port must be numeric");
+    assert_ne!(host_port, 0, "automatic publication must resolve port 0");
+
+    // Force reattachment to recover the binding from gvproxy's live control
+    // plane rather than accepting the snapshot written by the first process.
+    let snapshot = ctx
+        .home
+        .join("boxes")
+        .join(box_id)
+        .join("logs")
+        .join("resolved-ports.json");
+    std::fs::remove_file(snapshot).expect("detached run must persist resolved port bindings");
+
+    ctx.new_cmd()
+        .args(["port", name])
+        .assert()
+        .success()
+        .stdout(format!("0.0.0.0:{host_port}->18789/tcp\n"));
+
+    ctx.cleanup_box(name);
+}
+
+#[test]
 fn test_run_with_publish_short_flag() {
     let mut ctx = common::boxlite();
     let host_port = free_host_port();

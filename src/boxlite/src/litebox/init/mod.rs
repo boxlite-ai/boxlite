@@ -11,7 +11,8 @@
 //!      GuestRootfs     ─┘   (prepare guest, create COW disk)
 //!   3. VmmSpawn             (build config + spawn VM)
 //!   4. GuestConnect         (wait for guest ready)
-//!   5. GuestInit            (initialize container)
+//!   5. PortPublish          (publish configured host ports)
+//!   6. GuestInit            (initialize container)
 //!
 //! Stopped (restart):
 //!   1. Filesystem           (load existing layout)
@@ -19,11 +20,13 @@
 //!      GuestRootfs     ─┘   (reuse existing COW disk)
 //!   3. VmmSpawn             (build config + spawn NEW VM)
 //!   4. GuestConnect         (wait for guest ready)
-//!   5. GuestInit            (re-initialize container in new VM)
+//!   5. PortPublish          (republish configured host ports)
+//!   6. GuestInit            (re-initialize container in new VM)
 //!
 //! Running (reattach):
 //!   1. VmmAttach            (attach to running VM)
 //!   2. GuestConnect         (reconnect to guest)
+//!   3. PortPublish          (reconcile publication after a core crash)
 //! ```
 //!
 //! `CleanupGuard` provides RAII cleanup on failure.
@@ -47,7 +50,7 @@ use tokio::sync::Mutex;
 
 use tasks::{
     ContainerRootfsTask, FilesystemTask, GuestConnectTask, GuestInitTask, GuestRootfsTask, InitCtx,
-    VmmAttachTask, VmmSpawnTask,
+    PortPublishTask, VmmAttachTask, VmmSpawnTask,
 };
 use types::InitPipelineContext;
 
@@ -75,6 +78,7 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
             Stage::sequential(vec![Box::new(VmmSpawnTask)]),
             // Phase 4: Connect to guest and initialize container
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
+            Stage::sequential(vec![Box::new(PortPublishTask)]),
             Stage::sequential(vec![Box::new(GuestInitTask)]),
         ],
         // Stopped and Failed both run the restart pipeline. A Failed box
@@ -90,14 +94,17 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
             ]),
             Stage::sequential(vec![Box::new(VmmSpawnTask)]),
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
+            Stage::sequential(vec![Box::new(PortPublishTask)]),
             // GuestInit must run - new VM process has fresh guest daemon
             Stage::sequential(vec![Box::new(GuestInitTask)]),
         ],
         BoxStatus::Running => vec![
             // Reattach: vmm_attach gates on ProcessIdentity AND surfaces
-            // any crash via exit_file, then connect to guest.
+            // any crash via exit_file, then connect to guest and reconcile
+            // any publication interrupted by a prior core-process crash.
             Stage::sequential(vec![Box::new(VmmAttachTask)]),
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
+            Stage::sequential(vec![Box::new(PortPublishTask)]),
         ],
         other => {
             return Err(BoxliteError::InvalidState(format!(
@@ -295,5 +302,47 @@ impl BoxBuilder {
                 Err(e)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task_names(status: BoxStatus) -> Vec<String> {
+        get_execution_plan(status)
+            .unwrap()
+            .stages()
+            .into_iter()
+            .flat_map(|stage| stage.tasks)
+            .map(|task| task.name().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn fresh_and_restart_plans_publish_after_guest_connect() {
+        for status in [BoxStatus::Configured, BoxStatus::Stopped, BoxStatus::Failed] {
+            let names = task_names(status);
+            let connect = names
+                .iter()
+                .position(|name| name == "guest_connect")
+                .unwrap();
+            let publish = names
+                .iter()
+                .position(|name| name == "port_publish")
+                .unwrap();
+            let init = names.iter().position(|name| name == "guest_init").unwrap();
+
+            assert_eq!(publish, connect + 1, "{status}");
+            assert_eq!(init, publish + 1, "{status}");
+        }
+    }
+
+    #[test]
+    fn running_reattach_reconciles_ports_without_reinitializing_guest() {
+        assert_eq!(
+            task_names(BoxStatus::Running),
+            ["vmm_attach", "guest_connect", "port_publish"]
+        );
     }
 }

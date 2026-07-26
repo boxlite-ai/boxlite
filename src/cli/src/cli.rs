@@ -84,6 +84,9 @@ pub enum Commands {
     /// Display detailed information on a box
     Inspect(crate::commands::inspect::InspectArgs),
 
+    /// Display active port bindings for a box
+    Port(crate::commands::port::PortArgs),
+
     /// Copy files/folders between host and box
     Cp(crate::commands::cp::CpArgs),
 
@@ -1366,6 +1369,15 @@ mod tests {
     fn tunnel_rejects_port_zero_at_parse() {
         let result = Cli::try_parse_from(["boxlite", "tunnel", "mybox", "0"]);
         assert!(result.is_err(), "port 0 must be rejected by the parser");
+    }
+
+    #[test]
+    fn port_parses_box() {
+        let cli = Cli::try_parse_from(["boxlite", "port", "mybox"]).expect("parse");
+        let Commands::Port(args) = cli.command else {
+            panic!("expected Commands::Port");
+        };
+        assert_eq!(args.target, "mybox");
     }
 
     #[test]

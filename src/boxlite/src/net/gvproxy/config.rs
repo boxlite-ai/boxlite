@@ -27,30 +27,6 @@ pub struct DnsRecord {
     pub ip: String,
 }
 
-/// Port mapping configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PortMapping {
-    /// Host port to bind. Zero asks the OS to select an available port.
-    pub host_port: u16,
-    /// Guest port to forward to
-    pub guest_port: u16,
-    /// Transport protocol.
-    pub protocol: crate::runtime::options::PortProtocol,
-    /// Host bind address. `None` binds all IPv4 interfaces.
-    pub host_ip: Option<String>,
-}
-
-impl From<&crate::runtime::options::PortSpec> for PortMapping {
-    fn from(spec: &crate::runtime::options::PortSpec) -> Self {
-        Self {
-            host_port: spec.host_port.unwrap_or(0),
-            guest_port: spec.guest_port,
-            protocol: spec.protocol,
-            host_ip: spec.host_ip.clone(),
-        }
-    }
-}
-
 /// Network configuration for gvproxy instance
 ///
 /// This structure encapsulates all configuration needed to create a gvproxy
@@ -90,9 +66,6 @@ pub struct GvproxyConfig {
 
     /// MTU for the virtual network
     pub mtu: u16,
-
-    /// Port mappings: (host_port, guest_port)
-    pub port_mappings: Vec<PortMapping>,
 
     /// Local DNS zones for the gateway's embedded DNS server
     pub dns_zones: Vec<DnsZone>,
@@ -152,7 +125,6 @@ impl std::fmt::Debug for GvproxyConfig {
             .field("host_ip", &self.host_ip)
             .field("guest_mac", &self.guest_mac)
             .field("mtu", &self.mtu)
-            .field("port_mappings", &self.port_mappings)
             .field("dns_zones", &self.dns_zones)
             .field("dns_search_domains", &self.dns_search_domains)
             .field("debug", &self.debug)
@@ -207,7 +179,6 @@ fn defaults_with_socket_path(socket_path: PathBuf) -> GvproxyConfig {
         host_ip: HOST_IP.to_string(),
         guest_mac: GUEST_MAC_STRING.to_string(),
         mtu: DEFAULT_MTU,
-        port_mappings: Vec::new(),
         dns_zones: vec![boxlite_internal_dns_zone()],
         dns_search_domains: DNS_SEARCH_DOMAINS.iter().map(|s| s.to_string()).collect(),
         debug: false,
@@ -234,27 +205,15 @@ fn boxlite_internal_dns_zone() -> DnsZone {
 }
 
 impl GvproxyConfig {
-    /// Create a new configuration with the given socket path and port mappings
+    /// Create a new configuration with the given socket path.
     ///
     /// Uses default values for all other network settings.
     ///
     /// # Arguments
     ///
     /// * `socket_path` - Caller-provided Unix socket path (must be unique per box)
-    /// * `port_mappings` - List of (host_port, guest_port) tuples
-    pub fn new(socket_path: PathBuf, port_mappings: Vec<(u16, u16)>) -> Self {
-        let mut config = Self {
-            port_mappings: port_mappings
-                .into_iter()
-                .map(|(host_port, guest_port)| PortMapping {
-                    host_port,
-                    guest_port,
-                    protocol: crate::runtime::options::PortProtocol::Tcp,
-                    host_ip: None,
-                })
-                .collect(),
-            ..defaults_with_socket_path(socket_path)
-        };
+    pub fn new(socket_path: PathBuf) -> Self {
+        let mut config = defaults_with_socket_path(socket_path);
 
         // Check environment variable for capture file
         if let Ok(capture_file) = std::env::var("BOXLITE_NET_CAPTURE_FILE")
@@ -274,12 +233,6 @@ impl GvproxyConfig {
         }
 
         config
-    }
-
-    /// Replace tuple mappings with the full public port specification.
-    pub fn with_port_specs(mut self, port_mappings: &[crate::runtime::options::PortSpec]) -> Self {
-        self.port_mappings = port_mappings.iter().map(PortMapping::from).collect();
-        self
     }
 
     /// Enable debug logging
@@ -320,7 +273,7 @@ impl GvproxyConfig {
     /// use boxlite::net::gvproxy::GvproxyConfig;
     /// use std::path::PathBuf;
     ///
-    /// let config = GvproxyConfig::new(PathBuf::from("/tmp/network.sock"), vec![(8080, 80)])
+    /// let config = GvproxyConfig::new(PathBuf::from("/tmp/network.sock"))
     ///     .with_capture_file("/tmp/network.pcap".to_string());
     /// ```
     pub fn with_capture_file(mut self, capture_file: String) -> Self {
@@ -359,7 +312,7 @@ mod tests {
 
     #[test]
     fn test_new_config_defaults() {
-        let config = GvproxyConfig::new(test_socket_path(), vec![]);
+        let config = GvproxyConfig::new(test_socket_path());
         assert_eq!(config.socket_path, test_socket_path());
         assert_eq!(config.subnet, "192.168.127.0/24");
         assert_eq!(config.gateway_ip, "192.168.127.1");
@@ -380,16 +333,8 @@ mod tests {
     }
 
     #[test]
-    fn test_new_with_port_mappings() {
-        let config = GvproxyConfig::new(test_socket_path(), vec![(8080, 80), (8443, 443)]);
-        assert_eq!(config.port_mappings.len(), 2);
-        assert_eq!(config.port_mappings[0].host_port, 8080);
-        assert_eq!(config.port_mappings[0].guest_port, 80);
-    }
-
-    #[test]
     fn test_builder_pattern() {
-        let config = GvproxyConfig::new(test_socket_path(), vec![(8080, 80)])
+        let config = GvproxyConfig::new(test_socket_path())
             .with_debug(true)
             .with_mtu(9000);
 
@@ -399,20 +344,19 @@ mod tests {
 
     #[test]
     fn test_serialization() {
-        let config = GvproxyConfig::new(test_socket_path(), vec![(8080, 80)]);
+        let config = GvproxyConfig::new(test_socket_path());
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: GvproxyConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config.subnet, deserialized.subnet);
         assert_eq!(config.socket_path, deserialized.socket_path);
         assert_eq!(config.host_ip, deserialized.host_ip);
-        assert_eq!(config.port_mappings.len(), deserialized.port_mappings.len());
         assert_eq!(config.dns_zones, deserialized.dns_zones);
     }
 
     #[test]
     fn test_capture_file_builder() {
-        let config = GvproxyConfig::new(test_socket_path(), vec![(8080, 80)])
-            .with_capture_file("/tmp/test.pcap".to_string());
+        let config =
+            GvproxyConfig::new(test_socket_path()).with_capture_file("/tmp/test.pcap".to_string());
 
         assert_eq!(config.capture_file, Some("/tmp/test.pcap".to_string()));
     }
@@ -420,7 +364,7 @@ mod tests {
     #[test]
     fn test_capture_file_serialization() {
         // Without capture file - should not include field in JSON
-        let config = GvproxyConfig::new(test_socket_path(), vec![(8080, 80)]);
+        let config = GvproxyConfig::new(test_socket_path());
         let json = serde_json::to_string(&config).unwrap();
         assert!(!json.contains("capture_file"));
 
@@ -440,7 +384,7 @@ mod tests {
 
     #[test]
     fn test_new_config_no_capture_by_default() {
-        let config = GvproxyConfig::new(test_socket_path(), vec![]);
+        let config = GvproxyConfig::new(test_socket_path());
         assert_eq!(config.capture_file, None);
     }
 
@@ -451,7 +395,7 @@ mod tests {
         // which was the root cause of the socket collision bug.
 
         let socket_path = PathBuf::from("/home/user/.boxlite/boxes/my-box/sockets/net.sock");
-        let config = GvproxyConfig::new(socket_path.clone(), vec![(8080, 80)]);
+        let config = GvproxyConfig::new(socket_path.clone());
 
         let json = serde_json::to_string(&config).unwrap();
 
@@ -497,8 +441,7 @@ mod tests {
     fn test_gvproxy_config_with_secrets() {
         let secret = test_secret();
         let gvproxy_secret = GvproxySecretConfig::from(&secret);
-        let config = GvproxyConfig::new(test_socket_path(), vec![(8080, 80)])
-            .with_secrets(vec![gvproxy_secret]);
+        let config = GvproxyConfig::new(test_socket_path()).with_secrets(vec![gvproxy_secret]);
         assert_eq!(config.secrets.len(), 1);
         assert_eq!(config.secrets[0].name, "openai");
     }
@@ -507,8 +450,7 @@ mod tests {
     fn test_gvproxy_config_secrets_serialization() {
         let secret = test_secret();
         let gvproxy_secret = GvproxySecretConfig::from(&secret);
-        let config =
-            GvproxyConfig::new(test_socket_path(), vec![]).with_secrets(vec![gvproxy_secret]);
+        let config = GvproxyConfig::new(test_socket_path()).with_secrets(vec![gvproxy_secret]);
 
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("\"secrets\""));
@@ -525,7 +467,7 @@ mod tests {
 
     #[test]
     fn test_gvproxy_config_no_secrets_default() {
-        let config = GvproxyConfig::new(test_socket_path(), vec![]);
+        let config = GvproxyConfig::new(test_socket_path());
         assert!(config.secrets.is_empty());
         let json = serde_json::to_string(&config).unwrap();
         // secrets field is skipped when empty due to skip_serializing_if
@@ -554,19 +496,13 @@ mod tests {
         //           and Go would generate /tmp/gvproxy-1.sock for both → collision.
         // NEW CODE: Each config carries its own unique socket_path.
 
-        let config_a = GvproxyConfig::new(
-            PathBuf::from("/boxes/box-a/sockets/net.sock"),
-            vec![(8080, 80)],
-        );
-        let config_b = GvproxyConfig::new(
-            PathBuf::from("/boxes/box-b/sockets/net.sock"),
-            vec![(8080, 80)],
-        );
+        let config_a = GvproxyConfig::new(PathBuf::from("/boxes/box-a/sockets/net.sock"));
+        let config_b = GvproxyConfig::new(PathBuf::from("/boxes/box-b/sockets/net.sock"));
 
         let json_a = serde_json::to_string(&config_a).unwrap();
         let json_b = serde_json::to_string(&config_b).unwrap();
 
-        // CRITICAL: Same port mappings but different socket paths → different JSON
+        // CRITICAL: Different socket paths must produce different JSON.
         assert_ne!(
             json_a, json_b,
             "Two configs with different socket paths must produce different JSON"
@@ -576,7 +512,7 @@ mod tests {
 
     #[test]
     fn test_with_dns_zones_preserves_builtin_host_alias() {
-        let config = GvproxyConfig::new(test_socket_path(), vec![]).with_dns_zones(vec![DnsZone {
+        let config = GvproxyConfig::new(test_socket_path()).with_dns_zones(vec![DnsZone {
             name: "example.internal.".to_string(),
             records: vec![DnsRecord {
                 name: "api".to_string(),
@@ -592,7 +528,7 @@ mod tests {
 
     #[test]
     fn test_with_dns_zones_appends_across_multiple_calls() {
-        let config = GvproxyConfig::new(test_socket_path(), vec![])
+        let config = GvproxyConfig::new(test_socket_path())
             .with_dns_zones(vec![DnsZone {
                 name: "one.internal.".to_string(),
                 records: vec![],
@@ -612,7 +548,7 @@ mod tests {
 
     #[test]
     fn test_serialization_contains_host_alias_record() {
-        let config = GvproxyConfig::new(test_socket_path(), vec![]);
+        let config = GvproxyConfig::new(test_socket_path());
         let json = serde_json::to_string(&config).unwrap();
 
         assert!(json.contains(&format!("\"host_ip\":\"{HOST_IP}\"")));

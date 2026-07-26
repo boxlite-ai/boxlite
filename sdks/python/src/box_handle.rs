@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::exec::PyExecution;
-use crate::info::PyBoxInfo;
+use crate::info::{PyBoxInfo, PyPortBinding, port_binding_from_spec};
 use crate::metrics::PyBoxMetrics;
 use crate::network::PyNetworkHandle;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions};
@@ -29,6 +29,21 @@ impl PyBox {
 
     fn info(&self) -> PyBoxInfo {
         PyBoxInfo::from(self.handle.info())
+    }
+
+    /// Return active host-to-guest bindings with resolved host ports.
+    fn port_bindings<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let bindings: Vec<PyPortBinding> = handle
+                .port_bindings()
+                .await
+                .map_err(map_err)?
+                .into_iter()
+                .map(port_binding_from_spec)
+                .collect();
+            Ok(bindings)
+        })
     }
 
     /// Get the snapshot handle for snapshot operations.

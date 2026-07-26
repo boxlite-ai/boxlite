@@ -86,14 +86,12 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
         let handler = ShimHandler::from_pid(pid, config_id);
 
         // The box's one network backend on the reattach path: control over the
-        // live gvproxy. Forwards are already established in the running instance
-        // (so no port mappings), and no wire spec is produced on reattach — the
-        // box is already provisioned. Threaded into LiveState like the spawn path.
+        // live gvproxy. No wire spec is produced on reattach; PortPublishTask
+        // uses this client to adopt or repair forwards before LiveState is
+        // returned.
         let network_backend = network.and_then(|(allow_net, secrets)| {
             let config = NetworkBackendConfig {
-                port_mappings: Vec::new(),
                 socket_path: layout.net_backend_socket_path(),
-                resolved_ports_path: layout.resolved_ports_path(),
                 allow_net,
                 secrets,
                 ca_dir: layout.ca_dir(),
@@ -102,6 +100,8 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
         });
 
         let mut ctx = ctx.lock().await;
+        ctx.guard.set_layout(layout.clone());
+        ctx.layout = Some(layout);
         ctx.guard.set_handler(Box::new(handler));
         ctx.network_backend = network_backend;
 

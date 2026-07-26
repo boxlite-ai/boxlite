@@ -14,7 +14,7 @@ use crate::rootfs::guest::{GuestRootfs, Strategy};
 use crate::runtime::constants::{guest_paths, mount_tags};
 use crate::runtime::id::BoxID;
 use crate::runtime::layout::BoxFilesystemLayout;
-use crate::runtime::options::{BoxOptions, PortProtocol, PortSpec};
+use crate::runtime::options::BoxOptions;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::ContainerID;
 use crate::util::find_binary;
@@ -331,8 +331,8 @@ fn build_guest_entrypoint(
     Ok(builder.build())
 }
 
-/// Create the box's **one** network backend by routing box-level policy (port
-/// mappings + allowlist) through the abstraction: assemble a
+/// Create the box's **one** network backend by routing box-level policy through
+/// the abstraction: assemble a
 /// [`NetworkBackendConfig`] and hand it to the factory. `None` when networking is
 /// disabled. The returned backend is used for both
 /// its wire spec (`spec()`) and, threaded on to `LiveState`, runtime control — no
@@ -348,16 +348,8 @@ fn build_network_backend(
         crate::runtime::options::NetworkSpec::Disabled => return Ok(None),
     };
 
-    // OCI EXPOSE is metadata. Only explicit user publication requests create
-    // host listeners; a missing host port asks the backend to allocate one.
-    let port_mappings = build_port_plan(options)?;
-
-    tracing::info!("Explicit port mappings: {}", port_mappings.len(),);
-
     let config = NetworkBackendConfig {
-        port_mappings,
         socket_path: layout.net_backend_socket_path(),
-        resolved_ports_path: layout.resolved_ports_path(),
         allow_net,
         secrets: options.secrets.clone(),
         ca_dir: layout.ca_dir(),
@@ -365,29 +357,6 @@ fn build_network_backend(
 
     // Hand the config to the backend abstraction — the one backend for this box.
     Ok(runtime.network_factory.create(&config))
-}
-
-fn build_port_plan(options: &BoxOptions) -> BoxliteResult<Vec<PortSpec>> {
-    for mapping in &options.ports {
-        if mapping.guest_port == 0 {
-            return Err(BoxliteError::Config(
-                "guest port must be in range 1-65535".to_string(),
-            ));
-        }
-        if mapping.protocol == PortProtocol::Udp {
-            return Err(BoxliteError::Unsupported(
-                "UDP port forwarding is not implemented; use TCP".to_string(),
-            ));
-        }
-        if let Some(host_ip) = mapping.host_ip.as_deref()
-            && host_ip.parse::<std::net::IpAddr>().is_err()
-        {
-            return Err(BoxliteError::Config(format!(
-                "invalid port host_ip {host_ip:?}; expected an IPv4 or IPv6 address"
-            )));
-        }
-    }
-    Ok(options.ports.clone())
 }
 
 fn unpublished_exposed_tcp_ports(
@@ -450,52 +419,6 @@ mod tests {
     use super::*;
     use crate::images::ContainerImageConfig;
     use crate::runtime::options::{PortProtocol, PortSpec};
-
-    #[test]
-    fn port_plan_contains_only_explicit_user_mappings() {
-        let options = BoxOptions {
-            ports: vec![
-                PortSpec {
-                    host_port: None,
-                    guest_port: 3000,
-                    protocol: PortProtocol::Tcp,
-                    host_ip: None,
-                },
-                PortSpec {
-                    host_port: Some(8080),
-                    guest_port: 80,
-                    protocol: PortProtocol::Tcp,
-                    host_ip: Some("127.0.0.1".into()),
-                },
-            ],
-            ..Default::default()
-        };
-
-        let mappings = build_port_plan(&options).expect("valid explicit mappings");
-
-        assert_eq!(mappings.len(), 2);
-        assert_eq!(mappings[0].host_port, None);
-        assert_eq!(mappings[0].guest_port, 3000);
-        assert_eq!(mappings[1].host_port, Some(8080));
-        assert_eq!(mappings[1].guest_port, 80);
-        assert_eq!(mappings[1].host_ip.as_deref(), Some("127.0.0.1"));
-    }
-
-    #[test]
-    fn port_plan_rejects_udp_before_backend_creation() {
-        let options = BoxOptions {
-            ports: vec![PortSpec {
-                host_port: None,
-                guest_port: 53,
-                protocol: PortProtocol::Udp,
-                host_ip: None,
-            }],
-            ..Default::default()
-        };
-
-        let err = build_port_plan(&options).unwrap_err();
-        assert!(err.to_string().contains("UDP port forwarding"));
-    }
 
     #[test]
     fn reports_only_exposed_tcp_ports_without_explicit_publication() {

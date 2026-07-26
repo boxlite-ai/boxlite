@@ -46,8 +46,8 @@ mod gvproxy_tests {
         assert!(obj["value"].is_string());
 
         // Verify a full GvproxyConfig with secrets serializes correctly
-        let config = GvproxyConfig::new(PathBuf::from("/tmp/test.sock"), vec![])
-            .with_secrets(vec![gvproxy_secret]);
+        let config =
+            GvproxyConfig::new(PathBuf::from("/tmp/test.sock")).with_secrets(vec![gvproxy_secret]);
         let config_json = serde_json::to_value(&config).unwrap();
         let secrets_arr = config_json["secrets"].as_array().unwrap();
         assert_eq!(secrets_arr.len(), 1);
@@ -64,8 +64,8 @@ mod gvproxy_tests {
         let gvproxy_secrets: Vec<GvproxySecretConfig> =
             secrets.iter().map(GvproxySecretConfig::from).collect();
 
-        let config = GvproxyConfig::new(PathBuf::from("/tmp/test.sock"), vec![(8080, 80)])
-            .with_secrets(gvproxy_secrets);
+        let config =
+            GvproxyConfig::new(PathBuf::from("/tmp/test.sock")).with_secrets(gvproxy_secrets);
 
         assert_eq!(config.secrets.len(), 2);
         assert_eq!(config.secrets[0].name, "openai");

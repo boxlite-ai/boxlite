@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
-use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
+use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions, PortSpec};
 use crate::{BoxID, BoxInfo};
 use boxlite_shared::errors::BoxliteResult;
 pub use config::BoxConfig;
@@ -88,6 +88,14 @@ impl LiteBox {
     /// Get box info without triggering VM initialization.
     pub fn info(&self) -> BoxInfo {
         self.box_backend.info()
+    }
+
+    /// Return active host-to-guest port bindings with resolved host ports.
+    ///
+    /// The result is empty while the box is stopped. Unlike [`Self::info`],
+    /// remote backends refresh this value from the server.
+    pub async fn port_bindings(&self) -> BoxliteResult<Vec<PortSpec>> {
+        self.box_backend.port_bindings().await
     }
 
     /// Start the box (initialize VM).

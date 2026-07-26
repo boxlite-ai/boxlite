@@ -3,26 +3,10 @@
 use std::path::PathBuf;
 
 use boxlite::net::{NetworkBackendConfig, NetworkBackendSpec};
-use boxlite::runtime::options::{PortProtocol, PortSpec};
-
-fn fixed_port(host_port: u16, guest_port: u16) -> PortSpec {
-    PortSpec {
-        host_port: Some(host_port),
-        guest_port,
-        protocol: PortProtocol::Tcp,
-        host_ip: None,
-    }
-}
 
 fn test_config(socket_path: PathBuf) -> NetworkBackendConfig {
     NetworkBackendConfig {
-        port_mappings: vec![
-            fixed_port(8080, 80),
-            fixed_port(3000, 3000),
-            fixed_port(5432, 5432),
-        ],
         socket_path,
-        resolved_ports_path: PathBuf::from("/tmp/test-resolved-ports.json"),
         allow_net: Vec::new(),
         secrets: Vec::new(),
         ca_dir: PathBuf::from("/tmp/test-ca"),
@@ -35,9 +19,7 @@ fn spec_carries_unique_socket_path_across_serde() {
     // boundary to the shim (guards the old gvproxy socket collision, where the
     // Go library generated /tmp/gvproxy-{id}.sock).
     let spec = NetworkBackendSpec {
-        port_mappings: vec![fixed_port(8080, 80)],
         socket_path: PathBuf::from("/boxes/box-a/sockets/net.sock"),
-        resolved_ports_path: Some(PathBuf::from("/boxes/box-a/logs/resolved-ports.json")),
         allow_net: Vec::new(),
         secrets: Vec::new(),
         ca_cert_pem: None,
@@ -48,7 +30,6 @@ fn spec_carries_unique_socket_path_across_serde() {
     let json = serde_json::to_string(&spec).unwrap();
     let deserialized: NetworkBackendSpec = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized.socket_path, spec.socket_path);
-    assert_eq!(deserialized.port_mappings, spec.port_mappings);
 }
 
 #[test]
@@ -56,12 +37,10 @@ fn spec_deserializes_legacy_payload_with_default_control_fields() {
     let json = r#"{"port_mappings":[[8080,80]],"socket_path":"/boxes/box-a/sockets/net.sock"}"#;
     let spec: NetworkBackendSpec = serde_json::from_str(json).unwrap();
 
-    assert_eq!(spec.port_mappings, vec![fixed_port(8080, 80)]);
     assert_eq!(
         spec.socket_path,
         PathBuf::from("/boxes/box-a/sockets/net.sock")
     );
-    assert!(spec.resolved_ports_path.is_none());
     assert!(spec.allow_net.is_empty());
     assert!(spec.secrets.is_empty());
     assert!(spec.ca_cert_pem.is_none());
@@ -79,9 +58,8 @@ fn factory_creates_backend_whose_spec_reflects_config() {
 
     let backend = factory.create(&config).expect("gvproxy backend");
     let spec = backend.spec();
-    // The config's socket/ports cross into the wire spec via production spec().
+    // The config's socket crosses into the wire spec via production spec().
     assert_eq!(spec.socket_path, config.socket_path);
-    assert_eq!(spec.port_mappings, config.port_mappings);
     // No secrets configured → no CA is minted.
     assert!(spec.ca_cert_pem.is_none());
 }

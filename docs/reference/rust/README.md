@@ -193,6 +193,7 @@ pub struct LiteBox {
 | `id` | `fn id(&self) -> &BoxID` | Get box ID |
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `fn info(&self) -> BoxInfo` | Get box info (no VM init) |
+| `port_bindings` | `async fn port_bindings(&self) -> BoxliteResult<Vec<PortSpec>>` | Get active mappings with resolved host ports |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |

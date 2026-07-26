@@ -95,6 +95,11 @@ pub(super) struct ListBoxesResponse {
     pub boxes: Vec<BoxResponse>,
 }
 
+#[derive(Serialize)]
+pub(super) struct PortBindingsResponse {
+    pub ports: Vec<boxlite::runtime::options::PortSpec>,
+}
+
 // ============================================================================
 // Named volume types (`/v1/volumes`)
 // ============================================================================

@@ -494,7 +494,7 @@ impl BoxFilesystemLayout {
         self.box_dir.join("logs")
     }
 
-    /// Last shim-verified host port mappings for the active VM lifecycle.
+    /// Last backend-confirmed host port mappings for the active VM lifecycle.
     pub fn resolved_ports_path(&self) -> PathBuf {
         self.logs_dir().join(dirs::RESOLVED_PORTS_FILE)
     }

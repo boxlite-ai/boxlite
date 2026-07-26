@@ -300,6 +300,9 @@ Handle to a running or stopped box.
   Get box metadata (async)
   - `info.ports` contains active local TCP mappings and is empty while stopped
 
+- `port_bindings() -> List[Tuple[Optional[int], int, str, Optional[str]]]`
+  Refresh active local bindings and return resolved host ports (async)
+
 - `metrics() -> BoxMetrics`
   Get box resource usage metrics (async)
 

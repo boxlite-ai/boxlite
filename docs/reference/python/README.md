@@ -214,6 +214,7 @@ Handle to a running or stopped box.
 | `stop()` | `() -> None` | Stop the box gracefully (async) |
 | `remove()` | `() -> None` | Delete box and its data (async) |
 | `info()` | `() -> BoxInfo` | Get box metadata (async) |
+| `port_bindings()` | `() -> List[Tuple[Optional[int], int, str, Optional[str]]]` | Refresh active local bindings and return resolved host ports (async) |
 | `metrics()` | `() -> BoxMetrics` | Get resource usage metrics (async) |
 
 ---

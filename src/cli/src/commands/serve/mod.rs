@@ -1102,6 +1102,11 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/boxes/{box_id}/stop",
             post(boxes::stop_box),
         )
+        // Active, resolved local port bindings
+        .route(
+            "/v1/boxes/{box_id}/ports",
+            get(boxes::get_port_bindings),
+        )
         // Box metrics
         .route(
             "/v1/boxes/{box_id}/metrics",
@@ -1582,6 +1587,17 @@ mod tests {
             attached.status().as_u16(),
             405,
             "GET /v1/boxes/{{box_id}}/attach must be registered (405 = path matched, method did not)",
+        );
+
+        let ports = http
+            .post(format!("http://127.0.0.1:{port}/v1/boxes/box1/ports"))
+            .send()
+            .await
+            .expect("POST /ports");
+        assert_eq!(
+            ports.status().as_u16(),
+            405,
+            "GET /v1/boxes/{{box_id}}/ports must be registered",
         );
 
         let unrouted = http

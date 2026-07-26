@@ -188,6 +188,7 @@ Handle to a running or stopped box.
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `info()` | `() => JsBoxInfo` | Get box metadata (sync) |
+| `portBindings()` | `() => Promise<JsPortSpec[]>` | Refresh active local bindings and return resolved host ports |
 | `exec()` | `(cmd, args?, env?, tty?) => Promise<JsExecution>` | Execute command |
 | `stop()` | `() => Promise<void>` | Stop the box |
 | `metrics()` | `() => Promise<JsBoxMetrics>` | Get resource metrics |
