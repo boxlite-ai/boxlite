@@ -37,7 +37,7 @@ pub async fn execute(args: TunnelArgs, global: &GlobalFlags) -> Result<()> {
         BoxEndpoint::Uri(uri) => uri,
         BoxEndpoint::FileDescriptor(_) => {
             return Err(anyhow!(
-                "boxlite tunnel requires a remote REST profile (--url or --profile)"
+                "boxlite network tunnel requires a remote REST profile (--url or --profile)"
             ));
         }
     };
