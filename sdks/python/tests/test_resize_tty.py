@@ -7,8 +7,9 @@ These tests require a working VM/libkrun setup.
 
 from __future__ import annotations
 
-import boxlite
 import pytest
+
+import boxlite
 
 pytestmark = pytest.mark.integration
 
@@ -32,7 +33,7 @@ class TestResizeTtySync:
         box = shared_sync_runtime.create(boxlite.BoxOptions(image="alpine:latest"))
         try:
             execution = box.exec("echo", ["hello"])
-            with pytest.raises(Exception):
+            with pytest.raises(RuntimeError):
                 execution.resize_tty(40, 120)
             execution.wait()
         finally:

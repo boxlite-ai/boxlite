@@ -233,10 +233,12 @@ class TestSyncSimpleBoxReuseExisting:
         ) as box1:
             assert box1.created is True
 
-            with pytest.raises(Exception):
-                with SyncSimpleBox(
+            with (
+                pytest.raises(RuntimeError),
+                SyncSimpleBox(
                     image="alpine:latest",
                     name=name,
                     runtime=shared_sync_runtime,
-                ) as _box2:
-                    pass
+                ) as _box2,
+            ):
+                pass

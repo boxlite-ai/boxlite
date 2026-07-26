@@ -560,7 +560,7 @@ impl BoxOptions {
     /// - effective remove-on-stop (`auto_delete>0`, or deprecated `auto_remove`)
     ///   with `detach=true` is invalid
     /// - `advanced.isolate_mounts=true` is only supported on Linux
-    pub fn sanitize(&self) -> BoxliteResult<()> {
+    pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::Config(
                 "remove-on-stop is incompatible with detach=true. Detached boxes should use \
@@ -602,6 +602,25 @@ impl BoxOptions {
             }
         }
 
+        Ok(())
+    }
+
+    /// Validate a persisted box without requiring ingestion sources to remain.
+    pub(crate) fn sanitize_persisted(&self) -> BoxliteResult<()> {
+        self.sanitize_common()?;
+
+        if let Some(kernel) = &self.advanced.kernel {
+            kernel.sanitize_persisted()?;
+        }
+        Ok(())
+    }
+
+    pub fn sanitize(&self) -> BoxliteResult<()> {
+        self.sanitize_common()?;
+
+        if let Some(kernel) = &self.advanced.kernel {
+            kernel.sanitize()?;
+        }
         Ok(())
     }
 }
@@ -835,6 +854,7 @@ pub struct CloneOptions {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
     use crate::runtime::advanced_options::{SecurityOptions, SecurityOptionsBuilder};
 
     #[test]
@@ -897,6 +917,105 @@ mod tests {
             "auto_remove should keep its legacy default"
         );
         assert!(!opts.detach, "detach should default to false");
+    }
+
+    #[test]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    fn custom_kernel_configuration_roundtrips() {
+        let temp = tempfile::tempdir().unwrap();
+        let kernel = temp.path().join("vmlinux");
+        let initramfs = temp.path().join("initramfs.img");
+        #[cfg(target_arch = "x86_64")]
+        std::fs::write(&kernel, b"\x7fELFcustom kernel").unwrap();
+        #[cfg(target_arch = "aarch64")]
+        std::fs::write(&kernel, b"arm64-header\x1f\x8b\x08custom kernel").unwrap();
+        std::fs::write(&initramfs, b"custom initramfs").unwrap();
+
+        #[cfg(target_arch = "x86_64")]
+        let format = KernelFormat::Elf;
+        #[cfg(target_arch = "aarch64")]
+        let format = KernelFormat::PeGz;
+
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                kernel: Some(
+                    KernelOptions::new(&kernel)
+                        .with_format(format)
+                        .with_initramfs(&initramfs)
+                        .with_command_line("console=ttyS0 panic=-1"),
+                ),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        opts.sanitize().unwrap();
+        let json = serde_json::to_string(&opts).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value.get("kernel").is_none());
+        assert!(value["advanced"]["kernel"].is_object());
+        let restored: BoxOptions = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.advanced.kernel, opts.advanced.kernel);
+    }
+
+    #[test]
+    fn custom_kernel_must_be_a_file() {
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                kernel: Some(KernelOptions::new("/definitely/missing/vmlinux")),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = opts.sanitize().unwrap_err().to_string();
+        assert!(error.contains("custom kernel"), "unexpected error: {error}");
+        assert!(error.contains("regular file"), "unexpected error: {error}");
+    }
+
+    #[test]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    fn persisted_custom_kernel_boot_assets_do_not_require_original_source() {
+        #[cfg(target_arch = "x86_64")]
+        let format = KernelFormat::Elf;
+        #[cfg(target_arch = "aarch64")]
+        let format = KernelFormat::PeGz;
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                kernel: Some(
+                    KernelOptions::new("/source/removed/after-create")
+                        .with_format(format)
+                        .with_command_line("console=ttyS0"),
+                ),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        opts.sanitize_persisted().unwrap();
+        assert!(opts.sanitize().is_err());
+    }
+
+    #[test]
+    fn custom_initramfs_must_be_a_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let kernel = temp.path().join("vmlinux");
+        std::fs::write(&kernel, b"\x7fELFcustom kernel").unwrap();
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                kernel: Some(
+                    KernelOptions::new(&kernel)
+                        .with_format(KernelFormat::Elf)
+                        .with_initramfs(temp.path().join("missing-initramfs")),
+                ),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = opts.sanitize().unwrap_err().to_string();
+        assert!(error.contains("initramfs"), "unexpected error: {error}");
+        assert!(error.contains("regular file"), "unexpected error: {error}");
     }
 
     #[test]

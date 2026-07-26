@@ -197,8 +197,8 @@ class TestSyncSkillBoxExports:
     @pytest.mark.skipif(not SYNC_AVAILABLE, reason="greenlet not installed")
     def test_sync_skillbox_from_sync_api_module(self):
         """Test that SyncSkillBox can be imported from sync_api module."""
-        from boxlite.sync_api import SyncSkillBox as SyncSkillBoxFromModule
         import boxlite
+        from boxlite.sync_api import SyncSkillBox as SyncSkillBoxFromModule
 
         assert SyncSkillBoxFromModule is boxlite.SyncSkillBox
 
@@ -231,9 +231,8 @@ class TestSyncSkillBoxValidation:
         original = os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
         try:
             box = SyncSkillBox(oauth_token="", runtime=shared_sync_runtime)
-            with pytest.raises(ValueError, match="OAuth token required"):
-                with box:
-                    pass
+            with pytest.raises(ValueError, match="OAuth token required"), box:
+                pass
         finally:
             if original:
                 os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = original

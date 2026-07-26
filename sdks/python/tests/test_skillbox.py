@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import os
 
-import boxlite
 import pytest
+
+import boxlite
 
 # Try to import sync API - skip if greenlet not installed
 try:
@@ -254,9 +255,8 @@ class TestSkillBoxValidation:
         original = os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
         try:
             box = SyncSkillBox(oauth_token="", runtime=shared_sync_runtime)
-            with pytest.raises(ValueError, match="OAuth token required"):
-                with box:
-                    pass
+            with pytest.raises(ValueError, match="OAuth token required"), box:
+                pass
         finally:
             if original:
                 os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = original

@@ -145,9 +145,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
               request.query?.force === 'true',
             )
             break
-          case '/api/box/:boxIdOrName/resize':
-            this.captureResizeBox(props, request.params.boxIdOrName, request.body)
-            break
           case '/api/box/:boxIdOrName/public/:isPublic':
             this.captureUpdatePublicStatus(props, request.params.boxIdOrName, request.params.isPublic === 'true')
             break
@@ -450,19 +447,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     this.capture('api_box_stopped', props, 'api_box_stop_failed', {
       box_id: boxId,
       force,
-    })
-  }
-
-  private captureResizeBox(
-    props: CommonCaptureProps,
-    boxId: string,
-    body: { cpu?: number; memory?: number; disk?: number },
-  ) {
-    this.capture('api_box_resized', props, 'api_box_resize_failed', {
-      box_id: boxId,
-      cpu: body?.cpu,
-      memory: body?.memory,
-      disk: body?.disk,
     })
   }
 

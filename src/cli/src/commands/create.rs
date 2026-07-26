@@ -1,4 +1,6 @@
-use crate::cli::{GlobalFlags, NetworkFlags, PublishFlags, ResourceFlags, VolumeFlags};
+use crate::cli::{
+    GlobalFlags, KernelFlags, NetworkFlags, PublishFlags, ResourceFlags, VolumeFlags,
+};
 use boxlite::{BoxOptions, RootfsSpec};
 use clap::Args;
 
@@ -45,6 +47,9 @@ pub struct CreateArgs {
     /// the image ENTRYPOINT is preserved), mirroring `docker create`.
     #[arg(index = 2, trailing_var_arg = true)]
     pub command: Vec<String>,
+
+    #[command(flatten, next_help_heading = "Advanced boot options")]
+    pub boot: KernelFlags,
 }
 
 pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
@@ -59,8 +64,10 @@ pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<(
 
 impl CreateArgs {
     fn to_box_options(&self, global: &GlobalFlags) -> anyhow::Result<BoxOptions> {
+        self.boot.require_enabled(global.experimental_features())?;
         let mut options = BoxOptions::default();
         self.resource.apply_to(&mut options);
+        self.boot.apply_to(&mut options);
         self.management.apply_to(&mut options)?;
         self.publish.apply_to(&mut options)?;
         self.volume.apply_to(&mut options, global.home.as_deref())?;

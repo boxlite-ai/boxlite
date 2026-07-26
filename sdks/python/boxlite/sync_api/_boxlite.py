@@ -6,14 +6,17 @@ for the synchronous BoxLite API.
 """
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Optional
 
 from greenlet import greenlet
 
 if TYPE_CHECKING:
+    from ..boxlite import Boxlite, BoxOptions, Options, RuntimeMetrics
     from ._box import SyncBox
     from ._images import SyncImageHandle
-    from ..boxlite import Boxlite, BoxOptions, RuntimeMetrics, Options
+
+logger = logging.getLogger("boxlite.sync_boxlite")
 
 __all__ = ["SyncBoxlite"]
 
@@ -71,7 +74,7 @@ class SyncBoxlite:
         self._sync_helper = None
         self._started = False
 
-    def __enter__(self) -> "SyncBoxlite":
+    def __enter__(self) -> "SyncBoxlite":  # noqa: PYI034 - typing.Self needs 3.11+; project supports 3.10+
         """
         Start the sync runtime and enter context.
 
@@ -145,8 +148,8 @@ class SyncBoxlite:
                 for t in [t for t in tasks if not (t.done() or t.cancelled())]:
                     t.cancel()
                 self._loop.run_until_complete(self._loop.shutdown_asyncgens())
-            except Exception:
-                pass  # Ignore errors during cleanup
+            except Exception as e:  # noqa: BLE001 - loop is shutting down regardless; must not raise
+                logger.debug(f"Error during event loop cleanup: {e}")
             finally:
                 self._loop.close()
 
@@ -255,7 +258,7 @@ class SyncBoxlite:
     def create(
         self,
         options: "BoxOptions",
-        name: Optional[str] = None,
+        name: str | None = None,
     ) -> "SyncBox":
         """
         Create a new box.
@@ -280,7 +283,7 @@ class SyncBoxlite:
     def get_or_create(
         self,
         options: "BoxOptions",
-        name: Optional[str] = None,
+        name: str | None = None,
     ) -> tuple["SyncBox", bool]:
         """
         Get an existing box by name, or create a new one.
@@ -346,7 +349,7 @@ class SyncBoxlite:
         """
         self._sync(self._boxlite.remove(id_or_name, force))
 
-    def shutdown(self, timeout: Optional[int] = None) -> None:
+    def shutdown(self, timeout: int | None = None) -> None:
         """
         Gracefully shutdown all boxes in this runtime.
 

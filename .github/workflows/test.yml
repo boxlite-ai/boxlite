@@ -20,6 +20,7 @@ on:
       - 'src/cli/**'
       - 'src/guest/**'
       - 'sdks/**'
+      - 'apps/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/test.yml'
@@ -52,6 +53,7 @@ jobs:
       python: ${{ steps.filter.outputs.python }}
       node: ${{ steps.filter.outputs.node }}
       go: ${{ steps.filter.outputs.go }}
+      apps: ${{ steps.filter.outputs.apps }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v4
@@ -76,6 +78,8 @@ jobs:
               - 'sdks/node/**'
             go:
               - 'sdks/go/**'
+            apps:
+              - 'apps/**'
 
   # Rust unit tests (boxlite-shared only - boxlite requires native libs not available in CI)
   rust:
@@ -276,6 +280,61 @@ jobs:
       - name: Run Go unit tests
         run: make test:unit:go
 
+  # apps/api (NestJS) unit tests — the nx `api` project's jest suite (org-quota,
+  # box-usage, box.service, organization, etc.). Pure/mocked specs, no native libs.
+  apps:
+    name: Apps API Tests
+    needs: [config, changes]
+    if: ${{ needs.changes.outputs.apps == 'true' }}
+    runs-on: ubuntu-latest
+    # Read-only token: this job runs repository-controlled code (yarn install
+    # build scripts, Nx/Jest), so it must not carry write scopes.
+    permissions:
+      contents: read
+    # Redis lets the quota engine's real-Lua integration spec run (it self-skips
+    # without REDIS_HOST); the rest of the api suite is pure/mocked.
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        # Wait for Redis to accept connections before the job runs, so the
+        # real-Lua integration spec doesn't race container startup.
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      REDIS_HOST: localhost
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          # Don't persist GITHUB_TOKEN in .git/config before untrusted code runs.
+          persist-credentials: false
+
+      # corepack must be enabled before setup-node's yarn cache probe runs
+      - name: Enable corepack (yarn 4)
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: apps/yarn.lock
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run apps/api unit tests
+        run: yarn nx run api:test
+
   # Single required status check for branch protection / merge queue.
   # Passes only if every job above succeeded or was skipped (path-filtered).
   # `if: !cancelled()` is required: without it a failed dependency would skip
@@ -283,7 +342,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [config, changes, rust, cli, python, node, go]
+    needs: [config, changes, rust, cli, python, node, go, apps]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

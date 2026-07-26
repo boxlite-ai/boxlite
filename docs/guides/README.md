@@ -278,8 +278,8 @@ normal host address.
 For SDK code that must work with local and remote runtimes, use
 `box.network.tunnel(port)` and consume its byte stream with `connect()`. A tunnel
 handle represents one connection; request another handle for another connection.
-Remote CLI users can run `boxlite tunnel BOX PORT` to obtain the public service
-URL.
+Remote CLI users can run `boxlite network tunnel BOX PORT` to obtain the public
+service URL.
 
 Image `EXPOSE` declarations are metadata only and never create host listeners.
 

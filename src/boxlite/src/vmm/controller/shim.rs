@@ -7,6 +7,7 @@ use crate::{
     runtime::layout::BoxFilesystemLayout,
     vmm::{InstanceSpec, VmmKind},
 };
+
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::watchdog;
@@ -326,6 +327,7 @@ impl VmmController for ShimController {
             // VM configuration
             cpus: config.cpus,
             memory_mib: config.memory_mib,
+            kernel: config.kernel.clone(),
             fs_shares: config.fs_shares.clone(),
             block_devices: config.block_devices.clone(),
             guest_entrypoint,

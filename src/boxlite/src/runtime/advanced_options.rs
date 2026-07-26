@@ -2,7 +2,8 @@
 //!
 //! This module contains [`AdvancedBoxOptions`], [`SecurityOptions`], [`ResourceLimits`],
 //! and [`SecurityOptionsBuilder`] — configuration that entry-level users can safely
-//! ignore. Defaults prioritize compatibility.
+//! ignore. Defaults prioritize compatibility. Direct custom-kernel boot is also
+//! grouped here because it changes the VM boot contract.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -599,4 +600,12 @@ pub struct AdvancedBoxOptions {
     /// Most users should rely on the defaults.
     #[serde(default)]
     pub health_check: Option<HealthCheckOptions>,
+
+    /// Release-candidate direct Linux boot configuration.
+    ///
+    /// The runtime must explicitly enable
+    /// [`ExperimentalFeature::CustomKernel`](crate::experimental::ExperimentalFeature::CustomKernel).
+    #[doc(hidden)]
+    #[serde(default)]
+    pub kernel: Option<crate::experimental::custom_kernel::KernelOptions>,
 }

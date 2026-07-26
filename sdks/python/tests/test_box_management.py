@@ -9,12 +9,14 @@ These tests exercise the new runtime-oriented API that lives on the
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
+import logging
 
 import pytest
 import pytest_asyncio
 
 import boxlite
+
+logger = logging.getLogger(__name__)
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -74,10 +76,14 @@ async def runtime(shared_runtime):
     finally:
         # Clean up boxes created by this test, but don't close the shared runtime
         for box in list(harness._boxes):
-            with suppress(RuntimeError):
+            try:
                 await box.stop()
-            with suppress(RuntimeError):
+            except Exception as e:  # noqa: BLE001 - teardown must clean up remaining boxes even if one fails
+                logger.debug(f"Error stopping box {box.id}: {e}")
+            try:
                 await harness.remove(box.id)
+            except Exception as e:  # noqa: BLE001 - teardown must clean up remaining boxes even if one fails
+                logger.debug(f"Error removing box {box.id}: {e}")
 
 
 class TestBoxManagement:

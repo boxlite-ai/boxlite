@@ -117,7 +117,15 @@ image pulling, Box startup) is deferred until first use.
 
 1. `runtime.create()` returns immediately with handle
 2. First API call triggers initialization pipeline
-3. Pipeline: image pull → rootfs prep → Box spawn → guest ready
+3. Pipeline: filesystem layout → boot assets + rootfs prep → Box spawn → guest ready
+
+Custom kernels are an [RC feature](../experimental/custom-kernel.md). They are
+prepared by the initialization pipeline, not by the VMM controller. The pipeline
+copies the kernel and optional initramfs into an immutable per-box generation,
+verifies their checksums, and atomically publishes the generation before
+`VmmSpawn`. Restarting a stopped or failed Box reuses the published generation,
+so the caller-owned source files are only required when a generation must first
+be created. Reattaching to a running Box skips preparation.
 
 ### ShimController
 

@@ -46,7 +46,7 @@ try:
         VolumeInfo,
     )
 
-    __all__ = [
+    __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
         # Core Rust API
         "Options",
         "ImageRegistry",
@@ -100,7 +100,7 @@ try:
     from .simplebox import SimpleBox  # noqa: F401
 
     __all__.extend(
-        [
+        [  # noqa: RUF022 - grouped by API area, not alphabetical
             # Python convenience wrappers
             "SimpleBox",
             "CodeBox",
@@ -148,7 +148,7 @@ except ImportError:
 try:
     from .orchestration import BoxGroup, BoxRuntime, ManagedBox  # noqa: F401
 
-    __all__.extend(["BoxRuntime", "ManagedBox", "BoxGroup"])
+    __all__.extend(["BoxGroup", "BoxRuntime", "ManagedBox"])
 except ImportError:
     pass
 
@@ -170,15 +170,15 @@ try:
 
     __all__.extend(
         [
-            "SyncBoxlite",
             "SyncBox",
+            "SyncBoxlite",
+            "SyncCodeBox",
+            "SyncExecStderr",
+            "SyncExecStdout",
+            "SyncExecution",
             "SyncImageHandle",
             "SyncNetworkHandle",
-            "SyncExecution",
-            "SyncExecStdout",
-            "SyncExecStderr",
             "SyncSimpleBox",
-            "SyncCodeBox",
             "SyncSkillBox",
         ]
     )

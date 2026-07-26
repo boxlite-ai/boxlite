@@ -27,15 +27,18 @@ These modes are MUTUALLY EXCLUSIVE - use one or the other per instance.
 """
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
-from typing import Optional, TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from . import constants as const
 from .simplebox import SimpleBox
 
 if TYPE_CHECKING:
     from .boxlite import Boxlite
+
+logger = logging.getLogger("boxlite.browserbox")
 
 __all__ = ["BrowserBox", "BrowserBoxOptions"]
 
@@ -93,8 +96,8 @@ class BrowserBoxOptions:
     browser: str = "chromium"  # chromium, firefox, or webkit
     memory: int = 2048  # Memory in MiB
     cpu: int = 2  # Number of CPU cores
-    port: Optional[int] = None  # Host port for Playwright Server (default: 3000)
-    cdp_port: Optional[int] = None  # Host port for CDP/Puppeteer (default: 9222)
+    port: int | None = None  # Host port for Playwright Server (default: 3000)
+    cdp_port: int | None = None  # Host port for CDP/Puppeteer (default: 9222)
 
 
 class BrowserBox(SimpleBox):
@@ -132,7 +135,7 @@ class BrowserBox(SimpleBox):
 
     def __init__(
         self,
-        options: Optional[BrowserBoxOptions] = None,
+        options: BrowserBoxOptions | None = None,
         runtime: Optional["Boxlite"] = None,
         **kwargs,
     ):
@@ -225,8 +228,8 @@ class BrowserBox(SimpleBox):
                 "sh", "-c", f"cat {log_path} 2>/dev/null || echo 'No log'"
             )
             log_content = log_result.stdout.strip()
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 - best-effort log fetch, must not mask the TimeoutError below
+            logger.debug(f"Failed to fetch log for {service_name}: {e}")
 
         raise TimeoutError(
             f"{service_name} did not start within {timeout}s. Log: {log_content[:500]}"

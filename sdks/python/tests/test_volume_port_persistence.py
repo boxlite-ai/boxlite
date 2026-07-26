@@ -26,6 +26,7 @@ Requirements:
 from __future__ import annotations
 
 import http.client
+import logging
 import os
 import shutil
 import socket
@@ -35,6 +36,8 @@ import time
 import pytest
 
 import boxlite
+
+logger = logging.getLogger(__name__)
 
 GUEST_MOUNT = "/data"
 GUEST_PORT = 8000
@@ -117,15 +120,16 @@ class TestVolumePortPersistence:
                 try:
                     box.start()
                     return box, port
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - port bind races can raise different exception types
                     # most likely the host port was taken between pick + bind
                     last_err = e
                     try:
                         box.stop()
-                    except Exception:
-                        # Best-effort cleanup: if start() failed, stop() may also fail;
+                    except Exception as stop_err:  # noqa: BLE001 - best-effort cleanup: if start() failed, stop() may also fail
                         # ignore and continue retrying with a new port.
-                        pass
+                        logger.debug(
+                            f"Error stopping box after failed start: {stop_err}"
+                        )
             raise AssertionError(
                 f"could not start a server box on a free host port: {last_err!r}"
             )

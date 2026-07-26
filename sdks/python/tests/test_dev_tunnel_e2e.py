@@ -10,7 +10,6 @@ import pytest
 
 import boxlite
 
-
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 LOCAL_IMAGE = "python:3-alpine"

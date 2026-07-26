@@ -4,8 +4,9 @@ Unit tests for ExecResult dataclass (no VM required).
 Tests the ExecResult structure and behavior.
 """
 
-import pytest
 from dataclasses import is_dataclass
+
+import pytest
 
 import boxlite
 from boxlite.exec import ExecResult
@@ -209,7 +210,7 @@ class TestSyncExecutionAPIExports:
             from boxlite.sync_api._execution import SyncExecution
 
             assert hasattr(SyncExecution, "resize_tty")
-            assert callable(getattr(SyncExecution, "resize_tty"))
+            assert callable(SyncExecution.resize_tty)
         except ImportError:
             pytest.skip("sync API not available")
 

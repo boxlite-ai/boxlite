@@ -7,8 +7,9 @@
 //! ```text
 //! Starting (new box):
 //!   1. Filesystem           (create layout)
-//!   2. ContainerRootfs ─┬─  (pull image, create COW disk)
-//!      GuestRootfs     ─┘   (prepare guest, create COW disk)
+//!   2. BootAssets       ─┬─  (stage custom kernel/initramfs)
+//!      ContainerRootfs  ├─  (pull image, create COW disk)
+//!      GuestRootfs      ─┘  (prepare guest, create COW disk)
 //!   3. VmmSpawn             (build config + spawn VM)
 //!   4. GuestConnect         (wait for guest ready)
 //!   5. PortPublish          (publish configured host ports)
@@ -16,8 +17,9 @@
 //!
 //! Stopped (restart):
 //!   1. Filesystem           (load existing layout)
-//!   2. ContainerRootfs ─┬─  (reuse existing COW disk - preserves user data)
-//!      GuestRootfs     ─┘   (reuse existing COW disk)
+//!   2. BootAssets       ─┬─  (reuse box-scoped boot assets)
+//!      ContainerRootfs  ├─  (reuse existing COW disk - preserves user data)
+//!      GuestRootfs      ─┘  (reuse existing COW disk)
 //!   3. VmmSpawn             (build config + spawn NEW VM)
 //!   4. GuestConnect         (wait for guest ready)
 //!   5. PortPublish          (republish configured host ports)
@@ -50,8 +52,8 @@ use tokio::sync::Mutex;
 
 pub(crate) use tasks::PortPublishTask;
 use tasks::{
-    ContainerRootfsTask, FilesystemTask, GuestConnectTask, GuestInitTask, GuestRootfsTask, InitCtx,
-    VmmAttachTask, VmmSpawnTask,
+    BootAssetsTask, ContainerRootfsTask, FilesystemTask, GuestConnectTask, GuestInitTask,
+    GuestRootfsTask, InitCtx, VmmAttachTask, VmmSpawnTask,
 };
 use types::InitPipelineContext;
 
@@ -70,8 +72,10 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
             // First start: Full pipeline
             // Phase 1: Setup filesystem layout first
             Stage::sequential(vec![Box::new(FilesystemTask)]),
-            // Phase 2: Prepare rootfs (now has access to layout for disk paths)
+            // Phase 2: Prepare independent boot and rootfs inputs after the
+            // filesystem task has established their box-scoped destinations.
             Stage::parallel(vec![
+                Box::new(BootAssetsTask),
                 Box::new(ContainerRootfsTask),
                 Box::new(GuestRootfsTask),
             ]),
@@ -90,6 +94,7 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
             // (preserves user modifications from previous run)
             Stage::sequential(vec![Box::new(FilesystemTask)]),
             Stage::parallel(vec![
+                Box::new(BootAssetsTask),
                 Box::new(ContainerRootfsTask),
                 Box::new(GuestRootfsTask),
             ]),
@@ -161,6 +166,14 @@ pub(crate) struct BoxBuilder {
     state: BoxState,
 }
 
+fn validate_persisted_options(
+    features: &crate::experimental::ExperimentalFeatures,
+    options: &crate::BoxOptions,
+) -> BoxliteResult<()> {
+    features.require_for_options(options)?;
+    options.sanitize_persisted()
+}
+
 impl BoxBuilder {
     /// Create a new builder from config and state.
     ///
@@ -178,9 +191,11 @@ impl BoxBuilder {
         config: BoxConfig,
         state: BoxState,
     ) -> BoxliteResult<Self> {
-        // Get options reference from config (no reconstruction needed!)
+        // External source paths were validated at create time. Persisted boxes
+        // validate only their stored shape here; the boot-assets task reopens a
+        // source only when no complete box-scoped generation exists.
         let options = &config.options;
-        options.sanitize()?;
+        validate_persisted_options(&runtime.experimental_features, options)?;
 
         Ok(Self {
             runtime,
@@ -309,43 +324,96 @@ impl BoxBuilder {
 }
 
 #[cfg(test)]
-mod tests {
+mod plan_tests {
     use super::*;
+    use crate::experimental::ExperimentalFeatures;
+    use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
+    use crate::pipeline::ExecutionMode;
 
-    fn task_names(status: BoxStatus) -> Vec<String> {
+    fn plan_shape(status: BoxStatus) -> Vec<(ExecutionMode, Vec<String>)> {
         get_execution_plan(status)
             .unwrap()
             .stages()
             .into_iter()
-            .flat_map(|stage| stage.tasks)
-            .map(|task| task.name().to_string())
+            .map(|stage| {
+                (
+                    stage.execution,
+                    stage
+                        .tasks
+                        .into_iter()
+                        .map(|task| task.name().to_string())
+                        .collect(),
+                )
+            })
             .collect()
     }
 
-    #[test]
-    fn fresh_and_restart_plans_publish_after_guest_connect() {
-        for status in [BoxStatus::Configured, BoxStatus::Stopped, BoxStatus::Failed] {
-            let names = task_names(status);
-            let connect = names
-                .iter()
-                .position(|name| name == "guest_connect")
-                .unwrap();
-            let publish = names
-                .iter()
-                .position(|name| name == "port_publish")
-                .unwrap();
-            let init = names.iter().position(|name| name == "guest_init").unwrap();
-
-            assert_eq!(publish, connect + 1, "{status}");
-            assert_eq!(init, publish + 1, "{status}");
-        }
+    fn boot_pipeline_shape() -> Vec<(ExecutionMode, Vec<String>)> {
+        vec![
+            (
+                ExecutionMode::Sequential,
+                vec!["filesystem_setup".to_string()],
+            ),
+            (
+                ExecutionMode::Parallel,
+                vec![
+                    "boot_assets_prepare".to_string(),
+                    "container_rootfs_prep".to_string(),
+                    "guest_rootfs_init".to_string(),
+                ],
+            ),
+            (ExecutionMode::Sequential, vec!["vmm_spawn".to_string()]),
+            (ExecutionMode::Sequential, vec!["guest_connect".to_string()]),
+            (ExecutionMode::Sequential, vec!["port_publish".to_string()]),
+            (ExecutionMode::Sequential, vec!["guest_init".to_string()]),
+        ]
     }
 
     #[test]
-    fn running_reattach_reconciles_ports_without_reinitializing_guest() {
+    fn configured_box_prepares_boot_assets_before_vmm_spawn() {
+        assert_eq!(plan_shape(BoxStatus::Configured), boot_pipeline_shape());
+    }
+
+    #[test]
+    fn restartable_boxes_prepare_boot_assets_before_vmm_spawn() {
+        let expected = boot_pipeline_shape();
+        assert_eq!(plan_shape(BoxStatus::Stopped), expected);
+        assert_eq!(plan_shape(BoxStatus::Failed), boot_pipeline_shape());
+    }
+
+    #[test]
+    fn running_box_reattach_does_not_prepare_boot_assets() {
         assert_eq!(
-            task_names(BoxStatus::Running),
-            ["vmm_attach", "guest_connect", "port_publish"]
+            plan_shape(BoxStatus::Running),
+            vec![
+                (ExecutionMode::Sequential, vec!["vmm_attach".to_string()]),
+                (ExecutionMode::Sequential, vec!["guest_connect".to_string()],),
+                (ExecutionMode::Sequential, vec!["port_publish".to_string()],),
+            ]
         );
+    }
+
+    #[test]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    fn persisted_custom_kernel_uses_injected_feature_state() {
+        #[cfg(target_arch = "x86_64")]
+        let format = KernelFormat::Elf;
+        #[cfg(target_arch = "aarch64")]
+        let format = KernelFormat::PeGz;
+
+        let mut options = crate::BoxOptions::default();
+        options.advanced.kernel =
+            Some(KernelOptions::new("/source/no-longer-needed").with_format(format));
+
+        let error = validate_persisted_options(&ExperimentalFeatures::default(), &options)
+            .expect_err("persisted custom kernel must be disabled by default");
+        assert!(
+            error
+                .to_string()
+                .contains("ExperimentalFeature::CustomKernel")
+        );
+
+        let enabled = ExperimentalFeatures::parse("custom-kernel").unwrap();
+        validate_persisted_options(&enabled, &options).unwrap();
     }
 }

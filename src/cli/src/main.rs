@@ -20,7 +20,7 @@ use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::Subs
 static FILE_LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
 fn main() {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
 
     // Handle shell completion before starting tokio or tracing
     if let cli::Commands::Completion(args) = &cli.command {
@@ -28,6 +28,14 @@ fn main() {
         cli::generate_completion(&args.shell, &mut cmd, "boxlite", &mut std::io::stdout());
         process::exit(0);
     }
+
+    cli.global.experimental_features = match cli::experimental_features_from_env() {
+        Ok(features) => features,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            process::exit(1);
+        }
+    };
 
     // Start tokio runtime manually to ensure environment is set up safely
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -119,7 +127,7 @@ async fn run_cli(cli: Cli) -> i32 {
         cli::Commands::Info(args) => commands::info::execute(args, &global).await.map(|_| 0),
         cli::Commands::Logs(args) => commands::logs::execute(args, &global).await.map(|_| 0),
         cli::Commands::Stats(args) => commands::stats::execute(args, &global).await.map(|_| 0),
-        cli::Commands::Tunnel(args) => commands::tunnel::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Network(args) => commands::network::execute(args, &global).await.map(|_| 0),
         cli::Commands::Serve(args) => commands::serve::execute(args, &global).await.map(|_| 0),
         cli::Commands::Auth(args) => commands::auth::run(args, &global).await.map(|_| 0),
         cli::Commands::Volume(args) => commands::volume::execute(args, &global).await.map(|_| 0),

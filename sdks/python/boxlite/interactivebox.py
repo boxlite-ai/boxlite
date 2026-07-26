@@ -10,7 +10,7 @@ import os
 import sys
 import termios
 import tty
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from .simplebox import SimpleBox
 
@@ -44,11 +44,11 @@ class InteractiveBox(SimpleBox):
         self,
         image: str,
         shell: str = "/bin/sh",
-        tty: Optional[bool] = None,
-        memory_mib: Optional[int] = None,
-        cpus: Optional[int] = None,
+        tty: bool | None = None,
+        memory_mib: int | None = None,
+        cpus: int | None = None,
         runtime: Optional["Boxlite"] = None,
-        name: Optional[str] = None,
+        name: str | None = None,
         auto_remove: bool = True,
         **kwargs,
     ):
@@ -145,7 +145,7 @@ class InteractiveBox(SimpleBox):
                 termios.tcsetattr(
                     sys.stdin.fileno(), termios.TCSADRAIN, self._old_tty_settings
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - terminal restore must not raise during exit
                 logger.error(f"Caught exception on TTY settings: {e}")
 
         """Exit interactive session and restore terminal."""
@@ -159,8 +159,7 @@ class InteractiveBox(SimpleBox):
             except asyncio.TimeoutError:
                 # If it doesn't finish, that's ok - box is shutting down anyway
                 logger.error("Timeout waiting for I/O tasks to finish, cancelling...")
-            except Exception as e:
-                # Ignore other exceptions during cleanup
+            except Exception as e:  # noqa: BLE001 - exit path must not raise on cleanup failure
                 logger.error(f"Caught exception on exit: {e}")
 
         # Print diagnostic after terminal is restored (clean output guaranteed)
@@ -235,7 +234,7 @@ class InteractiveBox(SimpleBox):
 
         except asyncio.CancelledError:
             logger.info("Cancelling interactive shell (stdin forwarding).")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - background forwarder task must not crash silently
             logger.error(f"Caught exception on stdin: {e}")
 
     async def _forward_output(self):
@@ -257,7 +256,7 @@ class InteractiveBox(SimpleBox):
 
         except asyncio.CancelledError:
             logger.error("Cancelling interactive shell (stdout forwarding).")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - background forwarder task must not crash silently
             logger.error(f"\nError forwarding output: {e}", file=sys.stderr)
 
     async def _forward_stderr(self):
@@ -279,7 +278,7 @@ class InteractiveBox(SimpleBox):
 
         except asyncio.CancelledError:
             logger.error("Cancelling interactive shell (stderr forwarding).")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - background forwarder task must not crash silently
             logger.error(f"\nError forwarding stderr: {e}", file=sys.stderr)
 
     async def _wait_for_exit(self):
@@ -288,8 +287,8 @@ class InteractiveBox(SimpleBox):
             result = await self._execution.wait()
             if result.error_message:
                 self._error_message = result.error_message
-        except Exception:
-            pass  # Ignore errors, cleanup will happen in __aexit__
+        except Exception as e:  # noqa: BLE001 - cleanup will happen in __aexit__ regardless
+            logger.debug(f"Error waiting for exit: {e}")
         finally:
             # Signal other tasks to stop
             if self._exited:

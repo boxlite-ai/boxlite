@@ -7,10 +7,10 @@ that can be viewed from a browser, with full GUI automation support.
 
 import asyncio
 import logging
-from typing import Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from . import constants as const
-from .errors import ExecError, TimeoutError, ParseError
+from .errors import ExecError, ParseError, TimeoutError
 from .simplebox import SimpleBox
 
 if TYPE_CHECKING:
@@ -229,7 +229,7 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
                 "left_click_drag()", exec_result.exit_code, exec_result.stderr
             )
 
-    async def cursor_position(self) -> Tuple[int, int]:
+    async def cursor_position(self) -> tuple[int, int]:
         """Get the current mouse cursor position. Returns (x, y) tuple."""
         exec_result = await self.exec("xdotool", "getmouselocation", "--shell")
         if exec_result.exit_code != 0:
@@ -288,7 +288,7 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
         if exec_result.exit_code != 0:
             raise ExecError("scroll()", exec_result.exit_code, exec_result.stderr)
 
-    async def get_screen_size(self) -> Tuple[int, int]:
+    async def get_screen_size(self) -> tuple[int, int]:
         """Get the screen resolution. Returns (width, height) tuple."""
         exec_result = await self.exec("xdotool", "getdisplaygeometry")
         if exec_result.exit_code != 0:

@@ -32,7 +32,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite info`](#boxlite-info)
   - [`boxlite logs`](#boxlite-logs)
   - [`boxlite stats`](#boxlite-stats)
-  - [`boxlite tunnel`](#boxlite-tunnel)
+  - [`boxlite network tunnel`](#boxlite-network-tunnel)
   - [`boxlite serve`](#boxlite-serve)
   - [`boxlite completion`](#boxlite-completion)
 - [Shared Flag Groups](#shared-flag-groups)
@@ -546,9 +546,9 @@ Display resource usage statistics for a box.
 
 ---
 
-### `boxlite tunnel`
+### `boxlite network tunnel`
 
-**Synopsis:** `boxlite tunnel BOX PORT`
+**Synopsis:** `boxlite network tunnel BOX PORT`
 
 Print the public URL for a box service port. Requires a remote REST profile
 (`--url` or `--profile`); local boxes have no public ingress.
@@ -621,6 +621,7 @@ Used by `run` and `create` (defined at `src/cli/src/cli.rs:287-310`).
 |------|------|-------------|
 | `--cpus N` | u32 | Number of CPUs (capped at 255; values above 255 log a warning) |
 | `--memory MiB` | u32 | Memory limit in mebibytes |
+| `--disk-size GB` | u64 | Sparse root filesystem disk size in gigabytes |
 
 ### `PublishFlags`
 
@@ -694,9 +695,9 @@ PORT := [HOST_PORT ':'] BOX_PORT ['/tcp']
 
 Ports must be in `1..=65535`. TCP is the only supported protocol; UDP is rejected.
 `-p` is explicit local publication and is rejected for remote REST runtimes.
-For a remote box, use `boxlite tunnel BOX PORT` to obtain its public service
-URL. For SDK code that must run with either runtime, use the box network tunnel
-API; each tunnel handle represents one connection.
+For a remote box, use `boxlite network tunnel BOX PORT` to obtain its public
+service URL. For SDK code that must run with either runtime, use the box network
+tunnel API; each tunnel handle represents one connection.
 Image `EXPOSE` declarations remain metadata and do not open host listeners.
 
 ---

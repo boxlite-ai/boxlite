@@ -6,6 +6,8 @@ exported and structured without requiring a working libkrun/VM setup.
 Requires the native Rust extension to be compiled (maturin develop).
 """
 
+from typing import ClassVar
+
 import pytest
 
 import boxlite
@@ -197,7 +199,7 @@ class TestModuleMetadata:
     """Test module-level metadata (always available, even without native ext)."""
 
     # Override the module-level skip — version is always available.
-    pytestmark = []
+    pytestmark: ClassVar = []
 
     def test_version_exists(self):
         assert hasattr(boxlite, "__version__")

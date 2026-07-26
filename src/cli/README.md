@@ -69,8 +69,6 @@ cargo build --release -p boxlite-cli
 # Binary: target/release/boxlite
 ```
 
-
-
 ### System Requirements
 
 | Platform       | Architecture          | Status           |
@@ -327,7 +325,7 @@ silently restarting it, because restarting would run the command a second time.
 | `--rm` | | Remove the box when it exits |
 
 `-p` is explicit local publication. Remote REST profiles reject it and direct
-the caller to `boxlite tunnel`.
+the caller to `boxlite network tunnel`.
 
 **Examples:**
 
@@ -368,7 +366,7 @@ default, and `exec` still starts it on demand.
 | `--rm` | | Auto-remove when stopped |
 
 `-p` is explicit local publication. Remote REST profiles reject it and direct
-the caller to `boxlite tunnel`.
+the caller to `boxlite network tunnel`.
 
 **Examples:**
 

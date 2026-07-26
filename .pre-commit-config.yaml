@@ -46,6 +46,7 @@ repos:
             src/ffi/|
             src/guest/|
             sdks/|
+            apps/|
             .*/Cargo\.toml$|
             Cargo\.lock$
           )

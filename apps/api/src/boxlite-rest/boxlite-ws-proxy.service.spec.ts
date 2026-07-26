@@ -93,13 +93,15 @@ describe('BoxliteWsProxyService', () => {
   })
 
   it('does not upgrade the websocket when strict AutoResume fails', async () => {
-    const { service, apiKeyService, organizationUserService, autoResume } = buildAuthHarness()
+    const { service, apiKeyService, organizationUserService, autoResume, boxService } = buildAuthHarness()
     apiKeyService.getApiKeyByValue.mockResolvedValue({
       organizationId: 'org-1',
       userId: 'user-1',
       expiresAt: null,
     })
     organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
+    // AutoResume only runs for a box that opted in, so give the resolved box autoResume=true.
+    boxService.findOneByIdOrName.mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true })
     autoResume.ensureReady.mockRejectedValue(new Error('start failed'))
     const socket = { write: jest.fn(), destroy: jest.fn() }
     const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value

@@ -7,13 +7,13 @@ Async-only metadata retrieval is not exposed.
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Optional
 
 from ..exec import ExecResult
 
 if TYPE_CHECKING:
-    from ._boxlite import SyncBoxlite
     from ._box import SyncBox
+    from ._boxlite import SyncBoxlite
 
 logger = logging.getLogger("boxlite.sync_simplebox")
 
@@ -42,12 +42,12 @@ class SyncSimpleBox:
 
     def __init__(
         self,
-        image: Optional[str] = None,
-        rootfs_path: Optional[str] = None,
-        memory_mib: Optional[int] = None,
-        cpus: Optional[int] = None,
+        image: str | None = None,
+        rootfs_path: str | None = None,
+        memory_mib: int | None = None,
+        cpus: int | None = None,
         runtime: Optional["SyncBoxlite"] = None,
-        name: Optional[str] = None,
+        name: str | None = None,
         auto_remove: bool = True,
         reuse_existing: bool = False,
         **kwargs,
@@ -72,8 +72,8 @@ class SyncSimpleBox:
         if not image and not rootfs_path:
             raise ValueError("Either 'image' or 'rootfs_path' must be provided")
 
-        from ._boxlite import SyncBoxlite
         from ..boxlite import BoxOptions
+        from ._boxlite import SyncBoxlite
 
         # Handle optional runtime
         if runtime is None:
@@ -97,10 +97,10 @@ class SyncSimpleBox:
         # Store for lazy creation in __enter__
         self._name = name
         self._reuse_existing = reuse_existing
-        self._box: Optional["SyncBox"] = None
-        self._created: Optional[bool] = None
+        self._box: SyncBox | None = None
+        self._created: bool | None = None
 
-    def __enter__(self) -> "SyncSimpleBox":
+    def __enter__(self) -> "SyncSimpleBox":  # noqa: PYI034 - typing.Self needs 3.11+; project supports 3.10+
         """Enter context - starts runtime if owned, then creates or reuses box.
 
         When a name is provided, attempts to get an existing box first.
@@ -136,12 +136,12 @@ class SyncSimpleBox:
         return self._box.id
 
     @property
-    def name(self) -> Optional[str]:
+    def name(self) -> str | None:
         """Get the box name (if set)."""
         return self._box.name
 
     @property
-    def created(self) -> Optional[bool]:
+    def created(self) -> bool | None:
         """Whether this box was newly created (True) or an existing box was reused (False).
 
         Returns None if the box hasn't been started yet.
@@ -152,10 +152,10 @@ class SyncSimpleBox:
         self,
         cmd: str,
         *args: str,
-        env: Optional[Dict[str, str]] = None,
-        user: Optional[str] = None,
-        timeout: Optional[float] = None,
-        cwd: Optional[str] = None,
+        env: dict[str, str] | None = None,
+        user: str | None = None,
+        timeout: float | None = None,
+        cwd: str | None = None,
     ) -> ExecResult:
         """
         Execute a command in the box synchronously.
@@ -197,13 +197,13 @@ class SyncSimpleBox:
 
             try:
                 stdout_stream = execution.stdout()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - native binding call; fall back to no stdout stream
                 logger.error(f"take stdout err: {e}")
                 stdout_stream = None
 
             try:
                 stderr_stream = execution.stderr()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - native binding call; fall back to no stderr stream
                 logger.error(f"take stderr err: {e}")
                 stderr_stream = None
 
@@ -216,7 +216,7 @@ class SyncSimpleBox:
                             stdout_lines.append(line.decode("utf-8", errors="replace"))
                         else:
                             stdout_lines.append(line)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - stream collection must not crash exec(); partial output is acceptable
                     logger.error(f"collecting stdout err: {e}")
 
             async def collect_stderr():
@@ -228,7 +228,7 @@ class SyncSimpleBox:
                             stderr_lines.append(line.decode("utf-8", errors="replace"))
                         else:
                             stderr_lines.append(line)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - stream collection must not crash exec(); partial output is acceptable
                     logger.error(f"collecting stderr err: {e}")
 
             await asyncio.gather(collect_stdout(), collect_stderr())
@@ -238,7 +238,7 @@ class SyncSimpleBox:
                 exec_result = await execution.wait()
                 exit_code = exec_result.exit_code
                 error_message = exec_result.error_message
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - native binding call; report failure via exit_code instead of raising
                 logger.error(f"failed to wait execution: {e}")
                 exit_code = -1
 

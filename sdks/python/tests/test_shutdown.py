@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import tempfile
 
-import boxlite
 import pytest
+
+import boxlite
 
 pytestmark = pytest.mark.integration
 
