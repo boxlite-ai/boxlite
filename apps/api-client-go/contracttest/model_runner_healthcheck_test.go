@@ -1,13 +1,15 @@
-package apiclient
+package contracttest
 
 import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 )
 
 func TestRunnerHealthcheckCarriesAdvertisedFeatures(t *testing.T) {
-	healthcheck := NewRunnerHealthcheck("v1.0.0")
+	healthcheck := apiclient.NewRunnerHealthcheck("v1.0.0")
 	healthcheck.SetFeatures([]string{"linux-capabilities-v2"})
 
 	payload, err := json.Marshal(healthcheck)
@@ -25,7 +27,7 @@ func TestRunnerHealthcheckCarriesAdvertisedFeatures(t *testing.T) {
 }
 
 func TestRunnerHealthcheckDoesNotTreatFeaturesAsAdditional(t *testing.T) {
-	var healthcheck RunnerHealthcheck
+	var healthcheck apiclient.RunnerHealthcheck
 	if err := json.Unmarshal([]byte(`{"appVersion":"v1.0.0","features":["linux-capabilities-v2"]}`), &healthcheck); err != nil {
 		t.Fatalf("unmarshal healthcheck: %v", err)
 	}
@@ -36,13 +38,13 @@ func TestRunnerHealthcheckDoesNotTreatFeaturesAsAdditional(t *testing.T) {
 }
 
 func TestBoxDoesNotTreatCapabilitiesAsAdditional(t *testing.T) {
-	box := NewBox(
+	box := apiclient.NewBox(
 		"box-1",
 		"org-1",
 		"cap-box",
 		"boxlite",
 		map[string]string{},
-		*NewBoxAdvancedOptions(*NewLinuxCapabilities([]string{"SYS_ADMIN"}, []string{"NET_RAW"})),
+		*apiclient.NewBoxAdvancedOptions(*apiclient.NewLinuxCapabilities([]string{"SYS_ADMIN"}, []string{"NET_RAW"})),
 		map[string]string{},
 		true,
 		false,
@@ -58,7 +60,7 @@ func TestBoxDoesNotTreatCapabilitiesAsAdditional(t *testing.T) {
 		t.Fatalf("marshal box: %v", err)
 	}
 
-	var decoded Box
+	var decoded apiclient.Box
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		t.Fatalf("unmarshal box: %v", err)
 	}

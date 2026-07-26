@@ -6306,41 +6306,6 @@ components:
       - mountPath
       - volumeId
       type: object
-    LinuxCapabilities:
-      example:
-        add:
-        - SYS_ADMIN
-        drop:
-        - NET_RAW
-      properties:
-        add:
-          description: Linux capabilities added to the default container capability
-            set
-          items:
-            type: string
-          type: array
-        drop:
-          description: Linux capabilities removed from the container capability set
-          items:
-            type: string
-          type: array
-      required:
-      - add
-      - drop
-      type: object
-    BoxAdvancedOptions:
-      example:
-        capabilities:
-          add:
-          - SYS_ADMIN
-          drop:
-          - NET_RAW
-      properties:
-        capabilities:
-          $ref: "#/components/schemas/LinuxCapabilities"
-      required:
-      - capabilities
-      type: object
     Box:
       example:
         id: aB3cD4eF5gH6
@@ -6349,12 +6314,6 @@ components:
         user: boxlite
         env:
           NODE_ENV: production
-        advanced:
-          capabilities:
-            add:
-            - SYS_ADMIN
-            drop:
-            - NET_RAW
         labels:
           boxlite.io/public: "true"
         public: false
@@ -6410,10 +6369,6 @@ components:
           example:
             NODE_ENV: production
           type: object
-        advanced:
-          allOf:
-          - $ref: "#/components/schemas/BoxAdvancedOptions"
-          description: Advanced box configuration
         labels:
           additionalProperties:
             type: string
@@ -6523,7 +6478,6 @@ components:
           example: https://proxy.app.boxlite.io/toolbox
           type: string
       required:
-      - advanced
       - cpu
       - disk
       - env
@@ -7295,8 +7249,6 @@ components:
         proxyUrl: http://proxy.boxlite.example.com:8080
         apiUrl: http://api.boxlite.example.com:8080
         appVersion: v0.0.0-dev
-        features:
-        - linux-capabilities-v2
       properties:
         metrics:
           allOf:
@@ -7323,13 +7275,6 @@ components:
           description: Runner app version
           example: v0.0.0-dev
           type: string
-        features:
-          description: Optional runner features used for rollout negotiation
-          example:
-          - linux-capabilities-v2
-          items:
-            type: string
-          type: array
       required:
       - appVersion
       type: object
@@ -7419,7 +7364,6 @@ components:
       description: The type of the job
       enum:
       - CREATE_BOX
-      - CREATE_BOX_WITH_CAPABILITIES_V2
       - START_BOX
       - STOP_BOX
       - DESTROY_BOX
@@ -7427,7 +7371,6 @@ components:
       - CREATE_BACKUP
       - PULL_ARTIFACT
       - RECOVER_BOX
-      - RECOVER_BOX_WITH_CAPABILITIES_V2
       - INSPECT_ARTIFACT_IN_REGISTRY
       - REMOVE_ARTIFACT
       - UPDATE_BOX_NETWORK_SETTINGS

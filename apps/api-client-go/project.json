@@ -26,8 +26,7 @@
       "outputs": [
         "{projectRoot}/*.go",
         "{projectRoot}/go.mod",
-        "{projectRoot}/go.sum",
-        "{projectRoot}/api/openapi.yaml"
+        "{projectRoot}/go.sum"
       ],
       "options": {
         "commands": [

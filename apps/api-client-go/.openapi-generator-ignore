@@ -28,3 +28,7 @@ test/*
 .gitlab-ci.yml
 docs/*
 README.md
+
+# Deprecated snapshot. The NestJS export is authoritative; keep this file
+# unchanged until it is removed from the repository.
+api/openapi.yaml
