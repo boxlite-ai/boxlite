@@ -581,7 +581,7 @@ Error: portal error: connection timeout
 
 **Solution:**
 - Enable debug logging: `RUST_LOG=debug`
-- Check if box is running: `box.info().status`
+- Check if box is running: `box.info().await?.status`
 - Restart box: `box.stop()` and recreate
 - Report issue with logs if persists
 
@@ -673,7 +673,7 @@ Error: box not found: 01JJNH8...
 ```
 
 **Solution:**
-- List all boxes: `runtime.list()`
+- List all boxes: `await runtime.list_info()`
 - Verify box ID is correct
 - Create new box if needed
 
@@ -710,8 +710,8 @@ Error: invalid state: cannot execute on stopped box
 ```
 
 **Solution:**
-- Check box status: `info = await box.info(); print(info.status)`
-- Restart box if stopped: `runtime.get(box_id)` (may auto-restart)
+- Check box status: `info = await box.info(); print(info.state.status)`
+- Restart box if stopped: `await runtime.get(box_id)` (may auto-restart)
 - Create new box if needed
 
 ### Error Handling Patterns

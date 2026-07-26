@@ -35,8 +35,7 @@ class TestSyncCodeBox:
     def test_default_image(self, shared_sync_runtime):
         """Uses Python image by default."""
         with SyncCodeBox(runtime=shared_sync_runtime) as box:
-            info = box.info()
-            assert "python" in info.image.lower()
+            assert "python" in box._box_opts.image.lower()
 
     def test_run_simple(self, shared_sync_runtime):
         """Can run simple Python code."""

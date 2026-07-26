@@ -74,7 +74,7 @@ const box = await runtime.create({
 
 // List all boxes
 const boxes = await runtime.listInfo();
-boxes.forEach(info => console.log(`${info.id}: ${info.status}`));
+boxes.forEach(info => console.log(`${info.id}: ${info.state.status}`));
 ```
 
 ---
@@ -187,7 +187,7 @@ Handle to a running or stopped box.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `info()` | `() => JsBoxInfo` | Get box metadata (sync) |
+| `info()` | `() => Promise<JsBoxInfo>` | Get box metadata |
 | `exec()` | `(cmd, args?, env?, tty?) => Promise<JsExecution>` | Execute command |
 | `stop()` | `() => Promise<void>` | Stop the box |
 | `metrics()` | `() => Promise<JsBoxMetrics>` | Get resource metrics |
@@ -202,10 +202,11 @@ Metadata about a box.
 |-------|------|-------------|
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| undefined` | User-defined name |
-| `status` | `string` | Current status: `"Starting"`, `"Running"`, `"Stopped"`, etc. |
+| `state` | `JsBoxStateInfo` | Runtime state with `status`, `running`, and optional `pid` fields |
 | `createdAt` | `string` | Creation timestamp (ISO 8601) |
-| `lastUpdated` | `string` | Last state change (ISO 8601) |
-| `pid` | `number \| undefined` | Process ID (if running) |
+| `image` | `string` | OCI image reference or rootfs path |
+| `cpus` | `number` | Allocated CPU count |
+| `memoryMib` | `number` | Allocated memory in MiB |
 | `network` | `JsNetworkInfo \| null` | Current network configuration and resolved local publications |
 
 ```typescript
@@ -224,17 +225,17 @@ interface JsPublishedPort {
 ```
 
 `network === null` means network information is unavailable. Within
-`JsNetworkInfo`, `publishedPorts === null` means unresolved for the current box
-lifecycle, `[]` means authoritatively no publications, and a populated array
-contains concrete active local bindings. `JsPortSpec` remains the request type;
-resolved output uses `JsPublishedPort` so every reported host port is concrete.
+`JsNetworkInfo`, `publishedPorts === null` means the current handle does not know
+the lifecycle's publications, `[]` means there are no active publications, and
+a populated array contains concrete active local bindings. `JsPortSpec` remains
+the request type; resolved output uses `JsPublishedPort` so every reported host
+port is concrete.
 
-`box.info()` is a synchronous, lifecycle-bound snapshot. For a running local
-box with configured ports, `await runtime.getInfo(id)` and
-`await runtime.listInfo()` always confirm the current bindings through an
-observation-only backend query. That query never publishes a listener or
-starts, stops, or restarts the box; failure or a lifecycle race is reported as
-`publishedPorts === null`.
+`box.info()` always returns a promise. Local metadata reads report
+bindings captured when this handle started or reattached the box; REST metadata
+reads fetch the current server record. A newly loaded local running box has no
+live binding data yet, so box, get, or list info may report
+`publishedPorts === null` until an operation requiring live state reattaches it.
 
 ---
 

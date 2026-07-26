@@ -18,11 +18,6 @@ use std::time::Duration;
 
 const DEFAULT_HOST_IP: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 #[cfg(not(test))]
-const METADATA_OBSERVE_TIMEOUT: Duration = Duration::from_secs(1);
-#[cfg(test)]
-const METADATA_OBSERVE_TIMEOUT: Duration = Duration::from_millis(50);
-
-#[cfg(not(test))]
 const REATTACH_CONTROL_READY_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(test)]
 const REATTACH_CONTROL_READY_TIMEOUT: Duration = Duration::from_millis(50);
@@ -51,80 +46,11 @@ impl PlannedPort {
 pub struct PortPublishTask;
 
 impl PortPublishTask {
-    /// Discover bindings already owned by the running backend without creating
-    /// or removing any listener. Metadata reads use this observational path;
-    /// start/reattach remains the sole owner of publication repair.
-    pub(crate) async fn observe(
-        backend: Option<&dyn NetworkBackend>,
-        requested: &[PortSpec],
-        lifecycle: ShimPidRecord,
-    ) -> BoxliteResult<Vec<PublishedPort>> {
-        let planned = plan_ports(requested)?;
-        if planned.is_empty() {
-            return Ok(Vec::new());
-        }
-        if !lifecycle.has_runtime_port_control() {
-            return Err(BoxliteError::Unsupported(
-                "legacy shim has no observable runtime port control; restart the box to migrate"
-                    .to_string(),
-            ));
-        }
-        let backend = backend.ok_or_else(|| {
-            BoxliteError::Unsupported(
-                "host port discovery requires an active network backend".to_string(),
-            )
-        })?;
-
-        // After any in-flight publication finishes, the metadata read's own
-        // backend call is best effort and does not use reattach's readiness
-        // retries. A caller can retry a null BoxInfo result.
-        let active_forwards = tokio::time::timeout(
-            METADATA_OBSERVE_TIMEOUT,
-            backend.list_forwards(),
-        )
-        .await
-        .map_err(|_| {
-            BoxliteError::Network(format!(
-                "network backend forward discovery timed out after {METADATA_OBSERVE_TIMEOUT:?}"
-            ))
-        })??;
-        let mut claimed_active = vec![false; active_forwards.len()];
-        let mut resolved = vec![None; requested.len()];
-
-        let ordered = publication_order(&planned);
-        for (position, mapping) in ordered.iter().copied().enumerate() {
-            let matching_limit = remaining_equivalent_mappings(&ordered, position);
-            let active_index =
-                find_existing_forward(mapping, &active_forwards, &claimed_active, matching_limit)?
-                    .ok_or_else(|| {
-                        BoxliteError::InvalidState(format!(
-                            "configured port {} has no active backend forward",
-                            mapping.request.guest_port
-                        ))
-                    })?;
-            claimed_active[active_index] = true;
-            let local = validate_forward(&active_forwards[active_index], mapping)?;
-            resolved[mapping.request_index] = Some(PublishedPort {
-                guest_port: mapping.request.guest_port,
-                host_ip: local.ip().to_string(),
-                host_port: local.port(),
-                protocol: mapping.request.protocol,
-            });
-        }
-
-        resolved
-            .into_iter()
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| {
-                BoxliteError::Internal("port discovery result was incomplete".to_string())
-            })
-    }
-
     /// Repair publication for an already-active lifecycle.
     ///
     /// The running reattach pipeline uses this entry point to adopt or restore
-    /// forwards after a core-process restart. Metadata reads use `observe`
-    /// above and never call this mutating path.
+    /// forwards after a core-process restart. Metadata reads never call this
+    /// mutating path; they report only what the live state already knows.
     pub(crate) async fn reconcile(
         backend: Option<&dyn NetworkBackend>,
         requested: &[PortSpec],
@@ -151,16 +77,6 @@ impl PipelineTask<InitCtx> for PortPublishTask {
     async fn run(self: Box<Self>, ctx: InitCtx) -> BoxliteResult<()> {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
-
-        // A recovered box can be inspected through a separate BoxImpl while
-        // this pipeline reconciles its listeners. Share the runtime gate so
-        // an observation cannot cache a partially reconciled publication.
-        let refresh_lock = {
-            let ctx = ctx.lock().await;
-            ctx.runtime.published_port_cache.refresh_lock(&box_id)
-        };
-        let _refresh = refresh_lock.lock().await;
-        let refresh_generation = refresh_lock.generation();
 
         let (requested, pid_path, network_backend, is_reattach) = {
             let mut ctx = ctx.lock().await;
@@ -199,12 +115,6 @@ impl PipelineTask<InitCtx> for PortPublishTask {
         if let Ok(Some(ports)) = &result {
             let published_ports =
                 crate::litebox::ports::LivePublishedPorts::new(lifecycle.identity(), ports.clone());
-            ctx.runtime.published_port_cache.store_if_current(
-                &box_id,
-                &refresh_lock,
-                refresh_generation,
-                published_ports.clone(),
-            );
             ctx.published_ports = Some(published_ports);
         }
         drop(ctx);
@@ -932,114 +842,6 @@ mod tests {
         assert_eq!(backend.list_call_count(), 3);
         assert_eq!(*backend.exposed.lock().unwrap(), vec!["127.0.0.1:0"]);
         assert_eq!(resolved, vec![published_port(49152, 3000)]);
-    }
-
-    #[tokio::test]
-    async fn metadata_observation_never_publishes_a_missing_forward() {
-        let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:49152")]);
-
-        let error =
-            PortPublishTask::observe(Some(&backend), &[mapping(None, 3000)], lifecycle(117, 1017))
-                .await
-                .unwrap_err();
-
-        assert!(error.to_string().contains("no active backend forward"));
-        assert!(
-            backend.exposed.lock().unwrap().is_empty(),
-            "metadata discovery must not create a listener"
-        );
-    }
-
-    #[tokio::test]
-    async fn metadata_observation_does_not_retry_backend_errors() {
-        let backend = MockBackend::new([])
-            .with_transient_list_errors(["gvproxy control socket is not ready"]);
-
-        let error =
-            PortPublishTask::observe(Some(&backend), &[mapping(None, 3000)], lifecycle(123, 1023))
-                .await
-                .unwrap_err();
-
-        assert!(error.to_string().contains("control socket is not ready"));
-        assert_eq!(backend.list_call_count(), 1);
-        assert!(backend.exposed.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn metadata_observation_returns_an_existing_automatic_forward() {
-        let backend =
-            MockBackend::new([]).with_active(vec![active_forward("127.0.0.1:49152", 3000)]);
-
-        let resolved =
-            PortPublishTask::observe(Some(&backend), &[mapping(None, 3000)], lifecycle(118, 1018))
-                .await
-                .unwrap();
-
-        assert_eq!(resolved, vec![published_port(49152, 3000)]);
-        assert!(backend.exposed.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn metadata_observation_claims_fixed_before_overlapping_automatic() {
-        let backend = MockBackend::new([]).with_active(vec![
-            active_forward("127.0.0.1:18080", 3000),
-            active_forward("127.0.0.1:49152", 3000),
-        ]);
-        let requested = vec![mapping(None, 3000), mapping(Some(18080), 3000)];
-
-        let resolved = PortPublishTask::observe(Some(&backend), &requested, lifecycle(120, 1020))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            resolved,
-            vec![published_port(49152, 3000), published_port(18080, 3000)]
-        );
-    }
-
-    #[tokio::test]
-    async fn metadata_observation_rejects_ambiguous_live_automatic_forwards() {
-        let backend = MockBackend::new([]).with_active(vec![
-            active_forward("127.0.0.1:49152", 3000),
-            active_forward("127.0.0.1:49153", 3000),
-        ]);
-
-        let error =
-            PortPublishTask::observe(Some(&backend), &[mapping(None, 3000)], lifecycle(121, 1021))
-                .await
-                .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("multiple active backend forwards")
-        );
-        assert!(backend.exposed.lock().unwrap().is_empty());
-        assert!(backend.unexposed.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn metadata_observation_bounds_a_hanging_backend_query() {
-        let backend = MockBackend::new([]).with_list_delay(Duration::from_secs(2));
-        let started = std::time::Instant::now();
-
-        let error =
-            PortPublishTask::observe(Some(&backend), &[mapping(None, 3000)], lifecycle(122, 1022))
-                .await
-                .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("network backend forward discovery timed out")
-        );
-        assert!(
-            started.elapsed() < Duration::from_millis(500),
-            "a metadata query must remain bounded"
-        );
-        assert_eq!(backend.list_call_count(), 1);
-        assert!(backend.exposed.lock().unwrap().is_empty());
-        assert!(backend.unexposed.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

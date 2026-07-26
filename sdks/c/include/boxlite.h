@@ -293,8 +293,9 @@ typedef struct CPublishedPortList {
 // Typed network metadata owned by an enclosing [`CBoxInfo`].
 //
 // `allow_net` points to `allow_net_count` owned strings. `published_ports`
-// is null when the current bindings are unresolved, non-null and empty when
-// they are authoritatively empty, and otherwise contains concrete bindings.
+// is null when the current handle does not know the bindings, non-null and
+// empty when there are no active publications, and otherwise contains
+// concrete bindings.
 typedef struct CNetworkInfo {
   enum BoxliteNetworkMode mode;
   char **allow_net;
@@ -319,7 +320,9 @@ typedef struct CBoxInfo {
   struct CNetworkInfo *network;
 } CBoxInfo;
 
-// Box info completion.
+// Box info completion. On success the callback owns the non-null metadata and
+// must release it with `boxlite_free_box_info`. The error pointer is borrowed
+// for callback dispatch only; on failure the metadata pointer is null.
 typedef void (*CBoxInfoCb)(struct CBoxInfo*, CBoxliteError*, void*);
 
 typedef struct CBoxInfoList {
@@ -611,7 +614,8 @@ void boxlite_free_image_info_list(struct CImageInfoList *list);
 void boxlite_free_image_pull_result(struct CImagePullResult *result);
 
 enum BoxliteErrorCode boxlite_box_info(CBoxHandle *handle,
-                                       struct CBoxInfo **out_info,
+                                       CBoxInfoCb cb,
+                                       void *user_data,
                                        CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_get_info(CBoxliteRuntime *runtime,

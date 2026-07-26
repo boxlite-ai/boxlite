@@ -339,8 +339,8 @@ pub struct NetworkInfo {
 
     /// Concrete publications for the current runtime lifecycle.
     ///
-    /// `None` means the runtime could not authoritatively resolve the current
-    /// bindings. `Some([])` means there are authoritatively no publications.
+    /// `None` means this handle does not know the current bindings. `Some([])`
+    /// means there are no active publications.
     #[serde(default)]
     pub published_ports: Option<Vec<PublishedPort>>,
 }

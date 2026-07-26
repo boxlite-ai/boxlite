@@ -1,8 +1,8 @@
 """
 Integration tests for the synchronous API (greenlet-based).
 
-These tests exercise the SyncBoxlite/SyncBox/SyncExecution classes that mirror
-the async API. They launch real VMs, so we mark them as ``integration``.
+These tests exercise synchronous lifecycle and execution wrappers. Box metadata
+remains async-only. The tests launch real VMs, so we mark them as ``integration``.
 """
 
 from __future__ import annotations
@@ -39,7 +39,8 @@ class TestSyncBoxliteRuntime:
         """SyncBoxlite has expected methods."""
         assert hasattr(shared_sync_runtime, "create")
         assert hasattr(shared_sync_runtime, "get")
-        assert hasattr(shared_sync_runtime, "list_info")
+        assert not hasattr(shared_sync_runtime, "get_info")
+        assert not hasattr(shared_sync_runtime, "list_info")
         assert hasattr(shared_sync_runtime, "metrics")
         assert hasattr(shared_sync_runtime, "stop")
 
@@ -64,8 +65,8 @@ class TestSyncBox:
         assert box.id is not None
         box.stop()
 
-    def test_box_info(self, shared_sync_runtime):
-        """Can get box info."""
+    def test_box_has_no_sync_info(self, shared_sync_runtime):
+        """Box metadata is available only from the async API."""
         box = shared_sync_runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
@@ -73,11 +74,7 @@ class TestSyncBox:
                 memory_mib=256,
             )
         )
-        info = box.info()
-        assert info.id == box.id
-        assert info.image == "alpine:latest"
-        assert info.cpus == 2
-        assert info.memory_mib == 256
+        assert not hasattr(box, "info")
         box.stop()
 
     def test_box_exec_simple(self, shared_sync_runtime):
@@ -259,18 +256,6 @@ class TestSyncExecution:
 
 class TestSyncBoxliteRuntimeMethods:
     """Tests for SyncBoxlite runtime methods."""
-
-    def test_list_info(self, shared_sync_runtime):
-        """Can list all boxes."""
-        # Create a box
-        box = shared_sync_runtime.create(boxlite.BoxOptions(image="alpine:latest"))
-
-        # List should include our box
-        infos = shared_sync_runtime.list_info()
-        assert isinstance(infos, list)
-        assert any(info.id == box.id for info in infos)
-
-        box.stop()
 
     def test_get_box(self, shared_sync_runtime):
         """Can get existing box by ID."""

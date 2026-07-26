@@ -44,7 +44,7 @@ async def test_clone_running_box():
         print(f"  Cloned: {cloned.id}")
 
         # Source should still be running
-        source_info = source.info()
+        source_info = await source.info()
         print(f"  Source state after clone: {source_info.state}")
 
         # Cloned box is stopped — start it and verify marker
@@ -114,7 +114,7 @@ async def test_export_import_roundtrip():
             print(f"  Archive: {archive_path}")
 
             # Source should still be running after export
-            print(f"  Source state after export: {source.info().state}")
+            print(f"  Source state after export: {(await source.info()).state}")
 
             # Import the archive
             print("Importing archive...")

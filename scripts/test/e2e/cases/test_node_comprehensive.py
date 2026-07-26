@@ -177,7 +177,7 @@ def test_node_lifecycle_stop_start(node_env):
 
 
 def test_node_box_info(node_env):
-    """box.info() and rt.getInfo() must carry the box id and name."""
+    """Awaited box.info() and rt.getInfo() must carry the box id and name."""
     r = _run(node_env, "box_info")
     assert r.returncode == 0, f"exit={r.returncode}\nstderr:\n{r.stderr}"
     assert "BOX_INFO=ok" in r.stdout

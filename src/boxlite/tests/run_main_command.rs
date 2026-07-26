@@ -187,7 +187,12 @@ async fn a_stopped_no_command_box_refuses_to_serve_its_dead_vm() {
     };
     let handle = runtime.create(opts, None).await.expect("create box");
     handle.start().await.expect("start box");
-    let shim = handle.info().pid.expect("a running box has a shim");
+    let shim = handle
+        .info()
+        .await
+        .expect("get box info")
+        .pid
+        .expect("a running box has a shim");
 
     // The VM dies underneath the handle.
     let killed = std::process::Command::new("kill")
@@ -196,9 +201,9 @@ async fn a_stopped_no_command_box_refuses_to_serve_its_dead_vm() {
         .expect("run kill");
     assert!(killed.success(), "the shim must actually be killed");
 
-    let mut status = handle.info().status;
+    let mut status = handle.info().await.expect("get box info").status;
     for _ in 0..60 {
-        status = handle.info().status;
+        status = handle.info().await.expect("get box info").status;
         if status != boxlite::BoxStatus::Running {
             break;
         }
@@ -361,16 +366,16 @@ async fn an_adopted_running_box_is_followed_to_its_exit() {
         .expect("get box")
         .expect("box exists");
     assert_eq!(
-        adopted.info().status,
+        adopted.info().await.expect("get box info").status,
         boxlite::BoxStatus::Running,
         "precondition: the box must still be running when we adopt it"
     );
 
     // Its main command now exits on its own. Nothing in this process started the
     // box, so only an armed watcher can notice.
-    let mut info = adopted.info();
+    let mut info = adopted.info().await.expect("get box info");
     for _ in 0..60 {
-        info = adopted.info();
+        info = adopted.info().await.expect("get box info");
         if info.status != boxlite::BoxStatus::Running {
             break;
         }
@@ -422,9 +427,9 @@ async fn a_self_stopped_box_refuses_to_restart_on_the_spent_handle() {
     handle.start().await.expect("start box");
 
     // Wait for the watcher to observe the shim's death and record the exit.
-    let mut info = handle.info();
+    let mut info = handle.info().await.expect("get box info");
     for _ in 0..60 {
-        info = handle.info();
+        info = handle.info().await.expect("get box info");
         if info.status != boxlite::BoxStatus::Running {
             break;
         }
@@ -464,7 +469,7 @@ async fn a_self_stopped_box_refuses_to_restart_on_the_spent_handle() {
         .expect("box exists");
     fresh.start().await.expect("a fresh handle must restart it");
     assert_eq!(
-        fresh.info().status,
+        fresh.info().await.expect("get box info").status,
         boxlite::BoxStatus::Running,
         "the restarted box must actually be running"
     );
@@ -503,9 +508,9 @@ async fn attach_refuses_a_stopped_box() {
     handle.start().await.expect("start box");
 
     // Wait for the watcher to mark it Stopped.
-    let mut info = handle.info();
+    let mut info = handle.info().await.expect("get box info");
     for _ in 0..60 {
-        info = handle.info();
+        info = handle.info().await.expect("get box info");
         if info.status != boxlite::BoxStatus::Running {
             break;
         }
@@ -527,7 +532,7 @@ async fn attach_refuses_a_stopped_box() {
         .expect("get box")
         .expect("box exists");
     assert_eq!(
-        stopped.info().status,
+        stopped.info().await.expect("get box info").status,
         boxlite::BoxStatus::Stopped,
         "precondition: a fresh handle on the box reports it Stopped"
     );

@@ -77,7 +77,7 @@ def _make_box_info(box_id: str, *, name: str = "test-box", status: str = "create
 
 def _make_box_handle(box_id: str, *, name: str = "test-box"):
     info = _make_box_info(box_id, name=name)
-    handle = SimpleNamespace(info=lambda: info)
+    handle = SimpleNamespace(info=AsyncMock(return_value=info))
     handle.start = AsyncMock()
     handle.stop = AsyncMock()
     handle.clone = AsyncMock()
@@ -212,7 +212,7 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
         cached = _make_box_handle("box-canonical", name="friendly-name")
         SERVER.state.active_boxes_by_id["box-canonical"] = cached
         runtime = SimpleNamespace(
-            list_info=AsyncMock(return_value=[cached.info()]),
+            list_info=AsyncMock(return_value=[await cached.info()]),
             remove=AsyncMock(return_value=None),
         )
         SERVER.state.runtime = runtime

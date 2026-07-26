@@ -40,10 +40,11 @@ from boxlite import Boxlite, Options, BoxOptions, ImageRegistry
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `create()` | `(options: BoxOptions, name: str = None) -> Box` | Create a new box (async) |
-| `get()` | `(box_id: str) -> Box` | Reattach to an existing box by ID (async) |
-| `list()` | `() -> List[BoxInfo]` | List all boxes (async) |
-| `metrics()` | `() -> RuntimeMetrics` | Get runtime-wide metrics (async) |
+| `create()` | `async (options: BoxOptions, name: str = None) -> Box` | Create a new box |
+| `get()` | `async (box_id: str) -> Optional[Box]` | Reattach to an existing box by ID |
+| `get_info()` | `async (box_id: str) -> Optional[BoxInfo]` | Get current box metadata by ID or name |
+| `list_info()` | `async () -> List[BoxInfo]` | List all boxes |
+| `metrics()` | `async () -> RuntimeMetrics` | Get runtime-wide metrics |
 
 #### Example
 
@@ -69,8 +70,8 @@ runtime = Boxlite(Options(
 box = await runtime.create(BoxOptions(image="alpine:latest"))
 
 # List all boxes
-for info in await runtime.list():
-    print(f"{info.id}: {info.status}")
+for info in await runtime.list_info():
+    print(f"{info.id}: {info.state.status}")
 ```
 
 ---
@@ -213,7 +214,7 @@ Handle to a running or stopped box.
 | `exec()` | `(cmd, args, env, tty) -> Execution` | Execute command (async) |
 | `stop()` | `() -> None` | Stop the box gracefully (async) |
 | `remove()` | `() -> None` | Delete box and its data (async) |
-| `info()` | `() -> BoxInfo` | Get a synchronous metadata snapshot |
+| `info()` | `async () -> BoxInfo` | Get box metadata |
 | `metrics()` | `() -> BoxMetrics` | Get resource usage metrics (async) |
 
 ---
@@ -226,9 +227,8 @@ Metadata about a box.
 |-------|------|-------------|
 | `id` | `str` | Unique box identifier (ULID) |
 | `name` | `str \| None` | Optional user-assigned name |
-| `status` | `str` | Current status: `"running"`, `"stopped"`, `"created"` |
-| `created_at` | `datetime` | Creation timestamp |
-| `pid` | `int \| None` | Process ID (if running) |
+| `state` | `BoxStateInfo` | Runtime state with `status`, `running`, and nullable `pid` fields |
+| `created_at` | `str` | ISO 8601 creation timestamp |
 | `image` | `str` | OCI image used |
 | `cpus` | `int` | Allocated CPU cores |
 | `memory_mib` | `int` | Allocated memory in MiB |
@@ -239,17 +239,16 @@ Metadata about a box.
 `guest_port`, `host_ip`, `host_port`, and `protocol` attributes.
 
 `network is None` means network information is unavailable. Within
-`NetworkInfo`, `published_ports is None` means unresolved for the current box
-lifecycle, `[]` means authoritatively no publications, and a populated list
-contains concrete active local bindings. `BoxOptions.ports` remains the request
-API; its optional host port is not reused in resolved output.
+`NetworkInfo`, `published_ports is None` means the current handle does not know
+the lifecycle's publications, `[]` means there are no active publications, and
+a populated list contains concrete active local bindings. `BoxOptions.ports`
+remains the request API; its optional host port is not reused in resolved output.
 
-`box.info()` is a synchronous, lifecycle-bound snapshot. For a running local
-box with configured ports, `await runtime.get_info(id)` and
-`await runtime.list_info()` always confirm the current bindings through an
-observation-only backend query. That query never publishes a listener or
-starts, stops, or restarts the box; failure or a lifecycle race is reported as
-`published_ports is None`.
+`box.info()` has no synchronous variant. Local metadata reads report
+bindings captured when this handle started or reattached the box; REST metadata
+reads fetch the current server record. A newly loaded local running box has no
+live binding data yet, so box, get, or list info may report
+`published_ports is None` until an operation requiring live state reattaches it.
 
 ---
 
@@ -426,7 +425,7 @@ SimpleBox(
 |--------|-----------|-------------|
 | `start()` | `() -> Self` | Explicitly start the box (async) |
 | `exec()` | `(cmd, *args, env=None, user=None, timeout=None, cwd=None) -> ExecResult` | Execute command and wait (async) |
-| `info()` | `() -> BoxInfo` | Get box metadata |
+| `info()` | `async () -> BoxInfo` | Get box metadata |
 | `shutdown()` | `() -> None` | Shutdown and release resources |
 
 #### Example
@@ -733,13 +732,13 @@ from boxlite import SyncBoxlite, SyncBox, SyncSimpleBox, SyncCodeBox
 
 | Async API | Sync API | Notes |
 |-----------|----------|-------|
-| `Boxlite` | `SyncBoxlite` | |
-| `Box` | `SyncBox` | |
+| `Boxlite` | `SyncBoxlite` | `get_info()` and `list_info()` are async-only |
+| `Box` | `SyncBox` | `Box.info()` is async-only and is not exposed by `SyncBox` |
 | `Execution` | `SyncExecution` | |
 | `ExecStdout` | `SyncExecStdout` | Regular iterator |
 | `ExecStderr` | `SyncExecStderr` | Regular iterator |
-| `SimpleBox` | `SyncSimpleBox` | |
-| `CodeBox` | `SyncCodeBox` | |
+| `SimpleBox` | `SyncSimpleBox` | `SimpleBox.info()` is async-only and is not exposed by `SyncSimpleBox` |
+| `CodeBox` | `SyncCodeBox` | Inherits the async-only metadata rule |
 
 ### Classes
 

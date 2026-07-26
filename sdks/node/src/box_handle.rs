@@ -36,10 +36,11 @@ impl JsBox {
         self.handle.name().map(|s| s.to_string())
     }
 
-    /// Get box metadata (synchronous).
+    /// Get box metadata.
     #[napi]
-    pub fn info(&self) -> JsBoxInfo {
-        JsBoxInfo::from(self.handle.info())
+    pub async fn info(&self) -> Result<JsBoxInfo> {
+        let info = self.handle.info().await.map_err(map_err)?;
+        Ok(JsBoxInfo::from(info))
     }
 
     /// Execute a command inside the box.

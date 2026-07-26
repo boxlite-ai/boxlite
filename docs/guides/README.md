@@ -347,7 +347,7 @@ box while networking is enabled.
 Monitor network usage:
 
 ```python
-box = runtime.create(boxlite.BoxOptions(image="alpine"))
+box = await runtime.create(boxlite.BoxOptions(image="alpine"))
 metrics = await box.metrics()
 
 print(f"Bytes sent: {metrics.network_bytes_sent}")
@@ -532,11 +532,11 @@ RUST_LOG=debug cargo run
 **Get Box Information:**
 
 ```python
-box = runtime.create(boxlite.BoxOptions(image="alpine"))
+box = await runtime.create(boxlite.BoxOptions(image="alpine"))
 info = await box.info()
 
 print(f"ID: {info.id}")
-print(f"Status: {info.status}")
+print(f"Status: {info.state.status}")
 print(f"Image: {info.image}")
 print(f"CPUs: {info.cpus}")
 print(f"Memory: {info.memory_mib} MiB")
@@ -557,9 +557,9 @@ print(f"Network received: {metrics.network_bytes_received}")
 **List All Boxes:**
 
 ```python
-boxes = runtime.list()
+boxes = await runtime.list_info()
 for info in boxes:
-    print(f"{info.id}: {info.status} ({info.image})")
+    print(f"{info.id}: {info.state.status} ({info.image})")
 ```
 
 ### Common Issues & Debug Steps
@@ -639,7 +639,7 @@ for info in boxes:
 
 3. Monitor runtime metrics:
    ```python
-   runtime_metrics = runtime.metrics()
+   runtime_metrics = await runtime.metrics()
    print(f"Active boxes: {runtime_metrics.active_boxes}")
    print(f"Total exec calls: {runtime_metrics.total_exec_calls}")
    ```
@@ -782,7 +782,7 @@ asyncio.run(main())
 **Concurrency Limits:**
 - Limited by host resources (CPU, memory)
 - Each box: minimum 128 MiB + overhead
-- Monitor with `runtime.metrics().active_boxes`
+- Monitor with `(await runtime.metrics()).active_boxes`
 
 **Best Practices:**
 - Use asyncio for concurrent execution

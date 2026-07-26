@@ -524,7 +524,8 @@ local-only host listener that accepts repeated connections.
 // List all boxes
 BoxliteErrorCode boxlite_list_info(
     CBoxliteRuntime* runtime,
-    CBoxInfoList** out_list,
+    CBoxInfoListCb cb,
+    void* user_data,
     CBoxliteError* out_error
 );
 
@@ -532,14 +533,16 @@ BoxliteErrorCode boxlite_list_info(
 BoxliteErrorCode boxlite_get_info(
     CBoxliteRuntime* runtime,
     const char* id_or_name,
-    CBoxInfo** out_info,
+    CBoxInfoCb cb,
+    void* user_data,
     CBoxliteError* out_error
 );
 
 // Get box info from handle
 BoxliteErrorCode boxlite_box_info(
     CBoxHandle* handle,
-    CBoxInfo** out_info,
+    CBoxInfoCb cb,
+    void* user_data,
     CBoxliteError* out_error
 );
 
@@ -554,15 +557,16 @@ BoxliteErrorCode boxlite_box_metrics(
 `CBoxInfo.network` is an owned `CNetworkInfo*` and is `NULL` when network
 metadata is unavailable. `CNetworkInfo` exposes `mode`, the `allow_net` string
 array and count, and a nullable `CPublishedPortList*`. A `NULL`
-`published_ports` pointer means unresolved, a non-`NULL` list with `count == 0`
-means authoritatively empty, and a populated list contains typed
-`CPublishedPort` entries with `guest_port`, `host_ip`, `host_port`, and
-`protocol`.
+`published_ports` pointer means the current handle does not know the bindings,
+a non-`NULL` list with `count == 0` means there are no active publications, and
+a populated list contains typed `CPublishedPort` entries with `guest_port`,
+`host_ip`, `host_port`, and `protocol`.
 
 The network pointer and every nested array and string are borrowed from their
-enclosing `CBoxInfo`; do not free them separately. `boxlite_free_box_info()` and
-`boxlite_free_box_info_list()` release the complete object graph.
-`boxlite_get_info()` observes the live backend without publishing.
+enclosing `CBoxInfo`; do not free them separately. Info callbacks own their
+result and must call `boxlite_free_box_info()` or
+`boxlite_free_box_info_list()` to release the complete object graph. All info
+operations complete asynchronously through `boxlite_runtime_drain()`.
 
 ### Error Handling
 
@@ -883,6 +887,12 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
   ports are `uint16_t`, the new `BoxlitePortProtocol` enum and a nullable
   `host_ip` bind address were added, and the function returns
   `BoxliteErrorCode` instead of `void`.
+- `boxlite_box_info` intentionally breaks the C ABI: metadata lookup is now
+  asynchronous, so the `CBoxInfo **out_info` argument was replaced by a
+  `CBoxInfoCb` callback and `void *user_data`. `Ok` means the request was
+  queued; call `boxlite_runtime_drain()` to dispatch the callback. On success,
+  the callback owns the `CBoxInfo *` and must release it with
+  `boxlite_free_box_info()`.
 
 Before:
 ```c
@@ -892,6 +902,20 @@ boxlite_options_add_port(opts, 80, 8080);  /* guest, host */
 After:
 ```c
 boxlite_options_add_port(opts, 8080, 80, BoxlitePortProtocolTcp, NULL);  /* host, guest */
+```
+
+Before:
+```c
+CBoxInfo *info = NULL;
+boxlite_box_info(box, &info, &error);
+```
+
+After:
+```c
+boxlite_box_info(box, on_info, user_data, &error);
+while (!request_done) {
+    boxlite_runtime_drain(runtime, -1, &error);
+}
 ```
 
 ### From 0.1.x to 0.2.0

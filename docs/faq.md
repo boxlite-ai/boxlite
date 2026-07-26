@@ -211,7 +211,7 @@ RUST_LOG=debug python script.py
 
 ```python
 info = await box.info()
-print(f"Status: {info.status}")
+print(f"Status: {info.state.status}")
 
 metrics = await box.metrics()
 print(f"Memory: {metrics.memory_usage_bytes / (1024**2):.2f} MB")
@@ -330,7 +330,7 @@ See [Configuring Networking](./guides/README.md#configuring-networking) for deta
 
 3. **Too many boxes:**
    ```python
-   metrics = runtime.metrics()
+   metrics = await runtime.metrics()
    print(f"Active boxes: {metrics.active_boxes}")
    # Reduce concurrency or increase host resources
    ```
@@ -355,7 +355,7 @@ Example:
 
 **Best practices:**
 - Start small (10 boxes) and scale up
-- Monitor metrics: `runtime.metrics().active_boxes`
+- Monitor metrics: `(await runtime.metrics()).active_boxes`
 - Use resource pooling (reuse boxes)
 - Test at expected load
 

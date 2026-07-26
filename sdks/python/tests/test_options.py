@@ -8,16 +8,17 @@ These tests verify the behavior of:
 
 from __future__ import annotations
 
-import boxlite
 import pytest
+
+import boxlite
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def runtime(shared_sync_runtime):
-    """Use shared sync runtime for box lifecycle operations."""
-    return shared_sync_runtime
+def runtime(shared_runtime):
+    """Use the shared async runtime for box lifecycle operations."""
+    return shared_runtime
 
 
 class TestBoxOptionsDefaults:
@@ -56,20 +57,21 @@ class TestBoxOptionsDefaults:
         assert opts.detach is False
 
 
+@pytest.mark.asyncio
 class TestAutoRemoveBehavior:
     """Test auto_remove option behavior."""
 
-    def test_auto_delete_overrides_auto_remove(self, runtime):
-        box = runtime.create(
+    async def test_auto_delete_overrides_auto_remove(self, runtime):
+        box = await runtime.create(
             boxlite.BoxOptions(image="alpine:latest", auto_remove=False, auto_delete=60)
         )
         box_id = box.id
-        box.stop()
-        assert runtime.get_info(box_id) is None
+        await box.stop()
+        assert await runtime.get_info(box_id) is None
 
-    def test_auto_remove_true_removes_box_on_stop(self, runtime):
+    async def test_auto_remove_true_removes_box_on_stop(self, runtime):
         """Test that auto_remove=True removes box when stop() is called."""
-        box = runtime.create(
+        box = await runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
                 auto_remove=True,
@@ -78,17 +80,17 @@ class TestAutoRemoveBehavior:
         box_id = box.id
 
         # Box should exist before stop
-        assert runtime.get_info(box_id) is not None
+        assert await runtime.get_info(box_id) is not None
 
         # Stop the box
-        box.stop()
+        await box.stop()
 
         # Box should be removed
-        assert runtime.get_info(box_id) is None
+        assert await runtime.get_info(box_id) is None
 
-    def test_auto_remove_false_preserves_box_on_stop(self, runtime):
+    async def test_auto_remove_false_preserves_box_on_stop(self, runtime):
         """Test that auto_remove=False preserves box when stop() is called."""
-        box = runtime.create(
+        box = await runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
                 auto_remove=False,
@@ -97,27 +99,28 @@ class TestAutoRemoveBehavior:
         box_id = box.id
 
         # Ensure box is running before stopping
-        execution = box.exec("echo", ["ready"])
-        execution.wait()
+        execution = await box.exec("echo", ["ready"])
+        await execution.wait()
 
         # Stop the box
-        box.stop()
+        await box.stop()
 
         # Box should still exist
-        info = runtime.get_info(box_id)
+        info = await runtime.get_info(box_id)
         assert info is not None
         assert info.state.status == "stopped"
 
         # Cleanup
-        runtime.remove(box_id)
+        await runtime.remove(box_id)
 
 
+@pytest.mark.asyncio
 class TestDetachOption:
     """Test detach option is accepted."""
 
-    def test_detach_false_creates_box(self, runtime):
+    async def test_detach_false_creates_box(self, runtime):
         """Test that detach=False creates box successfully."""
-        box = runtime.create(
+        box = await runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
                 detach=False,
@@ -128,12 +131,12 @@ class TestDetachOption:
         assert box.id is not None
 
         # Cleanup
-        box.stop()
+        await box.stop()
 
-    def test_detach_true_creates_box(self, runtime):
+    async def test_detach_true_creates_box(self, runtime):
         """Test that detach=True creates box successfully."""
         # Detached boxes opt out of removal with the deprecated compatibility flag.
-        box = runtime.create(
+        box = await runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
                 detach=True,
@@ -144,24 +147,25 @@ class TestDetachOption:
         assert box.id is not None
 
         # Cleanup
-        box.stop()
-        runtime.remove(box.id)
+        await box.stop()
+        await runtime.remove(box.id)
 
 
+@pytest.mark.asyncio
 class TestOptionCombinations:
     """Test compatibility option combinations."""
 
-    def test_auto_remove_true_detach_true_rejected(self, runtime):
+    async def test_auto_remove_true_detach_true_rejected(self, runtime):
         opts = boxlite.BoxOptions(
             image="alpine:latest",
             auto_remove=True,
             detach=True,
         )
         with pytest.raises(RuntimeError, match="remove-on-stop is incompatible"):
-            runtime.create(opts)
+            await runtime.create(opts)
 
-    def test_auto_delete_overrides_auto_remove_for_detach(self, runtime):
-        box = runtime.create(
+    async def test_auto_delete_overrides_auto_remove_for_detach(self, runtime):
+        box = await runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
                 auto_remove=True,
@@ -170,16 +174,17 @@ class TestOptionCombinations:
             )
         )
         assert box is not None
-        box.stop()
-        runtime.remove(box.id)
+        await box.stop()
+        await runtime.remove(box.id)
 
 
+@pytest.mark.asyncio
 class TestCombinedOptions:
     """Test combinations of auto_remove and detach options."""
 
-    def test_ephemeral_sandbox(self, runtime):
+    async def test_ephemeral_sandbox(self, runtime):
         """Test ephemeral sandbox: auto_remove=True, detach=False."""
-        box = runtime.create(
+        box = await runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
                 auto_remove=True,
@@ -189,17 +194,17 @@ class TestCombinedOptions:
         box_id = box.id
 
         # Box exists
-        assert runtime.get_info(box_id) is not None
+        assert await runtime.get_info(box_id) is not None
 
         # Stop - should auto-remove
-        box.stop()
+        await box.stop()
 
         # Box gone
-        assert runtime.get_info(box_id) is None
+        assert await runtime.get_info(box_id) is None
 
-    def test_persistent_sandbox(self, runtime):
+    async def test_persistent_sandbox(self, runtime):
         """Test persistent sandbox: auto_remove=False, detach=False."""
-        box = runtime.create(
+        box = await runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
                 auto_remove=False,
@@ -209,27 +214,27 @@ class TestCombinedOptions:
         box_id = box.id
 
         # Ensure box is running before stopping
-        execution = box.exec("echo", ["ready"])
-        execution.wait()
+        execution = await box.exec("echo", ["ready"])
+        await execution.wait()
 
         # Stop - should preserve
-        box.stop()
+        await box.stop()
 
         # Box still exists
-        info = runtime.get_info(box_id)
+        info = await runtime.get_info(box_id)
         assert info is not None
         assert info.state.status == "stopped"
 
         # Can get new handle
-        box2 = runtime.get(box_id)
+        box2 = await runtime.get(box_id)
         assert box2 is not None
 
         # Cleanup - box is already stopped, just remove it
-        runtime.remove(box_id)
+        await runtime.remove(box_id)
 
-    def test_detached_service(self, runtime):
+    async def test_detached_service(self, runtime):
         """Test detached service: auto_remove=False, detach=True."""
-        box = runtime.create(
+        box = await runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
                 auto_remove=False,
@@ -239,17 +244,17 @@ class TestCombinedOptions:
         box_id = box.id
 
         # Box exists
-        assert runtime.get_info(box_id) is not None
+        assert await runtime.get_info(box_id) is not None
 
         # Stop
-        box.stop()
+        await box.stop()
 
         # Still exists (auto_remove=False)
-        info = runtime.get_info(box_id)
+        info = await runtime.get_info(box_id)
         assert info is not None
 
         # Cleanup
-        runtime.remove(box_id)
+        await runtime.remove(box_id)
 
 
 class TestCmdAndUserOptions:
@@ -327,12 +332,13 @@ class TestEntrypointOptions:
         assert opts.entrypoint == []
 
 
+@pytest.mark.asyncio
 class TestCmdIntegration:
     """Integration tests for cmd override (require VM)."""
 
-    def test_cmd_override_runs_with_args(self, runtime):
+    async def test_cmd_override_runs_with_args(self, runtime):
         """Test that cmd override is passed to the container."""
-        sandbox = runtime.create(
+        sandbox = await runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
                 cmd=["sleep", "infinity"],
@@ -341,36 +347,37 @@ class TestCmdIntegration:
         try:
             # A box with a cmd is the user's main command: exec refuses to boot
             # it as a side effect, so start it explicitly first.
-            sandbox.start()
+            await sandbox.start()
             # Run a command to verify the box started successfully with cmd
-            execution = sandbox.exec("echo", ["cmd-override-works"])
-            stdout_lines = list(execution.stdout())
-            result = execution.wait()
+            execution = await sandbox.exec("echo", ["cmd-override-works"])
+            stdout_lines = [line async for line in execution.stdout()]
+            result = await execution.wait()
             assert result.exit_code == 0
             assert any("cmd-override-works" in line for line in stdout_lines)
         finally:
-            sandbox.stop()
+            await sandbox.stop()
 
 
+@pytest.mark.asyncio
 class TestUserIntegration:
     """Integration tests for user override (require VM)."""
 
-    def test_user_override_changes_uid(self, runtime):
+    async def test_user_override_changes_uid(self, runtime):
         """Test that user override changes the running user."""
-        sandbox = runtime.create(
+        sandbox = await runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
                 user="1000:1000",
             )
         )
         try:
-            execution = sandbox.exec("id", ["-u"])
-            stdout_lines = list(execution.stdout())
-            result = execution.wait()
+            execution = await sandbox.exec("id", ["-u"])
+            stdout_lines = [line async for line in execution.stdout()]
+            result = await execution.wait()
             assert result.exit_code == 0
             assert any("1000" in line for line in stdout_lines)
         finally:
-            sandbox.stop()
+            await sandbox.stop()
 
 
 if __name__ == "__main__":

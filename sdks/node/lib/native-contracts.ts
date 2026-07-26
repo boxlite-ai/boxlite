@@ -228,7 +228,7 @@ export interface JsPublishedPort {
 export interface JsNetworkInfo {
   mode: "enabled" | "disabled";
   allowNet: string[];
-  /** `null` means unresolved; `[]` means authoritatively no publications. */
+  /** `null` means unknown to this handle; `[]` means no active publications. */
   publishedPorts: JsPublishedPort[] | null;
 }
 
@@ -355,7 +355,7 @@ export type JsExportOptions = Record<string, never>;
 export interface JsBox {
   readonly id: string;
   readonly name: string | null;
-  info(): JsBoxInfo;
+  info(): Promise<JsBoxInfo>;
   exec(
     command: string,
     args?: string[] | null,

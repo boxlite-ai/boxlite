@@ -2,7 +2,7 @@
 SyncCodeBox - Synchronous wrapper for CodeBox.
 
 Provides a synchronous API for Python code execution using greenlet fiber switching.
-API mirrors async CodeBox exactly.
+Box metadata remains async-only and is not exposed by this wrapper.
 """
 
 from typing import TYPE_CHECKING, Optional
@@ -21,7 +21,8 @@ class SyncCodeBox(SyncSimpleBox):
 
     Provides synchronous methods for executing Python code in a secure container.
     Built on top of SyncSimpleBox with Python-specific convenience methods.
-    API mirrors async CodeBox exactly.
+    It mirrors the sync-capable CodeBox operations. Box metadata remains
+    async-only and is not exposed by this wrapper.
 
     Usage (standalone - recommended):
         with SyncCodeBox() as box:

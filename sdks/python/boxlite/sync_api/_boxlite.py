@@ -6,14 +6,14 @@ for the synchronous BoxLite API.
 """
 
 import asyncio
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Optional
 
 from greenlet import greenlet
 
 if TYPE_CHECKING:
     from ._box import SyncBox
     from ._images import SyncImageHandle
-    from ..boxlite import Boxlite, BoxOptions, BoxInfo, RuntimeMetrics, Options
+    from ..boxlite import Boxlite, BoxOptions, RuntimeMetrics, Options
 
 __all__ = ["SyncBoxlite"]
 
@@ -23,7 +23,8 @@ class SyncBoxlite:
     Synchronous wrapper for Boxlite runtime.
 
     This class handles both the dispatcher fiber lifecycle AND provides the
-    runtime API. API mirrors async Boxlite exactly.
+    sync-capable runtime operations. Metadata methods remain async-only and are
+    not exposed by this wrapper.
 
     Usage (default runtime - preferred):
         with SyncBoxlite.default() as runtime:
@@ -248,7 +249,7 @@ class SyncBoxlite:
         return self._sync_helper._sync(coro)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Runtime API (mirrors Boxlite)
+    # Sync-capable runtime API
     # ─────────────────────────────────────────────────────────────────────────
 
     def create(
@@ -316,29 +317,6 @@ class SyncBoxlite:
         if native_box is None:
             return None
         return SyncBox(self, native_box)
-
-    def list_info(self) -> List["BoxInfo"]:
-        """
-        List all boxes.
-
-        Returns:
-            List of BoxInfo for all boxes.
-        """
-        self._require_started()
-        return self._sync(self._boxlite.list_info())
-
-    def get_info(self, id_or_name: str) -> Optional["BoxInfo"]:
-        """
-        Get info for a box by ID or name.
-
-        Args:
-            id_or_name: Box ID or name to look up.
-
-        Returns:
-            BoxInfo if found, None otherwise.
-        """
-        self._require_started()
-        return self._sync(self._boxlite.get_info(id_or_name))
 
     def metrics(self) -> "RuntimeMetrics":
         """

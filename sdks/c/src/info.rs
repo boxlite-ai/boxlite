@@ -1,7 +1,7 @@
 //! Box information types and operations for the BoxLite C SDK.
 //!
-//! `boxlite_box_info` is synchronous (reads cached fields on the handle).
-//! `boxlite_get_info` and `boxlite_list_info` are async + callback.
+//! All info operations are async and use the runtime's post-and-drain callback
+//! queue.
 
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
@@ -51,8 +51,9 @@ pub struct CPublishedPortList {
 /// Typed network metadata owned by an enclosing [`CBoxInfo`].
 ///
 /// `allow_net` points to `allow_net_count` owned strings. `published_ports`
-/// is null when the current bindings are unresolved, non-null and empty when
-/// they are authoritatively empty, and otherwise contains concrete bindings.
+/// is null when the current handle does not know the bindings, non-null and
+/// empty when there are no active publications, and otherwise contains
+/// concrete bindings.
 #[repr(C)]
 pub struct CNetworkInfo {
     pub mode: BoxliteNetworkMode,
@@ -303,10 +304,11 @@ unsafe fn free_str(s: *mut c_char) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_box_info(
     handle: *mut CBoxHandle,
-    out_info: *mut *mut CBoxInfo,
+    cb: CBoxInfoCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    box_info(handle, out_info, out_error)
+    box_info(handle, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -342,7 +344,8 @@ pub unsafe extern "C" fn boxlite_free_box_info_list(list: *mut CBoxInfoList) {
 
 unsafe fn box_info(
     handle: *mut BoxHandle,
-    out_info: *mut *mut CBoxInfo,
+    cb: CBoxInfoCb,
+    user_data: *mut c_void,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
     unsafe {
@@ -350,14 +353,31 @@ unsafe fn box_info(
             write_error(out_error, null_pointer_error("handle"));
             return BoxliteErrorCode::InvalidArgument;
         }
-        if out_info.is_null() {
-            write_error(out_error, null_pointer_error("out_info"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let handle_ref = &*handle;
-        let info = handle_ref.handle.info();
-        *out_info = Box::into_raw(Box::new(CBoxInfo::from_box_info(&info)));
+        let lite = handle_ref.handle.clone();
+        let queue = handle_ref.queue.clone();
+        let user_data_addr = user_data as usize;
+
+        handle_ref.tokio_rt.spawn(async move {
+            let result = lite.info().await.map(|info| {
+                crate::event_queue::OwnedFfiPtr::new_with(
+                    Box::new(CBoxInfo::from_box_info(&info)),
+                    free_box_info_ptr,
+                )
+            });
+            push_event(
+                &queue,
+                RuntimeEvent::Info {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
         BoxliteErrorCode::Ok
     }
 }

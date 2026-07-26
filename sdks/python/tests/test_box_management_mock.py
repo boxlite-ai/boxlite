@@ -172,7 +172,7 @@ class TestBoxliteManagementMethods:
 
 
 class TestSyncBoxliteManagementMethods:
-    """Test that SyncBoxlite exposes the same management methods."""
+    """Test SyncBoxlite's sync-capable management methods."""
 
     @pytest.fixture()
     def cls(self):
@@ -183,10 +183,14 @@ class TestSyncBoxliteManagementMethods:
 
     @pytest.mark.parametrize(
         "method",
-        ["list_info", "get_info", "get", "remove", "create", "get_or_create", "images"],
+        ["get", "remove", "create", "get_or_create", "images"],
     )
     def test_method_exists(self, cls, method):
         assert hasattr(cls, method), f"SyncBoxlite missing method: {method}"
+
+    @pytest.mark.parametrize("method", ["list_info", "get_info"])
+    def test_async_metadata_method_is_absent(self, cls, method):
+        assert not hasattr(cls, method), f"SyncBoxlite unexpectedly exposes: {method}"
 
 
 class TestModuleMetadata:

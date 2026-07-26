@@ -33,8 +33,8 @@ type PublishedPort struct {
 type NetworkInfo struct {
 	Mode     NetworkMode
 	AllowNet []string
-	// PublishedPorts is nil when publications are unresolved. A non-nil empty
-	// slice authoritatively means that the box has no active publications.
+	// PublishedPorts is nil when this handle does not know the bindings. A
+	// non-nil empty slice means that the box has no active publications.
 	PublishedPorts []PublishedPort
 }
 
@@ -56,23 +56,32 @@ type BoxInfo struct {
 }
 
 // Info returns information about the box.
-//
-// boxlite_box_info is synchronous on the C side (it reads cached fields on
-// the handle), so no drain participation is required.
-func (b *Box) Info(_ context.Context) (*BoxInfo, error) {
-	var cInfo *C.CBoxInfo
+func (b *Box) Info(ctx context.Context) (*BoxInfo, error) {
+	b.runtime.ensureDrainRunning()
+
+	ch := make(chan infoResult, 1)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_box_info(b.handle, &cInfo, &cerr)
+	code := C.boxlite_box_info(b.handle, C.cbInfo(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
 	}
-	defer C.boxlite_free_box_info(cInfo)
 
-	info := cBoxInfoToGo(cInfo)
-	if info.Name != "" && b.name == "" {
-		b.name = info.Name
+	select {
+	case res := <-ch:
+		if res.value != nil && res.value.Name != "" && b.name == "" {
+			b.name = res.value.Name
+		}
+		return res.value, res.err
+	case <-ctx.Done():
+		drainAndDelete(ch, h, b.runtime.closing)
+		return nil, ctx.Err()
+	case <-b.runtime.closing:
+		drainAndDelete(ch, h, b.runtime.closing)
+		return nil, ErrRuntimeClosed
 	}
-	return &info, nil
 }
 
 // ListInfo lists all boxes.

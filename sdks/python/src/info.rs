@@ -74,7 +74,8 @@ pub(crate) struct PyNetworkInfo {
     pub(crate) mode: String,
     #[pyo3(get)]
     pub(crate) allow_net: Vec<String>,
-    /// `None` means unresolved; an empty list is an authoritative no-publications result.
+    /// `None` means this handle does not know the bindings; an empty list means
+    /// there are no active publications.
     #[pyo3(get)]
     pub(crate) published_ports: Option<Vec<PyPublishedPort>>,
 }

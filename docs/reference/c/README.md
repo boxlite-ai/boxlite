@@ -838,12 +838,15 @@ List all boxes.
 ```c
 BoxliteErrorCode boxlite_list_info(
     CBoxliteRuntime* runtime,
-    CBoxInfoList** out_list,
+    CBoxInfoListCb callback,
+    void* user_data,
     CBoxliteError* out_error
 );
 ```
 
-Caller must free `out_list` with `boxlite_free_box_info_list()`.
+`Ok` means the request was queued. The callback runs later when the caller
+invokes `boxlite_runtime_drain()`. On success, the callback owns the non-NULL
+list and must free it with `boxlite_free_box_info_list()`.
 
 ---
 
@@ -855,7 +858,8 @@ Get single box info by ID or name.
 BoxliteErrorCode boxlite_get_info(
     CBoxliteRuntime* runtime,
     const char* id_or_name,
-    CBoxInfo** out_info,
+    CBoxInfoCb callback,
+    void* user_data,
     CBoxliteError* out_error
 );
 ```
@@ -869,35 +873,95 @@ Get box info from handle.
 ```c
 BoxliteErrorCode boxlite_box_info(
     CBoxHandle* handle,
-    CBoxInfo** out_info,
+    CBoxInfoCb callback,
+    void* user_data,
     CBoxliteError* out_error
 );
 ```
 
-Caller must free `out_info` with `boxlite_free_box_info()`.
+All three info functions use the same post-and-drain contract. `out_error`
+reports only synchronous queueing failures. The error passed to a callback is
+borrowed and valid only during that callback; do not call
+`boxlite_error_free()` on it. `user_data` must remain valid until the callback
+runs.
 
 ```c
-CBoxInfo* info = NULL;
-if (boxlite_box_info(box, &info, &error) == Ok) {
-    printf("Box %s status: %s\n", info->id, info->status);
-    boxlite_free_box_info(info);
+typedef struct {
+    int done;
+} InfoRequest;
+
+static void on_box_info(CBoxInfo* info, CBoxliteError* error, void* user_data) {
+    InfoRequest* request = user_data;
+    if (error->code != Ok) {
+        fprintf(stderr, "info failed: %s\n",
+                error->message ? error->message : "unknown error");
+    } else {
+        // The callback owns info on success.
+        printf("Box %s status: %s\n", info->id, info->status);
+        boxlite_free_box_info(info);
+    }
+    request->done = 1;
+}
+
+InfoRequest request = {0};
+CBoxliteError error = {0};
+if (boxlite_box_info(box, on_box_info, &request, &error) == Ok) {
+    while (!request.done) {
+        if (boxlite_runtime_drain(runtime, -1, &error) < 0) {
+            fprintf(stderr, "drain failed: %s\n",
+                    error.message ? error.message : "unknown error");
+            boxlite_error_free(&error);
+            break;
+        }
+    }
+} else {
+    fprintf(stderr, "queueing info failed: %s\n",
+            error.message ? error.message : "unknown error");
+    boxlite_error_free(&error);
+}
+```
+
+A list callback has the equivalent ownership rule:
+
+```c
+static void on_box_list(CBoxInfoList* list, CBoxliteError* error,
+                        void* user_data) {
+    InfoRequest* request = user_data;
+    if (error->code == Ok) {
+        for (int i = 0; i < list->count; ++i) {
+            printf("%s\n", list->items[i].id);
+        }
+        boxlite_free_box_info_list(list);
+    }
+    request->done = 1;
+}
+
+InfoRequest list_request = {0};
+if (boxlite_list_info(runtime, on_box_list, &list_request, &error) == Ok) {
+    while (!list_request.done) {
+        if (boxlite_runtime_drain(runtime, -1, &error) < 0) {
+            boxlite_error_free(&error);
+            break;
+        }
+    }
+} else {
+    boxlite_error_free(&error);
 }
 ```
 
 `info->network` is an owned `CNetworkInfo*` freed with the rest of `CBoxInfo`.
 It is `NULL` when network information is unavailable. Otherwise it contains a
 typed `mode`, an `allow_net` string array and count, and a nullable
-`CPublishedPortList*`. A `NULL` `published_ports` pointer means unresolved for
-the current lifecycle, a non-`NULL` list with `count == 0` means authoritatively
-no local publications, and a populated list contains typed `CPublishedPort`
-entries with `guest_port`, `host_ip`, `host_port`, and `protocol` fields. These
-nested values are borrowed from `CBoxInfo` and must not be freed separately.
+`CPublishedPortList*`. A `NULL` `published_ports` pointer means the current
+handle does not know the lifecycle's publications, a non-`NULL` list with
+`count == 0` means there are no active local publications, and a populated list
+contains typed `CPublishedPort` entries with `guest_port`, `host_ip`,
+`host_port`, and `protocol` fields. These nested values are borrowed from
+`CBoxInfo` and must not be freed separately.
 
-`boxlite_box_info()` is a synchronous, lifecycle-bound snapshot. For a running
-local box with configured ports, `boxlite_get_info()` and `boxlite_list_info()`
-always confirm the current bindings through an observation-only backend query.
-That query never publishes a listener or starts, stops, or restarts the box;
-failure or a lifecycle race is reported as `published_ports: null`.
+Because info resolution is asynchronous, the implementation may perform backend
+I/O before posting the callback. Keep the runtime and any callback `user_data`
+alive until the completion has been drained.
 
 ---
 
@@ -939,7 +1003,8 @@ BoxliteErrorCode boxlite_box_metrics(
    - `boxlite_box_id()` → `boxlite_free_string()`
 
 2. **Error structs must be freed**
-   - `CBoxliteError` → `boxlite_error_free()`
+   - Caller-owned `CBoxliteError` output → `boxlite_error_free()`
+   - Callback error pointers are borrowed and must not be freed
 
 3. **Results must be freed**
    - `CBoxliteExecResult` → `boxlite_result_free()`
@@ -991,7 +1056,7 @@ Safe to call with NULL.
 | `CBoxliteRuntime` | Thread-safe |
 | `CBoxHandle` | **NOT** thread-safe - do not share across threads |
 | `CBoxliteSimple` | **NOT** thread-safe - do not share across threads |
-| Callbacks | Invoked on the calling thread |
+| Callbacks | Invoked on the thread calling `boxlite_runtime_drain()` |
 
 ### Safe Multi-threaded Usage
 
@@ -1093,7 +1158,8 @@ if (code != Ok) {
 
 - [ ] Replace `char* error = NULL` with `CBoxliteError error = {0}`
 - [ ] Initialize output pointers to NULL (e.g., `CBoxliteRuntime* runtime = NULL`)
-- [ ] Update all function calls to use output parameters
+- [ ] Use output parameters for synchronous calls and callbacks for
+      asynchronous calls
 - [ ] Replace return value checks with `BoxliteErrorCode` checks
 - [ ] Replace `boxlite_free_string(error)` with `boxlite_error_free(&error)`
 - [ ] Create boxes with `CBoxliteOptions`
@@ -1116,11 +1182,11 @@ if (code != Ok) {
 | `boxlite_get()` | Reattach to box |
 | `boxlite_box_id()` | Get box ID |
 | `boxlite_box_free()` | Free box handle |
-| `boxlite_box_info()` | Get box info |
+| `boxlite_box_info()` | Queue box info lookup |
 | `boxlite_box_metrics()` | Get box metrics |
 | `boxlite_execute()` | Execute command |
-| `boxlite_list_info()` | List all boxes |
-| `boxlite_get_info()` | Get box info by ID |
+| `boxlite_list_info()` | Queue box list lookup |
+| `boxlite_get_info()` | Queue box info lookup by ID |
 | `boxlite_simple_new()` | Create simple box |
 | `boxlite_simple_run()` | Run command (simple) |
 | `boxlite_simple_free()` | Free simple box |
@@ -1166,10 +1232,16 @@ boxlite_free_string(box_id);
 ### Get Box Info
 
 ```c
-CBoxInfo* info = NULL;
-if (boxlite_box_info(box, &info, &error) == Ok) {
-    printf("Box %s status: %s\n", info->id, info->status);
-    boxlite_free_box_info(info);
+InfoRequest request = {0};
+BoxliteErrorCode code =
+    boxlite_box_info(box, on_box_info, &request, &error);
+if (code == Ok) {
+    while (!request.done) {
+        if (boxlite_runtime_drain(runtime, -1, &error) < 0) {
+            boxlite_error_free(&error);
+            break;
+        }
+    }
 }
 ```
 
@@ -1202,13 +1274,17 @@ if (code != Ok) {
 ### Forgetting to free result structs
 
 ```c
-CBoxInfoList* list;
-boxlite_list_info(runtime, &list, &error);
-// Wrong: forgot to free
+static void leaking_list_callback(CBoxInfoList* list, CBoxliteError* error,
+                                  void* user_data) {
+    // Wrong: successful list ownership was transferred here but never freed.
+}
 
-CBoxInfoList* list;
-boxlite_list_info(runtime, &list, &error);
-boxlite_free_box_info_list(list);  // Correct
+static void list_callback(CBoxInfoList* list, CBoxliteError* error,
+                          void* user_data) {
+    if (error->code == Ok) {
+        boxlite_free_box_info_list(list);  // Correct
+    }
+}
 ```
 
 ---

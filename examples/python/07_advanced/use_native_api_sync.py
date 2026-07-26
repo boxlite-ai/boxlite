@@ -4,12 +4,15 @@ Sync Native API Example - Low-Level Box API (Synchronous)
 
 Synchronous version of use_native_api.py.  See that file for detailed comments.
 
-Demonstrates the synchronous native boxlite API (mirrors async API exactly):
+Demonstrates synchronous wrappers for lifecycle and execution operations:
 - SyncBoxlite.default() returns SyncBoxlite runtime (mirrors Boxlite.default())
 - runtime.create() returns SyncBox (mirrors runtime.create())
 - SyncBox.exec() returns SyncExecution (mirrors box.exec())
 - SyncExecution.stdout()/stderr() return sync iterables
-- All methods are synchronous (no await needed)
+- The wrapped methods are synchronous (no await needed)
+
+Box metadata remains async-only; the sync wrappers do not expose `info()`,
+`get_info()`, or `list_info()`.
 
 Requires: pip install boxlite[sync]
 """
@@ -62,15 +65,11 @@ def example_custom_runtime():
         box = runtime.create(box_opts, name=f"test-box-{int(time.time())}")
         print(f"✓ Box created with limits: {box.id}")
 
-        # Get box info
-        info = box.info()
-        print(f"✓ Box info:")
-        print(f"  ID: {info.id}")
-        print(f"  State: {info.state.status}")
-        print(f"  Image: {info.image}")
-        print(f"  CPUs: {info.cpus}")
-        print(f"  Memory: {info.memory_mib} MiB")
-        print(f"  Created: {info.created_at}")
+        print("✓ Requested configuration:")
+        print(f"  ID: {box.id}")
+        print(f"  Image: {box_opts.image}")
+        print(f"  CPUs: {box_opts.cpus}")
+        print(f"  Memory: {box_opts.memory_mib} MiB")
 
         box.stop()
         print("✓ Box shut down")
@@ -207,46 +206,9 @@ def example_runtime_metrics():
         print("\n✓ All boxes shut down")
 
 
-def example_list_and_info():
-    """Example 7: Listing and getting box info."""
-    print("\n\n=== Example 7: List and Get Info ===")
-
-    with SyncBoxlite.default() as runtime:
-        # Create multiple boxes
-        boxes = []
-        ts = int(time.time())
-        for i in range(3):
-            box = runtime.create(
-                boxlite.BoxOptions(image="alpine:latest"),
-                name=f"test-box-{ts}-{i}"
-            )
-            boxes.append(box)
-            print(f"✓ Box {i + 1} created: {box.id}")
-
-        # List all boxes
-        all_boxes = runtime.list_info()
-        print(f"\n✓ Total boxes: {len(all_boxes)}")
-        for info in all_boxes[-3:]:  # Show last 3
-            print(f"  - {info.id}: {info.state} ({info.image})")
-
-        # Get specific box info
-        if boxes:
-            info = boxes[0].info()
-            print(f"\n✓ Box info for {boxes[0].id}:")
-            print(f"  State: {info.state}")
-            print(f"  Image: {info.image}")
-            print(f"  CPUs: {info.cpus}")
-            print(f"  Memory: {info.memory_mib} MiB")
-
-        # Cleanup - shutdown boxes
-        for box in boxes:
-            box.stop()
-            print(f"✓ Stopped box: {box.id}")
-
-
 def example_execution_kill():
-    """Example 8: Kill running execution."""
-    print("\n\n=== Example 8: Kill Execution ===")
+    """Example 7: Kill running execution."""
+    print("\n\n=== Example 7: Kill Execution ===")
 
     with SyncBoxlite.default() as runtime:
         box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
@@ -272,8 +234,8 @@ def example_execution_kill():
 
 
 def example_context_manager():
-    """Example 9: Using Box as context manager."""
-    print("\n\n=== Example 9: Context Manager ===")
+    """Example 8: Using Box as context manager."""
+    print("\n\n=== Example 8: Context Manager ===")
 
     with SyncBoxlite.default() as runtime:
         # Box automatically shuts down when exiting context
@@ -295,8 +257,8 @@ def example_context_manager():
 
 
 def example_working_directory():
-    """Example 10: Working directory and port mappings."""
-    print("\n\n=== Example 10: Working Directory & Ports ===")
+    """Example 9: Working directory and port mappings."""
+    print("\n\n=== Example 9: Working Directory & Ports ===")
 
     with SyncBoxlite.default() as runtime:
         box = runtime.create(boxlite.BoxOptions(
@@ -316,16 +278,14 @@ def example_working_directory():
 
         execution.wait()
 
-        # Get box info to see port mappings
-        info = box.info()
         print(f"✓ Box configuration verified")
 
         box.stop()
 
 
 def example_manual_start_stop():
-    """Example 11: Manual start/stop (non-context-manager usage)."""
-    print("\n\n=== Example 11: Manual Start/Stop ===")
+    """Example 10: Manual start/stop (non-context-manager usage)."""
+    print("\n\n=== Example 10: Manual Start/Stop ===")
 
     # This pattern is useful for:
     # - REPL/interactive sessions
@@ -360,8 +320,8 @@ def example_manual_start_stop():
 
 
 def example_class_based_usage():
-    """Example 12: Class-based usage pattern."""
-    print("\n\n=== Example 12: Class-Based Usage ===")
+    """Example 11: Class-based usage pattern."""
+    print("\n\n=== Example 11: Class-Based Usage ===")
 
     class SandboxManager:
         """Example of class-based lifecycle management."""
@@ -420,7 +380,6 @@ def main():
     example_environment_variables()
     example_box_metrics()
     example_runtime_metrics()
-    example_list_and_info()
     example_execution_kill()
     example_context_manager()
     example_working_directory()
@@ -435,7 +394,7 @@ def main():
     print("  • box.exec() returns SyncExecution (same API, no await)")
     print("  • Separate stdout/stderr streams with sync iteration")
     print("  • Comprehensive metrics (runtime and per-box)")
-    print("  • List/get_info for box management")
+    print("  • Metadata methods remain on the async API")
     print("  • Context manager for automatic cleanup")
     print("  • Manual start()/stop() for REPL and class-based usage")
     print("  • Full control over resources (CPU, memory, env, ports)")

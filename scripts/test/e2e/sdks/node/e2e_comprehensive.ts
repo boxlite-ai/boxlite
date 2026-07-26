@@ -375,7 +375,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
     if (TEST === 'all' || TEST === 'box_info') {
       const name = `node-e2e-${Date.now()}`;
       const b = await newBox(true, name);
-      const info = b.info();
+      const info = await b.info();
       if (info.id !== b.id) die(`info.id mismatch: ${info.id} != ${b.id}`);
       if (info.name !== name) die(`info.name mismatch: ${info.name} != ${name}`);
       const fetched = await rt.getInfo(b.id);

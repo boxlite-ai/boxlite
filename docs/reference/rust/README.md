@@ -192,7 +192,7 @@ pub struct LiteBox {
 |--------|-----------|-------------|
 | `id` | `fn id(&self) -> &BoxID` | Get box ID |
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
-| `info` | `fn info(&self) -> BoxInfo` | Get box info (no VM init) |
+| `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
@@ -278,16 +278,16 @@ pub struct PublishedPort {
 
 `network: None` means network information is unavailable, such as metadata from
 an older or remote producer. Within `NetworkInfo`, `published_ports: None`
-means the current lifecycle's publications are unresolved. `Some(vec![])` means
-there are authoritatively none, and a populated vector contains concrete active
-local bindings. `PortSpec` remains the request type; resolved output uses
-`PublishedPort` so every reported host port is concrete.
+means the current handle does not know the lifecycle's publications.
+`Some(vec![])` means there are no active publications, and a populated vector
+contains concrete active local bindings. `PortSpec` remains the request type;
+resolved output uses `PublishedPort` so every reported host port is concrete.
 
-`LiteBox::info()` is a synchronous, lifecycle-bound snapshot. For a running
-local box with configured ports, `BoxliteRuntime::get_info()` and `list_info()`
-always confirm the current bindings through an observation-only backend query.
-That query never publishes a listener or starts, stops, or restarts the box;
-failure or a lifecycle race is reported as `published_ports: None`.
+`LiteBox::info()` has no synchronous snapshot variant. Local metadata reads report
+bindings captured when this handle started or reattached the box; REST metadata
+reads fetch the current server record. A newly loaded local running box has no
+live binding data yet, so `info()`, `get_info()`, or `list_info()` may report
+`published_ports: None` until an operation requiring live state reattaches it.
 
 ### BoxStatus
 

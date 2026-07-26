@@ -68,7 +68,10 @@ async fn create_running_box(runtime: &BoxliteRuntime, name: &str) -> LiteBox {
         .expect("Failed to create box");
 
     litebox.start().await.expect("Failed to start box");
-    assert_eq!(litebox.info().status, BoxStatus::Running);
+    assert_eq!(
+        litebox.info().await.expect("get box info").status,
+        BoxStatus::Running
+    );
 
     litebox
 }
@@ -706,7 +709,10 @@ async fn test_snapshot_running_box_with_quiesce() {
         .expect("snapshot on running box should succeed");
 
     // Source still running
-    assert_eq!(litebox.info().status, BoxStatus::Running);
+    assert_eq!(
+        litebox.info().await.expect("get box info").status,
+        BoxStatus::Running
+    );
 
     // Source still functional
     let out = exec_stdout(&litebox, BoxCommand::new("echo").args(["alive"])).await;
@@ -740,7 +746,10 @@ async fn test_snapshot_restore_rejected_while_running() {
     assert!(result.is_err(), "restore while running should be rejected");
 
     // Box still running
-    assert_eq!(litebox.info().status, BoxStatus::Running);
+    assert_eq!(
+        litebox.info().await.expect("get box info").status,
+        BoxStatus::Running
+    );
 
     litebox.stop().await.unwrap();
 
@@ -814,7 +823,10 @@ async fn test_two_snapshots_while_running() {
         .unwrap();
 
     // Still running and functional after two snapshots.
-    assert_eq!(litebox.info().status, BoxStatus::Running);
+    assert_eq!(
+        litebox.info().await.expect("get box info").status,
+        BoxStatus::Running
+    );
     let out = exec_stdout(&litebox, BoxCommand::new("echo").args(["ok"])).await;
     assert_eq!(out.trim(), "ok");
 
@@ -1541,7 +1553,10 @@ async fn test_import_validates_no_backing_references() {
         .await
         .unwrap();
 
-    assert_eq!(imported.info().status, BoxStatus::Stopped);
+    assert_eq!(
+        imported.info().await.expect("get imported box info").status,
+        BoxStatus::Stopped
+    );
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
@@ -1598,7 +1613,7 @@ async fn test_export_import_box_with_custom_options() {
         .unwrap();
 
     // Imported box should be in Stopped state
-    let info = imported.info();
+    let info = imported.info().await.expect("get imported box info");
     assert_eq!(info.status, BoxStatus::Stopped);
     assert_eq!(info.name.as_deref(), Some("imp-custom"));
 
@@ -1908,7 +1923,10 @@ async fn test_snapshot_under_write_pressure() {
         .expect("snapshot under write pressure should succeed");
 
     // Source still running
-    assert_eq!(source.info().status, BoxStatus::Running);
+    assert_eq!(
+        source.info().await.expect("get source box info").status,
+        BoxStatus::Running
+    );
 
     // Stop, restore, verify boots
     let source = stop_and_refresh(&runtime, source, "snap-stress").await;
@@ -1953,7 +1971,10 @@ async fn test_clone_under_write_pressure() {
         .expect("clone under write pressure should succeed");
 
     // Source still running
-    assert_eq!(source.info().status, BoxStatus::Running);
+    assert_eq!(
+        source.info().await.expect("get source box info").status,
+        BoxStatus::Running
+    );
 
     // Clone should boot and be functional
     cloned.start().await.unwrap();
@@ -2080,7 +2101,10 @@ async fn test_export_under_write_pressure_with_data_check() {
         .expect("export under write pressure should succeed");
 
     // Source still running
-    assert_eq!(source.info().status, BoxStatus::Running);
+    assert_eq!(
+        source.info().await.expect("get source box info").status,
+        BoxStatus::Running
+    );
 
     // Import and verify marker
     let imported = runtime
@@ -2152,7 +2176,10 @@ async fn test_box_info_status_correct_throughout_snapshot_lifecycle() {
     .expect("create runtime");
 
     let litebox = create_running_box(&runtime, "status-track").await;
-    assert_eq!(litebox.info().status, BoxStatus::Running);
+    assert_eq!(
+        litebox.info().await.expect("get box info").status,
+        BoxStatus::Running
+    );
 
     // Snapshot while running → still Running
     litebox
@@ -2160,19 +2187,31 @@ async fn test_box_info_status_correct_throughout_snapshot_lifecycle() {
         .create(SnapshotOptions::default(), "v1")
         .await
         .unwrap();
-    assert_eq!(litebox.info().status, BoxStatus::Running);
+    assert_eq!(
+        litebox.info().await.expect("get box info").status,
+        BoxStatus::Running
+    );
 
     // Stop → Stopped
     let litebox = stop_and_refresh(&runtime, litebox, "status-track").await;
-    assert_eq!(litebox.info().status, BoxStatus::Stopped);
+    assert_eq!(
+        litebox.info().await.expect("get box info").status,
+        BoxStatus::Stopped
+    );
 
     // Restore → still Stopped
     litebox.snapshots().restore("v1").await.unwrap();
-    assert_eq!(litebox.info().status, BoxStatus::Stopped);
+    assert_eq!(
+        litebox.info().await.expect("get box info").status,
+        BoxStatus::Stopped
+    );
 
     // Start → Running
     litebox.start().await.unwrap();
-    assert_eq!(litebox.info().status, BoxStatus::Running);
+    assert_eq!(
+        litebox.info().await.expect("get box info").status,
+        BoxStatus::Running
+    );
 
     litebox.stop().await.unwrap();
 

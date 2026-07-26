@@ -232,11 +232,6 @@ impl Drop for CleanupGuard {
 
         tracing::warn!(box_id = %self.box_id, reason = %reason, "Box initialization failed, cleaning up");
 
-        // Port publication precedes later initialization stages. If one of
-        // those stages fails, discard the write-through cache before this
-        // lifecycle is marked Failed.
-        self.runtime.published_port_cache.invalidate(&self.box_id);
-
         // Stop handler if started
         if let Some(ref mut handler) = self.handler
             && let Err(e) = handler.stop()

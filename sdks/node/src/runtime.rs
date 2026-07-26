@@ -187,7 +187,7 @@ impl JsBoxlite {
     /// ```javascript
     /// const boxes = await runtime.listInfo();
     /// boxes.forEach(box => {
-    ///   console.log(`${box.id}: ${box.status}`);
+    ///   console.log(`${box.id}: ${box.state.status}`);
     /// });
     /// ```
     #[napi]
@@ -210,7 +210,7 @@ impl JsBoxlite {
     /// ```javascript
     /// const info = await runtime.getInfo('my-python-box');
     /// if (info) {
-    ///   console.log(`Status: ${info.status}`);
+    ///   console.log(`Status: ${info.state.status}`);
     /// }
     /// ```
     #[napi]

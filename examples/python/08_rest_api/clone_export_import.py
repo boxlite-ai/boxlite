@@ -46,7 +46,7 @@ async def test_clone():
 
     # Verify different IDs
     assert source.id != cloned.id, "Clone should have different ID"
-    cloned_info = cloned.info()
+    cloned_info = await cloned.info()
     print(f"  Clone name: {cloned_info.name}")
     print(f"  Clone state: {cloned_info.state}")
 
@@ -80,7 +80,7 @@ async def test_export_import():
         imported = await rt.import_box(archive_path, name="rest-imported")
         print(f"  Imported: {imported.id}")
 
-        imported_info = imported.info()
+        imported_info = await imported.info()
         print(f"  Import name: {imported_info.name}")
         print(f"  Import state: {imported_info.state}")
 

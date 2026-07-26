@@ -13,6 +13,7 @@ import type { ExecResult } from "./exec.js";
 import { getJsBoxlite } from "./native.js";
 import type {
   JsBox,
+  JsBoxInfo,
   JsBoxOptions,
   NativeBoxConnection,
   NativeBoxTunnel,
@@ -485,9 +486,9 @@ export class SimpleBox {
   /**
    * Get box metadata.
    *
-   * Note: Throws if called before the box is created.
+   * Note: The promise rejects if called before the box is created.
    */
-  info() {
+  async info(): Promise<JsBoxInfo> {
     if (!this._box) {
       throw new Error("Box not yet created. Call exec() first.");
     }
@@ -497,7 +498,7 @@ export class SimpleBox {
   /**
    * Get box metadata asynchronously, creating the box if needed.
    */
-  async getInfo() {
+  async getInfo(): Promise<JsBoxInfo> {
     const box = await this._ensureBox();
     return box.info();
   }

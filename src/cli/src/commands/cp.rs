@@ -46,7 +46,7 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
             box_path,
         } => {
             let handle = require_box(&rt, &box_name).await?;
-            let was_running = handle.info().status == boxlite::BoxStatus::Running;
+            let was_running = handle.info().await?.status == boxlite::BoxStatus::Running;
 
             // No explicit start(): copy_into boots the box itself when that is
             // safe, and refuses when it is not. Starting it here would walk
@@ -73,7 +73,7 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
             host,
         } => {
             let handle = require_box(&rt, &box_name).await?;
-            let was_running = handle.info().status == boxlite::BoxStatus::Running;
+            let was_running = handle.info().await?.status == boxlite::BoxStatus::Running;
 
             // Same as above: let copy_out decide whether booting is safe. This
             // is the path that would otherwise turn

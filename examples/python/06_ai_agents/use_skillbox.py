@@ -114,7 +114,7 @@ async def example_custom_config():
             disk_size_gb=10,  # Larger disk for more packages
             skills=["anthropics/skills"],
     ) as skill_box:
-        info = skill_box.info()
+        info = await skill_box.info()
         print(f"Box name: {info.name}")
         print(f"Memory: {info.memory_mib} MiB")
         print(f"Image: {info.image}")

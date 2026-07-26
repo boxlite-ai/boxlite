@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from boxlite.simplebox import SimpleBox
@@ -43,6 +45,36 @@ class _FakeNetwork:
 class _FakeBox:
     def __init__(self, tunnel: _FakeTunnel) -> None:
         self.network = _FakeNetwork(tunnel)
+
+
+class _FakeInfoBox:
+    def __init__(self, info) -> None:
+        self.info_value = info
+
+    async def info(self):
+        return self.info_value
+
+
+@pytest.mark.asyncio
+async def test_info_is_async():
+    marker = object()
+    box = SimpleBox.__new__(SimpleBox)
+    box._started = True
+    box._box = _FakeInfoBox(marker)
+
+    assert inspect.iscoroutinefunction(SimpleBox.info)
+    assert await box.info() is marker
+
+
+@pytest.mark.asyncio
+async def test_info_rejects_when_box_is_not_started():
+    box = SimpleBox.__new__(SimpleBox)
+    box._started = False
+
+    info = box.info()
+    assert inspect.isawaitable(info)
+    with pytest.raises(RuntimeError, match="Box not started"):
+        await info
 
 
 @pytest.mark.asyncio

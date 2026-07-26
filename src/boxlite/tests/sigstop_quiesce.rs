@@ -41,7 +41,7 @@ async fn test_sigstop_sigcont_preserves_vm() {
     assert_eq!(result.exit_code, 0, "command should succeed before SIGSTOP");
 
     // Get shim PID
-    let info = litebox.info();
+    let info = litebox.info().await.expect("get box info");
     let shim_pid = info.pid.expect("running box should have a PID");
 
     // --- SIGSTOP: freeze the shim (all vCPUs + virtio backends) ---

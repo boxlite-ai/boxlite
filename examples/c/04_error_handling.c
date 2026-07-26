@@ -31,9 +31,9 @@ int main(void) {
     return 1;
   }
   CBoxHandle *handle = NULL;
-  code = boxlite_get(runtime, "nonexistent-box-id", &handle, &error);
+  code = example_get_box(runtime, "nonexistent-box-id", &handle, &error);
   if (code != Ok) {
-    show_error("boxlite_get", &error);
+    printf("boxlite_get completed with code=%d\n", code);
     boxlite_error_free(&error);
   }
   printf("\n");
@@ -65,11 +65,11 @@ int main(void) {
   printf("\n");
 
   printf("5. Branch on error code\n");
-  code = boxlite_get(runtime, "still-missing", &handle, &error);
+  code = example_get_box(runtime, "still-missing", &handle, &error);
   if (code == NotFound) {
-    printf("handled NotFound specifically: %s\n", error.message);
+    printf("handled NotFound specifically after callback dispatch\n");
   } else if (code != Ok) {
-    show_error("boxlite_get", &error);
+    printf("boxlite_get completed with code=%d\n", code);
   }
   boxlite_error_free(&error);
 

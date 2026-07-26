@@ -1,6 +1,11 @@
 package boxlite
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -104,5 +109,85 @@ func TestNewRestDoubleCloseSafe(t *testing.T) {
 	}
 	if err := rt.Close(); err != nil {
 		t.Fatalf("second Close() returned error: %v", err)
+	}
+}
+
+func TestRestBoxInfoFetchesCurrentMetadata(t *testing.T) {
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/boxes/box1" {
+			http.NotFound(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if requestCount.Add(1) == 1 {
+			_, _ = io.WriteString(w, `{
+				"box_id":"box1","name":"service","status":"configured",
+				"created_at":"2026-07-14T00:00:00Z","updated_at":"2026-07-14T00:00:00Z",
+				"pid":null,"image":"alpine:3.20","cpus":1,"memory_mib":256
+			}`)
+			return
+		}
+
+		_, _ = io.WriteString(w, `{
+			"box_id":"box1","name":"service","status":"stopped",
+			"created_at":"2026-07-14T00:00:00Z","updated_at":"2026-07-15T00:00:00Z",
+			"pid":null,"image":"alpine:3.21","cpus":2,"memory_mib":768,
+			"auto_pause":42,"auto_delete":7,"auto_resume":false
+		}`)
+	}))
+	defer server.Close()
+
+	rt, err := NewRest(BoxliteRestOptions{URL: server.URL})
+	if err != nil {
+		t.Fatalf("NewRest: %v", err)
+	}
+	defer func() {
+		if err := rt.Close(); err != nil {
+			t.Errorf("Close runtime: %v", err)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	box, err := rt.Get(ctx, "box1")
+	if err != nil {
+		t.Fatalf("Get box: %v", err)
+	}
+	defer func() {
+		if err := box.Close(); err != nil {
+			t.Errorf("Close box: %v", err)
+		}
+	}()
+
+	info, err := box.Info(ctx)
+	if err != nil {
+		t.Fatalf("Info: %v", err)
+	}
+	if got := requestCount.Load(); got != 2 {
+		t.Fatalf("request count: got %d, want 2", got)
+	}
+	if info.ID != "box1" || info.Name != "service" {
+		t.Errorf("identity: got ID=%q Name=%q", info.ID, info.Name)
+	}
+	if info.State != StateStopped || info.Running {
+		t.Errorf("state: got State=%q Running=%v", info.State, info.Running)
+	}
+	if info.Image != "alpine:3.21" || info.CPUs != 2 || info.MemoryMiB != 768 {
+		t.Errorf(
+			"resources: got Image=%q CPUs=%d MemoryMiB=%d",
+			info.Image,
+			info.CPUs,
+			info.MemoryMiB,
+		)
+	}
+	if info.AutoPause != 42 || info.AutoDelete != 7 || info.AutoResume {
+		t.Errorf(
+			"lifecycle: got AutoPause=%d AutoDelete=%d AutoResume=%v",
+			info.AutoPause,
+			info.AutoDelete,
+			info.AutoResume,
+		)
 	}
 }

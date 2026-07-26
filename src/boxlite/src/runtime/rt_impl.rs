@@ -164,10 +164,6 @@ pub struct RuntimeImpl {
     /// no call site names a concrete backend — see [`crate::net::NetworkBackendFactory`].
     pub(crate) network_factory: Arc<dyn crate::net::NetworkBackendFactory>,
 
-    /// Concrete host-port bindings learned from publication or one cold
-    /// recovery observation. Entries are scoped to a verified shim lifecycle.
-    pub(crate) published_port_cache: crate::litebox::ports::PublishedPortCache,
-
     /// Runtime filesystem lock (held for lifetime). Prevent from multiple process run on same
     /// BOXLITE_HOME directory
     pub(crate) _runtime_lock: RuntimeLock,
@@ -314,7 +310,6 @@ impl RuntimeImpl {
             snapshot_mgr,
             lock_manager,
             network_factory: crate::net::default_factory(),
-            published_port_cache: crate::litebox::ports::PublishedPortCache::default(),
             _runtime_lock: runtime_lock,
             shutdown_token: CancellationToken::new(),
         });
@@ -553,7 +548,7 @@ impl RuntimeImpl {
         };
 
         if let Some(box_impl) = cached_box {
-            return Ok(Some(box_impl.info().await));
+            return Ok(Some(box_impl.info().await?));
         }
 
         // Fall back to DB lookup - run on blocking thread pool
@@ -566,7 +561,7 @@ impl RuntimeImpl {
 
         if let Some((config, state)) = db_result {
             let (box_impl, _) = self.get_or_create_box_impl(config, state);
-            return Ok(Some(box_impl.info().await));
+            return Ok(Some(box_impl.info().await?));
         }
         Ok(None)
     }
@@ -576,10 +571,7 @@ impl RuntimeImpl {
     /// Includes both persisted boxes (from database) and in-memory boxes
     /// (created but not yet persisted).
     pub async fn list_info(self: &Arc<Self>) -> BoxliteResult<Vec<BoxInfo>> {
-        use futures::stream::{self, StreamExt};
         use std::collections::HashSet;
-
-        const PORT_INFO_QUERY_CONCURRENCY: usize = 16;
 
         // Get boxes from database - run on blocking thread pool
         let this = Arc::clone(self);
@@ -591,8 +583,8 @@ impl RuntimeImpl {
         let mut boxes = Vec::with_capacity(db_boxes.len());
         for (config, state) in db_boxes {
             seen_ids.insert(config.id.clone());
-            // Database rows are the cross-process freshness authority. Use an
-            // uncached observational instance so a live handle in this process
+            // Database rows are the cross-process freshness authority. Use a
+            // fresh metadata instance so a live handle in this process
             // cannot replace a newer state written by another runtime.
             let box_impl = Arc::new(crate::litebox::box_impl::BoxImpl::new(
                 config,
@@ -603,8 +595,7 @@ impl RuntimeImpl {
             boxes.push(box_impl);
         }
 
-        // Snapshot strong references while holding the synchronous cache lock;
-        // never retain that lock across the observations below.
+        // Snapshot strong references while holding the synchronous cache lock.
         let in_memory_only = {
             let sync = self.sync_state.read().unwrap();
             sync.active_boxes_by_id
@@ -620,11 +611,10 @@ impl RuntimeImpl {
         };
         boxes.extend(in_memory_only);
 
-        let mut infos = stream::iter(boxes)
-            .map(|box_impl| async move { box_impl.info().await })
-            .buffer_unordered(PORT_INFO_QUERY_CONCURRENCY)
-            .collect::<Vec<_>>()
-            .await;
+        let mut infos = Vec::with_capacity(boxes.len());
+        for box_impl in boxes {
+            infos.push(box_impl.info().await?);
+        }
 
         // Sort by creation time (newest first)
         infos.sort_by_key(|b| std::cmp::Reverse(b.created_at));
@@ -1575,7 +1565,6 @@ impl RuntimeImpl {
     /// Called when box is stopped or removed. Existing handles become stale;
     /// new handles from runtime.get() will get a fresh BoxImpl.
     pub(crate) fn invalidate_box_impl(&self, box_id: &BoxID, box_name: Option<&str>) {
-        self.published_port_cache.invalidate(box_id);
         let mut sync = self.sync_state.write().unwrap();
         sync.active_boxes_by_id.remove(box_id);
         if let Some(name) = box_name {
@@ -1910,7 +1899,10 @@ mod tests {
 
         let (cached_box, inserted) = runtime.get_or_create_box_impl(config.clone(), cached_state);
         assert!(inserted);
-        assert_eq!(cached_box.snapshot_info().status, BoxStatus::Configured);
+        assert_eq!(
+            cached_box.info().await.expect("cached box info").status,
+            BoxStatus::Configured
+        );
 
         let mut fresh_state = BoxState::new();
         fresh_state.status = BoxStatus::Stopped;
@@ -1923,7 +1915,10 @@ mod tests {
 
         assert_eq!(infos.len(), 1);
         assert_eq!(infos[0].status, BoxStatus::Stopped);
-        assert_eq!(cached_box.snapshot_info().status, BoxStatus::Configured);
+        assert_eq!(
+            cached_box.info().await.expect("cached box info").status,
+            BoxStatus::Configured
+        );
     }
 
     // ====================================================================

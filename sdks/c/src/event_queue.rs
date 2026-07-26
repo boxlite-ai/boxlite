@@ -151,7 +151,9 @@ pub(crate) type CBoxVolumeRemoveFn = extern "C" fn(*mut crate::CBoxliteError, *m
 pub type CBoxCopyCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxCopyFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
-/// Box info completion.
+/// Box info completion. On success the callback owns the non-null metadata and
+/// must release it with `boxlite_free_box_info`. The error pointer is borrowed
+/// for callback dispatch only; on failure the metadata pointer is null.
 pub type CBoxInfoCb = Option<extern "C" fn(*mut CBoxInfo, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxInfoFn = extern "C" fn(*mut CBoxInfo, *mut crate::CBoxliteError, *mut c_void);
 

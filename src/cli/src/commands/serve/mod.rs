@@ -925,17 +925,31 @@ async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>
     // So a non-Running box gets a fresh handle, which *can* boot it. That is the
     // auto-restart the cloud depends on: its reaper stops idle boxes and the next
     // SDK call is expected to bring them back.
-    if let Some(cached) = state.boxes.read().await.get(box_id)
-        && cached.info().status.is_active()
-    {
-        return Ok(Arc::clone(cached));
+    let cached = state.boxes.read().await.get(box_id).cloned();
+    if let Some(cached) = cached {
+        match cached.info().await {
+            Ok(info) if info.status.is_active() => return Ok(Arc::clone(&cached)),
+            Ok(_) => {}
+            Err(e) => return Err(error_from_boxlite(&e)),
+        }
+        let mut boxes = state.boxes.write().await;
+        if boxes
+            .get(box_id)
+            .is_some_and(|current| Arc::ptr_eq(current, &cached))
+        {
+            boxes.remove(box_id);
+        }
     }
-    state.boxes.write().await.remove(box_id);
 
     // Fetch from runtime
     match state.runtime.get(box_id).await {
         Ok(Some(b)) => {
-            let id = b.info().id.to_string();
+            let id = b
+                .info()
+                .await
+                .map_err(|e| error_from_boxlite(&e))?
+                .id
+                .to_string();
             let arc = Arc::new(b);
             state.boxes.write().await.insert(id, Arc::clone(&arc));
             Ok(arc)

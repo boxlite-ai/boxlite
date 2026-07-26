@@ -54,7 +54,8 @@ pub struct JsNetworkInfo {
     pub mode: String,
     #[napi(js_name = "allowNet")]
     pub allow_net: Vec<String>,
-    /// `None` becomes `null`; an empty array is an authoritative no-publications result.
+    /// `None` becomes `null` when this handle does not know the bindings; an
+    /// empty array means there are no active publications.
     #[napi(js_name = "publishedPorts")]
     pub published_ports: Option<Vec<JsPublishedPort>>,
 }

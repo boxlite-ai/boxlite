@@ -226,8 +226,8 @@ impl BoxTestBase {
     }
 
     /// Assert that the box is in a running/active state.
-    pub fn assert_running(&self) {
-        let info = self.bx.info();
+    pub async fn assert_running(&self) {
+        let info = self.bx.info().await.expect("get box info");
         assert!(
             info.status.is_active(),
             "expected box to be running, got: {:?}",
@@ -236,8 +236,8 @@ impl BoxTestBase {
     }
 
     /// Assert that the box is stopped.
-    pub fn assert_stopped(&self) {
-        let info = self.bx.info();
+    pub async fn assert_stopped(&self) {
+        let info = self.bx.info().await.expect("get box info");
         assert!(
             !info.status.is_active(),
             "expected box to be stopped, got: {:?}",

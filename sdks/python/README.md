@@ -30,6 +30,7 @@ Requires Python 3.10 or later.
 
 ```python
 import boxlite
+
 print(boxlite.__version__)  # Prints installed package version
 ```
 
@@ -54,12 +55,14 @@ ls -l /dev/kvm                    # Should exist and be accessible
 import asyncio
 import boxlite
 
+
 async def main():
     # Create a box and run a command
     async with boxlite.SimpleBox(image="python:slim") as box:
         result = await box.exec("python", "-c", "print('Hello from BoxLite!')")
         print(result.stdout)
         # Output: Hello from BoxLite!
+
 
 asyncio.run(main())
 ```
@@ -69,6 +72,7 @@ asyncio.run(main())
 ```python
 import asyncio
 import boxlite
+
 
 async def main():
     # Execute untrusted Python code safely
@@ -82,6 +86,7 @@ print(response.text)
         # CodeBox automatically installs packages
         result = await codebox.run(code)
         print(result)
+
 
 asyncio.run(main())
 ```
@@ -102,16 +107,19 @@ The main runtime for creating and managing boxes.
 - `Boxlite(options: Options) -> Boxlite`
   Create runtime with custom options
 
-- `create(box_options: BoxOptions) -> Box`
+- `async create(box_options: BoxOptions) -> Box`
   Create a new box with specified configuration
 
-- `get(box_id: str) -> Box`
+- `async get(box_id: str) -> Optional[Box]`
   Reattach to an existing box by ID
 
-- `list() -> List[BoxInfo]`
+- `async get_info(box_id: str) -> Optional[BoxInfo]`
+  Get current metadata for a box by ID or name
+
+- `async list_info() -> List[BoxInfo]`
   List all boxes (running and stopped)
 
-- `metrics() -> RuntimeMetrics`
+- `async metrics() -> RuntimeMetrics`
   Get runtime-wide metrics
 
 **Example:**
@@ -124,26 +132,28 @@ runtime = boxlite.Boxlite.default()
 runtime = boxlite.Boxlite(boxlite.Options(home_dir="/custom/path"))
 
 # Custom registry host with basic auth
-runtime = boxlite.Boxlite(boxlite.Options(
-    image_registries=[
-        boxlite.ImageRegistry(
-            host="registry.example.com",
-            username="user",
-            password="password",
-        )
-    ]
-))
+runtime = boxlite.Boxlite(
+    boxlite.Options(
+        image_registries=[
+            boxlite.ImageRegistry(
+                host="registry.example.com",
+                username="user",
+                password="password",
+            )
+        ]
+    )
+)
 
 # Create a box
-box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
 
 # Reattach to existing box
-box = runtime.get("01JJNH8...")
+box = await runtime.get("01JJNH8...")
 
 # List all boxes
-boxes = runtime.list()
+boxes = await runtime.list_info()
 for info in boxes:
-    print(f"{info.id}: {info.status}")
+    print(f"{info.id}: {info.state.status}")
 ```
 
 #### Runtime Image Management
@@ -167,10 +177,12 @@ implementation of the `Credential` ABC.
 ```python
 from boxlite import Boxlite, BoxliteRestOptions, ApiKeyCredential
 
-rt = Boxlite.rest(BoxliteRestOptions(
-    url="http://localhost:8100",
-    credential=ApiKeyCredential("your-api-key"),
-))
+rt = Boxlite.rest(
+    BoxliteRestOptions(
+        url="http://localhost:8100",
+        credential=ApiKeyCredential("your-api-key"),
+    )
+)
 boxes = await rt.list_info()
 
 # Env discovery — returns None when BOXLITE_API_KEY is unset:
@@ -195,11 +207,13 @@ id; another deployment may use a workspace name, a region+team
 pair, or any other multi-segment value such as `us-east/team-42`.
 
 ```python
-rt = Boxlite.rest(BoxliteRestOptions(
-    url="https://api.boxlite.ai/api",
-    credential=ApiKeyCredential("blk_live_…"),
-    path_prefix="acme",   # → requests hit /v1/acme/boxes
-))
+rt = Boxlite.rest(
+    BoxliteRestOptions(
+        url="https://api.boxlite.ai/api",
+        credential=ApiKeyCredential("blk_live_…"),
+        path_prefix="acme",  # → requests hit /v1/acme/boxes
+    )
+)
 ```
 
 When `path_prefix` is unset or empty, the client builds URLs
@@ -272,7 +286,7 @@ options = boxlite.BoxOptions(
         ),
     ],
 )
-box = runtime.create(options)
+box = await runtime.create(options)
 ```
 
 ### Box Handle
@@ -296,13 +310,13 @@ Handle to a running or stopped box.
 - `remove() -> None`
   Delete the box and its data (async)
 
-- `info() -> BoxInfo`
-  Get a synchronous metadata snapshot
+- `info() -> Awaitable[BoxInfo]`
+  Get box metadata (async)
   - `info.network` contains `NetworkInfo` when network metadata is available
   - When `info.network` is not `None`, `published_ports` is `None` when
-    unresolved, `[]` when authoritatively empty, or a list of named
-    `PublishedPort` objects
-  - `await runtime.get_info(box.id)` observes the live backend without publishing
+    this handle does not know the bindings, `[]` when there are no active
+    publications, or a list of named `PublishedPort` objects
+  - bindings become available after this handle starts or reattaches the box
 
 - `metrics() -> BoxMetrics`
   Get box resource usage metrics (async)
@@ -310,15 +324,15 @@ Handle to a running or stopped box.
 **Example:**
 
 ```python
-box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
 
 # Execute commands
 execution = await box.exec("echo", "Hello")
 result = await execution.wait()
 
 # Get box info
-info = box.info()
-print(f"Box {info.id}: {info.status}")
+info = await box.info()
+print(f"Box {info.id}: {info.state.status}")
 
 # Stop and remove
 await box.stop()
@@ -526,7 +540,7 @@ async with boxlite.SimpleBox() as box:
 # Box automatically stopped and removed
 
 # Manual cleanup (if not using context manager)
-box = runtime.create(boxlite.BoxOptions(image="alpine"))
+box = await runtime.create(boxlite.BoxOptions(image="alpine"))
 try:
     await box.exec("command")
 finally:
@@ -588,7 +602,7 @@ boxlite.BoxOptions(image="123456.dkr.ecr.us-east-1.amazonaws.com/repo:tag")
 
 ```python
 boxlite.BoxOptions(
-    cpus=4,           # 4 CPU cores
+    cpus=4,  # 4 CPU cores
     memory_mib=2048,  # 2 GB RAM
 )
 ```
@@ -612,7 +626,6 @@ boxlite.BoxOptions(
     volumes=[
         # Read-only mount
         ("/host/config", "/etc/app/config", "ro"),
-
         # Read-write mount
         ("/host/data", "/mnt/data", "rw"),
     ]
@@ -735,7 +748,7 @@ Get aggregate metrics across all boxes:
 
 ```python
 runtime = boxlite.Boxlite.default()
-metrics = runtime.metrics()
+metrics = await runtime.metrics()
 
 print(f"Boxes created: {metrics.boxes_created}")
 print(f"Boxes destroyed: {metrics.boxes_destroyed}")
@@ -753,7 +766,7 @@ print(f"Total exec calls: {metrics.total_exec_calls}")
 Get per-box resource usage:
 
 ```python
-box = runtime.create(boxlite.BoxOptions(image="alpine"))
+box = await runtime.create(boxlite.BoxOptions(image="alpine"))
 metrics = await box.metrics()
 
 print(f"CPU time: {metrics.cpu_time_ms}ms")
@@ -788,6 +801,7 @@ from boxlite import BoxliteError, ExecError, TimeoutError, ParseError
 
 ```python
 import boxlite
+
 
 async def safe_execution():
     try:
@@ -857,8 +871,8 @@ sudo usermod -aG kvm $USER
 ```python
 # Increase resource limits
 boxlite.BoxOptions(
-    cpus=4,          # More CPUs
-    memory_mib=4096, # More memory
+    cpus=4,  # More CPUs
+    memory_mib=4096,  # More memory
 )
 
 # Check metrics

@@ -35,7 +35,10 @@ pub(in crate::commands::serve) async fn create_box(
         Err(e) => return error_from_boxlite(&e),
     };
 
-    let info = litebox.info();
+    let info = match litebox.info().await {
+        Ok(info) => info,
+        Err(e) => return error_from_boxlite(&e),
+    };
     let box_id = info.id.to_string();
     let resp = box_info_to_response(&info);
 
@@ -91,13 +94,20 @@ pub(in crate::commands::serve) async fn start_box(
     // that is still Running is kept, though: `run --url` attaches (which boots
     // the box) and only then calls `/start` to run its init, and dropping the
     // live VM between the two would strand the client's attach on a dead guest.
-    {
-        let mut boxes = state.boxes.write().await;
-        let spent = boxes
-            .get(&box_id)
-            .is_some_and(|b| !b.info().status.is_active());
-        if spent {
-            boxes.remove(&box_id);
+    let cached = state.boxes.read().await.get(&box_id).cloned();
+    if let Some(cached) = cached {
+        let info = match cached.info().await {
+            Ok(info) => info,
+            Err(e) => return error_from_boxlite(&e),
+        };
+        if !info.status.is_active() {
+            let mut boxes = state.boxes.write().await;
+            if boxes
+                .get(&box_id)
+                .is_some_and(|current| Arc::ptr_eq(current, &cached))
+            {
+                boxes.remove(&box_id);
+            }
         }
     }
 
@@ -110,7 +120,10 @@ pub(in crate::commands::serve) async fn start_box(
         return error_from_boxlite(&e);
     }
 
-    let info = litebox.info();
+    let info = match litebox.info().await {
+        Ok(info) => info,
+        Err(e) => return error_from_boxlite(&e),
+    };
     Json(box_info_to_response(&info)).into_response()
 }
 
@@ -132,7 +145,10 @@ pub(in crate::commands::serve) async fn stop_box(
     // call with "invalidated after stop()".
     state.boxes.write().await.remove(&box_id);
 
-    let info = litebox.info();
+    let info = match litebox.info().await {
+        Ok(info) => info,
+        Err(e) => return error_from_boxlite(&e),
+    };
     Json(box_info_to_response(&info)).into_response()
 }
 

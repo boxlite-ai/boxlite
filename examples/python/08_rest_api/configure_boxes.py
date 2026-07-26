@@ -43,7 +43,7 @@ async def main():
         auto_remove=False,
     )
     box = await rt.create(opts, name="config-demo")
-    info = box.info()
+    info = await box.info()
     print(f"  Created box: {box.id}")
     print(f"  CPUs:        {info.cpus}")
     print(f"  Memory MiB:  {info.memory_mib}")

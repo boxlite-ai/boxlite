@@ -73,8 +73,8 @@ pub(crate) trait BoxBackend: Send + Sync {
 
     fn name(&self) -> Option<&str>;
 
-    /// Return cached or persisted metadata without querying the network backend.
-    fn snapshot_info(&self) -> BoxInfo;
+    /// Return metadata for this box.
+    async fn info(&self) -> BoxliteResult<BoxInfo>;
 
     async fn start(&self) -> BoxliteResult<()>;
 

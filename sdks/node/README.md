@@ -213,10 +213,10 @@ console.log(pwdResult.stdout); // "/tmp\n"
 // Get box info
 console.log(box.id);    // ULID
 console.log(box.name);  // Optional name
-const info = box.info(); // Metadata
-// null means unresolved; [] means authoritatively no active publications.
+const info = await box.info(); // Metadata
+// null means unknown to this handle; [] means no active publications.
 console.log(info.network?.publishedPorts);
-// getInfo observes the live backend without publishing.
+// Local info reads do not query the live network backend; REST info performs a GET.
 const refreshed = await runtime.getInfo(box.id);
 console.log(refreshed?.network?.publishedPorts);
 

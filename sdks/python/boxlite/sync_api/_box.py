@@ -1,7 +1,7 @@
 """
-SyncBox - Synchronous wrapper for Box.
+SyncBox - Synchronous wrapper for sync-capable Box operations.
 
-Mirrors the native Box API exactly, but with synchronous methods.
+Box metadata is intentionally available only through the async ``Box.info()`` API.
 """
 
 from typing import TYPE_CHECKING, List, Optional, Tuple
@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from ._boxlite import SyncBoxlite
     from ._execution import SyncExecution
     from ._network import SyncNetworkHandle
-    from ..boxlite import Box, BoxInfo, BoxMetrics
+    from ..boxlite import Box, BoxMetrics
 
 __all__ = ["SyncBox"]
 
@@ -19,8 +19,9 @@ class SyncBox:
     """
     Synchronous wrapper for Box.
 
-    Provides the same API as the native Box class, but with synchronous methods.
-    Uses greenlet fiber switching internally to bridge async operations.
+    Provides synchronous lifecycle and execution methods. Uses greenlet fiber
+    switching internally to bridge async operations. ``Box.info()`` is excluded
+    because metadata retrieval is an async-only API.
 
     Usage:
         with SyncBoxlite.default() as runtime:
@@ -73,10 +74,6 @@ class SyncBox:
     def name(self) -> Optional[str]:
         """Get the box name (if set)."""
         return self._box.name
-
-    def info(self) -> "BoxInfo":
-        """Get box information (synchronous, no I/O)."""
-        return self._box.info()
 
     def start(self) -> None:
         """

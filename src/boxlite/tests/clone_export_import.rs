@@ -40,7 +40,10 @@ async fn create_running_box(runtime: &BoxliteRuntime, name: &str) -> LiteBox {
         .expect("Failed to create box");
 
     litebox.start().await.expect("Failed to start box");
-    assert_eq!(litebox.info().status, BoxStatus::Running);
+    assert_eq!(
+        litebox.info().await.expect("get box info").status,
+        BoxStatus::Running
+    );
 
     litebox
 }
@@ -65,8 +68,8 @@ async fn test_clone_produces_independent_box() {
         .expect("Failed to clone box");
 
     // Cloned box has a different ID
-    let source_info = source.info();
-    let cloned_info = cloned.info();
+    let source_info = source.info().await.expect("get source box info");
+    let cloned_info = cloned.info().await.expect("get cloned box info");
     assert_ne!(source_info.id, cloned_info.id);
     assert_eq!(cloned_info.name.as_deref(), Some("cloned-box"));
     assert_eq!(cloned_info.status, BoxStatus::Stopped);
@@ -104,7 +107,7 @@ async fn test_export_import_roundtrip() {
         .await
         .expect("Failed to import box");
 
-    let info = imported.info();
+    let info = imported.info().await.expect("get imported box info");
     assert_eq!(info.name.as_deref(), Some("imported-box"));
     assert_eq!(info.status, BoxStatus::Stopped);
 
@@ -145,7 +148,7 @@ async fn test_export_import_preserves_box_options() {
 
     let imported = runtime.import_box(archive, None).await.expect("import");
 
-    let imported_info = imported.info();
+    let imported_info = imported.info().await.expect("get imported box info");
     assert_eq!(imported_info.status, BoxStatus::Stopped);
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
@@ -172,11 +175,17 @@ async fn test_clone_running_box() {
         .expect("Clone on running box should succeed");
 
     // Source is still running
-    assert_eq!(source.info().status, BoxStatus::Running);
+    assert_eq!(
+        source.info().await.expect("get source box info").status,
+        BoxStatus::Running
+    );
 
     // Cloned box is stopped (new box, no VM yet)
-    let cloned_info = cloned.info();
-    assert_ne!(source.info().id, cloned_info.id);
+    let cloned_info = cloned.info().await.expect("get cloned box info");
+    assert_ne!(
+        source.info().await.expect("get source box info").id,
+        cloned_info.id
+    );
     assert_eq!(cloned_info.name.as_deref(), Some("cloned-running"));
     assert_eq!(cloned_info.status, BoxStatus::Stopped);
 
@@ -219,7 +228,10 @@ async fn test_export_running_box() {
         .expect("Export on running box should succeed");
 
     // Source is still running after export (PauseGuard resumed it)
-    assert_eq!(source.info().status, BoxStatus::Running);
+    assert_eq!(
+        source.info().await.expect("get source box info").status,
+        BoxStatus::Running
+    );
 
     // Archive is valid
     assert!(archive.path().exists());
@@ -236,7 +248,10 @@ async fn test_export_running_box() {
         .import_box(archive, Some("imported-running".to_string()))
         .await
         .expect("Import should succeed");
-    assert_eq!(imported.info().status, BoxStatus::Stopped);
+    assert_eq!(
+        imported.info().await.expect("get imported box info").status,
+        BoxStatus::Stopped
+    );
     imported.start().await.expect("Start imported box");
     imported.stop().await.expect("Stop imported box");
 
@@ -271,7 +286,10 @@ async fn test_export_import_running_box_roundtrip() {
         .expect("Export running box should succeed");
 
     // Source still running after export
-    assert_eq!(source.info().status, BoxStatus::Running);
+    assert_eq!(
+        source.info().await.expect("get source box info").status,
+        BoxStatus::Running
+    );
 
     // Import and verify the marker file is preserved
     let imported = runtime
@@ -389,8 +407,14 @@ async fn test_clone_10x_benchmark() {
         eprintln!("Clone {}/{}: {:?}", i + 1, N, elapsed);
 
         // Verify clone is valid
-        assert_eq!(cloned.info().status, BoxStatus::Stopped);
-        assert_ne!(cloned.info().id, source.info().id);
+        assert_eq!(
+            cloned.info().await.expect("get cloned box info").status,
+            BoxStatus::Stopped
+        );
+        assert_ne!(
+            cloned.info().await.expect("get cloned box info").id,
+            source.info().await.expect("get source box info").id
+        );
     }
 
     let total = total_start.elapsed();
@@ -442,7 +466,10 @@ async fn test_export_under_write_pressure() {
         .expect("Export under write pressure should succeed");
 
     // Source should still be running after export
-    assert_eq!(source.info().status, BoxStatus::Running);
+    assert_eq!(
+        source.info().await.expect("get source box info").status,
+        BoxStatus::Running
+    );
 
     // Import the archive and verify the filesystem is intact (bootable)
     let imported = runtime
