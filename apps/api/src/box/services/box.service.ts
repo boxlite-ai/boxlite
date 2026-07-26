@@ -33,7 +33,6 @@ import { BoxDesiredStateUpdatedEvent } from '../events/box-desired-state-updated
 import { BoxStoppedEvent } from '../events/box-stopped.event'
 import { OrganizationService } from '../../organization/services/organization.service'
 import { OrganizationUsageService, PendingBoxReservation } from '../../organization/services/organization-usage.service'
-import { resizeQuotaDeltas } from '../../organization/services/box-usage'
 import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
 import { OrganizationSuspendedBoxStoppedEvent } from '../../organization/events/organization-suspended-box-stopped.event'
 import { TypedConfigService } from '../../config/typed-config.service'

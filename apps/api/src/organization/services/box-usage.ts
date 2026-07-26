@@ -4,18 +4,12 @@
  */
 
 import { BoxState } from '../../box/enums/box-state.enum'
-import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
-import {
-  BOX_STATES_CONDITIONALLY_CONSUMING_COMPUTE,
-  BOX_STATES_CONSUMING_COMPUTE,
-  BOX_STATES_CONSUMING_DISK,
-} from '../constants/box-consuming-states.constant'
+import { BOX_STATES_CONSUMING_COMPUTE, BOX_STATES_CONSUMING_DISK } from '../constants/box-consuming-states.constant'
 import { OrgResourceUsage } from './org-quota'
 
 /** The resource fields a box charges against, in its current state. */
 export interface BoxUsageInput {
   state: BoxState
-  desiredState: BoxDesiredState
   cpu: number
   mem: number
   disk: number
@@ -24,14 +18,12 @@ export interface BoxUsageInput {
 
 /**
  * What a single box contributes to org usage in its current state: full compute
- * (cpu / memory / gpu + one running slot) while running — including a hot RESIZING
- * box headed back to STARTED — disk while running or merely stopped, and nothing
- * once terminal. Mirrors the usage SUM in fetchBoxUsageFromDb.
+ * (cpu / memory / gpu + one running slot) while running, disk while running or
+ * merely stopped, and nothing once terminal. Mirrors the usage SUM in
+ * fetchBoxUsageFromDb.
  */
 export function boxUsageContribution(box: BoxUsageInput): OrgResourceUsage {
-  const consumesCompute =
-    BOX_STATES_CONSUMING_COMPUTE.includes(box.state) ||
-    (BOX_STATES_CONDITIONALLY_CONSUMING_COMPUTE.includes(box.state) && box.desiredState === BoxDesiredState.STARTED)
+  const consumesCompute = BOX_STATES_CONSUMING_COMPUTE.includes(box.state)
   const consumesDisk = BOX_STATES_CONSUMING_DISK.includes(box.state)
   return {
     cpu: consumesCompute ? box.cpu : 0,
@@ -62,21 +54,4 @@ export function stateTransitionDelta(
     return -amount
   }
   return 0
-}
-
-/**
- * The positive per-dimension deltas a resize charges against org quota. Only growth
- * can breach a quota, and a cold (stopped) resize consumes no compute — so cpu/memory
- * are charged only on a hot resize, while disk is charged in both states.
- */
-export function resizeQuotaDeltas(
-  current: { cpu: number; mem: number; disk: number },
-  target: { cpu: number; mem: number; disk: number },
-  isHotResize: boolean,
-): { cpu: number; memory: number; disk: number } {
-  return {
-    cpu: isHotResize ? Math.max(0, target.cpu - current.cpu) : 0,
-    memory: isHotResize ? Math.max(0, target.mem - current.mem) : 0,
-    disk: Math.max(0, target.disk - current.disk),
-  }
 }

@@ -7,11 +7,11 @@ export class AddOrganizationQuota1784260000000 implements MigrationInterface {
     await queryRunner.query(
       `CREATE TABLE "organization_quota" (
         "organizationId" uuid NOT NULL,
-        "total_cpu_quota" integer NOT NULL DEFAULT '10',
-        "total_memory_quota" integer NOT NULL DEFAULT '40',
-        "total_disk_quota" integer NOT NULL DEFAULT '30',
+        "total_cpu_quota" integer NOT NULL DEFAULT '64',
+        "total_memory_quota" integer NOT NULL DEFAULT '256',
+        "total_disk_quota" integer NOT NULL DEFAULT '512',
         "total_gpu_quota" integer NOT NULL DEFAULT '0',
-        "max_concurrent_boxes" integer NOT NULL DEFAULT '10',
+        "max_concurrent_boxes" integer NOT NULL DEFAULT '50',
         "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
         "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
         CONSTRAINT "organization_quota_pk" PRIMARY KEY ("organizationId"),

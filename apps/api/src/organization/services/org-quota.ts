@@ -19,11 +19,11 @@ export interface OrgQuotaLimits {
 /** Applied when an organization has no OrganizationQuota row. Must stay in sync
  * with the entity column defaults and the backfill migration. */
 export const DEFAULT_ORG_QUOTA: OrgQuotaLimits = {
-  totalCpuQuota: 10,
-  totalMemoryQuota: 40,
-  totalDiskQuota: 30,
+  totalCpuQuota: 64,
+  totalMemoryQuota: 256,
+  totalDiskQuota: 512,
   totalGpuQuota: 0,
-  maxConcurrentBoxes: 10,
+  maxConcurrentBoxes: 50,
 }
 
 /** A snapshot of what an organization already consumes, in the same units as the

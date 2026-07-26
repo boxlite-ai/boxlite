@@ -26,21 +26,21 @@ export class OrganizationQuota {
 
   @Column({
     type: 'int',
-    default: 10,
+    default: 64,
     name: 'total_cpu_quota',
   })
   totalCpuQuota: number
 
   @Column({
     type: 'int',
-    default: 40,
+    default: 256,
     name: 'total_memory_quota',
   })
   totalMemoryQuota: number
 
   @Column({
     type: 'int',
-    default: 30,
+    default: 512,
     name: 'total_disk_quota',
   })
   totalDiskQuota: number
@@ -54,7 +54,7 @@ export class OrganizationQuota {
 
   @Column({
     type: 'int',
-    default: 10,
+    default: 50,
     name: 'max_concurrent_boxes',
   })
   maxConcurrentBoxes: number

@@ -94,18 +94,6 @@ describeIfRedis('OrganizationUsageService (integration, real Redis)', () => {
     expect(await current('cpu')).toBe('10') // 8 + 2 realized into current
   })
 
-  it('validateResizeQuota reserves only the positive growth delta', async () => {
-    setDbUsage({ cpu: 8, count: 4 })
-    const reservation = await service.validateResizeQuota(org, 1, 0, 0) // +1 cpu -> 9 <= 10
-    expect(reservation).toEqual({ cpu: 1, memory: 0, disk: 0, gpu: 0, count: 0 })
-  })
-
-  it('validateResizeQuota rejects a growth delta beyond quota and rolls back', async () => {
-    setDbUsage({ cpu: 8, count: 4 })
-    await expect(service.validateResizeQuota(org, 5, 0, 0)).rejects.toThrow(/CPU limit/) // 8 + 5 = 13 > 10
-    expect(await pending('cpu')).toBe('0')
-  })
-
   it("counts a starting box's own disk exactly once (rejects when it exceeds disk quota)", async () => {
     quotaRepository.findOne.mockResolvedValue({ ...QUOTA, totalDiskQuota: 20 })
     // The stopped box's 25 GiB disk is already in current usage; starting it must

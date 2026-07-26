@@ -20,12 +20,6 @@ export const BOX_STATES_CONSUMING_COMPUTE: BoxState[] = [
 ]
 
 /**
- * States that consume compute only while the box is heading to STARTED. A resize
- * of a stopped box, for example, must not be charged for cpu/memory.
- */
-export const BOX_STATES_CONDITIONALLY_CONSUMING_COMPUTE: BoxState[] = [BoxState.RESIZING]
-
-/**
  * States in which a box occupies disk. Broader than compute: a STOPPED (or
  * ARCHIVING) box frees its cpu/memory and its running slot but still holds its
  * disk image, so disk keeps counting.
@@ -34,5 +28,4 @@ export const BOX_STATES_CONSUMING_DISK: BoxState[] = [
   ...BOX_STATES_CONSUMING_COMPUTE,
   BoxState.STOPPED,
   BoxState.ARCHIVING,
-  BoxState.RESIZING,
 ]

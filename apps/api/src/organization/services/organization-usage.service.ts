@@ -11,18 +11,13 @@ import { Redis } from 'ioredis'
 import { Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
 import { BoxState } from '../../box/enums/box-state.enum'
-import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BoxEvents } from '../../box/constants/box-events.constants'
 import { BoxCreatedEvent } from '../../box/events/box-create.event'
 import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { Organization } from '../entities/organization.entity'
 import { OrganizationQuota } from '../entities/organization-quota.entity'
-import {
-  BOX_STATES_CONDITIONALLY_CONSUMING_COMPUTE,
-  BOX_STATES_CONSUMING_COMPUTE,
-  BOX_STATES_CONSUMING_DISK,
-} from '../constants/box-consuming-states.constant'
+import { BOX_STATES_CONSUMING_COMPUTE, BOX_STATES_CONSUMING_DISK } from '../constants/box-consuming-states.constant'
 import { assertWithinOrgQuota, DEFAULT_ORG_QUOTA, OrgQuotaLimits, OrgResourceUsage } from './org-quota'
 import { boxUsageContribution, stateTransitionDelta } from './box-usage'
 
@@ -113,46 +108,6 @@ export class OrganizationUsageService {
         count: overview.count + overview.pendingCount,
       }
       assertWithinOrgQuota(limits, projected, gpu)
-    } catch (error) {
-      await this.rollbackPendingUsage(organization.id, reservation)
-      throw error
-    }
-
-    return reservation
-  }
-
-  /**
-   * Quota check for a resize. Only growth can breach, so the caller passes the
-   * positive per-dimension deltas (a cold resize passes 0 for cpu/memory, since a
-   * stopped box consumes no compute). The box's current size stays in current usage —
-   * no exclude — and the running-box count is unchanged.
-   */
-  async validateResizeQuota(
-    organization: Organization,
-    cpuDelta: number,
-    memoryDelta: number,
-    diskDelta: number,
-  ): Promise<PendingBoxReservation> {
-    const reservation: PendingBoxReservation = {
-      cpu: cpuDelta,
-      memory: memoryDelta,
-      disk: diskDelta,
-      gpu: 0,
-      count: 0,
-    }
-    await this.reservePending(organization.id, reservation)
-
-    try {
-      const limits = await this.getQuotaLimits(organization.id)
-      const overview = await this.getBoxUsageOverview(organization.id)
-      const projected: OrgResourceUsage = {
-        cpu: overview.cpu + overview.pendingCpu,
-        memory: overview.memory + overview.pendingMemory,
-        disk: overview.disk + overview.pendingDisk,
-        gpu: overview.gpu + overview.pendingGpu,
-        count: overview.count + overview.pendingCount,
-      }
-      assertWithinOrgQuota(limits, projected, 0)
     } catch (error) {
       await this.rollbackPendingUsage(organization.id, reservation)
       throw error
@@ -274,8 +229,7 @@ export class OrganizationUsageService {
   }
 
   private async fetchBoxUsageFromDb(organizationId: string): Promise<OrgResourceUsage> {
-    const computePredicate =
-      'box.state IN (:...computeStates) OR (box.state IN (:...conditionalStates) AND box."desiredState" = :started)'
+    const computePredicate = 'box.state IN (:...computeStates)'
 
     const raw = await this.boxRepository
       .createQueryBuilder('box')
@@ -286,9 +240,7 @@ export class OrganizationUsageService {
       .addSelect(`SUM(CASE WHEN ${computePredicate} THEN 1 ELSE 0 END)`, 'used_count')
       .where('box."organizationId" = :organizationId', { organizationId })
       .setParameter('computeStates', BOX_STATES_CONSUMING_COMPUTE)
-      .setParameter('conditionalStates', BOX_STATES_CONDITIONALLY_CONSUMING_COMPUTE)
       .setParameter('diskStates', BOX_STATES_CONSUMING_DISK)
-      .setParameter('started', BoxDesiredState.STARTED)
       .getRawOne<{
         used_cpu: string | null
         used_memory: string | null
@@ -445,15 +397,6 @@ export class OrganizationUsageService {
 
   @OnEvent(BoxEvents.STATE_UPDATED)
   async handleBoxStateUpdated(event: BoxStateUpdatedEvent): Promise<void> {
-    // Transitions into or out of a conditionally-consuming state (resize) are
-    // accounted for by the resize flow, not by simple set membership here.
-    if (
-      BOX_STATES_CONDITIONALLY_CONSUMING_COMPUTE.includes(event.oldState) ||
-      BOX_STATES_CONDITIONALLY_CONSUMING_COMPUTE.includes(event.newState)
-    ) {
-      return
-    }
-
     const box = event.box
     const lockKey = `box:${box.id}:quota-usage-update`
     await this.redisLockProvider.waitForLock(lockKey, 60)
