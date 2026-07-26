@@ -117,6 +117,10 @@ export class Box {
   @Column({ nullable: true })
   networkAllowList?: string
 
+  @Column({ default: false, type: 'boolean' })
+  captureLogs = false
+
+
   @Column('jsonb', { nullable: true })
   labels: { [key: string]: string }
 

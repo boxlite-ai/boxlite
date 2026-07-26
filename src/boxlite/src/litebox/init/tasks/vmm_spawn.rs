@@ -11,7 +11,7 @@ use crate::litebox::init::types::resolve_user_volumes;
 use crate::net::{NetworkBackend, NetworkBackendConfig};
 use crate::pipeline::PipelineTask;
 use crate::rootfs::guest::{GuestRootfs, Strategy};
-use crate::runtime::constants::{guest_paths, mount_tags};
+use crate::runtime::constants::{guest_paths, logs, mount_tags};
 use crate::runtime::id::BoxID;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::BoxOptions;
@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use boxlite_shared::BoxTransport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct VmmSpawnTask;
 
@@ -77,20 +77,26 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         };
 
         // Build config and get outputs
-        let (instance_spec, volume_mgr, rootfs_init, container_mounts, network_backend) =
-            build_config(
-                &box_id,
-                &options,
-                &layout,
-                &container_image_config,
-                &container_disk_path,
-                guest_disk_path.as_deref(),
-                &container_id,
-                &runtime,
-                reuse_rootfs,
-            )
-            .await
-            .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
+        let (
+            instance_spec,
+            volume_mgr,
+            rootfs_init,
+            container_mounts,
+            network_backend,
+            log_capture_path,
+        ) = build_config(
+            &box_id,
+            &options,
+            &layout,
+            &container_image_config,
+            &container_disk_path,
+            guest_disk_path.as_deref(),
+            &container_id,
+            &runtime,
+            reuse_rootfs,
+        )
+        .await
+        .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         // Spawn VM
         let handler = spawn_vm(&box_id, &instance_spec, &options, &layout)
@@ -101,6 +107,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         ctx.guard.set_handler(handler);
         ctx.volume_mgr = Some(volume_mgr);
         ctx.rootfs_init = Some(rootfs_init);
+        ctx.log_capture_path = log_capture_path;
         ctx.container_mounts = Some(container_mounts);
         // Hand the box's one network backend to LiveState assembly (init/mod.rs).
         ctx.network_backend = network_backend;
@@ -135,6 +142,7 @@ async fn build_config(
     crate::portal::interfaces::ContainerRootfsInitConfig,
     Vec<ContainerMount>,
     Option<Box<dyn NetworkBackend>>,
+    Option<String>,
 )> {
     // BoxTransport setup
     let transport = BoxTransport::unix(layout.socket_path());
@@ -151,6 +159,7 @@ async fn build_config(
 
     // SHARED virtiofs - needed by all strategies
     volume_mgr.add_fs_share(mount_tags::SHARED, layout.shared_dir(), None, false, None);
+    let log_capture_path = configure_log_capture(options, layout, container_id, &mut volume_mgr)?;
 
     // Add container rootfs disk (COW overlay workflow):
     // 1. Base disk: Pre-built ext4 image with container layers merged
@@ -254,13 +263,60 @@ async fn build_config(
         exit_file: layout.exit_file_path(),
         detach: options.detach,
     };
-
     Ok((
         instance_spec,
         volume_mgr,
         rootfs_init,
         container_mounts,
         network_backend,
+        log_capture_path,
+    ))
+}
+
+fn configure_log_capture(
+    options: &BoxOptions,
+    layout: &BoxFilesystemLayout,
+    container_id: &ContainerID,
+    volume_mgr: &mut GuestVolumeManager,
+) -> BoxliteResult<Option<String>> {
+    if !options.capture_logs {
+        return Ok(None);
+    }
+
+    let managed_log_path = layout.container_log_path(container_id.as_str());
+    let managed_log_dir = layout.container_logs_dir(container_id.as_str());
+    std::fs::create_dir_all(&managed_log_dir).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "failed to create container log directory {}: {}",
+            managed_log_dir.display(),
+            e
+        ))
+    })?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&managed_log_path)
+        .map_err(|e| {
+            BoxliteError::Storage(format!(
+                "failed to create container log file {}: {}",
+                managed_log_path.display(),
+                e
+            ))
+        })?;
+
+    volume_mgr.add_fs_share(
+        mount_tags::CONTAINER_LOGS,
+        managed_log_dir,
+        Some(logs::GUEST_DIR),
+        false,
+        None,
+    );
+
+    Ok(Some(
+        PathBuf::from(logs::GUEST_DIR)
+            .join("console.log")
+            .to_string_lossy()
+            .into_owned(),
     ))
 }
 

@@ -4,7 +4,7 @@
 //! Host controls all paths - guest receives these via GuestInitRequest.
 
 // Re-export shared constants from boxlite-core
-pub use boxlite_shared::constants::{container, mount_tags, network};
+pub use boxlite_shared::constants::{container, logs, mount_tags, network};
 
 /// Guest mount points (paths inside the guest).
 ///

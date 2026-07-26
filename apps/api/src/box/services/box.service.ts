@@ -181,7 +181,11 @@ export class BoxService {
       } else if (image) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec
         //  before creating a fresh one.
-        const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
+        //  Log capture must be configured before the container init process starts;
+        //  a pre-warmed box cannot be retrofitted without losing early output.
+        const needsFreshBoxForLogCapture = createBoxDto.captureLogs
+        const skipWarmPool =
+          needsFreshBoxForLogCapture || (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
         if (!skipWarmPool) {
           const warmPoolBox = await this.warmPoolService.fetchWarmPoolBox({
             organizationId: organization.id,
@@ -234,6 +238,8 @@ export class BoxService {
       if (createBoxDto.networkAllowList !== undefined) {
         box.networkAllowList = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
       }
+
+      box.captureLogs = createBoxDto.captureLogs || false
 
       const lifecyclePolicy = this.resolveLifecyclePolicy({
         autoPause: createBoxDto.autoPause,
@@ -308,6 +314,8 @@ export class BoxService {
     if (createBoxDto.networkAllowList !== undefined) {
       updateData.networkAllowList = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
     }
+
+    updateData.captureLogs = createBoxDto.captureLogs || false
 
     if (!warmPoolBox.runnerId) {
       throw new BoxError('Runner not found for warm pool box')

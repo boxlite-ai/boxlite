@@ -190,6 +190,11 @@ pub unsafe extern "C" fn boxlite_options_set_detach(opts: *mut CBoxliteOptions, 
     options_set_detach(opts, val)
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_capture_logs(opts: *mut CBoxliteOptions, val: c_int) {
+    options_set_capture_logs(opts, val)
+}
+
 /// Apply a `CAdvancedBoxOptions` (security, mount isolation, health check) to a
 /// `CBoxliteOptions`. Clones the advanced configuration into the box options —
 /// the caller retains ownership of `advanced_opts` and is responsible for
@@ -471,6 +476,14 @@ pub unsafe fn options_set_detach(handle: *mut OptionsHandle, val: c_int) {
     unsafe {
         if !handle.is_null() {
             (*handle).options.detach = val != 0;
+        }
+    }
+}
+
+pub unsafe fn options_set_capture_logs(handle: *mut OptionsHandle, val: c_int) {
+    unsafe {
+        if !handle.is_null() {
+            (*handle).options.capture_logs = val != 0;
         }
     }
 }

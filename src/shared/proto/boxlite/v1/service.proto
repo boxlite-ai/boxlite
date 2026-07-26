@@ -227,6 +227,9 @@ message ContainerInitRequest {
   // guest registers what it is handed, rather than both sides separately
   // hard-coding the id==container_id rule on their own side of the wire.
   string execution_id = 6;
+  // Optional guest-visible path for container init stdout/stderr capture.
+  // Constructed by the trusted host runtime under /run/boxlite/logs.
+  optional string log_capture_path = 7;
 }
 
 message ContainerStartRequest {

@@ -19,6 +19,7 @@ import type { DtoVolumeDTO } from './dto-volume-dto';
 
 export interface RecoverBoxDTO {
     'backupErrorReason'?: string;
+    'captureLogs'?: boolean;
     'cpuQuota'?: number;
     'env'?: { [key: string]: string; };
     'errorReason': string;

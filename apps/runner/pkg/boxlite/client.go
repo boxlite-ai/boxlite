@@ -248,6 +248,9 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithEntrypoint(boxDto.Entrypoint...))
 	}
 
+	if boxDto.CaptureLogs {
+		opts = append(opts, boxlite.WithCaptureLogs(true))
+	}
 	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
 	if err != nil {
 		return "", "", err

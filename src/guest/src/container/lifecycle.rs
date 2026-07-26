@@ -106,6 +106,7 @@ impl Container {
         user: &str,
         user_mounts: Vec<UserMount>,
         tty: bool,
+        log_capture: Option<PathBuf>,
     ) -> BoxliteResult<Self> {
         let rootfs = rootfs.as_ref();
         let workdir = workdir.as_ref();
@@ -199,7 +200,8 @@ impl Container {
         } else {
             // Pipes exist before the container does. The guest holds stdin's
             // write-end, so init's read() blocks instead of seeing EOF.
-            let (stdio, init_fds) = ContainerStdio::pipes()?;
+            let (mut stdio, init_fds) = ContainerStdio::pipes()?;
+            stdio.start_output_pump(log_capture)?;
             start::create_container_with_stdio(
                 container_id,
                 &state_root,
@@ -369,10 +371,10 @@ impl Container {
         )
     }
 
-    /// Drain init process stdout and stderr.
+    /// Take the bounded diagnostic tails for init stdout and stderr.
     ///
-    /// Reads all available data from the init process pipes using non-blocking I/O.
-    /// Can only be called once — subsequent calls return empty strings.
+    /// The always-on output pump owns the pipes and retains the latest bytes
+    /// per stream. Taking the tails clears them; subsequent calls are empty.
     ///
     /// # Returns
     ///
@@ -404,7 +406,7 @@ impl Container {
     pub fn diagnose_exit(&mut self) -> String {
         let container_state_path = self.container_state_path();
 
-        // Drain init process output before building diagnostics
+        // Take the bounded init output tails before building diagnostics
         let (init_stdout, init_stderr) = self.drain_init_output();
 
         // Try to load container state from libcontainer
@@ -483,7 +485,8 @@ impl Container {
     /// # Returns
     ///
     /// Ok(()) on successful shutdown, or if container was already stopped.
-    pub fn shutdown(&self, timeout_ms: u64) -> BoxliteResult<()> {
+    pub async fn shutdown(&mut self, timeout_ms: u64) -> BoxliteResult<()> {
+        const LOG_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
         self.is_shutdown
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
@@ -492,12 +495,14 @@ impl Container {
             Ok(c) => c,
             Err(_) => {
                 tracing::debug!(container_id = %self.id, "Container already gone, nothing to shutdown");
+                self.stdio.finish_output(LOG_DRAIN_TIMEOUT).await;
                 return Ok(());
             }
         };
 
         if !container.can_kill() {
             tracing::debug!(container_id = %self.id, "Container cannot be killed, skipping shutdown");
+            self.stdio.finish_output(LOG_DRAIN_TIMEOUT).await;
             return Ok(());
         }
 
@@ -511,9 +516,10 @@ impl Container {
         while start.elapsed().as_millis() < timeout_ms as u128 {
             if !self.is_running() {
                 tracing::info!(container_id = %self.id, "Container exited gracefully");
+                self.stdio.finish_output(LOG_DRAIN_TIMEOUT).await;
                 return Ok(());
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
 
         // Step 3: SIGKILL if still running
@@ -521,6 +527,7 @@ impl Container {
         let sigkill = Signal::try_from(9).expect("SIGKILL (9) is a valid signal");
         let _ = container.kill(sigkill, true);
 
+        self.stdio.finish_output(LOG_DRAIN_TIMEOUT).await;
         Ok(())
     }
 

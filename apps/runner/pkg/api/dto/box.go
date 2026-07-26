@@ -19,6 +19,7 @@ type CreateBoxDTO struct {
 	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
 	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
 	NetworkAllowList *string           `json:"networkAllowList,omitempty"`
+	CaptureLogs      bool              `json:"captureLogs,omitempty"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
 	AuthToken        *string           `json:"authToken,omitempty"`
 	OtelEndpoint     *string           `json:"otelEndpoint,omitempty"`
@@ -46,6 +47,7 @@ type RecoverBoxDTO struct {
 	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
 	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
 	NetworkAllowList *string           `json:"networkAllowList,omitempty"`
+	CaptureLogs      bool              `json:"captureLogs,omitempty"`
 	ErrorReason      string            `json:"errorReason" validate:"required"`
 } //	@name	RecoverBoxDTO
 

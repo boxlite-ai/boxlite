@@ -171,25 +171,26 @@ type Secret struct {
 }
 
 type boxConfig struct {
-	name       string
-	cpus       int
-	memoryMiB  int
-	diskSizeGB int
-	rootfsPath string
-	env        [][2]string
-	volumes    []volumeEntry
-	ports      []PortSpec
-	workDir    string
-	entrypoint []string
-	cmd        []string
-	autoRemove *bool
-	autoPause  *uint32
-	autoDelete *uint32
-	autoResume *bool
-	detach     *bool
-	network    *NetworkSpec
-	secrets    []Secret
-	advanced   *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
+	name        string
+	cpus        int
+	memoryMiB   int
+	diskSizeGB  int
+	rootfsPath  string
+	env         [][2]string
+	volumes     []volumeEntry
+	ports       []PortSpec
+	workDir     string
+	entrypoint  []string
+	cmd         []string
+	autoRemove  *bool
+	autoPause   *uint32
+	autoDelete  *uint32
+	autoResume  *bool
+	detach      *bool
+	network     *NetworkSpec
+	secrets     []Secret
+	captureLogs bool
+	advanced    *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
 }
 
 type volumeEntry struct {
@@ -325,6 +326,11 @@ func WithAutoRemove(v bool) BoxOption {
 // WithDetach sets whether the box survives parent process exit.
 func WithDetach(v bool) BoxOption {
 	return func(c *boxConfig) { c.detach = &v }
+}
+
+// WithCaptureLogs captures init stdout/stderr as CRI records in the box-managed log path.
+func WithCaptureLogs(v bool) BoxOption {
+	return func(c *boxConfig) { c.captureLogs = v }
 }
 
 // buildAndFreeCOptions runs buildCOptions, immediately frees the C
@@ -501,6 +507,9 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 	}
 	if cfg.detach != nil {
 		C.boxlite_options_set_detach(cOpts, boolToCInt(*cfg.detach))
+	}
+	if cfg.captureLogs {
+		C.boxlite_options_set_capture_logs(cOpts, C.int(1))
 	}
 	if cfg.advanced != nil && cfg.advanced.handle != nil {
 		// Clone the caller-owned advanced options (security, …) onto the box.

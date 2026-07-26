@@ -298,6 +298,7 @@ pub struct InitPipelineContext {
     pub volume_mgr: Option<GuestVolumeManager>,
     pub rootfs_init: Option<ContainerRootfsInitConfig>,
     pub container_mounts: Option<Vec<ContainerMount>>,
+    pub log_capture_path: Option<String>,
     pub guest_session: Option<GuestSession>,
     /// The box's one network backend (set by vmm_spawn on first start/restart, or
     /// by vmm_attach on reattach; moved into LiveState for runtime control).
@@ -330,6 +331,7 @@ impl InitPipelineContext {
             volume_mgr: None,
             rootfs_init: None,
             container_mounts: None,
+            log_capture_path: None,
             guest_session: None,
             network_backend: None,
             ca_cert_pem: None,

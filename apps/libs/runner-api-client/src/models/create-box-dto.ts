@@ -22,6 +22,7 @@ import type { RegistryDTO } from './registry-dto';
 
 export interface CreateBoxDTO {
     'authToken'?: string;
+    'captureLogs'?: boolean;
     'cpuQuota'?: number;
     'entrypoint'?: Array<string>;
     'env'?: { [key: string]: string; };

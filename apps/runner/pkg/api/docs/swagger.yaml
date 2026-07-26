@@ -51,6 +51,8 @@ definitions:
     properties:
       authToken:
         type: string
+      captureLogs:
+        type: boolean
       cpuQuota:
         minimum: 1
         type: integer
@@ -175,6 +177,8 @@ definitions:
     properties:
       backupErrorReason:
         type: string
+      captureLogs:
+        type: boolean
       cpuQuota:
         minimum: 1
         type: integer

@@ -18,6 +18,7 @@ import {
   DefaultApi,
   UpdateNetworkSettingsDTO,
   RecoverBoxDTO,
+  CreateBoxDTO,
 } from '@boxlite-ai/runner-api-client'
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
@@ -250,7 +251,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   }
 
   async createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined> {
-    const response = await this.boxApiClient.create({
+    const payload: CreateBoxDTO = {
       id: box.id,
       image: box.image ?? '',
       osUser: box.osUser,
@@ -262,10 +263,12 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
       metadata,
+      captureLogs: box.captureLogs,
       authToken: box.authToken,
       organizationId: box.organizationId,
       regionId: box.region,
-    })
+    }
+    const response = await this.boxApiClient.create(payload)
 
     if (!response?.data?.daemonVersion) {
       return undefined
@@ -331,6 +334,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
       errorReason: box.errorReason,
+      captureLogs: box.captureLogs,
     }
     await this.boxApiClient.recover(box.id, recoverBoxDTO)
   }

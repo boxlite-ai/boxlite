@@ -1652,6 +1652,10 @@ components:
           description: |
             Secret placeholder rules for outbound HTTP(S) requests.
             Matching requests replace `placeholder` with `value` on the host side.
+        capture_logs:
+          type: boolean
+          description: Capture init stdout/stderr as CRI records in the box-managed log path
+          default: false
         detach:
           type: boolean
           description: Box survives parent process exit

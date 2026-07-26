@@ -715,6 +715,8 @@ void boxlite_options_set_auto_resume_enabled(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
 
+void boxlite_options_set_capture_logs(CBoxliteOptions *opts, int val);
+
 // Apply a `CAdvancedBoxOptions` (security, mount isolation, health check) to a
 // `CBoxliteOptions`. Clones the advanced configuration into the box options —
 // the caller retains ownership of `advanced_opts` and is responsible for

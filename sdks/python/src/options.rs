@@ -412,6 +412,10 @@ pub(crate) struct PyBoxOptions {
     #[pyo3(get, set)]
     pub(crate) advanced: Option<PyAdvancedBoxOptions>,
 
+    /// Capture init stdout/stderr as CRI records in the box-managed log path.
+    #[pyo3(get, set)]
+    pub(crate) capture_logs: Option<bool>,
+
     /// Secrets to inject into outbound HTTPS requests via MITM proxy.
     #[pyo3(get, set)]
     pub(crate) secrets: Vec<PySecret>,
@@ -440,6 +444,7 @@ impl PyBoxOptions {
         cmd=None,
         user=None,
         advanced=None,
+        capture_logs=None,
         secrets=vec![],
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -463,6 +468,7 @@ impl PyBoxOptions {
         cmd: Option<Vec<String>>,
         user: Option<String>,
         advanced: Option<PyAdvancedBoxOptions>,
+        capture_logs: Option<bool>,
         secrets: Vec<PySecret>,
     ) -> Self {
         Self {
@@ -485,6 +491,7 @@ impl PyBoxOptions {
             cmd,
             user,
             advanced,
+            capture_logs,
             secrets,
         }
     }
@@ -545,6 +552,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             entrypoint: py_opts.entrypoint,
             cmd: py_opts.cmd,
             user: py_opts.user,
+            capture_logs: py_opts.capture_logs.unwrap_or(false),
             ..Default::default()
         };
 

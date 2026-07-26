@@ -109,8 +109,8 @@ impl GuestService for GuestServer {
         let containers = self.containers.lock().await;
         for (container_id, container_arc) in containers.iter() {
             info!(container_id = %container_id, "Shutting down container");
-            let container = container_arc.lock().await;
-            if let Err(e) = container.shutdown(CONTAINER_SHUTDOWN_TIMEOUT_MS) {
+            let mut container = container_arc.lock().await;
+            if let Err(e) = container.shutdown(CONTAINER_SHUTDOWN_TIMEOUT_MS).await {
                 error!(container_id = %container_id, error = %e, "Failed to shutdown container");
             }
         }

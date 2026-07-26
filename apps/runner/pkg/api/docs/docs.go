@@ -1239,6 +1239,9 @@ const docTemplate = `{
                 "authToken": {
                     "type": "string"
                 },
+                "captureLogs": {
+                    "type": "boolean"
+                },
                 "cpuQuota": {
                     "type": "integer",
                     "minimum": 1
@@ -1417,6 +1420,9 @@ const docTemplate = `{
             "properties": {
                 "backupErrorReason": {
                     "type": "string"
+                },
+                "captureLogs": {
+                    "type": "boolean"
                 },
                 "cpuQuota": {
                     "type": "integer",

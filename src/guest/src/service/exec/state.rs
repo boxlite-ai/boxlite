@@ -17,7 +17,7 @@ pub(crate) trait InitHealthCheck: Send + Sync {
     fn is_running(&self) -> bool;
 
     /// Diagnose why init exited. Includes status, PID, init stdout/stderr.
-    /// May only return full output once (drains init pipes).
+    /// May only return the buffered output once (takes the diagnostic tails).
     fn diagnose_exit(&mut self) -> String;
 }
 

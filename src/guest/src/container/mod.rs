@@ -16,10 +16,14 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create and start container
 //! let container = Container::start(
+//!     "my-container",
 //!     "/rootfs",
 //!     vec!["sh".to_string()],
 //!     vec!["PATH=/bin:/usr/bin".to_string()],
 //!     "/",
+//!     "0:0",
+//!     Vec::new(),
+//!     None,
 //! )?;
 //!
 //! // Execute command

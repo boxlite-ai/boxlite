@@ -33,6 +33,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             volume_mgr,
             rootfs_init,
             container_mounts,
+            log_capture_path,
             network_spec,
             ca_cert_pem,
             tty,
@@ -57,6 +58,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     BoxliteError::Internal("vmm_spawn task must run first".into())
                 })?;
                 let network_spec = ctx.config.options.network.clone();
+                let log_capture_path = ctx.log_capture_path.clone();
                 let ca_cert_pem = ctx.ca_cert_pem.clone();
                 let tty = ctx.config.options.tty;
                 (
@@ -66,6 +68,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     volume_mgr,
                     rootfs_init,
                     container_mounts,
+                    log_capture_path,
                     network_spec,
                     ca_cert_pem,
                     tty,
@@ -79,6 +82,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             &volume_mgr,
             &rootfs_init,
             &container_mounts,
+            log_capture_path,
             &network_spec,
             ca_cert_pem.as_deref(),
             tty,
@@ -109,6 +113,7 @@ async fn run_guest_init(
     volume_mgr: &GuestVolumeManager,
     rootfs_init: &ContainerRootfsInitConfig,
     container_mounts: &[ContainerMount],
+    log_capture_path: Option<String>,
     network_spec: &NetworkSpec,
     ca_cert_pem: Option<&str>,
     tty: bool,
@@ -151,6 +156,7 @@ async fn run_guest_init(
             container_mounts.to_vec(),
             ca_certs,
             tty,
+            log_capture_path,
         )
         .await?;
     tracing::info!(container_id = %returned_id, "Container created");

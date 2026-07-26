@@ -3,7 +3,7 @@
 //!
 //! Handles OCI container lifecycle (Init RPC).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::service::server::GuestServer;
 use boxlite_shared::{
@@ -18,6 +18,20 @@ use tracing::{debug, error, info, warn};
 use crate::container::{Container, UserMount};
 use crate::layout::GuestLayout;
 use crate::storage::block_device::BlockDeviceMount;
+
+fn log_capture_config(path: Option<String>) -> Result<Option<PathBuf>, String> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(path);
+    if path.as_os_str().is_empty() {
+        return Err("log_capture_path is required when log capture is enabled".to_string());
+    }
+    if !path.is_absolute() {
+        return Err("log_capture_path must be absolute".to_string());
+    }
+    Ok(Some(path))
+}
 
 /// Prepare container rootfs based on the initialization strategy.
 ///
@@ -249,6 +263,25 @@ impl ContainerService for GuestServer {
             })
             .collect();
 
+        let log_capture = match log_capture_config(init_req.log_capture_path) {
+            Ok(config) => config,
+            Err(reason) => {
+                error!(%reason, "Invalid log capture configuration");
+                return Ok(Response::new(ContainerInitResponse {
+                    result: Some(container_init_response::Result::Error(ContainerInitError {
+                        reason,
+                    })),
+                }));
+            }
+        };
+        if config.tty && log_capture.is_some() {
+            return Ok(Response::new(ContainerInitResponse {
+                result: Some(container_init_response::Result::Error(ContainerInitError {
+                    reason: "log capture is not supported with TTY mode".to_string(),
+                })),
+            }));
+        }
+
         debug!(
             entrypoint = ?config.entrypoint,
             workdir = %config.workdir,
@@ -295,6 +328,7 @@ impl ContainerService for GuestServer {
             &config.user,
             user_mounts,
             config.tty,
+            log_capture,
         ) {
             Ok(mut container) => {
                 // Init is created, not yet running — Init never runs it; the

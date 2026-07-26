@@ -163,6 +163,15 @@ export class CreateBoxDto {
   autoResume?: boolean
 
   @ApiPropertyOptional({
+    description: 'Capture init stdout/stderr as CRI records in the box-managed log path',
+    example: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  captureLogs?: boolean
+
+
+  @ApiPropertyOptional({
     description: 'Array of volumes to attach to the box',
     type: [BoxVolume],
     required: false,

@@ -114,6 +114,8 @@ pub(crate) struct CreateBoxRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<CreateBoxSecret>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_logs: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub detach: Option<bool>,
     /// A terminal for the main command (`run -t`). Only sent when asked for:
     /// the server rejects unknown fields, so an older one would 400 on it —
@@ -175,6 +177,7 @@ impl CreateBoxRequest {
             cmd: options.cmd.clone(),
             user: options.user.clone(),
             secrets,
+            capture_logs: Some(options.capture_logs),
             detach: Some(options.detach),
             tty: options.tty.then_some(true),
             // The deprecated remove-on-stop flag was never applied by the cloud
@@ -583,6 +586,7 @@ mod tests {
                 hosts: vec!["api.openai.com".into()],
                 placeholder: "<BOXLITE_SECRET:openai>".into(),
             }]),
+            capture_logs: None,
             detach: None,
             auto_pause: Some(900),
             auto_delete: Some(604800),

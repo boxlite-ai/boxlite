@@ -111,6 +111,11 @@ export class CreateBoxDto {
   auto_resume?: boolean
 
   @IsOptional()
+  @IsBoolean()
+  capture_logs?: boolean
+
+
+  @IsOptional()
   @ValidateNested()
   @Type(() => NetworkSpecDto)
   network?: NetworkSpecDto

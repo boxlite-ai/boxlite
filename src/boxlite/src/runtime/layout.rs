@@ -330,7 +330,9 @@ impl FilesystemLayout {
 /// ├── shared/             # Guest-visible (ro bind mount → mounts/)
 /// ├── logs/               # Per-box logging
 /// │   ├── boxlite-shim.log  # Shim tracing output
-/// │   └── console.log       # Kernel/init output
+/// │   ├── console.log       # Kernel/init output
+/// │   └── {cid}/
+/// │       └── console.log   # Optional CRI-formatted init stdout/stderr
 /// └── disks/              # Disk images
 ///     ├── disk.qcow2          # Data disk (container rootfs COW disk)
 ///     └── guest-rootfs.qcow2  # Guest rootfs COW overlay
@@ -486,6 +488,20 @@ impl BoxFilesystemLayout {
     /// so the sandbox doesn't need access to any home_dir paths for writing.
     pub fn logs_dir(&self) -> PathBuf {
         self.box_dir.join("logs")
+    }
+
+    /// Per-container logs directory: ~/.boxlite/boxes/{box_id}/logs/{container_id}
+    ///
+    /// This is the only logs subtree exposed writable to the guest. VM console
+    /// and shim logs remain host-only siblings under [`Self::logs_dir`].
+    pub fn container_logs_dir(&self, container_id: &str) -> PathBuf {
+        self.logs_dir().join(container_id)
+    }
+
+    /// Container init stdout/stderr log path:
+    /// ~/.boxlite/boxes/{box_id}/logs/{container_id}/console.log
+    pub fn container_log_path(&self, container_id: &str) -> PathBuf {
+        self.container_logs_dir(container_id).join("console.log")
     }
 
     /// Per-box temp directory: ~/.boxlite/boxes/{box_id}/tmp
@@ -983,6 +999,23 @@ mod tests {
         assert_eq!(
             layout.logs_dir(),
             PathBuf::from("/home/.boxlite/boxes/mybox/logs")
+        );
+    }
+
+    #[test]
+    fn test_box_layout_container_log_is_isolated_from_host_logs() {
+        let layout = test_box_layout("/home/.boxlite/boxes/mybox");
+        assert_eq!(
+            layout.container_logs_dir("container-1"),
+            PathBuf::from("/home/.boxlite/boxes/mybox/logs/container-1")
+        );
+        assert_eq!(
+            layout.container_log_path("container-1"),
+            PathBuf::from("/home/.boxlite/boxes/mybox/logs/container-1/console.log")
+        );
+        assert_ne!(
+            layout.container_log_path("container-1"),
+            layout.console_output_path()
         );
     }
 

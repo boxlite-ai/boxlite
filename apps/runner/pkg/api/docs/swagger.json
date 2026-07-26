@@ -1151,6 +1151,9 @@
         "authToken": {
           "type": "string"
         },
+        "captureLogs": {
+          "type": "boolean"
+        },
         "cpuQuota": {
           "type": "integer",
           "minimum": 1
@@ -1315,6 +1318,9 @@
       "properties": {
         "backupErrorReason": {
           "type": "string"
+        },
+        "captureLogs": {
+          "type": "boolean"
         },
         "cpuQuota": {
           "type": "integer",

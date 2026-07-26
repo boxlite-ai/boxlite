@@ -53,4 +53,13 @@ pub mod mount_tags {
 
     /// Tag for shared container directory (contains overlayfs/ and rootfs/)
     pub const SHARED: &str = "BoxLiteShared";
+
+    /// Tag for container init stdout/stderr log capture share.
+    pub const CONTAINER_LOGS: &str = "BoxLiteContainerLogs";
+}
+
+/// Container log capture constants.
+pub mod logs {
+    /// Guest mount point for the dedicated container logs virtiofs share.
+    pub const GUEST_DIR: &str = "/run/boxlite/logs";
 }

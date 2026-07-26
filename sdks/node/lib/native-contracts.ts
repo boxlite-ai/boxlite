@@ -151,6 +151,7 @@ export interface JsBoxOptions {
   security?: JsSecurityOptions;
   healthCheck?: JsHealthCheckOptions;
   secrets?: JsSecret[];
+  captureLogs?: boolean;
 }
 
 export interface JsOptions {

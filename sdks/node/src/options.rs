@@ -236,6 +236,10 @@ pub struct JsBoxOptions {
     #[napi(js_name = "healthCheck")]
     pub health_check: Option<JsHealthCheckOptions>,
 
+    /// Capture init stdout/stderr as CRI records in the box-managed log path.
+    #[napi(js_name = "captureLogs")]
+    pub capture_logs: Option<bool>,
+
     /// Secrets to inject into outbound HTTPS requests via MITM proxy.
     pub secrets: Option<Vec<JsSecret>>,
 }
@@ -449,6 +453,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             // client that attaches to the main command, which the SDKs cannot
             // do until they grow `attach()` (see sdk-run-semantics-api.md).
             tty: false,
+            capture_logs: js_opts.capture_logs.unwrap_or(false),
             secrets,
         })
     }
@@ -736,6 +741,7 @@ mod tests {
             security: None,
             health_check: None,
             secrets: None,
+            capture_logs: None,
         };
 
         let mut both = js.clone();
@@ -785,6 +791,7 @@ mod tests {
                 hosts: Some(vec!["api.openai.com".into()]),
                 placeholder: None,
             }]),
+            capture_logs: None,
         };
 
         let opts = BoxOptions::try_from(js).unwrap();

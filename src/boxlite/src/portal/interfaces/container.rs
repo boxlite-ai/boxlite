@@ -101,6 +101,7 @@ impl ContainerInterface {
         mounts: Vec<ContainerMount>,
         ca_certs: Vec<String>,
         tty: bool,
+        log_capture_path: Option<String>,
     ) -> BoxliteResult<String> {
         let proto_config = ProtoContainerConfig {
             entrypoint: image_config.final_cmd(),
@@ -149,6 +150,7 @@ impl ContainerInterface {
             // `LiteBox::attach()` can address the main command with the same id
             // it sent, instead of both sides separately hard-coding it.
             execution_id: container_id.to_string(),
+            log_capture_path,
         };
 
         let response = self.client.init(request).await?.into_inner();

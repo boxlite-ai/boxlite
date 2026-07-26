@@ -415,6 +415,14 @@ pub struct BoxOptions {
     #[serde(default)]
     pub tty: bool,
 
+    /// Capture the container init process stdout/stderr as CRI-formatted records.
+    ///
+    /// This is opt-in because it creates an additional writable guest share.
+    /// When enabled, logs are written to `logs/{container_id}/console.log` under
+    /// the box-managed directory, with stream identity, timestamps, and rotation.
+    #[serde(default)]
+    pub capture_logs: bool,
+
     /// Secrets for MITM proxy injection into outbound HTTP(S) requests.
     ///
     /// Each secret maps a placeholder string to a real value. When the box
@@ -511,6 +519,7 @@ fn default_detach() -> bool {
 impl Default for BoxOptions {
     fn default() -> Self {
         Self {
+            capture_logs: false,
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,

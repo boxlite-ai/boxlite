@@ -262,6 +262,9 @@ export interface SimpleBoxOptions {
    */
   user?: string;
 
+  /** Capture init stdout/stderr as CRI records in the box-managed log path. */
+  captureLogs?: boolean;
+
   /** Security isolation options for the box. */
   security?: SecurityOptions;
 }
@@ -405,6 +408,7 @@ export class SimpleBox {
       entrypoint: options.entrypoint,
       cmd: options.cmd,
       user: options.user,
+      captureLogs: options.captureLogs,
       security,
       secrets: options.secrets,
     };
