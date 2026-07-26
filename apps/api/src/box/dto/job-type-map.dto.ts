@@ -16,6 +16,9 @@ export interface JobTypeMap {
   [JobType.CREATE_BOX]: {
     resourceType: [ResourceType.BOX]
   }
+  [JobType.CREATE_BOX_WITH_CAPABILITIES_V2]: {
+    resourceType: [ResourceType.BOX]
+  }
   [JobType.START_BOX]: {
     resourceType: [ResourceType.BOX]
   }
@@ -44,6 +47,9 @@ export interface JobTypeMap {
     resourceType: [ResourceType.ARTIFACT]
   }
   [JobType.RECOVER_BOX]: {
+    resourceType: [ResourceType.BOX]
+  }
+  [JobType.RECOVER_BOX_WITH_CAPABILITIES_V2]: {
     resourceType: [ResourceType.BOX]
   }
 }

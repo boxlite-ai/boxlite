@@ -38,6 +38,8 @@ import { TypedConfigService } from '../../config/typed-config.service'
 import { WarmPool } from '../entities/warm-pool.entity'
 import { BoxDto, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
+import { requiredRunnerFeaturesForCapabilities, runnerSupportsFeatures } from '../constants/runner-features'
+import { normalizeBoxAdvancedOptions } from '../common/box-advanced-options'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
 import { SshAccess } from '../entities/ssh-access.entity'
 import { SshAccessDto, SshAccessValidationDto } from '../dto/ssh-access.dto'
@@ -172,13 +174,16 @@ export class BoxService {
       // Restrict box creation to the supported pinned images; reject anything else
       // at the request boundary (defaults undefined -> base image).
       const image = assertSupportedImage(createBoxDto.image)
+      const advanced = normalizeBoxAdvancedOptions(createBoxDto.advanced)
+      const requiredRunnerFeatures = requiredRunnerFeaturesForCapabilities(advanced.capabilities)
+      const hasCustomCapabilities = requiredRunnerFeatures.length > 0
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
         await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
-      } else if (image) {
+      } else if (image && !hasCustomCapabilities) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec
         //  before creating a fresh one.
         const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
@@ -206,7 +211,13 @@ export class BoxService {
       const runner = await this.runnerService.getRandomAvailableRunner({
         regions: [region.id],
         boxClass,
+        requiredFeatures: hasCustomCapabilities ? requiredRunnerFeatures : undefined,
       })
+      if (!runnerSupportsFeatures(runner.features, requiredRunnerFeatures)) {
+        throw new BadRequestError(
+          `Runner ${runner.id} does not support required feature: ${requiredRunnerFeatures.join(', ')}`,
+        )
+      }
 
       const box = new Box(region.id, createBoxDto.name)
 
@@ -217,6 +228,7 @@ export class BoxService {
       //  TODO: default user should be configurable
       box.osUser = createBoxDto.user || 'boxlite'
       box.env = createBoxDto.env || {}
+      box.advanced = advanced
       box.labels = createBoxDto.labels || {}
 
       box.image = image
@@ -929,7 +941,14 @@ export class BoxService {
     if (!box.runnerId) {
       throw new NotFoundException(`Box with ID ${box.id} does not have a runner`)
     }
-    const runner = await this.runnerService.findOneOrFail(box.runnerId)
+    const runner = await this.runnerService.findOneCurrentOrFail(box.runnerId)
+
+    const requiredRunnerFeatures = requiredRunnerFeaturesForCapabilities(box.advanced.capabilities)
+    if (!runnerSupportsFeatures(runner.features, requiredRunnerFeatures)) {
+      throw new BadRequestError(
+        `Runner ${runner.id} does not support required feature: ${requiredRunnerFeatures.join(', ')}`,
+      )
+    }
 
     if (runner.apiVersion === '2') {
       // TODO: we need "recovering" state that can be set after calling recover

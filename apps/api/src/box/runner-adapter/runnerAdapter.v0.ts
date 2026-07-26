@@ -19,6 +19,7 @@ import {
   UpdateNetworkSettingsDTO,
   RecoverBoxDTO,
 } from '@boxlite-ai/runner-api-client'
+import { hasCapabilityPolicy, normalizeBoxAdvancedOptions } from '../common/box-advanced-options'
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
@@ -238,6 +239,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       serviceHealth: response.data.serviceHealth,
       metrics: response.data.metrics,
       appVersion: response.data.appVersion,
+      features: response.data.features,
     }
   }
 
@@ -250,7 +252,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   }
 
   async createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined> {
-    const response = await this.boxApiClient.create({
+    const createBoxDTO = {
       id: box.id,
       image: box.image ?? '',
       osUser: box.osUser,
@@ -265,7 +267,14 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       authToken: box.authToken,
       organizationId: box.organizationId,
       regionId: box.region,
-    })
+    }
+    const advanced = normalizeBoxAdvancedOptions(box.advanced)
+    const response = hasCapabilityPolicy(advanced)
+      ? await this.boxApiClient.createWithCapabilities({
+          ...createBoxDTO,
+          advanced,
+        })
+      : await this.boxApiClient.create(createBoxDTO)
 
     if (!response?.data?.daemonVersion) {
       return undefined
@@ -331,6 +340,14 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
       errorReason: box.errorReason,
+    }
+    const advanced = normalizeBoxAdvancedOptions(box.advanced)
+    if (hasCapabilityPolicy(advanced)) {
+      await this.boxApiClient.recoverWithCapabilities(box.id, {
+        ...recoverBoxDTO,
+        advanced,
+      })
+      return
     }
     await this.boxApiClient.recover(box.id, recoverBoxDTO)
   }

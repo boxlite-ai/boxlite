@@ -4,10 +4,60 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, IsInt, Min } from 'class-validator'
+import {
+  IsEnum,
+  IsObject,
+  IsOptional,
+  IsString,
+  IsNumber,
+  IsBoolean,
+  IsArray,
+  IsInt,
+  Min,
+  Validate,
+  ValidateIf,
+  ValidateNested,
+} from 'class-validator'
+import { Type } from 'class-transformer'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxVolume } from './box.dto'
+import { IsLinuxCapabilityNameConstraint } from '../utils/capability-validation.util'
+
+@ApiSchema({ name: 'CreateLinuxCapabilities' })
+export class CreateLinuxCapabilitiesDto {
+  @ApiPropertyOptional({
+    description: 'Linux capabilities to add to the default container capability set',
+    type: [String],
+    example: ['SYS_ADMIN'],
+  })
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsArray()
+  @IsString({ each: true })
+  @Validate(IsLinuxCapabilityNameConstraint, { each: true })
+  add?: string[]
+
+  @ApiPropertyOptional({
+    description: 'Linux capabilities to remove from the container capability set',
+    type: [String],
+    example: ['NET_RAW'],
+  })
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsArray()
+  @IsString({ each: true })
+  @Validate(IsLinuxCapabilityNameConstraint, { each: true })
+  drop?: string[]
+}
+
+@ApiSchema({ name: 'CreateBoxAdvancedOptions' })
+export class CreateBoxAdvancedOptionsDto {
+  @ApiPropertyOptional({ type: CreateLinuxCapabilitiesDto })
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsObject()
+  @ValidateNested()
+  @Type(() => CreateLinuxCapabilitiesDto)
+  capabilities?: CreateLinuxCapabilitiesDto
+}
 
 @ApiSchema({ name: 'CreateBox' })
 export class CreateBoxDto {
@@ -45,6 +95,13 @@ export class CreateBoxDto {
   @IsOptional()
   @IsObject()
   env?: { [key: string]: string }
+
+  @ApiPropertyOptional({ type: CreateBoxAdvancedOptionsDto })
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsObject()
+  @ValidateNested()
+  @Type(() => CreateBoxAdvancedOptionsDto)
+  advanced?: CreateBoxAdvancedOptionsDto
 
   @ApiPropertyOptional({
     description: 'Labels for the box',

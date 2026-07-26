@@ -43,6 +43,8 @@ def _install_boxlite_stub() -> None:
     module.Boxlite = _Noop
     module.Options = _Noop
     module.BoxOptions = _Noop
+    module.AdvancedBoxOptions = _Noop
+    module.ContainerCapabilities = _Noop
     module.CloneOptions = _Noop
     module.ExportOptions = _Noop
     module.SnapshotOptions = _Noop
@@ -154,6 +156,64 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(payload["box_id"], "box-create")
         self.assertIn("box-create", SERVER.state.active_boxes_by_id)
+
+    def test_build_box_options_forwards_capability_policy(self) -> None:
+        request = SERVER.StrictCreateBoxRequest(
+            advanced=SERVER.CreateBoxAdvancedOptions(
+                capabilities=SERVER.ContainerCapabilities(
+                    add=["SYS_ADMIN"],
+                    drop=["CAP_NET_RAW"],
+                )
+            ),
+        )
+
+        capabilities = object()
+        advanced = object()
+        with (
+            patch.object(
+                SERVER.boxlite,
+                "ContainerCapabilities",
+                return_value=capabilities,
+            ) as capabilities_constructor,
+            patch.object(
+                SERVER.boxlite,
+                "AdvancedBoxOptions",
+                return_value=advanced,
+            ) as advanced_constructor,
+            patch.object(
+                SERVER.boxlite,
+                "BoxOptions",
+                return_value=object(),
+            ) as constructor,
+        ):
+            SERVER.build_box_options(request)
+
+        capabilities_constructor.assert_called_once_with(
+            add=["SYS_ADMIN"],
+            drop=["CAP_NET_RAW"],
+        )
+        advanced_constructor.assert_called_once_with(capabilities=capabilities)
+        constructor.assert_called_once_with(
+            image="alpine:latest",
+            advanced=advanced,
+            detach=False,
+        )
+
+    def test_create_box_rejects_malformed_capability_policy(self) -> None:
+        for capability in ("NET-ADMIN", "123", "ß"):
+            with self.assertRaises(ValueError):
+                SERVER.StrictCreateBoxRequest(
+                    advanced=SERVER.CreateBoxAdvancedOptions(
+                        capabilities=SERVER.ContainerCapabilities(add=[capability])
+                    )
+                )
+
+    def test_strict_create_does_not_expose_client_security_policy(self) -> None:
+        with self.assertRaises(ValueError):
+            SERVER.StrictCreateBoxRequest(security="development")
+
+        schema = SERVER.StrictCreateBoxRequest.model_json_schema()
+        self.assertNotIn("security", schema["properties"])
 
     async def test_clone_box_caches_cloned_handle(self) -> None:
         source = _make_box_handle("box-source")

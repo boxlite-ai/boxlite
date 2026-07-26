@@ -22,6 +22,7 @@ import type { RunnerServiceInfo } from './runner-service-info';
 
 export interface RunnerInfoResponseDTO {
     'appVersion'?: string;
+    'features'?: Array<string>;
     'metrics'?: RunnerMetrics;
     'serviceHealth'?: Array<RunnerServiceInfo>;
 }

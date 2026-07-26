@@ -1,11 +1,17 @@
 /**
  * Unit tests for SimpleBoxOptions interface (no VM required).
  *
- * Tests the type structure and expected properties for cmd/user options.
+ * Tests the type structure and expected properties for box options.
  */
 
-import { describe, test, expect } from "vitest";
+import { describe, test, expect, vi } from "vitest";
 import type { Secret, SimpleBoxOptions } from "../lib/simplebox.js";
+
+vi.mock("../lib/native.js", () => ({
+  getJsBoxlite: () => ({
+    withDefaultConfig: () => ({}),
+  }),
+}));
 
 describe("SimpleBoxOptions", () => {
   test("cmd defaults to undefined", () => {
@@ -16,6 +22,36 @@ describe("SimpleBoxOptions", () => {
   test("user defaults to undefined", () => {
     const opts: SimpleBoxOptions = {};
     expect(opts.user).toBeUndefined();
+  });
+
+  test("capability policy defaults to undefined", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const box = new SimpleBox();
+    const nativeOptions = (box as any)._boxOpts;
+
+    expect(nativeOptions.advanced).toBeUndefined();
+  });
+
+  test("forwards custom capability lists", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const box = new SimpleBox({
+      advanced: {
+        capabilities: {
+          add: ["NET_ADMIN", "SYS_PTRACE"],
+          drop: ["MKNOD", "NET_RAW"],
+        },
+      },
+    });
+    const nativeOptions = (box as any)._boxOpts;
+
+    expect(nativeOptions.advanced.capabilities.add).toEqual([
+      "NET_ADMIN",
+      "SYS_PTRACE",
+    ]);
+    expect(nativeOptions.advanced.capabilities.drop).toEqual([
+      "MKNOD",
+      "NET_RAW",
+    ]);
   });
 
   test("accepts cmd array", () => {

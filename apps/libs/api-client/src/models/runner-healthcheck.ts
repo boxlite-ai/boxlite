@@ -12,38 +12,40 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { RunnerHealthMetrics } from './runner-health-metrics';
+import type { RunnerHealthMetrics } from './runner-health-metrics'
 // May contain unused imports in some cases
 // @ts-ignore
-import type { RunnerServiceHealth } from './runner-service-health';
+import type { RunnerServiceHealth } from './runner-service-health'
 
 export interface RunnerHealthcheck {
-    /**
-     * Runner metrics
-     */
-    'metrics'?: RunnerHealthMetrics;
-    /**
-     * Health status of individual services on the runner
-     */
-    'serviceHealth'?: Array<RunnerServiceHealth>;
-    /**
-     * Runner domain
-     */
-    'domain'?: string;
-    /**
-     * Runner proxy URL
-     */
-    'proxyUrl'?: string;
-    /**
-     * Runner API URL
-     */
-    'apiUrl'?: string;
-    /**
-     * Runner app version
-     */
-    'appVersion': string;
+  /**
+   * Optional runner features used for rollout negotiation
+   */
+  features?: Array<string>
+  /**
+   * Runner metrics
+   */
+  metrics?: RunnerHealthMetrics
+  /**
+   * Health status of individual services on the runner
+   */
+  serviceHealth?: Array<RunnerServiceHealth>
+  /**
+   * Runner domain
+   */
+  domain?: string
+  /**
+   * Runner proxy URL
+   */
+  proxyUrl?: string
+  /**
+   * Runner API URL
+   */
+  apiUrl?: string
+  /**
+   * Runner app version
+   */
+  appVersion: string
 }
-

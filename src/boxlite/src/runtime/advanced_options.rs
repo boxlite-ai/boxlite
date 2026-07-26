@@ -1,8 +1,9 @@
 //! Advanced options for expert users.
 //!
-//! This module contains [`AdvancedBoxOptions`], [`SecurityOptions`], [`ResourceLimits`],
-//! and [`SecurityOptionsBuilder`] — configuration that entry-level users can safely
-//! ignore. Defaults prioritize compatibility.
+//! This module contains [`AdvancedBoxOptions`], [`ContainerCapabilities`],
+//! [`SecurityOptions`], [`ResourceLimits`], and [`SecurityOptionsBuilder`] —
+//! configuration that entry-level users can safely ignore. Defaults prioritize
+//! compatibility.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -561,12 +562,112 @@ impl SecurityOptionsBuilder {
 // Advanced Options
 // ============================================================================
 
+/// Linux capability policy for the container process.
+///
+/// Capability names are case-insensitive and may include the `CAP_` prefix.
+/// The special value `ALL` is accepted in either list. For named conflicts an
+/// explicit addition wins; with `add = ["ALL"]`, named removals win. With
+/// `drop = ["ALL"]`, explicit additions form the complete resulting set.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ContainerCapabilities {
+    /// Capabilities to add to BoxLite's Docker-compatible baseline.
+    pub add: Vec<String>,
+
+    /// Capabilities to remove from the resulting capability set.
+    pub drop: Vec<String>,
+}
+
+impl ContainerCapabilities {
+    /// Whether this policy leaves the default capability set unchanged.
+    pub fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.drop.is_empty()
+    }
+
+    pub(crate) fn validate(&self) -> boxlite_shared::errors::BoxliteResult<()> {
+        validate_capability_names("advanced.capabilities.add", &self.add)?;
+        validate_capability_names("advanced.capabilities.drop", &self.drop)
+    }
+
+    /// Validate the policy before `get_or_create` adopts an existing box.
+    pub(crate) fn ensure_matches(
+        &self,
+        existing: &Self,
+        box_name: &str,
+    ) -> boxlite_shared::errors::BoxliteResult<()> {
+        let canonicalize = |capabilities: &[String]| {
+            capabilities
+                .iter()
+                .map(|capability| {
+                    let normalized = capability.to_ascii_uppercase();
+                    if normalized == "ALL" {
+                        normalized
+                    } else {
+                        normalized
+                            .strip_prefix("CAP_")
+                            .unwrap_or(&normalized)
+                            .to_string()
+                    }
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+
+        if canonicalize(&self.add) == canonicalize(&existing.add)
+            && canonicalize(&self.drop) == canonicalize(&existing.drop)
+        {
+            return Ok(());
+        }
+
+        Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+            format!(
+                "capability policy does not match existing box '{box_name}'; \
+                 get_or_create never changes an existing box's security policy"
+            ),
+        ))
+    }
+}
+
+fn validate_capability_names(
+    option: &str,
+    capabilities: &[String],
+) -> boxlite_shared::errors::BoxliteResult<()> {
+    for capability in capabilities {
+        let normalized = capability.to_ascii_uppercase();
+        if normalized == "ALL" {
+            continue;
+        }
+
+        let name = normalized.strip_prefix("CAP_").unwrap_or(&normalized);
+        if name.is_empty() {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                format!("empty Linux capability in {option}"),
+            ));
+        }
+        let mut bytes = name.bytes();
+        let starts_with_letter = bytes.next().is_some_and(|byte| byte.is_ascii_uppercase());
+        let has_valid_tail =
+            bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
+        if !starts_with_letter || !has_valid_tail {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                format!("malformed Linux capability in {option}: {capability}"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Advanced options for expert users.
 ///
 /// Entry-level users can ignore this — the defaults are secure and sensible.
 /// Only modify these if you understand the security implications.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AdvancedBoxOptions {
+    /// Linux capability policy for the container process.
+    #[serde(default)]
+    pub capabilities: ContainerCapabilities,
+
     /// Security isolation options (jailer, seccomp, namespaces, resource limits).
     ///
     /// Secure by default: the default is the fully-enabled profile

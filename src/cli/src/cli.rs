@@ -403,6 +403,28 @@ impl ProcessFlags {
 }
 
 // ============================================================================
+// CAPABILITY FLAGS
+// ============================================================================
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct CapabilityFlags {
+    /// Add a Linux capability to the container (repeatable; `ALL` is supported)
+    #[arg(long = "cap-add", value_name = "CAPABILITY")]
+    pub cap_add: Vec<String>,
+
+    /// Drop a Linux capability from the container (repeatable; `ALL` is supported)
+    #[arg(long = "cap-drop", value_name = "CAPABILITY")]
+    pub cap_drop: Vec<String>,
+}
+
+impl CapabilityFlags {
+    pub fn apply_to(&self, opts: &mut BoxOptions) {
+        opts.advanced.capabilities.add.clone_from(&self.cap_add);
+        opts.advanced.capabilities.drop.clone_from(&self.cap_drop);
+    }
+}
+
+// ============================================================================
 // RESOURCE FLAGS
 // ============================================================================
 

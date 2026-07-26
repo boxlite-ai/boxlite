@@ -287,7 +287,8 @@ fn do_export_finalize(
     dest: &std::path::Path,
 ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
     use super::archive::{
-        ARCHIVE_VERSION, ArchiveManifest, MANIFEST_FILENAME, build_zstd_tar_archive, sha256_file,
+        ArchiveManifest, MANIFEST_FILENAME, archive_version_for_options, build_zstd_tar_archive,
+        sha256_file,
     };
 
     let output_path = if dest.is_dir() {
@@ -311,7 +312,7 @@ fn do_export_finalize(
     };
 
     let manifest = ArchiveManifest {
-        version: ARCHIVE_VERSION,
+        version: archive_version_for_options(config_options),
         box_name: config_name.map(|s| s.to_string()),
         image,
         box_options: Some(config_options.clone()),

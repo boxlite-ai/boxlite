@@ -290,6 +290,35 @@ typedef struct CBoxInfoList {
 // Box info list completion.
 typedef void (*CBoxInfoListCb)(struct CBoxInfoList*, CBoxliteError*, void*);
 
+// Versioned box metadata that adds capability policy without changing the
+// layout or array stride of the stable CBoxInfo ABI.
+typedef struct CContainerCapabilities {
+  char **add;
+  int add_count;
+  char **drop;
+  int drop_count;
+} CContainerCapabilities;
+
+typedef struct CBoxAdvancedInfo {
+  struct CContainerCapabilities capabilities;
+} CBoxAdvancedInfo;
+
+typedef struct CBoxInfoV2 {
+  struct CBoxInfo base;
+  struct CBoxAdvancedInfo advanced;
+} CBoxInfoV2;
+
+// Versioned box info completion with capability policy.
+typedef void (*CBoxInfoV2Cb)(struct CBoxInfoV2*, CBoxliteError*, void*);
+
+typedef struct CBoxInfoListV2 {
+  struct CBoxInfoV2 *items;
+  int count;
+} CBoxInfoListV2;
+
+// Versioned box info list completion with capability policy.
+typedef void (*CBoxInfoListV2Cb)(struct CBoxInfoListV2*, CBoxliteError*, void*);
+
 typedef struct CBoxMetrics {
   double cpu_percent;
   int64_t memory_bytes;
@@ -409,6 +438,22 @@ void boxlite_advanced_options_free(CAdvancedBoxOptions *opts);
 // switch off, every sub-protection off — for debugging or environments that
 // genuinely can't sandbox). Null `opts` is a no-op.
 void boxlite_advanced_options_set_security_enabled(CAdvancedBoxOptions *opts, int enabled);
+
+// Replace the capabilities added to BoxLite's Docker-compatible baseline.
+//
+// A zero count clears the list. Negative counts, null handles, null arrays
+// with a positive count, null elements, and invalid UTF-8 fail closed.
+enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_add(CAdvancedBoxOptions *opts,
+                                                                    const char *const *capabilities,
+                                                                    int count);
+
+// Replace the capabilities removed from the container capability set.
+//
+// A zero count clears the list. Negative counts, null handles, null arrays
+// with a positive count, null elements, and invalid UTF-8 fail closed.
+enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_drop(CAdvancedBoxOptions *opts,
+                                                                     const char *const *capabilities,
+                                                                     int count);
 
 enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
                                          CBoxliteOptions *opts,
@@ -585,9 +630,28 @@ enum BoxliteErrorCode boxlite_list_info(CBoxliteRuntime *runtime,
                                         void *user_data,
                                         CBoxliteError *out_error);
 
+enum BoxliteErrorCode boxlite_box_info_v2(CBoxHandle *handle,
+                                          struct CBoxInfoV2 **out_info,
+                                          CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_get_info_v2(CBoxliteRuntime *runtime,
+                                          const char *id_or_name,
+                                          CBoxInfoV2Cb cb,
+                                          void *user_data,
+                                          CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_list_info_v2(CBoxliteRuntime *runtime,
+                                           CBoxInfoListV2Cb cb,
+                                           void *user_data,
+                                           CBoxliteError *out_error);
+
 void boxlite_free_box_info(struct CBoxInfo *info);
 
 void boxlite_free_box_info_list(struct CBoxInfoList *list);
+
+void boxlite_free_box_info_v2(struct CBoxInfoV2 *info);
+
+void boxlite_free_box_info_list_v2(struct CBoxInfoListV2 *list);
 
 enum BoxliteErrorCode boxlite_box_metrics(CBoxHandle *handle,
                                           CBoxMetricsCb cb,
@@ -715,7 +779,7 @@ void boxlite_options_set_auto_resume_enabled(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
 
-// Apply a `CAdvancedBoxOptions` (security, mount isolation, health check) to a
+// Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
 // `CBoxliteOptions`. Clones the advanced configuration into the box options —
 // the caller retains ownership of `advanced_opts` and is responsible for
 // freeing it via `boxlite_advanced_options_free`.

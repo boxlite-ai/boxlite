@@ -2,14 +2,14 @@
 //!
 //! Creates OCI-compliant runtime specifications following the runtime-spec standard.
 
-use super::capabilities::default_capabilities;
+use super::capabilities::CapabilitySet;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::path::Path;
 
 use oci_spec::runtime::{
-    LinuxBuilder, LinuxCapabilitiesBuilder, LinuxIdMappingBuilder, LinuxNamespaceBuilder,
-    LinuxNamespaceType, Mount, MountBuilder, PosixRlimitBuilder, PosixRlimitType, ProcessBuilder,
-    RootBuilder, Spec, SpecBuilder, UserBuilder,
+    LinuxBuilder, LinuxIdMappingBuilder, LinuxNamespaceBuilder, LinuxNamespaceType, Mount,
+    MountBuilder, PosixRlimitBuilder, PosixRlimitType, ProcessBuilder, RootBuilder, Spec,
+    SpecBuilder, UserBuilder,
 };
 
 /// User-specified bind mount for container
@@ -32,7 +32,7 @@ pub struct UserMount {
 /// Builds an OCI spec with:
 /// - Standard mounts (/proc, /dev, /sys, etc.)
 /// - User-specified bind mounts (volumes)
-/// - Default capabilities (matching runc defaults)
+/// - Resolved default and user-requested capabilities
 /// - Standard namespaces (pid, ipc, uts, mount)
 /// - UID/GID mappings for user namespace
 /// - Configurable user (resolved uid/gid)
@@ -52,11 +52,12 @@ pub fn create_oci_spec(
     workdir: &str,
     uid: u32,
     gid: u32,
+    capabilities: &CapabilitySet,
     bundle_path: &Path,
     user_mounts: &[UserMount],
     tty: bool,
 ) -> BoxliteResult<Spec> {
-    let caps = build_default_capabilities()?;
+    let caps = capabilities.to_oci()?;
     let namespaces = build_default_namespaces()?;
     let mut mounts = build_standard_mounts(bundle_path)?;
 
@@ -265,20 +266,6 @@ fn find_group_in_group_file(rootfs: &str, name: &str) -> BoxliteResult<u32> {
 // Spec Component Builders
 // ====================
 
-/// Build default Linux capabilities matching Docker/OCI defaults.
-fn build_default_capabilities() -> BoxliteResult<oci_spec::runtime::LinuxCapabilities> {
-    let caps = default_capabilities();
-
-    LinuxCapabilitiesBuilder::default()
-        .bounding(caps.clone())
-        .effective(caps.clone())
-        .inheritable(caps.clone())
-        .permitted(caps.clone())
-        .ambient(caps)
-        .build()
-        .map_err(|e| BoxliteError::Internal(format!("Failed to build capabilities: {}", e)))
-}
-
 /// Build default namespaces for container isolation
 fn build_default_namespaces() -> BoxliteResult<Vec<oci_spec::runtime::LinuxNamespace>> {
     Ok(vec![
@@ -358,6 +345,7 @@ pub(crate) fn build_tty_exec_process(
     cwd: &str,
     uid: u32,
     gid: u32,
+    capabilities: CapabilitySet,
 ) -> BoxliteResult<oci_spec::runtime::Process> {
     let user = UserBuilder::default()
         .uid(uid)
@@ -371,7 +359,7 @@ pub(crate) fn build_tty_exec_process(
         .args(args.to_vec())
         .env(env)
         .cwd(cwd)
-        .capabilities(build_default_capabilities()?)
+        .capabilities(capabilities.to_oci()?)
         .no_new_privileges(false)
         .build()
         .map_err(|e| BoxliteError::Internal(format!("Failed to build tty exec process: {}", e)))
@@ -586,6 +574,7 @@ fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::container::capabilities::CapabilitySet;
     use std::fs;
 
     /// Create a temp rootfs with /etc/passwd and /etc/group for testing.
@@ -626,6 +615,36 @@ mod tests {
         .unwrap();
 
         dir
+    }
+
+    #[test]
+    fn tty_exec_process_uses_resolved_capabilities() {
+        let resolved = CapabilitySet::resolve(&["SYS_ADMIN".to_string()], &["NET_RAW".to_string()])
+            .expect("resolve capabilities for tty exec");
+        let expected = resolved
+            .to_oci()
+            .expect("build expected OCI capability sets");
+
+        let process = build_tty_exec_process(
+            &["sh".to_string()],
+            &["PATH=/bin".to_string()],
+            "/",
+            0,
+            0,
+            resolved.clone(),
+        )
+        .expect("build tty exec process");
+
+        assert_eq!(process.terminal(), Some(true));
+        let capabilities = process
+            .capabilities()
+            .as_ref()
+            .expect("tty exec process should have capabilities");
+        assert_eq!(capabilities.bounding(), expected.bounding());
+        assert_eq!(capabilities.effective(), expected.effective());
+        assert_eq!(capabilities.permitted(), expected.permitted());
+        assert_eq!(capabilities.inheritable(), &None);
+        assert_eq!(capabilities.ambient(), &None);
     }
 
     // ==================

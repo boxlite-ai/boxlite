@@ -312,7 +312,7 @@ mod registry_options_tests {
 
 /// Options used when constructing a box.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct BoxOptions {
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
@@ -371,7 +371,7 @@ pub struct BoxOptions {
     #[serde(default = "default_detach")]
     pub detach: bool,
 
-    /// Advanced options for expert users (security, mount isolation).
+    /// Advanced options for expert users (capabilities, security, mount isolation).
     ///
     /// Defaults are secure — most users can ignore this entirely.
     /// See [`AdvancedBoxOptions`] for details.
@@ -556,6 +556,7 @@ impl BoxOptions {
     /// - effective remove-on-stop (`auto_delete>0`, or deprecated `auto_remove`)
     ///   with `detach=true` is invalid
     /// - `advanced.isolate_mounts=true` is only supported on Linux
+    /// - `advanced.capabilities` contains well-formed Linux capability names
     pub fn sanitize(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::Config(
@@ -571,7 +572,21 @@ impl BoxOptions {
                 "isolate_mounts is only supported on Linux".to_string(),
             ));
         }
+
+        self.advanced.capabilities.validate()?;
+
         Ok(())
+    }
+
+    /// Validate the security policy before `get_or_create` adopts an existing box.
+    pub(crate) fn ensure_capability_policy_matches(
+        &self,
+        existing: &crate::runtime::advanced_options::ContainerCapabilities,
+        box_name: &str,
+    ) -> BoxliteResult<()> {
+        self.advanced
+            .capabilities
+            .ensure_matches(existing, box_name)
     }
 }
 
@@ -757,7 +772,9 @@ pub struct CloneOptions {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::advanced_options::{SecurityOptions, SecurityOptionsBuilder};
+    use crate::runtime::advanced_options::{
+        ContainerCapabilities, SecurityOptions, SecurityOptionsBuilder,
+    };
 
     #[test]
     #[allow(deprecated)]
@@ -769,6 +786,218 @@ mod tests {
             "auto_remove should keep its legacy default"
         );
         assert!(!opts.detach, "detach should default to false");
+        assert!(
+            opts.advanced.capabilities.is_empty(),
+            "advanced capabilities should default to empty"
+        );
+    }
+
+    #[test]
+    fn box_options_capabilities_serde_roundtrip() {
+        let json = r#"{
+            "advanced": {
+                "capabilities": {
+                    "add": ["SYS_ADMIN", "CAP_NET_ADMIN"],
+                    "drop": ["NET_RAW"]
+                }
+            }
+        }"#;
+
+        let opts: BoxOptions = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            opts.advanced.capabilities.add,
+            ["SYS_ADMIN", "CAP_NET_ADMIN"]
+        );
+        assert_eq!(opts.advanced.capabilities.drop, ["NET_RAW"]);
+
+        let serialized = serde_json::to_string(&opts).unwrap();
+        let roundtripped: BoxOptions = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(
+            roundtripped.advanced.capabilities,
+            opts.advanced.capabilities
+        );
+    }
+
+    #[test]
+    fn box_options_serde_rejects_unknown_flat_capability_fields() {
+        let error = serde_json::from_str::<BoxOptions>(r#"{"cap_drop":["NET_RAW"]}"#)
+            .expect_err("flat capability fields must not be silently ignored");
+
+        assert!(error.to_string().contains("cap_drop"));
+    }
+
+    #[test]
+    fn advanced_options_serde_rejects_misspelled_capabilities_field() {
+        let error = serde_json::from_str::<BoxOptions>(
+            r#"{"advanced":{"capabilites":{"drop":["NET_RAW"]}}}"#,
+        )
+        .expect_err("misspelled advanced capability fields must not be silently ignored");
+
+        assert!(error.to_string().contains("capabilites"));
+    }
+
+    #[test]
+    fn container_capabilities_serde_rejects_misspelled_drop_field() {
+        let error = serde_json::from_str::<BoxOptions>(
+            r#"{"advanced":{"capabilities":{"dorp":["NET_RAW"]}}}"#,
+        )
+        .expect_err("misspelled capability policy fields must not be silently ignored");
+
+        assert!(error.to_string().contains("dorp"));
+    }
+
+    #[test]
+    fn box_options_sanitize_accepts_valid_capability_names() {
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                capabilities: ContainerCapabilities {
+                    add: vec!["sys_admin".into(), "CAP_NET_ADMIN".into()],
+                    drop: vec!["NET_RAW".into()],
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        opts.sanitize()
+            .expect("Docker-style capability names should be accepted");
+    }
+
+    #[test]
+    fn box_options_sanitize_accepts_future_capability_names() {
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                capabilities: ContainerCapabilities {
+                    add: vec!["FUTURE_KERNEL_FEATURE".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        opts.sanitize()
+            .expect("the guest runtime, not the host SDK, owns the supported capability list");
+    }
+
+    #[test]
+    fn box_options_sanitize_rejects_malformed_capability_names() {
+        for opts in [
+            BoxOptions {
+                advanced: AdvancedBoxOptions {
+                    capabilities: ContainerCapabilities {
+                        add: vec!["".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            BoxOptions {
+                advanced: AdvancedBoxOptions {
+                    capabilities: ContainerCapabilities {
+                        drop: vec!["NET-ADMIN".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            BoxOptions {
+                advanced: AdvancedBoxOptions {
+                    capabilities: ContainerCapabilities {
+                        add: vec!["123".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            BoxOptions {
+                advanced: AdvancedBoxOptions {
+                    capabilities: ContainerCapabilities {
+                        add: vec!["ß".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ] {
+            let err = opts
+                .sanitize()
+                .expect_err("malformed capability should be rejected");
+            assert_eq!(err.http().0, 400);
+            let err = err.to_string();
+            assert!(
+                err.contains("empty")
+                    || err.contains("NET-ADMIN")
+                    || err.contains("123")
+                    || err.contains("ß"),
+                "error should identify the malformed capability, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn get_or_create_rejects_capability_policy_drift() {
+        let baseline = BoxOptions::default();
+        assert!(
+            baseline
+                .ensure_capability_policy_matches(&ContainerCapabilities::default(), "same-policy")
+                .is_ok()
+        );
+
+        let spelling_variant = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                capabilities: ContainerCapabilities {
+                    add: vec!["sys_admin".into(), "CAP_NET_ADMIN".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            spelling_variant
+                .ensure_capability_policy_matches(
+                    &ContainerCapabilities {
+                        add: vec!["NET_ADMIN".into(), "CAP_SYS_ADMIN".into()],
+                        ..Default::default()
+                    },
+                    "same-policy"
+                )
+                .is_ok()
+        );
+
+        let restricted = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                capabilities: ContainerCapabilities {
+                    drop: vec!["ALL".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(matches!(
+            restricted.ensure_capability_policy_matches(
+                &ContainerCapabilities::default(),
+                "baseline-box"
+            ),
+            Err(boxlite_shared::errors::BoxliteError::InvalidArgument(_))
+        ));
+
+        assert!(matches!(
+            baseline.ensure_capability_policy_matches(
+                &ContainerCapabilities {
+                    add: vec!["CAP_SYS_ADMIN".into()],
+                    ..Default::default()
+                },
+                "privileged-box"
+            ),
+            Err(boxlite_shared::errors::BoxliteError::InvalidArgument(_))
+        ));
     }
 
     #[test]

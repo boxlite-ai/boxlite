@@ -7,18 +7,19 @@
 //! the vmm_config stage.
 
 use super::{InitCtx, log_task_error, task_start};
-use crate::images::ContainerImageConfig;
 use crate::net::constants::{GATEWAY_IP, GUEST_CIDR, GUEST_INTERFACE};
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
-use crate::portal::interfaces::{ContainerRootfsInitConfig, GuestInitConfig, NetworkInitConfig};
-use crate::runtime::options::NetworkSpec;
-use crate::runtime::types::ContainerID;
-use crate::volumes::{ContainerMount, GuestVolumeManager};
+use crate::portal::interfaces::{ContainerInitConfig, GuestInitConfig, NetworkInitConfig};
 use async_trait::async_trait;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 pub struct GuestInitTask;
+
+struct GuestBootstrapConfig {
+    guest: GuestInitConfig,
+    container: ContainerInitConfig,
+}
 
 #[async_trait]
 impl PipelineTask<InitCtx> for GuestInitTask {
@@ -26,65 +27,67 @@ impl PipelineTask<InitCtx> for GuestInitTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        let (
-            guest_session,
-            container_image_config,
-            container_id,
-            volume_mgr,
-            rootfs_init,
-            container_mounts,
-            network_spec,
-            ca_cert_pem,
-            tty,
-        ) =
-            {
-                let mut ctx = ctx.lock().await;
-                let guest_session = ctx
-                    .guest_session
-                    .take()
-                    .ok_or_else(|| BoxliteError::Internal("connect task must run first".into()))?;
-                let container_image_config = ctx
-                    .container_image_config
-                    .clone()
-                    .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?;
-                let volume_mgr = ctx.volume_mgr.take().ok_or_else(|| {
-                    BoxliteError::Internal("vmm_spawn task must run first".into())
-                })?;
-                let rootfs_init = ctx.rootfs_init.take().ok_or_else(|| {
-                    BoxliteError::Internal("vmm_spawn task must run first".into())
-                })?;
-                let container_mounts = ctx.container_mounts.take().ok_or_else(|| {
-                    BoxliteError::Internal("vmm_spawn task must run first".into())
-                })?;
-                let network_spec = ctx.config.options.network.clone();
-                let ca_cert_pem = ctx.ca_cert_pem.clone();
-                let tty = ctx.config.options.tty;
-                (
-                    guest_session,
-                    container_image_config,
-                    ctx.config.container.id.clone(),
-                    volume_mgr,
-                    rootfs_init,
-                    container_mounts,
-                    network_spec,
-                    ca_cert_pem,
-                    tty,
-                )
+        let (guest_session, volume_mgr, rootfs_init, container_mounts, bootstrap) = {
+            let mut ctx = ctx.lock().await;
+            let guest_session = ctx
+                .guest_session
+                .take()
+                .ok_or_else(|| BoxliteError::Internal("connect task must run first".into()))?;
+            let image = ctx
+                .container_image_config
+                .clone()
+                .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?;
+            let volume_mgr = ctx
+                .volume_mgr
+                .take()
+                .ok_or_else(|| BoxliteError::Internal("vmm_spawn task must run first".into()))?;
+            let rootfs_init = ctx
+                .rootfs_init
+                .take()
+                .ok_or_else(|| BoxliteError::Internal("vmm_spawn task must run first".into()))?;
+            let container_mounts = ctx
+                .container_mounts
+                .take()
+                .ok_or_else(|| BoxliteError::Internal("vmm_spawn task must run first".into()))?;
+
+            let network = match &ctx.config.options.network {
+                crate::runtime::options::NetworkSpec::Enabled { .. } => Some(NetworkInitConfig {
+                    interface: GUEST_INTERFACE.to_string(),
+                    ip: Some(GUEST_CIDR.to_string()),
+                    gateway: Some(GATEWAY_IP.to_string()),
+                }),
+                crate::runtime::options::NetworkSpec::Disabled => None,
+            };
+            let bootstrap = GuestBootstrapConfig {
+                guest: GuestInitConfig {
+                    volumes: volume_mgr.build_guest_mounts(),
+                    network,
+                },
+                container: ContainerInitConfig {
+                    container_id: ctx.config.container.id.as_str().to_owned(),
+                    image,
+                    rootfs: rootfs_init.clone(),
+                    mounts: container_mounts.clone(),
+                    ca_certs: ctx.ca_cert_pem.iter().cloned().collect(),
+                    tty: ctx.config.options.tty,
+                    advanced: crate::portal::interfaces::container::ContainerAdvancedConfig {
+                        capabilities: ctx.config.options.advanced.capabilities.clone(),
+                    },
+                },
             };
 
-        run_guest_init(
-            guest_session.clone(),
-            &container_image_config,
-            &container_id,
-            &volume_mgr,
-            &rootfs_init,
-            &container_mounts,
-            &network_spec,
-            ca_cert_pem.as_deref(),
-            tty,
-        )
-        .await
-        .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
+            (
+                guest_session,
+                volume_mgr,
+                rootfs_init,
+                container_mounts,
+                bootstrap,
+            )
+        };
+
+        run_guest_init(guest_session.clone(), bootstrap)
+            .await
+            .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         let mut ctx = ctx.lock().await;
         ctx.guest_session = Some(guest_session);
@@ -101,58 +104,26 @@ impl PipelineTask<InitCtx> for GuestInitTask {
 }
 
 /// Initialize the guest and create the container (init is *not* run here).
-#[allow(clippy::too_many_arguments)]
 async fn run_guest_init(
     guest_session: GuestSession,
-    container_image_config: &ContainerImageConfig,
-    container_id: &ContainerID,
-    volume_mgr: &GuestVolumeManager,
-    rootfs_init: &ContainerRootfsInitConfig,
-    container_mounts: &[ContainerMount],
-    network_spec: &NetworkSpec,
-    ca_cert_pem: Option<&str>,
-    tty: bool,
+    bootstrap: GuestBootstrapConfig,
 ) -> BoxliteResult<()> {
-    let container_id_str = container_id.as_str();
-
-    // Build guest volumes from volume manager
-    let guest_volumes = volume_mgr.build_guest_mounts();
-
-    let network = match network_spec {
-        NetworkSpec::Enabled { .. } => Some(NetworkInitConfig {
-            interface: GUEST_INTERFACE.to_string(),
-            ip: Some(GUEST_CIDR.to_string()),
-            gateway: Some(GATEWAY_IP.to_string()),
-        }),
-        NetworkSpec::Disabled => None,
-    };
-
-    let guest_init_config = GuestInitConfig {
-        volumes: guest_volumes,
-        network,
-    };
-
     // Step 1: Guest Init (volumes + network)
     tracing::info!("Sending guest initialization request");
     let mut guest_interface = guest_session.guest().await?;
-    guest_interface.init(guest_init_config).await?;
+    if !bootstrap.container.advanced.capabilities.is_empty() {
+        guest_interface
+            .require_feature(boxlite_shared::constants::guest_features::LINUX_CAPABILITIES_V2)
+            .await?;
+    }
+    guest_interface.init(bootstrap.guest).await?;
     tracing::info!("Guest initialized successfully");
 
     // Step 2: create the container (rootfs + image config + user mounts). This
     // does NOT run init — Container.Init only creates.
     tracing::info!("Sending container configuration to guest");
     let mut container_interface = guest_session.container().await?;
-    let ca_certs: Vec<String> = ca_cert_pem.into_iter().map(|s| s.to_string()).collect();
-    let returned_id = container_interface
-        .init(
-            container_id_str,
-            container_image_config.clone(),
-            rootfs_init.clone(),
-            container_mounts.to_vec(),
-            ca_certs,
-            tty,
-        )
-        .await?;
+    let returned_id = container_interface.init(bootstrap.container).await?;
     tracing::info!(container_id = %returned_id, "Container created");
 
     // Running init is deliberately *not* done here. The container is created and

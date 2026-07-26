@@ -345,7 +345,8 @@ impl RuntimeImpl {
     ///
     /// Returns `(LiteBox, true)` if a new box was created, or `(LiteBox, false)`
     /// if an existing box with the given name was found. When an existing box is
-    /// returned, the provided `options` are ignored (no config drift validation).
+    /// returned, general options are ignored, but its capability policy must
+    /// match exactly so reuse cannot silently weaken or elevate privileges.
     pub async fn get_or_create(
         self: &Arc<Self>,
         options: BoxOptions,
@@ -390,6 +391,10 @@ impl RuntimeImpl {
             && let Some((config, state)) = self.box_manager.lookup_box(name)?
         {
             return if reuse_existing {
+                options.ensure_capability_policy_matches(
+                    &config.options.advanced.capabilities,
+                    name,
+                )?;
                 let (box_impl, _) = self.get_or_create_box_impl(config, state);
                 Ok((litebox_from_impl(box_impl), false))
             } else {
@@ -430,6 +435,10 @@ impl RuntimeImpl {
                 && let Some(ref name) = name
                 && let Some((config, state)) = self.box_manager.lookup_box(name)?
             {
+                options.ensure_capability_policy_matches(
+                    &config.options.advanced.capabilities,
+                    name,
+                )?;
                 let (box_impl, _) = self.get_or_create_box_impl(config, state);
                 return Ok((litebox_from_impl(box_impl), false));
             }

@@ -39,6 +39,11 @@ pub(super) struct CreateBoxRequest {
     /// add one.
     #[serde(default)]
     pub tty: Option<bool>,
+    /// Expert-only container options. A small wrapper records presence so the
+    /// legacy route can reject this newer contract even when the object is
+    /// empty. Explicit `null` is rejected by the nested deserializer.
+    #[serde(default)]
+    pub advanced: AdvancedRequestField,
     #[serde(default)]
     pub network: Option<NetworkSpec>,
     #[serde(default)]
@@ -57,6 +62,38 @@ pub(super) struct CreateBoxRequest {
     // serde_json::from_str — there is no quiet fall-through. See
     // `build_box_options_rejects_client_supplied_security_*` tests
     // below for the wire-shape pin.
+}
+
+#[derive(Default)]
+pub(super) struct AdvancedRequestField {
+    pub is_present: bool,
+    pub capabilities: ContainerCapabilitiesRequest,
+}
+
+impl<'de> Deserialize<'de> for AdvancedRequestField {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = CreateBoxAdvancedOptions::deserialize(deserializer)?;
+        Ok(Self {
+            is_present: true,
+            capabilities: value.capabilities,
+        })
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct CreateBoxAdvancedOptions {
+    capabilities: ContainerCapabilitiesRequest,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct ContainerCapabilitiesRequest {
+    pub add: Vec<String>,
+    pub drop: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +115,7 @@ pub(super) struct BoxResponse {
     pub image: String,
     pub cpus: u8,
     pub memory_mib: u32,
+    pub advanced: BoxAdvancedResponse,
     pub labels: HashMap<String, String>,
     pub auto_pause: u32,
     pub auto_delete: u32,
@@ -87,6 +125,17 @@ pub(super) struct BoxResponse {
     /// "not finished" apart from "finished with 0".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+}
+
+#[derive(Serialize)]
+pub(super) struct BoxAdvancedResponse {
+    pub capabilities: ContainerCapabilitiesResponse,
+}
+
+#[derive(Serialize)]
+pub(super) struct ContainerCapabilitiesResponse {
+    pub add: Vec<String>,
+    pub drop: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -161,6 +210,7 @@ pub(super) struct ServerConfig {
 
 #[derive(Serialize)]
 pub(super) struct ServerCapabilities {
+    pub linux_capabilities_enabled: bool,
     pub snapshots_enabled: bool,
     pub clone_enabled: bool,
     pub export_enabled: bool,

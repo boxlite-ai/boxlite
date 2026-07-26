@@ -182,6 +182,12 @@ const box = new SimpleBox({
     mode: 'enabled',
     allowNet: ['api.openai.com'],
   },
+  advanced: {
+    capabilities: {
+      add: ['NET_ADMIN'],
+      drop: ['NET_RAW'],
+    },
+  },
   env: { FOO: 'bar' },
   volumes: [
     { hostPath: '/tmp/data', guestPath: '/data', readOnly: false }
@@ -214,6 +220,7 @@ console.log(pwdResult.stdout); // "/tmp\n"
 console.log(box.id);    // ULID
 console.log(box.name);  // Optional name
 console.log(box.info()); // Metadata
+// box.info().advanced.capabilities.add / .drop
 
 // Cleanup
 await box.stop();

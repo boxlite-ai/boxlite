@@ -146,6 +146,12 @@ export class Runner {
   apiVersion: string
 
   @Column({
+    type: 'jsonb',
+    default: [],
+  })
+  features: string[] = []
+
+  @Column({
     nullable: true,
     type: 'timestamp with time zone',
   })

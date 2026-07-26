@@ -458,10 +458,14 @@ impl ApiClient {
             }
         }
 
-        let config: ServerConfig = self.get_root("/config").await?;
+        let config = self.fetch_config().await?;
         let mut cache = self.config_cache.write().await;
         *cache = Some(config.clone());
         Ok(config)
+    }
+
+    async fn fetch_config(&self) -> BoxliteResult<ServerConfig> {
+        self.get_root("/config").await
     }
 
     /// `GET /v1/me` — identity of the calling credential. Not cached
@@ -480,6 +484,22 @@ impl ApiClient {
             )
         })?;
         ensure_capability("snapshots", capabilities.snapshots_enabled)
+    }
+
+    pub async fn require_linux_capabilities_enabled(&self) -> BoxliteResult<()> {
+        // This gate protects a security policy, so a cached positive response
+        // is insufficient after a server rollback or replacement. Recheck the
+        // live endpoint immediately before every capability-bearing create.
+        let config = self.fetch_config().await?;
+        let capabilities = config.capabilities.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "Remote server did not advertise Linux capabilities support".to_string(),
+            )
+        })?;
+        ensure_capability(
+            "Linux capabilities",
+            capabilities.linux_capabilities_enabled,
+        )
     }
 
     pub async fn require_clone_enabled(&self) -> BoxliteResult<()> {
@@ -730,6 +750,43 @@ mod tests {
         let opts = BoxliteRestOptions::new("http://localhost:1");
         let client = ApiClient::new(&opts).expect("client");
         assert_eq!(client.current_bearer().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn linux_capability_gate_rechecks_uncached_server_config() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            for body in [
+                r#"{"capabilities":{"linux_capabilities_enabled":true}}"#,
+                r#"{"capabilities":{}}"#,
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(socket.read_u8().await.unwrap());
+                }
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let client =
+            ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        client.require_linux_capabilities_enabled().await.unwrap();
+        let second = client.require_linux_capabilities_enabled().await;
+        server.abort();
+
+        assert!(matches!(second, Err(BoxliteError::Unsupported(_))));
     }
 
     #[test]

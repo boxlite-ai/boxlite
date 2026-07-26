@@ -1,4 +1,5 @@
 PHONY_TARGETS += test
+PHONY_TARGETS += test\:unit\:guest-capabilities
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -205,6 +206,21 @@ test\:unit\:rust:
 		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 	fi; \
 	exit $$rc
+
+# Guest capability policy is Linux-only and does not require a VM. Keep this
+# focused target separate so macOS contributors can run the normal unit suite,
+# while Linux CI executes the policy and OCI construction tests themselves.
+test\:unit\:guest-capabilities:
+	@if [ "$$(uname)" != "Linux" ]; then \
+		echo "⏭️  Guest capability unit tests require Linux"; \
+		exit 0; \
+	fi; \
+	echo "🧪 Running guest capability unit tests..."; \
+	if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run --no-tests=fail -p boxlite-guest -E 'test(~capabilit)'; \
+	else \
+		cargo test -p boxlite-guest capabilit -- --test-threads=1; \
+	fi
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
 test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)

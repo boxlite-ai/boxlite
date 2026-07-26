@@ -96,6 +96,21 @@ for _, image := range cached {
 - `WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled, AllowNet: []string{"api.openai.com"}})` restricts outbound traffic while keeping networking enabled.
 - `WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeDisabled})` disables the guest network interface entirely.
 - `WithSecret(boxlite.Secret{...})` configures host-side HTTP(S) secret substitution; `Placeholder` defaults to `<BOXLITE_SECRET:{Name}>`.
+- Container capabilities live under advanced options:
+
+  ```go
+  advanced, err := boxlite.NewAdvancedBoxOptions()
+  if err != nil { log.Fatal(err) }
+  defer advanced.Close()
+  if err := advanced.SetCapabilities(boxlite.ContainerCapabilities{
+      Add: []string{"NET_ADMIN"},
+      Drop: []string{"NET_RAW"},
+  }); err != nil { log.Fatal(err) }
+  box, err := runtime.Create(ctx, "alpine:latest", boxlite.WithAdvancedOptions(advanced))
+  ```
+
+Inspection uses the same grouping: `info.Advanced.Capabilities.Add` and
+`info.Advanced.Capabilities.Drop`.
 
 ## Development
 

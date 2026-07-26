@@ -245,6 +245,71 @@ paths:
               schema:
                 $ref: "#/components/schemas/ListBoxesResponse"
 
+  /{prefix}/boxes/strict:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+
+    get:
+      operationId: listBoxesStrict
+      summary: List boxes with authoritative security metadata
+      description: |
+        Returns a paginated list through a route introduced with Linux
+        capability policy support. Clients use this route so an older server
+        fails instead of omitting `advanced.capabilities` and making a custom
+        policy appear to be the baseline.
+      tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/pageSize"
+        - $ref: "#/components/parameters/pageToken"
+        - name: status
+          in: query
+          description: Filter by box status
+          schema:
+            $ref: "#/components/schemas/BoxStatus"
+      responses:
+        "200":
+          description: List of boxes with authoritative capability policies
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListBoxesResponse"
+
+    post:
+      operationId: createBoxStrict
+      summary: Create a box with fail-closed option handling
+      description: |
+        Creates a box through a route introduced with strict option handling.
+        Clients MUST use this route when sending `advanced.capabilities` so a
+        schema-unaware server returns 404 instead of silently discarding those
+        security fields at the legacy create endpoint.
+      tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StrictCreateBoxRequest"
+      responses:
+        "201":
+          description: Box created
+          headers:
+            Location:
+              description: URL of the created box
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+
   /{prefix}/boxes/{box_id}:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -298,6 +363,30 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/strict:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+
+    get:
+      operationId: getBoxStrict
+      summary: Get authoritative box details
+      description: |
+        Returns box metadata through a route introduced with Linux capability
+        policy support. Clients that must compare a persisted security policy
+        use this route so an older server fails with 404 instead of omitting
+        `advanced.capabilities`.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Box details with an authoritative capability policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 
   # -------------------------------------------------------------------------
   # Box Lifecycle
@@ -1249,6 +1338,10 @@ components:
           type: object
           description: Server capability limits and feature flags
           properties:
+            linux_capabilities_enabled:
+              type: boolean
+              description: Whether Docker-style Linux capability add/drop policy is supported
+              example: true
             max_cpus:
               type: integer
               description: Maximum allowed vCPUs per box
@@ -1487,7 +1580,7 @@ components:
     Box:
       type: object
       description: Box metadata (maps to BoxInfo)
-      required: [box_id, status, created_at, updated_at, image, cpus, memory_mib]
+      required: [box_id, status, created_at, updated_at, image, cpus, memory_mib, advanced]
       properties:
         box_id:
           type: string
@@ -1536,6 +1629,8 @@ components:
           minimum: 128
           description: Allocated memory in MiB
           example: 512
+        advanced:
+          $ref: "#/components/schemas/BoxAdvancedInfo"
         labels:
           type: object
           additionalProperties:
@@ -1575,8 +1670,17 @@ components:
         - unknown
 
     CreateBoxRequest:
+      allOf:
+        - $ref: "#/components/schemas/CreateBoxRequestBase"
+        - type: object
+          description: Legacy create request accepted by `POST /boxes`.
+          properties:
+            security:
+              $ref: "#/components/schemas/SecurityPreset"
+
+    CreateBoxRequestBase:
       type: object
-      description: Configuration for creating a new box (maps to BoxOptions)
+      description: Shared non-security configuration for creating a new box.
       properties:
         name:
           type: string
@@ -1670,8 +1774,76 @@ components:
           type: boolean
           default: true
           description: Whether the box automatically resumes when accessed after AutoPause
-        security:
-          $ref: "#/components/schemas/SecurityPreset"
+
+    StrictCreateBoxRequest:
+      allOf:
+        - $ref: "#/components/schemas/CreateBoxRequestBase"
+        - type: object
+          description: |
+            Fail-closed create request for security-sensitive options. This
+            schema is accepted only by `POST /boxes/strict`.
+          properties:
+            advanced:
+              $ref: "#/components/schemas/CreateBoxAdvancedOptions"
+      unevaluatedProperties: false
+
+    CreateBoxAdvancedOptions:
+      type: object
+      description: Expert-only container options accepted by the strict create route.
+      additionalProperties: false
+      properties:
+        capabilities:
+          $ref: "#/components/schemas/CreateContainerCapabilities"
+
+    CreateContainerCapabilities:
+      type: object
+      description: Linux capability additions and removals for container processes.
+      additionalProperties: false
+      properties:
+        add:
+          type: array
+          items:
+            type: string
+          default: []
+          description: |
+            Linux capabilities to add to the default container capability set.
+            Names are case-insensitive, may include the `CAP_` prefix, and may be `ALL`.
+          example: [SYS_ADMIN]
+        drop:
+          type: array
+          items:
+            type: string
+          default: []
+          description: |
+            Linux capabilities to remove from the container capability set.
+            Names are case-insensitive, may include the `CAP_` prefix, and may be `ALL`.
+          example: [NET_RAW]
+
+    BoxAdvancedInfo:
+      type: object
+      description: Expert-only inspection metadata safe to expose to clients.
+      additionalProperties: false
+      required: [capabilities]
+      properties:
+        capabilities:
+          $ref: "#/components/schemas/ContainerCapabilities"
+
+    ContainerCapabilities:
+      type: object
+      description: Authoritative Linux capability policy for container processes.
+      additionalProperties: false
+      required: [add, drop]
+      properties:
+        add:
+          type: array
+          items:
+            type: string
+          description: Linux capabilities added to the default container set.
+        drop:
+          type: array
+          items:
+            type: string
+          description: Linux capabilities removed from the resulting container set.
 
     VolumeSpec:
       type: object

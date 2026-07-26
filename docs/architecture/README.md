@@ -2,6 +2,8 @@
 
 Related design: [AutoPause / AutoResume / AutoDelete](./auto-pause-resume-design.md)
 
+Container security design: [Linux capability API](./container-capabilities.md)
+
 ## Overview
 
 BoxLite is an embeddable virtual machine runtime that follows the SQLite philosophy: a library that

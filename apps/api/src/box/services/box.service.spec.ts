@@ -256,18 +256,21 @@ describe('BoxService network tunnel URLs', () => {
 describe('BoxService public defaults', () => {
   function makeCreateService() {
     const boxRepository = { insert: jest.fn(async (box: any) => box) } as any
+    const runnerService = {
+      getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: 'runner-1', features: ['linux-capabilities-v2'] }),
+    }
     const service = Object.create(BoxService.prototype) as BoxService
     Object.assign(service as any, {
       getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
       getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
       organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
       redis: { exists: jest.fn().mockResolvedValue(1) },
-      runnerService: { getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: 'runner-1' }) },
+      runnerService,
       boxRepository,
       eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
       toBoxDto: jest.fn((box) => box),
     })
-    return { service, boxRepository }
+    return { service, boxRepository, runnerService }
   }
 
   it.each([
@@ -279,6 +282,57 @@ describe('BoxService public defaults', () => {
     await service.create({ name: 'fresh-box', public: requestedPublic } as any, { id: 'org-1' } as any)
 
     expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }))
+  })
+
+  it('persists capability overrides on a fresh box', async () => {
+    const { service, boxRepository, runnerService } = makeCreateService()
+
+    await service.create(
+      {
+        name: 'cap-box',
+        advanced: { capabilities: { add: ['SYS_ADMIN'], drop: ['NET_RAW'] } },
+      } as any,
+      { id: 'org-1' } as any,
+    )
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        advanced: { capabilities: { add: ['SYS_ADMIN'], drop: ['NET_RAW'] } },
+      }),
+    )
+    expect(runnerService.getRandomAvailableRunner).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredFeatures: ['linux-capabilities-v2'] }),
+    )
+  })
+
+  it('does not assign a default-capability warm-pool box to a custom-capability request', async () => {
+    const fetchWarmPoolBox = jest.fn().mockResolvedValue(null)
+    const boxRepository = { insert: jest.fn(async (box: any) => box) } as any
+    const service = Object.create(BoxService.prototype) as BoxService
+    Object.assign(service as any, {
+      getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
+      getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
+      organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+      redis: { exists: jest.fn().mockResolvedValue(0) },
+      warmPoolService: { fetchWarmPoolBox },
+      runnerService: {
+        getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: 'runner-1', features: ['linux-capabilities-v2'] }),
+      },
+      boxRepository,
+      eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
+      toBoxDto: jest.fn((box) => box),
+    })
+
+    await service.create(
+      {
+        name: 'cap-box',
+        image: 'base',
+        advanced: { capabilities: { add: ['SYS_ADMIN'], drop: [] } },
+      } as any,
+      { id: 'org-1' } as any,
+    )
+
+    expect(fetchWarmPoolBox).not.toHaveBeenCalled()
   })
 
   it.each([

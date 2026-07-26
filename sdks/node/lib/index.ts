@@ -98,6 +98,8 @@ export {
   BoxTunnel,
   NetworkHandle,
   type NetworkSpec,
+  type AdvancedBoxOptions,
+  type ContainerCapabilities,
   type SimpleBoxOptions,
   type SecurityOptions,
   type Secret,

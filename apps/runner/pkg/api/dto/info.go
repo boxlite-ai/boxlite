@@ -25,4 +25,5 @@ type RunnerInfoResponseDTO struct {
 	ServiceHealth []*RunnerServiceInfo `json:"serviceHealth,omitempty"`
 	Metrics       *RunnerMetrics       `json:"metrics,omitempty"`
 	AppVersion    string               `json:"appVersion"`
+	Features      []string             `json:"features,omitempty"`
 } //	@name	RunnerInfoResponseDTO

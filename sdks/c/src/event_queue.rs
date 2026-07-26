@@ -12,7 +12,7 @@ use std::sync::{Condvar, Mutex};
 use boxlite::BoxliteError;
 
 use crate::images::{CImageInfoList, CImagePullResult};
-use crate::info::{CBoxInfo, CBoxInfoList};
+use crate::info::{CBoxInfo, CBoxInfoList, CBoxInfoListV2, CBoxInfoV2};
 use crate::metrics::{CBoxMetrics, CRuntimeMetrics};
 use crate::volumes::{CVolumeInfo, CVolumeInfoList};
 
@@ -160,6 +160,18 @@ pub type CBoxInfoListCb =
     Option<extern "C" fn(*mut CBoxInfoList, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxInfoListFn =
     extern "C" fn(*mut CBoxInfoList, *mut crate::CBoxliteError, *mut c_void);
+
+/// Versioned box info completion with capability policy.
+pub type CBoxInfoV2Cb =
+    Option<extern "C" fn(*mut CBoxInfoV2, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxInfoV2Fn =
+    extern "C" fn(*mut CBoxInfoV2, *mut crate::CBoxliteError, *mut c_void);
+
+/// Versioned box info list completion with capability policy.
+pub type CBoxInfoListV2Cb =
+    Option<extern "C" fn(*mut CBoxInfoListV2, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxInfoListV2Fn =
+    extern "C" fn(*mut CBoxInfoListV2, *mut crate::CBoxliteError, *mut c_void);
 
 /// Per-box metrics completion.
 pub type CBoxMetricsCb =
@@ -382,6 +394,16 @@ pub enum RuntimeEvent {
         cb: CBoxInfoListFn,
         user_data: usize,
         result: Result<OwnedFfiPtr<CBoxInfoList>, BoxliteError>,
+    },
+    InfoV2 {
+        cb: CBoxInfoV2Fn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CBoxInfoV2>, BoxliteError>,
+    },
+    InfoListV2 {
+        cb: CBoxInfoListV2Fn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CBoxInfoListV2>, BoxliteError>,
     },
     Metrics {
         cb: CBoxMetricsFn,

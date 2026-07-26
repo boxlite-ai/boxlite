@@ -1,6 +1,6 @@
 use crate::cli::{
-    GlobalFlags, ManagementFlags, NetworkFlags, ProcessFlags, PublishFlags, ResourceFlags,
-    VolumeFlags,
+    CapabilityFlags, GlobalFlags, ManagementFlags, NetworkFlags, ProcessFlags, PublishFlags,
+    ResourceFlags, VolumeFlags,
 };
 use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
@@ -15,6 +15,9 @@ pub struct RunArgs {
 
     #[command(flatten)]
     pub resource: ResourceFlags,
+
+    #[command(flatten)]
+    pub capability: CapabilityFlags,
 
     #[command(flatten)]
     pub publish: PublishFlags,
@@ -121,6 +124,7 @@ impl BoxRunner {
     ) -> anyhow::Result<LiteBox> {
         let mut options = BoxOptions::default();
         self.args.resource.apply_to(&mut options);
+        self.args.capability.apply_to(&mut options);
         self.args.management.apply_to(&mut options)?;
         self.args.publish.apply_to(&mut options)?;
         self.args
@@ -188,6 +192,28 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Commands};
     use clap::Parser;
+
+    #[test]
+    fn run_capability_flags_are_repeatable() {
+        let cli = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "--cap-add",
+            "SYS_ADMIN",
+            "--cap-add",
+            "NET_ADMIN",
+            "--cap-drop",
+            "CAP_NET_RAW",
+            "alpine",
+        ])
+        .expect("capability flags should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+
+        assert_eq!(args.capability.cap_add, vec!["SYS_ADMIN", "NET_ADMIN"]);
+        assert_eq!(args.capability.cap_drop, vec!["CAP_NET_RAW"]);
+    }
 
     #[test]
     fn run_rootfs_flag_sets_rootfs_path_and_uses_trailing_command() {

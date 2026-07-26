@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { BadRequestException } from '@nestjs/common'
 import { BoxDto } from '../../box/dto/box.dto'
 import { BoxState } from '../../box/enums/box-state.enum'
 import {
@@ -14,6 +15,7 @@ import {
 import { BoxResponseDto } from '../dto/box-response.dto'
 import { CreateBoxDto as RestCreateBoxDto } from '../dto/create-box.dto'
 import { CreateBoxDto } from '../../box/dto/create-box.dto'
+import { normalizeBoxAdvancedOptions } from '../../box/common/box-advanced-options'
 
 export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
   return {
@@ -25,6 +27,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     image: box.image || '',
     cpus: box.cpu || 1,
     memory_mib: (box.memory || 1) * 1024,
+    advanced: normalizeBoxAdvancedOptions(box.advanced),
     labels: box.labels || {},
     auto_pause: box.autoPause ?? DEFAULT_AUTO_PAUSE_SECONDS,
     auto_delete: box.autoDelete ?? AUTO_DELETE_DISABLED,
@@ -33,11 +36,14 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
 }
 
 export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): CreateBoxDto {
+  rejectUnsupportedCloudCreateOptions(dto)
+
   const createDto = new CreateBoxDto()
   createDto.name = dto.name
   createDto.image = dto.image
   createDto.user = dto.user
   createDto.env = dto.env
+  createDto.advanced = dto.advanced
   createDto.cpu = dto.cpus
   createDto.memory = dto.memory_mib ? Math.ceil(dto.memory_mib / 1024) : undefined
   createDto.disk = dto.disk_size_gb
@@ -51,6 +57,17 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     createDto.networkAllowList = dto.network.mode === 'enabled' && allowNet?.length ? allowNet.join(',') : undefined
   }
   return createDto
+}
+
+function rejectUnsupportedCloudCreateOptions(dto: RestCreateBoxDto): void {
+  const unsupportedFields = (['rootfs_path', 'tty', 'secrets'] as const).filter((field) => dto[field] !== undefined)
+  if (unsupportedFields.length === 0) {
+    return
+  }
+
+  throw new BadRequestException(
+    `${unsupportedFields.join(', ')} is not supported by the cloud REST API`,
+  )
 }
 
 function mapState(state: string | BoxState | undefined): string {

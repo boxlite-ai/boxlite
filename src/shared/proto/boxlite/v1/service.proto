@@ -184,6 +184,9 @@ message PingRequest {}
 
 message PingResponse {
   string version = 1;  // Guest agent version
+  // Optional capabilities used for host/guest rollout negotiation. Unknown
+  // entries are ignored; an older guest decodes as an empty list.
+  repeated string features = 2;
 }
 
 message ShutdownRequest {}
@@ -307,6 +310,27 @@ message ContainerConfig {
   // guest opens the PTY at a default size and the attaching client's
   // ResizeTty sets the real one.
   bool tty = 5;
+
+  // Tags used by an early flat capability-policy prototype. They must not be
+  // reused because repeated strings and nested messages share the same wire
+  // type and could be silently misread by mixed-version peers.
+  reserved 6, 7;
+  reserved "cap_add", "cap_drop";
+
+  // Expert-only container process options.
+  ContainerAdvancedOptions advanced = 8;
+}
+
+message ContainerAdvancedOptions {
+  ContainerCapabilities capabilities = 1;
+}
+
+message ContainerCapabilities {
+  // Capabilities to add to the default capability set.
+  repeated string add = 1;
+
+  // Capabilities to remove from the resulting capability set.
+  repeated string drop = 2;
 }
 
 // ============================================================================

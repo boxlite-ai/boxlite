@@ -132,11 +132,13 @@ func (a *ApiServer) Start(ctx context.Context) error {
 	boxController := protected.Group("/boxes")
 	{
 		boxController.POST("", controllers.Create)
+		boxController.POST("/strict", controllers.CreateWithCapabilities)
 		boxController.GET("/:boxId", controllers.Info)
 		boxController.POST("/:boxId/destroy", controllers.Destroy)
 		boxController.POST("/:boxId/start", controllers.Start)
 		boxController.POST("/:boxId/stop", controllers.Stop)
 		boxController.POST("/:boxId/recover", controllers.Recover)
+		boxController.POST("/:boxId/recover/strict", controllers.RecoverWithCapabilities)
 		boxController.POST("/:boxId/is-recoverable", controllers.IsRecoverable)
 		boxController.POST("/:boxId/network-settings", controllers.UpdateNetworkSettings)
 

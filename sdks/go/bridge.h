@@ -27,8 +27,8 @@ extern CBoxVolumeListCb cbVolumeList(void);
 extern CBoxVolumeGetCb cbVolumeGet(void);
 extern CBoxVolumeRemoveCb cbVolumeRemove(void);
 
-extern CBoxInfoCb cbInfo(void);
-extern CBoxInfoListCb cbInfoList(void);
+extern CBoxInfoV2Cb cbInfoV2(void);
+extern CBoxInfoListV2Cb cbInfoListV2(void);
 
 extern CBoxMetricsCb cbBoxMetrics(void);
 extern CRuntimeMetricsCb cbRuntimeMetrics(void);

@@ -17,6 +17,8 @@ import { TypedConfigService } from '../../../config/typed-config.service'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
 import { WithSpan } from '../../../common/decorators/otel.decorator'
 import { BoxActivityService } from '../../services/box-activity.service'
+import { Runner } from '../../entities/runner.entity'
+import { requiredRunnerFeaturesForCapabilities, runnerSupportsFeatures } from '../../constants/runner-features'
 
 @Injectable()
 export class BoxStartAction extends BoxAction {
@@ -57,8 +59,12 @@ export class BoxStartAction extends BoxAction {
   }
 
   private async handleRunnerBoxUnknownStateOnDesiredStateStart(box: Box, lockCode: LockCode): Promise<SyncState> {
-    const runner = await this.runnerService.findOneOrFail(box.runnerId)
+    const runner = await this.runnerService.findOneCurrentOrFail(box.runnerId)
     if (runner.state !== RunnerState.READY) {
+      return DONT_SYNC_AGAIN
+    }
+
+    if (!(await this.ensureRunnerSupportsCapabilities(box, runner, lockCode))) {
       return DONT_SYNC_AGAIN
     }
 
@@ -92,9 +98,13 @@ export class BoxStartAction extends BoxAction {
       return DONT_SYNC_AGAIN
     }
 
-    const runner = await this.runnerService.findOneOrFail(box.runnerId)
+    const runner = await this.runnerService.findOneCurrentOrFail(box.runnerId)
 
     if (runner.state !== RunnerState.READY) {
+      return DONT_SYNC_AGAIN
+    }
+
+    if (!(await this.ensureRunnerSupportsCapabilities(box, runner, lockCode))) {
       return DONT_SYNC_AGAIN
     }
 
@@ -189,6 +199,18 @@ export class BoxStartAction extends BoxAction {
     }
 
     return SYNC_AGAIN
+  }
+
+  private async ensureRunnerSupportsCapabilities(box: Box, runner: Runner, lockCode: LockCode): Promise<boolean> {
+    const requiredFeatures = requiredRunnerFeaturesForCapabilities(box.advanced.capabilities)
+    if (runnerSupportsFeatures(runner.features, requiredFeatures)) {
+      return true
+    }
+
+    const errorReason = `Runner ${runner.id} does not support required feature: ${requiredFeatures.join(', ')}`
+    this.logger.error(`Cannot start box ${box.id}: ${errorReason}`)
+    await this.updateBoxState(box, BoxState.ERROR, lockCode, undefined, errorReason)
+    return false
   }
 
   private async checkTimeoutError(box: Box, timeoutMinutes: number, errorReason: string): Promise<boolean> {

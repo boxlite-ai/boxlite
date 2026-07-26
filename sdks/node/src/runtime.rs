@@ -145,7 +145,8 @@ impl JsBoxlite {
     /// Returns an object with `box` (the box handle) and `created` (true if
     /// newly created, false if an existing box was found).
     ///
-    /// When an existing box is returned, the provided options are ignored.
+    /// When an existing box is returned, general options are ignored, but
+    /// `advanced.capabilities` must match its persisted security policy.
     ///
     /// # Arguments
     /// * `options` - Box configuration (used only if creating a new box)

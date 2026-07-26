@@ -16,6 +16,7 @@ export class BoxliteConfigController {
   getConfig() {
     return {
       capabilities: {
+        linux_capabilities_enabled: true,
         snapshots_enabled: false,
         clone_enabled: false,
         export_enabled: false,

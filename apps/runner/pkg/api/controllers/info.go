@@ -51,6 +51,7 @@ func RunnerInfo(ctx *gin.Context) {
 			CurrentStartedBoxes:          int64(metrics.StartedBoxCount),
 		},
 		AppVersion: internal.Version,
+		Features:   []string{internal.FeatureLinuxCapabilitiesV2},
 	}
 
 	ctx.JSON(http.StatusOK, response)

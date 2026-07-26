@@ -1,4 +1,6 @@
-use crate::cli::{GlobalFlags, NetworkFlags, PublishFlags, ResourceFlags, VolumeFlags};
+use crate::cli::{
+    CapabilityFlags, GlobalFlags, NetworkFlags, PublishFlags, ResourceFlags, VolumeFlags,
+};
 use boxlite::{BoxOptions, RootfsSpec};
 use clap::Args;
 
@@ -33,6 +35,9 @@ pub struct CreateArgs {
     pub resource: ResourceFlags,
 
     #[command(flatten)]
+    pub capability: CapabilityFlags,
+
+    #[command(flatten)]
     pub publish: PublishFlags,
 
     #[command(flatten)]
@@ -61,6 +66,7 @@ impl CreateArgs {
     fn to_box_options(&self, global: &GlobalFlags) -> anyhow::Result<BoxOptions> {
         let mut options = BoxOptions::default();
         self.resource.apply_to(&mut options);
+        self.capability.apply_to(&mut options);
         self.management.apply_to(&mut options)?;
         self.publish.apply_to(&mut options)?;
         self.volume.apply_to(&mut options, global.home.as_deref())?;
@@ -151,5 +157,28 @@ mod tests {
             .expect_err("competing sources must be rejected");
 
         assert!(err.to_string().contains("either IMAGE or --rootfs"));
+    }
+
+    #[test]
+    fn create_capability_flags_reach_box_options() {
+        let cli = Cli::try_parse_from([
+            "boxlite",
+            "create",
+            "--cap-add",
+            "SYS_ADMIN",
+            "--cap-drop",
+            "CAP_NET_RAW",
+            "alpine",
+        ])
+        .expect("capability flags should parse");
+        let Commands::Create(args) = cli.command else {
+            panic!("expected create command");
+        };
+
+        let opts = args
+            .to_box_options(&cli.global)
+            .expect("options should build");
+        assert_eq!(opts.advanced.capabilities.add, vec!["SYS_ADMIN"]);
+        assert_eq!(opts.advanced.capabilities.drop, vec!["CAP_NET_RAW"]);
     }
 }

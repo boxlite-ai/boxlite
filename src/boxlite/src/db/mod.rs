@@ -201,6 +201,35 @@ mod tests {
     }
 
     #[test]
+    fn test_db_migration_v8_to_v9() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(schema::SCHEMA_VERSION_TABLE).unwrap();
+            let now = Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO schema_version (id, version, updated_at) VALUES (1, 8, ?1)",
+                rusqlite::params![now],
+            )
+            .unwrap();
+        }
+
+        let db = Database::open(&db_path).unwrap();
+        let version: i32 = db
+            .conn()
+            .query_row(
+                "SELECT version FROM schema_version WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(version, 9);
+    }
+
+    #[test]
     fn test_db_migration_v4_to_v7() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");

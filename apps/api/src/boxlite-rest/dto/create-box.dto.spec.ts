@@ -42,9 +42,7 @@ describe('CreateBoxDto resource minimums', () => {
 
 describe('CreateBoxDto lifecycle policy', () => {
   it('accepts second-based lifecycle fields', async () => {
-    const errors = await validate(
-      plainToInstance(CreateBoxDto, { auto_pause: 900, auto_delete: 604800 }),
-    )
+    const errors = await validate(plainToInstance(CreateBoxDto, { auto_pause: 900, auto_delete: 604800 }))
 
     expect(errors).toHaveLength(0)
   })
@@ -122,5 +120,79 @@ describe('CreateBoxDto network validation', () => {
     )
 
     expect(JSON.stringify(errors)).toContain('isIn')
+  })
+})
+
+describe('CreateBoxDto capability validation', () => {
+  it.each([
+    ['advanced', { advanced: null }],
+    ['advanced.capabilities', { advanced: { capabilities: null } }],
+    ['advanced.capabilities.add', { advanced: { capabilities: { add: null } } }],
+    ['advanced.capabilities.drop', { advanced: { capabilities: { drop: null } } }],
+  ])('rejects explicit null for %s', async (_field, payload) => {
+    const errors = await validate(plainToInstance(CreateBoxDto, payload))
+
+    expect(errors).not.toHaveLength(0)
+  })
+
+  it('accepts Docker-style capability names', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        advanced: {
+          capabilities: {
+            add: ['sys_admin', 'CAP_NET_ADMIN', 'ALL'],
+            drop: ['NET_RAW'],
+          },
+        },
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('accepts a syntactically valid capability that a newer guest may support', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        advanced: { capabilities: { add: ['FUTURE_KERNEL_FEATURE'] } },
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('rejects malformed capability names', async () => {
+    for (const capability of ['NET-ADMIN', '123', 'ß']) {
+      const errors = await validate(
+        plainToInstance(CreateBoxDto, {
+          advanced: { capabilities: { add: [capability] } },
+        }),
+      )
+
+      expect(JSON.stringify(errors)).toContain('isLinuxCapabilityName')
+    }
+  })
+})
+
+describe('CreateBoxDto unsupported cloud options', () => {
+  it.each([
+    ['rootfs_path', '/tmp/rootfs'],
+    ['tty', true],
+    [
+      'secrets',
+      [
+        {
+          name: 'registry-token',
+          value: 'redacted-test-value',
+          hosts: ['registry.example.com'],
+          placeholder: '<BOXLITE_SECRET:registry-token>',
+        },
+      ],
+    ],
+  ])('rejects %s instead of silently dropping it', async (field, value) => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { [field]: value }))
+
+    expect(errors.find((error) => error.property === field)?.constraints).toHaveProperty(
+      'isUnsupportedCloudCreateOption',
+    )
   })
 })

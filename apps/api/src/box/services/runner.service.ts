@@ -44,6 +44,7 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import { runnerSupportsFeatures } from '../constants/runner-features'
 
 @Injectable()
 export class RunnerService {
@@ -224,6 +225,15 @@ export class RunnerService {
     return runner
   }
 
+  /** Read security-sensitive runner state directly from the database. */
+  async findOneCurrentOrFail(id: string): Promise<Runner> {
+    const runner = await this.runnerRepository.findOne({ where: { id } })
+    if (!runner) {
+      throw new NotFoundException(`Runner with ID ${id} not found`)
+    }
+    return runner
+  }
+
   async findOneFullOrFail(id: string): Promise<RunnerFullDto> {
     const runner = await this.findOneOrFail(id)
     const region = await this.regionService.findOne(runner.region)
@@ -312,7 +322,10 @@ export class RunnerService {
       where: runnerFilter,
     })
 
-    return runners.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
+    return runners
+      .filter((runner) => runnerSupportsFeatures(runner.features, params.requiredFeatures))
+      .sort((a, b) => b.availabilityScore - a.availabilityScore)
+      .slice(0, 10)
   }
 
   /**
@@ -370,6 +383,7 @@ export class RunnerService {
       diskGiB?: number
     },
     appVersion?: string,
+    features?: string[],
   ): Promise<void> {
     const runner = await this.findOne(runnerId)
     if (!runner) {
@@ -402,6 +416,10 @@ export class RunnerService {
     if (appVersion) {
       updateData.appVersion = appVersion
     }
+
+    // Absence means an older runner. Clearing on every heartbeat prevents a
+    // downgraded runner from retaining capabilities it no longer advertises.
+    updateData.features = [...new Set(features ?? [])]
 
     if (serviceHealth !== undefined) {
       updateData.serviceHealth = serviceHealth
@@ -554,6 +572,7 @@ export class RunnerService {
                     runnerInfo?.serviceHealth,
                     runnerInfo?.metrics,
                     runnerInfo?.appVersion,
+                    runnerInfo?.features,
                   )
                 })(),
                 new Promise((_, reject) => {
@@ -723,7 +742,10 @@ export class RunnerService {
     const availableRunners = await this.findAvailableRunners(params)
 
     if (availableRunners.length === 0) {
-      throw new BadRequestError('No available runners')
+      const required = params.requiredFeatures?.join(', ')
+      throw new BadRequestError(
+        required ? `No available runners support required features: ${required}` : 'No available runners',
+      )
     }
 
     // Get random runner from the best available runners
@@ -914,6 +936,7 @@ export class GetRunnerParams {
   boxClass?: BoxClass
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
+  requiredFeatures?: string[]
 }
 
 interface AvailabilityScoreParams {

@@ -322,6 +322,8 @@ silently restarting it, because restarting would run the command a second time.
 | `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, `boxPath` for anonymous) |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
+| `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
+| `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--name NAME` | | Name the box |
 | `--detach` | `-d` | Run in background, print box ID |
 | `--rm` | | Remove the box when it exits |
@@ -334,6 +336,7 @@ boxlite run -it --rm alpine:latest /bin/sh
 boxlite run -d --name openclaw -p 18789:18789 ghcr.io/openclaw/openclaw:main
 boxlite run -v /host/data:/app/data alpine:latest cat /app/data/hello.txt
 boxlite run --rootfs /path/to/rootfs /bin/sh
+boxlite run --cap-drop ALL --cap-add NET_BIND_SERVICE nginx:alpine
 ```
 
 ### `boxlite create`
@@ -361,6 +364,8 @@ default, and `exec` still starts it on demand.
 | `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, or box path for anonymous) |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
+| `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
+| `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--detach` | `-d` | (create always “detaches”) |
 | `--rm` | | Auto-remove when stopped |
 
@@ -370,6 +375,7 @@ default, and `exec` still starts it on demand.
 boxlite create --name mybox alpine:latest
 boxlite create -p 18789:18789 -v /data:/app/data --name openclaw ghcr.io/openclaw/openclaw:main
 boxlite create --rootfs /path/to/rootfs --name local-rootfs
+boxlite create --cap-drop NET_RAW --name hardened alpine:latest
 boxlite start mybox
 boxlite start openclaw
 ```

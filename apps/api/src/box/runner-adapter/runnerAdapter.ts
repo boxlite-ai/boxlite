@@ -32,6 +32,7 @@ export interface RunnerInfo {
   serviceHealth?: RunnerServiceInfo[]
   metrics?: RunnerMetrics
   appVersion?: string
+  features?: string[]
 }
 
 export interface StartBoxResponse {

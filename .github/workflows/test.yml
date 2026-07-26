@@ -101,7 +101,7 @@ jobs:
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev protobuf-compiler
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
@@ -116,6 +116,10 @@ jobs:
       - name: Run Rust unit tests with coverage
         # Only test boxlite-shared - boxlite requires libkrun/libgvproxy not available in CI
         run: cargo llvm-cov nextest -p boxlite-shared --lib --profile ci --lcov --output-path lcov.info
+
+      - name: Run guest capability policy tests
+        if: runner.os == 'Linux'
+        run: make test:unit:guest-capabilities
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

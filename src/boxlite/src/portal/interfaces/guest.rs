@@ -68,6 +68,13 @@ impl GuestInterface {
         Ok(())
     }
 
+    /// Fail before initialization if the connected guest cannot honor a
+    /// security-sensitive request field. Older guests return no features.
+    pub async fn require_feature(&mut self, feature: &str) -> BoxliteResult<()> {
+        let response = self.client.ping(PingRequest {}).await?.into_inner();
+        ensure_guest_feature(&response.version, &response.features, feature)
+    }
+
     /// Shutdown the guest agent.
     pub async fn shutdown(&mut self) -> BoxliteResult<()> {
         let _response = self.client.shutdown(ShutdownRequest {}).await?;
@@ -90,6 +97,40 @@ impl GuestInterface {
     pub async fn thaw(&mut self) -> BoxliteResult<u32> {
         let response = self.client.thaw(ThawRequest {}).await?.into_inner();
         Ok(response.thawed_count)
+    }
+}
+
+fn ensure_guest_feature(version: &str, features: &[String], required: &str) -> BoxliteResult<()> {
+    if features.iter().any(|candidate| candidate == required) {
+        return Ok(());
+    }
+
+    Err(BoxliteError::Unsupported(format!(
+        "guest {version} does not support required feature '{required}'; recreate the box with the current runtime"
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_guest_without_features_is_rejected_for_required_policy() {
+        let error = ensure_guest_feature("0.9.6", &[], "linux-capabilities-v2")
+            .expect_err("an old guest must not silently ignore security policy");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("linux-capabilities-v2"));
+    }
+
+    #[test]
+    fn advertised_guest_feature_is_accepted() {
+        ensure_guest_feature(
+            "0.9.7",
+            &["linux-capabilities-v2".to_string()],
+            "linux-capabilities-v2",
+        )
+        .expect("current guest advertises the feature");
     }
 }
 

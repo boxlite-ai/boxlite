@@ -40,6 +40,12 @@ pub mod executor {
     pub const CONTAINER_KEY: &str = "container";
 }
 
+/// Features advertised by the guest agent during Ping.
+pub mod guest_features {
+    /// Guest understands Docker-style capability deltas on Container.Init.
+    pub const LINUX_CAPABILITIES_V2: &str = "linux-capabilities-v2";
+}
+
 /// Virtiofs mount tags
 ///
 /// These tags identify shared filesystems mounted via virtiofs.

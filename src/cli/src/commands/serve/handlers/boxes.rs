@@ -17,6 +17,25 @@ pub(in crate::commands::serve) async fn create_box(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateBoxRequest>,
 ) -> Response {
+    create_box_inner(state, req).await
+}
+
+pub(in crate::commands::serve) async fn create_box_legacy(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateBoxRequest>,
+) -> Response {
+    if req.advanced.is_present {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "advanced capabilities require POST /v1/boxes/strict".to_string(),
+            "InvalidArgumentError",
+            "invalid_argument",
+        );
+    }
+    create_box_inner(state, req).await
+}
+
+async fn create_box_inner(state: Arc<AppState>, req: CreateBoxRequest) -> Response {
     let name = req.name.clone();
     let options = match build_box_options(&req) {
         Ok(options) => options,

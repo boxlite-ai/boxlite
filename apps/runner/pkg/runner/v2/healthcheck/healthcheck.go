@@ -98,6 +98,7 @@ func (s *Service) sendHealthcheck(ctx context.Context) error {
 	defer cancel()
 
 	healthcheck := apiclient.NewRunnerHealthcheck(internal.Version)
+	healthcheck.SetFeatures([]string{internal.FeatureLinuxCapabilitiesV2})
 	healthcheck.SetDomain(s.domain)
 
 	proxyUrl := fmt.Sprintf("http://%s:%d", s.domain, s.proxyPort)

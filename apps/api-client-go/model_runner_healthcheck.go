@@ -21,6 +21,8 @@ var _ MappedNullable = &RunnerHealthcheck{}
 
 // RunnerHealthcheck struct for RunnerHealthcheck
 type RunnerHealthcheck struct {
+	// Optional runner features used for rollout negotiation
+	Features []string `json:"features,omitempty"`
 	// Runner metrics
 	Metrics *RunnerHealthMetrics `json:"metrics,omitempty"`
 	// Health status of individual services on the runner
@@ -32,7 +34,7 @@ type RunnerHealthcheck struct {
 	// Runner API URL
 	ApiUrl *string `json:"apiUrl,omitempty"`
 	// Runner app version
-	AppVersion string `json:"appVersion"`
+	AppVersion           string `json:"appVersion"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -54,6 +56,33 @@ func NewRunnerHealthcheck(appVersion string) *RunnerHealthcheck {
 func NewRunnerHealthcheckWithDefaults() *RunnerHealthcheck {
 	this := RunnerHealthcheck{}
 	return &this
+}
+
+// GetFeatures returns the Features field value if set, zero value otherwise.
+func (o *RunnerHealthcheck) GetFeatures() []string {
+	if o == nil || IsNil(o.Features) {
+		var ret []string
+		return ret
+	}
+	return o.Features
+}
+
+// GetFeaturesOk returns a tuple with the Features field value if set, nil otherwise.
+func (o *RunnerHealthcheck) GetFeaturesOk() ([]string, bool) {
+	if o == nil || IsNil(o.Features) {
+		return nil, false
+	}
+	return o.Features, true
+}
+
+// HasFeatures returns true if Features has been set.
+func (o *RunnerHealthcheck) HasFeatures() bool {
+	return o != nil && !IsNil(o.Features)
+}
+
+// SetFeatures sets the Features field value.
+func (o *RunnerHealthcheck) SetFeatures(v []string) {
+	o.Features = v
 }
 
 // GetMetrics returns the Metrics field value if set, zero value otherwise.
@@ -241,7 +270,7 @@ func (o *RunnerHealthcheck) SetAppVersion(v string) {
 }
 
 func (o RunnerHealthcheck) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -250,6 +279,9 @@ func (o RunnerHealthcheck) MarshalJSON() ([]byte, error) {
 
 func (o RunnerHealthcheck) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.Features) {
+		toSerialize["features"] = o.Features
+	}
 	if !IsNil(o.Metrics) {
 		toSerialize["metrics"] = o.Metrics
 	}
@@ -287,10 +319,10 @@ func (o *RunnerHealthcheck) UnmarshalJSON(data []byte) (err error) {
 	err = json.Unmarshal(data, &allProperties)
 
 	if err != nil {
-		return err;
+		return err
 	}
 
-	for _, requiredProperty := range(requiredProperties) {
+	for _, requiredProperty := range requiredProperties {
 		if _, exists := allProperties[requiredProperty]; !exists {
 			return fmt.Errorf("no value given for required property %v", requiredProperty)
 		}
@@ -309,6 +341,7 @@ func (o *RunnerHealthcheck) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "features")
 		delete(additionalProperties, "metrics")
 		delete(additionalProperties, "serviceHealth")
 		delete(additionalProperties, "domain")
@@ -356,5 +389,3 @@ func (v *NullableRunnerHealthcheck) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
-
-

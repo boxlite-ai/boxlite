@@ -8,8 +8,8 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use crate::disk::constants::filenames as disk_filenames;
 use crate::litebox::LiteBox;
 use crate::litebox::archive::{
-    ArchiveManifest, MANIFEST_FILENAME, MAX_SUPPORTED_VERSION, extract_archive, move_file,
-    sha256_file,
+    ArchiveManifest, CAPABILITY_POLICY_ARCHIVE_VERSION, MANIFEST_FILENAME, MAX_SUPPORTED_VERSION,
+    extract_archive, move_file, sha256_file,
 };
 use crate::runtime::options::{BoxArchive, BoxOptions, RootfsSpec};
 use crate::runtime::rt_impl::RuntimeImpl;
@@ -42,6 +42,8 @@ pub(crate) async fn import_box(
                 BoxliteError::Internal(format!("Import extraction task panicked: {}", e))
             })??;
 
+    let options = options_from_manifest(&manifest)?;
+
     // Phase 2: Validate disks and install into a staging directory (blocking I/O).
     // The staging dir lives inside temp_dir; provision_box will rename it.
     let staging_dir = temp_dir.path().join("staging");
@@ -50,12 +52,6 @@ pub(crate) async fn import_box(
     tokio::task::spawn_blocking(move || install_disks(&temp_path, &staging_clone))
         .await
         .map_err(|e| BoxliteError::Internal(format!("Import install task panicked: {}", e)))??;
-
-    // Use full BoxOptions from v3+ manifest, or reconstruct from image for v1/v2.
-    let options = manifest.box_options.unwrap_or_else(|| BoxOptions {
-        rootfs: RootfsSpec::Image(manifest.image),
-        ..Default::default()
-    });
 
     let litebox = runtime
         .provision_box(staging_dir, name, options, BoxStatus::Stopped)
@@ -68,6 +64,26 @@ pub(crate) async fn import_box(
     );
 
     Ok(litebox)
+}
+
+/// Read the persisted configuration, falling back to the v1/v2 image field.
+fn options_from_manifest(manifest: &ArchiveManifest) -> BoxliteResult<BoxOptions> {
+    let options = manifest.box_options.clone().unwrap_or_else(|| BoxOptions {
+        rootfs: RootfsSpec::Image(manifest.image.clone()),
+        ..Default::default()
+    });
+    if manifest.version < CAPABILITY_POLICY_ARCHIVE_VERSION
+        && !options.advanced.capabilities.is_empty()
+    {
+        return Err(BoxliteError::InvalidArgument(format!(
+            "archive capability policy requires manifest version {} or newer",
+            CAPABILITY_POLICY_ARCHIVE_VERSION
+        )));
+    }
+    options.sanitize().map_err(|error| {
+        BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
+    })?;
+    Ok(options)
 }
 
 /// Extract archive, parse manifest, verify checksums.
@@ -185,6 +201,60 @@ pub(crate) fn validate_no_backing_references(disk_path: &Path) -> BoxliteResult<
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn imported_capability_policy_is_validated_before_install() {
+        let manifest = ArchiveManifest {
+            version: 4,
+            box_name: Some("untrusted".into()),
+            image: "alpine:latest".into(),
+            box_options: Some(BoxOptions {
+                advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                    capabilities: crate::runtime::advanced_options::ContainerCapabilities {
+                        drop: vec!["NET-ADMIN".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            guest_disk_checksum: String::new(),
+            container_disk_checksum: String::new(),
+            exported_at: "2026-01-01T00:00:00Z".into(),
+        };
+
+        let error = options_from_manifest(&manifest)
+            .expect_err("malformed archived capability policy must be rejected");
+        assert!(matches!(error, BoxliteError::InvalidArgument(_)));
+        assert!(error.to_string().contains("NET-ADMIN"));
+    }
+
+    #[test]
+    fn archive_v3_cannot_smuggle_a_capability_policy() {
+        let manifest = ArchiveManifest {
+            version: 3,
+            box_name: Some("mislabeled".into()),
+            image: "alpine:latest".into(),
+            box_options: Some(BoxOptions {
+                advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                    capabilities: crate::runtime::advanced_options::ContainerCapabilities {
+                        drop: vec!["ALL".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            guest_disk_checksum: String::new(),
+            container_disk_checksum: String::new(),
+            exported_at: "2026-01-01T00:00:00Z".into(),
+        };
+
+        let error = options_from_manifest(&manifest)
+            .expect_err("v3 archives must not carry v4 capability policy fields");
+        assert!(matches!(error, BoxliteError::InvalidArgument(_)));
+        assert!(error.to_string().contains("version 4"));
+    }
 
     #[test]
     fn test_validate_no_backing_references_rejects_absolute() {

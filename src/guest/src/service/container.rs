@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use crate::service::server::GuestServer;
+use boxlite_shared::errors::BoxliteError;
 use boxlite_shared::{
     container_init_response, container_start_response, rootfs_init, Container as ContainerService,
     ContainerInitError, ContainerInitRequest, ContainerInitResponse, ContainerInitSuccess,
@@ -15,7 +16,7 @@ use nix::mount::{mount, MsFlags};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
-use crate::container::{Container, UserMount};
+use crate::container::{CapabilitySet, Container, UserMount};
 use crate::layout::GuestLayout;
 use crate::storage::block_device::BlockDeviceMount;
 
@@ -148,6 +149,17 @@ impl ContainerService for GuestServer {
                 })),
             }));
         }
+
+        // Validate and resolve the privilege policy before creating directories,
+        // mounting the rootfs, or modifying its trust store. A malformed or
+        // unsupported name is caller input, not a partially initialized box.
+        let capability_policy = config
+            .advanced
+            .unwrap_or_default()
+            .capabilities
+            .unwrap_or_default();
+        let capabilities = CapabilitySet::resolve(&capability_policy.add, &capability_policy.drop)
+            .map_err(BoxliteError::into_validation_status)?;
 
         info!("🚀 Starting OCI container with received configuration");
 
@@ -295,6 +307,7 @@ impl ContainerService for GuestServer {
             &config.user,
             user_mounts,
             config.tty,
+            capabilities,
         ) {
             Ok(mut container) => {
                 // Init is created, not yet running — Init never runs it; the

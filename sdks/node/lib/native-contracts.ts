@@ -121,6 +121,15 @@ export interface JsHealthCheckOptions {
   startPeriod: number;
 }
 
+export interface JsContainerCapabilities {
+  add?: string[];
+  drop?: string[];
+}
+
+export interface JsAdvancedBoxOptions {
+  capabilities?: JsContainerCapabilities;
+}
+
 export interface JsBoxOptions {
   image?: string;
   rootfsPath?: string;
@@ -148,6 +157,7 @@ export interface JsBoxOptions {
   entrypoint?: string[];
   cmd?: string[];
   user?: string;
+  advanced?: JsAdvancedBoxOptions;
   security?: JsSecurityOptions;
   healthCheck?: JsHealthCheckOptions;
   secrets?: JsSecret[];
@@ -218,6 +228,15 @@ export interface JsBoxStateInfo {
   pid?: number;
 }
 
+export interface JsContainerCapabilitiesInfo {
+  add: string[];
+  drop: string[];
+}
+
+export interface JsBoxAdvancedInfo {
+  capabilities: JsContainerCapabilitiesInfo;
+}
+
 export interface JsBoxInfo {
   id: string;
   name?: string;
@@ -226,6 +245,7 @@ export interface JsBoxInfo {
   image: string;
   cpus: number;
   memoryMib: number;
+  advanced: JsBoxAdvancedInfo;
   autoPause: number;
   autoDelete: number;
   autoResume: boolean;

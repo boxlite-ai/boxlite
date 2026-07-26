@@ -58,7 +58,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 import boxlite
@@ -121,7 +121,40 @@ class NetworkSpec(BaseModel):
         return self
 
 
-class CreateBoxRequest(BaseModel):
+class ContainerCapabilities(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    add: list[str] = Field(default_factory=list)
+    drop: list[str] = Field(default_factory=list)
+
+    @field_validator("add", "drop")
+    @classmethod
+    def validate_capabilities(cls, capabilities: list[str]) -> list[str]:
+        for capability in capabilities:
+            if not capability.isascii():
+                raise ValueError("capability names must contain only ASCII characters")
+            normalized = capability.upper()
+            if normalized == "ALL":
+                continue
+            name = normalized.removeprefix("CAP_")
+            if (
+                not name
+                or not name[0].isalpha()
+                or not all(
+                    char.isalpha() or char.isdigit() or char == "_" for char in name
+                )
+            ):
+                raise ValueError(f"malformed Linux capability: {capability}")
+        return capabilities
+
+
+class CreateBoxAdvancedOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capabilities: ContainerCapabilities = Field(default_factory=ContainerCapabilities)
+
+
+class CreateBoxRequestBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: Optional[str] = None
@@ -143,7 +176,23 @@ class CreateBoxRequest(BaseModel):
     auto_delete: Optional[int] = Field(default=None, ge=0)
     auto_resume: Optional[bool] = None
     detach: Optional[bool] = False
+
+
+class CreateBoxRequest(CreateBoxRequestBase):
+    # Legacy reference-server compatibility only. The strict capability route
+    # intentionally excludes client-controlled sandbox policy.
     security: Optional[str] = None
+
+
+class StrictCreateBoxRequest(CreateBoxRequestBase):
+    advanced: Optional[CreateBoxAdvancedOptions] = None
+
+    @field_validator("advanced", mode="before")
+    @classmethod
+    def reject_null_advanced(cls, advanced):
+        if advanced is None:
+            raise ValueError("advanced must be an object when provided")
+        return advanced
 
 
 class StopBoxRequest(BaseModel):
@@ -215,6 +264,7 @@ def get_server_config() -> ServerConfig:
     if state.server_config is None:
         raise RuntimeError("server configuration not initialized")
     return state.server_config
+
 
 # ============================================================================
 # Error Mapping
@@ -329,6 +379,8 @@ async def require_auth(
 
 
 def box_info_to_dict(info) -> dict:
+    advanced = getattr(info, "advanced", None)
+    capabilities = getattr(advanced, "capabilities", None)
     return {
         "box_id": info.id,
         "name": info.name,
@@ -339,11 +391,17 @@ def box_info_to_dict(info) -> dict:
         "image": info.image,
         "cpus": info.cpus,
         "memory_mib": info.memory_mib,
+        "advanced": {
+            "capabilities": {
+                "add": list(getattr(capabilities, "add", [])),
+                "drop": list(getattr(capabilities, "drop", [])),
+            }
+        },
         "labels": {},
     }
 
 
-def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
+def build_box_options(req: CreateBoxRequestBase) -> boxlite.BoxOptions:
     kwargs = {}
     if req.image and not req.rootfs_path:
         kwargs["image"] = req.image
@@ -370,6 +428,16 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
         kwargs["cmd"] = req.cmd
     if req.user is not None:
         kwargs["user"] = req.user
+    advanced = getattr(req, "advanced", None)
+    if advanced is not None and (
+        advanced.capabilities.add or advanced.capabilities.drop
+    ):
+        kwargs["advanced"] = boxlite.AdvancedBoxOptions(
+            capabilities=boxlite.ContainerCapabilities(
+                add=advanced.capabilities.add,
+                drop=advanced.capabilities.drop,
+            )
+        )
     if req.secrets:
         kwargs["secrets"] = [
             boxlite.Secret(
@@ -398,14 +466,15 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
             (p.get("host_port", 0), p["guest_port"], p.get("protocol", "tcp"))
             for p in req.ports
         ]
-    if req.security:
+    security = getattr(req, "security", None)
+    if security:
         presets = {
             "development": boxlite.SecurityOptions.development,
             "standard": boxlite.SecurityOptions.standard,
             "maximum": boxlite.SecurityOptions.maximum,
         }
-        if req.security in presets:
-            kwargs["security"] = presets[req.security]()
+        if security in presets:
+            kwargs["security"] = presets[security]()
 
     return boxlite.BoxOptions(**kwargs)
 
@@ -543,6 +612,7 @@ async def get_config():
         },
         "overrides": {},
         "capabilities": {
+            "linux_capabilities_enabled": True,
             "max_cpus": 32,
             "max_memory_mib": 16384,
             "max_disk_size_gb": 100,
@@ -579,6 +649,19 @@ async def create_box(
     req: CreateBoxRequest,
     _auth: dict = Depends(require_auth),
 ):
+    return await create_box_with_options(prefix, req)
+
+
+@app.post("/v1/{prefix}/boxes/strict", status_code=201)
+async def create_box_strict(
+    prefix: str,
+    req: StrictCreateBoxRequest,
+    _auth: dict = Depends(require_auth),
+):
+    return await create_box_with_options(prefix, req)
+
+
+async def create_box_with_options(prefix: str, req: CreateBoxRequestBase):
     options = build_box_options(req)
     box_handle = await state.runtime.create(options, req.name)
     await cache_box_handle(box_handle)
@@ -591,6 +674,7 @@ async def create_box(
     )
 
 
+@app.get("/v1/{prefix}/boxes/strict")
 @app.get("/v1/{prefix}/boxes")
 async def list_boxes(
     prefix: str,
@@ -606,6 +690,7 @@ async def list_boxes(
     return {"boxes": boxes, "next_page_token": None}
 
 
+@app.get("/v1/{prefix}/boxes/{box_id}/strict")
 @app.get("/v1/{prefix}/boxes/{box_id}")
 async def get_box(
     prefix: str,

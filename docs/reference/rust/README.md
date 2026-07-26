@@ -536,7 +536,7 @@ pub struct BoxOptions {
     /// Run independently of parent process (default: false)
     pub detach: bool,
 
-    /// Advanced options for expert users (security, mount isolation). Defaults are secure.
+    /// Advanced options for expert users (capabilities, security, mount isolation).
     pub advanced: AdvancedBoxOptions,
 }
 ```
@@ -544,6 +544,7 @@ pub struct BoxOptions {
 #### Example
 
 ```rust
+use boxlite::{AdvancedBoxOptions, ContainerCapabilities};
 use boxlite::runtime::options::{BoxOptions, RootfsSpec, VolumeSpec, PortSpec};
 
 let options = BoxOptions {
@@ -567,6 +568,13 @@ let options = BoxOptions {
             ..Default::default()
         },
     ],
+    advanced: AdvancedBoxOptions {
+        capabilities: ContainerCapabilities {
+            add: vec!["SYS_ADMIN".to_string()],
+            drop: vec!["NET_RAW".to_string()],
+        },
+        ..Default::default()
+    },
     auto_remove: false,  // Keep box after stop
     detach: true,        // Run independently
     ..Default::default()
@@ -579,6 +587,7 @@ Advanced options for expert users. Most users can ignore this — defaults prior
 
 ```rust
 pub struct AdvancedBoxOptions {
+    pub capabilities: ContainerCapabilities,
     pub security: SecurityOptions,
     pub isolate_mounts: bool,
 }
@@ -586,6 +595,7 @@ pub struct AdvancedBoxOptions {
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `capabilities` | `ContainerCapabilities` | Empty add/drop lists | Linux capability delta policy for init and exec processes |
 | `security` | `SecurityOptions` | Compatibility defaults (jailer `true` on macOS; `false` on Linux/others) | Security isolation options (jailer, seccomp, namespaces) |
 | `isolate_mounts` | `bool` | `false` | Enable bind mount isolation (requires CAP_SYS_ADMIN on Linux) |
 

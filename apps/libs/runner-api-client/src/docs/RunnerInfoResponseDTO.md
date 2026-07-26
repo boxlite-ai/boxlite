@@ -6,6 +6,7 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **appVersion** | **string** |  | [optional] [default to undefined]
+**features** | **Array&lt;string&gt;** |  | [optional] [default to undefined]
 **metrics** | [**RunnerMetrics**](RunnerMetrics.md) |  | [optional] [default to undefined]
 **serviceHealth** | [**Array&lt;RunnerServiceInfo&gt;**](RunnerServiceInfo.md) |  | [optional] [default to undefined]
 
@@ -16,6 +17,7 @@ import { RunnerInfoResponseDTO } from './api';
 
 const instance: RunnerInfoResponseDTO = {
     appVersion,
+    features,
     metrics,
     serviceHealth,
 };

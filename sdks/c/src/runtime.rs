@@ -616,6 +616,16 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::CBoxInfoList>(result, user_data, cb),
+            RuntimeEvent::InfoV2 {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CBoxInfoV2>(result, user_data, cb),
+            RuntimeEvent::InfoListV2 {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CBoxInfoListV2>(result, user_data, cb),
             RuntimeEvent::Metrics {
                 cb,
                 user_data,

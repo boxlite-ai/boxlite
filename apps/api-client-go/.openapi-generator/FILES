@@ -54,6 +54,7 @@ model_api_key_list.go
 model_api_key_response.go
 model_audit_log.go
 model_box.go
+model_box_advanced_options.go
 model_box_class.go
 model_box_desired_state.go
 model_box_labels.go
@@ -77,6 +78,7 @@ model_job.go
 model_job_status.go
 model_job_type.go
 model_log_entry.go
+model_linux_capabilities.go
 model_metric_data_point.go
 model_metric_series.go
 model_metrics_response.go

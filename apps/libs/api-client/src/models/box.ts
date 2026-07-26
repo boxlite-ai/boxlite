@@ -12,144 +12,148 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { BoxDesiredState } from './box-desired-state';
+import type { BoxDesiredState } from './box-desired-state'
 // May contain unused imports in some cases
 // @ts-ignore
-import type { BoxState } from './box-state';
+import type { BoxState } from './box-state'
 // May contain unused imports in some cases
 // @ts-ignore
-import type { BoxVolume } from './box-volume';
+import type { BoxVolume } from './box-volume'
+// May contain unused imports in some cases
+// @ts-ignore
+import type { BoxAdvancedOptions } from './box-advanced-options'
 
 export interface Box {
-    /**
-     * The public 12-character Box ID
-     */
-    'id': string;
-    /**
-     * The organization ID of the box
-     */
-    'organizationId': string;
-    /**
-     * The name of the box
-     */
-    'name': string;
-    /**
-     * The user associated with the project
-     */
-    'user': string;
-    /**
-     * Environment variables for the box
-     */
-    'env': { [key: string]: string; };
-    /**
-     * Labels for the box
-     */
-    'labels': { [key: string]: string; };
-    /**
-     * Whether the box http preview is public
-     */
-    'public': boolean;
-    /**
-     * Whether to block all network access for the box
-     */
-    'networkBlockAll': boolean;
-    /**
-     * Comma-separated list of allowed CIDR network addresses for the box
-     */
-    'networkAllowList'?: string;
-    /**
-     * The target environment for the box
-     */
-    'target': string;
-    /**
-     * The image used for the box
-     */
-    'image'?: string;
-    /**
-     * The CPU quota for the box
-     */
-    'cpu': number;
-    /**
-     * The GPU quota for the box
-     */
-    'gpu': number;
-    /**
-     * The memory quota for the box
-     */
-    'memory': number;
-    /**
-     * The disk quota for the box
-     */
-    'disk': number;
-    /**
-     * The state of the box
-     */
-    'state'?: BoxState;
-    /**
-     * The desired state of the box
-     */
-    'desiredState'?: BoxDesiredState;
-    /**
-     * The error reason of the box
-     */
-    'errorReason'?: string;
-    /**
-     * Whether the box error is recoverable.
-     */
-    'recoverable'?: boolean;
-    /**
-     * Auto-pause interval in seconds (0 means disabled)
-     */
-    'autoPause'?: number;
-    /**
-     * Auto-delete interval in seconds (0 means disabled)
-     */
-    'autoDelete'?: number;
-    /**
-     * Whether the box should be automatically resumed on proxy access
-     */
-    'autoResume'?: boolean;
-    /**
-     * Array of volumes attached to the box
-     */
-    'volumes'?: Array<BoxVolume>;
-    /**
-     * The creation timestamp of the box
-     */
-    'createdAt'?: string;
-    /**
-     * The last update timestamp of the box
-     */
-    'updatedAt'?: string;
-    /**
-     * The class of the box
-     * @deprecated
-     */
-    'class'?: BoxClassEnum;
-    /**
-     * The version of the daemon running in the box
-     */
-    'daemonVersion'?: string;
-    /**
-     * The runner ID of the box
-     */
-    'runnerId'?: string;
-    /**
-     * The toolbox proxy URL for the box
-     */
-    'toolboxProxyUrl': string;
+  /**
+   * The public 12-character Box ID
+   */
+  id: string
+  /**
+   * The organization ID of the box
+   */
+  organizationId: string
+  /**
+   * The name of the box
+   */
+  name: string
+  /**
+   * The user associated with the project
+   */
+  user: string
+  /**
+   * Environment variables for the box
+   */
+  env: { [key: string]: string }
+  /**
+   * Advanced box configuration
+   */
+  advanced: BoxAdvancedOptions
+  /**
+   * Labels for the box
+   */
+  labels: { [key: string]: string }
+  /**
+   * Whether the box http preview is public
+   */
+  public: boolean
+  /**
+   * Whether to block all network access for the box
+   */
+  networkBlockAll: boolean
+  /**
+   * Comma-separated list of allowed CIDR network addresses for the box
+   */
+  networkAllowList?: string
+  /**
+   * The target environment for the box
+   */
+  target: string
+  /**
+   * The image used for the box
+   */
+  image?: string
+  /**
+   * The CPU quota for the box
+   */
+  cpu: number
+  /**
+   * The GPU quota for the box
+   */
+  gpu: number
+  /**
+   * The memory quota for the box
+   */
+  memory: number
+  /**
+   * The disk quota for the box
+   */
+  disk: number
+  /**
+   * The state of the box
+   */
+  state?: BoxState
+  /**
+   * The desired state of the box
+   */
+  desiredState?: BoxDesiredState
+  /**
+   * The error reason of the box
+   */
+  errorReason?: string
+  /**
+   * Whether the box error is recoverable.
+   */
+  recoverable?: boolean
+  /**
+   * Auto-pause interval in seconds (0 means disabled)
+   */
+  autoPause?: number
+  /**
+   * Auto-delete interval in seconds (0 means disabled)
+   */
+  autoDelete?: number
+  /**
+   * Whether the box should be automatically resumed on proxy access
+   */
+  autoResume?: boolean
+  /**
+   * Array of volumes attached to the box
+   */
+  volumes?: Array<BoxVolume>
+  /**
+   * The creation timestamp of the box
+   */
+  createdAt?: string
+  /**
+   * The last update timestamp of the box
+   */
+  updatedAt?: string
+  /**
+   * The class of the box
+   * @deprecated
+   */
+  class?: BoxClassEnum
+  /**
+   * The version of the daemon running in the box
+   */
+  daemonVersion?: string
+  /**
+   * The runner ID of the box
+   */
+  runnerId?: string
+  /**
+   * The toolbox proxy URL for the box
+   */
+  toolboxProxyUrl: string
 }
 
 export const BoxClassEnum = {
-    SMALL: 'small',
-    MEDIUM: 'medium',
-    LARGE: 'large',
-    UNKNOWN_DEFAULT_OPEN_API: '11184809',
-} as const;
+  SMALL: 'small',
+  MEDIUM: 'medium',
+  LARGE: 'large',
+  UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const
 
-export type BoxClassEnum = typeof BoxClassEnum[keyof typeof BoxClassEnum];
-
-
+export type BoxClassEnum = (typeof BoxClassEnum)[keyof typeof BoxClassEnum]

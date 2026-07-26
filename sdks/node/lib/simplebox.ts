@@ -262,8 +262,22 @@ export interface SimpleBoxOptions {
    */
   user?: string;
 
+  /** Expert-only container process options. */
+  advanced?: AdvancedBoxOptions;
+
   /** Security isolation options for the box. */
   security?: SecurityOptions;
+}
+
+export interface ContainerCapabilities {
+  /** Linux capabilities added to BoxLite's Docker-compatible baseline. */
+  add?: string[];
+  /** Linux capabilities removed from the resulting capability set. */
+  drop?: string[];
+}
+
+export interface AdvancedBoxOptions {
+  capabilities?: ContainerCapabilities;
 }
 
 /** Box-scoped network operations for a SimpleBox. */
@@ -405,6 +419,16 @@ export class SimpleBox {
       entrypoint: options.entrypoint,
       cmd: options.cmd,
       user: options.user,
+      advanced: options.advanced
+        ? {
+            capabilities: options.advanced.capabilities
+              ? {
+                  add: [...(options.advanced.capabilities.add ?? [])],
+                  drop: [...(options.advanced.capabilities.drop ?? [])],
+                }
+              : undefined,
+          }
+        : undefined,
       security,
       secrets: options.secrets,
     };

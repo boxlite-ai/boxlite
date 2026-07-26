@@ -6,6 +6,8 @@ The type of the job
 
 * `CREATE_BOX` (value: `'CREATE_BOX'`)
 
+* `CREATE_BOX_WITH_CAPABILITIES_V2` (value: `'CREATE_BOX_WITH_CAPABILITIES_V2'`)
+
 * `START_BOX` (value: `'START_BOX'`)
 
 * `STOP_BOX` (value: `'STOP_BOX'`)
@@ -19,6 +21,8 @@ The type of the job
 * `PULL_ARTIFACT` (value: `'PULL_ARTIFACT'`)
 
 * `RECOVER_BOX` (value: `'RECOVER_BOX'`)
+
+* `RECOVER_BOX_WITH_CAPABILITIES_V2` (value: `'RECOVER_BOX_WITH_CAPABILITIES_V2'`)
 
 * `INSPECT_ARTIFACT_IN_REGISTRY` (value: `'INSPECT_ARTIFACT_IN_REGISTRY'`)
 

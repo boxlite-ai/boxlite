@@ -77,6 +77,8 @@ mod stdio;
 pub(crate) mod zygote;
 
 #[cfg(target_os = "linux")]
+pub(crate) use capabilities::CapabilitySet;
+#[cfg(target_os = "linux")]
 pub(crate) use command::SpawnResult;
 #[cfg(target_os = "linux")]
 pub use lifecycle::Container;

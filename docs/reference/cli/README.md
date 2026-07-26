@@ -246,7 +246,7 @@ The box's lifetime is that command's lifetime. When it exits, the box stops and
 takes the command's exit code; `boxlite ps` shows it stopped and
 `boxlite inspect -f '{{.State.ExitCode}}'` gives the code.
 
-**Options:** Uses [`ProcessFlags`](#processflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags), plus:
+**Options:** Uses [`ProcessFlags`](#processflags) + [`CapabilityFlags`](#capabilityflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags), plus:
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -266,6 +266,7 @@ boxlite run -it --rm alpine:latest /bin/sh
 boxlite run -d --name web -p 8080:80 nginx:alpine
 boxlite run -v $(pwd):/work -w /work alpine:latest ls -la
 boxlite run --cpus 4 --memory 4096 python:slim python -c "print(2+2)"
+boxlite run --cap-add SYS_ADMIN --cap-drop NET_RAW alpine:latest sh
 boxlite run --rootfs /path/to/rootfs /bin/sh
 ```
 
@@ -321,7 +322,7 @@ implicitly, because starting it runs that command. Start it deliberately with
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
 | `--workdir PATH` | `-w` | Working directory inside the box |
 
-Also uses [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
+Also uses [`CapabilityFlags`](#capabilityflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
 
 > Note: `create` accepts `--env` and `--workdir` directly rather than via `ProcessFlags` (no `-i`/`-t`/`-u` here, since no command is being executed).
 
@@ -330,6 +331,7 @@ Also uses [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + 
 ```bash
 boxlite create --name mybox alpine:latest
 boxlite create -p 8080:80 -v /data:/app/data --name web nginx:alpine
+boxlite create --cap-drop ALL --cap-add NET_BIND_SERVICE --name web nginx:alpine
 boxlite create --rootfs /path/to/rootfs --name local-rootfs
 ```
 
@@ -612,6 +614,21 @@ Used by `run` and `exec` (defined at `src/cli/src/cli.rs:208-281`).
 | `--user NAME[:GROUP]` | `-u` | Run as `name`/`uid`[:`group`/`gid`] |
 
 `--tty` implies `--interactive` when stdin is a TTY. `--tty` without a TTY-attached stdin is a hard error.
+
+### `CapabilityFlags`
+
+Used by `run` and `create` to adjust the Linux capability set inherited by the
+container's init and every later `exec` process.
+
+| Flag | Description |
+|------|-------------|
+| `--cap-add CAPABILITY` | Add a capability; repeatable |
+| `--cap-drop CAPABILITY` | Drop a capability; repeatable |
+
+Names are case-insensitive and may include the `CAP_` prefix. `ALL` is
+supported. With neither flag, BoxLite keeps its Docker-compatible 14-capability
+baseline. `--cap-drop ALL --cap-add NET_BIND_SERVICE` creates a minimal set
+containing only `NET_BIND_SERVICE`.
 
 ### `ResourceFlags`
 

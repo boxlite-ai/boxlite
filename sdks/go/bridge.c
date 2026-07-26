@@ -27,8 +27,8 @@ extern void goBoxliteOnVolume(CVolumeInfo *info, CBoxliteError *err, void *ud);
 extern void goBoxliteOnVolumeList(CVolumeInfoList *list, CBoxliteError *err, void *ud);
 extern void goBoxliteOnVolumeRemove(CBoxliteError *err, void *ud);
 
-extern void goBoxliteOnInfo(CBoxInfo *info, CBoxliteError *err, void *ud);
-extern void goBoxliteOnInfoList(CBoxInfoList *list, CBoxliteError *err, void *ud);
+extern void goBoxliteOnInfoV2(CBoxInfoV2 *info, CBoxliteError *err, void *ud);
+extern void goBoxliteOnInfoListV2(CBoxInfoListV2 *list, CBoxliteError *err, void *ud);
 
 extern void goBoxliteOnBoxMetrics(CBoxMetrics *m, CBoxliteError *err, void *ud);
 extern void goBoxliteOnRuntimeMetrics(CRuntimeMetrics *m, CBoxliteError *err, void *ud);
@@ -62,8 +62,8 @@ CBoxVolumeGetCb cbVolumeGet(void) { return (CBoxVolumeGetCb)goBoxliteOnVolume; }
 CBoxVolumeListCb cbVolumeList(void) { return (CBoxVolumeListCb)goBoxliteOnVolumeList; }
 CBoxVolumeRemoveCb cbVolumeRemove(void) { return (CBoxVolumeRemoveCb)goBoxliteOnVolumeRemove; }
 
-CBoxInfoCb cbInfo(void) { return (CBoxInfoCb)goBoxliteOnInfo; }
-CBoxInfoListCb cbInfoList(void) { return (CBoxInfoListCb)goBoxliteOnInfoList; }
+CBoxInfoV2Cb cbInfoV2(void) { return (CBoxInfoV2Cb)goBoxliteOnInfoV2; }
+CBoxInfoListV2Cb cbInfoListV2(void) { return (CBoxInfoListV2Cb)goBoxliteOnInfoListV2; }
 
 CBoxMetricsCb cbBoxMetrics(void) { return (CBoxMetricsCb)goBoxliteOnBoxMetrics; }
 CRuntimeMetricsCb cbRuntimeMetrics(void) { return (CRuntimeMetricsCb)goBoxliteOnRuntimeMetrics; }

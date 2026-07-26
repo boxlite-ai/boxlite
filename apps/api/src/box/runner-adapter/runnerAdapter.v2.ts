@@ -13,6 +13,7 @@ import { Box } from '../entities/box.entity'
 import { Job } from '../entities/job.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { JobType } from '../enums/job-type.enum'
+import { hasCapabilityPolicy, normalizeBoxAdvancedOptions } from '../common/box-advanced-options'
 import { JobStatus } from '../enums/job-status.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
@@ -101,6 +102,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     // Map job types to transitional states
     switch (job.type) {
       case JobType.CREATE_BOX:
+      case JobType.CREATE_BOX_WITH_CAPABILITIES_V2:
         return job.status === JobStatus.COMPLETED ? BoxState.STARTED : BoxState.CREATING
       case JobType.START_BOX:
         return job.status === JobStatus.COMPLETED ? BoxState.STARTED : BoxState.STARTING
@@ -141,9 +143,14 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       regionId: box.region,
     }
 
-    await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
+    const advanced = normalizeBoxAdvancedOptions(box.advanced)
+    const hasCustomCapabilities = hasCapabilityPolicy(advanced)
+    const jobType = hasCustomCapabilities ? JobType.CREATE_BOX_WITH_CAPABILITIES_V2 : JobType.CREATE_BOX
+    const jobPayload = hasCustomCapabilities ? { ...payload, advanced } : payload
 
-    this.logger.debug(`Created CREATE_BOX job for box ${box.id} on runner ${this.runner.id}`)
+    await this.jobService.createJob(null, jobType, this.runner.id, ResourceType.BOX, box.id, jobPayload)
+
+    this.logger.debug(`Created ${jobType} job for box ${box.id} on runner ${this.runner.id}`)
 
     //  Daemon version is set in the job result metadata once the runner completes the job.
     return undefined
@@ -196,9 +203,14 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       networkAllowList: box.networkAllowList,
       errorReason: box.errorReason,
     }
-    await this.jobService.createJob(null, JobType.RECOVER_BOX, this.runner.id, ResourceType.BOX, box.id, recoverBoxDTO)
+    const advanced = normalizeBoxAdvancedOptions(box.advanced)
+    const hasCustomCapabilities = hasCapabilityPolicy(advanced)
+    const jobType = hasCustomCapabilities ? JobType.RECOVER_BOX_WITH_CAPABILITIES_V2 : JobType.RECOVER_BOX
+    const jobPayload = hasCustomCapabilities ? { ...recoverBoxDTO, advanced } : recoverBoxDTO
 
-    this.logger.debug(`Created RECOVER_BOX job for box ${box.id} on runner ${this.runner.id}`)
+    await this.jobService.createJob(null, jobType, this.runner.id, ResourceType.BOX, box.id, jobPayload)
+
+    this.logger.debug(`Created ${jobType} job for box ${box.id} on runner ${this.runner.id}`)
   }
 
   async updateNetworkSettings(
