@@ -11,9 +11,24 @@ import { useApi } from '@/hooks/useApi'
 import { useOrganizationRoles } from '@/hooks/useOrganizationRoles'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
-import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
+import { CreateOrganizationRolePermissionsEnum, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import React, { useState } from 'react'
 import { toast } from 'sonner'
+
+type AssignableOrganizationRolePermission = Exclude<
+  CreateOrganizationRolePermissionsEnum,
+  typeof CreateOrganizationRolePermissionsEnum.UNKNOWN_DEFAULT_OPEN_API
+>
+
+const assignableOrganizationRolePermissions = new Set<string>(
+  Object.values(CreateOrganizationRolePermissionsEnum).filter(
+    (permission) => permission !== CreateOrganizationRolePermissionsEnum.UNKNOWN_DEFAULT_OPEN_API,
+  ),
+)
+
+const isAssignableOrganizationRolePermission = (
+  permission: OrganizationRolePermissionsEnum,
+): permission is AssignableOrganizationRolePermission => assignableOrganizationRolePermissions.has(permission)
 
 const OrganizationRoles: React.FC = () => {
   const { organizationsApi } = useApi()
@@ -35,7 +50,7 @@ const OrganizationRoles: React.FC = () => {
       await organizationsApi.createOrganizationRole(selectedOrganization.id, {
         name: name.trim(),
         description: description?.trim(),
-        permissions,
+        permissions: permissions.filter(isAssignableOrganizationRolePermission),
       })
       toast.success('Role created successfully')
       await refreshRoles(false)
@@ -60,7 +75,7 @@ const OrganizationRoles: React.FC = () => {
       await organizationsApi.updateOrganizationRole(selectedOrganization.id, roleId, {
         name: name.trim(),
         description: description?.trim(),
-        permissions,
+        permissions: permissions.filter(isAssignableOrganizationRolePermission),
       })
       toast.success('Role updated successfully')
       await refreshRoles(false)

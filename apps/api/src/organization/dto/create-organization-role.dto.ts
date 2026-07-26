@@ -5,8 +5,11 @@
  */
 
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
-import { ArrayNotEmpty, IsArray, IsEnum, IsString } from 'class-validator'
-import { OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
+import { ArrayNotEmpty, IsArray, IsIn, IsString } from 'class-validator'
+import {
+  ASSIGNABLE_ORGANIZATION_RESOURCE_PERMISSIONS,
+  OrganizationResourcePermission,
+} from '../enums/organization-resource-permission.enum'
 
 @ApiSchema({ name: 'CreateOrganizationRole' })
 export class CreateOrganizationRoleDto {
@@ -27,12 +30,12 @@ export class CreateOrganizationRoleDto {
 
   @ApiProperty({
     description: 'The list of permissions assigned to the role',
-    enum: OrganizationResourcePermission,
+    enum: ASSIGNABLE_ORGANIZATION_RESOURCE_PERMISSIONS,
     isArray: true,
     required: true,
   })
   @IsArray()
   @ArrayNotEmpty()
-  @IsEnum(OrganizationResourcePermission, { each: true })
+  @IsIn(ASSIGNABLE_ORGANIZATION_RESOURCE_PERMISSIONS, { each: true })
   permissions: OrganizationResourcePermission[]
 }

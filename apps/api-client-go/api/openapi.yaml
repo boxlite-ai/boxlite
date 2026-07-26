@@ -5249,8 +5249,8 @@ components:
       example:
         name: My API Key
         permissions:
-        - write:registries
-        - write:registries
+        - write:boxes
+        - write:boxes
         expiresAt: 2025-06-09T12:00:00Z
       properties:
         name:
@@ -5262,21 +5262,8 @@ components:
             to the API key
           items:
             enum:
-            - write:registries
-            - delete:registries
-            - write:templates
-            - delete:templates
             - write:boxes
             - delete:boxes
-            - read:volumes
-            - write:volumes
-            - delete:volumes
-            - write:regions
-            - delete:regions
-            - read:runners
-            - write:runners
-            - delete:runners
-            - read:audit_logs
             type: string
           type: array
         expiresAt:
@@ -5810,8 +5797,8 @@ components:
         name: Maintainer
         description: Can manage all resources
         permissions:
-        - write:registries
-        - write:registries
+        - write:boxes
+        - write:boxes
       properties:
         name:
           description: The name of the role
@@ -5825,21 +5812,8 @@ components:
           description: The list of permissions assigned to the role
           items:
             enum:
-            - write:registries
-            - delete:registries
-            - write:templates
-            - delete:templates
             - write:boxes
             - delete:boxes
-            - read:volumes
-            - write:volumes
-            - delete:volumes
-            - write:regions
-            - delete:regions
-            - read:runners
-            - write:runners
-            - delete:runners
-            - read:audit_logs
             type: string
           type: array
       required:
@@ -5852,8 +5826,8 @@ components:
         name: Maintainer
         description: Can manage all resources
         permissions:
-        - write:registries
-        - write:registries
+        - write:boxes
+        - write:boxes
       properties:
         name:
           description: The name of the role
@@ -5867,21 +5841,8 @@ components:
           description: The list of permissions assigned to the role
           items:
             enum:
-            - write:registries
-            - delete:registries
-            - write:templates
-            - delete:templates
             - write:boxes
             - delete:boxes
-            - read:volumes
-            - write:volumes
-            - delete:volumes
-            - write:regions
-            - delete:regions
-            - read:runners
-            - write:runners
-            - delete:runners
-            - read:audit_logs
             type: string
           type: array
       required:

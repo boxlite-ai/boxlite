@@ -12,23 +12,4 @@ export const ORGANIZATION_ROLE_PERMISSIONS_GROUPS: { name: string; permissions: 
       name: 'Boxes',
       permissions: [OrganizationRolePermissionsEnum.WRITE_BOXES, OrganizationRolePermissionsEnum.DELETE_BOXES],
     },
-    {
-      name: 'Images',
-      permissions: [OrganizationRolePermissionsEnum.WRITE_TEMPLATES, OrganizationRolePermissionsEnum.DELETE_TEMPLATES],
-    },
-    {
-      name: 'Registries',
-      permissions: [
-        OrganizationRolePermissionsEnum.WRITE_REGISTRIES,
-        OrganizationRolePermissionsEnum.DELETE_REGISTRIES,
-      ],
-    },
-    {
-      name: 'Volumes',
-      permissions: [
-        OrganizationRolePermissionsEnum.READ_VOLUMES,
-        OrganizationRolePermissionsEnum.WRITE_VOLUMES,
-        OrganizationRolePermissionsEnum.DELETE_VOLUMES,
-      ],
-    },
   ]

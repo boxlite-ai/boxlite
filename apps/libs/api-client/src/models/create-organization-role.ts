@@ -30,24 +30,9 @@ export interface CreateOrganizationRole {
 }
 
 export const CreateOrganizationRolePermissionsEnum = {
-    WRITE_REGISTRIES: 'write:registries',
-    DELETE_REGISTRIES: 'delete:registries',
-    WRITE_TEMPLATES: 'write:templates',
-    DELETE_TEMPLATES: 'delete:templates',
     WRITE_BOXES: 'write:boxes',
     DELETE_BOXES: 'delete:boxes',
-    READ_VOLUMES: 'read:volumes',
-    WRITE_VOLUMES: 'write:volumes',
-    DELETE_VOLUMES: 'delete:volumes',
-    WRITE_REGIONS: 'write:regions',
-    DELETE_REGIONS: 'delete:regions',
-    READ_RUNNERS: 'read:runners',
-    WRITE_RUNNERS: 'write:runners',
-    DELETE_RUNNERS: 'delete:runners',
-    READ_AUDIT_LOGS: 'read:audit_logs',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type CreateOrganizationRolePermissionsEnum = typeof CreateOrganizationRolePermissionsEnum[keyof typeof CreateOrganizationRolePermissionsEnum];
-
-
