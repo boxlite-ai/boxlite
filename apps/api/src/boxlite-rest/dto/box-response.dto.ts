@@ -38,12 +38,6 @@ export class BoxResponseDto {
   })
   updated_at: string
 
-  @ApiPropertyOptional({
-    description: 'Runtime process ID when available',
-    example: 12345,
-  })
-  pid?: number
-
   @ApiProperty({
     description: 'Approved image used for the box',
     example: 'boxlite/base',

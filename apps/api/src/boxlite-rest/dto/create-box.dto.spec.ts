@@ -40,6 +40,23 @@ describe('CreateBoxDto resource minimums', () => {
   })
 })
 
+describe('CreateBoxDto environment validation', () => {
+  it('accepts a string-to-string environment map', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { env: { MODE: 'worker', RETRIES: '3' } }))
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it.each([{ RETRIES: 3 }, { DEBUG: true }, { EMPTY: null }])(
+    'rejects non-string environment values in %j',
+    async (env) => {
+      const errors = await validate(plainToInstance(CreateBoxDto, { env }))
+
+      expect(errors.find((error) => error.property === 'env')).toBeDefined()
+    },
+  )
+})
+
 describe('CreateBoxDto lifecycle policy', () => {
   it('accepts second-based lifecycle fields', async () => {
     const errors = await validate(

@@ -17,6 +17,7 @@ import {
   UseGuards,
   Logger,
   Res,
+  ValidationPipe,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiResponse, ApiExcludeController } from '@nestjs/swagger'
 import { Response } from 'express'
@@ -72,10 +73,6 @@ export class BoxliteBoxController {
         cpus: req.body?.cpus,
         memory_mib: req.body?.memory_mib,
         disk_size_gb: req.body?.disk_size_gb,
-        working_dir: req.body?.working_dir,
-        entrypoint: req.body?.entrypoint,
-        cmd: req.body?.cmd,
-        detach: req.body?.detach,
         auto_pause: req.body?.auto_pause,
         auto_delete: req.body?.auto_delete,
         auto_resume: req.body?.auto_resume,
@@ -84,7 +81,14 @@ export class BoxliteBoxController {
   })
   async createBox(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Body() dto: CreateBoxDto,
+    @Body(
+      new ValidationPipe({
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
+    )
+    dto: CreateBoxDto,
   ): Promise<BoxResponseDto> {
     const organization = authContext.organization
     const createBoxDto = createBoxToCreateBox(dto)
