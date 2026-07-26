@@ -11,6 +11,7 @@ use tracing_subscriber::EnvFilter;
 static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
 pub mod event_listener;
+pub mod experimental;
 pub mod jailer;
 pub mod litebox;
 pub mod lock;
@@ -52,8 +53,7 @@ pub use runtime::advanced_options::{
 };
 pub use runtime::options::{
     BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, ImageRegistry,
-    ImageRegistryAuth, KernelFormat, KernelOptions, NetworkSpec, RegistryTransport, RootfsSpec,
-    Secret, SnapshotOptions,
+    ImageRegistryAuth, NetworkSpec, RegistryTransport, RootfsSpec, Secret, SnapshotOptions,
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -14,9 +14,9 @@ pub mod guest_check;
 pub mod krun;
 pub mod registry;
 
+use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
 use crate::jailer::SecurityOptions;
 use crate::rootfs::guest::GuestRootfs;
-use crate::runtime::options::KernelFormat;
 pub use engine::{Vmm, VmmConfig, VmmInstance};
 pub use exit_info::ExitInfo;
 pub use factory::VmmFactory;
@@ -47,7 +47,7 @@ impl PreparedKernel {
             ));
         }
 
-        let staged = crate::runtime::options::KernelOptions {
+        let staged = KernelOptions {
             path: path.clone(),
             format,
             initramfs: initramfs.clone(),

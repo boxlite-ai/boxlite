@@ -3,6 +3,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
+use crate::experimental::ExperimentalFeatures;
 use crate::litebox::LiteBox;
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
@@ -87,15 +88,29 @@ impl BoxliteRuntime {
     /// - Image API initialization fails
     pub fn new(options: BoxliteOptions) -> BoxliteResult<Self> {
         let local = LocalRuntime(RuntimeImpl::new(options)?);
+        Ok(Self::from_local(local))
+    }
+
+    pub(crate) fn new_with_experimental_features(
+        options: BoxliteOptions,
+        features: ExperimentalFeatures,
+    ) -> BoxliteResult<Self> {
+        let local = LocalRuntime(RuntimeImpl::new_with_experimental_features(
+            options, features,
+        )?);
+        Ok(Self::from_local(local))
+    }
+
+    fn from_local(local: LocalRuntime) -> Self {
         let backend_arc = Arc::new(local);
         let image_backend = Arc::clone(&backend_arc) as Arc<dyn ImageBackend>;
         let volume_backend = Arc::clone(&backend_arc) as Arc<dyn VolumeBackend>;
-        Ok(Self {
+        Self {
             backend: backend_arc,
             image_backend: Some(image_backend),
             volume_backend: Some(volume_backend),
             auth_backend: None,
-        })
+        }
     }
 
     /// Create a REST-backed runtime connecting to a remote BoxLite API server.

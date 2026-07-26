@@ -1,9 +1,9 @@
 //! Krun - VMM implementation using libkrun.
 
 use super::context::KrunContext;
+use crate::experimental::custom_kernel::KernelFormat;
 use crate::runtime::constants::network;
 use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
-use crate::runtime::options::KernelFormat;
 use crate::vmm::{InstanceSpec, Vmm, VmmConfig, VmmInstance, engine::VmmInstanceImpl};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 

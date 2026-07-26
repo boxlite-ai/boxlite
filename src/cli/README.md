@@ -69,29 +69,6 @@ cargo build --release -p boxlite-cli
 # Binary: target/release/boxlite
 ```
 
-### Custom guest kernel
-
-Use `--kernel` to boot a Linux kernel image directly. BoxLite detects the
-image format by default and can also load an initramfs and replace the kernel
-command line. Boot files are copied into the box before the shim starts, so
-the original files do not need to be exposed through the sandbox.
-
-```bash
-boxlite run \
-  --kernel /absolute/path/to/vmlinux \
-  --kernel-format elf \
-  --initramfs /absolute/path/to/initramfs.img \
-  --kernel-args "console=ttyS0 panic=-1" \
-  alpine:latest
-```
-
-`--kernel-format` defaults to `auto`. Supported explicit values are `raw`,
-`elf`, `pe-gz`, `image-bz2`, `image-gz`, and `image-zstd`; availability is
-architecture-dependent. If `--kernel` is omitted, BoxLite uses its bundled
-guest kernel. Custom kernels are supported by the local runtime only. Run
-`boxlite run --help` or `boxlite create --help` to see these flags grouped
-under **Advanced boot options**.
-
 ### System Requirements
 
 | Platform       | Architecture          | Status           |

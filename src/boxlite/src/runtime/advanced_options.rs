@@ -601,8 +601,11 @@ pub struct AdvancedBoxOptions {
     #[serde(default)]
     pub health_check: Option<HealthCheckOptions>,
 
-    /// Direct Linux boot configuration. When unset, BoxLite uses its bundled
-    /// kernel and default boot command line.
+    /// Release-candidate direct Linux boot configuration.
+    ///
+    /// The runtime must explicitly enable
+    /// [`ExperimentalFeature::CustomKernel`](crate::experimental::ExperimentalFeature::CustomKernel).
+    #[doc(hidden)]
     #[serde(default)]
-    pub kernel: Option<crate::runtime::options::KernelOptions>,
+    pub kernel: Option<crate::experimental::custom_kernel::KernelOptions>,
 }

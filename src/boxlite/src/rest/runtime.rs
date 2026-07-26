@@ -287,7 +287,9 @@ mod tests {
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
         let opts = BoxOptions {
             advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
-                kernel: Some(crate::runtime::options::KernelOptions::new(kernel)),
+                kernel: Some(crate::experimental::custom_kernel::KernelOptions::new(
+                    kernel,
+                )),
                 ..Default::default()
             },
             ..Default::default()

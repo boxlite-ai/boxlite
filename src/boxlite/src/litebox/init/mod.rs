@@ -158,6 +158,14 @@ pub(crate) struct BoxBuilder {
     state: BoxState,
 }
 
+fn validate_persisted_options(
+    features: &crate::experimental::ExperimentalFeatures,
+    options: &crate::BoxOptions,
+) -> BoxliteResult<()> {
+    features.require_for_options(options)?;
+    options.sanitize_persisted()
+}
+
 impl BoxBuilder {
     /// Create a new builder from config and state.
     ///
@@ -179,7 +187,7 @@ impl BoxBuilder {
         // validate only their stored shape here; the boot-assets task reopens a
         // source only when no complete box-scoped generation exists.
         let options = &config.options;
-        options.sanitize_persisted()?;
+        validate_persisted_options(&runtime.experimental_features, options)?;
 
         Ok(Self {
             runtime,
@@ -308,6 +316,8 @@ impl BoxBuilder {
 #[cfg(test)]
 mod plan_tests {
     use super::*;
+    use crate::experimental::ExperimentalFeatures;
+    use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
     use crate::pipeline::ExecutionMode;
 
     fn plan_shape(status: BoxStatus) -> Vec<(ExecutionMode, Vec<String>)> {
@@ -369,5 +379,29 @@ mod plan_tests {
                 (ExecutionMode::Sequential, vec!["guest_connect".to_string()],),
             ]
         );
+    }
+
+    #[test]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    fn persisted_custom_kernel_uses_injected_feature_state() {
+        #[cfg(target_arch = "x86_64")]
+        let format = KernelFormat::Elf;
+        #[cfg(target_arch = "aarch64")]
+        let format = KernelFormat::PeGz;
+
+        let mut options = crate::BoxOptions::default();
+        options.advanced.kernel =
+            Some(KernelOptions::new("/source/no-longer-needed").with_format(format));
+
+        let error = validate_persisted_options(&ExperimentalFeatures::default(), &options)
+            .expect_err("persisted custom kernel must be disabled by default");
+        assert!(
+            error
+                .to_string()
+                .contains("ExperimentalFeature::CustomKernel")
+        );
+
+        let enabled = ExperimentalFeatures::parse("custom-kernel").unwrap();
+        validate_persisted_options(&enabled, &options).unwrap();
     }
 }

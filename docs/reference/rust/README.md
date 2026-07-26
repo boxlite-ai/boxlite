@@ -499,23 +499,6 @@ impl ExecResult {
 Options for constructing a box.
 
 ```rust
-pub enum KernelFormat {
-    Auto,
-    Raw,
-    Elf,
-    PeGz,
-    ImageBz2,
-    ImageGz,
-    ImageZstd,
-}
-
-pub struct KernelOptions {
-    pub path: PathBuf,
-    pub format: KernelFormat,
-    pub initramfs: Option<PathBuf>,
-    pub command_line: Option<String>,
-}
-
 pub struct BoxOptions {
     /// Number of CPUs (default: 2)
     pub cpus: Option<u8>,
@@ -590,30 +573,6 @@ let options = BoxOptions {
 };
 ```
 
-#### Custom kernel
-
-`KernelOptions::new` uses format detection by default. Set the format explicitly
-only when the image is ambiguous or you want to fail on a format mismatch.
-Custom kernels are supported only by the local runtime;
-`BoxliteRuntime::rest` rejects configurations with `advanced.kernel` set.
-
-```rust
-use boxlite::{AdvancedBoxOptions, BoxOptions, KernelFormat, KernelOptions};
-
-let options = BoxOptions {
-    advanced: AdvancedBoxOptions {
-        kernel: Some(
-            KernelOptions::new("/absolute/path/to/vmlinux")
-                .with_format(KernelFormat::Elf)
-                .with_initramfs("/absolute/path/to/initramfs.img")
-                .with_command_line("console=ttyS0 panic=-1"),
-        ),
-        ..Default::default()
-    },
-    ..Default::default()
-};
-```
-
 ### AdvancedBoxOptions
 
 Advanced options for expert users. Most users can ignore this — defaults enable
@@ -624,7 +583,6 @@ pub struct AdvancedBoxOptions {
     pub security: SecurityOptions,
     pub isolate_mounts: bool,
     pub health_check: Option<HealthCheckOptions>,
-    pub kernel: Option<KernelOptions>,
 }
 ```
 
@@ -633,7 +591,6 @@ pub struct AdvancedBoxOptions {
 | `security` | `SecurityOptions` | `SecurityOptions::default()` (fully enabled profile; jailer enabled) | Security isolation options (jailer, seccomp, namespaces) |
 | `isolate_mounts` | `bool` | `false` | Enable bind mount isolation (requires CAP_SYS_ADMIN on Linux) |
 | `health_check` | `Option<HealthCheckOptions>` | `None` | Optional guest-agent health monitoring |
-| `kernel` | `Option<KernelOptions>` | `None` | Optional direct Linux boot configuration |
 
 ### RootfsSpec
 

@@ -7,11 +7,11 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use serde::{Deserialize, Serialize};
 
 use super::{InitCtx, log_task_error, task_start};
+use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
 use crate::litebox::archive::sha256_file;
 use crate::litebox::init::types::PreparedBootAssets;
 use crate::pipeline::PipelineTask;
 use crate::runtime::layout::BoxFilesystemLayout;
-use crate::runtime::options::{KernelFormat, KernelOptions};
 use crate::vmm::PreparedKernel;
 
 const MANIFEST_VERSION: u32 = 1;
