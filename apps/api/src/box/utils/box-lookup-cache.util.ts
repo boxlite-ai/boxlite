@@ -6,6 +6,23 @@
 export const BOX_LOOKUP_CACHE_TTL_MS = 10_000
 export const BOX_ORG_ID_CACHE_TTL_MS = 60_000
 export const TOOLBOX_PROXY_URL_CACHE_TTL_S = 30 * 60 // 30 minutes
+// The unbounded listBoxes endpoint materializes and serializes the org's whole
+// box table per request; under poll-heavy traffic that pegs the single event
+// loop. A short TTL collapses bursts of identical polls onto one query while
+// keeping the list fresh within a few seconds.
+export const BOX_LIST_CACHE_TTL_S = 3
+
+export function boxListCacheKey(args: {
+  organizationId: string
+  labels?: { [key: string]: string }
+  includeErroredDeleted?: boolean
+}): string {
+  const labels = args.labels
+    ? JSON.stringify(Object.fromEntries(Object.entries(args.labels).sort(([a], [b]) => a.localeCompare(b))))
+    : 'none'
+  const includeErroredDeleted = args.includeErroredDeleted ? 1 : 0
+  return `box:list:org:${args.organizationId}:errdel:${includeErroredDeleted}:labels:${labels}`
+}
 
 type BoxLookupCacheKeyArgs = {
   organizationId?: string | null
