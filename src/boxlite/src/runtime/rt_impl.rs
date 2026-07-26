@@ -531,7 +531,7 @@ impl RuntimeImpl {
     /// Checks in-memory cache first (for boxes not yet persisted), then database.
     pub async fn get_info(self: &Arc<Self>, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
         // Check in-memory cache first (for boxes created but not yet persisted)
-        {
+        let cached_box = {
             let sync = self.sync_state.read().unwrap();
 
             // Try as BoxID first
@@ -539,15 +539,16 @@ impl RuntimeImpl {
                 && let Some(weak) = sync.active_boxes_by_id.get(&box_id)
                 && let Some(strong) = weak.upgrade()
             {
-                return Ok(Some(strong.info()));
+                Some(strong)
+            } else if let Some(weak) = sync.active_boxes_by_name.get(id_or_name) {
+                weak.upgrade()
+            } else {
+                None
             }
+        };
 
-            // Try as name
-            if let Some(weak) = sync.active_boxes_by_name.get(id_or_name)
-                && let Some(strong) = weak.upgrade()
-            {
-                return Ok(Some(strong.info()));
-            }
+        if let Some(box_impl) = cached_box {
+            return Ok(Some(box_impl.authoritative_info().await));
         }
 
         // Fall back to DB lookup - run on blocking thread pool
@@ -559,7 +560,8 @@ impl RuntimeImpl {
                 .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
 
         if let Some((config, state)) = db_result {
-            return Ok(Some(BoxInfo::new(&config, &state)));
+            let (box_impl, _) = self.get_or_create_box_impl(config, state);
+            return Ok(Some(box_impl.authoritative_info().await));
         }
         Ok(None)
     }

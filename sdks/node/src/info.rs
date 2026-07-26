@@ -128,6 +128,10 @@ pub struct JsBoxInfo {
     /// Active host-to-guest port mappings.
     pub ports: Vec<JsPortSpec>,
 
+    /// Whether active port mappings were resolved for the current lifecycle.
+    #[napi(js_name = "portsResolved")]
+    pub ports_resolved: bool,
+
     /// Idle time in seconds before AutoPause; 0 disables it.
     #[napi(js_name = "autoPause")]
     pub auto_pause: u32,
@@ -163,10 +167,68 @@ impl From<BoxInfo> for JsBoxInfo {
             cpus: info.cpus,
             memory_mib: info.memory_mib,
             ports: info.ports.into_iter().map(JsPortSpec::from).collect(),
+            ports_resolved: info.ports_resolved,
             auto_pause: info.auto_pause,
             auto_delete: info.auto_delete,
             auto_resume: info.auto_resume,
             health_status,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::time::SystemTime;
+
+    use boxlite::runtime::options::{PortProtocol, PortSpec};
+    use boxlite::{BoxID, BoxInfo, BoxStatus, HealthStatus};
+
+    use super::JsBoxInfo;
+
+    fn core_info(ports: Vec<PortSpec>, ports_resolved: bool) -> BoxInfo {
+        BoxInfo {
+            id: BoxID::parse("box-node-info").unwrap(),
+            name: Some("node-info".to_string()),
+            status: BoxStatus::Running,
+            created_at: SystemTime::UNIX_EPOCH.into(),
+            last_updated: SystemTime::UNIX_EPOCH.into(),
+            pid: Some(1234),
+            image: "alpine:latest".to_string(),
+            cpus: 2,
+            memory_mib: 512,
+            ports,
+            ports_resolved,
+            labels: HashMap::new(),
+            auto_pause: 0,
+            auto_delete: 0,
+            auto_resume: true,
+            health_status: HealthStatus::default(),
+            exit_code: None,
+        }
+    }
+
+    #[test]
+    fn box_info_conversion_preserves_ports_and_resolution() {
+        let resolved = JsBoxInfo::from(core_info(
+            vec![PortSpec {
+                host_port: Some(49152),
+                guest_port: 3000,
+                protocol: PortProtocol::Tcp,
+                host_ip: Some("127.0.0.1".to_string()),
+            }],
+            true,
+        ));
+
+        assert_eq!(resolved.ports.len(), 1);
+        assert_eq!(resolved.ports[0].host_port, Some(49152));
+        assert_eq!(resolved.ports[0].guest_port, 3000);
+        assert_eq!(resolved.ports[0].protocol.as_deref(), Some("tcp"));
+        assert_eq!(resolved.ports[0].host_ip.as_deref(), Some("127.0.0.1"));
+        assert!(resolved.ports_resolved);
+
+        let unresolved = JsBoxInfo::from(core_info(Vec::new(), false));
+        assert!(unresolved.ports.is_empty());
+        assert!(!unresolved.ports_resolved);
     }
 }

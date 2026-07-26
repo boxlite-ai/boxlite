@@ -297,11 +297,10 @@ Handle to a running or stopped box.
   Delete the box and its data (async)
 
 - `info() -> BoxInfo`
-  Get box metadata (async)
-  - `info.ports` contains active local TCP mappings and is empty while stopped
-
-- `port_bindings() -> List[Tuple[Optional[int], int, str, Optional[str]]]`
-  Refresh active local bindings and return resolved host ports (async)
+  Get a synchronous metadata snapshot
+  - `info.ports` contains active local TCP mappings
+  - `info.ports_resolved` says whether those mappings belong to the current box lifecycle
+  - If unresolved on a running box, ignore `ports`; `await runtime.get_info(box.id)` observes the live backend without publishing
 
 - `metrics() -> BoxMetrics`
   Get box resource usage metrics (async)
@@ -316,7 +315,7 @@ execution = await box.exec("echo", "Hello")
 result = await execution.wait()
 
 # Get box info
-info = await box.info()
+info = box.info()
 print(f"Box {info.id}: {info.status}")
 
 # Stop and remove

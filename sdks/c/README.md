@@ -551,9 +551,12 @@ BoxliteErrorCode boxlite_box_metrics(
 );
 ```
 
-`CBoxInfo.ports_json` contains the active local TCP mappings as a JSON array.
-It is `"[]"` while the box is stopped and is released by the existing
-`boxlite_free_box_info()` / `boxlite_free_box_info_list()` functions.
+`CBoxInfo.ports_json` is an owned JSON value: an array contains the active local
+TCP mappings, JSON `null` means unresolved for the current lifecycle, and `[]`
+means confirmed empty. It is released by the existing `boxlite_free_box_info()`
+/ `boxlite_free_box_info_list()` functions. `boxlite_box_info()` is a snapshot;
+`boxlite_get_info()` observes the live backend without publishing when a
+running box's mapping state is unresolved.
 
 ### Error Handling
 

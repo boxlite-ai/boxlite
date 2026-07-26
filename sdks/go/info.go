@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"runtime/cgo"
+	"strings"
 	"time"
 	"unsafe"
 )
@@ -24,19 +25,21 @@ const (
 
 // BoxInfo holds information about a box.
 type BoxInfo struct {
-	ID         string
-	Name       string
-	Image      string
-	State      State
-	Running    bool
-	PID        int
-	CPUs       int
-	MemoryMiB  int
-	Ports      []PortSpec
-	AutoPause  uint32
-	AutoDelete uint32
-	AutoResume bool
-	CreatedAt  time.Time
+	ID        string
+	Name      string
+	Image     string
+	State     State
+	Running   bool
+	PID       int
+	CPUs      int
+	MemoryMiB int
+	Ports     []PortSpec
+	// PortsResolved reports whether Ports belongs to the current box lifecycle.
+	PortsResolved bool
+	AutoPause     uint32
+	AutoDelete    uint32
+	AutoResume    bool
+	CreatedAt     time.Time
 }
 
 // Info returns information about the box.
@@ -116,20 +119,22 @@ func (r *Runtime) GetInfo(ctx context.Context, idOrName string) (*BoxInfo, error
 
 func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 	pid := int(info.pid)
+	ports, portsResolved := decodePortsJSON(cString(info.ports_json))
 	return BoxInfo{
-		ID:         cString(info.id),
-		Name:       cString(info.name),
-		Image:      cString(info.image),
-		State:      State(cString(info.status)),
-		Running:    info.running != 0,
-		PID:        pid,
-		CPUs:       int(info.cpus),
-		MemoryMiB:  int(info.memory_mib),
-		Ports:      decodePortsJSON(cString(info.ports_json)),
-		AutoPause:  uint32(info.auto_pause),
-		AutoDelete: uint32(info.auto_delete),
-		AutoResume: info.auto_resume != 0,
-		CreatedAt:  time.Unix(int64(info.created_at), 0),
+		ID:            cString(info.id),
+		Name:          cString(info.name),
+		Image:         cString(info.image),
+		State:         State(cString(info.status)),
+		Running:       info.running != 0,
+		PID:           pid,
+		CPUs:          int(info.cpus),
+		MemoryMiB:     int(info.memory_mib),
+		Ports:         ports,
+		PortsResolved: portsResolved,
+		AutoPause:     uint32(info.auto_pause),
+		AutoDelete:    uint32(info.auto_delete),
+		AutoResume:    info.auto_resume != 0,
+		CreatedAt:     time.Unix(int64(info.created_at), 0),
 	}
 }
 
@@ -140,10 +145,15 @@ type portInfoJSON struct {
 	HostIP    string `json:"host_ip"`
 }
 
-func decodePortsJSON(value string) []PortSpec {
+func decodePortsJSON(value string) ([]PortSpec, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "null" {
+		return nil, false
+	}
+
 	var wirePorts []portInfoJSON
-	if value == "" || json.Unmarshal([]byte(value), &wirePorts) != nil {
-		return nil
+	if json.Unmarshal([]byte(value), &wirePorts) != nil || wirePorts == nil {
+		return nil, false
 	}
 
 	ports := make([]PortSpec, 0, len(wirePorts))
@@ -163,7 +173,7 @@ func decodePortsJSON(value string) []PortSpec {
 			HostIP:   wire.HostIP,
 		})
 	}
-	return ports
+	return ports, true
 }
 
 // convertBoxInfoList materialises a CBoxInfoList* into Go BoxInfo slice.

@@ -78,10 +78,6 @@ class SyncBox:
         """Get box information (synchronous, no I/O)."""
         return self._box.info()
 
-    def port_bindings(self):
-        """Return active host-to-guest bindings with resolved host ports."""
-        return self._sync(self._box.port_bindings())
-
     def start(self) -> None:
         """
         Start the box (initialize VM).

@@ -327,7 +327,7 @@ async def require_auth(
 # ============================================================================
 
 
-def port_bindings_to_dict(ports) -> list[dict]:
+def port_specs_to_dict(ports) -> list[dict]:
     return [
         {
             "host_port": host_port,
@@ -340,17 +340,28 @@ def port_bindings_to_dict(ports) -> list[dict]:
 
 
 def box_info_to_dict(info) -> dict:
+    status = info.state.status
+    ports_resolved = getattr(
+        info,
+        "ports_resolved",
+        False,
+    )
     return {
         "box_id": info.id,
         "name": info.name,
-        "status": info.state.status,
+        "status": status,
         "created_at": info.created_at,
         "updated_at": info.created_at,
         "pid": info.state.pid,
         "image": info.image,
         "cpus": info.cpus,
         "memory_mib": info.memory_mib,
-        "ports": port_bindings_to_dict(info.ports),
+        "ports": (
+            port_specs_to_dict(info.ports)
+            if status in ("running", "paused") and ports_resolved
+            else []
+        ),
+        "ports_resolved": ports_resolved,
         "labels": {},
     }
 
@@ -444,6 +455,23 @@ async def get_cached_box_handle(box_id: str) -> Optional[Any]:
 async def evict_cached_box_by_id(box_id: str) -> None:
     async with state.active_boxes_lock:
         state.active_boxes_by_id.pop(box_id, None)
+
+
+async def find_box_info_snapshot(id_or_name: str):
+    """Find metadata without attaching a handle or observing live networking."""
+    cached = await get_cached_box_handle(id_or_name)
+    if cached is not None:
+        return cached.info()
+
+    infos = await state.runtime.list_info()
+    return next(
+        (
+            info
+            for info in infos
+            if str(info.id) == id_or_name or info.name == id_or_name
+        ),
+        None,
+    )
 
 
 async def clear_cached_box_handles() -> None:
@@ -625,24 +653,13 @@ async def get_box(
     return box_info_to_dict(info)
 
 
-@app.get("/v1/{prefix}/boxes/{box_id}/ports")
-async def get_box_ports(
-    prefix: str,
-    box_id: str,
-    _auth: dict = Depends(require_auth),
-):
-    box_handle = await get_box_or_404(box_id)
-    ports = await box_handle.port_bindings()
-    return {"ports": port_bindings_to_dict(ports)}
-
-
 @app.head("/v1/{prefix}/boxes/{box_id}")
 async def box_exists(
     prefix: str,
     box_id: str,
     _auth: dict = Depends(require_auth),
 ):
-    info = await state.runtime.get_info(box_id)
+    info = await find_box_info_snapshot(box_id)
     if info is None:
         return Response(status_code=404)
     return Response(status_code=204)
@@ -655,7 +672,7 @@ async def remove_box(
     force: bool = Query(False),
     _auth: dict = Depends(require_auth),
 ):
-    info = await state.runtime.get_info(box_id)
+    info = await find_box_info_snapshot(box_id)
     await state.runtime.remove(box_id, force=force)
     if info is not None:
         await evict_cached_box_by_id(info.id)

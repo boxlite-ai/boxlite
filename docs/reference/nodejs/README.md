@@ -188,7 +188,6 @@ Handle to a running or stopped box.
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `info()` | `() => JsBoxInfo` | Get box metadata (sync) |
-| `portBindings()` | `() => Promise<JsPortSpec[]>` | Refresh active local bindings and return resolved host ports |
 | `exec()` | `(cmd, args?, env?, tty?) => Promise<JsExecution>` | Execute command |
 | `stop()` | `() => Promise<void>` | Stop the box |
 | `metrics()` | `() => Promise<JsBoxMetrics>` | Get resource metrics |
@@ -207,7 +206,12 @@ Metadata about a box.
 | `createdAt` | `string` | Creation timestamp (ISO 8601) |
 | `lastUpdated` | `string` | Last state change (ISO 8601) |
 | `pid` | `number \| undefined` | Process ID (if running) |
-| `ports` | `JsPortSpec[]` | Active local TCP mappings; empty while stopped |
+| `ports` | `JsPortSpec[]` | Active local TCP mappings; authoritative when `portsResolved` is true |
+| `portsResolved` | `boolean` | Whether `ports` was resolved for the current box lifecycle |
+
+`box.info()` is a synchronous snapshot. If `portsResolved` is false, ignore
+`ports`; for a running box, `await runtime.getInfo(id)` attempts an attach-only
+refresh without publishing, starting, or stopping it.
 
 ---
 

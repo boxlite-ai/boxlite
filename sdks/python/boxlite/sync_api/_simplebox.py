@@ -152,14 +152,6 @@ class SyncSimpleBox:
         """Get box information."""
         return self._box.info()
 
-    def port_bindings(self):
-        """Return active host-to-guest bindings with resolved host ports."""
-        if self._box is None:
-            raise RuntimeError(
-                "Box not started. Use 'with SyncSimpleBox(...) as box:' first."
-            )
-        return self._box.port_bindings()
-
     def exec(
         self,
         cmd: str,

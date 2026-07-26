@@ -710,6 +710,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         cpus: info.cpus,
         memory_mib: info.memory_mib,
         ports: info.ports.clone(),
+        ports_resolved: info.ports_resolved,
         labels: info.labels.clone(),
         auto_pause: info.auto_pause,
         auto_delete: info.auto_delete,
@@ -1101,11 +1102,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/v1/boxes/{box_id}/stop",
             post(boxes::stop_box),
-        )
-        // Active, resolved local port bindings
-        .route(
-            "/v1/boxes/{box_id}/ports",
-            get(boxes::get_port_bindings),
         )
         // Box metrics
         .route(
@@ -1589,15 +1585,15 @@ mod tests {
             "GET /v1/boxes/{{box_id}}/attach must be registered (405 = path matched, method did not)",
         );
 
-        let ports = http
-            .post(format!("http://127.0.0.1:{port}/v1/boxes/box1/ports"))
+        let removed_ports = http
+            .get(format!("http://127.0.0.1:{port}/v1/boxes/box1/ports"))
             .send()
             .await
-            .expect("POST /ports");
+            .expect("GET removed /ports route");
         assert_eq!(
-            ports.status().as_u16(),
-            405,
-            "GET /v1/boxes/{{box_id}}/ports must be registered",
+            removed_ports.status().as_u16(),
+            404,
+            "the dedicated /ports discovery route must stay removed",
         );
 
         let unrouted = http

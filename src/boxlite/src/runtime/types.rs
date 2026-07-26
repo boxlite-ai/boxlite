@@ -336,9 +336,19 @@ pub struct BoxInfo {
     /// Allocated memory in MiB.
     pub memory_mib: u32,
 
-    /// Active host-to-guest port mappings. Empty when the box is not running.
+    /// Active host-to-guest mappings when [`Self::ports_resolved`] is true;
+    /// otherwise empty.
     #[serde(default)]
     pub ports: Vec<crate::runtime::options::PortSpec>,
+
+    /// Whether [`Self::ports`] is authoritative for the current box lifecycle.
+    ///
+    /// Active boxes return `false` with an empty `ports` list when the runtime
+    /// cannot verify or refresh their concrete host bindings. Configured,
+    /// stopped, and failed boxes without a live shim are known-empty, as are
+    /// boxes without configured mappings.
+    #[serde(default)]
+    pub ports_resolved: bool,
 
     /// User-defined labels for filtering and organization.
     pub labels: HashMap<String, String>,
@@ -366,6 +376,8 @@ impl BoxInfo {
         use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
         use crate::runtime::options::RootfsSpec;
 
+        let port_resolution = crate::litebox::ports::PortResolution::load(config, state);
+
         Self {
             id: config.id.clone(),
             name: config.name.clone(),
@@ -379,7 +391,8 @@ impl BoxInfo {
             },
             cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
-            ports: load_resolved_ports(config, state),
+            ports: port_resolution.ports,
+            ports_resolved: port_resolution.is_resolved,
             labels: HashMap::new(),
             // Local runtimes do not sweep lifecycle deadlines, but metadata keeps
             // the configured values so callers can inspect the effective policy.
@@ -402,49 +415,13 @@ impl PartialEq for BoxInfo {
             && self.cpus == other.cpus
             && self.memory_mib == other.memory_mib
             && self.ports == other.ports
+            && self.ports_resolved == other.ports_resolved
             && self.labels == other.labels
             && self.auto_pause == other.auto_pause
             && self.auto_delete == other.auto_delete
             && self.auto_resume == other.auto_resume
             && self.health_status == other.health_status
     }
-}
-
-fn load_resolved_ports(
-    config: &crate::litebox::config::BoxConfig,
-    state: &BoxState,
-) -> Vec<crate::runtime::options::PortSpec> {
-    if !state.status.is_active() {
-        return Vec::new();
-    }
-
-    let path = config
-        .box_home
-        .join(crate::runtime::layout::dirs::LOGS_DIR)
-        .join(crate::runtime::layout::dirs::RESOLVED_PORTS_FILE);
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-        Err(error) => {
-            tracing::warn!(
-                box_id = %config.id,
-                path = %path.display(),
-                %error,
-                "Failed to read resolved port mappings"
-            );
-            return Vec::new();
-        }
-    };
-
-    serde_json::from_str(&contents).unwrap_or_else(|error| {
-        tracing::warn!(
-            box_id = %config.id,
-            path = %path.display(),
-            %error,
-            "Failed to parse resolved port mappings"
-        );
-        Vec::new()
-    })
 }
 
 // ============================================================================
@@ -612,13 +589,24 @@ mod tests {
         assert_eq!(info.cpus, 4);
         assert_eq!(info.memory_mib, 1024);
         assert!(info.ports.is_empty());
+        assert!(
+            info.ports_resolved,
+            "a box with no requested mappings is known-empty"
+        );
     }
 
     #[test]
-    fn running_box_info_reads_resolved_ports_snapshot() {
+    fn running_box_info_rejects_untagged_resolved_ports_snapshot() {
         let temp_dir = tempfile::tempdir().unwrap();
         let logs_dir = temp_dir.path().join("logs");
         std::fs::create_dir_all(&logs_dir).unwrap();
+        let pid = std::process::id();
+        let start_time = crate::util::process_start_time(pid).expect("current process start time");
+        std::fs::write(
+            temp_dir.path().join("shim.pid"),
+            format!("{pid}\n{start_time}\nservices-mux-v1\n"),
+        )
+        .unwrap();
         let expected = vec![crate::runtime::options::PortSpec {
             host_port: Some(49152),
             guest_port: 3000,
@@ -638,17 +626,180 @@ mod tests {
             container: ContainerRuntimeConfig {
                 id: ContainerID::new(),
             },
-            options: BoxOptions::default(),
+            options: BoxOptions {
+                ports: vec![crate::runtime::options::PortSpec {
+                    host_port: None,
+                    guest_port: 3000,
+                    protocol: crate::runtime::options::PortProtocol::Tcp,
+                    host_ip: Some("0.0.0.0".to_string()),
+                }],
+                ..Default::default()
+            },
             engine_kind: crate::vmm::VmmKind::Libkrun,
             box_home: temp_dir.path().to_path_buf(),
         };
         let mut state = BoxState::new();
+        state.set_pid(Some(pid));
         state.transition_to(BoxStatus::Running).unwrap();
 
-        assert_eq!(BoxInfo::new(&config, &state).ports, expected);
+        let info = BoxInfo::new(&config, &state);
+        assert!(
+            info.ports.is_empty(),
+            "an untagged snapshot cannot prove that its host ports belong to the active VM lifecycle"
+        );
+        assert_eq!(
+            serde_json::to_value(&info).unwrap()["ports_resolved"],
+            serde_json::Value::Bool(false),
+            "BoxInfo must distinguish unresolved bindings from confirmed-empty bindings"
+        );
 
         state.transition_to(BoxStatus::Stopping).unwrap();
-        assert!(BoxInfo::new(&config, &state).ports.is_empty());
+        let stopping = BoxInfo::new(&config, &state);
+        assert!(stopping.ports.is_empty());
+        assert!(
+            !stopping.ports_resolved,
+            "a stopping lifecycle may still own active mappings"
+        );
+        state.transition_to(BoxStatus::Stopped).unwrap();
+        let stopped_with_live_shim = BoxInfo::new(&config, &state);
+        assert!(!stopped_with_live_shim.ports_resolved);
+
+        std::fs::write(temp_dir.path().join("shim.pid"), format!("{pid}\n")).unwrap();
+        let stopped_with_legacy_shim = BoxInfo::new(&config, &state);
+        assert!(
+            !stopped_with_legacy_shim.ports_resolved,
+            "an alive legacy shim is uncertain, never confirmed-empty"
+        );
+
+        std::fs::remove_file(temp_dir.path().join("shim.pid")).unwrap();
+        let stopped = BoxInfo::new(&config, &state);
+        assert!(stopped.ports.is_empty());
+        assert!(stopped.ports_resolved, "a stopped box is known-empty");
+
+        state.status = BoxStatus::Unknown;
+        let unknown = BoxInfo::new(&config, &state);
+        assert!(unknown.ports.is_empty());
+        assert!(
+            !unknown.ports_resolved,
+            "unknown lifecycle state cannot prove that mappings are absent"
+        );
+    }
+
+    #[test]
+    fn running_box_info_accepts_matching_verified_lifecycle_snapshot() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let logs_dir = temp_dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        let pid = std::process::id();
+        let start_time = crate::util::process_start_time(pid).expect("current process start time");
+        std::fs::write(
+            temp_dir.path().join("shim.pid"),
+            format!("{pid}\n{start_time}\nservices-mux-v1\n"),
+        )
+        .unwrap();
+        let expected = vec![crate::runtime::options::PortSpec {
+            host_port: Some(49152),
+            guest_port: 3000,
+            protocol: crate::runtime::options::PortProtocol::Tcp,
+            host_ip: Some("0.0.0.0".to_string()),
+        }];
+        std::fs::write(
+            logs_dir.join("resolved-ports.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "lifecycle": {
+                    "pid": pid,
+                    "start_time": start_time
+                },
+                "runtime": {
+                    "pid": pid,
+                    "start_time": start_time
+                },
+                "ports": expected
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let config = BoxConfig {
+            id: BoxID::parse("01HJK4TNRPQSXYZ8WM6NCVT9R5").unwrap(),
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions {
+                ports: vec![crate::runtime::options::PortSpec {
+                    host_port: None,
+                    guest_port: 3000,
+                    protocol: crate::runtime::options::PortProtocol::Tcp,
+                    host_ip: Some("0.0.0.0".to_string()),
+                }],
+                ..Default::default()
+            },
+            engine_kind: crate::vmm::VmmKind::Libkrun,
+            box_home: temp_dir.path().to_path_buf(),
+        };
+        let mut state = BoxState::new();
+        state.set_pid(Some(pid));
+        state.transition_to(BoxStatus::Running).unwrap();
+
+        let info = BoxInfo::new(&config, &state);
+        assert_eq!(info.ports, expected);
+        assert_eq!(
+            serde_json::to_value(&info).unwrap()["ports_resolved"],
+            serde_json::Value::Bool(true)
+        );
+
+        std::fs::write(
+            logs_dir.join("resolved-ports.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "lifecycle": {
+                    "pid": pid,
+                    "start_time": start_time
+                },
+                "runtime": {
+                    "pid": pid + 1,
+                    "start_time": start_time
+                },
+                "ports": expected
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let prior_runtime = BoxInfo::new(&config, &state);
+        assert!(prior_runtime.ports.is_empty());
+        assert!(
+            !prior_runtime.ports_resolved,
+            "a replacement core must confirm the live mapping before exposing it"
+        );
+
+        std::fs::write(
+            logs_dir.join("resolved-ports.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "lifecycle": {
+                    "pid": pid,
+                    "start_time": start_time + 1
+                },
+                "runtime": {
+                    "pid": pid,
+                    "start_time": start_time
+                },
+                "ports": expected
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mismatched = BoxInfo::new(&config, &state);
+        assert!(mismatched.ports.is_empty());
+        assert!(!mismatched.ports_resolved);
+
+        std::fs::write(logs_dir.join("resolved-ports.json"), b"not-json").unwrap();
+        let malformed = BoxInfo::new(&config, &state);
+        assert!(malformed.ports.is_empty());
+        assert!(!malformed.ports_resolved);
     }
 
     #[test]

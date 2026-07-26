@@ -195,6 +195,8 @@ pub(crate) struct PyBoxInfo {
     #[pyo3(get)]
     pub(crate) ports: Vec<PyPortBinding>,
     #[pyo3(get)]
+    pub(crate) ports_resolved: bool,
+    #[pyo3(get)]
     pub(crate) auto_pause: u32,
     #[pyo3(get)]
     pub(crate) auto_delete: u32,
@@ -219,6 +221,7 @@ impl PyBoxInfo {
             "cpus": self.cpus,
             "memory_mib": self.memory_mib,
             "ports": self.ports,
+            "ports_resolved": self.ports_resolved,
             "auto_pause": self.auto_pause,
             "auto_delete": self.auto_delete,
             "auto_resume": self.auto_resume,
@@ -252,10 +255,72 @@ impl From<BoxInfo> for PyBoxInfo {
             cpus: info.cpus,
             memory_mib: info.memory_mib,
             ports: info.ports.into_iter().map(port_binding_from_spec).collect(),
+            ports_resolved: info.ports_resolved,
             auto_pause: info.auto_pause,
             auto_delete: info.auto_delete,
             auto_resume: info.auto_resume,
             health_status,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::time::SystemTime;
+
+    use boxlite::runtime::options::{PortProtocol, PortSpec};
+    use boxlite::{BoxID, BoxInfo, BoxStatus, HealthStatus};
+
+    use super::PyBoxInfo;
+
+    fn core_info(ports: Vec<PortSpec>, ports_resolved: bool) -> BoxInfo {
+        BoxInfo {
+            id: BoxID::parse("box-python-info").unwrap(),
+            name: Some("python-info".to_string()),
+            status: BoxStatus::Running,
+            created_at: SystemTime::UNIX_EPOCH.into(),
+            last_updated: SystemTime::UNIX_EPOCH.into(),
+            pid: Some(1234),
+            image: "alpine:latest".to_string(),
+            cpus: 2,
+            memory_mib: 512,
+            ports,
+            ports_resolved,
+            labels: HashMap::new(),
+            auto_pause: 0,
+            auto_delete: 0,
+            auto_resume: true,
+            health_status: HealthStatus::default(),
+            exit_code: None,
+        }
+    }
+
+    #[test]
+    fn box_info_conversion_preserves_ports_and_resolution() {
+        let resolved = PyBoxInfo::from(core_info(
+            vec![PortSpec {
+                host_port: Some(49152),
+                guest_port: 3000,
+                protocol: PortProtocol::Tcp,
+                host_ip: Some("127.0.0.1".to_string()),
+            }],
+            true,
+        ));
+
+        assert_eq!(
+            resolved.ports,
+            vec![(
+                Some(49152),
+                3000,
+                "tcp".to_string(),
+                Some("127.0.0.1".to_string()),
+            )]
+        );
+        assert!(resolved.ports_resolved);
+
+        let unresolved = PyBoxInfo::from(core_info(Vec::new(), false));
+        assert!(unresolved.ports.is_empty());
+        assert!(!unresolved.ports_resolved);
     }
 }

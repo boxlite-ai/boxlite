@@ -9,7 +9,6 @@ use crate::exec::JsExecution;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsBoxMetrics;
 use crate::network::JsNetworkHandle;
-use crate::options::JsPortSpec;
 use crate::snapshot_options::{JsCloneOptions, JsExportOptions};
 use crate::snapshots::JsSnapshotHandle;
 use crate::util::map_err;
@@ -41,13 +40,6 @@ impl JsBox {
     #[napi]
     pub fn info(&self) -> JsBoxInfo {
         JsBoxInfo::from(self.handle.info())
-    }
-
-    /// Return active host-to-guest bindings with resolved host ports.
-    #[napi(js_name = "portBindings")]
-    pub async fn port_bindings(&self) -> Result<Vec<JsPortSpec>> {
-        let ports = self.handle.port_bindings().await.map_err(map_err)?;
-        Ok(ports.into_iter().map(JsPortSpec::from).collect())
     }
 
     /// Execute a command inside the box.

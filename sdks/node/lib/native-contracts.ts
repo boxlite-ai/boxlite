@@ -227,6 +227,7 @@ export interface JsBoxInfo {
   cpus: number;
   memoryMib: number;
   ports: JsPortSpec[];
+  portsResolved: boolean;
   autoPause: number;
   autoDelete: number;
   autoResume: boolean;
@@ -342,7 +343,6 @@ export interface JsBox {
   readonly id: string;
   readonly name: string | null;
   info(): JsBoxInfo;
-  portBindings(): Promise<JsPortSpec[]>;
   exec(
     command: string,
     args?: string[] | null,

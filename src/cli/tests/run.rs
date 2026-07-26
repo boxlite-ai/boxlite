@@ -526,13 +526,38 @@ fn test_run_with_automatic_publish_reports_concrete_port() {
         .join(box_id)
         .join("logs")
         .join("resolved-ports.json");
-    std::fs::remove_file(snapshot).expect("detached run must persist resolved port bindings");
+    std::fs::remove_file(&snapshot).expect("detached run must persist resolved port bindings");
 
-    ctx.new_cmd()
-        .args(["port", name])
+    let inspect = ctx
+        .new_cmd()
+        .args(["inspect", "--format", "{{json .Ports}}", name])
         .assert()
-        .success()
-        .stdout(format!("0.0.0.0:{host_port}->18789/tcp\n"));
+        .success();
+    let ports: serde_json::Value = serde_json::from_slice(&inspect.get_output().stdout)
+        .expect("inspect must return the resolved BoxInfo ports as JSON");
+    assert_eq!(
+        ports,
+        serde_json::json!([{
+            "host_port": host_port,
+            "guest_port": 18789,
+            "protocol": "tcp",
+            "host_ip": "0.0.0.0"
+        }])
+    );
+
+    // Discovery is observational: another short-lived CLI process resolves the
+    // same live gvproxy forward again without rebuilding a listener or relying
+    // on metadata written by the previous inspect.
+    assert!(!snapshot.exists());
+    let refreshed = ctx
+        .new_cmd()
+        .args(["inspect", "--format", "{{json .Ports}}", name])
+        .assert()
+        .success();
+    let refreshed_ports: serde_json::Value = serde_json::from_slice(&refreshed.get_output().stdout)
+        .expect("inspect must rediscover the live mapping");
+    assert_eq!(refreshed_ports, ports);
+    assert!(!snapshot.exists());
 
     ctx.cleanup_box(name);
 }

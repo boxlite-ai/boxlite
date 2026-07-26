@@ -299,28 +299,6 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
-  /{prefix}/boxes/{box_id}/ports:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-      - $ref: "#/components/parameters/boxId"
-    get:
-      operationId: getBoxPorts
-      summary: Get active box port bindings
-      description: |
-        Returns resolved host-to-guest port bindings for a running box.
-        Automatic publications contain the concrete host port selected by the
-        OS. The list is empty while the box is stopped.
-      tags: [Boxes]
-      responses:
-        "200":
-          description: Active port bindings
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PortBindingsResponse"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-
   # -------------------------------------------------------------------------
   # Box Lifecycle
   # -------------------------------------------------------------------------
@@ -1561,10 +1539,17 @@ components:
         ports:
           type: array
           description: |
-            Active local TCP port mappings. Empty when the box is not running.
-            Older servers may omit this field.
+            Active local TCP port mappings. Treat this list as authoritative
+            only when `ports_resolved` is true. Older servers may omit this
+            field.
           items:
             $ref: "#/components/schemas/PortSpec"
+        ports_resolved:
+          type: boolean
+          default: false
+          description: |
+            Whether `ports` was resolved for the current box lifecycle.
+            False distinguishes unavailable state from a confirmed empty list.
         labels:
           type: object
           additionalProperties:
@@ -1594,6 +1579,7 @@ components:
         - `stopping`: Graceful shutdown in progress (transient)
         - `stopped`: VM terminated, can be restarted
         - `paused`: VM frozen via SIGSTOP (during snapshot/export)
+        - `failed`: Initialization failed; diagnostic state is retained
         - `unknown`: Error recovery state
       enum:
         - configured
@@ -1601,6 +1587,7 @@ components:
         - stopping
         - stopped
         - paused
+        - failed
         - unknown
 
     CreateBoxRequest:
@@ -1759,15 +1746,6 @@ components:
         host_ip:
           type: string
           description: Host IP to bind (defaults to 0.0.0.0)
-
-    PortBindingsResponse:
-      type: object
-      required: [ports]
-      properties:
-        ports:
-          type: array
-          items:
-            $ref: "#/components/schemas/PortSpec"
 
     SecretSpec:
       type: object

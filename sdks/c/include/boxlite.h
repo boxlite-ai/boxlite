@@ -277,7 +277,7 @@ typedef struct CBoxInfo {
   uint32_t auto_delete;
   int auto_resume;
   int64_t created_at;
-  // JSON array of active `PortSpec` objects.
+  // JSON array of active `PortSpec` objects; JSON `null` when unresolved.
   char *ports_json;
 } CBoxInfo;
 

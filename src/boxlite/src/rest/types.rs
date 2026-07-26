@@ -242,6 +242,8 @@ pub(crate) struct BoxResponse {
     #[serde(default)]
     pub ports: Vec<crate::runtime::options::PortSpec>,
     #[serde(default)]
+    pub ports_resolved: Option<bool>,
+    #[serde(default)]
     pub labels: HashMap<String, String>,
     /// Absent while the box's main command is still running. An older server
     /// omits it entirely, which reads the same as "still running" — the
@@ -270,6 +272,28 @@ impl BoxResponse {
         })?;
 
         let status = parse_box_status(&self.status);
+        // Older servers have no `ports_resolved` field and provide no process
+        // evidence. A bare legacy list or lifecycle label cannot prove that a
+        // binding belongs to the current VM lifecycle.
+        let is_known_empty = matches!(
+            status,
+            crate::BoxStatus::Configured | crate::BoxStatus::Stopped | crate::BoxStatus::Failed
+        );
+        let has_concrete_ports = self.ports.iter().all(|port| {
+            port.host_port.is_some_and(|host_port| host_port != 0)
+                && port.guest_port != 0
+                && port
+                    .host_ip
+                    .as_deref()
+                    .is_none_or(|host_ip| host_ip.parse::<std::net::IpAddr>().is_ok())
+        });
+        let (ports_resolved, ports) = match self.ports_resolved {
+            Some(true) if status.is_active() && has_concrete_ports => (true, self.ports.clone()),
+            Some(true) if status.is_active() => (false, Vec::new()),
+            Some(true) if is_known_empty => (true, Vec::new()),
+            Some(false) => (false, Vec::new()),
+            Some(true) | None => (false, Vec::new()),
+        };
 
         let created_at = chrono::DateTime::parse_from_rfc3339(&self.created_at)
             .map(|dt| dt.with_timezone(&chrono::Utc))
@@ -289,7 +313,8 @@ impl BoxResponse {
             image: self.image.clone(),
             cpus: self.cpus,
             memory_mib: self.memory_mib,
-            ports: self.ports.clone(),
+            ports,
+            ports_resolved,
             labels: self.labels.clone(),
             auto_pause: self.auto_pause,
             auto_delete: self.auto_delete,
@@ -317,11 +342,6 @@ pub(crate) struct ListBoxesResponse {
     pub boxes: Vec<BoxResponse>,
     #[allow(dead_code)]
     pub next_page_token: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct PortBindingsResponse {
-    pub ports: Vec<crate::runtime::options::PortSpec>,
 }
 
 // ============================================================================
@@ -557,6 +577,7 @@ fn parse_box_status(status: &str) -> BoxStatus {
         "stopping" => BoxStatus::Stopping,
         "stopped" => BoxStatus::Stopped,
         "paused" => BoxStatus::Paused,
+        "failed" => BoxStatus::Failed,
         _ => BoxStatus::Unknown,
     }
 }
@@ -741,15 +762,60 @@ mod tests {
             "memory_mib": 512,
             "labels": {}
         }"#;
-        let resp: BoxResponse = serde_json::from_str(json).unwrap();
+        let mut resp: BoxResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.box_id, "01J0000000000000000000000A");
         assert_eq!(resp.name.as_deref(), Some("mybox"));
         assert_eq!(resp.status, "running");
         assert_eq!(resp.pid, Some(1234));
         assert_eq!(resp.cpus, 2);
         assert!(resp.ports.is_empty());
+        assert_eq!(resp.ports_resolved, None);
         assert_eq!(resp.auto_pause, 900);
         assert_eq!(resp.auto_delete, 0);
+
+        // An older active server may return a bare port list but cannot bind it
+        // to the current VM lifecycle. Do not surface it as authoritative.
+        resp.ports.push(crate::runtime::options::PortSpec {
+            host_port: Some(49152),
+            guest_port: 3000,
+            protocol: crate::runtime::options::PortProtocol::Tcp,
+            host_ip: Some("127.0.0.1".to_string()),
+        });
+        let active = resp.to_box_info().unwrap();
+        assert!(!active.ports_resolved);
+        assert!(active.ports.is_empty());
+
+        resp.ports_resolved = Some(true);
+        resp.ports[0].host_port = None;
+        let invalid_resolved = resp.to_box_info().unwrap();
+        assert!(!invalid_resolved.ports_resolved);
+        assert!(invalid_resolved.ports.is_empty());
+        resp.ports[0].host_port = Some(49152);
+        resp.ports_resolved = None;
+
+        // An old response has no process evidence, even in an inactive-looking
+        // state, so absence of the resolution flag remains unresolved.
+        resp.status = "stopped".to_string();
+        let stopped = resp.to_box_info().unwrap();
+        assert!(!stopped.ports_resolved);
+        assert!(stopped.ports.is_empty());
+
+        resp.ports_resolved = Some(true);
+        let explicitly_empty = resp.to_box_info().unwrap();
+        assert!(explicitly_empty.ports_resolved);
+        assert!(explicitly_empty.ports.is_empty());
+
+        resp.ports_resolved = Some(false);
+        let explicitly_unresolved = resp.to_box_info().unwrap();
+        assert!(!explicitly_unresolved.ports_resolved);
+        assert!(explicitly_unresolved.ports.is_empty());
+
+        resp.status = "failed".to_string();
+        resp.ports_resolved = None;
+        let legacy_failed = resp.to_box_info().unwrap();
+        assert_eq!(legacy_failed.status, crate::BoxStatus::Failed);
+        assert!(!legacy_failed.ports_resolved);
+        assert!(legacy_failed.ports.is_empty());
     }
 
     #[test]
@@ -764,7 +830,13 @@ mod tests {
             image: "python:3.11".to_string(),
             cpus: 2,
             memory_mib: 512,
-            ports: Vec::new(),
+            ports: vec![crate::runtime::options::PortSpec {
+                host_port: Some(49152),
+                guest_port: 3000,
+                protocol: crate::runtime::options::PortProtocol::Tcp,
+                host_ip: Some("127.0.0.1".to_string()),
+            }],
+            ports_resolved: Some(true),
             labels: HashMap::new(),
             exit_code: None,
             auto_pause: 1800,
@@ -776,6 +848,10 @@ mod tests {
         assert_eq!(info.image, "python:3.11");
         assert_eq!(info.cpus, 2);
         assert_eq!(info.memory_mib, 512);
+        assert!(info.ports_resolved);
+        assert_eq!(info.ports.len(), 1);
+        assert_eq!(info.ports[0].host_port, Some(49152));
+        assert_eq!(info.ports[0].guest_port, 3000);
         assert_eq!(info.auto_pause, 1800);
         assert_eq!(info.auto_delete, 604800);
     }
@@ -795,6 +871,7 @@ mod tests {
             cpus: 1,
             memory_mib: 256,
             ports: Vec::new(),
+            ports_resolved: Some(true),
             labels: HashMap::new(),
             exit_code: None,
             auto_pause: 900,
@@ -824,6 +901,7 @@ mod tests {
             cpus: 1,
             memory_mib: 256,
             ports: Vec::new(),
+            ports_resolved: Some(true),
             labels: HashMap::new(),
             exit_code: None,
             auto_pause: 900,
@@ -897,6 +975,7 @@ mod tests {
             cpus: 2,
             memory_mib: 512,
             ports: Vec::new(),
+            ports_resolved: Some(true),
             labels: HashMap::new(),
             exit_code: None,
             auto_pause: 900,

@@ -43,6 +43,8 @@ struct InspectPresenter {
     memory: u64,
     #[serde(rename = "Ports")]
     ports: Vec<boxlite::runtime::options::PortSpec>,
+    #[serde(rename = "PortsResolved")]
+    ports_resolved: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,6 +78,7 @@ impl From<&BoxInfo> for InspectPresenter {
             cpus: info.cpus,
             memory: info.memory_mib as u64 * 1024 * 1024,
             ports: info.ports.clone(),
+            ports_resolved: info.ports_resolved,
         }
     }
 }
@@ -164,7 +167,10 @@ async fn resolve_inspect_infos(
         let mut list = rt.list_info().await?;
         list.sort_by_key(|b| std::cmp::Reverse(b.created_at));
         match list.into_iter().next() {
-            Some(info) => Ok((vec![info], Vec::new())),
+            Some(info) => match rt.get_info(info.id.as_str()).await? {
+                Some(refreshed) => Ok((vec![refreshed], Vec::new())),
+                None => Err(anyhow::anyhow!("no such box: {}", info.id)),
+            },
             None => Err(anyhow::anyhow!("no boxes to inspect")),
         }
     } else {

@@ -76,7 +76,7 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
   -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n"
 ```
 
-## Implemented Endpoints (21 of 23)
+## Implemented Endpoints (20 of 22)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -87,7 +87,6 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
 | `/{prefix}/boxes/{id}` | GET | Get box |
 | `/{prefix}/boxes/{id}` | HEAD | Check exists |
 | `/{prefix}/boxes/{id}` | DELETE | Remove box |
-| `/{prefix}/boxes/{id}/ports` | GET | Get active resolved port bindings |
 | `/{prefix}/boxes/{id}/start` | POST | Start box |
 | `/{prefix}/boxes/{id}/stop` | POST | Stop box |
 | `/{prefix}/boxes/{id}/exec` | POST | Execute command |

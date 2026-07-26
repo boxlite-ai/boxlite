@@ -884,8 +884,11 @@ if (boxlite_box_info(box, &info, &error) == Ok) {
 }
 ```
 
-`info->ports_json` contains the active local TCP mappings as a JSON array. It
-is `"[]"` while the box is stopped and is freed with the rest of `CBoxInfo`.
+`info->ports_json` is an owned JSON value: an array contains the active local
+TCP mappings, JSON `null` means unresolved for the current lifecycle, and `[]`
+means confirmed empty. It is freed with the rest of `CBoxInfo`.
+`boxlite_box_info()` is a snapshot; `boxlite_get_info()` observes the live
+backend without publishing when a running box's mappings are unresolved.
 
 ---
 

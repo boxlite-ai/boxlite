@@ -7,7 +7,6 @@ pub mod info;
 pub mod inspect;
 pub mod list;
 pub mod logs;
-pub mod port;
 pub mod pull;
 pub mod restart;
 pub mod rm;
@@ -19,7 +18,7 @@ pub mod stop;
 pub mod tunnel;
 pub mod volume;
 
-pub(crate) fn format_port_mapping(port: &boxlite::runtime::options::PortSpec) -> String {
+fn format_port_mapping(port: &boxlite::runtime::options::PortSpec) -> String {
     let host_ip = port.host_ip.as_deref().unwrap_or("0.0.0.0");
     let host_port = port
         .host_port

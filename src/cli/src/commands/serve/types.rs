@@ -79,6 +79,7 @@ pub(super) struct BoxResponse {
     pub cpus: u8,
     pub memory_mib: u32,
     pub ports: Vec<boxlite::runtime::options::PortSpec>,
+    pub ports_resolved: bool,
     pub labels: HashMap<String, String>,
     pub auto_pause: u32,
     pub auto_delete: u32,
@@ -93,11 +94,6 @@ pub(super) struct BoxResponse {
 #[derive(Serialize)]
 pub(super) struct ListBoxesResponse {
     pub boxes: Vec<BoxResponse>,
-}
-
-#[derive(Serialize)]
-pub(super) struct PortBindingsResponse {
-    pub ports: Vec<boxlite::runtime::options::PortSpec>,
 }
 
 // ============================================================================

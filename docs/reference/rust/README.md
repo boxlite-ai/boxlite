@@ -193,7 +193,6 @@ pub struct LiteBox {
 | `id` | `fn id(&self) -> &BoxID` | Get box ID |
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `fn info(&self) -> BoxInfo` | Get box info (no VM init) |
-| `port_bindings` | `async fn port_bindings(&self) -> BoxliteResult<Vec<PortSpec>>` | Get active mappings with resolved host ports |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
@@ -256,13 +255,22 @@ pub struct BoxInfo {
     /// Allocated memory in MiB
     pub memory_mib: u32,
 
-    /// Active local TCP mappings; empty while stopped
+    /// Active local TCP mappings; authoritative when ports_resolved is true
     pub ports: Vec<PortSpec>,
+
+    /// Whether ports was resolved for the current box lifecycle
+    pub ports_resolved: bool,
 
     /// User-defined labels
     pub labels: HashMap<String, String>,
 }
 ```
+
+`LiteBox::info()` is a synchronous snapshot. If `ports_resolved` is false,
+ignore `ports`; for a running box, `BoxliteRuntime::get_info()` attempts an
+observation-only refresh without publishing, starting, or stopping it. A box kept running across
+an upgrade from the legacy listener implementation remains unresolved until its
+next normal restart; BoxLite does not risk publishing a duplicate listener.
 
 ### BoxStatus
 

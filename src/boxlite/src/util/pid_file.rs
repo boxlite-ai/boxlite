@@ -45,7 +45,7 @@ const SHIM_PID_RECORD_MAX_BYTES: usize =
 
 /// On-disk identity of a shim process: its PID and (optionally) the
 /// start-time fingerprint captured at spawn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PidRecord {
     pub pid: u32,
     /// Start-time fingerprint. `None` for legacy single-line files;
@@ -210,6 +210,21 @@ impl PidFileReader {
             ))
         })?;
         ShimPidRecord::decode(&bytes)
+    }
+
+    /// Return the verified lifecycle together with the shim's capabilities.
+    /// This is the trust boundary for runtime operations that must not attach
+    /// to a recycled PID or attribute resources to the wrong VM lifecycle.
+    pub(crate) fn verified_shim(&self) -> Option<ShimPidRecord> {
+        let record = self.read_shim().ok()?;
+        let identity = record.identity();
+        let expected_start_time = identity.start_time?;
+        if !crate::util::is_process_alive(identity.pid)
+            || crate::util::process_start_time(identity.pid) != Some(expected_start_time)
+        {
+            return None;
+        }
+        Some(record)
     }
 
     /// Read the PID file and classify the recorded process against the

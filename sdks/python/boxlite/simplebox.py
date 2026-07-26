@@ -204,15 +204,6 @@ class SimpleBox:
             )
         return self._box.info()
 
-    async def port_bindings(self):
-        """Return active host-to-guest bindings with resolved host ports."""
-        if not self._started:
-            raise RuntimeError(
-                "Box not started. Use 'async with SimpleBox(...) as box:' "
-                "or call 'await box.start()' first."
-            )
-        return await self._box.port_bindings()
-
     @property
     def created(self) -> Optional[bool]:
         """Whether this box was newly created (True) or an existing box was reused (False).

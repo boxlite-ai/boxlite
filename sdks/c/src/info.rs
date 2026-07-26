@@ -30,7 +30,7 @@ pub struct CBoxInfo {
     pub auto_delete: u32,
     pub auto_resume: c_int,
     pub created_at: i64,
-    /// JSON array of active `PortSpec` objects.
+    /// JSON array of active `PortSpec` objects; JSON `null` when unresolved.
     pub ports_json: *mut c_char,
 }
 
@@ -44,6 +44,15 @@ fn to_c_str(s: &str) -> *mut c_char {
     CString::new(s)
         .map(|c| c.into_raw())
         .unwrap_or(ptr::null_mut())
+}
+
+fn ports_to_c_str(
+    ports_resolved: bool,
+    ports: &[boxlite::runtime::options::PortSpec],
+) -> *mut c_char {
+    let ports = ports_resolved.then_some(ports);
+    let json = serde_json::to_string(&ports).expect("PortSpec serialization cannot fail");
+    to_c_str(&json)
 }
 
 fn status_to_str(status: BoxStatus) -> &'static str {
@@ -60,8 +69,8 @@ fn status_to_str(status: BoxStatus) -> &'static str {
 
 impl CBoxInfo {
     pub fn from_box_info(info: &boxlite::runtime::types::BoxInfo) -> Self {
-        let ports_json =
-            serde_json::to_string(&info.ports).expect("PortSpec serialization cannot fail");
+        // Keep the existing owned-string contract: JSON `null` carries the
+        // unresolved bit without adding a field or exposing a null C pointer.
         CBoxInfo {
             id: to_c_str(info.id.as_ref()),
             name: info
@@ -75,7 +84,7 @@ impl CBoxInfo {
             pid: info.pid.map(|p| p as c_int).unwrap_or(0),
             cpus: info.cpus as c_int,
             memory_mib: info.memory_mib as c_int,
-            ports_json: to_c_str(&ports_json),
+            ports_json: ports_to_c_str(info.ports_resolved, &info.ports),
             auto_pause: info.auto_pause,
             auto_delete: info.auto_delete,
             auto_resume: if info.auto_resume { 1 } else { 0 },
@@ -294,5 +303,45 @@ unsafe fn box_list(
         });
 
         BoxliteErrorCode::Ok
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CStr;
+
+    use boxlite::runtime::options::{PortProtocol, PortSpec};
+
+    use super::{free_str, ports_to_c_str};
+
+    fn encoded_ports(is_resolved: bool, ports: &[PortSpec]) -> String {
+        let encoded = ports_to_c_str(is_resolved, ports);
+        assert!(
+            !encoded.is_null(),
+            "successful BoxInfo conversion owns a JSON string"
+        );
+        let value = unsafe { CStr::from_ptr(encoded) }
+            .to_str()
+            .expect("JSON is UTF-8")
+            .to_string();
+        unsafe { free_str(encoded) };
+        value
+    }
+
+    #[test]
+    fn ports_json_preserves_resolution_without_a_new_c_field() {
+        assert_eq!(encoded_ports(false, &[]), "null");
+        assert_eq!(encoded_ports(true, &[]), "[]");
+
+        let ports = [PortSpec {
+            host_port: Some(49152),
+            guest_port: 3000,
+            protocol: PortProtocol::Tcp,
+            host_ip: Some("127.0.0.1".to_string()),
+        }];
+        let encoded = encoded_ports(true, &ports);
+        let value: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
+        assert_eq!(value[0]["host_port"], 49152);
+        assert_eq!(value[0]["guest_port"], 3000);
     }
 }

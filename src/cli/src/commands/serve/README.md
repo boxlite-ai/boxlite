@@ -92,7 +92,7 @@ registry.
 |--------------|--------------------------|---------------------------------------------------------------|
 | `config`     | `handlers/config.rs`     | Capability discovery (snapshots, clone, export, import)       |
 | `me`         | `handlers/me.rs`         | Identity of the calling credential (`GET /v1/me`)             |
-| `boxes`      | `handlers/boxes.rs`      | Box CRUD, lifecycle, and active port bindings                 |
+| `boxes`      | `handlers/boxes.rs`      | Box CRUD and lifecycle                                        |
 | `executions` | `handlers/executions.rs` | Lifecycle: start, status, signal, kill, resize, attach        |
 | `files`      | `handlers/files.rs`      | Tar-based file upload / download into / from boxes            |
 | `metrics`    | `handlers/metrics.rs`    | Runtime-level and per-box metrics                             |
@@ -126,7 +126,6 @@ permissive (accepts any/no bearer) — the zero-config local-dev default.
 | DELETE | `/v1/boxes/{box_id}`          | `boxes::remove_box`  | Remove box (`?force=true`)    |
 | POST   | `/v1/boxes/{box_id}/start`    | `boxes::start_box`   | Start a stopped box           |
 | POST   | `/v1/boxes/{box_id}/stop`     | `boxes::stop_box`    | Stop a running box            |
-| GET    | `/v1/boxes/{box_id}/ports`    | `boxes::get_port_bindings` | Get resolved active port bindings |
 
 ### Command Execution
 

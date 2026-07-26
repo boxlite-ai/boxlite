@@ -48,9 +48,10 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+pub(crate) use tasks::PortPublishTask;
 use tasks::{
     ContainerRootfsTask, FilesystemTask, GuestConnectTask, GuestInitTask, GuestRootfsTask, InitCtx,
-    PortPublishTask, VmmAttachTask, VmmSpawnTask,
+    VmmAttachTask, VmmSpawnTask,
 };
 use types::InitPipelineContext;
 

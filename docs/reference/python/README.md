@@ -213,8 +213,7 @@ Handle to a running or stopped box.
 | `exec()` | `(cmd, args, env, tty) -> Execution` | Execute command (async) |
 | `stop()` | `() -> None` | Stop the box gracefully (async) |
 | `remove()` | `() -> None` | Delete box and its data (async) |
-| `info()` | `() -> BoxInfo` | Get box metadata (async) |
-| `port_bindings()` | `() -> List[Tuple[Optional[int], int, str, Optional[str]]]` | Refresh active local bindings and return resolved host ports (async) |
+| `info()` | `() -> BoxInfo` | Get a synchronous metadata snapshot |
 | `metrics()` | `() -> BoxMetrics` | Get resource usage metrics (async) |
 
 ---
@@ -233,7 +232,12 @@ Metadata about a box.
 | `image` | `str` | OCI image used |
 | `cpus` | `int` | Allocated CPU cores |
 | `memory_mib` | `int` | Allocated memory in MiB |
-| `ports` | `List[Tuple[Optional[int], int, str, Optional[str]]]` | Active local TCP mappings; empty while stopped |
+| `ports` | `List[Tuple[Optional[int], int, str, Optional[str]]]` | Active local TCP mappings; authoritative when `ports_resolved` is true |
+| `ports_resolved` | `bool` | Whether `ports` was resolved for the current box lifecycle |
+
+`box.info()` is a synchronous snapshot. If `ports_resolved` is false, ignore
+`ports`; for a running box, `await runtime.get_info(id)` attempts an attach-only
+refresh without publishing, starting, or stopping it.
 
 ---
 

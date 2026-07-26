@@ -27,7 +27,7 @@ use crate::litebox::BoxTunnel;
 use crate::litebox::copy::CopyOptions;
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
-use crate::net::NetworkBackend;
+use crate::net::{NetworkBackend, NetworkBackendConfig};
 use crate::portal::GuestSession;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
@@ -120,6 +120,10 @@ pub(crate) struct BoxImpl {
     /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
     pub(crate) disk_ops: tokio::sync::Mutex<()>,
 
+    /// Serializes the initialization pipeline and observational port refreshes
+    /// so metadata never inspects a half-initialized network backend.
+    port_info_refresh: tokio::sync::Mutex<()>,
+
     /// Event listeners (from runtime options).
     pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
 
@@ -173,6 +177,7 @@ impl BoxImpl {
             layout,
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
+            port_info_refresh: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
             watcher: std::sync::OnceLock::new(),
@@ -227,8 +232,177 @@ impl BoxImpl {
     }
 
     pub(crate) fn info(&self) -> BoxInfo {
+        let info = self.snapshot_info();
+        if info.status != BoxStatus::Running || self.config.options.ports.is_empty() {
+            return info;
+        }
+
+        // Reattach publishes its snapshot before the rest of initialization
+        // commits. Never expose that intermediate file through synchronous
+        // metadata while the initialization/observation gate is held.
+        let Ok(_refresh) = self.port_info_refresh.try_lock() else {
+            return self.unresolved_port_info(info);
+        };
+        self.snapshot_info()
+    }
+
+    fn snapshot_info(&self) -> BoxInfo {
         let state = self.state.read();
         BoxInfo::new(&self.config, &state)
+    }
+
+    fn unresolved_port_info(&self, mut info: BoxInfo) -> BoxInfo {
+        if info.status == BoxStatus::Running && !self.config.options.ports.is_empty() {
+            info.ports.clear();
+            info.ports_resolved = false;
+        }
+        info
+    }
+
+    /// Return metadata after attempting an attach-only discovery of unresolved
+    /// port bindings. Failure is represented in `BoxInfo` as
+    /// `ports_resolved=false`; a metadata read must never restart or tear down
+    /// an otherwise healthy workload.
+    pub(crate) async fn authoritative_info(&self) -> BoxInfo {
+        let info = self.info();
+        if info.status != BoxStatus::Running
+            || self.config.options.ports.is_empty()
+            || info.ports_resolved
+        {
+            return info;
+        }
+
+        let Ok(_refresh) = self.port_info_refresh.try_lock() else {
+            return self.unresolved_port_info(info);
+        };
+        let info = self.snapshot_info();
+        if info.status != BoxStatus::Running
+            || self.config.options.ports.is_empty()
+            || info.ports_resolved
+        {
+            return info;
+        }
+
+        // A current-core snapshot was already confirmed through gvproxy. Only
+        // unresolved Running metadata needs live observation below.
+        let (lifecycle, ports) = match self.observe_port_info().await {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                tracing::warn!(
+                    box_id = %self.config.id,
+                    %error,
+                    "Could not refresh resolved ports for BoxInfo"
+                );
+                return self.unresolved_port_info(self.snapshot_info());
+            }
+        };
+
+        let mut refreshed = self.snapshot_info();
+        if refreshed.status == BoxStatus::Running
+            && refreshed.pid == Some(lifecycle.pid)
+            && crate::util::PidFileReader::at(self.layout.pid_file_path())
+                .verified_shim()
+                .is_some_and(|shim| shim.identity() == lifecycle)
+        {
+            refreshed.ports = ports;
+            refreshed.ports_resolved = true;
+        }
+        refreshed
+    }
+
+    /// Observe the running shim's network control socket only. This
+    /// intentionally does not call `ensure_booted`: doing so could restart a
+    /// box whose state changed while a read-only metadata request was waiting.
+    async fn observe_port_info(
+        &self,
+    ) -> BoxliteResult<(
+        crate::util::PidRecord,
+        Vec<crate::runtime::options::PortSpec>,
+    )> {
+        let initial_state = self.state.read().clone();
+        if initial_state.status != BoxStatus::Running || self.config.options.ports.is_empty() {
+            return Err(BoxliteError::InvalidState(format!(
+                "box {} is not eligible for running port discovery",
+                self.config.id
+            )));
+        }
+        let lock_id = initial_state.lock_id.ok_or_else(|| {
+            BoxliteError::InvalidState(format!("running box {} has no entity lock", self.config.id))
+        })?;
+        let locker = self.runtime.lock_manager.retrieve(lock_id)?;
+        let _entity_guard = LockGuard::try_new(locker.as_ref()).ok_or_else(|| {
+            BoxliteError::InvalidState(format!(
+                "box {} is busy; port metadata remains unresolved",
+                self.config.id
+            ))
+        })?;
+
+        // Re-read persisted state after taking the cross-process entity lock.
+        // Remove/start may have completed between the first snapshot and lock.
+        let (_, state) = self
+            .runtime
+            .box_manager
+            .box_by_id(&self.config.id)?
+            .ok_or_else(|| BoxliteError::NotFound(self.config.id.to_string()))?;
+        if state.status != BoxStatus::Running {
+            return Err(BoxliteError::InvalidState(format!(
+                "box {} is no longer running",
+                self.config.id
+            )));
+        }
+        let state_pid = state.pid.ok_or_else(|| {
+            BoxliteError::InvalidState(format!(
+                "running box {} has no recorded shim PID",
+                self.config.id
+            ))
+        })?;
+        let lifecycle = crate::util::PidFileReader::at(self.layout.pid_file_path())
+            .verified_shim()
+            .ok_or_else(|| {
+                BoxliteError::InvalidState(format!(
+                    "box {} has no verified active shim lifecycle",
+                    self.config.id
+                ))
+            })?;
+        if lifecycle.identity().pid != state_pid {
+            return Err(BoxliteError::InvalidState(format!(
+                "box {} state PID {} does not match verified shim PID {}",
+                self.config.id,
+                state_pid,
+                lifecycle.identity().pid
+            )));
+        }
+
+        let cached_backend = self.live.get().and_then(|live| live.network.as_deref());
+        let owned_backend = if cached_backend.is_none() {
+            self.network_backend_for_observation()
+        } else {
+            None
+        };
+        let backend = cached_backend.or(owned_backend.as_deref());
+
+        let ports = super::init::PortPublishTask::observe(
+            backend,
+            &self.config.options.ports,
+            &self.layout.resolved_ports_path(),
+            lifecycle,
+        )
+        .await?;
+        Ok((lifecycle.identity(), ports))
+    }
+
+    fn network_backend_for_observation(&self) -> Option<Box<dyn NetworkBackend>> {
+        let allow_net = match &self.config.options.network {
+            crate::runtime::options::NetworkSpec::Enabled { allow_net } => allow_net.clone(),
+            crate::runtime::options::NetworkSpec::Disabled => return None,
+        };
+        let config = NetworkBackendConfig {
+            socket_path: self.layout.net_backend_socket_path(),
+            allow_net,
+            secrets: self.config.options.secrets.clone(),
+            ca_dir: self.layout.ca_dir(),
+        };
+        self.runtime.network_factory.create(&config)
     }
 
     // ========================================================================
@@ -999,6 +1173,11 @@ impl BoxImpl {
         use super::BoxBuilder;
         use std::sync::Arc;
 
+        // A recovered box can be queried through `Runtime::get_info` while a
+        // normal operation starts its reattach pipeline. Share an async gate so
+        // observation cannot inspect the backend while initialization mutates it.
+        let _port_refresh = self.port_info_refresh.lock().await;
+
         let state = self.state.read().clone();
         let is_first_start = state.status == BoxStatus::Configured;
         // Reattaching to a live box: its init is already running, so mark the
@@ -1317,16 +1496,6 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self.info()
     }
 
-    async fn port_bindings(&self) -> BoxliteResult<Vec<crate::runtime::options::PortSpec>> {
-        // A fresh handle for a persisted Running box has no LiveState yet.
-        // Reattach before reading the snapshot so the Running recovery plan
-        // can reconcile publication interrupted by a prior process crash.
-        if self.state.read().status == BoxStatus::Running {
-            self.ensure_booted().await?;
-        }
-        Ok(self.info().ports)
-    }
-
     async fn start(&self) -> BoxliteResult<()> {
         self.start().await
     }
@@ -1412,8 +1581,13 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
     use crate::litebox::config::ContainerRuntimeConfig;
+    use crate::net::{Forward, NetworkBackendFactory, NetworkBackendSpec};
     use crate::runtime::id::BoxIDMint;
     use crate::runtime::options::{BoxOptions, BoxliteOptions, PortProtocol, PortSpec, RootfsSpec};
     use crate::runtime::rt_impl::RuntimeImpl;
@@ -1432,6 +1606,53 @@ mod tests {
         fn drop(&mut self) {
             let _ = self.0.kill();
             let _ = self.0.wait();
+        }
+    }
+
+    #[derive(Debug)]
+    struct ObservationBackend {
+        responses: Arc<std::sync::Mutex<VecDeque<Vec<Forward>>>>,
+        list_calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl NetworkBackend for ObservationBackend {
+        fn name(&self) -> &'static str {
+            "observation-test"
+        }
+
+        fn spec(&self) -> NetworkBackendSpec {
+            NetworkBackendSpec {
+                socket_path: PathBuf::from("/tmp/observation-test.sock"),
+                allow_net: Vec::new(),
+                secrets: Vec::new(),
+                ca_cert_pem: None,
+                ca_key_pem: None,
+            }
+        }
+
+        async fn list_forwards(&self) -> BoxliteResult<Vec<Forward>> {
+            self.list_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_default())
+        }
+    }
+
+    struct ObservationFactory {
+        responses: Arc<std::sync::Mutex<VecDeque<Vec<Forward>>>>,
+        list_calls: Arc<AtomicUsize>,
+    }
+
+    impl NetworkBackendFactory for ObservationFactory {
+        fn create(&self, _: &NetworkBackendConfig) -> Option<Box<dyn NetworkBackend>> {
+            Some(Box::new(ObservationBackend {
+                responses: Arc::clone(&self.responses),
+                list_calls: Arc::clone(&self.list_calls),
+            }))
         }
     }
 
@@ -1614,7 +1835,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn port_bindings_reconcile_failure_preserves_running_shim() {
+    async fn get_info_discovery_failure_preserves_running_shim_and_metadata() {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
         let runtime = RuntimeImpl::new(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
@@ -1650,30 +1871,146 @@ mod tests {
             .await
             .expect("get box")
             .expect("box exists");
-        let bindings = litebox
-            .port_bindings()
-            .await
-            .expect("a read query must tolerate reconciliation failure");
-
-        assert_eq!(bindings, vec![resolved]);
-        assert!(
-            is_process_alive(pid),
-            "port discovery must not stop an already-running shim"
-        );
         let info = runtime
             .get_info(id.as_str())
             .await
             .expect("query box")
             .expect("box remains registered");
+        assert!(info.ports.is_empty());
+        assert!(
+            !info.ports_resolved,
+            "failed discovery must remain explicit instead of exposing an unverified snapshot"
+        );
+        assert!(
+            is_process_alive(pid),
+            "port discovery must not stop an already-running shim"
+        );
         assert_eq!(info.status, BoxStatus::Running);
         assert_eq!(info.pid, Some(pid));
         assert_eq!(
             std::fs::read(&snapshot_path).unwrap(),
             snapshot_contents,
-            "failed reconciliation must preserve the last confirmed bindings"
+            "observational discovery must not rewrite or delete persisted metadata"
         );
 
         drop(litebox);
+        drop(child);
+    }
+
+    #[tokio::test]
+    async fn repeated_get_info_does_not_cache_observed_ports() {
+        let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
+        let responses = Arc::new(std::sync::Mutex::new(VecDeque::from([
+            vec![Forward {
+                local: "127.0.0.1:49152".to_string(),
+                remote: format!("{}:3000", crate::net::constants::GUEST_IP),
+                protocol: "tcp".to_string(),
+            }],
+            Vec::new(),
+        ])));
+        let list_calls = Arc::new(AtomicUsize::new(0));
+        let mut runtime = RuntimeImpl::new(BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .expect("create runtime");
+        Arc::get_mut(&mut runtime)
+            .expect("new runtime has one owner")
+            .network_factory = Arc::new(ObservationFactory {
+            responses,
+            list_calls: Arc::clone(&list_calls),
+        });
+        let requested = PortSpec {
+            host_port: None,
+            guest_port: 3000,
+            protocol: PortProtocol::Tcp,
+            host_ip: Some("127.0.0.1".to_string()),
+        };
+        let (child, id, _pid) = running_box_with_standin(&runtime, false, 0, vec![requested]);
+        let litebox = runtime
+            .get(id.as_str())
+            .await
+            .expect("get box")
+            .expect("box exists");
+
+        let first = runtime
+            .get_info(id.as_str())
+            .await
+            .expect("first query")
+            .expect("box exists");
+        assert!(first.ports_resolved);
+        assert_eq!(first.ports.len(), 1);
+        assert_eq!(first.ports[0].host_port, Some(49152));
+
+        let second = runtime
+            .get_info(id.as_str())
+            .await
+            .expect("second query")
+            .expect("box exists");
+        assert!(second.ports.is_empty());
+        assert!(
+            !second.ports_resolved,
+            "a prior observation must not outlive the backend state it observed"
+        );
+        assert_eq!(list_calls.load(Ordering::SeqCst), 2);
+
+        drop(litebox);
+        drop(child);
+    }
+
+    #[tokio::test]
+    async fn box_info_hides_snapshot_until_port_initialization_commits() {
+        let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
+        let runtime = RuntimeImpl::new(BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .expect("create runtime");
+        let requested = PortSpec {
+            host_port: None,
+            guest_port: 3000,
+            protocol: PortProtocol::Tcp,
+            host_ip: Some("127.0.0.1".to_string()),
+        };
+        let resolved = PortSpec {
+            host_port: Some(49152),
+            ..requested.clone()
+        };
+        let (child, id, _pid) = running_box_with_standin(&runtime, false, 0, vec![requested]);
+        let (config, state) = runtime
+            .box_manager
+            .box_by_id(&id)
+            .expect("load box")
+            .expect("box exists");
+        let box_impl = BoxImpl::new(
+            config,
+            state,
+            runtime.clone(),
+            runtime.shutdown_token.child_token(),
+        );
+        std::fs::create_dir_all(box_impl.layout.resolved_ports_path().parent().unwrap())
+            .expect("create logs dir");
+        let lifecycle = crate::util::PidFileReader::at(box_impl.layout.pid_file_path())
+            .verified_shim()
+            .expect("verified shim")
+            .identity();
+        crate::litebox::ports::ResolvedPortsSnapshot::at(box_impl.layout.resolved_ports_path())
+            .replace(lifecycle, std::slice::from_ref(&resolved))
+            .expect("write current-runtime snapshot");
+
+        let gate = box_impl.port_info_refresh.lock().await;
+        let synchronous = box_impl.info();
+        assert!(synchronous.ports.is_empty());
+        assert!(!synchronous.ports_resolved);
+        let authoritative = box_impl.authoritative_info().await;
+        assert!(authoritative.ports.is_empty());
+        assert!(!authoritative.ports_resolved);
+        drop(gate);
+
+        let committed = box_impl.info();
+        assert_eq!(committed.ports, vec![resolved]);
+        assert!(committed.ports_resolved);
+
         drop(child);
     }
 

@@ -28,7 +28,6 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite pull`](#boxlite-pull)
   - [`boxlite images`](#boxlite-images)
   - [`boxlite inspect`](#boxlite-inspect)
-  - [`boxlite port`](#boxlite-port)
   - [`boxlite cp`](#boxlite-cp)
   - [`boxlite info`](#boxlite-info)
   - [`boxlite logs`](#boxlite-logs)
@@ -469,20 +468,6 @@ The Go-template engine exposes a `json` function for serializing nested values.
 boxlite inspect mybox
 boxlite inspect --format '{{.State.Status}}' mybox
 boxlite inspect -l --format yaml
-```
-
----
-
-### `boxlite port`
-
-**Synopsis:** `boxlite port BOX`
-
-Print active host-to-guest port bindings, one per line. Automatically allocated
-host ports are shown as their resolved values. A stopped box prints no bindings.
-
-```text
-127.0.0.1:49152->3000/tcp
-0.0.0.0:8080->80/tcp
 ```
 
 ---

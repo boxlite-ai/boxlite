@@ -213,8 +213,11 @@ console.log(pwdResult.stdout); // "/tmp\n"
 // Get box info
 console.log(box.id);    // ULID
 console.log(box.name);  // Optional name
-console.log(box.info()); // Metadata
-console.log(await box.portBindings()); // Active mappings with resolved host ports
+const info = box.info(); // Metadata
+console.log(info.ports, info.portsResolved); // Current lifecycle mappings and resolution state
+// If unresolved while running, getInfo observes the backend without publishing.
+const refreshed = await runtime.getInfo(box.id);
+console.log(refreshed?.ports, refreshed?.portsResolved);
 
 // Cleanup
 await box.stop();

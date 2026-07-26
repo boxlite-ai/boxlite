@@ -345,11 +345,14 @@ func TestPortProtocolString(t *testing.T) {
 }
 
 func TestDecodePortsJSONSupportsCurrentAndLegacyProtocols(t *testing.T) {
-	ports := decodePortsJSON(
+	ports, resolved := decodePortsJSON(
 		`[{"host_port":49152,"guest_port":3000,"protocol":"tcp","host_ip":"127.0.0.1"},` +
 			`{"host_port":5353,"guest_port":53,"protocol":"Udp","host_ip":null}]`,
 	)
 
+	if !resolved {
+		t.Fatal("populated JSON array should be resolved")
+	}
 	if len(ports) != 2 {
 		t.Fatalf("ports: got %d", len(ports))
 	}
@@ -358,6 +361,32 @@ func TestDecodePortsJSONSupportsCurrentAndLegacyProtocols(t *testing.T) {
 	}
 	if ports[1].Host != 5353 || ports[1].Guest != 53 || ports[1].Protocol != PortProtocolUdp || ports[1].HostIP != "" {
 		t.Errorf("legacy port: got %+v", ports[1])
+	}
+}
+
+func TestDecodePortsJSONResolutionSentinel(t *testing.T) {
+	tests := []struct {
+		name         string
+		value        string
+		wantResolved bool
+		wantLen      int
+	}{
+		{name: "unresolved", value: "null", wantResolved: false},
+		{name: "resolved empty", value: "[]", wantResolved: true},
+		{name: "missing legacy pointer", value: "", wantResolved: false},
+		{name: "malformed", value: "not-json", wantResolved: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ports, resolved := decodePortsJSON(tt.value)
+			if resolved != tt.wantResolved {
+				t.Fatalf("resolved: got %v, want %v", resolved, tt.wantResolved)
+			}
+			if len(ports) != tt.wantLen {
+				t.Fatalf("ports: got %d, want %d", len(ports), tt.wantLen)
+			}
+		})
 	}
 }
 
