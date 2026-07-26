@@ -1140,6 +1140,8 @@ mod owned_ffi_ptr_nested_leak_tests {
     use crate::FREE_STR_CALLS;
     use crate::images::{CImageInfoList, CImagePullResult};
     use crate::info::{CBoxInfo, CBoxInfoList};
+    use boxlite::runtime::options::PortProtocol;
+    use boxlite::{NetworkInfo, NetworkMode, PublishedPort};
     use std::ffi::CString;
     use std::sync::atomic::Ordering as AtomicOrdering;
 
@@ -1185,7 +1187,16 @@ mod owned_ffi_ptr_nested_leak_tests {
             pid: 0,
             cpus: 1,
             memory_mib: 256,
-            network_json: test_cstr("null"),
+            network: crate::info::network_to_c_ptr(&Some(NetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: vec!["api.example.com".to_string()],
+                published_ports: Some(vec![PublishedPort {
+                    guest_port: 3000,
+                    host_ip: "127.0.0.1".to_string(),
+                    host_port: 49152,
+                    protocol: PortProtocol::Tcp,
+                }]),
+            })),
             created_at: 0,
             auto_pause: 900,
             auto_delete: 0,
@@ -1198,9 +1209,9 @@ mod owned_ffi_ptr_nested_leak_tests {
         let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
         assert_eq!(
             after - before,
-            5,
+            6,
             "OwnedFfiPtr<CBoxInfo>::drop reclaimed {} inner CStrings; \
-             expected 5 (id + name + image + status + network). Inner allocations leak.",
+             expected 6 (four BoxInfo strings + allow_net + host_ip). Inner allocations leak.",
             after - before
         );
     }
@@ -1256,7 +1267,7 @@ mod owned_ffi_ptr_nested_leak_tests {
             pid: 0,
             cpus: 2,
             memory_mib: 512,
-            network_json: test_cstr("null"),
+            network: std::ptr::null_mut(),
             created_at: 0,
             auto_pause: 900,
             auto_delete: 0,
@@ -1277,9 +1288,9 @@ mod owned_ffi_ptr_nested_leak_tests {
         let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
         assert_eq!(
             after - before,
-            5,
+            4,
             "OwnedFfiPtr<CBoxInfoList>::drop reclaimed {} inner CStrings; \
-             expected 5 (1 item × 5 fields). Inner allocations leak.",
+             expected 4 (1 item × 4 fields). Inner allocations leak.",
             after - before
         );
     }

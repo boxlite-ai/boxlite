@@ -551,13 +551,18 @@ BoxliteErrorCode boxlite_box_metrics(
 );
 ```
 
-`CBoxInfo.network_json` is an owned JSON `NetworkInfo` object with `mode`,
-`allow_net`, and `published_ports`. The whole value is JSON `null` when network
-metadata is unavailable. Inside the object, `published_ports: null` means
-unresolved, `[]` means authoritatively empty, and an array contains concrete
-`PublishedPort` objects. The existing `boxlite_free_box_info()` and
-`boxlite_free_box_info_list()` functions release it. `boxlite_get_info()`
-observes the live backend without publishing.
+`CBoxInfo.network` is an owned `CNetworkInfo*` and is `NULL` when network
+metadata is unavailable. `CNetworkInfo` exposes `mode`, the `allow_net` string
+array and count, and a nullable `CPublishedPortList*`. A `NULL`
+`published_ports` pointer means unresolved, a non-`NULL` list with `count == 0`
+means authoritatively empty, and a populated list contains typed
+`CPublishedPort` entries with `guest_port`, `host_ip`, `host_port`, and
+`protocol`.
+
+The network pointer and every nested array and string are borrowed from their
+enclosing `CBoxInfo`; do not free them separately. `boxlite_free_box_info()` and
+`boxlite_free_box_info_list()` release the complete object graph.
+`boxlite_get_info()` observes the live backend without publishing.
 
 ### Error Handling
 

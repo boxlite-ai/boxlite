@@ -86,9 +86,9 @@ impl LiteBox {
         self.name.as_deref()
     }
 
-    /// Get box info without triggering VM initialization.
+    /// Get a synchronous metadata snapshot without querying the network backend.
     pub fn info(&self) -> BoxInfo {
-        self.box_backend.info()
+        self.box_backend.snapshot_info()
     }
 
     /// Start the box (initialize VM).

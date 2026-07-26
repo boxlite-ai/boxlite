@@ -62,9 +62,9 @@ pub(crate) struct LiveState {
     #[allow(dead_code)]
     network: Option<Arc<dyn NetworkBackend>>,
 
-    /// Port bindings confirmed while constructing this live VM. Keeping them
-    /// in LiveState makes the synchronous cache inherit the OnceCell's exact
-    /// shim lifecycle instead of requiring a separate invalidation protocol.
+    /// Port bindings confirmed while constructing this live VM. Retaining the
+    /// publication with LiveState lets an existing handle serve a synchronous
+    /// lifecycle-bound snapshot; the runtime cache shares it with other handles.
     published_ports: Option<crate::litebox::ports::LivePublishedPorts>,
 
     // Metrics
@@ -238,25 +238,28 @@ impl BoxImpl {
         self.config.container.id.as_str()
     }
 
-    pub(crate) fn info(&self) -> BoxInfo {
-        self.snapshot_info()
-    }
-
-    fn snapshot_info(&self) -> BoxInfo {
+    pub(crate) fn snapshot_info(&self) -> BoxInfo {
         let state = self.state.read();
         let mut info = BoxInfo::new(&self.config, &state);
         if state.status.is_active()
-            && let Some(published_ports) = self
-                .live
-                .get()
-                .and_then(|live| live.published_ports.as_ref())
-            && state.pid == Some(published_ports.lifecycle().pid)
-            && crate::util::PidFileReader::at(self.layout.pid_file_path())
+            && let Some(lifecycle) = crate::util::PidFileReader::at(self.layout.pid_file_path())
                 .verified_shim()
-                .is_some_and(|shim| shim.identity() == published_ports.lifecycle())
+                .map(|shim| shim.identity())
+            && state.pid == Some(lifecycle.pid)
+            && let Some(bindings) = self
+                .runtime
+                .published_port_cache
+                .get(&self.config.id, lifecycle)
+                .or_else(|| {
+                    self.live
+                        .get()
+                        .and_then(|live| live.published_ports.as_ref())
+                        .filter(|published_ports| published_ports.lifecycle() == lifecycle)
+                        .map(|published_ports| published_ports.bindings().to_vec())
+                })
             && let Some(network) = info.network.as_mut()
         {
-            network.published_ports = Some(published_ports.bindings().to_vec());
+            network.published_ports = Some(bindings);
         }
         info
     }
@@ -274,23 +277,50 @@ impl BoxImpl {
         info
     }
 
-    /// Return metadata after an attach-only observation of the live backend.
-    /// The in-memory value serves synchronous `box.info()` only: asynchronous
-    /// runtime queries always confirm gvproxy's current state. Failure is
-    /// represented by `published_ports=None`; metadata reads never restart or
-    /// tear down an otherwise healthy workload.
-    pub(crate) async fn authoritative_info(&self) -> BoxInfo {
-        let info = self.info();
+    fn has_resolved_published_ports(info: &BoxInfo) -> bool {
+        info.network
+            .as_ref()
+            .is_some_and(|network| network.published_ports.is_some())
+    }
+
+    /// Return metadata, recovering concrete ports from the live backend only
+    /// when this runtime has no result for the current shim lifecycle.
+    ///
+    /// A successful publication is stable for that lifecycle and is cached.
+    /// Recovery remains observational: it never starts, repairs, or tears down
+    /// an otherwise healthy workload.
+    pub(crate) async fn info(&self) -> BoxInfo {
+        let info = self.snapshot_info();
         if info.status != BoxStatus::Running || self.config.options.ports.is_empty() {
             return info;
         }
+        if Self::has_resolved_published_ports(&info) {
+            return info;
+        }
 
-        let Ok(_refresh) = self.port_info_refresh.try_lock() else {
-            return self.unresolved_port_info(info);
-        };
+        // Wait for this BoxImpl's initialization or observation, then check
+        // again before entering the runtime-wide per-box single flight.
+        let _refresh = self.port_info_refresh.lock().await;
         let info = self.snapshot_info();
         if info.status != BoxStatus::Running {
             return self.unresolved_port_info(info);
+        }
+        if Self::has_resolved_published_ports(&info) {
+            return info;
+        }
+
+        let refresh_lock = self
+            .runtime
+            .published_port_cache
+            .refresh_lock(&self.config.id);
+        let _runtime_refresh = refresh_lock.lock().await;
+        let refresh_generation = refresh_lock.generation();
+        let info = self.snapshot_info();
+        if info.status != BoxStatus::Running {
+            return self.unresolved_port_info(info);
+        }
+        if Self::has_resolved_published_ports(&info) {
+            return info;
         }
 
         let (lifecycle, ports) = match self.observe_port_info().await {
@@ -301,22 +331,29 @@ impl BoxImpl {
                     %error,
                     "Could not refresh resolved ports for BoxInfo"
                 );
-                return self.unresolved_port_info(self.snapshot_info());
+                let refreshed = self.snapshot_info();
+                return if Self::has_resolved_published_ports(&refreshed) {
+                    refreshed
+                } else {
+                    self.unresolved_port_info(refreshed)
+                };
             }
         };
 
-        // Start unresolved even when synchronous metadata has an in-memory
-        // value. Only the final lifecycle check below may make this async view
-        // authoritative.
         let mut refreshed = self.unresolved_port_info(self.snapshot_info());
         if refreshed.status == BoxStatus::Running
             && refreshed.pid == Some(lifecycle.pid)
             && crate::util::PidFileReader::at(self.layout.pid_file_path())
                 .verified_shim()
                 .is_some_and(|shim| shim.identity() == lifecycle)
-            && let Some(network) = refreshed.network.as_mut()
+            && self.runtime.published_port_cache.store_if_current(
+                &self.config.id,
+                &refresh_lock,
+                refresh_generation,
+                crate::litebox::ports::LivePublishedPorts::new(lifecycle, ports),
+            )
         {
-            network.published_ports = Some(ports);
+            refreshed = self.snapshot_info();
         }
         refreshed
     }
@@ -1499,8 +1536,8 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self.config.name.as_deref()
     }
 
-    fn info(&self) -> BoxInfo {
-        self.info()
+    fn snapshot_info(&self) -> BoxInfo {
+        BoxImpl::snapshot_info(self)
     }
 
     async fn start(&self) -> BoxliteResult<()> {
@@ -1988,7 +2025,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_get_info_does_not_cache_observed_ports() {
+    async fn repeated_get_info_reuses_observed_ports_for_the_shim_lifecycle() {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
         let responses = Arc::new(std::sync::Mutex::new(VecDeque::from([
             vec![Forward {
@@ -2037,11 +2074,88 @@ mod tests {
             .await
             .expect("second query")
             .expect("box exists");
-        assert!(
-            published_ports(&second).is_none(),
-            "a prior observation must not outlive the backend state it observed"
+        assert_eq!(published_ports(&second), Some(first_ports));
+        assert_eq!(
+            list_calls.load(Ordering::SeqCst),
+            1,
+            "resolved bindings should be observed once per shim lifecycle"
         );
-        assert_eq!(list_calls.load(Ordering::SeqCst), 2);
+
+        drop(litebox);
+        drop(child);
+    }
+
+    #[tokio::test]
+    async fn get_and_list_info_singleflight_one_cold_observation() {
+        let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
+        let forward = Forward {
+            local: "127.0.0.1:49152".to_string(),
+            remote: format!("{}:3000", crate::net::constants::GUEST_IP),
+            protocol: "tcp".to_string(),
+        };
+        let responses = Arc::new(std::sync::Mutex::new(VecDeque::from([
+            vec![forward.clone()],
+            vec![forward],
+        ])));
+        let list_calls = Arc::new(AtomicUsize::new(0));
+        let mut runtime = RuntimeImpl::new(BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .expect("create runtime");
+        Arc::get_mut(&mut runtime)
+            .expect("new runtime has one owner")
+            .network_factory = Arc::new(ObservationFactory {
+            responses,
+            list_calls: Arc::clone(&list_calls),
+        });
+        let requested = PortSpec {
+            host_port: None,
+            guest_port: 3000,
+            protocol: PortProtocol::Tcp,
+            host_ip: Some("127.0.0.1".to_string()),
+        };
+        let (child, id, _pid) = running_box_with_standin(&runtime, false, 0, vec![requested]);
+        let litebox = runtime
+            .get(id.as_str())
+            .await
+            .expect("get box")
+            .expect("box exists");
+
+        // Hold the shared gate until both independently constructed BoxImpl
+        // values are waiting on it. This proves the production coordination
+        // directly without relying on a timing delay in the mock backend.
+        let refresh_lock = runtime.published_port_cache.refresh_lock(&id);
+        let held_refresh = refresh_lock.lock().await;
+        let get_runtime = Arc::clone(&runtime);
+        let get_id = id.to_string();
+        let get_task = tokio::spawn(async move { get_runtime.get_info(&get_id).await });
+        let list_runtime = Arc::clone(&runtime);
+        let list_task = tokio::spawn(async move { list_runtime.list_info().await });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while Arc::strong_count(&refresh_lock) < 3 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("get_info and list_info should share the runtime refresh gate");
+        drop(held_refresh);
+
+        let (single, all) = tokio::join!(get_task, list_task);
+        let single = single
+            .expect("get_info task")
+            .expect("query box")
+            .expect("box exists");
+        let all = all.expect("list_info task").expect("list boxes");
+
+        assert_eq!(published_ports(&single).unwrap()[0].host_port, 49152);
+        assert_eq!(all.len(), 1);
+        assert_eq!(published_ports(&all[0]).unwrap()[0].host_port, 49152);
+        assert_eq!(
+            list_calls.load(Ordering::SeqCst),
+            1,
+            "independent BoxImpl values must share one cold observation"
+        );
 
         drop(litebox);
         drop(child);
@@ -2094,7 +2208,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn box_info_cache_is_live_state_and_lifecycle_bound() {
+    async fn box_info_reuses_lifecycle_cache_without_observing_live_backend() {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
         let runtime = RuntimeImpl::new(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
@@ -2126,7 +2240,7 @@ mod tests {
             runtime.shutdown_token.child_token(),
         );
         let gate = box_impl.port_info_refresh.lock().await;
-        assert!(published_ports(&box_impl.info()).is_none());
+        assert!(published_ports(&box_impl.snapshot_info()).is_none());
 
         let live = LiveState::new(
             Box::new(InfoTestHandler(pid)),
@@ -2151,19 +2265,23 @@ mod tests {
         );
         assert!(box_impl.live.set(live).is_ok());
 
-        let synchronous = box_impl.info();
-        assert_eq!(published_ports(&synchronous), Some([resolved].as_slice()));
+        let synchronous = box_impl.snapshot_info();
+        assert_eq!(
+            published_ports(&synchronous),
+            Some([resolved.clone()].as_slice())
+        );
 
-        // Async metadata must not mistake the synchronous cache for a live
-        // observation. The held gate makes observation unavailable here.
-        let authoritative = box_impl.authoritative_info().await;
-        assert!(published_ports(&authoritative).is_none());
+        // Async metadata must reuse a lifecycle-bound publication result
+        // without waiting for or querying the backend. The held gate proves
+        // this call returns from the cache before attempting observation.
+        let observed = box_impl.info().await;
+        assert_eq!(published_ports(&observed), Some([resolved].as_slice()));
         drop(gate);
 
         assert!(crate::util::kill_process(pid));
         child.0.wait().expect("reap stopped stand-in");
         assert!(
-            published_ports(&box_impl.info()).is_none(),
+            published_ports(&box_impl.snapshot_info()).is_none(),
             "the synchronous cache must not outlive its shim lifecycle"
         );
 

@@ -115,7 +115,7 @@ impl BoxBackend for RestBox {
         }
     }
 
-    fn info(&self) -> BoxInfo {
+    fn snapshot_info(&self) -> BoxInfo {
         self.cached_info.read().clone()
     }
 

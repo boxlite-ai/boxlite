@@ -344,60 +344,6 @@ func TestPortProtocolString(t *testing.T) {
 	}
 }
 
-func TestDecodeNetworkJSONPreservesNetworkAndPublishedPorts(t *testing.T) {
-	network := decodeNetworkJSON(
-		`{"mode":"enabled","allow_net":["api.example.com"],"published_ports":` +
-			`[{"guest_port":3000,"host_ip":"127.0.0.1","host_port":49152,"protocol":"tcp"},` +
-			`{"guest_port":53,"host_ip":"","host_port":5353,"protocol":"udp"}]}`,
-	)
-
-	if network == nil {
-		t.Fatal("network JSON should decode")
-	}
-	if network.Mode != NetworkModeEnabled {
-		t.Errorf("mode: got %q", network.Mode)
-	}
-	if len(network.AllowNet) != 1 || network.AllowNet[0] != "api.example.com" {
-		t.Errorf("allow net: got %v", network.AllowNet)
-	}
-	if len(network.PublishedPorts) != 2 {
-		t.Fatalf("published ports: got %d", len(network.PublishedPorts))
-	}
-	if network.PublishedPorts[0] != (PublishedPort{GuestPort: 3000, HostIP: "127.0.0.1", HostPort: 49152, Protocol: PortProtocolTcp}) {
-		t.Errorf("first published port: got %+v", network.PublishedPorts[0])
-	}
-	if network.PublishedPorts[1] != (PublishedPort{GuestPort: 53, HostIP: "", HostPort: 5353, Protocol: PortProtocolUdp}) {
-		t.Errorf("second published port: got %+v", network.PublishedPorts[1])
-	}
-}
-
-func TestDecodeNetworkJSONPreservesPublicationState(t *testing.T) {
-	tests := []struct {
-		name        string
-		value       string
-		wantNetwork bool
-		wantPorts   bool
-	}{
-		{name: "network unavailable", value: "null"},
-		{name: "unresolved", value: `{"mode":"enabled","allow_net":[],"published_ports":null}`, wantNetwork: true},
-		{name: "resolved empty", value: `{"mode":"enabled","allow_net":[],"published_ports":[]}`, wantNetwork: true, wantPorts: true},
-		{name: "missing legacy pointer", value: ""},
-		{name: "malformed", value: "not-json"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			network := decodeNetworkJSON(tt.value)
-			if (network != nil) != tt.wantNetwork {
-				t.Fatalf("network presence: got %v, want %v", network != nil, tt.wantNetwork)
-			}
-			if network != nil && (network.PublishedPorts != nil) != tt.wantPorts {
-				t.Fatalf("published port resolution: got %v, want %v", network.PublishedPorts != nil, tt.wantPorts)
-			}
-		})
-	}
-}
-
 func TestRuntimeOptions(t *testing.T) {
 	password := testRegistryPassword()
 	cfg := &runtimeConfig{}

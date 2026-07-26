@@ -75,9 +75,9 @@ impl PortPublishTask {
             )
         })?;
 
-        // Metadata reads are best effort and must not inherit reattach's
-        // readiness retry window. A caller can retry a null BoxInfo result;
-        // only the lifecycle pipeline is allowed to wait for control startup.
+        // After any in-flight publication finishes, the metadata read's own
+        // backend call is best effort and does not use reattach's readiness
+        // retries. A caller can retry a null BoxInfo result.
         let active_forwards = tokio::time::timeout(
             METADATA_OBSERVE_TIMEOUT,
             backend.list_forwards(),
@@ -152,6 +152,16 @@ impl PipelineTask<InitCtx> for PortPublishTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
+        // A recovered box can be inspected through a separate BoxImpl while
+        // this pipeline reconciles its listeners. Share the runtime gate so
+        // an observation cannot cache a partially reconciled publication.
+        let refresh_lock = {
+            let ctx = ctx.lock().await;
+            ctx.runtime.published_port_cache.refresh_lock(&box_id)
+        };
+        let _refresh = refresh_lock.lock().await;
+        let refresh_generation = refresh_lock.generation();
+
         let (requested, pid_path, network_backend, is_reattach) = {
             let mut ctx = ctx.lock().await;
             let layout = ctx
@@ -187,10 +197,15 @@ impl PipelineTask<InitCtx> for PortPublishTask {
         let mut ctx = ctx.lock().await;
         ctx.network_backend = network_backend;
         if let Ok(Some(ports)) = &result {
-            ctx.published_ports = Some(crate::litebox::ports::LivePublishedPorts::new(
-                lifecycle.identity(),
-                ports.clone(),
-            ));
+            let published_ports =
+                crate::litebox::ports::LivePublishedPorts::new(lifecycle.identity(), ports.clone());
+            ctx.runtime.published_port_cache.store_if_current(
+                &box_id,
+                &refresh_lock,
+                refresh_generation,
+                published_ports.clone(),
+            );
+            ctx.published_ports = Some(published_ports);
         }
         drop(ctx);
 

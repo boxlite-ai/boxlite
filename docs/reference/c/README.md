@@ -884,12 +884,14 @@ if (boxlite_box_info(box, &info, &error) == Ok) {
 }
 ```
 
-`info->network_json` is an owned JSON value freed with the rest of `CBoxInfo`.
-It is JSON `null` when network information is unavailable; otherwise it is an
-object containing `mode`, `allow_net`, and `published_ports`. Within that
-object, `published_ports: null` means unresolved for the current lifecycle,
-`[]` means authoritatively no local publications, and a populated array contains
-concrete `guest_port`, `host_ip`, `host_port`, and `protocol` fields.
+`info->network` is an owned `CNetworkInfo*` freed with the rest of `CBoxInfo`.
+It is `NULL` when network information is unavailable. Otherwise it contains a
+typed `mode`, an `allow_net` string array and count, and a nullable
+`CPublishedPortList*`. A `NULL` `published_ports` pointer means unresolved for
+the current lifecycle, a non-`NULL` list with `count == 0` means authoritatively
+no local publications, and a populated list contains typed `CPublishedPort`
+entries with `guest_port`, `host_ip`, `host_port`, and `protocol` fields. These
+nested values are borrowed from `CBoxInfo` and must not be freed separately.
 
 `boxlite_box_info()` is a synchronous, lifecycle-bound snapshot. For a running
 local box with configured ports, `boxlite_get_info()` and `boxlite_list_info()`

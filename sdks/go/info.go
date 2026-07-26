@@ -6,9 +6,7 @@ package boxlite
 import "C"
 import (
 	"context"
-	"encoding/json"
 	"runtime/cgo"
-	"strings"
 	"time"
 	"unsafe"
 )
@@ -134,7 +132,6 @@ func (r *Runtime) GetInfo(ctx context.Context, idOrName string) (*BoxInfo, error
 
 func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 	pid := int(info.pid)
-	network := decodeNetworkJSON(cString(info.network_json))
 	return BoxInfo{
 		ID:         cString(info.id),
 		Name:       cString(info.name),
@@ -144,7 +141,7 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 		PID:        pid,
 		CPUs:       int(info.cpus),
 		MemoryMiB:  int(info.memory_mib),
-		Network:    network,
+		Network:    cNetworkInfoToGo(info.network),
 		AutoPause:  uint32(info.auto_pause),
 		AutoDelete: uint32(info.auto_delete),
 		AutoResume: info.auto_resume != 0,
@@ -152,50 +149,59 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 	}
 }
 
-type publishedPortJSON struct {
-	GuestPort int    `json:"guest_port"`
-	HostIP    string `json:"host_ip"`
-	HostPort  int    `json:"host_port"`
-	Protocol  string `json:"protocol"`
+func networkModeFromCValue(mode uint32) NetworkMode {
+	switch mode {
+	case uint32(C.BoxliteNetworkModeEnabled):
+		return NetworkModeEnabled
+	case uint32(C.BoxliteNetworkModeDisabled):
+		return NetworkModeDisabled
+	default:
+		return NetworkMode("")
+	}
 }
 
-type networkInfoJSON struct {
-	Mode           NetworkMode         `json:"mode"`
-	AllowNet       []string            `json:"allow_net"`
-	PublishedPorts []publishedPortJSON `json:"published_ports"`
+func portProtocolFromCValue(protocol uint32) PortProtocol {
+	switch protocol {
+	case uint32(C.BoxlitePortProtocolTcp):
+		return PortProtocolTcp
+	case uint32(C.BoxlitePortProtocolUdp):
+		return PortProtocolUdp
+	default:
+		return PortProtocolUnknown
+	}
 }
 
-func decodeNetworkJSON(value string) *NetworkInfo {
-	value = strings.TrimSpace(value)
-	if value == "" || value == "null" {
+func cNetworkInfoToGo(network *C.CNetworkInfo) *NetworkInfo {
+	if network == nil {
 		return nil
 	}
 
-	var wire networkInfoJSON
-	if json.Unmarshal([]byte(value), &wire) != nil {
-		return nil
+	allowNet := make([]string, 0, int(network.allow_net_count))
+	if network.allow_net != nil && network.allow_net_count > 0 {
+		for _, host := range unsafe.Slice(network.allow_net, int(network.allow_net_count)) {
+			allowNet = append(allowNet, cString(host))
+		}
 	}
 
 	var publishedPorts []PublishedPort
-	if wire.PublishedPorts != nil {
-		publishedPorts = make([]PublishedPort, 0, len(wire.PublishedPorts))
-	}
-	for _, port := range wire.PublishedPorts {
-		protocol := PortProtocolTcp
-		if strings.EqualFold(port.Protocol, "udp") {
-			protocol = PortProtocolUdp
+	if network.published_ports != nil {
+		ports := network.published_ports
+		publishedPorts = make([]PublishedPort, 0, int(ports.count))
+		if ports.items != nil && ports.count > 0 {
+			for _, port := range unsafe.Slice(ports.items, int(ports.count)) {
+				publishedPorts = append(publishedPorts, PublishedPort{
+					GuestPort: int(port.guest_port),
+					HostIP:    cString(port.host_ip),
+					HostPort:  int(port.host_port),
+					Protocol:  portProtocolFromCValue(port.protocol),
+				})
+			}
 		}
-		publishedPorts = append(publishedPorts, PublishedPort{
-			GuestPort: port.GuestPort,
-			HostIP:    port.HostIP,
-			HostPort:  port.HostPort,
-			Protocol:  protocol,
-		})
 	}
 
 	return &NetworkInfo{
-		Mode:           wire.Mode,
-		AllowNet:       wire.AllowNet,
+		Mode:           networkModeFromCValue(network.mode),
+		AllowNet:       allowNet,
 		PublishedPorts: publishedPorts,
 	}
 }

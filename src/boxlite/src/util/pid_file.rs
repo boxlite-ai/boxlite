@@ -45,7 +45,7 @@ const SHIM_PID_RECORD_MAX_BYTES: usize =
 
 /// On-disk identity of a shim process: its PID and (optionally) the
 /// start-time fingerprint captured at spawn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct PidRecord {
     pub pid: u32,
     /// Start-time fingerprint. `None` for legacy single-line files;

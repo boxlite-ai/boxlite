@@ -499,7 +499,6 @@ dependencies = [
  "boxlite",
  "cbindgen",
  "futures",
- "serde_json",
  "tokio",
 ]
 
