@@ -504,17 +504,6 @@ boxlite cp ./local.txt mybox:/tmp/
 boxlite cp mybox:/app/out ./output
 ```
 
-### `boxlite tunnel`
-
-Print the public URL for a service port on a remote box.
-
-**Usage:** `boxlite tunnel BOX PORT`
-
-This command requires a remote REST profile (`--url` or `--profile`). It does
-not create a local listener. Local users who need a normal host address should
-publish the port explicitly with `-p`; portable SDK code can use the box network
-tunnel API for one connection at a time.
-
 ### `boxlite info`
 
 Display system-wide runtime information (version, paths, host/virtualization, box and image counts). Default output is YAML.

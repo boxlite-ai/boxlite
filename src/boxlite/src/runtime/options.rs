@@ -1058,6 +1058,29 @@ mod tests {
         assert!(keep_attached.sanitize().is_ok());
     }
 
+    #[test]
+    fn test_sanitize_allows_duplicate_automatic_ports() {
+        let duplicate = PortSpec {
+            host_port: None,
+            guest_port: 3000,
+            protocol: PortProtocol::Tcp,
+            host_ip: None,
+        };
+        let opts = BoxOptions {
+            ports: vec![
+                duplicate.clone(),
+                PortSpec {
+                    host_port: Some(0),
+                    host_ip: Some("0.0.0.0".to_string()),
+                    ..duplicate
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert!(opts.sanitize().is_ok());
+    }
+
     // ========================================================================
     // SecurityOptionsBuilder tests
     // ========================================================================

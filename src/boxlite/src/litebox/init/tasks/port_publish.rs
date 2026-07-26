@@ -2,10 +2,9 @@
 //!
 //! The backend owns endpoint allocation. This task owns lifecycle policy:
 //! fixed endpoints are published before automatic ones, partial publication is
-//! rolled back, and the concrete bindings are persisted in request order.
+//! rolled back, and concrete bindings are returned in request order.
 
 use super::{InitCtx, log_task_error, task_start};
-use crate::litebox::ports::ResolvedPortsSnapshot;
 use crate::net::constants::GUEST_IP;
 use crate::net::{Forward, NetworkBackend, TransportProtocol};
 use crate::pipeline::PipelineTask;
@@ -15,10 +14,13 @@ use crate::util::{PidFileReader, ShimPidRecord};
 use async_trait::async_trait;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::Path;
 use std::time::Duration;
 
 const DEFAULT_HOST_IP: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+#[cfg(not(test))]
+const METADATA_OBSERVE_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const METADATA_OBSERVE_TIMEOUT: Duration = Duration::from_millis(50);
 
 #[cfg(not(test))]
 const REATTACH_CONTROL_READY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -55,7 +57,6 @@ impl PortPublishTask {
     pub(crate) async fn observe(
         backend: Option<&dyn NetworkBackend>,
         requested: &[PortSpec],
-        snapshot_path: &Path,
         lifecycle: ShimPidRecord,
     ) -> BoxliteResult<Vec<PublishedPort>> {
         let planned = plan_ports(requested)?;
@@ -74,25 +75,33 @@ impl PortPublishTask {
             )
         })?;
 
-        let snapshot = ResolvedPortsSnapshot::at(snapshot_path);
-        let previous_snapshot = snapshot.previous_bindings_best_effort();
-        let active_forwards = list_forwards_when_ready(backend).await?;
+        // Metadata reads are best effort and must not inherit reattach's
+        // readiness retry window. A caller can retry a null BoxInfo result;
+        // only the lifecycle pipeline is allowed to wait for control startup.
+        let active_forwards = tokio::time::timeout(
+            METADATA_OBSERVE_TIMEOUT,
+            backend.list_forwards(),
+        )
+        .await
+        .map_err(|_| {
+            BoxliteError::Network(format!(
+                "network backend forward discovery timed out after {METADATA_OBSERVE_TIMEOUT:?}"
+            ))
+        })??;
         let mut claimed_active = vec![false; active_forwards.len()];
         let mut resolved = vec![None; requested.len()];
 
-        for mapping in &planned {
-            let active_index = find_existing_forward(
-                mapping,
-                &previous_snapshot,
-                &active_forwards,
-                &claimed_active,
-            )
-            .ok_or_else(|| {
-                BoxliteError::InvalidState(format!(
-                    "configured port {} has no active backend forward",
-                    mapping.request.guest_port
-                ))
-            })?;
+        let ordered = publication_order(&planned);
+        for (position, mapping) in ordered.iter().copied().enumerate() {
+            let matching_limit = remaining_equivalent_mappings(&ordered, position);
+            let active_index =
+                find_existing_forward(mapping, &active_forwards, &claimed_active, matching_limit)?
+                    .ok_or_else(|| {
+                        BoxliteError::InvalidState(format!(
+                            "configured port {} has no active backend forward",
+                            mapping.request.guest_port
+                        ))
+                    })?;
             claimed_active[active_index] = true;
             let local = validate_forward(&active_forwards[active_index], mapping)?;
             resolved[mapping.request_index] = Some(PublishedPort {
@@ -111,7 +120,7 @@ impl PortPublishTask {
             })
     }
 
-    /// Repair and persist publication for an already-active lifecycle.
+    /// Repair publication for an already-active lifecycle.
     ///
     /// The running reattach pipeline uses this entry point to adopt or restore
     /// forwards after a core-process restart. Metadata reads use `observe`
@@ -119,19 +128,21 @@ impl PortPublishTask {
     pub(crate) async fn reconcile(
         backend: Option<&dyn NetworkBackend>,
         requested: &[PortSpec],
-        snapshot_path: &Path,
         lifecycle: ShimPidRecord,
-    ) -> BoxliteResult<()> {
-        let result = publish_ports(backend, requested, snapshot_path, lifecycle, true)
-            .await
-            .map(|_| ());
-        if result.is_err() {
-            // Once live backend state cannot be confirmed, a matching
-            // same-lifecycle file is no longer authoritative. Invalidate only
-            // metadata; never tear down the already-running shim.
-            ResolvedPortsSnapshot::at(snapshot_path).clear_best_effort();
+    ) -> BoxliteResult<Option<Vec<PublishedPort>>> {
+        // Older shims own custom listeners that are not visible through
+        // ServicesMux. Never risk creating a second listener beside them; the
+        // bindings remain explicitly unresolved until a normal restart.
+        if !lifecycle.has_runtime_port_control() {
+            tracing::warn!(
+                "Legacy shim has no runtime port control; leaving its listeners untouched"
+            );
+            return Ok(None);
         }
-        result
+
+        publish_ports(backend, requested, lifecycle, true)
+            .await
+            .map(Some)
     }
 }
 
@@ -141,7 +152,7 @@ impl PipelineTask<InitCtx> for PortPublishTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        let (requested, snapshot_path, pid_path, network_backend, is_reattach) = {
+        let (requested, pid_path, network_backend, is_reattach) = {
             let mut ctx = ctx.lock().await;
             let layout = ctx
                 .layout
@@ -149,7 +160,6 @@ impl PipelineTask<InitCtx> for PortPublishTask {
                 .ok_or_else(|| BoxliteError::Internal("filesystem task must run first".into()))?;
             (
                 ctx.config.options.ports.clone(),
-                layout.resolved_ports_path(),
                 layout.pid_file_path(),
                 ctx.network_backend.take(),
                 ctx.skip_guest_wait,
@@ -168,27 +178,23 @@ impl PipelineTask<InitCtx> for PortPublishTask {
             }
         };
         let result = if is_reattach {
-            Self::reconcile(
-                network_backend.as_deref(),
-                &requested,
-                &snapshot_path,
-                lifecycle,
-            )
-            .await
-            .map(|_| Vec::new())
+            Self::reconcile(network_backend.as_deref(), &requested, lifecycle).await
         } else {
-            publish_ports(
-                network_backend.as_deref(),
-                &requested,
-                &snapshot_path,
-                lifecycle,
-                false,
-            )
-            .await
+            publish_ports(network_backend.as_deref(), &requested, lifecycle, false)
+                .await
+                .map(Some)
         };
-        ctx.lock().await.network_backend = network_backend;
+        let mut ctx = ctx.lock().await;
+        ctx.network_backend = network_backend;
+        if let Ok(Some(ports)) = &result {
+            ctx.published_ports = Some(crate::litebox::ports::LivePublishedPorts::new(
+                lifecycle.identity(),
+                ports.clone(),
+            ));
+        }
+        drop(ctx);
 
-        finish_publication(&box_id, task_name, is_reattach, result)
+        finish_publication(&box_id, task_name, is_reattach, result.map(|_| ()))
     }
 
     fn name(&self) -> &str {
@@ -199,38 +205,15 @@ impl PipelineTask<InitCtx> for PortPublishTask {
 async fn publish_ports(
     backend: Option<&dyn NetworkBackend>,
     requested: &[PortSpec],
-    snapshot_path: &Path,
     lifecycle: ShimPidRecord,
     is_reattach: bool,
 ) -> BoxliteResult<Vec<PublishedPort>> {
     // Validate the complete request before the first backend call. In
     // particular, a bad later mapping must not strand earlier forwards.
     let planned = plan_ports(requested)?;
-    let snapshot = ResolvedPortsSnapshot::at(snapshot_path);
-    let previous_snapshot = snapshot.previous_bindings_best_effort();
 
     if planned.is_empty() {
-        snapshot.clear()?;
         return Ok(Vec::new());
-    }
-    // A live shim started by the previous release owns its configured ports in
-    // custom listeners, not ServicesMux, so `/all` cannot see them. Its
-    // shim-written snapshot is nevertheless authoritative. Keep that legacy
-    // lifecycle untouched; the next normal restart writes a capability-bearing
-    // PID record and publishes through NetworkBackend::expose.
-    if is_reattach && !lifecycle.has_runtime_port_control() {
-        if let Some(legacy_bindings) = legacy_bindings(&planned, &previous_snapshot) {
-            return Ok(legacy_bindings);
-        }
-
-        // Never risk a second listener beside an older shim when its snapshot
-        // is missing or malformed. Keeping the live lifecycle intact is safer
-        // than guessing ownership; discovery remains empty/stale until the box
-        // is normally restarted and migrated to ServicesMux.
-        tracing::warn!(
-            "Could not validate legacy port bindings; leaving the live shim's listeners untouched"
-        );
-        return Ok(previous_snapshot);
     }
 
     if !lifecycle.has_runtime_port_control() {
@@ -247,7 +230,7 @@ async fn publish_ports(
 
     // Reattach can follow a core-process crash at any instruction boundary.
     // Adopt forwards that gvproxy already owns so publication is idempotent
-    // even when the prior process died before writing the snapshot. PID
+    // even when the prior process died immediately after publication. PID
     // publication precedes shim startup, so wait through the bounded window
     // where the lifecycle is live but ServicesMux has not bound its socket yet.
     // A fresh backend cannot own forwards, so it need not implement discovery.
@@ -260,16 +243,18 @@ async fn publish_ports(
     let mut resolved = vec![None; requested.len()];
     let mut published = Vec::with_capacity(planned.len());
 
-    let fixed = planned.iter().filter(|mapping| !mapping.is_automatic());
-    let automatic = planned.iter().filter(|mapping| mapping.is_automatic());
-
-    for mapping in fixed.chain(automatic) {
-        let existing = find_existing_forward(
-            mapping,
-            &previous_snapshot,
-            &active_forwards,
-            &claimed_active,
-        );
+    let ordered = publication_order(&planned);
+    for (position, mapping) in ordered.iter().copied().enumerate() {
+        let matching_limit = remaining_equivalent_mappings(&ordered, position);
+        let existing =
+            match find_existing_forward(mapping, &active_forwards, &claimed_active, matching_limit)
+            {
+                Ok(existing) => existing,
+                Err(error) => {
+                    rollback(backend, &published).await;
+                    return Err(error);
+                }
+            };
         let forward = if let Some(active_index) = existing {
             claimed_active[active_index] = true;
             active_forwards[active_index].clone()
@@ -288,9 +273,6 @@ async fn publish_ports(
                 }
                 Err(error) => {
                     rollback(backend, &published).await;
-                    if !is_reattach {
-                        snapshot.clear_best_effort();
-                    }
                     return Err(error);
                 }
             }
@@ -300,9 +282,6 @@ async fn publish_ports(
             Ok(local) => local,
             Err(error) => {
                 rollback(backend, &published).await;
-                if !is_reattach {
-                    snapshot.clear_best_effort();
-                }
                 return Err(error);
             }
         };
@@ -314,19 +293,10 @@ async fn publish_ports(
         });
     }
 
-    let resolved = resolved
+    resolved
         .into_iter()
         .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| BoxliteError::Internal("port publication result was incomplete".into()))?;
-    if let Err(error) = snapshot.replace(lifecycle.identity(), &resolved) {
-        rollback(backend, &published).await;
-        if !is_reattach {
-            snapshot.clear_best_effort();
-        }
-        return Err(error);
-    }
-
-    Ok(resolved)
+        .ok_or_else(|| BoxliteError::Internal("port publication result was incomplete".into()))
 }
 
 async fn list_forwards_when_ready(backend: &dyn NetworkBackend) -> BoxliteResult<Vec<Forward>> {
@@ -356,13 +326,13 @@ fn finish_publication(
     box_id: &crate::BoxID,
     task_name: &str,
     is_reattach: bool,
-    result: BoxliteResult<Vec<PublishedPort>>,
+    result: BoxliteResult<()>,
 ) -> BoxliteResult<()> {
     match result {
         Ok(_) => Ok(()),
         Err(error) if is_reattach => {
             // Reconciliation is repair work on an already-running shim. A
-            // transient control-plane or snapshot error must not leave its
+            // transient control-plane error must not leave its
             // CleanupGuard armed and tear down the healthy workload.
             tracing::warn!(
                 box_id = %box_id,
@@ -383,7 +353,7 @@ fn plan_ports(requested: &[PortSpec]) -> BoxliteResult<Vec<PlannedPort>> {
         BoxliteError::Internal(format!("invalid built-in guest IP {GUEST_IP}: {error}"))
     })?;
 
-    requested
+    let planned = requested
         .iter()
         .cloned()
         .enumerate()
@@ -404,80 +374,71 @@ fn plan_ports(requested: &[PortSpec]) -> BoxliteResult<Vec<PlannedPort>> {
                 request,
             })
         })
+        .collect::<BoxliteResult<Vec<_>>>()?;
+    Ok(planned)
+}
+
+fn publication_order(planned: &[PlannedPort]) -> Vec<&PlannedPort> {
+    planned
+        .iter()
+        .filter(|mapping| !mapping.is_automatic())
+        .chain(planned.iter().filter(|mapping| mapping.is_automatic()))
         .collect()
 }
 
-fn legacy_bindings(
-    planned: &[PlannedPort],
-    snapshot: &[PublishedPort],
-) -> Option<Vec<PublishedPort>> {
-    if snapshot.len() != planned.len() {
-        return None;
+fn remaining_equivalent_mappings(ordered: &[&PlannedPort], position: usize) -> usize {
+    let mapping = ordered[position];
+    if !mapping.is_automatic() {
+        return 1;
     }
 
-    for mapping in planned {
-        let binding = snapshot.get(mapping.request_index)?;
-        let host_ip = binding.host_ip.parse::<IpAddr>().ok()?;
-        let host_port = (binding.host_port != 0).then_some(binding.host_port)?;
-
-        if binding.guest_port != mapping.request.guest_port
-            || binding.protocol != mapping.request.protocol
-            || host_ip != mapping.host_ip
-            || mapping
-                .request
-                .host_port
-                .is_some_and(|requested| requested != 0 && requested != host_port)
-        {
-            return None;
-        }
-    }
-
-    Some(snapshot.to_vec())
+    ordered[position..]
+        .iter()
+        .filter(|candidate| {
+            candidate.is_automatic()
+                && candidate.host_ip == mapping.host_ip
+                && candidate.remote == mapping.remote
+                && candidate.protocol == mapping.protocol
+        })
+        .count()
 }
 
 fn find_existing_forward(
     planned: &PlannedPort,
-    previous_snapshot: &[PublishedPort],
     active: &[Forward],
     claimed: &[bool],
-) -> Option<usize> {
-    let preferred_local = if planned.is_automatic() {
-        previous_snapshot
-            .get(planned.request_index)
-            .filter(|binding| {
-                binding.guest_port == planned.request.guest_port
-                    && binding.protocol == planned.request.protocol
-            })
-            .and_then(|binding| {
-                let host_ip = binding.host_ip.parse::<IpAddr>().ok()?;
-                let host_port = (binding.host_port != 0).then_some(binding.host_port)?;
-                (host_ip == planned.host_ip).then_some(SocketAddr::new(host_ip, host_port))
-            })
-    } else {
-        Some(planned.local)
-    };
-
-    if let Some(preferred_local) = preferred_local
-        && let Some(index) = active.iter().enumerate().position(|(index, forward)| {
-            !claimed[index]
-                && forward_matches_plan(forward, planned)
-                && forward
-                    .local
-                    .parse::<SocketAddr>()
-                    .is_ok_and(|local| local == preferred_local)
-        })
-    {
-        return Some(index);
-    }
-
-    if !planned.is_automatic() {
-        return None;
-    }
-
-    active
+    matching_limit: usize,
+) -> BoxliteResult<Option<usize>> {
+    let mut matches = active
         .iter()
         .enumerate()
-        .position(|(index, forward)| !claimed[index] && forward_matches_plan(forward, planned))
+        .filter(|(index, forward)| {
+            !claimed[*index]
+                && forward_matches_plan(forward, planned)
+                && (planned.is_automatic()
+                    || forward
+                        .local
+                        .parse::<SocketAddr>()
+                        .is_ok_and(|local| local == planned.local))
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if matches.len() > matching_limit {
+        return Err(BoxliteError::InvalidState(format!(
+            "configured port {} matches multiple active backend forwards",
+            planned.request.guest_port
+        )));
+    }
+    // Exact duplicate automatic requests are a multiset: assigning their
+    // concrete ports by endpoint order is deterministic and preserves configs
+    // accepted before live backend discovery existed.
+    matches.sort_unstable_by_key(|index| {
+        active[*index]
+            .local
+            .parse::<SocketAddr>()
+            .expect("matching forwards have validated local endpoints")
+    });
+    Ok(matches.first().copied())
 }
 
 fn forward_matches_plan(forward: &Forward, planned: &PlannedPort) -> bool {
@@ -601,7 +562,7 @@ mod tests {
     use crate::util::PidRecord;
     use async_trait::async_trait;
     use std::collections::VecDeque;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::sync::Mutex;
 
     #[derive(Debug)]
@@ -621,7 +582,6 @@ mod tests {
         transient_list_errors: Mutex<VecDeque<&'static str>>,
         list_delay: Mutex<Option<Duration>>,
         list_calls: Mutex<usize>,
-        block_snapshot_parent_after_expose: Mutex<Option<PathBuf>>,
     }
 
     impl MockBackend {
@@ -635,7 +595,6 @@ mod tests {
                 transient_list_errors: Mutex::new(VecDeque::new()),
                 list_delay: Mutex::new(None),
                 list_calls: Mutex::new(0),
-                block_snapshot_parent_after_expose: Mutex::new(None),
             }
         }
 
@@ -664,11 +623,6 @@ mod tests {
 
         fn list_call_count(&self) -> usize {
             *self.list_calls.lock().unwrap()
-        }
-
-        fn with_snapshot_parent_blocked_after_expose(self, path: PathBuf) -> Self {
-            *self.block_snapshot_parent_after_expose.lock().unwrap() = Some(path);
-            self
         }
     }
 
@@ -709,18 +663,6 @@ mod tests {
                 protocol: protocol.as_str().to_string(),
             };
             self.active.lock().unwrap().push(forward.clone());
-            if let Some(path) = self
-                .block_snapshot_parent_after_expose
-                .lock()
-                .unwrap()
-                .take()
-            {
-                for entry in std::fs::read_dir(&path).unwrap() {
-                    std::fs::remove_file(entry.unwrap().path()).unwrap();
-                }
-                std::fs::remove_dir(&path).unwrap();
-                std::fs::write(&path, b"not a directory").unwrap();
-            }
             Ok(forward)
         }
 
@@ -790,16 +732,8 @@ mod tests {
         ShimPidRecord::legacy(identity(pid, start_time))
     }
 
-    fn persisted_ports(snapshot: &Path) -> Vec<PublishedPort> {
-        let document: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(snapshot).unwrap()).unwrap();
-        serde_json::from_value(document["ports"].clone()).unwrap()
-    }
-
     #[tokio::test]
-    async fn publishes_fixed_first_and_persists_in_request_order() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
+    async fn publishes_fixed_first_and_returns_request_order() {
         let backend = MockBackend::new([
             ExposeResult::Bound("127.0.0.1:18080"),
             ExposeResult::Bound("127.0.0.1:49152"),
@@ -807,15 +741,9 @@ mod tests {
         let requested = vec![mapping(None, 3000), mapping(Some(18080), 8080)];
 
         let active_lifecycle = lifecycle(101, 1001);
-        let resolved = publish_ports(
-            Some(&backend),
-            &requested,
-            &snapshot,
-            active_lifecycle,
-            false,
-        )
-        .await
-        .unwrap();
+        let resolved = publish_ports(Some(&backend), &requested, active_lifecycle, false)
+            .await
+            .unwrap();
 
         assert_eq!(
             *backend.exposed.lock().unwrap(),
@@ -825,18 +753,10 @@ mod tests {
         assert_eq!(resolved[0].guest_port, 3000);
         assert_eq!(resolved[1].host_port, 18080);
         assert_eq!(resolved[1].guest_port, 8080);
-        assert_eq!(persisted_ports(&snapshot), resolved);
-        let document: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&snapshot).unwrap()).unwrap();
-        assert_eq!(document["version"], 1);
-        assert_eq!(document["lifecycle"]["pid"], 101);
-        assert_eq!(document["lifecycle"]["start_time"], 1001);
     }
 
     #[tokio::test]
     async fn later_failure_rolls_back_successful_forwards_in_reverse() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
         let backend = MockBackend::new([
             ExposeResult::Bound("127.0.0.1:18080"),
             ExposeResult::Bound("127.0.0.1:18081"),
@@ -848,40 +768,25 @@ mod tests {
             mapping(Some(18082), 82),
         ];
 
-        let error = publish_ports(
-            Some(&backend),
-            &requested,
-            &snapshot,
-            lifecycle(102, 1002),
-            false,
-        )
-        .await
-        .unwrap_err();
+        let error = publish_ports(Some(&backend), &requested, lifecycle(102, 1002), false)
+            .await
+            .unwrap_err();
 
         assert!(error.to_string().contains("third publication failed"));
         assert_eq!(
             *backend.unexposed.lock().unwrap(),
             vec!["127.0.0.1:18081", "127.0.0.1:18080"]
         );
-        assert!(!snapshot.exists());
     }
 
     #[tokio::test]
     async fn validates_complete_plan_before_exposing_any_forward() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
         let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:18080")]);
         let requested = vec![mapping(Some(18080), 80), mapping(Some(18081), 0)];
 
-        let error = publish_ports(
-            Some(&backend),
-            &requested,
-            &snapshot,
-            lifecycle(103, 1003),
-            false,
-        )
-        .await
-        .unwrap_err();
+        let error = publish_ports(Some(&backend), &requested, lifecycle(103, 1003), false)
+            .await
+            .unwrap_err();
 
         assert!(error.to_string().contains("guest port"));
         assert!(backend.exposed.lock().unwrap().is_empty());
@@ -889,16 +794,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn publishes_duplicate_automatic_mappings() {
+        let backend = MockBackend::new([
+            ExposeResult::Bound("127.0.0.1:49152"),
+            ExposeResult::Bound("127.0.0.1:49153"),
+        ]);
+        let requested = vec![mapping(None, 3000), mapping(Some(0), 3000)];
+
+        let resolved = publish_ports(Some(&backend), &requested, lifecycle(119, 1019), false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resolved,
+            vec![published_port(49152, 3000), published_port(49153, 3000)]
+        );
+        assert_eq!(
+            *backend.exposed.lock().unwrap(),
+            vec!["127.0.0.1:0", "127.0.0.1:0"]
+        );
+        assert_eq!(backend.list_call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn reattach_recovers_duplicate_automatic_mappings_deterministically() {
+        let backend = MockBackend::new([]).with_active(vec![
+            active_forward("127.0.0.1:49153", 3000),
+            active_forward("127.0.0.1:49152", 3000),
+        ]);
+        let requested = vec![mapping(None, 3000), mapping(Some(0), 3000)];
+
+        let resolved = publish_ports(Some(&backend), &requested, lifecycle(122, 1022), true)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resolved,
+            vec![published_port(49152, 3000), published_port(49153, 3000)]
+        );
+        assert!(backend.exposed.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn rejects_wrong_remote_and_rolls_back_the_new_forward() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
         let backend =
             MockBackend::new([ExposeResult::BoundTo("127.0.0.1:18080", "192.168.127.2:81")]);
 
         let error = publish_ports(
             Some(&backend),
             &[mapping(Some(18080), 80)],
-            &snapshot,
             lifecycle(104, 1004),
             false,
         )
@@ -907,19 +851,16 @@ mod tests {
 
         assert!(error.to_string().contains("requested guest endpoint"));
         assert_eq!(*backend.unexposed.lock().unwrap(), vec!["127.0.0.1:18080"]);
-        assert!(!snapshot.exists());
     }
 
     #[tokio::test]
     async fn reattach_adopts_existing_fixed_forward_and_publishes_only_missing_auto() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
         let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:49152")])
             .with_active(vec![active_forward("127.0.0.1:18080", 8080)]);
         let requested = vec![mapping(None, 3000), mapping(Some(18080), 8080)];
 
         let lifecycle = lifecycle(105, 1005);
-        let resolved = publish_ports(Some(&backend), &requested, &snapshot, lifecycle, true)
+        let resolved = publish_ports(Some(&backend), &requested, lifecycle, true)
             .await
             .unwrap();
 
@@ -930,54 +871,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reattach_recovers_auto_forward_without_snapshot() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
+    async fn reattach_recovers_automatic_forward_from_live_backend() {
         let backend =
             MockBackend::new([]).with_active(vec![active_forward("127.0.0.1:49152", 3000)]);
 
         let lifecycle = lifecycle(106, 1006);
-        let resolved = publish_ports(
-            Some(&backend),
-            &[mapping(None, 3000)],
-            &snapshot,
-            lifecycle,
-            true,
-        )
-        .await
-        .unwrap();
+        let resolved = publish_ports(Some(&backend), &[mapping(None, 3000)], lifecycle, true)
+            .await
+            .unwrap();
 
         assert_eq!(resolved[0].host_port, 49152);
         assert!(backend.exposed.lock().unwrap().is_empty());
-        assert_eq!(persisted_ports(&snapshot), resolved);
     }
 
     #[tokio::test]
     async fn reattach_after_prepublication_crash_publishes_missing_forward() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
         let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:49152")]);
         let lifecycle = lifecycle(114, 1014);
 
-        let resolved = publish_ports(
-            Some(&backend),
-            &[mapping(None, 3000)],
-            &snapshot,
-            lifecycle,
-            true,
-        )
-        .await
-        .unwrap();
+        let resolved = publish_ports(Some(&backend), &[mapping(None, 3000)], lifecycle, true)
+            .await
+            .unwrap();
 
         assert_eq!(*backend.exposed.lock().unwrap(), vec!["127.0.0.1:0"]);
         assert_eq!(resolved, vec![published_port(49152, 3000)]);
-        assert_eq!(persisted_ports(&snapshot), resolved);
     }
 
     #[tokio::test]
     async fn reattach_waits_for_runtime_control_socket_then_reconciles() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
         let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:49152")])
             .with_transient_list_errors([
                 "gvproxy services connect failed: No such file or directory",
@@ -987,7 +908,6 @@ mod tests {
         let resolved = publish_ports(
             Some(&backend),
             &[mapping(None, 3000)],
-            &snapshot,
             lifecycle(116, 1016),
             true,
         )
@@ -1001,46 +921,133 @@ mod tests {
 
     #[tokio::test]
     async fn metadata_observation_never_publishes_a_missing_forward() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
         let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:49152")]);
 
-        let error = PortPublishTask::observe(
-            Some(&backend),
-            &[mapping(None, 3000)],
-            &snapshot,
-            lifecycle(117, 1017),
-        )
-        .await
-        .unwrap_err();
+        let error =
+            PortPublishTask::observe(Some(&backend), &[mapping(None, 3000)], lifecycle(117, 1017))
+                .await
+                .unwrap_err();
 
         assert!(error.to_string().contains("no active backend forward"));
         assert!(
             backend.exposed.lock().unwrap().is_empty(),
             "metadata discovery must not create a listener"
         );
-        assert!(!snapshot.exists());
+    }
+
+    #[tokio::test]
+    async fn metadata_observation_does_not_retry_backend_errors() {
+        let backend = MockBackend::new([])
+            .with_transient_list_errors(["gvproxy control socket is not ready"]);
+
+        let error =
+            PortPublishTask::observe(Some(&backend), &[mapping(None, 3000)], lifecycle(123, 1023))
+                .await
+                .unwrap_err();
+
+        assert!(error.to_string().contains("control socket is not ready"));
+        assert_eq!(backend.list_call_count(), 1);
+        assert!(backend.exposed.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn metadata_observation_returns_an_existing_automatic_forward() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
         let backend =
             MockBackend::new([]).with_active(vec![active_forward("127.0.0.1:49152", 3000)]);
 
-        let resolved = PortPublishTask::observe(
-            Some(&backend),
-            &[mapping(None, 3000)],
-            &snapshot,
-            lifecycle(118, 1018),
-        )
-        .await
-        .unwrap();
+        let resolved =
+            PortPublishTask::observe(Some(&backend), &[mapping(None, 3000)], lifecycle(118, 1018))
+                .await
+                .unwrap();
 
         assert_eq!(resolved, vec![published_port(49152, 3000)]);
         assert!(backend.exposed.lock().unwrap().is_empty());
-        assert!(!snapshot.exists(), "metadata discovery is not persistence");
+    }
+
+    #[tokio::test]
+    async fn metadata_observation_claims_fixed_before_overlapping_automatic() {
+        let backend = MockBackend::new([]).with_active(vec![
+            active_forward("127.0.0.1:18080", 3000),
+            active_forward("127.0.0.1:49152", 3000),
+        ]);
+        let requested = vec![mapping(None, 3000), mapping(Some(18080), 3000)];
+
+        let resolved = PortPublishTask::observe(Some(&backend), &requested, lifecycle(120, 1020))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resolved,
+            vec![published_port(49152, 3000), published_port(18080, 3000)]
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_observation_rejects_ambiguous_live_automatic_forwards() {
+        let backend = MockBackend::new([]).with_active(vec![
+            active_forward("127.0.0.1:49152", 3000),
+            active_forward("127.0.0.1:49153", 3000),
+        ]);
+
+        let error =
+            PortPublishTask::observe(Some(&backend), &[mapping(None, 3000)], lifecycle(121, 1021))
+                .await
+                .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("multiple active backend forwards")
+        );
+        assert!(backend.exposed.lock().unwrap().is_empty());
+        assert!(backend.unexposed.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn metadata_observation_bounds_a_hanging_backend_query() {
+        let backend = MockBackend::new([]).with_list_delay(Duration::from_secs(2));
+        let started = std::time::Instant::now();
+
+        let error =
+            PortPublishTask::observe(Some(&backend), &[mapping(None, 3000)], lifecycle(122, 1022))
+                .await
+                .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("network backend forward discovery timed out")
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "a metadata query must remain bounded"
+        );
+        assert_eq!(backend.list_call_count(), 1);
+        assert!(backend.exposed.lock().unwrap().is_empty());
+        assert!(backend.unexposed.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reattach_ambiguity_rolls_back_newly_published_forwards() {
+        let original = vec![
+            active_forward("127.0.0.1:49152", 3000),
+            active_forward("127.0.0.1:49153", 3000),
+        ];
+        let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:18080")])
+            .with_active(original.clone());
+        let requested = vec![mapping(None, 3000), mapping(Some(18080), 8080)];
+
+        let error = publish_ports(Some(&backend), &requested, lifecycle(124, 1024), true)
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("multiple active backend forwards")
+        );
+        assert_eq!(*backend.unexposed.lock().unwrap(), vec!["127.0.0.1:18080"]);
+        assert_eq!(*backend.active.lock().unwrap(), original);
     }
 
     #[tokio::test]
@@ -1063,183 +1070,87 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reattach_after_restart_crash_replaces_prior_lifecycle_snapshot() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
-        let prior_lifecycle = vec![mapping(Some(49151), 3000)];
-        std::fs::write(&snapshot, serde_json::to_vec(&prior_lifecycle).unwrap()).unwrap();
-        let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:49152")]);
-        let lifecycle = lifecycle(115, 1015);
-
-        let resolved = publish_ports(
-            Some(&backend),
-            &[mapping(None, 3000)],
-            &snapshot,
-            lifecycle,
-            true,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(*backend.exposed.lock().unwrap(), vec!["127.0.0.1:0"]);
-        assert_eq!(resolved, vec![published_port(49152, 3000)]);
-        assert_eq!(persisted_ports(&snapshot), resolved);
-    }
-
-    #[tokio::test]
-    async fn reattach_list_failure_invalidates_snapshot() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
-        let previous = vec![mapping(Some(49152), 3000)];
-        let snapshot_contents = serde_json::to_vec(&previous).unwrap();
-        std::fs::write(&snapshot, &snapshot_contents).unwrap();
+    async fn reattach_list_failure_is_reported_without_mutation() {
         let lifecycle = lifecycle(113, 1013);
         let backend = MockBackend::new([]).with_list_error("gvproxy control socket unavailable");
 
-        let error = PortPublishTask::reconcile(
-            Some(&backend),
-            &[mapping(None, 3000)],
-            &snapshot,
-            lifecycle,
-        )
-        .await
-        .unwrap_err();
+        let error = PortPublishTask::reconcile(Some(&backend), &[mapping(None, 3000)], lifecycle)
+            .await
+            .unwrap_err();
 
         assert!(error.to_string().contains("control socket unavailable"));
-        assert!(
-            !snapshot.exists(),
-            "failed live reconciliation must invalidate possibly stale metadata"
-        );
         assert!(backend.exposed.lock().unwrap().is_empty());
+        assert!(backend.unexposed.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn snapshot_failure_rolls_back_published_forward() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot_parent = dir.path().join("snapshot");
-        std::fs::create_dir(&snapshot_parent).unwrap();
-        let snapshot = snapshot_parent.join("resolved-ports.json");
-        let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:18080")])
-            .with_snapshot_parent_blocked_after_expose(snapshot_parent);
+    async fn successful_publication_keeps_forward_active() {
+        let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:18080")]);
 
-        let error = publish_ports(
+        let resolved = publish_ports(
             Some(&backend),
             &[mapping(Some(18080), 80)],
-            &snapshot,
             lifecycle(107, 1007),
             false,
         )
         .await
-        .unwrap_err();
+        .unwrap();
 
-        assert!(
-            error
-                .to_string()
-                .contains("temporary resolved port snapshot")
+        assert_eq!(resolved, vec![published_port(18080, 80)]);
+        assert_eq!(
+            *backend.active.lock().unwrap(),
+            vec![active_forward("127.0.0.1:18080", 80)]
         );
-        assert_eq!(*backend.unexposed.lock().unwrap(), vec!["127.0.0.1:18080"]);
+        assert!(backend.unexposed.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn empty_plan_clears_stale_snapshot_without_backend() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
-        std::fs::write(&snapshot, b"[{\"host_port\":1234}]").unwrap();
-
-        let resolved = publish_ports(None, &[], &snapshot, lifecycle(108, 1008), false)
+    async fn empty_plan_does_not_require_backend() {
+        let resolved = publish_ports(None, &[], lifecycle(108, 1008), false)
             .await
             .unwrap();
 
         assert!(resolved.is_empty());
-        assert!(!snapshot.exists());
     }
 
     #[tokio::test]
-    async fn nonempty_plan_requires_backend_without_mutating_snapshot() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
-        std::fs::write(&snapshot, b"stale").unwrap();
-
-        let error = publish_ports(
-            None,
-            &[mapping(None, 3000)],
-            &snapshot,
-            lifecycle(109, 1009),
-            false,
-        )
-        .await
-        .unwrap_err();
+    async fn nonempty_plan_requires_backend() {
+        let error = publish_ports(None, &[mapping(None, 3000)], lifecycle(109, 1009), false)
+            .await
+            .unwrap_err();
 
         assert!(error.to_string().contains("active network backend"));
-        assert_eq!(std::fs::read_to_string(snapshot).unwrap(), "stale");
     }
 
     #[tokio::test]
-    async fn reattach_preserves_legacy_listener_snapshot_without_republishing() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
+    async fn legacy_reattach_leaves_listeners_untouched_and_unresolved() {
         let requested = vec![mapping(None, 3000), mapping(Some(18080), 8080)];
-        let legacy = vec![mapping(Some(49152), 3000), mapping(Some(18080), 8080)];
-        std::fs::write(&snapshot, serde_json::to_vec(&legacy).unwrap()).unwrap();
-        let backend = MockBackend::new([]);
+        let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:49153")]);
 
         let lifecycle = legacy_lifecycle(110, 1010);
-        let resolved = publish_ports(Some(&backend), &requested, &snapshot, lifecycle, true)
+        let resolved = PortPublishTask::reconcile(Some(&backend), &requested, lifecycle)
             .await
             .unwrap();
 
-        assert_eq!(
-            resolved,
-            vec![published_port(49152, 3000), published_port(18080, 8080)]
-        );
+        assert!(resolved.is_none());
         assert!(backend.exposed.lock().unwrap().is_empty());
+        assert_eq!(backend.list_call_count(), 0);
         assert!(!lifecycle.has_runtime_port_control());
     }
 
     #[tokio::test]
-    async fn restart_migrates_legacy_snapshot_to_backend_publication() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
+    async fn fresh_restart_publishes_through_current_backend() {
         let requested = vec![mapping(None, 3000)];
-        std::fs::write(
-            &snapshot,
-            serde_json::to_vec(&vec![mapping(Some(49151), 3000)]).unwrap(),
-        )
-        .unwrap();
         let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:49152")]);
 
         let lifecycle = lifecycle(111, 1011);
-        let resolved = publish_ports(Some(&backend), &requested, &snapshot, lifecycle, false)
+        let resolved = publish_ports(Some(&backend), &requested, lifecycle, false)
             .await
             .unwrap();
 
         assert_eq!(resolved[0].host_port, 49152);
         assert_eq!(*backend.exposed.lock().unwrap(), vec!["127.0.0.1:0"]);
         assert!(lifecycle.has_runtime_port_control());
-    }
-
-    #[tokio::test]
-    async fn invalid_legacy_snapshot_never_creates_a_second_listener() {
-        let dir = tempfile::tempdir().unwrap();
-        let snapshot = dir.path().join("resolved-ports.json");
-        let stale = vec![mapping(Some(49152), 9999)];
-        std::fs::write(&snapshot, serde_json::to_vec(&stale).unwrap()).unwrap();
-        let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:49153")]);
-
-        let lifecycle = legacy_lifecycle(112, 1012);
-        let resolved = publish_ports(
-            Some(&backend),
-            &[mapping(None, 3000)],
-            &snapshot,
-            lifecycle,
-            true,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(resolved, vec![published_port(49152, 9999)]);
-        assert!(backend.exposed.lock().unwrap().is_empty());
-        assert!(!lifecycle.has_runtime_port_control());
     }
 
     #[test]

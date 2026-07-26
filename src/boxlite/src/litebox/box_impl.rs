@@ -62,6 +62,11 @@ pub(crate) struct LiveState {
     #[allow(dead_code)]
     network: Option<Arc<dyn NetworkBackend>>,
 
+    /// Port bindings confirmed while constructing this live VM. Keeping them
+    /// in LiveState makes the synchronous cache inherit the OnceCell's exact
+    /// shim lifecycle instead of requiring a separate invalidation protocol.
+    published_ports: Option<crate::litebox::ports::LivePublishedPorts>,
+
     // Metrics
     metrics: BoxMetricsStorage,
 
@@ -82,6 +87,7 @@ impl LiveState {
         handler: Box<dyn VmmHandler>,
         guest_session: GuestSession,
         network: Option<Box<dyn NetworkBackend>>,
+        published_ports: Option<crate::litebox::ports::LivePublishedPorts>,
         metrics: BoxMetricsStorage,
         container_rootfs_disk: Disk,
         guest_rootfs_disk: Option<Disk>,
@@ -91,6 +97,7 @@ impl LiveState {
             handler: std::sync::Mutex::new(handler),
             guest_session,
             network: network.map(Arc::from),
+            published_ports,
             metrics,
             _container_rootfs_disk: container_rootfs_disk,
             guest_rootfs_disk,
@@ -232,26 +239,32 @@ impl BoxImpl {
     }
 
     pub(crate) fn info(&self) -> BoxInfo {
-        let info = self.snapshot_info();
-        if info.status != BoxStatus::Running || self.config.options.ports.is_empty() {
-            return info;
-        }
-
-        // Reattach publishes its snapshot before the rest of initialization
-        // commits. Never expose that intermediate file through synchronous
-        // metadata while the initialization/observation gate is held.
-        let Ok(_refresh) = self.port_info_refresh.try_lock() else {
-            return self.unresolved_port_info(info);
-        };
         self.snapshot_info()
     }
 
     fn snapshot_info(&self) -> BoxInfo {
         let state = self.state.read();
-        BoxInfo::new(&self.config, &state)
+        let mut info = BoxInfo::new(&self.config, &state);
+        if state.status.is_active()
+            && let Some(published_ports) = self
+                .live
+                .get()
+                .and_then(|live| live.published_ports.as_ref())
+            && state.pid == Some(published_ports.lifecycle().pid)
+            && crate::util::PidFileReader::at(self.layout.pid_file_path())
+                .verified_shim()
+                .is_some_and(|shim| shim.identity() == published_ports.lifecycle())
+            && let Some(network) = info.network.as_mut()
+        {
+            network.published_ports = Some(published_ports.bindings().to_vec());
+        }
+        info
     }
 
     fn unresolved_port_info(&self, mut info: BoxInfo) -> BoxInfo {
+        // Only Running needs an explicit downgrade after live observation
+        // fails. Other states already carry the lifecycle-safe answer from
+        // PortResolution (including confirmed-empty Stopped boxes).
         if info.status == BoxStatus::Running
             && !self.config.options.ports.is_empty()
             && let Some(network) = info.network.as_mut()
@@ -261,22 +274,14 @@ impl BoxImpl {
         info
     }
 
-    fn has_resolved_port_info(info: &BoxInfo) -> bool {
-        info.network
-            .as_ref()
-            .is_some_and(|network| network.published_ports.is_some())
-    }
-
-    /// Return metadata after attempting an attach-only discovery of unresolved
-    /// port bindings. Failure is represented by `published_ports=None`; a
-    /// metadata read must never restart or tear down an otherwise healthy
-    /// workload.
+    /// Return metadata after an attach-only observation of the live backend.
+    /// The in-memory value serves synchronous `box.info()` only: asynchronous
+    /// runtime queries always confirm gvproxy's current state. Failure is
+    /// represented by `published_ports=None`; metadata reads never restart or
+    /// tear down an otherwise healthy workload.
     pub(crate) async fn authoritative_info(&self) -> BoxInfo {
         let info = self.info();
-        if info.status != BoxStatus::Running
-            || self.config.options.ports.is_empty()
-            || Self::has_resolved_port_info(&info)
-        {
+        if info.status != BoxStatus::Running || self.config.options.ports.is_empty() {
             return info;
         }
 
@@ -284,15 +289,10 @@ impl BoxImpl {
             return self.unresolved_port_info(info);
         };
         let info = self.snapshot_info();
-        if info.status != BoxStatus::Running
-            || self.config.options.ports.is_empty()
-            || Self::has_resolved_port_info(&info)
-        {
-            return info;
+        if info.status != BoxStatus::Running {
+            return self.unresolved_port_info(info);
         }
 
-        // A current-core snapshot was already confirmed through gvproxy. Only
-        // unresolved Running metadata needs live observation below.
         let (lifecycle, ports) = match self.observe_port_info().await {
             Ok(resolved) => resolved,
             Err(error) => {
@@ -305,7 +305,10 @@ impl BoxImpl {
             }
         };
 
-        let mut refreshed = self.snapshot_info();
+        // Start unresolved even when synchronous metadata has an in-memory
+        // value. Only the final lifecycle check below may make this async view
+        // authoritative.
+        let mut refreshed = self.unresolved_port_info(self.snapshot_info());
         if refreshed.status == BoxStatus::Running
             && refreshed.pid == Some(lifecycle.pid)
             && crate::util::PidFileReader::at(self.layout.pid_file_path())
@@ -389,13 +392,9 @@ impl BoxImpl {
         };
         let backend = cached_backend.or(owned_backend.as_deref());
 
-        let ports = super::init::PortPublishTask::observe(
-            backend,
-            &self.config.options.ports,
-            &self.layout.resolved_ports_path(),
-            lifecycle,
-        )
-        .await?;
+        let ports =
+            super::init::PortPublishTask::observe(backend, &self.config.options.ports, lifecycle)
+                .await?;
         Ok((lifecycle.identity(), ports))
     }
 
@@ -1591,9 +1590,10 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
 mod tests {
     use std::collections::VecDeque;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
+    use crate::disk::DiskFormat;
     use crate::litebox::config::ContainerRuntimeConfig;
     use crate::net::{Forward, NetworkBackendFactory, NetworkBackendSpec};
     use crate::runtime::id::BoxIDMint;
@@ -1602,8 +1602,11 @@ mod tests {
     use crate::runtime::types::{ContainerID, PublishedPort};
     use crate::util::{PidFileWriter, PidRecord, ShimPidRecord, is_process_alive};
     use crate::vmm::VmmKind;
+    use crate::vmm::controller::VmmMetrics;
+    use boxlite_shared::BoxTransport;
     use chrono::Utc;
     use tempfile::TempDir;
+    use tokio::sync::Semaphore;
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
         info.network
@@ -1620,6 +1623,26 @@ mod tests {
         fn drop(&mut self) {
             let _ = self.0.kill();
             let _ = self.0.wait();
+        }
+    }
+
+    struct InfoTestHandler(u32);
+
+    impl VmmHandler for InfoTestHandler {
+        fn stop(&mut self) -> BoxliteResult<()> {
+            Ok(())
+        }
+
+        fn metrics(&self) -> BoxliteResult<VmmMetrics> {
+            Ok(VmmMetrics::default())
+        }
+
+        fn is_running(&self) -> bool {
+            true
+        }
+
+        fn pid(&self) -> u32 {
+            self.0
         }
     }
 
@@ -1666,6 +1689,74 @@ mod tests {
             Some(Box::new(ObservationBackend {
                 responses: Arc::clone(&self.responses),
                 list_calls: Arc::clone(&self.list_calls),
+            }))
+        }
+    }
+
+    #[derive(Debug)]
+    struct ObservationOverlapProbe {
+        active: AtomicUsize,
+        did_overlap: AtomicBool,
+        release: Semaphore,
+    }
+
+    #[derive(Debug)]
+    struct OverlapObservationBackend {
+        probe: Arc<ObservationOverlapProbe>,
+    }
+
+    struct ActiveObservation<'a>(&'a AtomicUsize);
+
+    impl Drop for ActiveObservation<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl NetworkBackend for OverlapObservationBackend {
+        fn name(&self) -> &'static str {
+            "overlap-observation-test"
+        }
+
+        fn spec(&self) -> NetworkBackendSpec {
+            NetworkBackendSpec {
+                socket_path: PathBuf::from("/tmp/overlap-observation-test.sock"),
+                allow_net: Vec::new(),
+                secrets: Vec::new(),
+                ca_cert_pem: None,
+                ca_key_pem: None,
+            }
+        }
+
+        async fn list_forwards(&self) -> BoxliteResult<Vec<Forward>> {
+            let active = self.probe.active.fetch_add(1, Ordering::SeqCst) + 1;
+            let _active = ActiveObservation(&self.probe.active);
+            if active >= 2 {
+                self.probe.did_overlap.store(true, Ordering::SeqCst);
+                self.probe.release.add_permits(2);
+            }
+            let permit = self.probe.release.acquire().await.map_err(|error| {
+                BoxliteError::Internal(format!("observation release closed: {error}"))
+            })?;
+            permit.forget();
+
+            Ok(vec![Forward {
+                local: "127.0.0.1:49152".to_string(),
+                remote: format!("{}:3000", crate::net::constants::GUEST_IP),
+                protocol: "tcp".to_string(),
+            }])
+        }
+    }
+
+    struct OverlapObservationFactory {
+        probe: Arc<ObservationOverlapProbe>,
+    }
+
+    impl NetworkBackendFactory for OverlapObservationFactory {
+        fn create(&self, _: &NetworkBackendConfig) -> Option<Box<dyn NetworkBackend>> {
+            Some(Box::new(OverlapObservationBackend {
+                probe: Arc::clone(&self.probe),
             }))
         }
     }
@@ -1849,7 +1940,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_info_discovery_failure_preserves_running_shim_and_metadata() {
+    async fn get_info_discovery_failure_preserves_running_shim() {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
         let runtime = RuntimeImpl::new(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
@@ -1862,21 +1953,11 @@ mod tests {
             protocol: PortProtocol::Tcp,
             host_ip: Some("127.0.0.1".to_string()),
         };
-        let resolved = PublishedPort {
-            guest_port: requested.guest_port,
-            host_ip: requested.host_ip.clone().unwrap(),
-            host_port: 49152,
-            protocol: requested.protocol,
-        };
         let (child, id, pid) = running_box_with_standin(&runtime, false, 0, vec![requested]);
         let layout = runtime
             .layout
             .box_layout(id.as_str(), false)
             .expect("box layout");
-        let snapshot_path = layout.resolved_ports_path();
-        std::fs::create_dir_all(snapshot_path.parent().unwrap()).expect("create logs dir");
-        let snapshot_contents = serde_json::to_vec(&vec![resolved.clone()]).unwrap();
-        std::fs::write(&snapshot_path, &snapshot_contents).expect("write resolved ports");
         assert!(
             !crate::net::gvproxy::control_socket_path(&layout.net_backend_socket_path()).exists(),
             "missing control socket is the reconciliation failure under test"
@@ -1894,7 +1975,7 @@ mod tests {
             .expect("box remains registered");
         assert!(
             published_ports(&info).is_none(),
-            "failed discovery must remain explicit instead of exposing an unverified snapshot"
+            "failed discovery must remain explicit instead of exposing cached bindings"
         );
         assert!(
             is_process_alive(pid),
@@ -1902,12 +1983,6 @@ mod tests {
         );
         assert_eq!(info.status, BoxStatus::Running);
         assert_eq!(info.pid, Some(pid));
-        assert_eq!(
-            std::fs::read(&snapshot_path).unwrap(),
-            snapshot_contents,
-            "observational discovery must not rewrite or delete persisted metadata"
-        );
-
         drop(litebox);
         drop(child);
     }
@@ -1973,7 +2048,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn box_info_hides_snapshot_until_port_initialization_commits() {
+    async fn list_info_observes_running_boxes_concurrently() {
+        let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
+        let probe = Arc::new(ObservationOverlapProbe {
+            active: AtomicUsize::new(0),
+            did_overlap: AtomicBool::new(false),
+            release: Semaphore::new(0),
+        });
+        let mut runtime = RuntimeImpl::new(BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .expect("create runtime");
+        Arc::get_mut(&mut runtime)
+            .expect("new runtime has one owner")
+            .network_factory = Arc::new(OverlapObservationFactory {
+            probe: Arc::clone(&probe),
+        });
+        let requested = PortSpec {
+            host_port: None,
+            guest_port: 3000,
+            protocol: PortProtocol::Tcp,
+            host_ip: Some("127.0.0.1".to_string()),
+        };
+        let (first_child, _, _) =
+            running_box_with_standin(&runtime, false, 0, vec![requested.clone()]);
+        let (second_child, _, _) = running_box_with_standin(&runtime, false, 0, vec![requested]);
+
+        let infos = tokio::time::timeout(Duration::from_secs(1), runtime.list_info())
+            .await
+            .expect("two live observations should not serialize")
+            .expect("list box metadata");
+
+        assert_eq!(infos.len(), 2);
+        assert!(probe.did_overlap.load(Ordering::SeqCst));
+        assert_eq!(probe.active.load(Ordering::SeqCst), 0);
+        assert!(infos.iter().all(|info| {
+            published_ports(info).is_some_and(|ports| {
+                ports.len() == 1 && ports[0].guest_port == 3000 && ports[0].host_port == 49152
+            })
+        }));
+
+        drop(first_child);
+        drop(second_child);
+    }
+
+    #[tokio::test]
+    async fn box_info_cache_is_live_state_and_lifecycle_bound() {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
         let runtime = RuntimeImpl::new(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
@@ -1992,7 +2113,7 @@ mod tests {
             host_port: 49152,
             protocol: requested.protocol,
         };
-        let (child, id, _pid) = running_box_with_standin(&runtime, false, 0, vec![requested]);
+        let (mut child, id, pid) = running_box_with_standin(&runtime, false, 0, vec![requested]);
         let (config, state) = runtime
             .box_manager
             .box_by_id(&id)
@@ -2004,25 +2125,58 @@ mod tests {
             runtime.clone(),
             runtime.shutdown_token.child_token(),
         );
-        std::fs::create_dir_all(box_impl.layout.resolved_ports_path().parent().unwrap())
-            .expect("create logs dir");
-        let lifecycle = crate::util::PidFileReader::at(box_impl.layout.pid_file_path())
-            .verified_shim()
-            .expect("verified shim")
-            .identity();
-        crate::litebox::ports::ResolvedPortsSnapshot::at(box_impl.layout.resolved_ports_path())
-            .replace(lifecycle, std::slice::from_ref(&resolved))
-            .expect("write current-runtime snapshot");
-
         let gate = box_impl.port_info_refresh.lock().await;
+        assert!(published_ports(&box_impl.info()).is_none());
+
+        let live = LiveState::new(
+            Box::new(InfoTestHandler(pid)),
+            GuestSession::new(BoxTransport::tcp(0)),
+            None,
+            Some(crate::litebox::ports::LivePublishedPorts::new(
+                crate::util::PidFileReader::at(box_impl.layout.pid_file_path())
+                    .verified_shim()
+                    .expect("verified stand-in lifecycle")
+                    .identity(),
+                vec![resolved.clone()],
+            )),
+            BoxMetricsStorage::new(),
+            Disk::new(
+                temp_dir.path().join("container.qcow2"),
+                DiskFormat::Qcow2,
+                true,
+            ),
+            None,
+            #[cfg(target_os = "linux")]
+            None,
+        );
+        assert!(box_impl.live.set(live).is_ok());
+
         let synchronous = box_impl.info();
-        assert!(published_ports(&synchronous).is_none());
+        assert_eq!(published_ports(&synchronous), Some([resolved].as_slice()));
+
+        // Async metadata must not mistake the synchronous cache for a live
+        // observation. The held gate makes observation unavailable here.
         let authoritative = box_impl.authoritative_info().await;
         assert!(published_ports(&authoritative).is_none());
         drop(gate);
 
-        let committed = box_impl.info();
-        assert_eq!(published_ports(&committed), Some([resolved].as_slice()));
+        assert!(crate::util::kill_process(pid));
+        child.0.wait().expect("reap stopped stand-in");
+        assert!(
+            published_ports(&box_impl.info()).is_none(),
+            "the synchronous cache must not outlive its shim lifecycle"
+        );
+
+        {
+            let mut state = box_impl.state.write();
+            state.status = BoxStatus::Stopped;
+            state.pid = None;
+        }
+        let stopped = box_impl.unresolved_port_info(box_impl.snapshot_info());
+        assert!(
+            published_ports(&stopped).is_some_and(<[PublishedPort]>::is_empty),
+            "a failed running observation must preserve a newly confirmed stopped-empty state"
+        );
 
         drop(child);
     }

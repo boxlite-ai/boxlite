@@ -6,6 +6,7 @@ use crate::disk::Disk;
 use crate::fs::BindMountHandle;
 use crate::images::ContainerImageConfig;
 use crate::litebox::config::BoxConfig;
+use crate::litebox::ports::LivePublishedPorts;
 use crate::portal::GuestSession;
 use crate::portal::interfaces::ContainerRootfsInitConfig;
 use crate::runtime::layout::BoxFilesystemLayout;
@@ -302,6 +303,10 @@ pub struct InitPipelineContext {
     /// The box's one network backend (set by vmm_spawn on first start/restart, or
     /// by vmm_attach on reattach; moved into LiveState for runtime control).
     pub network_backend: Option<Box<dyn crate::net::NetworkBackend>>,
+    /// Concrete bindings confirmed by the port-publication stage. This remains
+    /// `None` when a running legacy shim cannot expose its listener state or
+    /// when best-effort reattachment reconciliation fails.
+    pub published_ports: Option<LivePublishedPorts>,
     /// MITM CA cert PEM (set by vmm_spawn, read by guest_init for Container.Init gRPC).
     pub ca_cert_pem: Option<String>,
 
@@ -332,6 +337,7 @@ impl InitPipelineContext {
             container_mounts: None,
             guest_session: None,
             network_backend: None,
+            published_ports: None,
             ca_cert_pem: None,
             #[cfg(target_os = "linux")]
             bind_mount: None,

@@ -278,12 +278,14 @@ impl BoxBuilder {
             // vmm_spawn (which also used it to produce the wire spec) or, on the
             // reattach path, by vmm_attach; both thread it here for runtime control.
             let network = ctx.network_backend.take();
+            let published_ports = ctx.published_ports.take();
 
             // Build LiveState
             let live_state = LiveState::new(
                 handler,
                 guest_session,
                 network,
+                published_ports,
                 metrics,
                 container_disk,
                 guest_disk,

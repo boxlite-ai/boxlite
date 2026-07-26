@@ -37,9 +37,6 @@ pub mod dirs {
     /// Subdirectory for log files
     pub const LOGS_DIR: &str = "logs";
 
-    /// Resolved host-to-guest port mapping snapshot.
-    pub const RESOLVED_PORTS_FILE: &str = "resolved-ports.json";
-
     /// Shim process identity file.
     pub const SHIM_PID_FILE: &str = "shim.pid";
 
@@ -492,11 +489,6 @@ impl BoxFilesystemLayout {
     /// so the sandbox doesn't need access to any home_dir paths for writing.
     pub fn logs_dir(&self) -> PathBuf {
         self.box_dir.join("logs")
-    }
-
-    /// Last backend-confirmed host port mappings for the active VM lifecycle.
-    pub fn resolved_ports_path(&self) -> PathBuf {
-        self.logs_dir().join(dirs::RESOLVED_PORTS_FILE)
     }
 
     /// Per-box temp directory: ~/.boxlite/boxes/{box_id}/tmp

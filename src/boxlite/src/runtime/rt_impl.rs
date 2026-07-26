@@ -571,7 +571,10 @@ impl RuntimeImpl {
     /// Includes both persisted boxes (from database) and in-memory boxes
     /// (created but not yet persisted).
     pub async fn list_info(self: &Arc<Self>) -> BoxliteResult<Vec<BoxInfo>> {
+        use futures::stream::{self, StreamExt};
         use std::collections::HashSet;
+
+        const PORT_INFO_QUERY_CONCURRENCY: usize = 16;
 
         // Get boxes from database - run on blocking thread pool
         let this = Arc::clone(self);
@@ -579,24 +582,44 @@ impl RuntimeImpl {
             .await
             .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
 
-        let mut seen_ids: HashSet<BoxID> = db_boxes.iter().map(|(c, _)| c.id.clone()).collect();
-        let mut infos: Vec<_> = db_boxes
-            .into_iter()
-            .map(|(config, state)| BoxInfo::new(&config, &state))
-            .collect();
-
-        // Add in-memory boxes not yet persisted
-        {
-            let sync = self.sync_state.read().unwrap();
-            for (box_id, weak) in &sync.active_boxes_by_id {
-                if !seen_ids.contains(box_id)
-                    && let Some(strong) = weak.upgrade()
-                {
-                    infos.push(strong.info());
-                    seen_ids.insert(box_id.clone());
-                }
-            }
+        let mut seen_ids = HashSet::with_capacity(db_boxes.len());
+        let mut boxes = Vec::with_capacity(db_boxes.len());
+        for (config, state) in db_boxes {
+            seen_ids.insert(config.id.clone());
+            // Database rows are the cross-process freshness authority. Use an
+            // uncached observational instance so a live handle in this process
+            // cannot replace a newer state written by another runtime.
+            let box_impl = Arc::new(crate::litebox::box_impl::BoxImpl::new(
+                config,
+                state,
+                Arc::clone(self),
+                self.shutdown_token.child_token(),
+            ));
+            boxes.push(box_impl);
         }
+
+        // Snapshot strong references while holding the synchronous cache lock;
+        // never retain that lock across the observations below.
+        let in_memory_only = {
+            let sync = self.sync_state.read().unwrap();
+            sync.active_boxes_by_id
+                .iter()
+                .filter_map(|(box_id, weak)| {
+                    if seen_ids.contains(box_id) {
+                        None
+                    } else {
+                        weak.upgrade()
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        boxes.extend(in_memory_only);
+
+        let mut infos = stream::iter(boxes)
+            .map(|box_impl| async move { box_impl.authoritative_info().await })
+            .buffer_unordered(PORT_INFO_QUERY_CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await;
 
         // Sort by creation time (newest first)
         infos.sort_by_key(|b| std::cmp::Reverse(b.created_at));
@@ -1867,6 +1890,34 @@ mod tests {
             engine_kind: VmmKind::Libkrun,
             box_home,
         }
+    }
+
+    #[tokio::test]
+    async fn list_info_prefers_fresh_database_state_over_cached_box() {
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config(false);
+        let cached_state = BoxState::new();
+        runtime
+            .box_manager
+            .add_box(&config, &cached_state)
+            .expect("Failed to add box");
+
+        let (cached_box, inserted) = runtime.get_or_create_box_impl(config.clone(), cached_state);
+        assert!(inserted);
+        assert_eq!(cached_box.info().status, BoxStatus::Configured);
+
+        let mut fresh_state = BoxState::new();
+        fresh_state.status = BoxStatus::Stopped;
+        runtime
+            .box_manager
+            .save_box(&config.id, &fresh_state)
+            .expect("Failed to update box state");
+
+        let infos = runtime.list_info().await.expect("Failed to list box info");
+
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].status, BoxStatus::Stopped);
+        assert_eq!(cached_box.info().status, BoxStatus::Configured);
     }
 
     // ====================================================================

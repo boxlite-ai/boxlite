@@ -229,10 +229,12 @@ lifecycle, `[]` means authoritatively no publications, and a populated array
 contains concrete active local bindings. `JsPortSpec` remains the request type;
 resolved output uses `JsPublishedPort` so every reported host port is concrete.
 
-`box.info()` is a synchronous snapshot. When a running local box reports
-`network.publishedPorts === null`, `await runtime.getInfo(id)` attempts an
-observation-only refresh without publishing a listener or starting, stopping,
-or restarting the box.
+`box.info()` is a synchronous, lifecycle-bound snapshot. For a running local
+box with configured ports, `await runtime.getInfo(id)` and
+`await runtime.listInfo()` always confirm the current bindings through an
+observation-only backend query. That query never publishes a listener or
+starts, stops, or restarts the box; failure or a lifecycle race is reported as
+`publishedPorts === null`.
 
 ---
 

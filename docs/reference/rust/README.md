@@ -283,10 +283,11 @@ there are authoritatively none, and a populated vector contains concrete active
 local bindings. `PortSpec` remains the request type; resolved output uses
 `PublishedPort` so every reported host port is concrete.
 
-`LiteBox::info()` is a synchronous snapshot. When a running local box reports
-`network.published_ports: None`, `BoxliteRuntime::get_info()` attempts an
-observation-only refresh without publishing a listener or starting, stopping,
-or restarting the box.
+`LiteBox::info()` is a synchronous, lifecycle-bound snapshot. For a running
+local box with configured ports, `BoxliteRuntime::get_info()` and `list_info()`
+always confirm the current bindings through an observation-only backend query.
+That query never publishes a listener or starts, stops, or restarts the box;
+failure or a lifecycle race is reported as `published_ports: None`.
 
 ### BoxStatus
 

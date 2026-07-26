@@ -244,10 +244,12 @@ lifecycle, `[]` means authoritatively no publications, and a populated list
 contains concrete active local bindings. `BoxOptions.ports` remains the request
 API; its optional host port is not reused in resolved output.
 
-`box.info()` is a synchronous snapshot. When a running local box reports
-`network.published_ports is None`, `await runtime.get_info(id)` attempts an
-observation-only refresh without publishing a listener or starting, stopping,
-or restarting the box.
+`box.info()` is a synchronous, lifecycle-bound snapshot. For a running local
+box with configured ports, `await runtime.get_info(id)` and
+`await runtime.list_info()` always confirm the current bindings through an
+observation-only backend query. That query never publishes a listener or
+starts, stops, or restarts the box; failure or a lifecycle race is reported as
+`published_ports is None`.
 
 ---
 

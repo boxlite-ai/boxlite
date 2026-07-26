@@ -677,26 +677,13 @@ mod tests {
     }
 
     #[test]
-    fn running_box_info_rejects_untagged_resolved_ports_snapshot() {
+    fn box_info_port_resolution_tracks_lifecycle_certainty() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let logs_dir = temp_dir.path().join("logs");
-        std::fs::create_dir_all(&logs_dir).unwrap();
         let pid = std::process::id();
         let start_time = crate::util::process_start_time(pid).expect("current process start time");
         std::fs::write(
             temp_dir.path().join("shim.pid"),
             format!("{pid}\n{start_time}\nservices-mux-v1\n"),
-        )
-        .unwrap();
-        let expected = vec![crate::runtime::options::PortSpec {
-            host_port: Some(49152),
-            guest_port: 3000,
-            protocol: crate::runtime::options::PortProtocol::Tcp,
-            host_ip: Some("0.0.0.0".to_string()),
-        }];
-        std::fs::write(
-            logs_dir.join("resolved-ports.json"),
-            serde_json::to_vec(&expected).unwrap(),
         )
         .unwrap();
 
@@ -761,120 +748,6 @@ mod tests {
             published_ports(&unknown).is_none(),
             "unknown lifecycle state cannot prove that mappings are absent"
         );
-    }
-
-    #[test]
-    fn running_box_info_accepts_matching_verified_lifecycle_snapshot() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let logs_dir = temp_dir.path().join("logs");
-        std::fs::create_dir_all(&logs_dir).unwrap();
-        let pid = std::process::id();
-        let start_time = crate::util::process_start_time(pid).expect("current process start time");
-        std::fs::write(
-            temp_dir.path().join("shim.pid"),
-            format!("{pid}\n{start_time}\nservices-mux-v1\n"),
-        )
-        .unwrap();
-        let expected = vec![PublishedPort {
-            guest_port: 3000,
-            host_ip: "0.0.0.0".to_string(),
-            host_port: 49152,
-            protocol: crate::runtime::options::PortProtocol::Tcp,
-        }];
-        std::fs::write(
-            logs_dir.join("resolved-ports.json"),
-            serde_json::to_vec(&serde_json::json!({
-                "version": 1,
-                "lifecycle": {
-                    "pid": pid,
-                    "start_time": start_time
-                },
-                "runtime": {
-                    "pid": pid,
-                    "start_time": start_time
-                },
-                "ports": expected
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        let config = BoxConfig {
-            id: BoxID::parse("01HJK4TNRPQSXYZ8WM6NCVT9R5").unwrap(),
-            name: None,
-            created_at: Utc::now(),
-            container: ContainerRuntimeConfig {
-                id: ContainerID::new(),
-            },
-            options: BoxOptions {
-                ports: vec![crate::runtime::options::PortSpec {
-                    host_port: None,
-                    guest_port: 3000,
-                    protocol: crate::runtime::options::PortProtocol::Tcp,
-                    host_ip: Some("0.0.0.0".to_string()),
-                }],
-                ..Default::default()
-            },
-            engine_kind: crate::vmm::VmmKind::Libkrun,
-            box_home: temp_dir.path().to_path_buf(),
-        };
-        let mut state = BoxState::new();
-        state.set_pid(Some(pid));
-        state.transition_to(BoxStatus::Running).unwrap();
-
-        let info = BoxInfo::new(&config, &state);
-        assert_eq!(published_ports(&info), Some(expected.as_slice()));
-        assert_eq!(
-            serde_json::to_value(&info).unwrap()["network"]["published_ports"],
-            serde_json::to_value(&expected).unwrap()
-        );
-
-        std::fs::write(
-            logs_dir.join("resolved-ports.json"),
-            serde_json::to_vec(&serde_json::json!({
-                "version": 1,
-                "lifecycle": {
-                    "pid": pid,
-                    "start_time": start_time
-                },
-                "runtime": {
-                    "pid": pid + 1,
-                    "start_time": start_time
-                },
-                "ports": expected
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let prior_runtime = BoxInfo::new(&config, &state);
-        assert!(
-            published_ports(&prior_runtime).is_none(),
-            "a replacement core must confirm the live mapping before exposing it"
-        );
-
-        std::fs::write(
-            logs_dir.join("resolved-ports.json"),
-            serde_json::to_vec(&serde_json::json!({
-                "version": 1,
-                "lifecycle": {
-                    "pid": pid,
-                    "start_time": start_time + 1
-                },
-                "runtime": {
-                    "pid": pid,
-                    "start_time": start_time
-                },
-                "ports": expected
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let mismatched = BoxInfo::new(&config, &state);
-        assert!(published_ports(&mismatched).is_none());
-
-        std::fs::write(logs_dir.join("resolved-ports.json"), b"not-json").unwrap();
-        let malformed = BoxInfo::new(&config, &state);
-        assert!(published_ports(&malformed).is_none());
     }
 
     #[test]
