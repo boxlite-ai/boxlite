@@ -20,6 +20,35 @@ fn test_run_exit_code_success() {
     ctx.cmd.assert().success();
 }
 
+/// Prove the opt-in reaches a working nested KVM boundary, not merely a device
+/// node. The dedicated self-hosted integration runner sets the opt-in env var;
+/// ordinary developer machines can run this explicitly when their hardware
+/// supports nesting.
+#[test]
+fn test_nested_virtualization_can_create_kvm_vm() {
+    if std::env::var_os("BOXLITE_TEST_NESTED_VIRTUALIZATION").is_none() {
+        eprintln!("skipping nested KVM smoke test (set BOXLITE_TEST_NESTED_VIRTUALIZATION=1)");
+        return;
+    }
+
+    let mut ctx = common::boxlite();
+    ctx.cmd.timeout(std::time::Duration::from_secs(180));
+    ctx.cmd.env("BOXLITE_EXPERIMENTAL", "nested-virtualization");
+    ctx.cmd.args([
+        "run",
+        "--nested-virtualization",
+        "--rm",
+        "python:3.12-alpine",
+        "python3",
+        "-c",
+        "import fcntl, os; kvm = os.open('/dev/kvm', os.O_RDWR | os.O_CLOEXEC); api = fcntl.ioctl(kvm, 0xAE00, 0); assert api == 12, api; vm = fcntl.ioctl(kvm, 0xAE01, 0); assert vm >= 0, vm; print(f'nested-kvm-api={api} vm-fd={vm}'); os.close(vm); os.close(kvm)",
+    ]);
+    ctx.cmd
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nested-kvm-api=12"));
+}
+
 #[test]
 fn test_run_exit_code_custom() {
     let mut ctx = common::boxlite();

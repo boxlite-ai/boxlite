@@ -41,9 +41,12 @@ on:
       - 'src/shared/**'
       - 'src/cli/**'
       - 'src/guest/**'
+      - 'src/shim/**'
+      - 'src/deps/**'
       - 'sdks/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
+      - '.gitmodules'
       - '.github/workflows/e2e-local.yml'
   pull_request_target:
     types: [labeled, synchronize]
@@ -53,9 +56,12 @@ on:
       - 'src/shared/**'
       - 'src/cli/**'
       - 'src/guest/**'
+      - 'src/shim/**'
+      - 'src/deps/**'
       - 'sdks/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
+      - '.gitmodules'
   workflow_dispatch:
     inputs:
       debug:
@@ -339,6 +345,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
+      BOXLITE_TEST_NESTED_VIRTUALIZATION: '1'
       HOME: /root
     steps:
       - name: Clean workspace (persistent runner)

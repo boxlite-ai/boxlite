@@ -129,6 +129,12 @@ verifies their checksums, and atomically publishes the generation before
 so the caller-owned source files are only required when a generation must first
 be created. Reattaching to a running Box skips preparation.
 
+Nested virtualization is also an
+[RC feature](../experimental/nested-virtualization.md). Its opt-in is persisted
+with the box and rechecked on every local start. The VMM exposes virtualization
+extensions to the guest, then the guest agent grants only its `/dev/kvm` device
+to the OCI workload.
+
 ### ShimController
 
 Universal subprocess-based Box controller. Spawns `boxlite-shim` binary in a subprocess to isolate

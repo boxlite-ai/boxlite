@@ -4,7 +4,7 @@ use boxlite_shared::{
     BindMount, BoxliteError, BoxliteResult, CaCert,
     ContainerAdvancedOptions as ProtoContainerAdvancedOptions,
     ContainerCapabilities as ProtoContainerCapabilities, ContainerClient,
-    ContainerConfig as ProtoContainerConfig, ContainerInitRequest, DiskRootfs, MergedRootfs,
+    ContainerConfig as ProtoContainerConfig, ContainerDevice, ContainerInitErrorKind, ContainerInitRequest, DiskRootfs, MergedRootfs,
     OverlayRootfs, RootfsInit, container_init_response,
 };
 use tonic::transport::Channel;
@@ -84,6 +84,8 @@ pub struct ContainerInitConfig {
     pub mounts: Vec<ContainerMount>,
     pub ca_certs: Vec<String>,
     pub tty: bool,
+    /// Guest device nodes to reproduce inside the OCI workload.
+    pub devices: Vec<ContainerDevice>,
     pub advanced: ContainerAdvancedConfig,
 }
 
@@ -117,6 +119,7 @@ impl ContainerInterface {
             mounts,
             ca_certs,
             tty,
+            devices,
             advanced,
         } = config;
 
@@ -161,6 +164,7 @@ impl ContainerInterface {
             advanced = ?proto_config.advanced,
             rootfs = ?rootfs,
             mounts_count = proto_mounts.len(),
+            device_count = devices.len(),
             "Container configuration"
         );
 
@@ -174,6 +178,7 @@ impl ContainerInterface {
             // `LiteBox::attach()` can address the main command with the same id
             // it sent, instead of both sides separately hard-coding it.
             execution_id: container_id.clone(),
+            devices,
         };
 
         let response = self
@@ -190,10 +195,13 @@ impl ContainerInterface {
             }
             Some(container_init_response::Result::Error(err)) => {
                 tracing::error!(container_id = %container_id, "Container init failed: {}", err.reason);
-                Err(BoxliteError::Internal(format!(
-                    "Container init failed: {}",
-                    err.reason
-                )))
+                let reason = format!("Container init failed: {}", err.reason);
+                match ContainerInitErrorKind::try_from(err.kind) {
+                    Ok(ContainerInitErrorKind::Unsupported) => {
+                        Err(BoxliteError::Unsupported(reason))
+                    }
+                    _ => Err(BoxliteError::Internal(reason)),
+                }
             }
             None => Err(BoxliteError::Internal(
                 "ContainerInit response missing result".to_string(),

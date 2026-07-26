@@ -836,7 +836,9 @@ async def import_box(
         with open(archive_path, "wb") as f:
             f.write(payload)
 
-        imported = await state.runtime.import_box(archive_path, name=name)
+        imported = await state.runtime.import_box(
+            archive_path, name=name, untrusted=True
+        )
 
     await cache_box_handle(imported)
     info = imported.info()

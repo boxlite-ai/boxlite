@@ -78,14 +78,27 @@ fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
     LiteBox::new(box_backend, network_backend, snapshot_backend)
 }
 
+fn reject_remote_experimental_options(options: &BoxOptions) -> BoxliteResult<()> {
+    if options.advanced.kernel.is_some() {
+        return Err(BoxliteError::Unsupported(
+            "custom kernels are only supported by the local runtime".to_string(),
+        ));
+    }
+
+    if options.nested_virtualization {
+        return Err(BoxliteError::Unsupported(
+            "nested virtualization is available only with a local runtime; REST servers do not expose this operator-controlled option"
+                .to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
-        if options.advanced.kernel.is_some() {
-            return Err(BoxliteError::Unsupported(
-                "custom kernels are only supported by the local runtime".to_string(),
-            ));
-        }
+        reject_remote_experimental_options(&options)?;
 
         // Validate only the caller's requested policy. An unset auto_pause means
         // "no auto-pause", so it must not borrow the server's default here —
@@ -116,6 +129,8 @@ impl RuntimeBackend for RestRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        reject_remote_experimental_options(&options)?;
+
         // Try to get existing box by name first
         if let Some(ref box_name) = name
             && let Some(litebox) = self.get(box_name).await?
@@ -428,6 +443,70 @@ mod tests {
             .await
             .err()
             .expect("REST runtime must reject a host-local custom kernel path");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_nested_virtualization_in_rest_mode() {
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            nested_virtualization: true,
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("REST nested virtualization must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_custom_kernel_for_rest_runtime() {
+        let temp = tempfile::tempdir().unwrap();
+        let kernel = temp.path().join("vmlinux");
+        std::fs::write(&kernel, b"custom kernel").unwrap();
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let opts = BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                kernel: Some(crate::experimental::custom_kernel::KernelOptions::new(
+                    kernel,
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::get_or_create(&runtime, opts, Some("custom".to_string()))
+            .await
+            .err()
+            .expect("REST runtime must reject a custom kernel before lookup");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_nested_virtualization_in_rest_mode() {
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            nested_virtualization: true,
+            ..Default::default()
+        };
+
+        let error =
+            RuntimeBackend::get_or_create(&runtime, box_options, Some("nested".to_string()))
+                .await
+                .err()
+                .expect("REST nested virtualization must be rejected before network I/O");
+
         assert!(matches!(error, BoxliteError::Unsupported(_)));
         assert!(error.to_string().contains("local runtime"));
     }

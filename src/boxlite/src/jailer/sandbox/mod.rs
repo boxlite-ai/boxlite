@@ -89,9 +89,9 @@ pub trait Sandbox: Send + Sync {
 
 /// A filesystem path with access permissions for the sandbox.
 ///
-/// Pre-computed by the [`Jailer`](super::Jailer) from system directories
-/// and user volumes. Sandbox implementations translate these to
-/// platform-specific mechanisms:
+/// Pre-computed by callers and the [`Jailer`](super::Jailer) from the paths
+/// required by the confined process. Sandbox implementations translate these
+/// to platform-specific mechanisms:
 /// - bwrap: `--bind` (writable) or `--ro-bind` (read-only)
 /// - seatbelt: `file-read*` + `file-write*` subpath rules
 #[derive(Debug, Clone)]

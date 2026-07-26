@@ -19,6 +19,7 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use boxlite::vmm::exit_info::ExitErrorKind;
 use boxlite::{
     util,
     vmm::{self, ExitInfo, InstanceSpec, VmmConfig, controller::watchdog},
@@ -110,12 +111,10 @@ fn main() -> BoxliteResult<()> {
 
     // Run the shim and handle errors
     run_shim(config, timing).inspect_err(|e| {
-        let info = ExitInfo::Error {
-            exit_code: 1,
-            message: e.to_string(),
-        };
+        let message = e.to_string();
+        let info = ExitInfo::serialize_error(1, &message, ExitErrorKind::from_boxlite_error(e));
 
-        if let Ok(json) = serde_json::to_string(&info) {
+        if let Ok(json) = info {
             let _ = std::fs::write(&exit_file, json);
         }
     })

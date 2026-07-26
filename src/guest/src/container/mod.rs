@@ -83,4 +83,4 @@ pub(crate) use command::SpawnResult;
 #[cfg(target_os = "linux")]
 pub use lifecycle::Container;
 #[cfg(target_os = "linux")]
-pub use spec::UserMount;
+pub use spec::{ContainerDevices, UserMount};

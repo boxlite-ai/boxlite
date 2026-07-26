@@ -8,7 +8,7 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 
 SERVER_PATH = Path(__file__).resolve().parents[1] / "server.py"
@@ -236,6 +236,9 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(payload["box_id"], "box-imported")
         self.assertIn("box-imported", SERVER.state.active_boxes_by_id)
+        runtime.import_box.assert_awaited_once_with(
+            ANY, name=None, untrusted=True
+        )
 
     async def test_stop_box_evicts_cached_handle_by_canonical_id(self) -> None:
         handle = _make_box_handle("box-stop")

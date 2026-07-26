@@ -5,7 +5,7 @@
 
 use super::capabilities::CapabilitySet;
 use super::command::ContainerCommand;
-use super::spec::UserMount;
+use super::spec::{ContainerDevices, UserMount};
 use super::stdio::{ContainerStdio, InitIo};
 use super::{console_socket, kill, spec, start};
 use crate::layout::GuestLayout;
@@ -111,6 +111,7 @@ impl Container {
         user_mounts: Vec<UserMount>,
         tty: bool,
         capabilities: CapabilitySet,
+        devices: ContainerDevices,
     ) -> BoxliteResult<Self> {
         let rootfs = rootfs.as_ref();
         let workdir = workdir.as_ref();
@@ -120,7 +121,6 @@ impl Container {
 
         // Validate inputs early
         start::validate_container_inputs(rootfs, &entrypoint, workdir)?;
-
         // Parse existing env into map (KEY=VALUE)
         let mut env_map: HashMap<String, String> = HashMap::new();
         for entry in &env {
@@ -187,6 +187,7 @@ impl Container {
             &layout.containers_dir(),
             &user_mounts,
             tty,
+            &devices,
         )?;
 
         let stdio = if tty {

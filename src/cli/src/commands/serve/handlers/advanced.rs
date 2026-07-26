@@ -116,7 +116,7 @@ pub(in crate::commands::serve) async fn import_box(
         );
     }
 
-    let archive = BoxArchive::new(archive_path);
+    let archive = BoxArchive::from_untrusted_upload(archive_path);
     match state.runtime.import_box(archive, query.name).await {
         Ok(litebox) => {
             let info = litebox.info();

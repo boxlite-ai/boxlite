@@ -4,13 +4,18 @@
 
 use super::capabilities::CapabilitySet;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use std::path::Path;
+use boxlite_shared::ContainerDevice as ProtoContainerDevice;
+use std::collections::HashSet;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::path::{Component, Path, PathBuf};
 
 use oci_spec::runtime::{
-    LinuxBuilder, LinuxIdMappingBuilder, LinuxNamespaceBuilder, LinuxNamespaceType, Mount,
-    MountBuilder, PosixRlimitBuilder, PosixRlimitType, ProcessBuilder, RootBuilder, Spec,
-    SpecBuilder, UserBuilder,
+    LinuxBuilder, LinuxDevice, LinuxDeviceBuilder, LinuxDeviceType, LinuxIdMappingBuilder,
+    LinuxNamespaceBuilder, LinuxNamespaceType, Mount, MountBuilder, PosixRlimitBuilder,
+    PosixRlimitType, ProcessBuilder, RootBuilder, Spec, SpecBuilder, UserBuilder,
 };
+
+const MAX_CONTAINER_DEVICES: usize = 64;
 
 /// User-specified bind mount for container
 #[derive(Debug, Clone)]
@@ -25,6 +30,146 @@ pub struct UserMount {
     pub owner_uid: u32,
     /// Owner GID of host directory (for auto-idmap)
     pub owner_gid: u32,
+}
+
+/// Validated device mappings used to build the OCI Linux device list.
+#[derive(Debug, Default)]
+pub struct ContainerDevices(Vec<ContainerDeviceMapping>);
+
+#[derive(Debug)]
+struct ContainerDeviceMapping {
+    destination: PathBuf,
+    typ: LinuxDeviceType,
+    major: i64,
+    minor: i64,
+    file_mode: Option<u32>,
+}
+
+impl ContainerDevices {
+    pub fn from_proto(devices: Vec<ProtoContainerDevice>) -> BoxliteResult<Self> {
+        if devices.len() > MAX_CONTAINER_DEVICES {
+            return Err(BoxliteError::Unsupported(format!(
+                "container requested {} devices; maximum is {MAX_CONTAINER_DEVICES}",
+                devices.len()
+            )));
+        }
+
+        let mut destinations = HashSet::with_capacity(devices.len());
+        let mut mappings = Vec::with_capacity(devices.len());
+        for device in devices {
+            let mapping = ContainerDeviceMapping::from_proto(device)?;
+            if !destinations.insert(mapping.destination.clone()) {
+                return Err(BoxliteError::Unsupported(format!(
+                    "duplicate container device destination {}",
+                    mapping.destination.display()
+                )));
+            }
+            mappings.push(mapping);
+        }
+
+        Ok(Self(mappings))
+    }
+
+    fn as_slice(&self) -> &[ContainerDeviceMapping] {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl ContainerDeviceMapping {
+    fn from_proto(device: ProtoContainerDevice) -> BoxliteResult<Self> {
+        let source = validate_absolute_path("source", &device.source)?;
+        let destination = validate_absolute_path("destination", &device.destination)?;
+        if destination == Path::new("/dev") || !destination.starts_with("/dev") {
+            return Err(BoxliteError::Unsupported(format!(
+                "container device destination must be below /dev: {}",
+                destination.display()
+            )));
+        }
+        if let Some(file_mode) = device.file_mode {
+            if file_mode & !0o777 != 0 {
+                return Err(BoxliteError::Unsupported(format!(
+                    "container device {} has invalid file mode {file_mode:#o}",
+                    destination.display()
+                )));
+            }
+        }
+
+        let metadata = std::fs::symlink_metadata(&source).map_err(|error| {
+            BoxliteError::Unsupported(format!(
+                "container device source {} is unavailable: {error}",
+                source.display()
+            ))
+        })?;
+        let typ = if metadata.file_type().is_char_device() {
+            LinuxDeviceType::C
+        } else if metadata.file_type().is_block_device() {
+            LinuxDeviceType::B
+        } else {
+            return Err(BoxliteError::Unsupported(format!(
+                "container device source {} is not a character or block device",
+                source.display()
+            )));
+        };
+        let major = i64::try_from(nix::sys::stat::major(metadata.rdev())).map_err(|_| {
+            BoxliteError::Unsupported(format!(
+                "container device source {} has an unsupported major number",
+                source.display()
+            ))
+        })?;
+        let minor = i64::try_from(nix::sys::stat::minor(metadata.rdev())).map_err(|_| {
+            BoxliteError::Unsupported(format!(
+                "container device source {} has an unsupported minor number",
+                source.display()
+            ))
+        })?;
+
+        Ok(Self {
+            destination,
+            typ,
+            major,
+            minor,
+            file_mode: device.file_mode,
+        })
+    }
+
+    fn to_oci_device(&self) -> BoxliteResult<oci_spec::runtime::LinuxDevice> {
+        let mut builder = LinuxDeviceBuilder::default()
+            .path(&self.destination)
+            .typ(self.typ)
+            .major(self.major)
+            .minor(self.minor)
+            .uid(0u32)
+            .gid(0u32);
+        if let Some(file_mode) = self.file_mode {
+            builder = builder.file_mode(file_mode);
+        }
+
+        builder.build().map_err(|error| {
+            BoxliteError::Internal(format!(
+                "failed to build container device {}: {error}",
+                self.destination.display()
+            ))
+        })
+    }
+}
+
+fn validate_absolute_path(field: &str, value: &str) -> BoxliteResult<PathBuf> {
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+    {
+        return Err(BoxliteError::Unsupported(format!(
+            "container device {field} must be a normalized absolute path: {value}"
+        )));
+    }
+
+    Ok(path.to_path_buf())
 }
 
 /// Create OCI runtime specification with default configuration
@@ -56,6 +201,7 @@ pub fn create_oci_spec(
     bundle_path: &Path,
     user_mounts: &[UserMount],
     tty: bool,
+    devices: &ContainerDevices,
 ) -> BoxliteResult<Spec> {
     let caps = capabilities.to_oci()?;
     let namespaces = build_default_namespaces()?;
@@ -94,7 +240,7 @@ pub fn create_oci_spec(
 
     let process = build_process_spec(entrypoint, env, workdir, uid, gid, caps, tty)?;
     let root = build_root_spec(rootfs)?;
-    let linux = build_linux_spec(container_id, namespaces)?;
+    let linux = build_linux_spec(container_id, namespaces, devices.as_slice())?;
 
     SpecBuilder::default()
         .version("1.0.2")
@@ -378,6 +524,7 @@ fn build_root_spec(rootfs: &str) -> BoxliteResult<oci_spec::runtime::Root> {
 fn build_linux_spec(
     container_id: &str,
     namespaces: Vec<oci_spec::runtime::LinuxNamespace>,
+    devices: &[ContainerDeviceMapping],
 ) -> BoxliteResult<oci_spec::runtime::Linux> {
     // UID/GID mappings for user namespace
     // Map full range of UIDs/GIDs to allow non-root users (nginx=33, etc.)
@@ -425,10 +572,20 @@ fn build_linux_spec(
     // let cgroups_path = format!("/boxlite/{}", container_id);
     let _ = container_id; // Suppress unused warning
 
-    LinuxBuilder::default()
+    let mut builder = LinuxBuilder::default()
         .namespaces(namespaces)
         .uid_mappings(uid_mappings)
-        .gid_mappings(gid_mappings)
+        .gid_mappings(gid_mappings);
+
+    if !devices.is_empty() {
+        let oci_devices = devices
+            .iter()
+            .map(ContainerDeviceMapping::to_oci_device)
+            .collect::<BoxliteResult<Vec<_>>>()?;
+        builder = builder.devices(oci_devices);
+    }
+
+    builder
         // .masked_paths(masked_paths)
         // .readonly_paths(readonly_paths)
         // .cgroups_path(cgroups_path)
@@ -576,6 +733,72 @@ mod tests {
     use super::*;
     use crate::container::capabilities::CapabilitySet;
     use std::fs;
+
+    #[test]
+    fn device_mapping_adds_the_resolved_device() {
+        let source_metadata = fs::metadata("/dev/null").unwrap();
+        let mappings = ContainerDevices::from_proto(vec![ProtoContainerDevice {
+            source: "/dev/null".to_string(),
+            destination: "/dev/test-device".to_string(),
+            file_mode: Some(0o666),
+        }])
+        .unwrap();
+        let linux = build_linux_spec("test-box", vec![], mappings.as_slice()).unwrap();
+        let devices = linux.devices().as_ref().expect("mapped device");
+
+        assert_eq!(devices.len(), 1);
+        let device = &devices[0];
+        assert_eq!(device.path(), Path::new("/dev/test-device"));
+        assert_eq!(device.typ(), LinuxDeviceType::C);
+        assert_eq!(
+            device.major(),
+            i64::try_from(nix::sys::stat::major(source_metadata.rdev())).unwrap()
+        );
+        assert_eq!(
+            device.minor(),
+            i64::try_from(nix::sys::stat::minor(source_metadata.rdev())).unwrap()
+        );
+        assert_eq!(device.file_mode(), Some(0o666));
+        assert_eq!(device.uid(), Some(0));
+        assert_eq!(device.gid(), Some(0));
+    }
+
+    #[test]
+    fn empty_device_mapping_adds_no_devices() {
+        let mappings = ContainerDevices::default();
+        let linux = build_linux_spec("test-box", vec![], mappings.as_slice()).unwrap();
+
+        assert!(linux.devices().is_none());
+    }
+
+    #[test]
+    fn device_mapping_rejects_a_non_device_source() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let error = ContainerDevices::from_proto(vec![ProtoContainerDevice {
+            source: file.path().display().to_string(),
+            destination: "/dev/test-device".to_string(),
+            file_mode: None,
+        }])
+        .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error
+            .to_string()
+            .contains("not a character or block device"));
+    }
+
+    #[test]
+    fn device_mapping_rejects_destination_outside_dev() {
+        let error = ContainerDevices::from_proto(vec![ProtoContainerDevice {
+            source: "/dev/null".to_string(),
+            destination: "/tmp/test-device".to_string(),
+            file_mode: None,
+        }])
+        .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("must be below /dev"));
+    }
 
     /// Create a temp rootfs with /etc/passwd and /etc/group for testing.
     ///

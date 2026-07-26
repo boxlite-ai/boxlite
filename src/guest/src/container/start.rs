@@ -107,6 +107,7 @@ pub(crate) fn create_oci_bundle(
     bundle_root: &Path,
     user_mounts: &[spec::UserMount],
     tty: bool,
+    devices: &spec::ContainerDevices,
 ) -> BoxliteResult<PathBuf> {
     let bundle_path = bundle_root.join(container_id);
 
@@ -138,6 +139,7 @@ pub(crate) fn create_oci_bundle(
         &bundle_path,
         user_mounts,
         tty,
+        devices,
     )?;
     let config_path = bundle_path.join("config.json");
 
@@ -153,6 +155,7 @@ pub(crate) fn create_oci_bundle(
         container_id,
         bundle_path = %bundle_path.display(),
         user_mounts_count = user_mounts.len(),
+        device_count = devices.len(),
         "Created OCI bundle"
     );
 

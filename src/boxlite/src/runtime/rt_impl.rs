@@ -358,7 +358,9 @@ impl RuntimeImpl {
     /// Returns `(LiteBox, true)` if a new box was created, or `(LiteBox, false)`
     /// if an existing box with the given name was found. When an existing box is
     /// returned, general options are ignored, but its capability policy must
-    /// match exactly so reuse cannot silently weaken or elevate privileges.
+    /// match exactly and it must already provide any required nested
+    /// virtualization, so reuse cannot silently weaken privileges or drop a
+    /// requested capability.
     pub async fn get_or_create(
         self: &Arc<Self>,
         options: BoxOptions,
@@ -495,7 +497,20 @@ impl RuntimeImpl {
         requested
             .advanced
             .capabilities
-            .check_compatibility(&actual.options.advanced.capabilities, box_name)
+            .check_compatibility(&actual.options.advanced.capabilities, box_name)?;
+
+        // One-way: a nested-capable box satisfies any request, but a plain box
+        // cannot satisfy one that needs /dev/kvm. Reusing it would look like a
+        // success and defer the failure into the guest.
+        if requested.advanced.nested_virtualization
+            && !actual.options.advanced.nested_virtualization
+        {
+            return Err(BoxliteError::Unsupported(format!(
+                "box '{box_name}' was created without nested virtualization and cannot satisfy a required nested virtualization request; use a different name or recreate the box"
+            )));
+        }
+
+        Ok(())
     }
 
     /// Get a handle to an existing box by ID or name.
@@ -1895,6 +1910,27 @@ mod tests {
                 .contains("custom kernel must be a regular file")
         );
     }
+
+    #[tokio::test]
+    async fn nested_virtualization_validation_uses_injected_features() {
+        let options = BoxOptions {
+            nested_virtualization: true,
+            ..Default::default()
+        };
+
+        let error = sanitize_local_options(&ExperimentalFeatures::default(), options.clone())
+            .await
+            .expect_err("nested virtualization must be disabled by default");
+        assert!(
+            error
+                .to_string()
+                .contains("BOXLITE_EXPERIMENTAL=nested-virtualization")
+        );
+
+        let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
+        sanitize_local_options(&enabled, options).await.unwrap();
+    }
+
     /// Create a RuntimeImpl with isolated temp directory.
     fn create_test_runtime() -> (SharedRuntimeImpl, TempDir) {
         let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
@@ -2823,6 +2859,77 @@ mod tests {
             }
             _ => panic!("Expected NotFound for missing archive"),
         }
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_nested_virtualization_upgrade() {
+        let (runtime, _dir) = create_test_runtime();
+        let name = Some("plain-box".to_string());
+
+        let (_, created) = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    ..Default::default()
+                },
+                name.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(created);
+
+        let result = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    nested_virtualization: true,
+                    ..Default::default()
+                },
+                name,
+            )
+            .await;
+
+        match result {
+            Err(BoxliteError::Unsupported(message)) => {
+                assert!(message.contains("nested virtualization"));
+                assert!(message.contains("plain-box"));
+            }
+            Err(other) => panic!("expected Unsupported error, got: {other}"),
+            Ok(_) => panic!("get_or_create must not reuse a non-nested box"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_or_create_allows_nested_box_for_default_request() {
+        let (runtime, _dir) = create_test_runtime();
+        let name = Some("nested-box".to_string());
+
+        let (nested_box, created) = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    nested_virtualization: true,
+                    ..Default::default()
+                },
+                name.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(created);
+
+        let (reused_box, created) = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    ..Default::default()
+                },
+                name,
+            )
+            .await
+            .unwrap();
+
+        assert!(!created);
+        assert_eq!(reused_box.id(), nested_box.id());
     }
 
     // ====================================================================

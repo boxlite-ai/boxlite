@@ -1,6 +1,7 @@
 //! JailerBuilder for constructing a [`Jailer`](super::Jailer).
 
 use super::Jailer;
+use super::PathAccess;
 use super::sandbox::{PlatformSandbox, Sandbox};
 use crate::runtime::advanced_options::{ResourceLimits, SecurityOptions};
 use crate::runtime::layout::BoxFilesystemLayout;
@@ -30,6 +31,7 @@ pub struct JailerBuilder {
     layout: Option<BoxFilesystemLayout>,
     preserved_fds: Vec<(RawFd, i32)>,
     detach: bool,
+    additional_path_access: Vec<PathAccess>,
 }
 
 impl Default for JailerBuilder {
@@ -48,6 +50,7 @@ impl JailerBuilder {
             layout: None,
             preserved_fds: Vec::new(),
             detach: false,
+            additional_path_access: Vec::new(),
         }
     }
 
@@ -282,6 +285,12 @@ impl JailerBuilder {
         self
     }
 
+    /// Add caller-defined filesystem permissions required by the confined shim.
+    pub(crate) fn with_additional_path_access(mut self, paths: Vec<PathAccess>) -> Self {
+        self.additional_path_access = paths;
+        self
+    }
+
     /// Build with the platform-default sandbox.
     ///
     /// On Linux: [`BwrapSandbox`](super::sandbox::BwrapSandbox)
@@ -328,6 +337,7 @@ impl JailerBuilder {
             layout,
             preserved_fds: self.preserved_fds,
             detach: self.detach,
+            additional_path_access: self.additional_path_access,
         })
     }
 }
@@ -422,6 +432,32 @@ mod tests {
             .expect("Should build successfully");
 
         assert_eq!(jailer.volumes().len(), 2);
+    }
+
+    #[test]
+    fn builder_propagates_additional_path_access() {
+        let path_access = PathAccess {
+            path: PathBuf::from("/host/required-by-vmm"),
+            writable: false,
+        };
+        let jailer = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_additional_path_access(vec![path_access.clone()])
+            .build()
+            .expect("Should build successfully");
+
+        assert_eq!(jailer.additional_path_access.len(), 1);
+        assert_eq!(jailer.additional_path_access[0].path, path_access.path);
+        assert!(!jailer.additional_path_access[0].writable);
+
+        let context = jailer.context();
+        let propagated = context
+            .paths
+            .iter()
+            .find(|entry| entry.path == path_access.path)
+            .expect("additional path access should reach the sandbox context");
+        assert!(!propagated.writable);
     }
 
     #[test]

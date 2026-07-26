@@ -1,17 +1,42 @@
 //! Subprocess spawning for boxlite-shim binary.
 
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Stdio},
 };
 
-use crate::jailer::{Jail, JailerBuilder};
+use crate::jailer::{Jail, JailerBuilder, PathAccess};
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::BoxOptions;
 use crate::util::configure_library_env;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::watchdog;
+
+fn nested_virtualization_probe_paths() -> [PathBuf; 2] {
+    [
+        PathBuf::from("/sys/module/kvm_intel/parameters/nested"),
+        PathBuf::from("/sys/module/kvm_amd/parameters/nested"),
+    ]
+}
+
+fn nested_virtualization_path_access(
+    enabled: bool,
+    probe_paths: impl IntoIterator<Item = PathBuf>,
+) -> Vec<PathAccess> {
+    if !enabled {
+        return Vec::new();
+    }
+
+    probe_paths
+        .into_iter()
+        .filter(|path| path.exists())
+        .map(|path| PathAccess {
+            path,
+            writable: false,
+        })
+        .collect()
+}
 
 /// A shim that was spawned, with its child process handle and optional keepalive.
 ///
@@ -63,6 +88,11 @@ impl<'a> ShimSpawner<'a> {
     /// # Returns
     /// * `SpawnedShim` containing the child process and optional keepalive
     pub fn spawn(&self, config_json: &str, detach: bool) -> BoxliteResult<SpawnedShim> {
+        let additional_path_access = nested_virtualization_path_access(
+            self.options.nested_virtualization,
+            nested_virtualization_probe_paths(),
+        );
+
         // 1. Create watchdog pipe (non-detached only)
         let (keepalive, child_setup) = if !detach {
             let (k, s) = watchdog::create()?;
@@ -79,6 +109,7 @@ impl<'a> ShimSpawner<'a> {
             .with_layout(self.layout.clone())
             .with_security(self.options.advanced.security.clone())
             .with_volumes(self.options.volumes.clone())
+            .with_additional_path_access(additional_path_access)
             .with_detach(detach);
 
         if let Some(ref setup) = child_setup {
@@ -185,6 +216,38 @@ impl<'a> ShimSpawner<'a> {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+    use tempfile::tempdir;
+
+    #[test]
+    fn nested_virtualization_uses_libkrun_probe_paths() {
+        assert_eq!(
+            nested_virtualization_probe_paths(),
+            [
+                PathBuf::from("/sys/module/kvm_intel/parameters/nested"),
+                PathBuf::from("/sys/module/kvm_amd/parameters/nested"),
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_virtualization_path_access_includes_only_existing_probes() {
+        let dir = tempdir().unwrap();
+        let existing_probe = dir.path().join("kvm_intel_nested");
+        let missing_probe = dir.path().join("kvm_amd_nested");
+        std::fs::write(&existing_probe, "Y\n").unwrap();
+
+        let disabled = nested_virtualization_path_access(
+            false,
+            [existing_probe.clone(), missing_probe.clone()],
+        );
+        assert!(disabled.is_empty());
+
+        let enabled =
+            nested_virtualization_path_access(true, [existing_probe.clone(), missing_probe]);
+        assert_eq!(enabled.len(), 1);
+        assert_eq!(enabled[0].path, existing_probe);
+        assert!(!enabled[0].writable);
+    }
 
     #[test]
     fn test_build_shim_args() {

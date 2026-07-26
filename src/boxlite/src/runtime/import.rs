@@ -11,7 +11,8 @@ use crate::litebox::archive::{
     ArchiveManifest, MANIFEST_FILENAME, MAX_SUPPORTED_VERSION, extract_archive, move_file,
     sha256_file,
 };
-use crate::runtime::options::{BoxArchive, BoxOptions, RootfsSpec};
+use crate::runtime::advanced_options::SecurityOptions;
+use crate::runtime::options::{ArchiveImportPolicy, BoxArchive, BoxOptions, RootfsSpec};
 use crate::runtime::rt_impl::RuntimeImpl;
 use crate::runtime::types::BoxStatus;
 
@@ -26,6 +27,7 @@ pub(crate) async fn import_box(
 ) -> BoxliteResult<LiteBox> {
     let t0 = std::time::Instant::now();
     let archive_path = archive.path().to_path_buf();
+    let import_policy = archive.import_policy();
     if !archive_path.exists() {
         return Err(BoxliteError::NotFound(format!(
             "Archive not found: {}",
@@ -42,7 +44,7 @@ pub(crate) async fn import_box(
                 BoxliteError::Internal(format!("Import extraction task panicked: {}", e))
             })??;
 
-    let options = options_from_manifest(&manifest)?;
+    let options = options_from_manifest(&manifest, archive.import_policy())?;
 
     // Phase 2: Validate disks and install into a staging directory (blocking I/O).
     // The staging dir lives inside temp_dir; provision_box will rename it.
@@ -70,14 +72,38 @@ pub(crate) async fn import_box(
 ///
 /// An archive is untrusted input, so its options are validated here rather
 /// than after disks have been installed and box metadata persisted.
-fn options_from_manifest(manifest: &ArchiveManifest) -> BoxliteResult<BoxOptions> {
-    let options = manifest.box_options.clone().unwrap_or_else(|| BoxOptions {
+fn options_from_manifest(
+    manifest: &ArchiveManifest,
+    policy: ArchiveImportPolicy,
+) -> BoxliteResult<BoxOptions> {
+    let mut options = manifest.box_options.clone().unwrap_or_else(|| BoxOptions {
         rootfs: RootfsSpec::Image(manifest.image.clone()),
         ..Default::default()
     });
     options.sanitize().map_err(|error| {
         BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
     })?;
+
+    if policy == ArchiveImportPolicy::Trusted {
+        return Ok(options);
+    }
+
+    // An upload must not reach into the server's host or pick its own
+    // isolation, so refuse everything that would and impose server defaults.
+    if options.advanced.kernel.is_some() {
+        return Err(rejected_upload("custom kernels"));
+    }
+    if options.advanced.nested_virtualization {
+        return Err(rejected_upload("nested virtualization"));
+    }
+    if matches!(options.rootfs, RootfsSpec::RootfsPath(_)) {
+        return Err(rejected_upload("host rootfs paths"));
+    }
+    if !options.volumes.is_empty() {
+        return Err(rejected_upload("host volume mounts"));
+    }
+    options.advanced.security = SecurityOptions::default();
+
     Ok(options)
 }
 
@@ -196,6 +222,107 @@ pub(crate) fn validate_no_backing_references(disk_path: &Path) -> BoxliteResult<
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    fn v3_manifest(options: BoxOptions) -> ArchiveManifest {
+        ArchiveManifest {
+            version: 3,
+            box_name: None,
+            image: "alpine:latest".to_string(),
+            box_options: Some(options),
+            guest_disk_checksum: String::new(),
+            container_disk_checksum: String::new(),
+            exported_at: "2026-07-26T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn untrusted_import_rejects_nested_virtualization() {
+        let options = BoxOptions {
+            nested_virtualization: true,
+            ..Default::default()
+        };
+
+        let error =
+            resolve_import_options(v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("nested virtualization"));
+    }
+
+    #[test]
+    fn untrusted_import_rejects_custom_kernel() {
+        let mut options = BoxOptions::default();
+        options.advanced.kernel = Some(crate::experimental::custom_kernel::KernelOptions::new(
+            "/host/vmlinux",
+        ));
+
+        let error =
+            resolve_import_options(v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("custom kernels"));
+    }
+
+    #[test]
+    fn untrusted_import_rejects_host_volumes() {
+        let mut options = BoxOptions::default();
+        options.volumes.push(crate::runtime::options::VolumeSpec {
+            host_path: "/".to_string(),
+            guest_path: "/host".to_string(),
+            read_only: false,
+        });
+
+        let error =
+            resolve_import_options(v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .expect_err("untrusted archives must not select server host paths");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("host volume mounts"));
+    }
+
+    #[test]
+    fn untrusted_import_rejects_host_rootfs_paths() {
+        let options = BoxOptions {
+            rootfs: RootfsSpec::RootfsPath("/".to_string()),
+            ..Default::default()
+        };
+
+        let error =
+            resolve_import_options(v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .expect_err("untrusted archives must not select a server rootfs path");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("host rootfs paths"));
+    }
+
+    #[test]
+    fn untrusted_import_replaces_archive_security_with_server_default() {
+        let mut options = BoxOptions::default();
+        options.advanced.security = SecurityOptions::disabled();
+
+        let resolved =
+            resolve_import_options(v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .unwrap();
+
+        assert_eq!(resolved.advanced.security, SecurityOptions::default());
+    }
+
+    #[test]
+    fn trusted_import_preserves_archive_configuration() {
+        let mut options = BoxOptions {
+            nested_virtualization: true,
+            ..Default::default()
+        };
+        options.advanced.security = SecurityOptions::disabled();
+
+        let resolved =
+            resolve_import_options(v3_manifest(options), ArchiveImportPolicy::Trusted).unwrap();
+
+        assert!(resolved.nested_virtualization);
+        assert_eq!(resolved.advanced.security, SecurityOptions::disabled());
+    }
 
     #[test]
     fn imported_capability_policy_is_validated_before_install() {

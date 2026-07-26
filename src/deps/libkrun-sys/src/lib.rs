@@ -69,6 +69,7 @@ extern "C" {
     pub fn krun_set_workdir(ctx_id: u32, workdir_path: *const c_char) -> i32;
     pub fn krun_split_irqchip(ctx_id: u32, enable: bool) -> i32;
     pub fn krun_set_nested_virt(ctx_id: u32, enabled: bool) -> i32;
+    pub fn krun_check_nested_virt() -> i32;
     pub fn krun_set_gpu_options(ctx_id: u32, virgl_flags: u32) -> i32;
     pub fn krun_set_rlimits(ctx_id: u32, rlimits: *const *const c_char) -> i32;
     pub fn krun_set_port_map(ctx_id: u32, port_map: *const *const c_char) -> i32;

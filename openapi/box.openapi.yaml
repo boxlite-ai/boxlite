@@ -519,7 +519,11 @@ paths:
       summary: Import a box from an archive
       description: |
         Imports a `.boxlite` archive (produced by the export endpoint) to create
-        a new box. The archive is uploaded as a binary payload.
+        a new box. The archive is uploaded as a binary payload and treated as
+        untrusted: archived security settings are replaced by the server's
+        defaults. Archives selecting server host paths through a local rootfs or
+        volume mount are rejected, as are archives requiring host-only
+        experimental features such as custom kernels or nested virtualization.
       tags: [Boxes]
       parameters:
         - name: name

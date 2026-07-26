@@ -12,6 +12,7 @@ use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
 use crate::portal::interfaces::{ContainerInitConfig, GuestInitConfig, NetworkInitConfig};
 use async_trait::async_trait;
+use boxlite_shared::ContainerDevice;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 /// Oldest guest release that honors `advanced.capabilities` on
@@ -20,6 +21,11 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 /// Guest rootfs images are cached per version and reused, so a host can meet
 /// one long after its own release.
 const MIN_CAPABILITY_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion = (0, 9, 8);
+
+/// Oldest guest release that honors `devices` on `Container.Init`. Same trap as
+/// capabilities above: an earlier guest drops the field and starts the workload
+/// with no `/dev/kvm` while the caller believes nesting was granted.
+const MIN_DEVICE_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion = (0, 9, 8);
 
 pub struct GuestInitTask;
 
@@ -77,6 +83,11 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     mounts: container_mounts.clone(),
                     ca_certs: ctx.ca_cert_pem.iter().cloned().collect(),
                     tty: ctx.config.options.tty,
+                    devices: if ctx.config.options.advanced.nested_virtualization {
+                        vec![kvm_device()]
+                    } else {
+                        Vec::new()
+                    },
                     advanced: crate::portal::interfaces::container::ContainerAdvancedConfig {
                         capabilities: ctx.config.options.advanced.capabilities.clone(),
                     },
@@ -123,6 +134,11 @@ async fn run_guest_init(
             .require_min_version(MIN_CAPABILITY_GUEST_VERSION)
             .await?;
     }
+    if !bootstrap.container.devices.is_empty() {
+        guest_interface
+            .require_min_version(MIN_DEVICE_GUEST_VERSION)
+            .await?;
+    }
     guest_interface.init(bootstrap.guest).await?;
     tracing::info!("Guest initialized successfully");
 
@@ -138,4 +154,14 @@ async fn run_guest_init(
     // client has attached, so nothing it prints can be missed however fast it is.
 
     Ok(())
+}
+
+/// The guest VM's own `/dev/kvm`, republished into the OCI workload so a nested
+/// hypervisor can open it. The host's `/dev/kvm` is never passed through.
+fn kvm_device() -> ContainerDevice {
+    ContainerDevice {
+        source: "/dev/kvm".to_string(),
+        destination: "/dev/kvm".to_string(),
+        file_mode: Some(0o666),
+    }
 }

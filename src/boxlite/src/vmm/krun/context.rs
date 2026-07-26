@@ -12,16 +12,33 @@ use crate::vmm::krun::check_status;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libkrun_sys::{
     krun_add_disk2, krun_add_net_unixgram, krun_add_net_unixstream, krun_add_virtiofs3,
-    krun_add_vsock, krun_add_vsock_port2, krun_create_ctx, krun_disable_implicit_vsock,
-    krun_free_ctx, krun_init_log, krun_set_console_output, krun_set_env, krun_set_exec,
-    krun_set_gpu_options, krun_set_kernel, krun_set_nested_virt, krun_set_port_map,
-    krun_set_rlimits, krun_set_root, krun_set_root_disk_remount, krun_set_vm_config,
-    krun_set_workdir, krun_setgid, krun_setuid, krun_split_irqchip, krun_start_enter,
+    krun_add_vsock, krun_add_vsock_port2, krun_check_nested_virt, krun_create_ctx,
+    krun_disable_implicit_vsock, krun_free_ctx, krun_init_log, krun_set_console_output,
+    krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel, krun_set_nested_virt,
+    krun_set_port_map, krun_set_rlimits, krun_set_root, krun_set_root_disk_remount,
+    krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid, krun_split_irqchip,
+    krun_start_enter,
 };
 
 /// Thin wrapper that owns a libkrun context.
 pub struct KrunContext {
     ctx_id: u32,
+}
+
+fn check_nested_virtualization_status(status: i32) -> BoxliteResult<()> {
+    match status {
+        1 => Ok(()),
+        0 => Err(BoxliteError::Unsupported(
+            "nested virtualization is not supported on this host; Linux x86_64 requires nested KVM, and macOS requires an M3-or-newer Mac running macOS 15 or later"
+                .to_string(),
+        )),
+        status if status < 0 => Err(BoxliteError::Engine(format!(
+            "krun_check_nested_virt failed with status {status}"
+        ))),
+        status => Err(BoxliteError::Engine(format!(
+            "krun_check_nested_virt returned unexpected status {status}"
+        ))),
+    }
 }
 
 impl KrunContext {
@@ -351,10 +368,18 @@ impl KrunContext {
         })
     }
 
-    pub unsafe fn set_nested_virt(&self, enabled: bool) -> BoxliteResult<()> {
-        tracing::trace!("Setting nested virtualization to: {}", enabled);
+    /// Verify host support and request nested virtualization for this VM.
+    ///
+    /// libkrun's setter only records the request, so the capability probe must
+    /// succeed first. VM startup can still fail if the host changes underneath
+    /// us; that error remains visible through `krun_start_enter`.
+    pub(crate) unsafe fn enable_nested_virtualization(&self) -> BoxliteResult<()> {
+        let status = unsafe { krun_check_nested_virt() };
+        check_nested_virtualization_status(status)?;
+
+        tracing::info!("Enabling nested virtualization");
         check_status("krun_set_nested_virt", unsafe {
-            krun_set_nested_virt(self.ctx_id, enabled)
+            krun_set_nested_virt(self.ctx_id, true)
         })
     }
 
@@ -608,5 +633,27 @@ impl Drop for KrunContext {
         unsafe {
             let _ = krun_free_ctx(self.ctx_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_virtualization_status_maps_libkrun_results() {
+        assert!(check_nested_virtualization_status(1).is_ok());
+        assert!(matches!(
+            check_nested_virtualization_status(0),
+            Err(BoxliteError::Unsupported(_))
+        ));
+        assert!(matches!(
+            check_nested_virtualization_status(-22),
+            Err(BoxliteError::Engine(_))
+        ));
+        assert!(matches!(
+            check_nested_virtualization_status(2),
+            Err(BoxliteError::Engine(_))
+        ));
     }
 }
