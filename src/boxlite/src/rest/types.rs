@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::litebox::BoxStatus;
+use crate::litebox::SshCertificateCredential;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 
@@ -400,6 +401,70 @@ impl SnapshotResponse {
 #[derive(Debug, Deserialize)]
 pub(crate) struct ListSnapshotsResponse {
     pub snapshots: Vec<SnapshotResponse>,
+}
+
+/// Body of `POST /boxes/{id}/ssh-access/certificates`.
+///
+/// Only the public key is ever sent. There is deliberately no private-key
+/// field: the caller generates the pair locally and keeps the private half.
+#[derive(Debug, Serialize)]
+pub(crate) struct CreateSshCertificateRequest {
+    pub public_key: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct SshCertificateResponse {
+    pub id: String,
+    pub box_id: String,
+    pub certificate: String,
+    pub public_key: String,
+    pub fingerprint: String,
+    /// Decimal uint64 string on the wire: a serial above 2^53 cannot be
+    /// represented exactly by a JSON number, so the API encodes it as text.
+    pub serial: String,
+    pub ca_key_id: String,
+    pub valid_after: String,
+    pub expires_at: String,
+    #[serde(default)]
+    pub revoked_at: Option<String>,
+    pub host: String,
+    pub port: u16,
+    pub ssh_command: String,
+    pub proxy_command: String,
+    pub known_hosts: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl SshCertificateResponse {
+    pub fn to_credential(&self) -> SshCertificateCredential {
+        SshCertificateCredential {
+            id: self.id.clone(),
+            box_id: self.box_id.clone(),
+            certificate: self.certificate.clone(),
+            public_key: self.public_key.clone(),
+            fingerprint: self.fingerprint.clone(),
+            // A malformed serial is not worth failing an otherwise usable
+            // credential over; it is audit metadata, not an authenticator.
+            serial: self.serial.parse().unwrap_or_default(),
+            ca_key_id: self.ca_key_id.clone(),
+            valid_after: self.valid_after.clone(),
+            expires_at: self.expires_at.clone(),
+            revoked_at: self.revoked_at.clone(),
+            host: self.host.clone(),
+            port: self.port,
+            ssh_command: self.ssh_command.clone(),
+            proxy_command: self.proxy_command.clone(),
+            known_hosts: self.known_hosts.clone(),
+            created_at: self.created_at.clone(),
+            updated_at: self.updated_at.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ListSshCertificatesResponse {
+    pub certificates: Vec<SshCertificateResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -928,5 +993,104 @@ mod tests {
         assert_eq!(info.name, "snap1");
         assert_eq!(info.disk_info.base_path, "");
         assert_eq!(info.disk_info.size_bytes, 4096);
+    }
+
+    /// The wire shape must match `openapi/box.openapi.yaml`'s
+    /// `SshCertificateCredential`; this pins snake_case field names and the
+    /// nullable `revoked_at`.
+    #[test]
+    fn ssh_certificate_response_parses_the_documented_wire_shape() {
+        let json = r#"{
+            "id": "cred-1",
+            "box_id": "box-1",
+            "certificate": "ssh-ed25519-cert-v01@openssh.com AAAA",
+            "public_key": "ssh-ed25519 AAAA",
+            "fingerprint": "SHA256:abc",
+            "serial": "7",
+            "ca_key_id": "ca-key-1",
+            "valid_after": "2026-07-25T11:59:30Z",
+            "expires_at": "2026-07-25T12:05:00Z",
+            "revoked_at": null,
+            "host": "22-d-abc.example.com",
+            "port": 22,
+            "ssh_command": "ssh ...",
+            "proxy_command": "proxytunnel ...",
+            "known_hosts": "[22-d-abc.example.com]:22 ssh-ed25519 AAAA",
+            "created_at": "2026-07-25T12:00:00Z",
+            "updated_at": "2026-07-25T12:00:00Z"
+        }"#;
+
+        let parsed: SshCertificateResponse = serde_json::from_str(json).unwrap();
+        let credential = parsed.to_credential();
+
+        assert_eq!(credential.id, "cred-1");
+        assert_eq!(credential.serial, 7);
+        assert_eq!(credential.ca_key_id, "ca-key-1");
+        assert_eq!(credential.port, 22);
+        assert_eq!(credential.revoked_at, None);
+    }
+
+    /// `revoked_at` is absent (not null) for an active credential on some
+    /// serializers; both must parse.
+    #[test]
+    fn ssh_certificate_response_tolerates_an_absent_revoked_at() {
+        let json = r#"{
+            "id": "cred-1", "box_id": "box-1",
+            "certificate": "c", "public_key": "p", "fingerprint": "f",
+            "serial": "1", "ca_key_id": "k",
+            "valid_after": "a", "expires_at": "e",
+            "host": "h", "port": 22,
+            "ssh_command": "s", "proxy_command": "pc", "known_hosts": "kh",
+            "created_at": "c", "updated_at": "u"
+        }"#;
+        let parsed: SshCertificateResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.to_credential().revoked_at, None);
+    }
+
+    /// The create request must carry the public key and nothing else — there
+    /// is no field a private key could ride in.
+    #[test]
+    fn create_ssh_certificate_request_sends_only_the_public_key() {
+        let req = CreateSshCertificateRequest {
+            public_key: "ssh-ed25519 AAAA".to_string(),
+        };
+        let value: serde_json::Value = serde_json::to_value(&req).unwrap();
+        let object = value.as_object().unwrap();
+        assert_eq!(object.len(), 1, "unexpected fields: {object:?}");
+        assert_eq!(object["public_key"], "ssh-ed25519 AAAA");
+    }
+
+    /// The serial is a uint64 carried as a decimal string precisely because
+    /// values above 2^53 cannot round-trip through a JSON number on the
+    /// JavaScript side that issues it.
+    #[test]
+    fn a_uint64_serial_survives_the_wire_without_precision_loss() {
+        let json = r#"{
+            "id": "cred-1", "box_id": "box-1",
+            "certificate": "c", "public_key": "p", "fingerprint": "f",
+            "serial": "18446744073709551615", "ca_key_id": "k",
+            "valid_after": "a", "expires_at": "e",
+            "host": "h", "port": 22,
+            "ssh_command": "s", "proxy_command": "pc", "known_hosts": "kh",
+            "created_at": "c", "updated_at": "u"
+        }"#;
+        let parsed: SshCertificateResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.to_credential().serial, u64::MAX);
+    }
+
+    #[test]
+    fn list_ssh_certificates_response_parses_a_named_collection() {
+        let json = r#"{"certificates": [{
+            "id": "cred-1", "box_id": "box-1",
+            "certificate": "c", "public_key": "p", "fingerprint": "f",
+            "serial": "1", "ca_key_id": "k",
+            "valid_after": "a", "expires_at": "e",
+            "host": "h", "port": 22,
+            "ssh_command": "s", "proxy_command": "pc", "known_hosts": "kh",
+            "created_at": "c", "updated_at": "u"
+        }]}"#;
+        let parsed: ListSshCertificatesResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.certificates.len(), 1);
+        assert_eq!(parsed.certificates[0].id, "cred-1");
     }
 }

@@ -4,6 +4,10 @@
 
 - [AutoPause、AutoResume 与 AutoDelete](./auto-pause-resume.md)
 
+## Operations
+
+- [Real SSH: rollout, CA rotation and rollback](./real-ssh-operations.md)
+
 ## Building from Source
 
 ### Prerequisites

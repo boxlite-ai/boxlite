@@ -184,6 +184,17 @@ message PingRequest {}
 
 message PingResponse {
   string version = 1;  // Guest agent version
+
+  // In-guest SSH diagnostics. Non-secret by construction: a host key
+  // fingerprint and CA key IDs only, never key material. Empty/false when the
+  // SSH listener is disabled, which is the default.
+  //
+  // The trusted CA key IDs are what make a stale trust bundle diagnosable
+  // during a CA rotation: a VM generation still trusting only the retired key
+  // shows up here instead of only as unexplained authentication failures.
+  bool ssh_listener_ready = 2;
+  string ssh_host_fingerprint = 3;
+  repeated string ssh_trusted_ca_key_ids = 4;
 }
 
 message ShutdownRequest {}

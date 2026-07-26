@@ -11,6 +11,7 @@ import { BoxClass } from '../enums/box-class.enum'
 import { BoxVolume } from '../dto/box.dto'
 import { nanoid } from 'nanoid'
 import { BoxLastActivity } from './box-last-activity.entity'
+import { GuestSshTrustConfig } from '../services/ssh-certificate/guest-ssh-trust'
 import { BOX_ID_LENGTH, BOX_ID_REGEX, generateBoxId } from '../utils/box-id.util'
 import {
   AUTO_DELETE_DISABLED,
@@ -119,6 +120,19 @@ export class Box {
 
   @Column('jsonb', { nullable: true })
   labels: { [key: string]: string }
+
+  /**
+   * CA trust for this box's in-guest SSH listener, resolved from organization
+   * policy when the box was created. Null means the organization had no CA at
+   * that moment, so this box has no SSH listener.
+   *
+   * Persisted deliberately: it is immutable for the VM generation. Start/stop
+   * and ordinary recover replay this exact bundle, so a CA rotation never
+   * takes effect under a running box. Picking up a rotated set requires a
+   * replacement box, which resolves organization policy afresh.
+   */
+  @Column('jsonb', { nullable: true })
+  guestSshTrust?: GuestSshTrustConfig | null
 
   @Column({ type: 'int', default: 2 })
   cpu = 2

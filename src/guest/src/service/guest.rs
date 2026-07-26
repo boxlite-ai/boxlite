@@ -81,8 +81,16 @@ impl GuestService for GuestServer {
 
     async fn ping(&self, _request: Request<PingRequest>) -> Result<Response<PingResponse>, Status> {
         debug!("Received ping request");
+        let ssh = self
+            .ssh_status
+            .read()
+            .expect("ssh status lock poisoned")
+            .clone();
         Ok(Response::new(PingResponse {
             version: env!("CARGO_PKG_VERSION").to_string(),
+            ssh_listener_ready: ssh.listener_ready,
+            ssh_host_fingerprint: ssh.host_fingerprint,
+            ssh_trusted_ca_key_ids: ssh.trusted_ca_key_ids,
         }))
     }
 

@@ -11,7 +11,9 @@ Name | Type | Description | Notes
 **env** | **{ [key: string]: string; }** |  | [optional] [default to undefined]
 **fromVolumeId** | **string** |  | [optional] [default to undefined]
 **gpuQuota** | **number** |  | [optional] [default to undefined]
+**guestSshTrust** | [**GuestSshTrustDTO**](GuestSshTrustDTO.md) |  | [optional] [default to undefined]
 **id** | **string** |  | [default to undefined]
+**image** | **string** |  | [default to undefined]
 **memoryQuota** | **number** |  | [optional] [default to undefined]
 **metadata** | **{ [key: string]: string; }** |  | [optional] [default to undefined]
 **networkAllowList** | **string** |  | [optional] [default to undefined]
@@ -22,9 +24,7 @@ Name | Type | Description | Notes
 **regionId** | **string** |  | [optional] [default to undefined]
 **registry** | [**RegistryDTO**](RegistryDTO.md) |  | [optional] [default to undefined]
 **skipStart** | **boolean** |  | [optional] [default to undefined]
-**snapshot** | **string** |  | [default to undefined]
 **storageQuota** | **number** |  | [optional] [default to undefined]
-**userId** | **string** |  | [default to undefined]
 **volumes** | [**Array&lt;DtoVolumeDTO&gt;**](DtoVolumeDTO.md) |  | [optional] [default to undefined]
 
 ## Example
@@ -39,7 +39,9 @@ const instance: CreateBoxDTO = {
     env,
     fromVolumeId,
     gpuQuota,
+    guestSshTrust,
     id,
+    image,
     memoryQuota,
     metadata,
     networkAllowList,
@@ -50,9 +52,7 @@ const instance: CreateBoxDTO = {
     regionId,
     registry,
     skipStart,
-    snapshot,
     storageQuota,
-    userId,
     volumes,
 };
 ```

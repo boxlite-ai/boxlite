@@ -24,11 +24,23 @@ async-trait = "0.1"
 uuid = { version = "1.10", features = ["v4"] }
 tonic = "0.12"
 tokio-stream = { version = "0.1", features = ["sync"] }
+tower = "0.4"
+hyper-util = { version = "0.1", features = ["tokio"] }
 futures = "0.3"
 async-stream = "0.3"
 clap = { version = "4.5", features = ["derive"] }
 rayon = "1.10"
 tar = "0.4"
+# `ring` (not `aws-lc-rs`) to avoid aws-lc's cmake toolchain. Note ring is
+# still C: cross-compiling from macOS needs a musl cross-compiler (see the
+# note on `clippy` in make/quality.mk). `rsa` is enabled
+# so russh can decode an RSA certificate and our own verifier can reject it
+# explicitly, rather than the algorithm silently failing to parse.
+russh = { version = "0.62", default-features = false, features = ["ring", "rsa"] }
+# In-process SFTP subsystem handler paired with russh; the wire protocol is
+# implemented here, not hand-rolled, and not an external sftp-server binary.
+russh-sftp = "2.3"
+rand = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procfs = "0.18.0"

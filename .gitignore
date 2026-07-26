@@ -179,6 +179,7 @@ Cargo.lock
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 .claude/.last-audit.json
+.claude/.last-audit-handoff.json
 .claude/.last-verdict.json
 .claude/.pr-reviewed.json
 .claude/.verdict-last-uuid

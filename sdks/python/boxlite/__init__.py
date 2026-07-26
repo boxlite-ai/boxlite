@@ -40,6 +40,9 @@ try:
         SnapshotHandle,
         SnapshotInfo,
         SnapshotOptions,
+        SshCertificateCredential,
+        SshCertificateHandle,
+        SshCredentialBundle,
         VolumeHandle,
         VolumeInfo,
     )
@@ -77,6 +80,9 @@ try:
         "SnapshotOptions",
         "CloneOptions",
         "ExportOptions",
+        "SshCertificateHandle",
+        "SshCertificateCredential",
+        "SshCredentialBundle",
         "VolumeHandle",
         "VolumeInfo",
     ]
@@ -162,6 +168,7 @@ try:
         SyncNetworkHandle,
         SyncSimpleBox,
         SyncSkillBox,
+        SyncSshCertificateHandle,
     )
 
     __all__.extend(
@@ -176,6 +183,7 @@ try:
             "SyncNetworkHandle",
             "SyncSimpleBox",
             "SyncSkillBox",
+            "SyncSshCertificateHandle",
         ]
     )
 except ImportError:

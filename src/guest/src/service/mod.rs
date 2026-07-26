@@ -4,9 +4,11 @@
 //! - `guest`: Guest initialization and management (Init, Ping, Shutdown RPCs)
 //! - `container`: Container lifecycle (Init RPC)
 //! - `execution`: Command execution (Exec, Wait, Kill RPCs)
+//! - `ssh`: Optional in-guest SSH/SFTP server with CA certificate auth
 
 mod container;
 pub(crate) mod exec;
 pub(crate) mod files;
 mod guest;
 pub(crate) mod server;
+pub(crate) mod ssh;

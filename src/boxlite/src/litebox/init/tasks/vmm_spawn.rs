@@ -324,6 +324,32 @@ fn build_guest_entrypoint(
     builder.with_arg("--notify");
     builder.with_arg(&ready_notify_uri);
 
+    // SSH trust, when this VM generation has any. Only CA *public* keys and
+    // non-secret identifiers travel here — argv lands in the kernel cmdline,
+    // which is world-readable inside the guest via /proc/cmdline, so nothing
+    // secret may ever be added to this block.
+    //
+    // These args come before env because `with_arg` spends the same cmdline
+    // budget env vars do (2 KiB total on aarch64) but, unlike env, is not
+    // droppable: a box booted without its trust set would silently accept
+    // nothing. Ed25519 CA keys are ~100 bytes each, so a current+next bundle
+    // costs ~300 bytes including identity.
+    if let Some(trust) = &options.guest_ssh_trust {
+        builder.with_arg("--ssh-listen");
+        builder.with_arg(&trust.listen_addr);
+        builder.with_arg("--ssh-org-id");
+        builder.with_arg(&trust.organization_id);
+        builder.with_arg("--ssh-box-id");
+        builder.with_arg(&trust.box_id);
+        for ca in &trust.ca_keys {
+            builder.with_arg("--ssh-ca-key");
+            // The guest reads the non-secret CA key ID out of the OpenSSH
+            // comment field, so identity travels with the key as one argument
+            // instead of needing a second, separately-orderable flag.
+            builder.with_arg(&ca_key_arg(ca));
+        }
+    }
+
     // Debug vars first (prioritized - guaranteed space)
     if let Ok(v) = std::env::var("RUST_LOG") {
         builder.with_env("RUST_LOG", &v);
@@ -344,6 +370,19 @@ fn build_guest_entrypoint(
     // The guest init process inherits them from the container environment.
 
     Ok(builder.build())
+}
+
+/// Render one trusted CA key as a single `--ssh-ca-key` argument, carrying the
+/// non-secret key ID in the OpenSSH comment field.
+///
+/// An OpenSSH public-key line is `<algo> <base64> [comment]`. A key that
+/// already carries a comment keeps it rather than growing a second one.
+fn ca_key_arg(ca: &crate::runtime::options::GuestSshCaKey) -> String {
+    let key = ca.public_key.trim();
+    if ca.key_id.is_empty() || key.split_whitespace().count() >= 3 {
+        return key.to_string();
+    }
+    format!("{key} {}", ca.key_id)
 }
 
 /// Create the box's **one** network backend by routing box-level policy (port
@@ -414,4 +453,165 @@ async fn spawn_vm(
     )?;
 
     controller.start(config).await
+}
+
+#[cfg(test)]
+mod guest_ssh_trust_args_tests {
+    use super::*;
+    use crate::rootfs::guest::{GuestRootfs, Strategy};
+    use crate::runtime::options::{GuestSshCaKey, GuestSshTrustConfig};
+
+    const CURRENT_CA: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICurrentCaKeyBodyPlaceholder00";
+    const NEXT_CA: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINextCaKeyBodyPlaceholder000000";
+
+    fn rootfs() -> GuestRootfs {
+        GuestRootfs {
+            path: std::path::PathBuf::from("/tmp/rootfs"),
+            strategy: Strategy::Direct,
+            kernel: None,
+            initrd: None,
+            env: Vec::new(),
+        }
+    }
+
+    fn entrypoint_for(options: &BoxOptions) -> Entrypoint {
+        build_guest_entrypoint(
+            &BoxTransport::Vsock { port: 2695 },
+            &BoxTransport::Vsock { port: 2696 },
+            &rootfs(),
+            options,
+        )
+        .expect("entrypoint should build")
+    }
+
+    fn trust(ca_keys: Vec<GuestSshCaKey>) -> GuestSshTrustConfig {
+        GuestSshTrustConfig {
+            listen_addr: "0.0.0.0:22".to_string(),
+            organization_id: "org-1".to_string(),
+            box_id: "box-1".to_string(),
+            ca_keys,
+        }
+    }
+
+    fn ca(key_id: &str, public_key: &str) -> GuestSshCaKey {
+        GuestSshCaKey {
+            key_id: key_id.to_string(),
+            public_key: public_key.to_string(),
+        }
+    }
+
+    /// Values that follow `flag` in the argv, in order.
+    fn values_for(args: &[String], flag: &str) -> Vec<String> {
+        args.windows(2)
+            .filter(|w| w[0] == flag)
+            .map(|w| w[1].clone())
+            .collect()
+    }
+
+    #[test]
+    fn disabled_trust_emits_no_ssh_arguments() {
+        let entrypoint = entrypoint_for(&BoxOptions::default());
+        assert!(
+            !entrypoint.args.iter().any(|a| a.starts_with("--ssh")),
+            "no SSH argument may appear when trust is absent, got {:?}",
+            entrypoint.args
+        );
+    }
+
+    #[test]
+    fn current_only_trust_emits_identity_and_one_ca_key() {
+        let options = BoxOptions {
+            guest_ssh_trust: Some(trust(vec![ca("ca-key-1", CURRENT_CA)])),
+            ..BoxOptions::default()
+        };
+        let args = entrypoint_for(&options).args;
+
+        assert_eq!(values_for(&args, "--ssh-listen"), vec!["0.0.0.0:22"]);
+        assert_eq!(values_for(&args, "--ssh-org-id"), vec!["org-1"]);
+        assert_eq!(values_for(&args, "--ssh-box-id"), vec!["box-1"]);
+        assert_eq!(
+            values_for(&args, "--ssh-ca-key"),
+            vec![format!("{CURRENT_CA} ca-key-1")]
+        );
+    }
+
+    #[test]
+    fn current_plus_next_trust_emits_a_repeated_ca_key_argument() {
+        let options = BoxOptions {
+            guest_ssh_trust: Some(trust(vec![
+                ca("ca-key-1", CURRENT_CA),
+                ca("ca-key-2", NEXT_CA),
+            ])),
+            ..BoxOptions::default()
+        };
+        let args = entrypoint_for(&options).args;
+
+        assert_eq!(
+            values_for(&args, "--ssh-ca-key"),
+            vec![
+                format!("{CURRENT_CA} ca-key-1"),
+                format!("{NEXT_CA} ca-key-2"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_ca_key_that_already_carries_a_comment_does_not_gain_a_second_one() {
+        let options = BoxOptions {
+            guest_ssh_trust: Some(trust(vec![ca(
+                "ca-key-2",
+                &format!("{CURRENT_CA} ca-key-1"),
+            )])),
+            ..BoxOptions::default()
+        };
+        let args = entrypoint_for(&options).args;
+
+        assert_eq!(
+            values_for(&args, "--ssh-ca-key"),
+            vec![format!("{CURRENT_CA} ca-key-1")]
+        );
+    }
+
+    /// The trust bundle must fit the tightest kernel cmdline budget
+    /// (2 KiB on aarch64) with room to spare for env vars.
+    #[test]
+    fn a_current_plus_next_bundle_stays_well_inside_the_cmdline_budget() {
+        let options = BoxOptions {
+            guest_ssh_trust: Some(trust(vec![
+                ca("ca-key-1", CURRENT_CA),
+                ca("ca-key-2", NEXT_CA),
+            ])),
+            ..BoxOptions::default()
+        };
+        let args = entrypoint_for(&options).args;
+        let ssh_bytes: usize = args
+            .iter()
+            .skip_while(|a| !a.starts_with("--ssh"))
+            .map(|a| a.len() + 1)
+            .sum();
+        assert!(
+            ssh_bytes < 512,
+            "SSH argv must stay small against the 2 KiB aarch64 cmdline, used {ssh_bytes} bytes"
+        );
+    }
+
+    /// Nothing secret may reach argv: it becomes the kernel cmdline, readable
+    /// inside the guest via /proc/cmdline.
+    #[test]
+    fn only_public_ca_material_reaches_the_command_line() {
+        let options = BoxOptions {
+            guest_ssh_trust: Some(trust(vec![ca("ca-key-1", CURRENT_CA)])),
+            ..BoxOptions::default()
+        };
+        let args = entrypoint_for(&options).args;
+        let joined = args.join(" ");
+        assert!(!joined.contains("PRIVATE KEY"));
+        assert!(!joined.to_lowercase().contains("secret"));
+        for value in values_for(&args, "--ssh-ca-key") {
+            assert!(
+                value.starts_with("ssh-ed25519 "),
+                "CA argument must be an OpenSSH public key line, got {value:?}"
+            );
+        }
+    }
 }

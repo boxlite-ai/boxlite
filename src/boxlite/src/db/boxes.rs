@@ -397,6 +397,67 @@ mod tests {
         assert_eq!(loaded.unwrap().id, config.id);
     }
 
+    /// Stop/start replays the persisted box options rather than re-deriving
+    /// them, which is what makes a VM generation's SSH CA trust immutable.
+    /// If this round trip ever drops the trust bundle, a restarted box would
+    /// come back with no SSH listener at all.
+    #[test]
+    fn test_guest_ssh_trust_survives_the_config_round_trip() {
+        use crate::runtime::options::{GuestSshCaKey, GuestSshTrustConfig};
+
+        let (store, _dir) = create_test_db();
+        let mut config = create_test_config(TEST_ID_1);
+        let trust = GuestSshTrustConfig {
+            listen_addr: "0.0.0.0:22".to_string(),
+            organization_id: "org-1".to_string(),
+            box_id: "box-1".to_string(),
+            ca_keys: vec![
+                GuestSshCaKey {
+                    key_id: "ca-key-1".to_string(),
+                    public_key: "ssh-ed25519 AAAACurrent".to_string(),
+                },
+                GuestSshCaKey {
+                    key_id: "ca-key-2".to_string(),
+                    public_key: "ssh-ed25519 AAAANext".to_string(),
+                },
+            ],
+        };
+        config.options.guest_ssh_trust = Some(trust.clone());
+
+        store.save(&config, &BoxState::new()).unwrap();
+        let loaded = store.load_config(config.id.as_str()).unwrap().unwrap();
+
+        assert_eq!(loaded.options.guest_ssh_trust, Some(trust));
+    }
+
+    /// Rows written before SSH trust existed must still load, with the
+    /// listener simply absent.
+    #[test]
+    fn test_config_rows_without_guest_ssh_trust_load_with_ssh_disabled() {
+        // A row written before SSH trust existed has no `guest_ssh_trust` key
+        // at all; serializing a fresh config emits `null`, which is a
+        // different shape. Strip the key to build a genuine pre-SSH row.
+        //
+        // The tolerance comes from `BoxOptions`' struct-level `#[serde(default)]`,
+        // not the field attribute — so what this pins is the observable
+        // contract (an old row still loads, with SSH off), which survives
+        // however that default is spelled.
+        let config = create_test_config(TEST_ID_1);
+        let mut row = serde_json::to_value(&config).unwrap();
+        let options = row["options"].as_object_mut().unwrap();
+        assert!(
+            options.remove("guest_ssh_trust").is_some(),
+            "field name changed; this test would silently stop covering the \
+             pre-SSH row shape"
+        );
+        assert!(!options.contains_key("guest_ssh_trust"));
+
+        let loaded: BoxConfig = serde_json::from_value(row).unwrap();
+
+        assert_eq!(loaded.id, config.id);
+        assert!(loaded.options.guest_ssh_trust.is_none());
+    }
+
     #[test]
     fn test_legacy_config_rows_with_persisted_socket_paths_load() {
         // Rows written before the BoxSockets redesign persisted `transport`

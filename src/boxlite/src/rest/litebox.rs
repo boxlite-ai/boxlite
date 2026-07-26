@@ -16,18 +16,22 @@ use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{
     BoxCommand, BoxTunnel, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution,
+    SshCertificateCredential,
 };
 use crate::metrics::BoxMetrics;
-use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
+use crate::runtime::backend::{
+    BoxBackend, BoxNetworkBackend, BoxSshCertificateBackend, SnapshotBackend,
+};
 use crate::runtime::id::BoxID;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 
 use super::client::{ApiClient, WsStream};
 use super::exec::RestExecControl;
 use super::types::{
-    BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest, ExecRequest,
-    ExecResponse, ExecutionStatusResponse, ExportBoxRequest, ListSnapshotsResponse,
-    SnapshotResponse,
+    BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest,
+    CreateSshCertificateRequest, ExecRequest, ExecResponse, ExecutionStatusResponse,
+    ExportBoxRequest, ListSnapshotsResponse, ListSshCertificatesResponse, SnapshotResponse,
+    SshCertificateResponse,
 };
 
 /// REST-backed box handle.
@@ -379,11 +383,13 @@ impl BoxBackend for RestBox {
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         let box_backend: Arc<dyn BoxBackend> = rest_box.clone();
         let network_backend: Arc<dyn BoxNetworkBackend> = rest_box.clone();
-        let snapshot_backend: Arc<dyn SnapshotBackend> = rest_box;
+        let snapshot_backend: Arc<dyn SnapshotBackend> = rest_box.clone();
+        let ssh_certificate_backend: Arc<dyn BoxSshCertificateBackend> = rest_box;
         Ok(crate::LiteBox::new(
             box_backend,
             network_backend,
             snapshot_backend,
+            ssh_certificate_backend,
         ))
     }
 
@@ -514,6 +520,46 @@ impl SnapshotBackend for RestBox {
         let encoded_name = urlencoding::encode(name);
         let path = format!("/boxes/{}/snapshots/{}/restore", box_id, encoded_name);
         self.client.post_empty_no_content(&path).await
+    }
+}
+
+#[async_trait]
+impl crate::runtime::backend::BoxSshCertificateBackend for RestBox {
+    async fn create(
+        &self,
+        public_key: &str,
+        ttl_minutes: Option<u32>,
+    ) -> BoxliteResult<SshCertificateCredential> {
+        let box_id = self.box_id_str();
+        let mut path = format!("/boxes/{}/ssh-access/certificates", box_id);
+        if let Some(minutes) = ttl_minutes {
+            path.push_str(&format!("?expiresInMinutes={minutes}"));
+        }
+        // Only the public half crosses this boundary. There is no request
+        // field for a private key, so none can be sent by mistake.
+        let req = CreateSshCertificateRequest {
+            public_key: public_key.to_string(),
+        };
+        let resp: SshCertificateResponse = self.client.post(&path, &req).await?;
+        Ok(resp.to_credential())
+    }
+
+    async fn list(&self) -> BoxliteResult<Vec<SshCertificateCredential>> {
+        let box_id = self.box_id_str();
+        let path = format!("/boxes/{}/ssh-access/certificates", box_id);
+        let resp: ListSshCertificatesResponse = self.client.get(&path).await?;
+        Ok(resp
+            .certificates
+            .iter()
+            .map(SshCertificateResponse::to_credential)
+            .collect())
+    }
+
+    async fn revoke(&self, credential_id: &str) -> BoxliteResult<()> {
+        let box_id = self.box_id_str();
+        let encoded_id = urlencoding::encode(credential_id);
+        let path = format!("/boxes/{}/ssh-access/certificates/{}", box_id, encoded_id);
+        self.client.delete(&path).await
     }
 }
 

@@ -37,7 +37,6 @@ function makeService() {
   const service = new BoxService(
     boxRepository, // boxRepository
     noop, // runnerRepository
-    noop, // sshAccessRepository
     noop, // runnerService
     noop, // volumeService
     noop, // configService
@@ -51,6 +50,7 @@ function makeService() {
     noop, // regionService
     noop, // boxLookupCacheInvalidationService
     noop, // boxActivityService
+    noop, // guestSshTrustService
   )
   return { service, boxRepository, eventEmitter, organizationService, organizationUsageService }
 }
@@ -79,7 +79,6 @@ function makePreviewUrlService() {
   const service = new BoxService(
     noop, // boxRepository
     noop, // runnerRepository
-    noop, // sshAccessRepository
     noop, // runnerService
     noop, // volumeService
     configService, // configService
@@ -93,6 +92,7 @@ function makePreviewUrlService() {
     regionService, // regionService
     noop, // boxLookupCacheInvalidationService
     noop, // boxActivityService
+    noop, // guestSshTrustService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -253,22 +253,22 @@ function makeNetworkTunnelService() {
   const regionService = { findOne: jest.fn().mockResolvedValue(null) } as any
   const noop = {} as any
   const service = new BoxService(
-    noop,
-    noop,
-    noop,
-    noop,
-    noop,
-    configService,
-    noop,
-    noop,
-    noop,
+    noop, // boxRepository
+    noop, // runnerRepository
+    noop, // runnerService
+    noop, // volumeService
+    configService, // configService
+    noop, // warmPoolService
+    noop, // eventEmitter
+    noop, // organizationService
     noop, // organizationUsageService
-    noop,
-    noop,
-    noop,
-    regionService,
-    noop,
-    noop,
+    noop, // runnerAdapterFactory
+    noop, // redisLockProvider
+    noop, // redis
+    regionService, // regionService
+    noop, // boxLookupCacheInvalidationService
+    noop, // boxActivityService
+    noop, // guestSshTrustService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -303,10 +303,88 @@ describe('BoxService public defaults', () => {
       runnerService: { getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: 'runner-1' }) },
       boxRepository,
       eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
+      // Organizations without a CA get no trust bundle, which is the default
+      // state; the delivery specs cover the populated case.
+      guestSshTrustService: {
+        resolveForNewBox: jest.fn().mockResolvedValue(null),
+        isEnabledForOrganization: jest.fn().mockResolvedValue(false),
+      },
+      warmPoolService: { fetchWarmPoolBox: jest.fn().mockResolvedValue(null) },
       toBoxDto: jest.fn((box) => box),
     })
     return { service, boxRepository }
   }
+
+  it('persists the organization-resolved SSH trust on the new box', async () => {
+    // This is the API-side hop: without it the bundle never reaches the runner
+    // and the guest listener is unreachable from the control plane. Remove the
+    // assignment in BoxService.create and this fails.
+    const trust = {
+      listenAddr: '0.0.0.0:22',
+      organizationId: 'org-1',
+      boxId: 'ignored',
+      caKeys: [{ keyId: 'ca-key-1', publicKey: 'ssh-ed25519 AAAA' }],
+    }
+    const { service, boxRepository } = makeCreateService()
+    const resolve = jest.fn().mockResolvedValue(trust)
+    Object.assign(service as any, {
+      guestSshTrustService: { resolveForNewBox: resolve, isEnabledForOrganization: jest.fn().mockResolvedValue(true) },
+    })
+
+    await service.create({ name: 'ssh-box' } as any, { id: 'org-1' } as any)
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ guestSshTrust: trust }))
+    // Resolved against the real box id, and from organization policy only —
+    // never from the request.
+    expect(resolve).toHaveBeenCalledWith('org-1', expect.any(String))
+  })
+
+  it('leaves SSH trust null for an organization without a CA', async () => {
+    const { service, boxRepository } = makeCreateService()
+
+    await service.create({ name: 'plain-box' } as any, { id: 'org-1' } as any)
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ guestSshTrust: null }))
+  })
+
+  it('bypasses the warm pool for an SSH-enabled organization', async () => {
+    // A pre-warmed box booted with no trust, so serving one here would make
+    // SSH availability depend on a pool hit.
+    const { service } = makeCreateService()
+    const fetchWarmPoolBox = jest.fn()
+    const isEnabledForOrganization = jest.fn().mockResolvedValue(true)
+    Object.assign(service as any, {
+      // The harness defaults `warm-pool:skip` to set, which would short-circuit
+      // the `||` before SSH is ever consulted and make this test vacuous.
+      redis: { exists: jest.fn().mockResolvedValue(0) },
+      guestSshTrustService: { resolveForNewBox: jest.fn().mockResolvedValue(null), isEnabledForOrganization },
+      warmPoolService: { fetchWarmPoolBox },
+    })
+
+    await service.create({ name: 'ssh-box' } as any, { id: 'org-1' } as any)
+
+    expect(isEnabledForOrganization).toHaveBeenCalledWith('org-1')
+    expect(fetchWarmPoolBox).not.toHaveBeenCalled()
+  })
+
+  it('still uses the warm pool for an organization without SSH', async () => {
+    // The counterpart to the bypass: without this, a bypass that fired
+    // unconditionally would look correct above.
+    const { service } = makeCreateService()
+    const fetchWarmPoolBox = jest.fn().mockResolvedValue(null)
+    Object.assign(service as any, {
+      redis: { exists: jest.fn().mockResolvedValue(0) },
+      guestSshTrustService: {
+        resolveForNewBox: jest.fn().mockResolvedValue(null),
+        isEnabledForOrganization: jest.fn().mockResolvedValue(false),
+      },
+      warmPoolService: { fetchWarmPoolBox },
+    })
+
+    await service.create({ name: 'plain-box' } as any, { id: 'org-1' } as any)
+
+    expect(fetchWarmPoolBox).toHaveBeenCalled()
+  })
 
   it.each([
     [undefined, true],

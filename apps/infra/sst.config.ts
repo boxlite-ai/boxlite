@@ -170,7 +170,6 @@ export default $config({
     const oidcMgmtClientSecret = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_SECRET')
     const posthogApiKey = new sst.Secret('POSTHOG_API_KEY', '')
     const svixAuthToken = new sst.Secret('SVIX_AUTH_TOKEN', '')
-    const sshPrivateKey = new sst.Secret('SSH_PRIVATE_KEY_B64', '')
     const sshHostKey = new sst.Secret('SSH_HOST_KEY_B64', '')
 
     // ─── 2. PLATFORM ─────────────────────────────────────────────────────────
@@ -549,9 +548,11 @@ export default $config({
         PROXY_API_KEY: envOr('PROXY_API_KEY', proxyApiKey.result),
         PROXY_TEMPLATE_URL: envOr('PROXY_TEMPLATE_URL', `https://proxy.${stackDomain}`),
 
-        // SSH Gateway — friendly hostname `ssh.<stackDomain>` is provisioned
-        // as a Cloudflare CNAME pointing at the SshGateway NLB further below.
-        SSH_GATEWAY_URL: envOr('SSH_GATEWAY_URL', `ssh://ssh.${stackDomain}:${PORTS.SSH_GATEWAY}`),
+        // SSH Gateway — this is an API-side credential only: the API still
+        // recognizes it in api-key.strategy.ts, and it is kept as Phase 5
+        // rollback protection. The gateway service is no longer given it,
+        // because it makes no API calls. SSH_GATEWAY_URL went away with the
+        // token issuance that was its only reader.
         SSH_GATEWAY_API_KEY: envOr('SSH_GATEWAY_API_KEY', sshGatewayApiKey.result),
 
         // Admin
@@ -695,7 +696,9 @@ export default $config({
       },
     })
 
-    // SSH Gateway: `ssh <box>@ssh.<stackDomain>:2222` proxies to the box.
+    // SSH Gateway: retained as rollback protection only. Its Legacy SSH Token
+    // authentication was deleted with the `/box/{id}/ssh-access` contract, so the
+    // service now refuses every connection; it is removed in the cleanup phase.
     // The NLB has no domain field (TCP listeners don't take ACM certs); instead we
     // attach a Cloudflare CNAME directly via cloudflareDns.createAlias below so users
     // get a stable, memorable hostname instead of the auto-generated NLB DNS name.
@@ -704,12 +707,9 @@ export default $config({
       image: { context: '../..', dockerfile: 'apps/ssh-gateway/Dockerfile', cache: false },
       loadBalancer: { rules: [{ listen: `${PORTS.SSH_GATEWAY}/tcp`, forward: `${PORTS.SSH_GATEWAY}/tcp` }] },
       environment: {
-        // api-client-go composes paths like "/box/ssh-access/validate" directly.
-        // The Nest control plane is globally mounted under /api, so the gateway
-        // must use the API base path rather than the raw ALB root.
-        API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
-        API_KEY: envOr('SSH_GATEWAY_API_KEY', sshGatewayApiKey.result), // NB: not SSH_GATEWAY_API_KEY
-        SSH_PRIVATE_KEY: sshPrivateKey.value,
+        // Host key only. The gateway makes no API calls and signs nothing now
+        // that token authentication is gone, so it needs neither an API
+        // credential nor the old runner-proxy signing key.
         SSH_HOST_KEY: sshHostKey.value,
       },
     })

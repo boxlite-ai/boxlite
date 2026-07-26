@@ -41,6 +41,7 @@ help:
 	@echo "    make test:unit:rust         - Run Rust unit tests (nextest when available)"
 	@echo "    make test:warm-cache:rust   - Pre-warm Rust integration image cache"
 	@echo "    make test:integration:rust  - Run Rust integration tests (requires VM, FILTER=<pattern>)"
+	@echo "    make test:unit:guest        - Run guest agent unit tests (Linux only)"
 	@echo "    make test:unit:ffi          - Run BoxLite FFI unit tests"
 	@echo "    make test:integration:cli   - Run CLI integration tests (FILTER=<pattern>)"
 	@echo "    make test:unit:python       - Run Python SDK unit tests"

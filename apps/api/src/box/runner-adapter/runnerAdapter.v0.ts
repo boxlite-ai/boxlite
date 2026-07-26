@@ -265,6 +265,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       authToken: box.authToken,
       organizationId: box.organizationId,
       regionId: box.region,
+      guestSshTrust: box.guestSshTrust ?? undefined,
     })
 
     if (!response?.data?.daemonVersion) {
@@ -331,6 +332,11 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
       errorReason: box.errorReason,
+      // Persisted at create; replayed verbatim here. Resolving organization
+      // policy again would silently change trust under an existing VM
+      // generation, which the design forbids — a rotated CA set reaches a box
+      // only via a replacement box.
+      guestSshTrust: box.guestSshTrust ?? undefined,
     }
     await this.boxApiClient.recover(box.id, recoverBoxDTO)
   }

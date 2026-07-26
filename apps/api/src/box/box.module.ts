@@ -30,7 +30,6 @@ import { RunnerAdapterFactory } from './runner-adapter/runnerAdapter'
 import { BoxStartAction } from './managers/box-actions/box-start.action'
 import { BoxStopAction } from './managers/box-actions/box-stop.action'
 import { BoxDestroyAction } from './managers/box-actions/box-destroy.action'
-import { SshAccess } from './entities/ssh-access.entity'
 import { BoxRepository } from './repositories/box.repository'
 import { RegionModule } from '../region/region.module'
 import { Region } from '../region/entities/region.entity'
@@ -49,13 +48,29 @@ import { EventEmitter2 } from '@nestjs/event-emitter'
 import { BoxLastActivity } from './entities/box-last-activity.entity'
 import { BoxActivityService } from './services/box-activity.service'
 import { BoxStateWaiterService } from './services/box-state-waiter.service'
+import { SshCertificateCredential } from './entities/ssh-certificate-credential.entity'
+import { OrganizationSshCaKey } from './entities/organization-ssh-ca-key.entity'
+import { SshCertificateService } from './services/ssh-certificate/ssh-certificate.service'
+import { OrganizationSshCaKeyService } from './services/ssh-certificate/organization-ssh-ca-key.service'
+import { GuestSshTrustService } from './services/ssh-certificate/guest-ssh-trust.service'
+import { sshCertificateSignerProvider } from './services/ssh-certificate/ssh-certificate-signer.provider'
 
 @Module({
   imports: [
     UserModule,
     OrganizationModule,
     RegionModule,
-    TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, SshAccess, Region, Job, BoxLastActivity]),
+    TypeOrmModule.forFeature([
+      Box,
+      Runner,
+      WarmPool,
+      Volume,
+      SshCertificateCredential,
+      OrganizationSshCaKey,
+      Region,
+      Job,
+      BoxLastActivity,
+    ]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
   providers: [
@@ -77,6 +92,10 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     JobStateHandlerService,
     BoxActivityService,
     BoxStateWaiterService,
+    OrganizationSshCaKeyService,
+    GuestSshTrustService,
+    sshCertificateSignerProvider,
+    SshCertificateService,
     BoxAccessGuard,
     RunnerAccessGuard,
     RegionRunnerAccessGuard,
@@ -103,6 +122,7 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     RunnerAdapterFactory,
     BoxActivityService,
     BoxStateWaiterService,
+    SshCertificateService,
   ],
 })
 export class BoxModule {}

@@ -1,7 +1,8 @@
 use std::os::raw::{c_char, c_int};
 
 use boxlite::runtime::options::{
-    BoxOptions, NetworkSpec, PortProtocol, PortSpec, RootfsSpec, Secret, VolumeSpec,
+    BoxOptions, GuestSshCaKey, GuestSshTrustConfig, NetworkSpec, PortProtocol, PortSpec,
+    RootfsSpec, Secret, VolumeSpec,
 };
 
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
@@ -135,6 +136,49 @@ pub unsafe extern "C" fn boxlite_options_add_secret(
     hosts_count: c_int,
 ) {
     options_add_secret(opts, name, value, placeholder, hosts, hosts_count)
+}
+
+/// Set the create-time SSH certificate-authority trust handed to the guest.
+///
+/// **Private bridge symbol for the Go binding, not part of the public C API.**
+/// The C SDK exposes no SSH surface, so this is kept out of
+/// `include/boxlite.h` via the `[export] exclude` entry in `cbindgen.toml`;
+/// the Go SDK declares it itself in `sdks/go/bridge.h`. Renaming it means
+/// updating both.
+///
+/// Carries CA *public* keys and non-secret identifiers only — the same
+/// material the guest receives on argv. No private key of any kind may be
+/// passed here.
+///
+/// `ca_key_ids[i]` and `ca_public_keys[i]` describe the same CA, so both
+/// arrays must hold `ca_key_count` entries. At least one CA key is required:
+/// a trust bundle with none would start a guest listener that can accept
+/// nothing, which is a silent lockout rather than a configuration error.
+///
+/// Returns `InvalidArgument` — leaving the options untouched — if `opts` is
+/// NULL, any identity field is NULL/empty/invalid UTF-8, or the CA key arrays
+/// are missing, empty, or hold a NULL/empty/invalid entry.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_go_options_set_guest_ssh_trust(
+    opts: *mut CBoxliteOptions,
+    listen_addr: *const c_char,
+    organization_id: *const c_char,
+    box_id: *const c_char,
+    ca_key_ids: *const *const c_char,
+    ca_public_keys: *const *const c_char,
+    ca_key_count: c_int,
+) -> BoxliteErrorCode {
+    unsafe {
+        options_set_guest_ssh_trust(
+            opts,
+            listen_addr,
+            organization_id,
+            box_id,
+            ca_key_ids,
+            ca_public_keys,
+            ca_key_count,
+        )
+    }
 }
 
 /// Deprecated: use `boxlite_options_set_auto_delete_interval`.
@@ -457,6 +501,84 @@ pub unsafe fn options_add_secret(
             value,
         });
     }
+}
+
+pub unsafe fn options_set_guest_ssh_trust(
+    handle: *mut OptionsHandle,
+    listen_addr: *const c_char,
+    organization_id: *const c_char,
+    box_id: *const c_char,
+    ca_key_ids: *const *const c_char,
+    ca_public_keys: *const *const c_char,
+    ca_key_count: c_int,
+) -> BoxliteErrorCode {
+    unsafe {
+        let Some(handle) = handle.as_mut() else {
+            return BoxliteErrorCode::InvalidArgument;
+        };
+        // Validate the whole bundle before touching the options: a half-applied
+        // trust set (identity without CA keys, or the reverse) would boot a
+        // guest that silently accepts nothing.
+        let Some(trust) = parse_guest_ssh_trust(
+            listen_addr,
+            organization_id,
+            box_id,
+            ca_key_ids,
+            ca_public_keys,
+            ca_key_count,
+        ) else {
+            return BoxliteErrorCode::InvalidArgument;
+        };
+        handle.options.guest_ssh_trust = Some(trust);
+        BoxliteErrorCode::Ok
+    }
+}
+
+/// Read a trust bundle out of the raw C input, or `None` when any part of it
+/// is missing or unusable.
+///
+/// # Safety
+/// Same contract as `boxlite_go_options_set_guest_ssh_trust`: the identity
+/// pointers must be NULL or null-terminated C strings, and both CA arrays must
+/// hold at least `ca_key_count` such pointers.
+unsafe fn parse_guest_ssh_trust(
+    listen_addr: *const c_char,
+    organization_id: *const c_char,
+    box_id: *const c_char,
+    ca_key_ids: *const *const c_char,
+    ca_public_keys: *const *const c_char,
+    ca_key_count: c_int,
+) -> Option<GuestSshTrustConfig> {
+    unsafe {
+        if ca_key_ids.is_null() || ca_public_keys.is_null() || ca_key_count <= 0 {
+            return None;
+        }
+
+        let mut ca_keys = Vec::with_capacity(ca_key_count as usize);
+        for index in 0..ca_key_count as usize {
+            ca_keys.push(GuestSshCaKey {
+                key_id: required_c_string(*ca_key_ids.add(index))?,
+                public_key: required_c_string(*ca_public_keys.add(index))?,
+            });
+        }
+
+        Some(GuestSshTrustConfig {
+            listen_addr: required_c_string(listen_addr)?,
+            organization_id: required_c_string(organization_id)?,
+            box_id: required_c_string(box_id)?,
+            ca_keys,
+        })
+    }
+}
+
+/// Owned, trimmed C string, or `None` when it is NULL, not UTF-8, or blank.
+///
+/// # Safety
+/// `value` must be NULL or a valid null-terminated C string.
+unsafe fn required_c_string(value: *const c_char) -> Option<String> {
+    let text = unsafe { c_str_to_string(value) }.ok()?;
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 #[allow(deprecated)]

@@ -77,6 +77,46 @@ func networkSpec(blockAll *bool, allowList *string) boxlite.NetworkSpec {
 	return spec
 }
 
+// guestSshTrust converts the create-time SSH trust DTO into the SDK option
+// value, or nil when the box gets no in-guest SSH listener.
+//
+// Deliberately not routed through boxRuntimeEnv: trust is typed box
+// configuration the runtime turns into guest argv, not a generic environment
+// variable.
+func guestSshTrust(trust *dto.GuestSshTrustDTO) *boxlite.GuestSshTrust {
+	if trust == nil {
+		return nil
+	}
+
+	caKeys := make([]boxlite.GuestSshCaKey, 0, len(trust.CaKeys))
+	for _, ca := range trust.CaKeys {
+		caKeys = append(caKeys, boxlite.GuestSshCaKey{
+			KeyID:     ca.KeyId,
+			PublicKey: ca.PublicKey,
+		})
+	}
+	return &boxlite.GuestSshTrust{
+		ListenAddr:     trust.ListenAddr,
+		OrganizationID: trust.OrganizationId,
+		BoxID:          trust.BoxId,
+		CaKeys:         caKeys,
+	}
+}
+
+// guestSshCaKeyIds lists the non-secret CA identifiers for logging. CA key IDs
+// and fingerprints are the only trust material safe to log; public keys and the
+// bundle as a whole are not.
+func guestSshCaKeyIds(trust *dto.GuestSshTrustDTO) []string {
+	if trust == nil {
+		return nil
+	}
+	keyIds := make([]string, 0, len(trust.CaKeys))
+	for _, ca := range trust.CaKeys {
+		keyIds = append(keyIds, ca.KeyId)
+	}
+	return keyIds
+}
+
 func boxRuntimeEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]string {
 	env := map[string]string{
 		"BOXLITE_BOX_ID": boxDto.Id,
@@ -264,6 +304,10 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 
 	opts = append(opts, boxlite.WithNetwork(networkSpec(boxDto.NetworkBlockAll, boxDto.NetworkAllowList)))
 
+	if trust := guestSshTrust(boxDto.GuestSshTrust); trust != nil {
+		opts = append(opts, boxlite.WithGuestSshTrust(*trust))
+	}
+
 	// GetOrCreate (not Create) so a CREATE_BOX replay is idempotent. The local
 	// box name is boxDto.Id — the control plane's globally-unique box id — so if
 	// the box was already persisted by a prior CREATE_BOX for the SAME box (e.g.
@@ -286,6 +330,9 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	c.boxes[boxDto.Id] = bx
 	c.mu.Unlock()
 
+	// Identifiers only. The SSH trust bundle is summarized by its CA key IDs —
+	// enough to tell which trust generation a box booted with during a CA
+	// rotation, without putting key material in the log.
 	c.logger.Info(
 		"created box",
 		"id",
@@ -296,6 +343,8 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		bx.Name(),
 		"image",
 		boxDto.Image,
+		"sshCaKeyIds",
+		guestSshCaKeyIds(boxDto.GuestSshTrust),
 	)
 
 	skipStart := boxDto.SkipStart != nil && *boxDto.SkipStart

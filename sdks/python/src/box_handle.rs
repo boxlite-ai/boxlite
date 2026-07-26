@@ -6,6 +6,7 @@ use crate::metrics::PyBoxMetrics;
 use crate::network::PyNetworkHandle;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions};
 use crate::snapshots::PySnapshotHandle;
+use crate::ssh_certificates::PySshCertificateHandle;
 use crate::util::map_err;
 use boxlite::{BoxCommand, CloneOptions, ExportOptions, LiteBox};
 use pyo3::prelude::*;
@@ -45,6 +46,17 @@ impl PyBox {
     #[getter]
     fn network(&self) -> PyNetworkHandle {
         PyNetworkHandle {
+            handle: Arc::clone(&self.handle),
+        }
+    }
+
+    /// Get the SSH certificate handle for this box.
+    ///
+    /// Usage: `await box.ssh_certificates.issue()`. Hosted runtimes only;
+    /// the embedded runtime raises `Unsupported`.
+    #[getter]
+    fn ssh_certificates(&self) -> PySshCertificateHandle {
+        PySshCertificateHandle {
             handle: Arc::clone(&self.handle),
         }
     }

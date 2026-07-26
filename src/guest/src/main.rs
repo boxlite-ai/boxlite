@@ -67,6 +67,66 @@ struct GuestArgs {
     ///   --notify unix:///var/run/boxlite-ready.sock
     #[arg(short, long)]
     notify: Option<String>,
+
+    /// Listen address for the in-guest SSH server. Omitted means no SSH
+    /// listener at all -- the feature is off unless the host asks for it.
+    ///
+    /// Example: --ssh-listen 0.0.0.0:22
+    #[arg(long)]
+    ssh_listen: Option<String>,
+
+    /// Trusted organization SSH CA public key, in OpenSSH format, with the
+    /// non-secret CA key ID in the comment field. Repeat to trust the `next`
+    /// key as well during a CA rotation. Only CA *public* material is ever
+    /// passed here.
+    #[arg(long)]
+    ssh_ca_key: Vec<String>,
+
+    /// Organization ID every accepted certificate must name as `org:<id>`.
+    #[arg(long)]
+    ssh_org_id: Option<String>,
+
+    /// Canonical box ID every accepted certificate must name as `box:<id>`.
+    #[arg(long)]
+    ssh_box_id: Option<String>,
+}
+
+/// Resolved, validated SSH configuration for this VM generation.
+#[cfg(target_os = "linux")]
+struct GuestSshConfig {
+    listen: std::net::SocketAddr,
+    trust: std::sync::Arc<service::ssh::ca::SshTrust>,
+}
+
+/// Turn the SSH boot arguments into a listener configuration.
+///
+/// Returns `Ok(None)` when `--ssh-listen` was not given: SSH is off by
+/// default and its absence is not an error. When it *is* given, an incomplete
+/// or malformed trust bundle is a hard startup failure rather than a listener
+/// that accepts nothing (or worse, everything) -- deployment must fail closed.
+#[cfg(target_os = "linux")]
+fn resolve_ssh_config(args: &GuestArgs) -> BoxliteResult<Option<GuestSshConfig>> {
+    use boxlite_shared::errors::BoxliteError;
+
+    let Some(listen) = args.ssh_listen.as_deref() else {
+        return Ok(None);
+    };
+
+    let listen: std::net::SocketAddr = listen
+        .parse()
+        .map_err(|e| BoxliteError::Internal(format!("invalid --ssh-listen {listen:?}: {e}")))?;
+
+    let trust = service::ssh::ca::SshTrust::new(
+        args.ssh_org_id.as_deref().unwrap_or_default(),
+        args.ssh_box_id.as_deref().unwrap_or_default(),
+        &args.ssh_ca_key,
+    )
+    .map_err(|e| BoxliteError::Internal(e.to_string()))?;
+
+    Ok(Some(GuestSshConfig {
+        listen,
+        trust: std::sync::Arc::new(trust),
+    }))
 }
 
 #[cfg(target_os = "linux")]
@@ -136,6 +196,18 @@ async fn async_main() -> BoxliteResult<()> {
         args.listen, args.notify
     );
 
+    // Resolved before any listener starts: a bad trust bundle must abort boot,
+    // not degrade into an SSH port that rejects everything silently.
+    let ssh = resolve_ssh_config(&args)?;
+    match &ssh {
+        Some(cfg) => info!(
+            "SSH enabled: listen={}, trusted_ca_key_ids={:?}",
+            cfg.listen,
+            cfg.trust.ca_key_ids()
+        ),
+        None => info!("SSH disabled: no --ssh-listen"),
+    }
+
     // Prepare guest layout directories
     let layout = layout::GuestLayout::new();
     info!("Preparing guest layout at {}", layout.base().display());
@@ -145,21 +217,163 @@ async fn async_main() -> BoxliteResult<()> {
     // All initialization (mounts, rootfs, network) will happen via Guest.Init RPC
     info!("Starting guest server on: {}", args.listen);
     let server = GuestServer::new(layout);
-    server.run(args.listen, args.notify).await
+    let ssh = ssh.map(|cfg| (cfg.listen, cfg.trust));
+    server.run(args.listen, args.notify, ssh).await
 }
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 
+    fn parse(argv: &[&str]) -> GuestArgs {
+        GuestArgs::try_parse_from(argv).expect("arguments should parse")
+    }
+
+    fn base_argv() -> Vec<&'static str> {
+        vec!["boxlite-guest", "--listen", "vsock://2695"]
+    }
+
+    fn ca_key_line() -> String {
+        let ca = russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+            .unwrap();
+        let mut public = ca.public_key().clone();
+        public.set_comment("ca-key-1");
+        public.to_openssh().unwrap()
+    }
+
     #[test]
     fn test_args_structure() {
-        // Test that the args structure compiles
-        let args = GuestArgs {
-            listen: "vsock://2695".to_string(),
-            notify: Some("vsock://2696".to_string()),
-        };
+        let args = parse(&[
+            "boxlite-guest",
+            "--listen",
+            "vsock://2695",
+            "--notify",
+            "vsock://2696",
+        ]);
         assert_eq!(args.listen, "vsock://2695");
         assert_eq!(args.notify, Some("vsock://2696".to_string()));
+    }
+
+    #[test]
+    fn ssh_is_disabled_without_a_listen_address() {
+        let args = parse(&base_argv());
+        assert!(resolve_ssh_config(&args).unwrap().is_none());
+    }
+
+    #[test]
+    fn ssh_ca_keys_left_over_from_a_disabled_config_do_not_start_a_listener() {
+        let key = ca_key_line();
+        let mut argv = base_argv();
+        argv.extend([
+            "--ssh-ca-key",
+            &key,
+            "--ssh-org-id",
+            "org-1",
+            "--ssh-box-id",
+            "box-1",
+        ]);
+        let args = parse(&argv);
+        assert!(resolve_ssh_config(&args).unwrap().is_none());
+    }
+
+    #[test]
+    fn ssh_config_resolves_with_a_current_only_trust_bundle() {
+        let key = ca_key_line();
+        let mut argv = base_argv();
+        argv.extend([
+            "--ssh-listen",
+            "0.0.0.0:22",
+            "--ssh-ca-key",
+            &key,
+            "--ssh-org-id",
+            "org-1",
+            "--ssh-box-id",
+            "box-1",
+        ]);
+        let args = parse(&argv);
+        let cfg = resolve_ssh_config(&args)
+            .unwrap()
+            .expect("ssh should be enabled");
+        assert_eq!(cfg.listen.to_string(), "0.0.0.0:22");
+        assert_eq!(cfg.trust.ca_key_ids(), vec!["ca-key-1".to_string()]);
+    }
+
+    #[test]
+    fn ssh_config_accepts_a_repeated_ca_key_for_current_plus_next() {
+        let current = ca_key_line();
+        let next = ca_key_line();
+        let mut argv = base_argv();
+        argv.extend([
+            "--ssh-listen",
+            "0.0.0.0:22",
+            "--ssh-ca-key",
+            &current,
+            "--ssh-ca-key",
+            &next,
+            "--ssh-org-id",
+            "org-1",
+            "--ssh-box-id",
+            "box-1",
+        ]);
+        let args = parse(&argv);
+        let cfg = resolve_ssh_config(&args)
+            .unwrap()
+            .expect("ssh should be enabled");
+        assert_eq!(cfg.trust.ca_key_ids().len(), 2);
+    }
+
+    #[test]
+    fn ssh_listen_without_identity_or_ca_keys_fails_closed() {
+        let key = ca_key_line();
+
+        let mut no_ca = base_argv();
+        no_ca.extend([
+            "--ssh-listen",
+            "0.0.0.0:22",
+            "--ssh-org-id",
+            "org-1",
+            "--ssh-box-id",
+            "box-1",
+        ]);
+        assert!(resolve_ssh_config(&parse(&no_ca)).is_err());
+
+        let mut no_org = base_argv();
+        no_org.extend([
+            "--ssh-listen",
+            "0.0.0.0:22",
+            "--ssh-ca-key",
+            &key,
+            "--ssh-box-id",
+            "box-1",
+        ]);
+        assert!(resolve_ssh_config(&parse(&no_org)).is_err());
+
+        let mut no_box = base_argv();
+        no_box.extend([
+            "--ssh-listen",
+            "0.0.0.0:22",
+            "--ssh-ca-key",
+            &key,
+            "--ssh-org-id",
+            "org-1",
+        ]);
+        assert!(resolve_ssh_config(&parse(&no_box)).is_err());
+    }
+
+    #[test]
+    fn a_malformed_ssh_listen_address_fails_closed() {
+        let key = ca_key_line();
+        let mut argv = base_argv();
+        argv.extend([
+            "--ssh-listen",
+            "not-an-address",
+            "--ssh-ca-key",
+            &key,
+            "--ssh-org-id",
+            "org-1",
+            "--ssh-box-id",
+            "box-1",
+        ]);
+        assert!(resolve_ssh_config(&parse(&argv)).is_err());
     }
 }

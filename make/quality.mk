@@ -197,11 +197,37 @@ lint\:go:
 	@echo "🔍 Linting Go SDK (vet)..."
 	@cd sdks/go && go vet -tags boxlite_dev ./...
 
+# Linting the guest from macOS means cross-compiling to musl, and clippy still
+# runs build scripts — so any C-backed dependency needs a musl cross-compiler.
+# `boxlite-guest` has one since russh (its only crypto backends, `ring` and
+# `aws-lc-rs`, are both C). `make setup` installs musl-cross, so developer
+# machines run this check; the lint workflow's macOS clippy job installs only
+# the Rust target, because building musl-cross-make from source takes ~15
+# minutes (see the note in .github/workflows/build-runtime.yml).
+#
+# What still covers the guest when this is skipped, stated precisely:
+#   - Lints: fully covered pre-merge. Linux CI runs the unexcluded
+#     `--workspace` branch below, and nothing under src/guest/ is gated on
+#     target_env/target_arch — only target_os = "linux" — so linux-gnu lints
+#     the same cfg set as linux-musl.
+#   - musl *compilation*: only partly covered pre-merge. test.yml's Go job
+#     builds the guest for musl, but is gated on `sdks/go/**` changes;
+#     build-runtime.yml also builds it but runs post-merge (workflow_run on
+#     main / release), not on pull_request. So a guest-only PR can reach merge
+#     without a musl build signal. That gap predates this skip, but do not
+#     widen it: if a guest C dependency changes, build the guest locally
+#     (`make guest`) or run the Go job.
 clippy: _ensure-python-deps
 	@echo "🔍 Running Rust clippy checks..."
 	@if [ "$$(uname)" = "Darwin" ]; then \
-		BOXLITE_DEPS_STUB=1 cargo clippy --workspace --all-targets --all-features --exclude boxlite-guest -- -D warnings && \
-		BOXLITE_DEPS_STUB=1 cargo clippy -p boxlite-guest --target "$$(bash scripts/util.sh --target)" --all-targets --all-features -- -D warnings; \
+		BOXLITE_DEPS_STUB=1 cargo clippy --workspace --all-targets --all-features --exclude boxlite-guest -- -D warnings || exit 1; \
+		guest_target="$$(bash scripts/util.sh --target)"; \
+		guest_cc="$$(echo "$$guest_target" | cut -d'-' -f1)-linux-musl-gcc"; \
+		if command -v "$$guest_cc" >/dev/null 2>&1; then \
+			BOXLITE_DEPS_STUB=1 cargo clippy -p boxlite-guest --target "$$guest_target" --all-targets --all-features -- -D warnings || exit 1; \
+		else \
+			echo "⏭️  Skipping boxlite-guest clippy: $$guest_cc not found (run 'make setup' to install musl-cross). Linux CI lints the guest natively."; \
+		fi; \
 	else \
 		BOXLITE_DEPS_STUB=1 cargo clippy --workspace --all-targets --all-features -- -D warnings; \
 	fi

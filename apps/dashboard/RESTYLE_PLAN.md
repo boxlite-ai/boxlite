@@ -35,8 +35,8 @@ Design source (visual/interaction spec only, NOT importable code — DCLogic pro
 |---|---|---|
 | Login.dc | LandingPage.tsx | react-oidc-context `signinRedirect` |
 | Nav.dc | Dashboard.tsx shell | ThemeContext, useAuth (sign out), useSelectedOrganization (+ org switcher), quickstart flag |
-| Boxes page.dc | Boxes.tsx + BoxTable + CreateBoxDialog | useBoxes, useCreateBoxMutation, useStart/Stop/DeleteBoxMutation, useCreateSshAccessMutation; stat cards → analytics usage (graceful-degrade if `analyticsApiUrl` unset) |
-| Box detail.dc | components/boxes/* (BoxDetails, BoxTerminalTab) | useBoxQuery (transition poll), start/stop/delete/recover, useTerminalSessionQuery, SSH mutations. NOTE: new design shows only spec panel + shell terminal, so the old logs/metrics/traces/spending tabs (BoxContentTabs) are NOT rendered anymore — their components/hooks still exist and can be re-added if wanted. |
+| Boxes page.dc | Boxes.tsx + BoxTable + CreateBoxDialog | useBoxes, useCreateBoxMutation, useStart/Stop/DeleteBoxMutation; stat cards → analytics usage (graceful-degrade if `analyticsApiUrl` unset) |
+| Box detail.dc | components/boxes/* (BoxDetails, BoxTerminalTab) | useBoxQuery (transition poll), start/stop/delete/recover, useTerminalSessionQuery. NOTE: new design shows only spec panel + shell terminal, so the old logs/metrics/traces/spending tabs (BoxContentTabs) are NOT rendered anymore — their components/hooks still exist and can be re-added if wanted. |
 | API keys.dc | Keys.tsx + ApiKeyTable + CreateApiKeyDialog | useApiKeysQuery, useCreateApiKeyMutation, useRevokeApiKeyMutation |
 | Quickstart.dc | Onboarding / OnboardingGuideDialog | useCreateApiKeyMutation (run-step is decorative) |
 | Billing.dc (empty) | Billing.tsx | none (static) |

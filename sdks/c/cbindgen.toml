@@ -14,3 +14,13 @@ usize_is_size_t = true
 
 [parse]
 parse_deps = false
+
+[export]
+# Private bridge symbols the Go binding reaches through its own header
+# (sdks/go/bridge.h). They exist because the Go SDK wraps the Rust core over
+# the same cdylib, not because the C SDK offers the feature — keeping them out
+# of include/boxlite.h is what stops them becoming public C API by accident.
+exclude = [
+  # SSH is a Hosted-API concern; the C SDK exposes no SSH surface.
+  "boxlite_go_options_set_guest_ssh_trust",
+]

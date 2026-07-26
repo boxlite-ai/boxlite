@@ -425,6 +425,46 @@ pub struct BoxOptions {
     /// guest; the real value never enters the VM.
     #[serde(default)]
     pub secrets: Vec<Secret>,
+
+    /// SSH certificate-authority trust delivered to the guest at boot.
+    ///
+    /// Immutable for a VM generation by construction: it lives in the box
+    /// options, which stop/start replays verbatim, so a restart can never pick
+    /// up a different CA set. Rotating the trusted CAs, or enabling SSH on an
+    /// existing box, requires recreating or replacing the box.
+    ///
+    /// `None` means no in-guest SSH listener, which is the default.
+    #[serde(default)]
+    pub guest_ssh_trust: Option<GuestSshTrustConfig>,
+}
+
+/// CA trust and identity for the in-guest SSH listener.
+///
+/// Carries public material only: CA *public* keys plus non-secret identifiers.
+/// No private key of any kind belongs in this struct, which is why it can
+/// safely travel through box options, the database and guest argv.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GuestSshTrustConfig {
+    /// Address the guest SSH server binds inside the VM, reached through the
+    /// existing direct tunnel. Conventionally `0.0.0.0:22`.
+    pub listen_addr: String,
+    /// Organization every accepted certificate must name as `org:<id>`.
+    pub organization_id: String,
+    /// Canonical box ID every accepted certificate must name as `box:<id>`.
+    pub box_id: String,
+    /// Trusted CA public keys: the `current` key, plus the `next` key while a
+    /// rotation is in flight. Order is not significant.
+    pub ca_keys: Vec<GuestSshCaKey>,
+}
+
+/// One trusted CA public key and its non-secret identifier.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GuestSshCaKey {
+    /// Non-secret signer/version identifier, used for audit and to make a
+    /// stale trust bundle diagnosable during rotation.
+    pub key_id: String,
+    /// Canonical OpenSSH CA **public** key line.
+    pub public_key: String,
 }
 
 /// A secret for MITM proxy injection.
@@ -531,6 +571,7 @@ impl Default for BoxOptions {
             user: None,
             tty: false,
             secrets: Vec::new(),
+            guest_ssh_trust: None,
         }
     }
 }

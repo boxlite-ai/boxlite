@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
-use crate::litebox::{BoxCommand, BoxTunnel, Execution, LiteBox};
+use crate::litebox::{BoxCommand, BoxTunnel, Execution, LiteBox, SshCertificateCredential};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
     BoxArchive, BoxOptions, CloneOptions, ExportOptions, SnapshotOptions,
@@ -143,6 +143,38 @@ pub(crate) trait BoxBackend: Send + Sync {
 pub(crate) trait BoxNetworkBackend: Send + Sync {
     /// Establish a one-shot tunnel and return its prepared endpoint and connection.
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
+}
+
+/// Backend abstraction for SSH certificate credential lifecycle on a box.
+///
+/// Kept separate from `BoxBackend` for two reasons. It is a *control-plane*
+/// concern — the Hosted API signs a certificate; nothing about the running box
+/// changes — so folding it into the box lifecycle trait would imply a guest
+/// round trip that never happens. And it is hosted-only: certificates are
+/// signed by an organization CA the local runtime has no access to, so the
+/// local backend answers `Unsupported` rather than inventing a second trust
+/// root.
+#[async_trait]
+pub(crate) trait BoxSshCertificateBackend: Send + Sync {
+    /// Sign a certificate for a caller-generated public key.
+    ///
+    /// The caller keeps the private half; it is never sent, returned or
+    /// stored. Issuing does not revoke any other credential.
+    async fn create(
+        &self,
+        public_key: &str,
+        ttl_minutes: Option<u32>,
+    ) -> BoxliteResult<SshCertificateCredential>;
+
+    /// Public credential metadata for this box. Never key material.
+    async fn list(&self) -> BoxliteResult<Vec<SshCertificateCredential>>;
+
+    /// Revoke exactly one credential by ID.
+    ///
+    /// Hides it from the active list. It does not invalidate
+    /// an already-issued certificate before `expires_at`, and does not
+    /// terminate live sessions.
+    async fn revoke(&self, credential_id: &str) -> BoxliteResult<()>;
 }
 
 /// Backend abstraction for snapshot lifecycle operations on a box.

@@ -17,6 +17,7 @@ mod options;
 mod runtime;
 mod snapshot_options;
 mod snapshots;
+mod ssh_certificates;
 mod util;
 mod volumes;
 
@@ -36,4 +37,8 @@ pub use options::{
 pub use runtime::JsBoxlite; // re-export for dist bundling
 pub use snapshot_options::{JsCloneOptions, JsExportOptions, JsSnapshotOptions};
 pub use snapshots::{JsSnapshotHandle, JsSnapshotInfo};
+pub use ssh_certificates::{
+    JsRedactedSshCredentialBundle, JsSshCertificateCredential, JsSshCertificateHandle,
+    JsSshCredentialBundle,
+};
 pub use volumes::{JsVolumeHandle, JsVolumeInfo};

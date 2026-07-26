@@ -3,7 +3,7 @@ use crate::*;
 use boxlite::BoxliteError;
 use boxlite::runtime::BoxliteRuntime;
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_int, c_void};
+use std::os::raw::{c_char, c_int, c_void};
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::Arc;
@@ -602,4 +602,206 @@ fn add_port_rejects_zero_guest_port_and_null_options() {
     let ports = unsafe { &(*opts).options.ports };
     assert!(ports.is_empty(), "rejected spec must not be stored");
     unsafe { boxlite_options_free(opts) };
+}
+
+// ============================================================================
+// Guest SSH trust (private Go bridge)
+// ============================================================================
+//
+// `boxlite_go_options_set_guest_ssh_trust` is deliberately absent from
+// include/boxlite.h (cbindgen `[export] exclude`), so these tests are the only
+// place the symbol is exercised from C-compatible input.
+
+/// Own a set of C strings for the lifetime of a test, plus the pointer array
+/// the FFI expects. The `Vec<CString>` must outlive the pointers, so both are
+/// returned together.
+fn c_string_array(values: &[&str]) -> (Vec<CString>, Vec<*const c_char>) {
+    let owned: Vec<CString> = values
+        .iter()
+        .map(|value| CString::new(*value).expect("test string cstring"))
+        .collect();
+    let pointers = owned.iter().map(|value| value.as_ptr()).collect();
+    (owned, pointers)
+}
+
+// A complete bundle must land on BoxOptions verbatim, current+next CA keys in
+// order, because that is exactly what vmm_spawn turns into guest argv.
+#[test]
+fn guest_ssh_trust_lands_on_box_options() {
+    let opts = unsafe { new_test_options() };
+
+    let listen_addr = CString::new("0.0.0.0:22").unwrap();
+    let organization_id = CString::new("org-1").unwrap();
+    let box_id = CString::new("box-1").unwrap();
+    let (_key_id_storage, key_ids) = c_string_array(&["ca-current", "ca-next"]);
+    let (_public_key_storage, public_keys) =
+        c_string_array(&["ssh-ed25519 AAAACurrent", "ssh-ed25519 AAAANext"]);
+
+    let code = unsafe {
+        boxlite_go_options_set_guest_ssh_trust(
+            opts,
+            listen_addr.as_ptr(),
+            organization_id.as_ptr(),
+            box_id.as_ptr(),
+            key_ids.as_ptr(),
+            public_keys.as_ptr(),
+            key_ids.len() as c_int,
+        )
+    };
+    assert_eq!(code, BoxliteErrorCode::Ok);
+
+    let trust = unsafe { (*opts).options.guest_ssh_trust.clone() }
+        .expect("a complete bundle must be stored on the box options");
+    assert_eq!(trust.listen_addr, "0.0.0.0:22");
+    assert_eq!(trust.organization_id, "org-1");
+    assert_eq!(trust.box_id, "box-1");
+    assert_eq!(
+        trust
+            .ca_keys
+            .iter()
+            .map(|ca| (ca.key_id.as_str(), ca.public_key.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("ca-current", "ssh-ed25519 AAAACurrent"),
+            ("ca-next", "ssh-ed25519 AAAANext"),
+        ],
+    );
+
+    unsafe { boxlite_options_free(opts) };
+}
+
+// Every incomplete bundle must be rejected whole. A half-applied trust set
+// boots a guest whose SSH listener can never authenticate anyone, so partial
+// acceptance would be a silent lockout rather than a loud configuration error.
+#[test]
+fn guest_ssh_trust_rejects_incomplete_bundles() {
+    let complete_key_ids = ["ca-current"];
+    let complete_public_keys = ["ssh-ed25519 AAAACurrent"];
+
+    struct IncompleteBundle<'a> {
+        name: &'a str,
+        listen_addr: &'a str,
+        organization_id: &'a str,
+        box_id: &'a str,
+        key_ids: &'a [&'a str],
+        public_keys: &'a [&'a str],
+        count: c_int,
+    }
+
+    let cases: &[IncompleteBundle] = &[
+        IncompleteBundle {
+            name: "blank listen address",
+            listen_addr: "  ",
+            organization_id: "org-1",
+            box_id: "box-1",
+            key_ids: &complete_key_ids,
+            public_keys: &complete_public_keys,
+            count: 1,
+        },
+        IncompleteBundle {
+            name: "blank organization",
+            listen_addr: "0.0.0.0:22",
+            organization_id: "",
+            box_id: "box-1",
+            key_ids: &complete_key_ids,
+            public_keys: &complete_public_keys,
+            count: 1,
+        },
+        IncompleteBundle {
+            name: "blank box id",
+            listen_addr: "0.0.0.0:22",
+            organization_id: "org-1",
+            box_id: "",
+            key_ids: &complete_key_ids,
+            public_keys: &complete_public_keys,
+            count: 1,
+        },
+        IncompleteBundle {
+            name: "no CA keys",
+            listen_addr: "0.0.0.0:22",
+            organization_id: "org-1",
+            box_id: "box-1",
+            key_ids: &complete_key_ids,
+            public_keys: &complete_public_keys,
+            count: 0,
+        },
+        IncompleteBundle {
+            name: "blank CA key id",
+            listen_addr: "0.0.0.0:22",
+            organization_id: "org-1",
+            box_id: "box-1",
+            key_ids: &[""],
+            public_keys: &complete_public_keys,
+            count: 1,
+        },
+        IncompleteBundle {
+            name: "blank CA public key",
+            listen_addr: "0.0.0.0:22",
+            organization_id: "org-1",
+            box_id: "box-1",
+            key_ids: &complete_key_ids,
+            public_keys: &[""],
+            count: 1,
+        },
+    ];
+
+    for IncompleteBundle {
+        name,
+        listen_addr,
+        organization_id,
+        box_id,
+        key_ids,
+        public_keys,
+        count,
+    } in cases
+    {
+        let opts = unsafe { new_test_options() };
+        let listen_addr_c = CString::new(*listen_addr).unwrap();
+        let organization_id_c = CString::new(*organization_id).unwrap();
+        let box_id_c = CString::new(*box_id).unwrap();
+        let (_key_id_storage, key_id_ptrs) = c_string_array(key_ids);
+        let (_public_key_storage, public_key_ptrs) = c_string_array(public_keys);
+
+        let code = unsafe {
+            boxlite_go_options_set_guest_ssh_trust(
+                opts,
+                listen_addr_c.as_ptr(),
+                organization_id_c.as_ptr(),
+                box_id_c.as_ptr(),
+                key_id_ptrs.as_ptr(),
+                public_key_ptrs.as_ptr(),
+                *count,
+            )
+        };
+
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument, "{name}");
+        assert!(
+            unsafe { (*opts).options.guest_ssh_trust.is_none() },
+            "{name}: a rejected bundle must not be stored"
+        );
+        unsafe { boxlite_options_free(opts) };
+    }
+}
+
+// A null options handle is a caller bug, not a crash.
+#[test]
+fn guest_ssh_trust_rejects_null_options() {
+    let listen_addr = CString::new("0.0.0.0:22").unwrap();
+    let organization_id = CString::new("org-1").unwrap();
+    let box_id = CString::new("box-1").unwrap();
+    let (_key_id_storage, key_ids) = c_string_array(&["ca-current"]);
+    let (_public_key_storage, public_keys) = c_string_array(&["ssh-ed25519 AAAACurrent"]);
+
+    let code = unsafe {
+        boxlite_go_options_set_guest_ssh_trust(
+            ptr::null_mut(),
+            listen_addr.as_ptr(),
+            organization_id.as_ptr(),
+            box_id.as_ptr(),
+            key_ids.as_ptr(),
+            public_keys.as_ptr(),
+            1,
+        )
+    };
+    assert_eq!(code, BoxliteErrorCode::InvalidArgument);
 }

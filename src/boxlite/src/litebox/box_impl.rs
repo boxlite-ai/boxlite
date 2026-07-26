@@ -1382,6 +1382,37 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 }
 
 #[async_trait::async_trait]
+impl crate::runtime::backend::BoxSshCertificateBackend for BoxImpl {
+    async fn create(
+        &self,
+        _public_key: &str,
+        _ttl_minutes: Option<u32>,
+    ) -> BoxliteResult<crate::litebox::SshCertificateCredential> {
+        Err(unsupported_ssh_certificates())
+    }
+
+    async fn list(&self) -> BoxliteResult<Vec<crate::litebox::SshCertificateCredential>> {
+        Err(unsupported_ssh_certificates())
+    }
+
+    async fn revoke(&self, _credential_id: &str) -> BoxliteResult<()> {
+        Err(unsupported_ssh_certificates())
+    }
+}
+
+/// Certificates are signed by an organization-scoped CA that only the hosted
+/// control plane holds. Failing closed is deliberate: a local runtime must not
+/// invent a second trust root, and silently returning an empty list would look
+/// like "no credentials" rather than "wrong runtime".
+fn unsupported_ssh_certificates() -> BoxliteError {
+    BoxliteError::Unsupported(
+        "SSH certificate issuance requires hosted BoxLite; the local runtime has no \
+         organization certificate authority"
+            .into(),
+    )
+}
+
+#[async_trait::async_trait]
 impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
         let network = self

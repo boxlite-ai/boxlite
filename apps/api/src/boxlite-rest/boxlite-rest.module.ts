@@ -13,12 +13,19 @@ import { BoxliteMeController } from './boxlite-me.controller'
 import { BoxliteConfigController } from './boxlite-config.controller'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
+import { BoxliteSshAccessController } from './boxlite-ssh-access.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxAutoResumeService } from './box-auto-resume.service'
 
 @Module({
   imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule],
-  controllers: [BoxliteMeController, BoxliteConfigController, BoxliteBoxController, BoxliteProxyController],
+  controllers: [
+    BoxliteMeController,
+    BoxliteConfigController,
+    BoxliteBoxController,
+    BoxliteProxyController,
+    BoxliteSshAccessController,
+  ],
   providers: [BoxliteWsProxyService, BoxAutoResumeService],
   exports: [BoxliteWsProxyService],
 })

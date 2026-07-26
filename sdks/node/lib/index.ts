@@ -39,6 +39,10 @@ export type {
   JsImageRegistry,
   JsImageRegistryAuth,
   JsOptions,
+  JsSshCertificateCredential,
+  JsSshCertificateHandle,
+  JsSshCredentialBundle,
+  JsRedactedSshCredentialBundle,
 } from "./native-contracts.js";
 
 // The public `rest` takes the cross-SDK `BoxliteRestOptions` bag. The

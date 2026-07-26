@@ -14,6 +14,7 @@ import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
+import { BoxliteSshAccessController } from './boxlite-ssh-access.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 
 jest.mock('http-proxy-middleware', () => ({
@@ -76,6 +77,22 @@ describe('BoxLite REST routing', () => {
   it('mounts box controllers at canonical and legacy default-prefix routes', () => {
     expect(Reflect.getMetadata(PATH_METADATA, BoxliteBoxController)).toEqual(['v1/boxes', 'v1/:prefix/boxes'])
     expect(Reflect.getMetadata(PATH_METADATA, BoxliteProxyController)).toEqual(['v1/boxes', 'v1/:prefix/boxes'])
+    // The certificate sub-resource must honour the same path-prefix contract;
+    // mounting it anywhere else would put a Box operation outside the
+    // canonical Box API surface.
+    expect(Reflect.getMetadata(PATH_METADATA, BoxliteSshAccessController)).toEqual([
+      'v1/boxes',
+      'v1/:prefix/boxes',
+    ])
+  })
+
+  it('keeps the certificate sub-resource out of the Cloud API document', () => {
+    // Box operations live only in openapi/box.openapi.yaml. Without
+    // @ApiExcludeController the routes leak into the generated product spec
+    // and both API clients regenerate with them.
+    // @nestjs/swagger stores the decorator argument list, so the flag is [true].
+    // The key is inlined rather than deep-imported from the package internals.
+    expect(Reflect.getMetadata('swagger/apiExcludeController', BoxliteSshAccessController)).toEqual([true])
   })
 
   it('registers canonical and legacy default-prefix routes in the Nest HTTP router', async () => {

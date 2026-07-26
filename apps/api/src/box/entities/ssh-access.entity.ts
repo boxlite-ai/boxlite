@@ -16,6 +16,17 @@ import {
 } from 'typeorm'
 import { Box } from './box.entity'
 
+/**
+ * Legacy SSH login-token record. Nothing reads it: the routes, service methods
+ * and DTOs were deleted with the token contract, and it is no longer registered
+ * in `BoxModule`.
+ *
+ * It survives on purpose. The migration DataSource globs `**\/*.entity.ts`
+ * (`src/migrations/data-source.ts`), so keeping this file stops
+ * `migration:generate` emitting a `DROP TABLE "ssh_access"` before the rollback
+ * window closes. The table is dropped by the post-deploy contract migration,
+ * which must not run until Phase 5 acceptance; this file goes with it.
+ */
 @Entity()
 export class SshAccess {
   @PrimaryColumn()

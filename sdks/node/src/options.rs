@@ -450,6 +450,13 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             // do until they grow `attach()` (see sdk-run-semantics-api.md).
             tty: false,
             secrets,
+            // Deliberately not surfaced on JsBoxOptions. Guest SSH trust is CA
+            // material the hosted API resolves from organization policy at box
+            // create and delivers as a Runner create/recover DTO field, then Go
+            // option -> BoxOptions -> guest argv. Letting an SDK caller supply
+            // it would mean a client could choose which CA its box trusts,
+            // which is the opposite of the design's trust boundary.
+            guest_ssh_trust: None,
         })
     }
 }

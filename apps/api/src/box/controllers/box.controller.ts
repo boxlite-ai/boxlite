@@ -8,7 +8,6 @@ import {
   Controller,
   Get,
   Post,
-  Delete,
   Body,
   Param,
   Query,
@@ -54,7 +53,6 @@ import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
 // import { UpdateBoxNetworkSettingsDto } from '../dto/update-box-network-settings.dto'
-import { SshAccessDto, SshAccessValidationDto } from '../dto/ssh-access.dto'
 import { ListBoxesQueryDto } from '../dto/list-boxes-query.dto'
 import { ProxyGuard } from '../guards/proxy.guard'
 import { OrGuard } from '../../auth/or.guard'
@@ -677,114 +675,6 @@ export class BoxController {
     @Param('token') token: string,
   ): Promise<void> {
     await this.boxService.expireSignedPreviewUrlToken(boxIdOrName, authContext.organizationId, token, port)
-  }
-
-  @Post(':boxIdOrName/ssh-access')
-  @HttpCode(200)
-  @ApiOperation({
-    summary: 'Create SSH access for box',
-    operationId: 'createSshAccess',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiQuery({
-    name: 'expiresInMinutes',
-    required: false,
-    type: Number,
-    description: 'Expiration time in minutes (default: 60)',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'SSH access has been created',
-    type: SshAccessDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @UseGuards(BoxAccessGuard)
-  @Audit({
-    action: AuditAction.CREATE_SSH_ACCESS,
-    targetType: AuditTarget.BOX,
-    targetIdFromRequest: (req) => req.params.boxIdOrName,
-    targetIdFromResult: (result: SshAccessDto) => result?.boxId,
-    requestMetadata: {
-      query: (req) => ({
-        expiresInMinutes: req.query.expiresInMinutes,
-      }),
-    },
-  })
-  async createSshAccess(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Query('expiresInMinutes') expiresInMinutes?: number,
-  ): Promise<SshAccessDto> {
-    return await this.boxService.createSshAccess(boxIdOrName, expiresInMinutes, authContext.organizationId)
-  }
-
-  @Delete(':boxIdOrName/ssh-access')
-  @HttpCode(200)
-  @ApiOperation({
-    summary: 'Revoke SSH access for box',
-    operationId: 'revokeSshAccess',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiQuery({
-    name: 'token',
-    required: false,
-    type: String,
-    description: 'SSH access token to revoke. If not provided, all SSH access for the box will be revoked.',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'SSH access has been revoked',
-    type: BoxDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @UseGuards(BoxAccessGuard)
-  @Audit({
-    action: AuditAction.REVOKE_SSH_ACCESS,
-    targetType: AuditTarget.BOX,
-    targetIdFromRequest: (req) => req.params.boxIdOrName,
-    targetIdFromResult: (result: BoxDto) => result?.id,
-    requestMetadata: {
-      query: (req) => ({
-        token: req.query.token,
-      }),
-    },
-  })
-  async revokeSshAccess(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Query('token') token?: string,
-  ): Promise<BoxDto> {
-    const box = await this.boxService.revokeSshAccess(boxIdOrName, token, authContext.organizationId)
-    return this.boxService.toBoxDto(box)
-  }
-
-  @Get('ssh-access/validate')
-  @ApiOperation({
-    summary: 'Validate SSH access for box',
-    operationId: 'validateSshAccess',
-  })
-  @ApiQuery({
-    name: 'token',
-    required: true,
-    type: String,
-    description: 'SSH access token to validate',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'SSH access validation result',
-    type: SshAccessValidationDto,
-  })
-  async validateSshAccess(@Query('token') token: string): Promise<SshAccessValidationDto> {
-    const result = await this.boxService.validateSshAccess(token)
-    return SshAccessValidationDto.fromValidationResult(result.valid, result.boxId)
   }
 
   @Get(':boxId/toolbox-proxy-url')

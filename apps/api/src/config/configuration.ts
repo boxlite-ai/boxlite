@@ -11,6 +11,71 @@ function csvEnv(value?: string): string[] {
     .filter(Boolean)
 }
 
+/**
+ * Parse a positive-integer env var, failing loudly on a malformed value.
+ *
+ * `parseInt('abc', 10)` is `NaN`, and every `<`/`>` comparison against `NaN`
+ * is false — so a typo in an SSH certificate bound would silently disable the
+ * limit it configures. These gate credential issuance, so an unparseable value
+ * must stop the boot, not be quietly replaced by a default the operator never
+ * chose.
+ */
+function positiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') {
+    return fallback
+  }
+  // Match the WHOLE string. `Number.parseInt` reads a prefix, so it would
+  // silently accept `5m` as 5 — a value the operator plainly did not mean, and
+  // the same quiet substitution this helper exists to prevent.
+  if (!/^\d+$/.test(raw) || Number(raw) <= 0) {
+    throw new Error(`${name} must be a positive integer, got "${raw}"`)
+  }
+  return Number(raw)
+}
+
+/**
+ * Parse a `host:port` listen address, failing loudly on a malformed value.
+ *
+ * Unvalidated, a typo here would surface much later as a runner DTO rejection
+ * when someone creates a box, not at boot where it belongs.
+ */
+function listenAddrEnv(name: string, fallback: string): string {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') {
+    return fallback
+  }
+  // Whole-string match on both halves. A prefix parse would accept `0.0.0.0:22x`
+  // or an empty/spaced host, which the runner's `hostname_port` validator then
+  // rejects at box-create — precisely the deferred failure this prevents.
+  // Bracketless IPv6 is not accepted, matching that validator.
+  const match = /^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?):(\d{1,5})$/.exec(raw)
+  const port = match ? Number(match[3]) : 0
+  if (!match || port <= 0 || port > 65535) {
+    throw new Error(`${name} must be host:port with a valid port, got "${raw}"`)
+  }
+  return raw
+}
+
+/** Signer providers the deployment may select. */
+const SSH_CERTIFICATE_SIGNER_PROVIDERS = ['aws-kms', 'local'] as const
+type SshCertificateSignerProvider = (typeof SSH_CERTIFICATE_SIGNER_PROVIDERS)[number]
+
+function sshCertificateSignerProvider(): SshCertificateSignerProvider {
+  const raw = process.env.SSH_CERTIFICATE_SIGNER_PROVIDER
+  if (raw === undefined || raw === '') {
+    return 'aws-kms'
+  }
+  if (!(SSH_CERTIFICATE_SIGNER_PROVIDERS as readonly string[]).includes(raw)) {
+    // Casting an unknown string to the union would let a typo fall through to
+    // whichever branch happens to be the `else`.
+    throw new Error(
+      `SSH_CERTIFICATE_SIGNER_PROVIDER must be one of ${SSH_CERTIFICATE_SIGNER_PROVIDERS.join(', ')}, got "${raw}"`,
+    )
+  }
+  return raw as SshCertificateSignerProvider
+}
+
 const configuration = {
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
@@ -157,11 +222,36 @@ const configuration = {
   healthCheck: {
     apiKey: process.env.HEALTH_CHECK_API_KEY,
   },
+  // Retained only as Phase 5 rollback protection for the disabled SSH Gateway.
+  // `url` is gone: its sole reader was the deleted legacy token issuance.
+  // `command` and `publicKey` are still surfaced by the public config DTO and
+  // are removed together with the gateway service itself.
   sshGateway: {
     apiKey: process.env.SSH_GATEWAY_API_KEY,
     command: process.env.SSH_GATEWAY_COMMAND,
     publicKey: process.env.SSH_GATEWAY_PUBLIC_KEY,
-    url: process.env.SSH_GATEWAY_URL,
+  },
+  sshCertificate: {
+    // Fail closed: certificate issuance must be switched on per deployment.
+    issuanceEnabled: process.env.SSH_CERTIFICATE_ISSUANCE_ENABLED === 'true',
+    // 'local' is an in-process test CA and is rejected when production is set.
+    signerProvider: sshCertificateSignerProvider(),
+    // Where the in-guest SSH server binds inside the VM. Reached only through
+    // the existing direct tunnel; not published on the host.
+    guestListenAddr: listenAddrEnv('SSH_CERTIFICATE_GUEST_LISTEN_ADDR', '0.0.0.0:22'),
+    defaultTtlMinutes: positiveIntEnv('SSH_CERTIFICATE_DEFAULT_TTL_MINUTES', 5),
+    minTtlMinutes: positiveIntEnv('SSH_CERTIFICATE_MIN_TTL_MINUTES', 1),
+    maxTtlMinutes: positiveIntEnv('SSH_CERTIFICATE_MAX_TTL_MINUTES', 60),
+    clockSkewSeconds: positiveIntEnv('SSH_CERTIFICATE_CLOCK_SKEW_SECONDS', 30),
+    maxActiveCredentialsPerBox: positiveIntEnv('SSH_CERTIFICATE_MAX_ACTIVE_PER_BOX', 10),
+    issueRateLimit: {
+      limit: positiveIntEnv('SSH_CERTIFICATE_ISSUE_RATE_LIMIT', 10),
+      windowSeconds: positiveIntEnv('SSH_CERTIFICATE_ISSUE_RATE_LIMIT_WINDOW_SECONDS', 60),
+    },
+    aws: {
+      region: process.env.SSH_CERTIFICATE_AWS_REGION || process.env.AWS_REGION,
+      kmsEndpoint: process.env.SSH_CERTIFICATE_AWS_KMS_ENDPOINT,
+    },
   },
   organizationBoxDefaultLimitedNetworkEgress: process.env.ORGANIZATION_BOX_DEFAULT_LIMITED_NETWORK_EGRESS === 'true',
   pylonAppId: process.env.PYLON_APP_ID,

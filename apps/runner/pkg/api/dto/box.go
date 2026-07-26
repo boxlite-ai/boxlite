@@ -4,6 +4,33 @@
 
 package dto
 
+// GuestSshCaKeyDTO is one certificate authority the in-guest SSH server trusts.
+//
+// Public material only: an OpenSSH CA *public* key plus its non-secret
+// signer/version identifier. No private key is ever sent to the runner.
+type GuestSshCaKeyDTO struct {
+	KeyId     string `json:"keyId" validate:"required"`
+	PublicKey string `json:"publicKey" validate:"required"`
+} //	@name	GuestSshCaKeyDTO
+
+// GuestSshTrustDTO configures the in-guest SSH server's certificate trust.
+//
+// Every certificate the guest accepts must be signed by one of CaKeys and must
+// name OrganizationId and BoxId, so access is pinned to a single box in a
+// single organization. CaKeys holds the current CA, plus the next one while a
+// rotation is in flight; at least one is required, because a listener with no
+// trusted CA accepts nothing.
+//
+// Create-time only: the runner persists it with the box options and replays it
+// on every start, so stop/start never picks up a rotated CA. Changing the
+// trust set requires recreating or replacing the box.
+type GuestSshTrustDTO struct {
+	ListenAddr     string             `json:"listenAddr" validate:"required,hostname_port"`
+	OrganizationId string             `json:"organizationId" validate:"required"`
+	BoxId          string             `json:"boxId" validate:"required"`
+	CaKeys         []GuestSshCaKeyDTO `json:"caKeys" validate:"required,min=1,dive"`
+} //	@name	GuestSshTrustDTO
+
 type CreateBoxDTO struct {
 	Id               string            `json:"id" validate:"required"`
 	FromVolumeId     string            `json:"fromVolumeId,omitempty"`
@@ -23,6 +50,7 @@ type CreateBoxDTO struct {
 	AuthToken        *string           `json:"authToken,omitempty"`
 	OtelEndpoint     *string           `json:"otelEndpoint,omitempty"`
 	SkipStart        *bool             `json:"skipStart,omitempty"`
+	GuestSshTrust    *GuestSshTrustDTO `json:"guestSshTrust,omitempty" validate:"omitempty"`
 
 	// Nullable for backward compatibility
 	OrganizationId *string `json:"organizationId,omitempty"`
@@ -47,6 +75,9 @@ type RecoverBoxDTO struct {
 	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
 	NetworkAllowList *string           `json:"networkAllowList,omitempty"`
 	ErrorReason      string            `json:"errorReason" validate:"required"`
+	// Recovery rebuilds the VM, so the caller must resend the trust bundle it
+	// wants the new generation to have — the destroyed box's options are gone.
+	GuestSshTrust *GuestSshTrustDTO `json:"guestSshTrust,omitempty" validate:"omitempty"`
 } //	@name	RecoverBoxDTO
 
 type IsRecoverableDTO struct {

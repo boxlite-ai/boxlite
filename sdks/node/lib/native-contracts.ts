@@ -313,6 +313,63 @@ export interface JsSnapshotHandle {
   restore(name: string): Promise<void>;
 }
 
+/** Public metadata for one issued SSH certificate credential. */
+export interface JsSshCertificateCredential {
+  id: string;
+  boxId: string;
+  certificate: string;
+  publicKey: string;
+  fingerprint: string;
+  /**
+   * Certificate serial as a decimal string: the core value is a `u64`, which
+   * no JS number can hold exactly above 2^53.
+   */
+  serial: string;
+  caKeyId: string;
+  validAfter: string;
+  expiresAt: string;
+  /** Absent (not null) while active: napi maps `Option::None` to undefined. */
+  revokedAt?: string;
+  host: string;
+  port: number;
+  sshCommand: string;
+  proxyCommand: string;
+  knownHosts: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** What `JSON.stringify` produces for a credential bundle. */
+export interface JsRedactedSshCredentialBundle {
+  /** Always the literal `[REDACTED]`. */
+  privateKey: string;
+  credential: JsSshCertificateCredential;
+}
+
+/**
+ * A locally generated private key plus the certificate issued for it.
+ *
+ * A class, not a plain object: the private key is not an own enumerable
+ * property, so `console.log` and `JSON.stringify` cannot leak it. Read it
+ * only through `exposePrivateKey()`.
+ */
+export interface JsSshCredentialBundle {
+  readonly credential: JsSshCertificateCredential;
+  /** The OpenSSH private key. Every call site is an explicit secret read. */
+  exposePrivateKey(): string;
+  toJSON(): JsRedactedSshCredentialBundle;
+}
+
+export interface JsSshCertificateHandle {
+  create(
+    publicKey: string,
+    ttlMinutes?: number | null,
+  ): Promise<JsSshCertificateCredential>;
+  list(): Promise<JsSshCertificateCredential[]>;
+  revoke(credentialId: string): Promise<void>;
+  issue(ttlMinutes?: number | null): Promise<JsSshCredentialBundle>;
+}
+
 export interface JsNetworkHandle {
   /** Establish a tunnel to a service port inside the box. */
   tunnel(port: number): Promise<NativeBoxTunnel>;
@@ -352,6 +409,7 @@ export interface JsBox {
   ): Promise<JsExecution>;
   readonly snapshot: JsSnapshotHandle;
   readonly network: JsNetworkHandle;
+  readonly sshCertificates: JsSshCertificateHandle;
   cloneBox(
     options?: JsCloneOptions | null,
     name?: string | null,

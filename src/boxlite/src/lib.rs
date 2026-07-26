@@ -47,13 +47,17 @@ pub use litebox::{
     BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
     HealthState, HealthStatus,
 };
+pub use litebox::{
+    ClientPrivateKey, SshCertificateCredential, SshCertificateHandle, SshCredentialBundle,
+};
 pub use metrics::{BoxMetrics, RuntimeMetrics};
 pub use runtime::advanced_options::{
     AdvancedBoxOptions, HealthCheckOptions, ResourceLimits, SecurityOptions,
 };
 pub use runtime::options::{
-    BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, ImageRegistry,
-    ImageRegistryAuth, NetworkSpec, RegistryTransport, RootfsSpec, Secret, SnapshotOptions,
+    BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, GuestSshCaKey,
+    GuestSshTrustConfig, ImageRegistry, ImageRegistryAuth, NetworkSpec, RegistryTransport,
+    RootfsSpec, Secret, SnapshotOptions,
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

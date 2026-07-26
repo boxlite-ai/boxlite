@@ -19,7 +19,18 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 		c.logger.Warn("failed to destroy during recover", "error", err)
 	}
 
-	createDto := dto.CreateBoxDTO{
+	_, _, err := c.Create(ctx, recoverCreateDto(boxId, recoverDto))
+	return err
+}
+
+// recoverCreateDto re-synthesizes the create request for a recovered box.
+//
+// RecoverBoxDTO is a subset of CreateBoxDTO, so every field it does carry must
+// be copied here or the recovered box silently differs from the original. Two
+// known gaps remain: GpuQuota is carried by RecoverBoxDTO but not applied, and
+// Image is hardcoded because recovery has no image to restore from.
+func recoverCreateDto(boxId string, recoverDto dto.RecoverBoxDTO) dto.CreateBoxDTO {
+	return dto.CreateBoxDTO{
 		Id:               boxId,
 		Image:            "alpine:latest",
 		OsUser:           recoverDto.OsUser,
@@ -31,10 +42,11 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 		NetworkBlockAll:  recoverDto.NetworkBlockAll,
 		NetworkAllowList: recoverDto.NetworkAllowList,
 		FromVolumeId:     recoverDto.FromVolumeId,
+		// Recovery builds a new VM generation, and trust is fixed at create
+		// time — dropping it here would silently recover the box without its
+		// SSH listener.
+		GuestSshTrust: recoverDto.GuestSshTrust,
 	}
-
-	_, _, err := c.Create(ctx, createDto)
-	return err
 }
 
 // UpdateNetworkSettings updates the network allowlist/blocklist for a box.

@@ -36,8 +36,17 @@ fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
     let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = box_impl.clone();
     let network_backend: Arc<dyn crate::runtime::backend::BoxNetworkBackend> = box_impl.clone();
     let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> =
-        Arc::new(LocalSnapshotBackend::new(box_impl));
-    LiteBox::new(box_backend, network_backend, snapshot_backend)
+        Arc::new(LocalSnapshotBackend::new(box_impl.clone()));
+    // Hosted-only: the local runtime has no organization CA, so this backend
+    // answers `Unsupported` rather than minting a second trust root.
+    let ssh_certificate_backend: Arc<dyn crate::runtime::backend::BoxSshCertificateBackend> =
+        box_impl;
+    LiteBox::new(
+        box_backend,
+        network_backend,
+        snapshot_backend,
+        ssh_certificate_backend,
+    )
 }
 
 /// Record that the box's main command is over, taking its exit code from the

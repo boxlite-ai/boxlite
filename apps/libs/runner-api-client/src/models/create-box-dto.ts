@@ -18,6 +18,9 @@
 import type { DtoVolumeDTO } from './dto-volume-dto';
 // May contain unused imports in some cases
 // @ts-ignore
+import type { GuestSshTrustDTO } from './guest-ssh-trust-dto';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { RegistryDTO } from './registry-dto';
 
 export interface CreateBoxDTO {
@@ -27,7 +30,9 @@ export interface CreateBoxDTO {
     'env'?: { [key: string]: string; };
     'fromVolumeId'?: string;
     'gpuQuota'?: number;
+    'guestSshTrust'?: GuestSshTrustDTO;
     'id': string;
+    'image': string;
     'memoryQuota'?: number;
     'metadata'?: { [key: string]: string; };
     'networkAllowList'?: string;
@@ -41,7 +46,6 @@ export interface CreateBoxDTO {
     'regionId'?: string;
     'registry'?: RegistryDTO;
     'skipStart'?: boolean;
-    'image': string;
     'storageQuota'?: number;
     'volumes'?: Array<DtoVolumeDTO>;
 }

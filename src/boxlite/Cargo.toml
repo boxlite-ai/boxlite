@@ -84,7 +84,13 @@ term_size = "0.3"
 qcow2-rs = "0.1.6"
 zstd = "0.13"
 nix = { version = "0.30.1", features = ["mount"] }
-rand = "0.9.3"
+# 0.10 to share one `rand_core` with `ssh-key` (and with the guest's russh),
+# so client key generation uses the same CSPRNG traits as the verifier side.
+rand = "0.10"
+# Client-side Ed25519 key generation and OpenSSH key/certificate encoding for
+# hosted SSH credentials. Pinned to the version russh already resolves so the
+# guest verifier and the SDK share one encoder.
+ssh-key = { version = "=0.7.0-rc.11", features = ["ed25519", "std", "rand_core"] }
 hex = "0.4.3"
 signal-hook = "0.3"
 reflink-copy = "0.1"

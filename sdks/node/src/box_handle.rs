@@ -11,6 +11,7 @@ use crate::metrics::JsBoxMetrics;
 use crate::network::JsNetworkHandle;
 use crate::snapshot_options::{JsCloneOptions, JsExportOptions};
 use crate::snapshots::JsSnapshotHandle;
+use crate::ssh_certificates::JsSshCertificateHandle;
 use crate::util::map_err;
 
 /// Box handle for interacting with a running container.
@@ -115,6 +116,16 @@ impl JsBox {
     #[napi(getter)]
     pub fn network(&self) -> JsNetworkHandle {
         JsNetworkHandle {
+            handle: Arc::clone(&self.handle),
+        }
+    }
+
+    /// Get the SSH certificate handle for this box.
+    ///
+    /// Hosted runtimes only; the embedded runtime rejects with `Unsupported`.
+    #[napi(getter, js_name = "sshCertificates")]
+    pub fn ssh_certificates(&self) -> JsSshCertificateHandle {
+        JsSshCertificateHandle {
             handle: Arc::clone(&self.handle),
         }
     }

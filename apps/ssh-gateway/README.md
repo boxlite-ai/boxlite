@@ -1,58 +1,39 @@
 # SSH Gateway
 
-A standalone SSH gateway application that authenticates users using tokens and proxies connections to BoxLite runners.
+**Disabled.** This gateway proxied SSH connections authenticated by the Legacy
+SSH Token API. That contract (`POST`/`DELETE /box/{boxIdOrName}/ssh-access` and
+`GET /box/ssh-access/validate`) has been deleted, so the gateway can no longer
+map a username to a box and refuses every connection.
 
-## Features
+SSH now runs over the existing direct tunnel to the box's port `22`, and
+`boxlite-guest` authenticates BoxLite-issued short-lived SSH certificates
+locally. The gateway service and its infrastructure stay in the tree only as
+rollback protection for that rollout and are removed in the cleanup phase.
 
-- **Token-based authentication**: Username is used as the authentication token
-- **Automatic runner discovery**: Validates tokens and finds the appropriate runner
-- **SSH keypair management**: Retrieves SSH credentials from runners automatically
-- **Connection proxying**: Seamlessly forwards SSH connections to runners
+## Current Behaviour
 
-## Usage
-
-### Connection Format
-
-```bash
-ssh -p 2222 <TOKEN>@<GATEWAY_HOST>
-```
-
-**Example:**
-
-```bash
-ssh -p 2222 Fg8Jx2nPtWAVY5pVN0TlUcbCDNPF-ePB@localhost
-```
-
-Where:
-
-- `Fg8Jx2nPtWAVY5pVN0TlUcbCDNPF-ePB` is the SSH access token
-- `localhost` is the SSH gateway host
-- `2222` is the SSH gateway port
-
-### How It Works
-
-1. **Authentication**: The gateway extracts the token from the username
-2. **Token Validation**: Calls the BoxLite API to validate the token and get runner information
-3. **Credential Retrieval**: Fetches the SSH keypair from the identified runner
-4. **Connection Proxying**: Establishes a connection to the runner's SSH gateway (port 2222)
-5. **Session Forwarding**: Proxies the SSH session between the client and the runner
+Every authentication method (password, public key, keyboard-interactive) is
+refused. The client receives a pre-auth banner explaining the removal and then
+`Permission denied`. No connection is proxied to a runner.
 
 ## Configuration
 
 ### Environment Variables
 
-| Variable           | Description                           | Default                 | Required |
-| ------------------ | ------------------------------------- | ----------------------- | -------- |
-| `SSH_GATEWAY_PORT` | Port for the SSH gateway to listen on | `2222`                  | No       |
-| `API_URL`          | BoxLite API base URL, including `/api` when the API is mounted there | `http://localhost:3000` | No       |
-| `API_KEY`          | BoxLite API authentication key        | -                       | **Yes**  |
+The gateway makes no API calls, so it needs no API URL or key. The only
+requirement left is a host key, so the listener can present a stable identity
+while refusing every connection.
+
+| Variable           | Description                                       | Default | Required |
+| ------------------ | ------------------------------------------------- | ------- | -------- |
+| `SSH_GATEWAY_PORT` | Port for the SSH gateway to listen on             | `2222`  | No       |
+| `SSH_HOST_KEY`     | Base64-encoded host private key                   | -       | **Yes**  |
 
 ### Example Environment
 
 ```bash
 export SSH_GATEWAY_PORT=2222
-export API_URL=https://api.boxlite.example.com/api
-export API_KEY=your-api-key-here
+export SSH_HOST_KEY=$(base64 -i /tmp/boxlite-host)
 ```
 
 ## Building
@@ -82,40 +63,26 @@ docker build -t ssh-gateway .
 
 ```bash
 docker run -p 2222:2222 \
-  -e API_URL=https://api.boxlite.example.com/api \
-  -e API_KEY=your-api-key-here \
+  -e SSH_HOST_KEY=$(base64 -i /tmp/boxlite-host) \
   ssh-gateway
 ```
 
 ## Security
 
-- **No password authentication**: Only token-based authentication is supported
-- **No public key authentication**: Public keys are not accepted
-- **Temporary host keys**: The gateway generates new host keys on each startup
-- **Secure token validation**: All tokens are validated against the BoxLite API
-- **Runner isolation**: Each connection is isolated to its specific runner
-
-## Architecture
-
-```
-SSH Client → SSH Gateway → BoxLite API → Runner SSH Gateway
-     ↓              ↓           ↓              ↓
-  Token Auth   Validate    Get Keypair    SSH Session
-```
+- **Fails closed**: no authentication method succeeds, so no session can be
+  established through this gateway.
+- **No token validation**: the API endpoint it depended on no longer exists.
+- **Stable host identity**: the host key is supplied via `SSH_HOST_KEY` and the
+  service refuses to start without one, so the fingerprint a client sees does
+  not change across restarts.
+- **No signing key**: the gateway holds no credential of its own. The key that
+  signed the old runner-proxy connection is neither required nor read.
 
 ## API Endpoints Used
 
-- `GET /box/ssh-access/validate?token={token}` - Validate SSH access token
-- `GET /runners/{id}/ssh-keypair` - Get runner SSH keypair
-
-## Error Handling
-
-The gateway provides clear error messages for common failure scenarios:
-
-- Invalid or expired tokens
-- Runner unavailability
-- Network connectivity issues
-- Authentication failures
+None, and no API client is built. The runner-proxying code paths have been
+removed; only the listener that refuses connections remains, until the service
+itself is deleted in the cleanup phase.
 
 ## Logging
 

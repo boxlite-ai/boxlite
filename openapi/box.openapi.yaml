@@ -824,6 +824,112 @@ paths:
           $ref: "#/components/responses/ConflictError"
 
   # -------------------------------------------------------------------------
+  # SSH access
+  # -------------------------------------------------------------------------
+  /{prefix}/boxes/{box_id}/ssh-access/certificates:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: createSshCertificate
+      summary: Issue an SSH certificate for a box
+      description: |
+        Signs a short-lived OpenSSH user certificate binding the supplied
+        public key to this box, its owning organization and the `root` login
+        user.
+
+        The caller generates the key pair locally and sends only the public
+        key. This endpoint never generates, receives, returns, stores or logs
+        a user private key; a lost private key cannot be recovered and
+        requires issuing a new credential.
+
+        Issuing a certificate does not revoke any other credential — a box may
+        hold several concurrently valid credentials.
+      tags: [Boxes]
+      parameters:
+        - name: expiresInMinutes
+          in: query
+          required: false
+          description: |
+            Certificate lifetime. Defaults to 5 minutes. The accepted range is
+            1-60 minutes, configured per deployment. Per-organization TTL
+            policy is not implemented; the configured bounds apply to every
+            organization.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 60
+            default: 5
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSshCertificateRequest"
+      responses:
+        "201":
+          description: Certificate issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SshCertificateCredential"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+        "429":
+          $ref: "#/components/responses/TooManyRequestsError"
+    get:
+      operationId: listSshCertificates
+      summary: List a box's SSH certificate credentials
+      description: |
+        Returns public credential metadata only — never key material of any
+        kind, and never a user private key.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Credential list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSshCertificatesResponse"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+  /{prefix}/boxes/{box_id}/ssh-access/certificates/{credential_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - name: credential_id
+        in: path
+        required: true
+        description: |
+          Opaque credential identifier. This is an identifier, not an SSH
+          authenticator: it is not a username, a certificate, or a secret.
+        schema:
+          type: string
+    delete:
+      operationId: revokeSshCertificate
+      summary: Revoke one SSH certificate credential
+      description: |
+        Marks a single credential revoked and removes it from the active list.
+        It does not invalidate an already-issued certificate: because the guest
+        verifies certificates offline against the CA, a certificate that has
+        already been handed out stays usable for new sessions until its
+        `expires_at`, and sessions already established are not terminated.
+        The short default lifetime is what bounds that window.
+
+        Only the named credential is revoked; there is no revoke-all.
+      tags: [Boxes]
+      responses:
+        "204":
+          description: Credential revoked
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+  # -------------------------------------------------------------------------
   # Network
   # -------------------------------------------------------------------------
   /{prefix}/boxes/{box_id}/network/tunnel:
@@ -1189,6 +1295,21 @@ components:
               message: "invalid state: box is already running"
               type: InvalidStateError
               code: invalid_state
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
+
+    TooManyRequestsError:
+      description: |
+        Rate limited. SSH certificate issuance is capped per box, both by
+        concurrent active credentials and by issuance frequency.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              message: box already has the maximum number of active SSH certificates
+              type: TooManyRequestsError
+              code: TOO_MANY_ACTIVE_CREDENTIALS
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     UnprocessableEntityError:
@@ -1817,6 +1938,138 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Snapshot"
+
+    CreateSshCertificateRequest:
+      type: object
+      required: [public_key]
+      properties:
+        public_key:
+          type: string
+          minLength: 1
+          maxLength: 8192
+          description: |
+            Canonical OpenSSH public key line generated by the caller, e.g.
+            `ssh-ed25519 AAAA...`. Ed25519 only. Passing a certificate here
+            instead of a public key is rejected.
+
+            Required. A request without it is rejected with
+            `SSH_PUBLIC_KEY_REQUIRED`; the service never generates a key pair
+            on the caller's behalf.
+          example: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...
+
+    SshCertificateCredential:
+      type: object
+      required:
+        [
+          id,
+          box_id,
+          certificate,
+          public_key,
+          fingerprint,
+          serial,
+          ca_key_id,
+          valid_after,
+          expires_at,
+          host,
+          port,
+          ssh_command,
+          proxy_command,
+          created_at,
+          updated_at,
+        ]
+      properties:
+        id:
+          type: string
+          description: |
+            Opaque credential identifier, and the target of the revoke
+            operation. Not an SSH authenticator.
+        box_id:
+          type: string
+        certificate:
+          type: string
+          description: |
+            The signed public OpenSSH user certificate. Combine it with the
+            private key held by the caller.
+          example: ssh-ed25519-cert-v01@openssh.com AAAA...
+        public_key:
+          type: string
+          description: The canonical public key this certificate binds.
+        fingerprint:
+          type: string
+          description: SHA-256 fingerprint of the bound public key, for display.
+          example: "SHA256:..."
+        serial:
+          type: string
+          description: |
+            Certificate serial, unique within the signing CA. Encoded as a
+            decimal string because it is a uint64: a value above 2^53 cannot be
+            represented exactly by a JSON number.
+          example: "1234567890123456789"
+        ca_key_id:
+          type: string
+          description: |
+            Non-secret signing key/version identifier, for audit and rotation
+            diagnostics.
+        valid_after:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Set once the credential is revoked. A revoked credential is no
+            longer active, but any certificate already issued remains usable
+            until `expires_at`.
+        host:
+          type: string
+          description: |
+            Region-aware direct-tunnel hostname for guest port 22.
+          example: 22-d-<encoded-box-id>.<proxy-domain>
+        port:
+          type: integer
+          example: 22
+        ssh_command:
+          type: string
+          description: |
+            SSH command template for the returned certificate. `<private-key>`
+            and `<certificate>` are placeholders the caller substitutes with
+            paths to its own key and the returned certificate.
+        proxy_command:
+          type: string
+          description: |
+            `ProxyCommand` reaching guest port 22 over the existing direct
+            tunnel. Unchanged from the general-purpose tunnel transport.
+        known_hosts:
+          type: string
+          description: |
+            `known_hosts` line for the box's persistent SSH host key.
+
+            NOT YET POPULATED: the guest persists a stable host key, but no
+            path yet carries it to this API, so this field is currently always
+            empty. Until it is delivered, learn the host key on first connect
+            and pin it yourself; do not disable strict host-key checking.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      description: |
+        Public certificate credential metadata. This schema never carries a
+        user private key, and never carries CA private material.
+
+    ListSshCertificatesResponse:
+      type: object
+      required: [certificates]
+      properties:
+        certificates:
+          type: array
+          items:
+            $ref: "#/components/schemas/SshCertificateCredential"
 
     CloneBoxRequest:
       type: object

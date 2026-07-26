@@ -16,19 +16,24 @@
 // May contain unused imports in some cases
 // @ts-ignore
 import type { DtoVolumeDTO } from './dto-volume-dto';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { GuestSshTrustDTO } from './guest-ssh-trust-dto';
 
 export interface RecoverBoxDTO {
-    'backupErrorReason'?: string;
     'cpuQuota'?: number;
     'env'?: { [key: string]: string; };
     'errorReason': string;
     'fromVolumeId'?: string;
     'gpuQuota'?: number;
+    /**
+     * Recovery rebuilds the VM, so the caller must resend the trust bundle it wants the new generation to have — the destroyed box\'s options are gone.
+     */
+    'guestSshTrust'?: GuestSshTrustDTO;
     'memoryQuota'?: number;
     'networkAllowList'?: string;
     'networkBlockAll'?: boolean;
     'osUser': string;
-    'snapshot'?: string;
     'storageQuota'?: number;
     'volumes'?: Array<DtoVolumeDTO>;
 }

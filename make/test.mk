@@ -97,8 +97,11 @@ else
 endif
 
 # Per-component test dispatch targets (map component tag → existing test targets).
+# `src/guest/` is tagged as the `rust` component (make/changes.mk), so the
+# guest suite belongs here or a guest-only change would test nothing.
 test\:changed\:rust:
 	@$(MAKE) test:unit:rust
+	@$(MAKE) test:unit:guest
 	@$(MAKE) test:integration:rust
 
 test\:changed\:cli:
@@ -167,10 +170,10 @@ test\:stress:
 	@echo ""
 	@echo "✅ Stress test matrix passed"
 
-# Core unit suites: Rust unit + FFI unit.
+# Core unit suites: Rust unit + guest unit + FFI unit.
 test\:unit\:core:
-	@echo "── Core unit suites (rust, ffi) ──"
-	$(call run_suites,test:unit:rust test:unit:ffi)
+	@echo "── Core unit suites (rust, guest, ffi) ──"
+	$(call run_suites,test:unit:rust test:unit:guest test:unit:ffi)
 
 # Core integration suites: Rust integration + CLI integration.
 test\:integration\:core:
@@ -229,6 +232,24 @@ test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:ru
 	else \
 		cargo test -p boxlite --features krun,gvproxy --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(CARGOTEST_FILTER); \
+	fi
+
+# Guest agent unit tests. Linux-only: the crate `compile_error!`s elsewhere.
+#
+# Tests here spawn real processes and share the guest's process-global reaper,
+# whose sweep is `waitpid(-1)`. `reaper.rs`'s fence test deliberately drives
+# that sweep flat out, which would steal any child another test spawned at the
+# same moment. nextest's process-per-test isolation keeps each test's children
+# its own; the fallback serializes for the same reason. Do not "fix" a failure
+# here by raising the thread count.
+test\:unit\:guest:
+	@echo "🧪 Running guest agent unit tests..."
+	@if [ "$$(uname -s)" != "Linux" ]; then \
+		echo "⏭️  Skipped: boxlite-guest is Linux-only (host is $$(uname -s))."; \
+	elif command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite-guest $(NEXTEST_FILTER); \
+	else \
+		cargo test -p boxlite-guest -- --test-threads=1 $(CARGOTEST_FILTER); \
 	fi
 
 # BoxLite C SDK unit tests.

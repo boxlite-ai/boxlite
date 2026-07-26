@@ -1,7 +1,7 @@
 package boxlite
 
 /*
-#include <boxlite.h>
+#include "bridge.h"
 #include <stdlib.h>
 */
 import "C"
@@ -170,6 +170,37 @@ type Secret struct {
 	Placeholder string
 }
 
+// GuestSshCaKey is one certificate authority the in-guest SSH server trusts.
+//
+// PublicKey is a canonical OpenSSH CA *public* key line; KeyID is the
+// non-secret signer/version identifier that makes a stale trust bundle
+// diagnosable during a rotation. Neither is secret — no private key of any
+// kind belongs in this struct.
+type GuestSshCaKey struct {
+	KeyID     string
+	PublicKey string
+}
+
+// GuestSshTrust configures the in-guest SSH server's certificate trust.
+//
+// Every certificate the guest accepts must be signed by one of CaKeys and must
+// name OrganizationID and BoxID, so this pins access to a single box in a
+// single organization. ListenAddr is the address the guest binds inside the VM
+// (conventionally "0.0.0.0:22"), reached through the existing direct tunnel.
+// CaKeys holds the current CA, plus the next one while a rotation is in
+// flight; at least one is required.
+//
+// This is a create-time option only. It is persisted with the box and replayed
+// verbatim on stop/start, so a restart can never pick up a different CA set:
+// rotating the trusted CAs, or enabling SSH on an existing box, requires
+// recreating or replacing the box.
+type GuestSshTrust struct {
+	ListenAddr     string
+	OrganizationID string
+	BoxID          string
+	CaKeys         []GuestSshCaKey
+}
+
 type boxConfig struct {
 	name       string
 	cpus       int
@@ -189,6 +220,7 @@ type boxConfig struct {
 	detach     *bool
 	network    *NetworkSpec
 	secrets    []Secret
+	sshTrust   *GuestSshTrust      // nil = no in-guest SSH listener (the default)
 	advanced   *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
 }
 
@@ -295,6 +327,24 @@ func WithNetwork(spec NetworkSpec) BoxOption {
 func WithSecret(secret Secret) BoxOption {
 	return func(c *boxConfig) {
 		c.secrets = append(c.secrets, secret)
+	}
+}
+
+// WithGuestSshTrust enables the in-guest SSH server and pins the certificate
+// authorities it trusts. Omitting it leaves the box with no SSH listener.
+//
+// The trust set is fixed for the life of the box: it is persisted with the box
+// options and replayed on every start, so stop/start never picks up a rotated
+// CA. Recreate or replace the box to change it.
+func WithGuestSshTrust(trust GuestSshTrust) BoxOption {
+	return func(c *boxConfig) {
+		caKeys := append([]GuestSshCaKey(nil), trust.CaKeys...)
+		c.sshTrust = &GuestSshTrust{
+			ListenAddr:     trust.ListenAddr,
+			OrganizationID: trust.OrganizationID,
+			BoxID:          trust.BoxID,
+			CaKeys:         caKeys,
+		}
 	}
 }
 
@@ -487,6 +537,12 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		C.free(unsafe.Pointer(cValue))
 		C.free(unsafe.Pointer(cPlaceholder))
 	}
+	if cfg.sshTrust != nil {
+		if err := applyGuestSshTrust(cOpts, cfg.sshTrust); err != nil {
+			C.boxlite_options_free(cOpts)
+			return nil, err
+		}
+	}
 	if cfg.autoPause != nil {
 		C.boxlite_options_set_auto_pause_interval(cOpts, C.uint32_t(*cfg.autoPause))
 	}
@@ -520,6 +576,50 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 	}
 
 	return cOpts, nil
+}
+
+// applyGuestSshTrust flattens the trust bundle into the single private bridge
+// call, mirroring how a Secret is flattened into one variadic call. One call
+// rather than a set-identity-then-add-keys sequence keeps the core's view
+// all-or-nothing: a box booted with an identity but no CA key would run a
+// listener that can accept nothing.
+func applyGuestSshTrust(cOpts *C.CBoxliteOptions, trust *GuestSshTrust) error {
+	cListenAddr := toCString(trust.ListenAddr)
+	defer C.free(unsafe.Pointer(cListenAddr))
+	cOrganizationID := toCString(trust.OrganizationID)
+	defer C.free(unsafe.Pointer(cOrganizationID))
+	cBoxID := toCString(trust.BoxID)
+	defer C.free(unsafe.Pointer(cBoxID))
+
+	keyIDs := make([]string, 0, len(trust.CaKeys))
+	publicKeys := make([]string, 0, len(trust.CaKeys))
+	for _, ca := range trust.CaKeys {
+		keyIDs = append(keyIDs, ca.KeyID)
+		publicKeys = append(publicKeys, ca.PublicKey)
+	}
+	cKeyIDs, keyCount := toCStringArray(keyIDs)
+	defer freeCStringArray(cKeyIDs, keyCount)
+	cPublicKeys, publicKeyCount := toCStringArray(publicKeys)
+	defer freeCStringArray(cPublicKeys, publicKeyCount)
+
+	code := C.boxlite_go_options_set_guest_ssh_trust(
+		cOpts,
+		cListenAddr,
+		cOrganizationID,
+		cBoxID,
+		cKeyIDs,
+		cPublicKeys,
+		C.int(keyCount),
+	)
+	if code != C.Ok {
+		// CA key IDs are non-secret and identify the offending bundle; the CA
+		// public keys themselves stay out of the message.
+		return fmt.Errorf(
+			"boxlite: guest SSH trust rejected with code %d (listen %q, org %q, box %q, ca keys %v)",
+			int(code), trust.ListenAddr, trust.OrganizationID, trust.BoxID, keyIDs,
+		)
+	}
+	return nil
 }
 
 func boolToCInt(v bool) C.int {

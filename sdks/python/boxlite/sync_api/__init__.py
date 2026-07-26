@@ -49,6 +49,7 @@ from ._images import SyncImageHandle
 from ._network import SyncNetworkHandle
 from ._simplebox import SyncSimpleBox
 from ._skillbox import SyncSkillBox
+from ._ssh_certificates import SyncSshCertificateHandle
 from ._sync_base import SyncBase, SyncContextManager
 
 __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
@@ -61,6 +62,7 @@ __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
     "SyncBox",
     "SyncImageHandle",
     "SyncNetworkHandle",
+    "SyncSshCertificateHandle",
     "SyncExecution",
     "SyncExecStdout",
     "SyncExecStderr",

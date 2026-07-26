@@ -5,19 +5,17 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**backupErrorReason** | **string** |  | [optional] [default to undefined]
 **cpuQuota** | **number** |  | [optional] [default to undefined]
 **env** | **{ [key: string]: string; }** |  | [optional] [default to undefined]
 **errorReason** | **string** |  | [default to undefined]
 **fromVolumeId** | **string** |  | [optional] [default to undefined]
 **gpuQuota** | **number** |  | [optional] [default to undefined]
+**guestSshTrust** | [**GuestSshTrustDTO**](GuestSshTrustDTO.md) | Recovery rebuilds the VM, so the caller must resend the trust bundle it wants the new generation to have — the destroyed box\&#39;s options are gone. | [optional] [default to undefined]
 **memoryQuota** | **number** |  | [optional] [default to undefined]
 **networkAllowList** | **string** |  | [optional] [default to undefined]
 **networkBlockAll** | **boolean** |  | [optional] [default to undefined]
 **osUser** | **string** |  | [default to undefined]
-**snapshot** | **string** |  | [optional] [default to undefined]
 **storageQuota** | **number** |  | [optional] [default to undefined]
-**userId** | **string** |  | [default to undefined]
 **volumes** | [**Array&lt;DtoVolumeDTO&gt;**](DtoVolumeDTO.md) |  | [optional] [default to undefined]
 
 ## Example
@@ -26,19 +24,17 @@ Name | Type | Description | Notes
 import { RecoverBoxDTO } from './api';
 
 const instance: RecoverBoxDTO = {
-    backupErrorReason,
     cpuQuota,
     env,
     errorReason,
     fromVolumeId,
     gpuQuota,
+    guestSshTrust,
     memoryQuota,
     networkAllowList,
     networkBlockAll,
     osUser,
-    snapshot,
     storageQuota,
-    userId,
     volumes,
 };
 ```

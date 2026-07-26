@@ -15,6 +15,7 @@ mod manager;
 mod network;
 mod snapshot;
 pub(crate) mod snapshot_mgr;
+mod ssh_certificates;
 mod state;
 mod watcher;
 
@@ -24,6 +25,9 @@ pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execut
 pub(crate) use manager::BoxManager;
 pub use network::{BoxConnection, BoxEndpoint, BoxTunnel, NetworkHandle};
 pub use snapshot::SnapshotHandle;
+pub use ssh_certificates::{
+    ClientPrivateKey, SshCertificateCredential, SshCertificateHandle, SshCredentialBundle,
+};
 pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
 
 pub(crate) use box_impl::SharedBoxImpl;
@@ -34,7 +38,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::metrics::BoxMetrics;
-use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
+use crate::runtime::backend::{
+    BoxBackend, BoxNetworkBackend, BoxSshCertificateBackend, SnapshotBackend,
+};
 use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
 use crate::{BoxID, BoxInfo};
 use boxlite_shared::errors::BoxliteResult;
@@ -57,6 +63,8 @@ pub struct LiteBox {
     network_backend: Arc<dyn BoxNetworkBackend>,
     /// Backend for snapshot lifecycle operations.
     snapshot_backend: Arc<dyn SnapshotBackend>,
+    /// Backend for SSH certificate credential lifecycle (hosted-only).
+    ssh_certificate_backend: Arc<dyn BoxSshCertificateBackend>,
 }
 
 impl LiteBox {
@@ -65,6 +73,7 @@ impl LiteBox {
         box_backend: Arc<dyn BoxBackend>,
         network_backend: Arc<dyn BoxNetworkBackend>,
         snapshot_backend: Arc<dyn SnapshotBackend>,
+        ssh_certificate_backend: Arc<dyn BoxSshCertificateBackend>,
     ) -> Self {
         let id = box_backend.id().clone();
         let name = box_backend.name().map(|s| s.to_string());
@@ -74,6 +83,7 @@ impl LiteBox {
             box_backend,
             network_backend,
             snapshot_backend,
+            ssh_certificate_backend,
         }
     }
 
@@ -164,6 +174,14 @@ impl LiteBox {
     /// Get a snapshot handle for snapshot operations.
     pub fn snapshots(&self) -> SnapshotHandle {
         SnapshotHandle::new(Arc::clone(&self.snapshot_backend))
+    }
+
+    /// Get a handle for SSH certificate credential operations.
+    ///
+    /// Hosted-only: the local runtime has no organization CA to sign with and
+    /// returns `Unsupported`.
+    pub fn ssh_certificates(&self) -> SshCertificateHandle {
+        SshCertificateHandle::new(Arc::clone(&self.ssh_certificate_backend))
     }
 
     /// Clone this box, creating a new box with a copy of its disks.
