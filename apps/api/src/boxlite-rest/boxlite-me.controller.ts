@@ -12,6 +12,7 @@ import { AuthContext as AuthCtx } from '../common/interfaces/auth-context.interf
 import type { OrganizationUser } from '../organization/entities/organization-user.entity'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationService } from '../organization/services/organization.service'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { PrincipalDto } from './dto/principal.dto'
 import { BOXLITE_BOX_READ_PERMISSIONS, grantedBoxliteScopes } from './boxlite-permission.policy'
 
@@ -28,7 +29,7 @@ import { BOXLITE_BOX_READ_PERMISSIONS, grantedBoxliteScopes } from './boxlite-pe
 @ApiExcludeController()
 @ApiTags('BoxLite REST')
 @Controller('v1')
-@UseGuards(CombinedAuthGuard)
+@UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard)
 @ApiBearerAuth()
 export class BoxliteMeController {
   constructor(private readonly organizationService: OrganizationService) {}

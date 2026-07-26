@@ -16,11 +16,12 @@ import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxAutoResumeService } from './box-auto-resume.service'
 import { UserModule } from '../user/user.module'
+import { BoxliteRequestThrottleService } from './boxlite-request-throttle.service'
 
 @Module({
   imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule, UserModule],
   controllers: [BoxliteMeController, BoxliteConfigController, BoxliteBoxController, BoxliteProxyController],
-  providers: [BoxliteWsProxyService, BoxAutoResumeService],
+  providers: [BoxliteWsProxyService, BoxAutoResumeService, BoxliteRequestThrottleService],
   exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}

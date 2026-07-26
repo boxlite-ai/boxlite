@@ -12,6 +12,7 @@ import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { RunnerService } from '../box/services/runner.service'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
@@ -125,6 +126,8 @@ describe('BoxLite REST permission integration', () => {
     })
       .overrideGuard(CombinedAuthGuard)
       .useValue(authenticationGuard)
+      .overrideGuard(AuthenticatedRateLimitGuard)
+      .useValue({ canActivate: () => true })
       .compile()
 
     app = moduleRef.createNestApplication()

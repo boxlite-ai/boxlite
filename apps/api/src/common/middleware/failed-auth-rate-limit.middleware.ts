@@ -10,6 +10,7 @@ import { ThrottlerException } from '@nestjs/throttler'
 import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { TypedConfigService } from '../../config/typed-config.service'
+import { getClientIp } from '../utils/client-ip.util'
 import { setRateLimitHeaders } from '../utils/rate-limit-headers.util'
 
 /**
@@ -32,7 +33,7 @@ export class FailedAuthRateLimitMiddleware implements NestMiddleware {
   ) {}
 
   async use(req: Request, res: Response, next: NextFunction) {
-    const ip = req.ips.length ? req.ips[0] : req.ip
+    const ip = getClientIp(req)
     const throttlerName = 'failed-auth'
     const tracker = `${throttlerName}:${ip}`
 

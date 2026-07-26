@@ -4,18 +4,22 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { PATH_METADATA } from '@nestjs/common/constants'
+import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
 import { Reflector } from '@nestjs/core'
 import { Test } from '@nestjs/testing'
-import type { ExecutionContext, INestApplication } from '@nestjs/common'
+import { RequestMethod, type ExecutionContext, type INestApplication } from '@nestjs/common'
 import type { AddressInfo } from 'net'
+import { createProxyMiddleware } from 'http-proxy-middleware'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
 import { BoxService } from '../box/services/box.service'
+import { RunnerService } from '../box/services/runner.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
+import { BoxAutoResumeService } from './box-auto-resume.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteConfigController } from './boxlite-config.controller'
 import { BoxliteMeController } from './boxlite-me.controller'
@@ -63,6 +67,8 @@ describe('BoxLite REST routing', () => {
       })
       .overrideGuard(OrganizationResourceActionGuard)
       .useValue({ canActivate: () => true })
+      .overrideGuard(AuthenticatedRateLimitGuard)
+      .useValue({ canActivate: () => true })
       .compile()
 
     app = moduleRef.createNestApplication()
@@ -70,9 +76,62 @@ describe('BoxLite REST routing', () => {
     await app.listen(0)
   }
 
-  async function get(path: string): Promise<Response> {
+  async function startProxyRoutingTestApp() {
+    const moduleRef = await Test.createTestingModule({
+      controllers: [BoxliteProxyController],
+      providers: [
+        {
+          provide: BoxService,
+          useValue: {
+            findOneByIdOrName: jest.fn().mockResolvedValue({
+              id: 'box-uuid',
+              runnerId: 'runner-1',
+              autoResume: false,
+            }),
+            updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: RunnerService,
+          useValue: {
+            findOne: jest.fn().mockResolvedValue({
+              apiUrl: 'http://runner.local',
+              apiKey: 'runner-key',
+            }),
+          },
+        },
+        {
+          provide: BoxAutoResumeService,
+          useValue: {
+            ensureReady: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+      ],
+    })
+      .overrideGuard(CombinedAuthGuard)
+      .useValue({
+        canActivate: (context: any) => {
+          context.switchToHttp().getRequest().user = {
+            organizationId: 'org-123',
+            organization: { id: 'org-123' },
+          }
+          return true
+        },
+      })
+      .overrideGuard(OrganizationResourceActionGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(AuthenticatedRateLimitGuard)
+      .useValue({ canActivate: () => true })
+      .compile()
+
+    app = moduleRef.createNestApplication()
+    app.setGlobalPrefix('api')
+    await app.listen(0)
+  }
+
+  async function request(path: string, method = 'GET'): Promise<Response> {
     const address = app.getHttpServer().address() as AddressInfo
-    return fetch(`http://127.0.0.1:${address.port}${path}`)
+    return fetch(`http://127.0.0.1:${address.port}${path}`, { method })
   }
 
   afterEach(async () => {
@@ -87,8 +146,8 @@ describe('BoxLite REST routing', () => {
   it('registers canonical and legacy default-prefix routes in the Nest HTTP router', async () => {
     await startRoutingTestApp()
 
-    const canonical = await get('/api/v1/boxes')
-    const legacy = await get('/api/v1/default/boxes')
+    const canonical = await request('/api/v1/boxes')
+    const legacy = await request('/api/v1/default/boxes')
 
     expect(canonical.status).toBe(200)
     expect(await canonical.json()).toEqual({ boxes: [] })
@@ -96,8 +155,49 @@ describe('BoxLite REST routing', () => {
     expect(await legacy.json()).toEqual({ boxes: [] })
   })
 
+  it('maps proxy handlers to only the HTTP verbs documented in the v1 contract', () => {
+    const prototype = BoxliteProxyController.prototype as unknown as Record<string, (...args: never[]) => unknown>
+    const method = (handlerName: string) => Reflect.getMetadata(METHOD_METADATA, prototype[handlerName])
+
+    expect(method('proxyExec')).toBe(RequestMethod.POST)
+    expect(method('proxyExecSignal')).toBe(RequestMethod.POST)
+    expect(method('proxyExecResize')).toBe(RequestMethod.POST)
+    expect(method('proxyExecStatus')).toBe(RequestMethod.GET)
+    expect(method('proxyExecKill')).toBe(RequestMethod.DELETE)
+    expect(method('proxyFiles')).toBe(RequestMethod.GET)
+    expect(method('proxyFilesUpload')).toBe(RequestMethod.PUT)
+    expect(method('proxyMetrics')).toBe(RequestMethod.GET)
+  })
+
+  it('rejects undocumented proxy verbs at the HTTP router boundary', async () => {
+    jest
+      .mocked(createProxyMiddleware)
+      .mockReturnValue(((_req: unknown, res: { status: (code: number) => { end: () => void } }) =>
+        res.status(204).end()) as never)
+    await startProxyRoutingTestApp()
+
+    const cases = [
+      ['/api/v1/boxes/box-1/exec', 'POST', 204],
+      ['/api/v1/boxes/box-1/exec', 'GET', 404],
+      ['/api/v1/boxes/box-1/executions/exec-1/signal', 'POST', 204],
+      ['/api/v1/boxes/box-1/executions/exec-1/signal', 'GET', 404],
+      ['/api/v1/boxes/box-1/executions/exec-1/resize', 'POST', 204],
+      ['/api/v1/boxes/box-1/executions/exec-1/resize', 'PATCH', 404],
+      ['/api/v1/boxes/box-1/files?path=/tmp', 'GET', 204],
+      ['/api/v1/boxes/box-1/files?path=/tmp', 'PUT', 204],
+      ['/api/v1/boxes/box-1/files?path=/tmp', 'POST', 404],
+      ['/api/v1/boxes/box-1/metrics', 'GET', 204],
+      ['/api/v1/boxes/box-1/metrics', 'DELETE', 404],
+    ] as const
+
+    for (const [path, method, expectedStatus] of cases) {
+      const response = await request(path, method)
+      expect({ path, method, status: response.status }).toEqual({ path, method, status: expectedStatus })
+    }
+  })
+
   it('matches websocket attach upgrades with or without a routing prefix', () => {
-    const service = new BoxliteWsProxyService(
+    const service = new (BoxliteWsProxyService as any)(
       {} as any,
       {} as any,
       {} as any,
@@ -106,6 +206,10 @@ describe('BoxLite REST routing', () => {
       {} as any,
       {} as any,
       {} as any,
+      {
+        consumeAnonymous: jest.fn().mockResolvedValue({ allowed: true }),
+        consumeAuthenticated: jest.fn().mockResolvedValue({ allowed: true }),
+      },
     )
 
     expect(service.matchAttachPath('/api/v1/boxes/box-1/executions/exec-1/attach')).toEqual({ boxId: 'box-1' })
@@ -116,7 +220,7 @@ describe('BoxLite REST routing', () => {
   })
 
   it('does not route HTTP duplex tunnels through the websocket proxy', () => {
-    const service = new BoxliteWsProxyService(
+    const service = new (BoxliteWsProxyService as any)(
       {} as any,
       {} as any,
       {} as any,
@@ -125,6 +229,10 @@ describe('BoxLite REST routing', () => {
       {} as any,
       {} as any,
       {} as any,
+      {
+        consumeAnonymous: jest.fn().mockResolvedValue({ allowed: true }),
+        consumeAuthenticated: jest.fn().mockResolvedValue({ allowed: true }),
+      },
     )
 
     expect(service.matchAttachPath('/api/v1/boxes/box-1/network/tunnel?port=3000')).toBeNull()
@@ -154,6 +262,7 @@ describe('BoxLite REST permissions', () => {
     [BoxliteProxyController.prototype, 'proxyExecStatus', WRITE_BOXES],
     [BoxliteProxyController.prototype, 'proxyExecKill', WRITE_BOXES],
     [BoxliteProxyController.prototype, 'proxyFiles', WRITE_BOXES],
+    [BoxliteProxyController.prototype, 'proxyFilesUpload', WRITE_BOXES],
     [BoxliteProxyController.prototype, 'proxyMetrics', READ_BOXES],
     [BoxliteProxyController.prototype, 'proxyNetworkTunnel', WRITE_BOXES],
   ]

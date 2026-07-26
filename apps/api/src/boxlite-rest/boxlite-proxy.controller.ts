@@ -6,8 +6,8 @@
 
 import {
   Controller,
-  All,
   Get,
+  Put,
   Delete,
   Param,
   Req,
@@ -16,7 +16,6 @@ import {
   UseGuards,
   Logger,
   NotFoundException,
-  ForbiddenException,
   HttpCode,
   HttpStatus,
   ParseIntPipe,
@@ -36,6 +35,7 @@ import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { BoxAutoResumeService } from './box-auto-resume.service'
 import { BOXLITE_BOX_READ_PERMISSIONS, BOXLITE_BOX_WRITE_PERMISSIONS } from './boxlite-permission.policy'
 
@@ -43,12 +43,11 @@ type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
 const OBSERVATION_ONLY: ProxyActivityPolicy = { activity: false, autoResume: false }
 
-// Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
-// spec: @All() expands to the SEARCH verb, which OpenAPI 3.0 cannot express.
+// Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product spec.
 @ApiExcludeController()
 @ApiTags('BoxLite REST')
 @Controller(['v1/boxes', 'v1/:prefix/boxes'])
-@UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
+@UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard, AuthenticatedRateLimitGuard)
 @FailClosedOnMissingOrganizationResourcePermissions(true)
 @ApiBearerAuth()
 export class BoxliteProxyController {
@@ -60,7 +59,7 @@ export class BoxliteProxyController {
     private readonly autoResume: BoxAutoResumeService,
   ) {}
 
-  @All(':boxId/exec')
+  @Post(':boxId/exec')
   @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   async proxyExec(
     @AuthContext() authContext: OrganizationAuthContext,
@@ -80,7 +79,7 @@ export class BoxliteProxyController {
     )
   }
 
-  @All(':boxId/executions/:execId/signal')
+  @Post(':boxId/executions/:execId/signal')
   @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   async proxyExecSignal(
     @AuthContext() authContext: OrganizationAuthContext,
@@ -101,7 +100,7 @@ export class BoxliteProxyController {
     )
   }
 
-  @All(':boxId/executions/:execId/resize')
+  @Post(':boxId/executions/:execId/resize')
   @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   async proxyExecResize(
     @AuthContext() authContext: OrganizationAuthContext,
@@ -170,7 +169,7 @@ export class BoxliteProxyController {
   // to this path (callers that forgot the Upgrade headers) fall through to
   // a NestJS 404, which is the correct answer.
 
-  @All(':boxId/files')
+  @Get(':boxId/files')
   @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   async proxyFiles(
     @AuthContext() authContext: OrganizationAuthContext,
@@ -178,6 +177,28 @@ export class BoxliteProxyController {
     @Req() req: Request,
     @Res() res: Response,
     @Next() next: NextFunction,
+  ) {
+    return this.proxyFilesRequest(authContext, boxId, req, res, next)
+  }
+
+  @Put(':boxId/files')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
+  async proxyFilesUpload(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyFilesRequest(authContext, boxId, req, res, next)
+  }
+
+  private proxyFilesRequest(
+    authContext: OrganizationAuthContext,
+    boxId: string,
+    req: Request,
+    res: Response,
+    next: NextFunction,
   ) {
     const query = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : ''
     return this.proxyToRunner(
@@ -191,7 +212,7 @@ export class BoxliteProxyController {
     )
   }
 
-  @All(':boxId/metrics')
+  @Get(':boxId/metrics')
   @RequiredOrganizationResourcePermissions(BOXLITE_BOX_READ_PERMISSIONS)
   async proxyMetrics(
     @AuthContext() authContext: OrganizationAuthContext,

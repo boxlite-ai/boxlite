@@ -46,7 +46,7 @@ describe('BoxliteWsProxyService', () => {
       findOne: jest.fn().mockImplementation(async (id) => ({ id, suspended: false })),
     }
     const boxService = {
-      findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1' }),
+      findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true }),
       updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     }
     const runnerService = {
@@ -63,6 +63,10 @@ describe('BoxliteWsProxyService', () => {
         email: 'dev@acme.test',
       }),
     }
+    const requestThrottle = {
+      consumeAnonymous: jest.fn().mockResolvedValue({ allowed: true }),
+      consumeAuthenticated: jest.fn().mockResolvedValue({ allowed: true }),
+    }
     const service = new BoxliteWsProxyService(
       apiKeyService as never,
       organizationUserService as never,
@@ -72,6 +76,7 @@ describe('BoxliteWsProxyService', () => {
       autoResume as never,
       jwtStrategy as never,
       userService as never,
+      requestThrottle as never,
     ) as unknown as {
       authenticate: (req: IncomingMessage, urlTenant?: string) => Promise<{ organization: { id: string } } | null>
     }
@@ -86,11 +91,13 @@ describe('BoxliteWsProxyService', () => {
       autoResume,
       jwtStrategy,
       userService,
+      requestThrottle,
     }
   }
 
   it('rewrites public box ids to internal box ids before proxying attach upgrades to the runner', () => {
     new BoxliteWsProxyService(
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
@@ -139,6 +146,97 @@ describe('BoxliteWsProxyService', () => {
 
     expect(autoResume.ensureReady).toHaveBeenCalledWith('box-uuid', expect.objectContaining({ id: 'org-1' }))
     expect(proxyHandler.upgrade).not.toHaveBeenCalled()
+    expect(socket.destroy).toHaveBeenCalled()
+  })
+
+  it('rejects websocket upgrades when the anonymous pre-auth quota is exhausted', async () => {
+    const { service, apiKeyService, requestThrottle } = buildAuthHarness()
+    requestThrottle.consumeAnonymous.mockResolvedValue({ allowed: false, retryAfterSeconds: 12 })
+    const socket = { write: jest.fn(), destroy: jest.fn() }
+
+    await (service as unknown as BoxliteWsProxyService).upgrade(
+      authRequest('blk_live_test'),
+      socket as never,
+      Buffer.alloc(0),
+    )
+
+    expect(requestThrottle.consumeAnonymous).toHaveBeenCalledWith(expect.objectContaining({ url: expect.any(String) }))
+    expect(apiKeyService.getApiKeyByValue).not.toHaveBeenCalled()
+    expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('HTTP/1.1 429 Too Many Requests'))
+    expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('Retry-After: 12'))
+    expect(socket.destroy).toHaveBeenCalled()
+  })
+
+  it('rejects authenticated websocket upgrades when the organization quota is exhausted', async () => {
+    const { service, apiKeyService, organizationUserService, boxService, requestThrottle } = buildAuthHarness()
+    apiKeyService.getApiKeyByValue.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      expiresAt: null,
+      permissions: [OrganizationResourcePermission.WRITE_BOXES],
+    })
+    organizationUserService.findOne.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      role: OrganizationMemberRole.MEMBER,
+      assignedRoles: [],
+    })
+    requestThrottle.consumeAuthenticated.mockResolvedValue({ allowed: false, retryAfterSeconds: 7 })
+    const socket = { write: jest.fn(), destroy: jest.fn() }
+
+    await (service as unknown as BoxliteWsProxyService).upgrade(
+      authRequest('blk_live_test'),
+      socket as never,
+      Buffer.alloc(0),
+    )
+
+    expect(requestThrottle.consumeAuthenticated).toHaveBeenCalledWith('org-1')
+    expect(boxService.findOneByIdOrName).not.toHaveBeenCalled()
+    expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('HTTP/1.1 429 Too Many Requests'))
+    expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('Retry-After: 7'))
+  })
+
+  it('fails closed when the anonymous websocket limiter is unavailable', async () => {
+    const { service, apiKeyService, requestThrottle } = buildAuthHarness()
+    requestThrottle.consumeAnonymous.mockRejectedValue(new Error('storage unavailable'))
+    const socket = { write: jest.fn(), destroy: jest.fn() }
+
+    await (service as unknown as BoxliteWsProxyService).upgrade(
+      authRequest('blk_live_test'),
+      socket as never,
+      Buffer.alloc(0),
+    )
+
+    expect(apiKeyService.getApiKeyByValue).not.toHaveBeenCalled()
+    expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('HTTP/1.1 503 Service Unavailable'))
+    expect(socket.destroy).toHaveBeenCalled()
+  })
+
+  it('fails closed when the authenticated websocket limiter is unavailable', async () => {
+    const { service, apiKeyService, organizationUserService, boxService, requestThrottle } = buildAuthHarness()
+    apiKeyService.getApiKeyByValue.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      expiresAt: null,
+      permissions: [OrganizationResourcePermission.WRITE_BOXES],
+    })
+    organizationUserService.findOne.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      role: OrganizationMemberRole.MEMBER,
+      assignedRoles: [],
+    })
+    requestThrottle.consumeAuthenticated.mockRejectedValue(new Error('storage unavailable'))
+    const socket = { write: jest.fn(), destroy: jest.fn() }
+
+    await (service as unknown as BoxliteWsProxyService).upgrade(
+      authRequest('blk_live_test'),
+      socket as never,
+      Buffer.alloc(0),
+    )
+
+    expect(boxService.findOneByIdOrName).not.toHaveBeenCalled()
+    expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('HTTP/1.1 503 Service Unavailable'))
     expect(socket.destroy).toHaveBeenCalled()
   })
 

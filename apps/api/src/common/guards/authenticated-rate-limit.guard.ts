@@ -13,8 +13,13 @@ import { Redis } from 'ioredis'
 import { OrganizationService } from '../../organization/services/organization.service'
 import { THROTTLER_SCOPE_KEY } from '../decorators/throttler-scope.decorator'
 import { AuthContextType } from '../interfaces/auth-context.interface'
+import { getClientIp } from '../utils/client-ip.util'
 
 type RateLimitAuthContext = AuthContextType & {
+  apiKey?: {
+    organizationId?: string
+  }
+  organization?: unknown
   organizationId?: string
   userId?: string
 }
@@ -39,10 +44,11 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
 
   protected async getTracker(req: Request): Promise<string> {
     const user = (req as AuthenticatedRequest).user
+    const organizationId = this.getTrustedOrganizationId(user)
 
     // Track by organization ID when available (shared quota per org)
-    if (user?.organizationId) {
-      return `auth:org:${user.organizationId}`
+    if (organizationId) {
+      return `auth:org:${organizationId}`
     }
 
     // Fallback to user ID for non-org routes (e.g., /users/me)
@@ -51,8 +57,7 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
     }
 
     // Ultimate fallback (shouldn't happen in normal flow)
-    const ip = req.ips.length ? req.ips[0] : req.ip
-    return `fallback:${ip}`
+    return `fallback:${getClientIp(req)}`
   }
 
   protected generateKey(context: ExecutionContext, suffix: string, name: string): string {
@@ -104,7 +109,7 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
         }
 
         const user = request.user
-        const orgId = user?.organizationId
+        const orgId = this.getTrustedOrganizationId(user)
         if (orgId) {
           const orgLimits = await this.getCachedOrganizationRateLimits(orgId)
           if (orgLimits) {
@@ -158,6 +163,16 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
   private isSystemRole(user: RateLimitAuthContext | undefined): boolean {
     // Skip rate limiting for M2M system roles (proxy, runner, ssh-gateway)
     return user?.role === 'ssh-gateway' || user?.role === 'proxy' || user?.role === 'runner'
+  }
+
+  private getTrustedOrganizationId(user: RateLimitAuthContext | undefined): string | undefined {
+    if (user?.apiKey?.organizationId) {
+      return user.apiKey.organizationId
+    }
+    if (user?.organization && user.organizationId) {
+      return user.organizationId
+    }
+    return undefined
   }
 
   private async getCachedOrganizationRateLimits(organizationId: string): Promise<{
