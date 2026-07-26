@@ -28,11 +28,16 @@ import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middl
 import { Request, Response, NextFunction } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
+import {
+  FailClosedOnMissingOrganizationResourcePermissions,
+  RequiredOrganizationResourcePermissions,
+} from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import { BoxAutoResumeService } from './box-auto-resume.service'
+import { BOXLITE_BOX_READ_PERMISSIONS, BOXLITE_BOX_WRITE_PERMISSIONS } from './boxlite-permission.policy'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -44,6 +49,7 @@ const OBSERVATION_ONLY: ProxyActivityPolicy = { activity: false, autoResume: fal
 @ApiTags('BoxLite REST')
 @Controller(['v1/boxes', 'v1/:prefix/boxes'])
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
+@FailClosedOnMissingOrganizationResourcePermissions(true)
 @ApiBearerAuth()
 export class BoxliteProxyController {
   private readonly logger = new Logger(BoxliteProxyController.name)
@@ -55,6 +61,7 @@ export class BoxliteProxyController {
   ) {}
 
   @All(':boxId/exec')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   async proxyExec(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -74,6 +81,7 @@ export class BoxliteProxyController {
   }
 
   @All(':boxId/executions/:execId/signal')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   async proxyExecSignal(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -94,6 +102,7 @@ export class BoxliteProxyController {
   }
 
   @All(':boxId/executions/:execId/resize')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   async proxyExecResize(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -114,6 +123,7 @@ export class BoxliteProxyController {
   }
 
   @Get(':boxId/executions/:execId')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   async proxyExecStatus(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -134,6 +144,7 @@ export class BoxliteProxyController {
   }
 
   @Delete(':boxId/executions/:execId')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   async proxyExecKill(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -160,6 +171,7 @@ export class BoxliteProxyController {
   // a NestJS 404, which is the correct answer.
 
   @All(':boxId/files')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   async proxyFiles(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -180,6 +192,7 @@ export class BoxliteProxyController {
   }
 
   @All(':boxId/metrics')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_READ_PERMISSIONS)
   async proxyMetrics(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -199,6 +212,7 @@ export class BoxliteProxyController {
   }
 
   @Post(':boxId/network/tunnel')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   @HttpCode(HttpStatus.OK)
   async proxyNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,

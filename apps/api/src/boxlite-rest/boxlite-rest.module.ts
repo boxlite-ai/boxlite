@@ -15,9 +15,10 @@ import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxAutoResumeService } from './box-auto-resume.service'
+import { UserModule } from '../user/user.module'
 
 @Module({
-  imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule],
+  imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule, UserModule],
   controllers: [BoxliteMeController, BoxliteConfigController, BoxliteBoxController, BoxliteProxyController],
   providers: [BoxliteWsProxyService, BoxAutoResumeService],
   exports: [BoxliteWsProxyService],

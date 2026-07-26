@@ -9,8 +9,11 @@ import { ApiBearerAuth, ApiTags, ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { AuthContext as AuthCtx } from '../common/interfaces/auth-context.interface'
+import type { OrganizationUser } from '../organization/entities/organization-user.entity'
+import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationService } from '../organization/services/organization.service'
 import { PrincipalDto } from './dto/principal.dto'
+import { BOXLITE_BOX_READ_PERMISSIONS, grantedBoxliteScopes } from './boxlite-permission.policy'
 
 /**
  * `GET /v1/me` — identity for the calling credential.
@@ -31,8 +34,9 @@ export class BoxliteMeController {
   constructor(private readonly organizationService: OrganizationService) {}
 
   @Get('me')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_READ_PERMISSIONS)
   async getMe(@AuthContext() ctx: AuthCtx): Promise<PrincipalDto> {
-    const pathPrefix = await this.resolvePathPrefix(ctx)
+    const access = await this.resolveOrganizationAccess(ctx)
 
     const principalType: 'user' | 'service_account' = ctx.apiKey ? 'service_account' : 'user'
 
@@ -41,11 +45,8 @@ export class BoxliteMeController {
       principal_type: principalType,
       email: ctx.email || undefined,
       display_name: undefined,
-      path_prefix: pathPrefix,
-      // TODO: source scopes from ctx.apiKey?.scopes once the ApiKey entity
-      // has a `scopes` column. For now grant the full set used by the OpenAPI
-      // spec's documented scope vocabulary.
-      scopes: ['box:read', 'box:write', 'box:exec', 'box:delete', 'image:read', 'image:write', 'me:read'],
+      path_prefix: access.pathPrefix,
+      scopes: grantedBoxliteScopes(ctx, access.organizationUser),
       // Source of truth for key expiry is ApiKey.expiresAt — the same column the
       // dashboard's `/api-keys` list renders. Returning a hardcoded null here let
       // clients believe a soon-to-expire key was permanent (P1-2). `null` stays
@@ -63,15 +64,28 @@ export class BoxliteMeController {
    * the field stays present in the response envelope with explicit
    * `null` per the OpenAPI contract).
    */
-  private async resolvePathPrefix(ctx: AuthCtx): Promise<string | null> {
-    if (ctx.apiKey?.organizationId) {
-      return ctx.apiKey.organizationId
-    }
+  private async resolveOrganizationAccess(
+    ctx: AuthCtx,
+  ): Promise<{ pathPrefix: string | null; organizationUser?: OrganizationUser }> {
     const memberships = await this.organizationService.findByUserWithDefaultFlag(ctx.userId)
-    if (memberships.length === 0) {
-      return null
+
+    if (ctx.apiKey?.organizationId) {
+      const membership = memberships.find(
+        (candidate) => candidate.organization.id === ctx.apiKey?.organizationId,
+      )
+      return {
+        pathPrefix: ctx.apiKey.organizationId,
+        organizationUser: membership?.organizationUser,
+      }
     }
-    return (memberships.find((membership) => membership.isDefaultForAuthenticatedUser) ?? memberships[0]).organization
-      .id
+
+    if (memberships.length === 0) {
+      return { pathPrefix: null }
+    }
+    const membership = memberships.find((candidate) => candidate.isDefaultForAuthenticatedUser) ?? memberships[0]
+    return {
+      pathPrefix: membership.organization.id,
+      organizationUser: membership.organizationUser,
+    }
   }
 }

@@ -86,7 +86,7 @@ export class OrganizationAccessGuard implements CanActivate {
     }
     request.user = organizationAuthContext
 
-    if (authContext.role === SystemRole.ADMIN) {
+    if (authContext.role === SystemRole.ADMIN && !authContext.apiKey) {
       return true
     }
 

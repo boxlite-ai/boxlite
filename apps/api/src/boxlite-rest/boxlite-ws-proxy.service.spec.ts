@@ -6,6 +6,9 @@
 
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import type { IncomingMessage } from 'http'
+import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
+import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
+import { SystemRole } from '../user/enums/system-role.enum'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 
 jest.mock('http-proxy-middleware', () => ({
@@ -53,6 +56,13 @@ describe('BoxliteWsProxyService', () => {
     const jwtStrategy = {
       verifyToken: jest.fn(),
     }
+    const userService = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'user-1',
+        role: SystemRole.USER,
+        email: 'dev@acme.test',
+      }),
+    }
     const service = new BoxliteWsProxyService(
       apiKeyService as never,
       organizationUserService as never,
@@ -61,6 +71,7 @@ describe('BoxliteWsProxyService', () => {
       runnerService as never,
       autoResume as never,
       jwtStrategy as never,
+      userService as never,
     ) as unknown as {
       authenticate: (req: IncomingMessage, urlTenant?: string) => Promise<{ organization: { id: string } } | null>
     }
@@ -74,11 +85,21 @@ describe('BoxliteWsProxyService', () => {
       runnerService,
       autoResume,
       jwtStrategy,
+      userService,
     }
   }
 
   it('rewrites public box ids to internal box ids before proxying attach upgrades to the runner', () => {
-    new BoxliteWsProxyService({} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never)
+    new BoxliteWsProxyService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    )
 
     const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
     const pathRewrite = proxyOptions.pathRewrite as (path: string, req: unknown) => string
@@ -98,8 +119,14 @@ describe('BoxliteWsProxyService', () => {
       organizationId: 'org-1',
       userId: 'user-1',
       expiresAt: null,
+      permissions: [OrganizationResourcePermission.WRITE_BOXES],
     })
-    organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
+    organizationUserService.findOne.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      role: OrganizationMemberRole.OWNER,
+      assignedRoles: [],
+    })
     autoResume.ensureReady.mockRejectedValue(new Error('start failed'))
     const socket = { write: jest.fn(), destroy: jest.fn() }
     const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
@@ -121,10 +148,16 @@ describe('BoxliteWsProxyService', () => {
       organizationId: 'org-1',
       userId: 'user-1',
       expiresAt: null,
+      permissions: [OrganizationResourcePermission.WRITE_BOXES],
     })
-    organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
+    organizationUserService.findOne.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      role: OrganizationMemberRole.OWNER,
+      assignedRoles: [],
+    })
 
-    await expect(service.authenticate(authRequest('blk_live_test'))).resolves.toEqual({
+    await expect(service.authenticate(authRequest('blk_live_test'))).resolves.toMatchObject({
       organization: { id: 'org-1', suspended: false },
     })
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
@@ -137,7 +170,7 @@ describe('BoxliteWsProxyService', () => {
     jwtStrategy.verifyToken.mockResolvedValue({ sub: 'user-1', email: 'dev@acme.test' })
     organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
 
-    await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toEqual({
+    await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toMatchObject({
       organization: { id: 'org-1', suspended: false },
     })
     expect(jwtStrategy.verifyToken).toHaveBeenCalledWith(jwt)
@@ -161,5 +194,57 @@ describe('BoxliteWsProxyService', () => {
 
     await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toBeNull()
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
+  })
+
+  it('rejects websocket attach when an owner API key lacks Box write permission', async () => {
+    const { service, apiKeyService, organizationUserService } = buildAuthHarness()
+    apiKeyService.getApiKeyByValue.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      expiresAt: null,
+      permissions: [],
+    })
+    organizationUserService.findOne.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      role: OrganizationMemberRole.OWNER,
+      assignedRoles: [],
+    })
+    const socket = { write: jest.fn(), destroy: jest.fn() }
+    const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+
+    await (service as unknown as BoxliteWsProxyService).upgrade(
+      authRequest('blk_live_test'),
+      socket as never,
+      Buffer.alloc(0),
+    )
+
+    expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('403 Forbidden'))
+    expect(proxyHandler.upgrade).not.toHaveBeenCalled()
+    expect(socket.destroy).toHaveBeenCalled()
+  })
+
+  it('allows an interactive system administrator to attach without an assigned Box role', async () => {
+    const { service, organizationUserService, jwtStrategy, userService } = buildAuthHarness()
+    const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhZG1pbi0xIn0.signature'
+    jwtStrategy.verifyToken.mockResolvedValue({ sub: 'admin-1', email: 'admin@acme.test' })
+    userService.findOne.mockResolvedValue({
+      id: 'admin-1',
+      role: SystemRole.ADMIN,
+      email: 'admin@acme.test',
+    })
+    organizationUserService.findOne.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'admin-1',
+      role: OrganizationMemberRole.MEMBER,
+      assignedRoles: [],
+    })
+    const socket = { write: jest.fn(), destroy: jest.fn() }
+    const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+
+    await (service as unknown as BoxliteWsProxyService).upgrade(authRequest(jwt), socket as never, Buffer.alloc(0))
+
+    expect(proxyHandler.upgrade).toHaveBeenCalled()
+    expect(socket.write).not.toHaveBeenCalledWith(expect.stringContaining('403 Forbidden'))
   })
 })

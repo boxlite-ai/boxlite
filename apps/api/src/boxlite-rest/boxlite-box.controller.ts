@@ -22,6 +22,10 @@ import { ApiTags, ApiBearerAuth, ApiResponse, ApiExcludeController } from '@nest
 import { Response } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
+import {
+  FailClosedOnMissingOrganizationResourcePermissions,
+  RequiredOrganizationResourcePermissions,
+} from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
@@ -35,12 +39,18 @@ import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.map
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
+import {
+  BOXLITE_BOX_DELETE_PERMISSIONS,
+  BOXLITE_BOX_READ_PERMISSIONS,
+  BOXLITE_BOX_WRITE_PERMISSIONS,
+} from './boxlite-permission.policy'
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
 @ApiExcludeController()
 @ApiTags('BoxLite REST')
 @Controller(['v1/boxes', 'v1/:prefix/boxes'])
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
+@FailClosedOnMissingOrganizationResourcePermissions(true)
 @ApiBearerAuth()
 export class BoxliteBoxController {
   private readonly logger = new Logger(BoxliteBoxController.name)
@@ -51,6 +61,7 @@ export class BoxliteBoxController {
   ) {}
 
   @Post()
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   @HttpCode(201)
   @ApiResponse({
     status: 201,
@@ -97,6 +108,7 @@ export class BoxliteBoxController {
   }
 
   @Get()
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_READ_PERMISSIONS)
   @ApiResponse({
     status: 200,
     description: 'List boxes',
@@ -114,6 +126,7 @@ export class BoxliteBoxController {
   }
 
   @Get(':boxId')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_READ_PERMISSIONS)
   @ApiResponse({
     status: 200,
     description: 'Box details',
@@ -129,6 +142,7 @@ export class BoxliteBoxController {
   }
 
   @Head(':boxId')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_READ_PERMISSIONS)
   async headBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -143,6 +157,7 @@ export class BoxliteBoxController {
   }
 
   @Delete(':boxId')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_DELETE_PERMISSIONS)
   @HttpCode(204)
   @Audit({
     action: AuditAction.DELETE,
@@ -154,6 +169,7 @@ export class BoxliteBoxController {
   }
 
   @Post(':boxId/start')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   @ApiResponse({
     status: 201,
     description: 'Box start requested',
@@ -185,6 +201,7 @@ export class BoxliteBoxController {
   }
 
   @Post(':boxId/stop')
+  @RequiredOrganizationResourcePermissions(BOXLITE_BOX_WRITE_PERMISSIONS)
   @ApiResponse({
     status: 201,
     description: 'Box stop requested',
