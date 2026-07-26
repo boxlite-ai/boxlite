@@ -9,6 +9,7 @@ pub(crate) mod config;
 pub mod copy;
 mod crash_report;
 mod exec;
+pub(crate) mod handle;
 mod init;
 pub(crate) mod local_snapshot;
 mod manager;
@@ -24,11 +25,11 @@ pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execut
 pub(crate) use manager::BoxManager;
 pub use network::{BoxConnection, BoxEndpoint, BoxTunnel, NetworkHandle};
 pub use snapshot::SnapshotHandle;
-pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
+pub use state::{BoxState, BoxStatus, HealthState, HealthStatus, StopCause, StopInfo};
 
 pub(crate) use box_impl::SharedBoxImpl;
+pub(crate) use handle::{BoxHandle, SharedBoxHandle};
 pub(crate) use init::BoxBuilder;
-pub(crate) use local_snapshot::LocalSnapshotBackend;
 
 use std::path::Path;
 use std::sync::Arc;

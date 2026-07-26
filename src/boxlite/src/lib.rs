@@ -48,7 +48,7 @@ pub use litebox::{
 };
 pub use metrics::{BoxMetrics, RuntimeMetrics};
 pub use runtime::advanced_options::{
-    AdvancedBoxOptions, HealthCheckOptions, ResourceLimits, SecurityOptions,
+    AdvancedBoxOptions, HealthCheckOptions, ResourceLimits, RestartPolicy, SecurityOptions,
 };
 pub use runtime::options::{
     BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, ImageRegistry,
@@ -56,6 +56,7 @@ pub use runtime::options::{
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub use litebox::{StopCause, StopInfo};
 pub use runtime::id::{BaseDiskID, BaseDiskIDMint, BoxID, BoxIDMint};
 pub use runtime::types::ContainerID;
 pub use runtime::types::{BoxInfo, BoxLifecyclePolicy, BoxState, BoxStateInfo, BoxStatus};

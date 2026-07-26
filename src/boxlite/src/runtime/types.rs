@@ -354,6 +354,13 @@ pub struct BoxInfo {
     /// Exit code of the container's init process, when the box stopped
     /// because its main command exited (docker semantics).
     pub exit_code: Option<i32>,
+    /// Stop info (valid when status is Stopped/Crashed/Restarting).
+    #[serde(default)]
+    pub stop_info: crate::litebox::StopInfo,
+
+    /// Last restart error message (if any).
+    #[serde(default)]
+    pub last_restart_error: Option<String>,
 }
 
 impl BoxInfo {
@@ -383,6 +390,8 @@ impl BoxInfo {
             auto_resume: config.options.auto_resume.unwrap_or(true),
             health_status: state.health_status,
             exit_code: state.exit_code,
+            stop_info: state.stop_info.clone(),
+            last_restart_error: None,
         }
     }
 }

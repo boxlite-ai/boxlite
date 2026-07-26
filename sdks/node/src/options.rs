@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use boxlite::runtime::advanced_options::{AdvancedBoxOptions, HealthCheckOptions, SecurityOptions};
+use boxlite::runtime::advanced_options::{
+    AdvancedBoxOptions, HealthCheckOptions, RestartPolicy, SecurityOptions,
+};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
     BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, NetworkConfig, NetworkMode,
@@ -11,6 +13,46 @@ use napi::bindgen_prelude::Error;
 use napi_derive::napi;
 
 use crate::advanced_options::JsSecurityOptions;
+
+/// Restart policy for automatic restart on crash.
+///
+/// Similar to Docker's restart policy. Controls what happens when a box's
+/// shim process crashes.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsRestartPolicy {
+    /// Policy type: "no", "always", "on_failure", or "unless_stopped"
+    #[napi(js_name = "type")]
+    pub type_: String,
+
+    /// Maximum retries for "on_failure" policy.
+    #[napi(js_name = "maxRetries")]
+    pub max_retries: Option<u32>,
+}
+
+impl TryFrom<JsRestartPolicy> for RestartPolicy {
+    type Error = boxlite_shared::errors::BoxliteError;
+
+    fn try_from(js_policy: JsRestartPolicy) -> Result<Self, Self::Error> {
+        match js_policy.type_.as_str() {
+            "no" => Ok(RestartPolicy::No),
+            "always" => Ok(RestartPolicy::Always),
+            "on_failure" => {
+                let max_retries = js_policy.max_retries.ok_or_else(|| {
+                    boxlite_shared::errors::BoxliteError::Config(
+                        "on_failure restart policy requires maxRetries".into(),
+                    )
+                })?;
+                Ok(RestartPolicy::OnFailure { max_retries })
+            }
+            "unless_stopped" => Ok(RestartPolicy::UnlessStopped),
+            _ => Err(boxlite_shared::errors::BoxliteError::Config(format!(
+                "invalid restart policy type: {}",
+                js_policy.type_
+            ))),
+        }
+    }
+}
 
 /// Health check options for boxes.
 ///
@@ -236,6 +278,10 @@ pub struct JsBoxOptions {
     #[napi(js_name = "healthCheck")]
     pub health_check: Option<JsHealthCheckOptions>,
 
+    /// Restart policy for automatic restart on crash.
+    #[napi(js_name = "restartPolicy")]
+    pub restart_policy: Option<JsRestartPolicy>,
+
     /// Secrets to inject into outbound HTTPS requests via MITM proxy.
     pub secrets: Option<Vec<JsSecret>>,
 }
@@ -408,6 +454,10 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .unwrap_or_default();
 
         let health_check = js_opts.health_check.map(HealthCheckOptions::from);
+        let restart_policy = js_opts
+            .restart_policy
+            .map(RestartPolicy::try_from)
+            .transpose()?;
         let secrets = js_opts
             .secrets
             .unwrap_or_default()
@@ -436,6 +486,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             advanced: AdvancedBoxOptions {
                 security,
                 health_check,
+                restart_policy,
                 ..Default::default()
             },
             auto_pause: js_opts.auto_pause,
@@ -735,6 +786,7 @@ mod tests {
             user: None,
             security: None,
             health_check: None,
+            restart_policy: None,
             secrets: None,
         };
 
@@ -779,6 +831,7 @@ mod tests {
             user: None,
             security: None,
             health_check: None,
+            restart_policy: None,
             secrets: Some(vec![JsSecret {
                 name: "openai".into(),
                 value: "sk-test".into(),
@@ -792,6 +845,100 @@ mod tests {
         assert_eq!(opts.secrets[0].name, "openai");
         assert_eq!(opts.secrets[0].hosts, vec!["api.openai.com"]);
         assert_eq!(opts.secrets[0].placeholder, "<BOXLITE_SECRET:openai>");
+    }
+
+    #[test]
+    fn restart_policy_no() {
+        let js = JsRestartPolicy {
+            type_: "no".into(),
+            max_retries: None,
+        };
+        let policy = RestartPolicy::try_from(js).unwrap();
+        assert_eq!(policy, RestartPolicy::No);
+    }
+
+    #[test]
+    fn restart_policy_always() {
+        let js = JsRestartPolicy {
+            type_: "always".into(),
+            max_retries: None,
+        };
+        let policy = RestartPolicy::try_from(js).unwrap();
+        assert_eq!(policy, RestartPolicy::Always);
+    }
+
+    #[test]
+    fn restart_policy_on_failure() {
+        let js = JsRestartPolicy {
+            type_: "on_failure".into(),
+            max_retries: Some(3),
+        };
+        let policy = RestartPolicy::try_from(js).unwrap();
+        assert_eq!(policy, RestartPolicy::OnFailure { max_retries: 3 });
+    }
+
+    #[test]
+    fn restart_policy_on_failure_missing_max_retries() {
+        let js = JsRestartPolicy {
+            type_: "on_failure".into(),
+            max_retries: None,
+        };
+        let err = RestartPolicy::try_from(js).unwrap_err();
+        assert!(err.to_string().contains("maxRetries"));
+    }
+
+    #[test]
+    fn restart_policy_unless_stopped() {
+        let js = JsRestartPolicy {
+            type_: "unless_stopped".into(),
+            max_retries: None,
+        };
+        let policy = RestartPolicy::try_from(js).unwrap();
+        assert_eq!(policy, RestartPolicy::UnlessStopped);
+    }
+
+    #[test]
+    fn restart_policy_invalid_type() {
+        let js = JsRestartPolicy {
+            type_: "invalid".into(),
+            max_retries: None,
+        };
+        let err = RestartPolicy::try_from(js).unwrap_err();
+        assert!(err.to_string().contains("invalid"));
+    }
+
+    #[test]
+    fn box_options_from_js_restart_policy() {
+        let js = JsBoxOptions {
+            image: Some("alpine:latest".into()),
+            rootfs_path: None,
+            cpus: None,
+            memory_mib: None,
+            disk_size_gb: None,
+            working_dir: None,
+            env: None,
+            volumes: None,
+            network: None,
+            ports: None,
+            auto_remove: None,
+            auto_pause: None,
+            auto_delete: None,
+            auto_resume: None,
+            detach: None,
+            entrypoint: None,
+            cmd: None,
+            user: None,
+            security: None,
+            health_check: None,
+            restart_policy: Some(JsRestartPolicy {
+                type_: "always".into(),
+                max_retries: None,
+            }),
+            secrets: None,
+        };
+
+        let opts = BoxOptions::try_from(js).unwrap();
+        assert_eq!(opts.advanced.restart_policy, Some(RestartPolicy::Always));
     }
 
     #[test]

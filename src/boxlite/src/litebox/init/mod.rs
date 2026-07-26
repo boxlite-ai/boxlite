@@ -80,7 +80,7 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
         // Stopped and Failed both run the restart pipeline. A Failed box
         // has its rootfs preserved (per BoxStatus::Failed doc) and is
         // retryable per BoxStatus::can_start.
-        BoxStatus::Stopped | BoxStatus::Failed => vec![
+        BoxStatus::Stopped | BoxStatus::Failed | BoxStatus::Restarting => vec![
             // Restart: Same flow but rootfs tasks reuse existing COW disks
             // (preserves user modifications from previous run)
             Stage::sequential(vec![Box::new(FilesystemTask)]),
@@ -198,7 +198,7 @@ impl BoxBuilder {
         } = self;
 
         let status = state.status;
-        let reuse_rootfs = status == BoxStatus::Stopped;
+        let reuse_rootfs = matches!(status, BoxStatus::Stopped | BoxStatus::Restarting);
         let skip_guest_wait = status == BoxStatus::Running;
 
         let ctx = InitPipelineContext::new(config, runtime.clone(), reuse_rootfs, skip_guest_wait);

@@ -368,6 +368,10 @@ pub struct BoxOptions {
     /// any process can reattach via `runtime.get(box_id)`. The only ways
     /// to stop a detached box are `runtime.get(box_id).stop()` and
     /// `boxlite stop <id>`. Similar to Docker's `-d` (detach) flag.
+    ///
+    /// Detached boxes are skipped by runtime shutdown and may survive parent
+    /// process exit. Health checks and restart policy still run inside the
+    /// embedding process and resume after a runtime reattaches to the box.
     #[serde(default = "default_detach")]
     pub detach: bool,
 

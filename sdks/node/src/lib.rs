@@ -30,8 +30,9 @@ pub use info::{JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus};
 pub use metrics::{JsBoxMetrics, JsRuntimeMetrics};
 pub use network::{JsBoxConnection, JsBoxTunnel, JsNetworkHandle};
 pub use options::{
-    ApiKeyCredential, JsAccessToken, JsBoxOptions, JsEnvVar, JsHealthCheckOptions, JsImageRegistry,
-    JsImageRegistryAuth, JsNetworkSpec, JsOptions, JsPortSpec, JsSecret, JsVolumeSpec,
+    ApiKeyCredential, JsAccessToken, JsBoxOptions, JsBoxliteRestOptions, JsEnvVar,
+    JsHealthCheckOptions, JsImageRegistry, JsImageRegistryAuth, JsNetworkSpec, JsOptions,
+    JsPortSpec, JsRestartPolicy, JsSecret, JsVolumeSpec,
 };
 pub use runtime::JsBoxlite; // re-export for dist bundling
 pub use snapshot_options::{JsCloneOptions, JsExportOptions, JsSnapshotOptions};
