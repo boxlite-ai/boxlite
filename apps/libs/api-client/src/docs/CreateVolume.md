@@ -6,6 +6,8 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **name** | **string** |  | [default to undefined]
+**backend** | **string** |  | [optional] [default to BackendEnum_S3]
+**sizeGiB** | **number** | Logical capacity limit in GiB | [optional] [default to 10]
 
 ## Example
 
@@ -14,6 +16,8 @@ import { CreateVolume } from './api';
 
 const instance: CreateVolume = {
     name,
+    backend,
+    sizeGiB,
 };
 ```
 

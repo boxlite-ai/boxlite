@@ -33,6 +33,7 @@ type Client struct {
 	awsEndpointUrl     string
 	awsAccessKeyId     string
 	awsSecretAccessKey string
+	efsFileSystemID    string
 	volumeMutexes      map[string]*sync.Mutex
 	volumeMutexesMutex sync.Mutex
 	volumeCleanupMutex sync.Mutex
@@ -53,6 +54,7 @@ type ClientConfig struct {
 	AWSEndpointUrl               string
 	AWSAccessKeyId               string
 	AWSSecretAccessKey           string
+	EFSFileSystemID              string
 	VolumeCleanupInterval        time.Duration
 	VolumeCleanupDryRun          bool
 	VolumeCleanupExclusionPeriod time.Duration
@@ -177,6 +179,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		awsEndpointUrl:     config.AWSEndpointUrl,
 		awsAccessKeyId:     config.AWSAccessKeyId,
 		awsSecretAccessKey: config.AWSSecretAccessKey,
+		efsFileSystemID:    config.EFSFileSystemID,
 		volumeMutexes:      make(map[string]*sync.Mutex),
 		volumeCleanup: volumeCleanupConfig{
 			interval:        config.VolumeCleanupInterval,
@@ -248,7 +251,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithEntrypoint(boxDto.Entrypoint...))
 	}
 
-	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
+	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Id, boxDto.Volumes)
 	if err != nil {
 		return "", "", err
 	}
@@ -311,7 +314,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 // Start starts a stopped box and returns the runtime version.
 func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
-		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
+		return "", fmt.Errorf("failed to ensure volume mounts: %w", err)
 	}
 
 	bx, err := c.getOrFetchBox(ctx, boxId)
@@ -331,11 +334,18 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 		return err
 	}
 	err = bx.Stop(ctx)
+	var releaseErr error
+	if err == nil {
+		releaseErr = c.releaseBoxVolumeMounts(ctx, boxId)
+	}
 
 	c.mu.Lock()
 	delete(c.boxes, boxId)
 	c.mu.Unlock()
 
+	if releaseErr != nil {
+		return fmt.Errorf("box stopped but failed to release volumes: %w", releaseErr)
+	}
 	return err
 }
 
@@ -352,8 +362,8 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 		return err
 	}
 
-	if err := c.removeBoxVolumeMountRecord(ctx, boxId); err != nil {
-		c.logger.WarnContext(ctx, "failed to remove box volume mount record", "box", boxId, "error", err)
+	if err := c.releaseBoxVolumeMounts(ctx, boxId); err != nil {
+		c.logger.WarnContext(ctx, "failed to release box volume mounts", "box", boxId, "error", err)
 	}
 	c.CleanupOrphanedVolumeMounts(ctx)
 

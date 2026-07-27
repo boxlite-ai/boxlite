@@ -235,6 +235,98 @@ export default $config({
     })
     const redis = new sst.aws.Redis('Cache', { vpc, cluster: false }) // NestJS uses SELECT (multi-DB)
     const storage = new sst.aws.Bucket('Storage', { versioning: true })
+    const workspaceEfsSecurityGroup = new aws.ec2.SecurityGroup('WorkspaceEfsSecurityGroup', {
+      vpcId: vpc.nodes.vpc.id,
+      description: 'NFS access to the BoxLite workspace EFS from runners',
+      ingress: [
+        {
+          protocol: 'tcp',
+          fromPort: 2049,
+          toPort: 2049,
+          cidrBlocks: [vpc.nodes.vpc.cidrBlock],
+          description: 'NFS from BoxLite runners and API',
+        },
+      ],
+      egress: [],
+    })
+    const workspaceFileSystem = new aws.efs.FileSystem('WorkspaceFileSystem', {
+      encrypted: true,
+      performanceMode: 'generalPurpose',
+      throughputMode: 'elastic',
+      lifecyclePolicies: [
+        { transitionToIa: 'AFTER_7_DAYS' },
+        { transitionToArchive: 'AFTER_90_DAYS' },
+        { transitionToPrimaryStorageClass: 'AFTER_1_ACCESS' },
+      ],
+      tags: { Name: `${$app.name}-${$app.stage}-workspaces` },
+    })
+    new aws.efs.FileSystemPolicy('WorkspaceFileSystemPolicy', {
+      fileSystemId: workspaceFileSystem.id,
+      policy: $resolve([workspaceFileSystem.arn, aws.getCallerIdentityOutput().accountId]).apply(
+        ([fileSystemArn, accountId]) =>
+          JSON.stringify({
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Sid: 'AllowTlsAccessPointMounts',
+                Effect: 'Allow',
+                Principal: '*',
+                Action: ['elasticfilesystem:ClientMount', 'elasticfilesystem:ClientWrite'],
+                Resource: fileSystemArn,
+                Condition: {
+                  Bool: { 'aws:SecureTransport': 'true' },
+                  ArnLike: {
+                    'elasticfilesystem:AccessPointArn': `arn:aws:elasticfilesystem:${REGION}:${accountId}:access-point/*`,
+                  },
+                },
+              },
+              {
+                Sid: 'DenyNonTlsMounts',
+                Effect: 'Deny',
+                Principal: '*',
+                Action: 'elasticfilesystem:ClientMount',
+                Resource: fileSystemArn,
+                Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+              },
+              {
+                Sid: 'DenyMountsWithoutAccessPoint',
+                Effect: 'Deny',
+                Principal: '*',
+                Action: 'elasticfilesystem:ClientMount',
+                Resource: fileSystemArn,
+                Condition: { Null: { 'elasticfilesystem:AccessPointArn': 'true' } },
+              },
+            ],
+          }),
+      ),
+    })
+    const workspaceMountTarget1 = new aws.efs.MountTarget('WorkspaceEfsMountTarget1', {
+      fileSystemId: workspaceFileSystem.id,
+      subnetId: vpc.privateSubnets[0],
+      securityGroups: [workspaceEfsSecurityGroup.id],
+    })
+    const workspaceMountTarget2 = new aws.efs.MountTarget('WorkspaceEfsMountTarget2', {
+      fileSystemId: workspaceFileSystem.id,
+      subnetId: vpc.privateSubnets[1],
+      securityGroups: [workspaceEfsSecurityGroup.id],
+    })
+    const workspaceAdminAccessPoint = new aws.efs.AccessPoint(
+      'WorkspaceAdminAccessPoint',
+      {
+        fileSystemId: workspaceFileSystem.id,
+        posixUser: { uid: 1000, gid: 1000 },
+        rootDirectory: {
+          path: '/boxlite-volumes',
+          creationInfo: {
+            ownerUid: 1000,
+            ownerGid: 1000,
+            permissions: '0770',
+          },
+        },
+        tags: { Name: `${$app.name}-${$app.stage}-workspace-admin` },
+      },
+      { dependsOn: [workspaceMountTarget1, workspaceMountTarget2] },
+    )
     // Services run in PRIVATE subnets. SST's Vpc component otherwise defaults Fargate
     // tasks to public subnets with public IPs; passing the cluster a plain vpc object
     // (SST's documented escape hatch) overrides that: containerSubnets = private (no
@@ -367,7 +459,6 @@ export default $config({
       },
     })
     const otelCollectorOtlpHttpUrl = stripTrailingSlash(otelCollector.url).apply((url) => `${url}:${PORTS.OTLP_HTTP}`)
-
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────
     const api = new sst.aws.Service('Api', {
       cluster,
@@ -399,6 +490,15 @@ export default $config({
       // s3:ListBucket statement below). Box object reads/writes flow through
       // vended S3AccessRole credentials, never the task role.
       link: [db, redis],
+      volumes: [
+        {
+          efs: {
+            fileSystem: workspaceFileSystem.id,
+            accessPoint: workspaceAdminAccessPoint.id,
+          },
+          path: '/mnt/boxlite-volumes',
+        },
+      ],
       permissions: [
         {
           // DescribeLogGroups ignores log-group-name granularity, but scoping
@@ -445,6 +545,24 @@ export default $config({
           ],
           resources: ['arn:aws:s3:::boxlite-volume-*', 'arn:aws:s3:::boxlite-volume-*/*'],
         },
+        {
+          actions: ['elasticfilesystem:CreateAccessPoint'],
+          resources: [workspaceFileSystem.arn],
+        },
+        {
+          actions: ['elasticfilesystem:ClientMount', 'elasticfilesystem:ClientWrite'],
+          resources: [workspaceFileSystem.arn],
+        },
+        {
+          actions: [
+            'elasticfilesystem:TagResource',
+            'elasticfilesystem:DeleteAccessPoint',
+            'elasticfilesystem:DescribeAccessPoints',
+          ],
+          resources: [
+            $interpolate`arn:aws:elasticfilesystem:${REGION}:${aws.getCallerIdentityOutput().accountId}:access-point/*`,
+          ],
+        },
       ],
       scaling: { min: 1, max: 4 },
       environment: {
@@ -452,6 +570,11 @@ export default $config({
         NODE_ENV: 'production',
         PORT: String(PORTS.API),
         ENVIRONMENT: 'production',
+        AWS_REGION: REGION,
+        EFS_REGION: REGION,
+        EFS_FILE_SYSTEM_ID: workspaceFileSystem.id,
+        EFS_MOUNT_PATH: '/mnt/boxlite-volumes',
+        VOLUME_DEFAULT_BACKEND: envOr('VOLUME_DEFAULT_BACKEND', 'efs'),
         RUN_MIGRATIONS: 'true',
         VERSION: '0.1.0',
         DEFAULT_REGION_ENFORCE_QUOTAS: 'false',
@@ -898,9 +1021,17 @@ export default $config({
       api.url,
       defaultRunnerApiKey.result,
       otelCollectorOtlpHttpUrl,
+      workspaceFileSystem.id,
       ghcrSecret ? ghcrSecret.arn : '',
-    ]).apply(([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-      buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
+    ]).apply(([apiUrl, token, otelEndpoint, efsFileSystemId, ghcrSecretArn]) =>
+      buildRunnerUserData({
+        apiUrl,
+        token,
+        otelEndpoint,
+        efsFileSystemId,
+        ghcrSecretArn: ghcrSecretArn || undefined,
+        ghcrUsername,
+      }),
     )
 
     // Runners hold load-bearing box state (/var/lib/boxlite + in-memory libkrun VMs).
@@ -939,6 +1070,7 @@ export default $config({
         {
           ignoreChanges: ['ami', 'userDataBase64'],
           protect: true,
+          dependsOn: [workspaceMountTarget1, workspaceMountTarget2],
         },
       )
 
@@ -969,9 +1101,22 @@ export default $config({
       const instance = makeRunner(
         `Runner-${name}`,
         `boxlite-runner-${index}`,
-        $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
-          ([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-            buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
+        $resolve([
+          api.url,
+          apiKey.result,
+          otelCollectorOtlpHttpUrl,
+          workspaceFileSystem.id,
+          ghcrSecret ? ghcrSecret.arn : '',
+        ]).apply(
+          ([apiUrl, token, otelEndpoint, efsFileSystemId, ghcrSecretArn]) =>
+            buildRunnerUserData({
+              apiUrl,
+              token,
+              otelEndpoint,
+              efsFileSystemId,
+              ghcrSecretArn: ghcrSecretArn || undefined,
+              ghcrUsername,
+            }),
         ),
       )
       return { name, apiKey, instance }
@@ -1010,6 +1155,7 @@ async function buildRunnerUserData(input: {
   apiUrl: string
   token: string
   otelEndpoint: string
+  efsFileSystemId: string
   ghcrSecretArn?: string
   ghcrUsername?: string
 }): Promise<string> {
@@ -1074,7 +1220,13 @@ set -euo pipefail
 while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
 
 apt-get update
-apt-get install -y curl
+apt-get install -y curl awscli binutils cargo gcc git gettext libssl-dev pkg-config rustc
+
+# Install amazon-efs-utils for TLS + EFS Access Point mounts.
+git clone --depth 1 https://github.com/aws/efs-utils.git /tmp/efs-utils
+(cd /tmp/efs-utils && ./build-deb.sh)
+apt-get install -y /tmp/efs-utils/build/amazon-efs-utils*deb
+rm -rf /tmp/efs-utils
 
 # Install Mountpoint for Amazon S3, used by volume mounts
 MOUNT_S3_VERSION=1.20.0
@@ -1128,6 +1280,7 @@ Environment=API_PORT=${PORTS.RUNNER}
 Environment=RUNNER_DOMAIN=\$HOST_IP
 Environment=BOXLITE_HOME_DIR=/var/lib/boxlite
 Environment=AWS_REGION=${REGION}
+Environment=EFS_FILE_SYSTEM_ID=${input.efsFileSystemId}
 Environment=OTEL_LOGGING_ENABLED=true
 Environment=OTEL_TRACING_ENABLED=true
 Environment=OTEL_EXPORTER_OTLP_ENDPOINT=${input.otelEndpoint}${input.ghcrSecretArn ? `

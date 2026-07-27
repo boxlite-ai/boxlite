@@ -100,6 +100,8 @@ export class VolumeController {
     requestMetadata: {
       body: (req: TypedRequest<CreateVolumeDto>) => ({
         name: req.body?.name,
+        backend: req.body?.backend,
+        sizeGiB: req.body?.sizeGiB,
       }),
     },
   })

@@ -43,6 +43,7 @@ import { validateNetworkAllowList } from '../utils/network-validation.util'
 import { SshAccess } from '../entities/ssh-access.entity'
 import { SshAccessDto, SshAccessValidationDto } from '../dto/ssh-access.dto'
 import { VolumeService } from './volume.service'
+import { Volume } from '../entities/volume.entity'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import {
   BoxSortField,
@@ -183,9 +184,10 @@ export class BoxService {
 
       quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(organization, cpu, mem, disk, gpu)
 
+      let resolvedVolumeEntities: Volume[] = []
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
-        await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
+        resolvedVolumeEntities = await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
       } else if (image) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec
         //  before creating a fresh one.
@@ -253,7 +255,21 @@ export class BoxService {
       box.autoResume = lifecyclePolicy.autoResume
 
       if (createBoxDto.volumes !== undefined) {
-        box.volumes = this.resolveVolumes(createBoxDto.volumes)
+        const byIdOrName = new Map(
+          resolvedVolumeEntities.flatMap((volume) => [[volume.id, volume] as const, [volume.name, volume] as const]),
+        )
+        box.volumes = this.resolveVolumes(createBoxDto.volumes).map((mount) => {
+          const volume = byIdOrName.get(mount.volumeId)
+          if (!volume) {
+            throw new NotFoundException(`Volume '${mount.volumeId}' not found`)
+          }
+          return {
+            ...mount,
+            volumeId: volume.id,
+            backend: volume.backend,
+            providerResourceId: volume.providerResourceId,
+          }
+        })
       }
 
       box.runnerId = runner.id

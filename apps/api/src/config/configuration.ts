@@ -94,6 +94,12 @@ const configuration = {
     accountId: process.env.S3_ACCOUNT_ID,
     roleName: process.env.S3_ROLE_NAME,
   },
+  efs: {
+    region: process.env.EFS_REGION || process.env.AWS_REGION,
+    fileSystemId: process.env.EFS_FILE_SYSTEM_ID,
+    mountPath: process.env.EFS_MOUNT_PATH,
+  },
+  volumeDefaultBackend: process.env.VOLUME_DEFAULT_BACKEND || 's3',
   notificationGatewayDisabled: process.env.NOTIFICATION_GATEWAY_DISABLED === 'true',
   skipConnections: process.env.SKIP_CONNECTIONS === 'true',
   maintananceMode: process.env.MAINTENANCE_MODE === 'true',

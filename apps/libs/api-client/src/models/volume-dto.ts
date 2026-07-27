@@ -15,6 +15,9 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
+import type { VolumeBackend } from './volume-backend';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { VolumeState } from './volume-state';
 
 export interface VolumeDto {
@@ -34,6 +37,11 @@ export interface VolumeDto {
      * Volume state
      */
     'state': VolumeState;
+    'backend': VolumeBackend;
+    /**
+     * Logical capacity limit in GiB
+     */
+    'sizeGiB': number;
     /**
      * Creation timestamp
      */

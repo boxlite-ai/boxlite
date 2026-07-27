@@ -21,6 +21,7 @@ import { TypedConfigService } from '../../config/typed-config.service'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { VolumeBackend } from '../enums/volume-backend.enum'
 
 @Injectable()
 export class VolumeService {
@@ -36,8 +37,12 @@ export class VolumeService {
   ) {}
 
   async create(organization: Organization, createVolumeDto: CreateVolumeDto): Promise<Volume> {
-    if (!this.configService.get('s3.endpoint')) {
-      throw new ServiceUnavailableException('Object storage is not configured')
+    const backend = createVolumeDto.backend ?? (this.configService.get('volumeDefaultBackend') as VolumeBackend)
+    if (backend === VolumeBackend.S3 && !this.configService.get('s3.endpoint')) {
+      throw new ServiceUnavailableException('S3 volume storage is not configured')
+    }
+    if (backend === VolumeBackend.EFS && !this.configService.get('efs.fileSystemId')) {
+      throw new ServiceUnavailableException('EFS volume storage is not configured')
     }
 
     this.organizationService.assertOrganizationIsNotSuspended(organization)
@@ -64,6 +69,8 @@ export class VolumeService {
     }
 
     volume.organizationId = organization.id
+    volume.backend = backend
+    volume.sizeGiB = createVolumeDto.sizeGiB ?? 10
     volume.state = VolumeState.PENDING_CREATE
 
     const savedVolume = await this.volumeRepository.save(volume)
@@ -127,6 +134,21 @@ export class VolumeService {
     return volume
   }
 
+  async waitUntilReady(volumeId: string, timeoutMs = 120_000): Promise<Volume> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const volume = await this.findOne(volumeId)
+      if (volume.state === VolumeState.READY) {
+        return volume
+      }
+      if (volume.state === VolumeState.ERROR) {
+        throw new ServiceUnavailableException(volume.errorReason || `Volume ${volumeId} provisioning failed`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+    throw new ServiceUnavailableException(`Timed out waiting for volume ${volumeId} to become ready`)
+  }
+
   async findAll(organizationId: string, includeDeleted = false): Promise<Volume[]> {
     return this.volumeRepository.find({
       where: {
@@ -159,9 +181,9 @@ export class VolumeService {
     return volume
   }
 
-  async validateVolumes(organizationId: string, volumeIdOrNames: string[]): Promise<void> {
+  async validateVolumes(organizationId: string, volumeIdOrNames: string[]): Promise<Volume[]> {
     if (!volumeIdOrNames.length) {
-      return
+      return []
     }
 
     const volumes = await this.volumeRepository.find({
@@ -186,6 +208,7 @@ export class VolumeService {
         throw new BadRequestError(`Volume '${volume.name}' is not in a ready state. Current state: ${volume.state}`)
       }
     }
+    return volumes
   }
 
   async getOrganizationId(params: { id: string } | { name: string; organizationId: string }): Promise<string> {

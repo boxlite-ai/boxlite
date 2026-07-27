@@ -104,6 +104,7 @@ export * from './update-organization-role';
 export * from './update-region';
 export * from './user';
 export * from './user-public-key';
+export * from './volume-backend';
 export * from './volume-dto';
 export * from './volume-state';
 export * from './webhook-app-portal-access';
