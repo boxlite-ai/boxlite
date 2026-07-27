@@ -38,6 +38,7 @@ set(TEST_TARGETS
     test_simple_api
     test_null_callback
     test_rest
+    test_options_port
 )
 
 foreach(TARGET ${TEST_TARGETS})
@@ -75,6 +76,10 @@ set_tests_properties(test_null_callback PROPERTIES LABELS "ffi")
 # REST runtime construction does no I/O (lazy connect), so it is a
 # true unit test — runs under `make test:unit:c` (ctest -L unit).
 set_tests_properties(test_rest PROPERTIES LABELS "unit")
+
+# Like test_null_callback: only exercises option-builder FFI validation,
+# no VM is required.
+set_tests_properties(test_options_port PROPERTIES LABELS "ffi")
 
 message(STATUS "BoxLite C Tests Configuration:")
 message(STATUS "  Include dir: ${BOXLITE_INCLUDE_DIR}")
