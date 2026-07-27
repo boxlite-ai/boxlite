@@ -95,10 +95,9 @@ def _credstore_get(registry: str) -> tuple[str | None, str | None]:
 
 
 def ensure_tools_on_path() -> None:
-    """The seed step shells out to `psql`; add Homebrew's keg-only libpq bin
-    (and the go-install bin) to PATH if not already resolvable, so a bare
-    `make up` finds them."""
-    extra = ["/opt/homebrew/opt/libpq/bin", str(Path.home() / "go" / "bin")]
+    """Add the go-install bin to PATH if not already resolvable, so a bare
+    `make up` finds go-installed tools."""
+    extra = [str(Path.home() / "go" / "bin")]
     parts = os.environ.get("PATH", "").split(os.pathsep)
     for d in extra:
         if d not in parts and Path(d).is_dir():
