@@ -571,11 +571,7 @@ impl RuntimeImpl {
                 .await
                 .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
 
-        if let Some((config, state)) = db_result {
-            let (box_impl, _) = self.get_or_create_box_impl(config, state);
-            return Ok(Some(box_impl.info().await?));
-        }
-        Ok(None)
+        Ok(db_result.map(|(config, state)| BoxInfo::new(&config, &state)))
     }
 
     /// List all boxes, sorted by creation time (newest first).
@@ -592,19 +588,12 @@ impl RuntimeImpl {
             .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
 
         let mut seen_ids = HashSet::with_capacity(db_boxes.len());
-        let mut boxes = Vec::with_capacity(db_boxes.len());
+        let mut infos = Vec::with_capacity(db_boxes.len());
         for (config, state) in db_boxes {
             seen_ids.insert(config.id.clone());
-            // Database rows are the cross-process freshness authority. Use a
-            // fresh metadata instance so a live handle in this process
-            // cannot replace a newer state written by another runtime.
-            let box_impl = Arc::new(crate::litebox::box_impl::BoxImpl::new(
-                config,
-                state,
-                Arc::clone(self),
-                self.shutdown_token.child_token(),
-            ));
-            boxes.push(box_impl);
+            // Database rows are the cross-process freshness authority. Build
+            // their metadata directly instead of manufacturing live handles.
+            infos.push(BoxInfo::new(&config, &state));
         }
 
         // Snapshot strong references while holding the synchronous cache lock.
@@ -621,10 +610,7 @@ impl RuntimeImpl {
                 })
                 .collect::<Vec<_>>()
         };
-        boxes.extend(in_memory_only);
-
-        let mut infos = Vec::with_capacity(boxes.len());
-        for box_impl in boxes {
+        for box_impl in in_memory_only {
             infos.push(box_impl.info().await?);
         }
 
@@ -1944,6 +1930,36 @@ mod tests {
             engine_kind: VmmKind::Libkrun,
             box_home,
         }
+    }
+
+    #[tokio::test]
+    async fn get_info_does_not_create_cached_box_handle() {
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config(false);
+        let state = BoxState::new();
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        let is_cached = || {
+            runtime
+                .sync_state
+                .read()
+                .unwrap()
+                .active_boxes_by_id
+                .contains_key(&config.id)
+        };
+        assert!(!is_cached());
+
+        let info = runtime
+            .get_info(config.id.as_str())
+            .await
+            .expect("Failed to query box info")
+            .expect("Box info must exist");
+
+        assert_eq!(info.id, config.id);
+        assert!(!is_cached(), "metadata lookup must not cache a live handle");
     }
 
     #[tokio::test]
