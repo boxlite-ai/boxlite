@@ -310,6 +310,38 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntityError"
 
+  /{prefix}/boxes/get-or-create/strict:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+
+    post:
+      operationId: getOrCreateBoxStrict
+      summary: Get a named box or create it with backend compatibility checks
+      description: |
+        Atomically adopts an existing named box or creates it. The server
+        validates the requested options against an existing box before reuse;
+        clients do not infer compatibility from inspection metadata.
+      tags: [Boxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StrictCreateBoxRequest"
+      responses:
+        "200":
+          description: Existing or newly created box
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetOrCreateBoxResponse"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+
   /{prefix}/boxes/{box_id}:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -1651,6 +1683,16 @@ components:
           default: true
           description: Whether the box automatically resumes when accessed after AutoPause
 
+    GetOrCreateBoxResponse:
+      type: object
+      required: [box_info, created]
+      properties:
+        box_info:
+          $ref: "#/components/schemas/Box"
+        created:
+          type: boolean
+          description: Whether this request created a new box
+
     BoxStatus:
       type: string
       description: |
@@ -1781,7 +1823,8 @@ components:
         - type: object
           description: |
             Fail-closed create request for security-sensitive options. This
-            schema is accepted only by `POST /boxes/strict`.
+            schema is accepted by the strict create and strict get-or-create
+            routes.
           properties:
             advanced:
               $ref: "#/components/schemas/CreateBoxAdvancedOptions"
@@ -1789,7 +1832,7 @@ components:
 
     CreateBoxAdvancedOptions:
       type: object
-      description: Expert-only container options accepted by the strict create route.
+      description: Expert-only container options accepted by strict box creation routes.
       additionalProperties: false
       properties:
         capabilities:

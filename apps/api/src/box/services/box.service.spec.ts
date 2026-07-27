@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ForbiddenException } from '@nestjs/common'
+import { ConflictException, ForbiddenException } from '@nestjs/common'
 import { BoxService } from './box.service'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
@@ -359,5 +359,135 @@ describe('BoxService public defaults', () => {
       'warm-box',
       expect.objectContaining({ updateData: expect.objectContaining({ public: expectedPublic }) }),
     )
+  })
+})
+
+describe('BoxService getOrCreate option compatibility', () => {
+  function createGetOrCreateService(actualCapabilities: { add: string[]; drop: string[] }) {
+    const service = Object.create(BoxService.prototype) as BoxService
+    const existing = {
+      id: 'box-1',
+      name: 'named',
+      organizationId: 'org-1',
+      state: BoxState.STARTED,
+      advanced: { capabilities: actualCapabilities },
+    }
+    ;(service as any).boxRepository = {
+      findOne: jest.fn().mockResolvedValue(existing),
+    }
+    service.toBoxDto = jest.fn().mockResolvedValue(existing as any)
+    service.create = jest.fn()
+    return service
+  }
+
+  function createDuplicateRaceService(winner: any | null) {
+    const service = Object.create(BoxService.prototype) as BoxService
+    const conflict = new ConflictException('Box with name named already exists')
+    ;(service as any).boxRepository = {
+      findOne: jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(winner),
+    }
+    service.toBoxDto = jest.fn().mockResolvedValue(winner)
+    service.create = jest.fn().mockRejectedValue(conflict)
+    return { service, conflict }
+  }
+
+  it('rejects an incompatible existing capability policy', async () => {
+    const service = createGetOrCreateService({ add: ['SYS_ADMIN'], drop: [] })
+
+    await expect(
+      service.getOrCreate(
+        {
+          name: 'named',
+          advanced: { capabilities: { add: ['NET_ADMIN'], drop: [] } },
+        },
+        { id: 'org-1' } as any,
+      ),
+    ).rejects.toThrow('does not match')
+    expect(service.create).not.toHaveBeenCalled()
+  })
+
+  it('accepts equivalent normalized capability policies', async () => {
+    const service = createGetOrCreateService({
+      add: ['NET_ADMIN', 'CAP_SYS_ADMIN'],
+      drop: [],
+    })
+
+    const result = await service.getOrCreate(
+      {
+        name: 'named',
+        advanced: {
+          capabilities: { add: ['sys_admin', 'CAP_NET_ADMIN'], drop: [] },
+        },
+      },
+      { id: 'org-1' } as any,
+    )
+
+    expect(result.created).toBe(false)
+    expect(result.box).toMatchObject({ id: 'box-1' })
+    expect(service.create).not.toHaveBeenCalled()
+  })
+
+  it('validates lifecycle options before returning an existing box', async () => {
+    const service = createGetOrCreateService({ add: [], drop: [] })
+
+    await expect(
+      service.getOrCreate(
+        {
+          name: 'named',
+          autoPause: 10,
+          autoDelete: 5,
+        },
+        { id: 'org-1' } as any,
+      ),
+    ).rejects.toThrow('greater than auto-pause')
+  })
+
+  it('adopts a compatible winner after losing a duplicate-create race', async () => {
+    const winner = {
+      id: 'box-1',
+      name: 'named',
+      organizationId: 'org-1',
+      state: BoxState.STARTED,
+      advanced: { capabilities: { add: ['CAP_SYS_ADMIN'], drop: [] } },
+    }
+    const { service } = createDuplicateRaceService(winner)
+
+    const result = await service.getOrCreate(
+      {
+        name: 'named',
+        advanced: { capabilities: { add: ['sys_admin'], drop: [] } },
+      },
+      { id: 'org-1' } as any,
+    )
+
+    expect(result).toEqual({ box: winner, created: false })
+    expect(service.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects an incompatible winner after losing a duplicate-create race', async () => {
+    const winner = {
+      id: 'box-1',
+      name: 'named',
+      organizationId: 'org-1',
+      state: BoxState.STARTED,
+      advanced: { capabilities: { add: ['SYS_ADMIN'], drop: [] } },
+    }
+    const { service } = createDuplicateRaceService(winner)
+
+    await expect(
+      service.getOrCreate(
+        {
+          name: 'named',
+          advanced: { capabilities: { add: ['NET_ADMIN'], drop: [] } },
+        },
+        { id: 'org-1' } as any,
+      ),
+    ).rejects.toThrow('does not match')
+  })
+
+  it('propagates the create conflict when no duplicate-race winner exists', async () => {
+    const { service, conflict } = createDuplicateRaceService(null)
+
+    await expect(service.getOrCreate({ name: 'named' }, { id: 'org-1' } as any)).rejects.toBe(conflict)
   })
 })

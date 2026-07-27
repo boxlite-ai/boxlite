@@ -584,17 +584,6 @@ impl BoxOptions {
     pub fn sanitize(&self) -> BoxliteResult<()> {
         self.validate()
     }
-
-    /// Check requested options against the effective options reported for a box.
-    ///
-    /// This is the compatibility boundary for adopting or acknowledging a box.
-    /// Comparisons for additional immutable options belong here.
-    pub(crate) fn check_options_compatibility(&self, actual: &crate::BoxInfo) -> BoxliteResult<()> {
-        let box_name = actual.name.as_deref().unwrap_or_else(|| actual.id.as_str());
-        self.advanced
-            .capabilities
-            .check_compatibility(&actual.advanced.capabilities, box_name)
-    }
 }
 
 /// How to populate the box root filesystem.
@@ -783,31 +772,6 @@ mod tests {
         ContainerCapabilities, SecurityOptions, SecurityOptionsBuilder,
     };
 
-    fn box_info_with_capabilities(
-        box_name: &str,
-        capabilities: ContainerCapabilities,
-    ) -> crate::BoxInfo {
-        let now = chrono::Utc::now();
-        crate::BoxInfo {
-            id: crate::runtime::id::BoxID::parse("test-box").unwrap(),
-            name: Some(box_name.to_string()),
-            status: crate::litebox::BoxStatus::Configured,
-            created_at: now,
-            last_updated: now,
-            pid: None,
-            image: "alpine:latest".to_string(),
-            cpus: 1,
-            memory_mib: 512,
-            advanced: crate::runtime::types::BoxAdvancedInfo { capabilities },
-            labels: Default::default(),
-            auto_pause: 0,
-            auto_delete: 0,
-            auto_resume: true,
-            health_status: Default::default(),
-            exit_code: None,
-        }
-    }
-
     #[test]
     #[allow(deprecated)]
     fn test_box_options_defaults() {
@@ -969,70 +933,6 @@ mod tests {
                 "error should identify the malformed capability, got: {err}"
             );
         }
-    }
-
-    #[test]
-    fn check_options_compatibility_rejects_capability_policy_drift() {
-        let baseline = BoxOptions::default();
-        assert!(
-            baseline
-                .check_options_compatibility(&box_info_with_capabilities(
-                    "same-policy",
-                    ContainerCapabilities::default(),
-                ))
-                .is_ok()
-        );
-
-        let spelling_variant = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                capabilities: ContainerCapabilities {
-                    add: vec!["sys_admin".into(), "CAP_NET_ADMIN".into()],
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        assert!(
-            spelling_variant
-                .check_options_compatibility(&box_info_with_capabilities(
-                    "same-policy",
-                    ContainerCapabilities {
-                        add: vec!["NET_ADMIN".into(), "CAP_SYS_ADMIN".into()],
-                        ..Default::default()
-                    },
-                ))
-                .is_ok()
-        );
-
-        let restricted = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                capabilities: ContainerCapabilities {
-                    drop: vec!["ALL".into()],
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        assert!(matches!(
-            restricted.check_options_compatibility(&box_info_with_capabilities(
-                "baseline-box",
-                ContainerCapabilities::default(),
-            )),
-            Err(boxlite_shared::errors::BoxliteError::InvalidArgument(_))
-        ));
-
-        assert!(matches!(
-            baseline.check_options_compatibility(&box_info_with_capabilities(
-                "privileged-box",
-                ContainerCapabilities {
-                    add: vec!["CAP_SYS_ADMIN".into()],
-                    ..Default::default()
-                },
-            )),
-            Err(boxlite_shared::errors::BoxliteError::InvalidArgument(_))
-        ));
     }
 
     #[test]

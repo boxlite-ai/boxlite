@@ -39,6 +39,16 @@ describe('BoxLite REST routing', () => {
             findAllDeprecated: jest.fn().mockResolvedValue([]),
             toBoxDtos: jest.fn().mockResolvedValue([]),
             findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-1' }),
+            getOrCreate: jest.fn().mockResolvedValue({
+              box: {
+                id: 'box-1',
+                name: 'named',
+                state: BoxState.STARTED,
+                labels: {},
+                advanced: { capabilities: { add: [], drop: [] } },
+              },
+              created: false,
+            }),
             toBoxDto: jest.fn().mockResolvedValue({
               id: 'box-1',
               name: 'named',
@@ -132,6 +142,25 @@ describe('BoxLite REST routing', () => {
     expect(await canonical.json()).toEqual({ boxes: [] })
     expect(prefixed.status).toBe(200)
     expect(await prefixed.json()).toEqual({ boxes: [] })
+  })
+
+  it('delegates strict get-or-create compatibility to the box service', async () => {
+    await startRoutingTestApp()
+
+    const response = await post('/api/v1/boxes/get-or-create/strict', {
+      name: 'named',
+      image: 'alpine:latest',
+      advanced: { capabilities: { add: [], drop: [] } },
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      box_info: {
+        box_id: 'box-1',
+        advanced: { capabilities: { add: [], drop: [] } },
+      },
+      created: false,
+    })
   })
 
   it('rejects unknown fields at the strict create boundary', async () => {

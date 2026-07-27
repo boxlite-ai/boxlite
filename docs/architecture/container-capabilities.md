@@ -88,9 +88,9 @@ plane first, then capable runners and guests, and expose capability-aware
 clients only after that path is healthy. The new control plane safely rejects
 custom policies while only old runners are available. Ordinary create, get,
 and list operations from older clients remain compatible throughout the
-rollout. Named `get_or_create` deliberately requires the strict policy-aware
-read route even for an empty requested policy: otherwise an old API could omit a persisted
-custom policy and make reuse appear safe. Drain a runner before downgrading or
+rollout. Named `get_or_create` deliberately requires the strict server-side
+operation even for an empty requested policy: otherwise an old API could omit a
+persisted custom policy and make reuse appear safe. Drain a runner before downgrading or
 rolling it back: a previously positive advertisement cannot prove that the
 runner binary has not changed since its last heartbeat. Once a custom-policy
 box has been accepted, do not roll the control plane back to a build that

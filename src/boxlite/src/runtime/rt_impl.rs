@@ -466,9 +466,24 @@ impl RuntimeImpl {
         config: BoxConfig,
         state: BoxState,
     ) -> BoxliteResult<(LiteBox, bool)> {
-        requested.check_options_compatibility(&BoxInfo::new(&config, &state))?;
+        Self::check_options_compatibility(requested, &config)?;
         let (box_impl, _) = self.get_or_create_box_impl(config, state);
         Ok((litebox_from_impl(box_impl), false))
+    }
+
+    /// Check requested options before adopting an existing local box.
+    ///
+    /// Comparisons for additional immutable options belong here so each
+    /// runtime backend owns its reuse policy.
+    fn check_options_compatibility(
+        requested: &BoxOptions,
+        actual: &BoxConfig,
+    ) -> BoxliteResult<()> {
+        let box_name = actual.name.as_deref().unwrap_or_else(|| actual.id.as_str());
+        requested
+            .advanced
+            .capabilities
+            .check_compatibility(&actual.options.advanced.capabilities, box_name)
     }
 
     /// Get a handle to an existing box by ID or name.
@@ -1783,6 +1798,25 @@ mod tests {
         options.auto_pause = None;
         options.auto_delete = Some(3600);
         assert!(reject_local_lifecycle_policy(&options).is_ok());
+    }
+
+    #[test]
+    fn options_compatibility_normalizes_capability_names() {
+        let mut actual = test_box_config(false);
+        actual.options.advanced.capabilities.add =
+            vec!["NET_ADMIN".to_string(), "CAP_SYS_ADMIN".to_string()];
+        let requested = BoxOptions {
+            advanced: crate::AdvancedBoxOptions {
+                capabilities: crate::ContainerCapabilities {
+                    add: vec!["sys_admin".to_string(), "CAP_NET_ADMIN".to_string()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(RuntimeImpl::check_options_compatibility(&requested, &actual).is_ok());
     }
 
     #[tokio::test]

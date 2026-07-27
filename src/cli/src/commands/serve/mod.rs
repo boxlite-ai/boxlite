@@ -1096,6 +1096,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Box CRUD (import first — static path before param path)
         .route("/v1/boxes/import", post(advanced::import_box))
         .route(
+            "/v1/boxes/get-or-create/strict",
+            post(boxes::get_or_create_box),
+        )
+        .route(
             "/v1/boxes/strict",
             post(boxes::create_box).get(boxes::list_boxes),
         )

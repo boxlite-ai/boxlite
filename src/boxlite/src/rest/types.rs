@@ -272,6 +272,12 @@ pub(crate) struct BoxResponse {
     pub auto_resume: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct GetOrCreateBoxResponse {
+    pub box_info: BoxResponse,
+    pub created: bool,
+}
+
 impl BoxResponse {
     pub(crate) fn to_authoritative_box_info(
         &self,

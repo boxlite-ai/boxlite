@@ -128,6 +128,12 @@ pub(super) struct BoxResponse {
 }
 
 #[derive(Serialize)]
+pub(super) struct GetOrCreateBoxResponse {
+    pub box_info: BoxResponse,
+    pub created: bool,
+}
+
+#[derive(Serialize)]
 pub(super) struct BoxAdvancedResponse {
     pub capabilities: ContainerCapabilitiesResponse,
 }

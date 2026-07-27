@@ -13,8 +13,8 @@ use super::client::ApiClient;
 use super::litebox::RestBox;
 use super::options::BoxliteRestOptions;
 use super::types::{
-    BoxResponse, CreateBoxRequest, CreateVolumeRequest, ListBoxesResponse, ListVolumesResponse,
-    RuntimeMetricsResponse, VolumeResponse,
+    BoxResponse, CreateBoxRequest, CreateVolumeRequest, GetOrCreateBoxResponse, ListBoxesResponse,
+    ListVolumesResponse, RuntimeMetricsResponse, VolumeResponse,
 };
 use crate::runtime::auth::{AuthBackend, Principal};
 use crate::runtime::volumes::VolumeBackend;
@@ -30,22 +30,10 @@ impl RestRuntime {
         Ok(Self { client })
     }
 
-    fn compatible_box_info(options: &BoxOptions, response: &BoxResponse) -> BoxliteResult<BoxInfo> {
-        if response.advanced.is_none() {
-            return Err(BoxliteError::Unsupported(
-                "REST server did not return an authoritative Linux capability policy".into(),
-            ));
-        }
-        let info = response.to_box_info()?;
-        options.check_options_compatibility(&info)?;
-        Ok(info)
-    }
-
     async fn create_with_contract(
         &self,
         options: BoxOptions,
         name: Option<String>,
-        force_strict: bool,
     ) -> BoxliteResult<LiteBox> {
         // Validate only the caller's requested policy. An unset auto_pause means
         // "no auto-pause", so it must not borrow the server's default here.
@@ -65,18 +53,14 @@ impl RestRuntime {
         // The strict route was introduced with capability policy support. An
         // older API instance returns 404 rather than accepting security-sensitive
         // fields it does not understand.
-        let uses_strict_contract = force_strict || has_capability_policy;
+        let uses_strict_contract = has_capability_policy;
         let create_path = if uses_strict_contract {
             "/boxes/strict"
         } else {
             "/boxes"
         };
         let resp: BoxResponse = self.client.post(create_path, &req).await?;
-        let info = if uses_strict_contract {
-            Self::compatible_box_info(&options, &resp)?
-        } else {
-            resp.to_box_info()?
-        };
+        let info = resp.to_box_info()?;
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         Ok(litebox_from_rest(rest_box))
     }
@@ -132,7 +116,7 @@ fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
-        self.create_with_contract(options, name, false).await
+        self.create_with_contract(options, name).await
     }
 
     async fn get_or_create(
@@ -140,26 +124,29 @@ impl RuntimeBackend for RestRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
-        if let Some(ref box_name) = name {
-            // Named reuse must be policy-aware even when the requested policy is
-            // the baseline. The versioned route prevents an old API instance
-            // from omitting the fields and masquerading as an empty policy.
-            let path = format!("/boxes/{box_name}/strict");
-            match self.client.get::<BoxResponse>(&path).await {
-                Ok(resp) => {
-                    let info = Self::compatible_box_info(&options, &resp)?;
-                    let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
-                    return Ok((litebox_from_rest(rest_box), false));
-                }
-                Err(BoxliteError::NotFound(_)) => {}
-                Err(error) => return Err(error),
+        if name.is_some() {
+            crate::runtime::types::BoxLifecyclePolicy {
+                auto_pause: options.auto_pause.unwrap_or(0),
+                auto_delete: options.auto_delete.unwrap_or(0),
+                auto_resume: options.auto_resume.unwrap_or(true),
+            }
+            .validate()?;
+
+            if !options.advanced.capabilities.is_empty() {
+                self.client.require_linux_capabilities_enabled().await?;
             }
 
-            let litebox = self.create_with_contract(options, name, true).await?;
-            return Ok((litebox, true));
+            let request = CreateBoxRequest::from_options(&options, name);
+            let response: GetOrCreateBoxResponse = self
+                .client
+                .post("/boxes/get-or-create/strict", &request)
+                .await?;
+            let info = response.box_info.to_box_info()?;
+            let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+            return Ok((litebox_from_rest(rest_box), response.created));
         }
 
-        let litebox = self.create_with_contract(options, name, false).await?;
+        let litebox = self.create_with_contract(options, name).await?;
         Ok((litebox, true))
     }
 
@@ -466,7 +453,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn strict_create_rejects_incompatible_options() {
+    async fn strict_create_does_not_recheck_server_options() {
         let (port, server) = json_server(vec![
             r#"{"capabilities":{"linux_capabilities_enabled":true}}"#,
             r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":null,"status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"advanced":{"capabilities":{"add":["SYS_ADMIN"],"drop":[]}},"labels":{}}"#,
@@ -474,7 +461,7 @@ mod tests {
         .await;
         let runtime =
             RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
-        let result = RuntimeBackend::create(
+        RuntimeBackend::create(
             &runtime,
             BoxOptions {
                 advanced: crate::AdvancedBoxOptions {
@@ -488,9 +475,8 @@ mod tests {
             },
             None,
         )
-        .await;
-
-        assert!(matches!(result, Err(BoxliteError::InvalidArgument(_))));
+        .await
+        .unwrap();
         assert_eq!(
             server.await.unwrap(),
             ["GET /v1/config HTTP/1.1", "POST /v1/boxes/strict HTTP/1.1"]
@@ -498,7 +484,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn strict_create_rejects_response_without_capability_policy() {
+    async fn strict_create_accepts_response_without_capability_policy() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
@@ -527,7 +513,7 @@ mod tests {
 
         let runtime =
             RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
-        let result = RuntimeBackend::create(
+        RuntimeBackend::create(
             &runtime,
             BoxOptions {
                 advanced: crate::AdvancedBoxOptions {
@@ -541,17 +527,13 @@ mod tests {
             },
             None,
         )
-        .await;
-
-        assert!(
-            matches!(result, Err(BoxliteError::Unsupported(_))),
-            "a strict response without an authoritative policy must fail closed"
-        );
+        .await
+        .unwrap();
         server.await.unwrap();
     }
 
     #[tokio::test]
-    async fn get_or_create_rejects_response_without_capability_policy() {
+    async fn get_or_create_accepts_response_without_capability_policy() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
@@ -561,7 +543,7 @@ mod tests {
                 headers.push(socket.read_u8().await.unwrap());
             }
             let request = String::from_utf8(headers).unwrap();
-            let body = r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{}}"#;
+            let body = r#"{"box_info":{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{}},"created":false}"#;
             socket
                 .write_all(
                     format!(
@@ -578,37 +560,38 @@ mod tests {
 
         let runtime =
             RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
-        let result =
+        let (_, created) =
             RuntimeBackend::get_or_create(&runtime, BoxOptions::default(), Some("named".into()))
-                .await;
-        let error = match result {
-            Err(error) => error,
-            Ok(_) => panic!("an omitted policy must not masquerade as the baseline policy"),
-        };
+                .await
+                .unwrap();
 
-        assert!(matches!(error, BoxliteError::Unsupported(_)));
-        assert_eq!(server.await.unwrap(), "GET /v1/boxes/named/strict HTTP/1.1");
+        assert!(!created);
+        assert_eq!(
+            server.await.unwrap(),
+            "POST /v1/boxes/get-or-create/strict HTTP/1.1"
+        );
     }
 
     #[tokio::test]
-    async fn get_or_create_rejects_incompatible_existing_options() {
+    async fn get_or_create_does_not_recheck_server_options() {
         let (port, server) = json_server(vec![
-            r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"advanced":{"capabilities":{"add":["SYS_ADMIN"],"drop":[]}},"labels":{}}"#,
+            r#"{"box_info":{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"advanced":{"capabilities":{"add":["SYS_ADMIN"],"drop":[]}},"labels":{}},"created":false}"#,
         ])
         .await;
         let runtime =
             RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
-        let result = RuntimeBackend::get_or_create(
+        let (_, created) = RuntimeBackend::get_or_create(
             &runtime,
             BoxOptions::default(),
             Some("named".to_string()),
         )
-        .await;
+        .await
+        .unwrap();
 
-        assert!(matches!(result, Err(BoxliteError::InvalidArgument(_))));
+        assert!(!created);
         assert_eq!(
             server.await.unwrap(),
-            ["GET /v1/boxes/named/strict HTTP/1.1"]
+            ["POST /v1/boxes/get-or-create/strict HTTP/1.1"]
         );
     }
 

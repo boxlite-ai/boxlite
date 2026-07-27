@@ -92,6 +92,17 @@ const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
 const TERMINAL_PREVIEW_PORT = 22222
 
+function canonicalCapabilities(capabilities: readonly string[]): string[] {
+  return [
+    ...new Set(
+      capabilities.map((capability) => {
+        const normalized = capability.toUpperCase()
+        return normalized === 'ALL' ? normalized : normalized.replace(/^CAP_/, '')
+      }),
+    ),
+  ].sort()
+}
+
 @Injectable()
 export class BoxService {
   private readonly logger = new Logger(BoxService.name)
@@ -288,6 +299,74 @@ export class BoxService {
       }
 
       throw error
+    }
+  }
+
+  async getOrCreate(
+    createBoxDto: CreateBoxDto,
+    organization: Organization,
+  ): Promise<{ box: BoxDto; created: boolean }> {
+    this.resolveLifecyclePolicy({
+      autoPause: createBoxDto.autoPause,
+      autoDelete: createBoxDto.autoDelete,
+      autoResume: createBoxDto.autoResume,
+    })
+
+    if (!createBoxDto.name) {
+      return { box: await this.create(createBoxDto, organization), created: true }
+    }
+
+    const existing = await this.findReusableBoxByName(createBoxDto.name, organization.id)
+    if (existing) {
+      this.checkOptionsCompatibility(createBoxDto, existing)
+      return { box: await this.toBoxDto(existing), created: false }
+    }
+
+    try {
+      return { box: await this.create(createBoxDto, organization), created: true }
+    } catch (error) {
+      if (!(error instanceof ConflictException)) {
+        throw error
+      }
+
+      const winner = await this.findReusableBoxByName(createBoxDto.name, organization.id)
+      if (!winner) {
+        throw error
+      }
+      this.checkOptionsCompatibility(createBoxDto, winner)
+      return { box: await this.toBoxDto(winner), created: false }
+    }
+  }
+
+  private async findReusableBoxByName(name: string, organizationId: string): Promise<Box | null> {
+    const box = await this.boxRepository.findOne({
+      where: {
+        name,
+        organizationId,
+        state: Not(BoxState.DESTROYED),
+      },
+    })
+    if (box?.state === BoxState.ERROR && box.desiredState === BoxDesiredState.DESTROYED) {
+      return null
+    }
+    return box
+  }
+
+  private checkOptionsCompatibility(requested: CreateBoxDto, actual: Box): void {
+    const requestedCapabilities = normalizeBoxAdvancedOptions(requested.advanced).capabilities
+    const actualCapabilities = normalizeBoxAdvancedOptions(actual.advanced).capabilities
+    const hasSameCapabilities = (['add', 'drop'] as const).every((field) => {
+      const requestedSet = canonicalCapabilities(requestedCapabilities[field])
+      const actualSet = canonicalCapabilities(actualCapabilities[field])
+      return (
+        requestedSet.length === actualSet.length && requestedSet.every((value, index) => value === actualSet[index])
+      )
+    })
+
+    if (!hasSameCapabilities) {
+      throw new BadRequestError(
+        `requested capability policy does not match the authoritative policy for box '${actual.name || actual.id}'`,
+      )
     }
   }
 

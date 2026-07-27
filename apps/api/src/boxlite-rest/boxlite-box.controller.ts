@@ -32,7 +32,7 @@ import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { Box } from '../box/entities/box.entity'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
-import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
+import { BoxResponseDto, GetOrCreateBoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
 import { CreateBoxDto } from './dto/create-box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.mapper'
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
@@ -158,6 +158,56 @@ export class BoxliteBoxController {
     @Body() dto: CreateBoxDto,
   ): Promise<BoxResponseDto> {
     return this.createBoxWithOptions(authContext, dto)
+  }
+
+  @Post('get-or-create/strict')
+  @HttpCode(200)
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+  @ApiResponse({
+    status: 200,
+    description: 'Existing or newly created box',
+    type: GetOrCreateBoxResponseDto,
+  })
+  @Audit({
+    action: AuditAction.CREATE,
+    targetType: AuditTarget.BOX,
+    targetIdFromResult: (result: GetOrCreateBoxResponseDto) => result?.box_info?.box_id,
+    requestMetadata: {
+      body: (req: TypedRequest<CreateBoxDto>) => ({
+        name: req.body?.name,
+        image: req.body?.image,
+        user: req.body?.user,
+        env: req.body?.env
+          ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
+          : undefined,
+        cpus: req.body?.cpus,
+        memory_mib: req.body?.memory_mib,
+        disk_size_gb: req.body?.disk_size_gb,
+        working_dir: req.body?.working_dir,
+        entrypoint: req.body?.entrypoint,
+        cmd: req.body?.cmd,
+        advanced: req.body?.advanced,
+        detach: req.body?.detach,
+        auto_pause: req.body?.auto_pause,
+        auto_delete: req.body?.auto_delete,
+        auto_resume: req.body?.auto_resume,
+      }),
+    },
+  })
+  async getOrCreateBoxStrict(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Body() dto: CreateBoxDto,
+  ): Promise<GetOrCreateBoxResponseDto> {
+    const createBoxDto = createBoxToCreateBox(dto)
+    const result = await this.boxService.getOrCreate(createBoxDto, authContext.organization)
+    let box = result.box
+    if (result.created && box.state !== BoxState.STARTED) {
+      box = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30)
+    }
+    return {
+      box_info: boxToBoxResponse(box),
+      created: result.created,
+    }
   }
 
   @Get(['', 'strict'])

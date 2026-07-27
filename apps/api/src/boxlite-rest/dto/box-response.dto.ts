@@ -97,6 +97,15 @@ export class BoxResponseDto {
   auto_resume: boolean
 }
 
+@ApiSchema({ name: 'GetOrCreateBoxResponse' })
+export class GetOrCreateBoxResponseDto {
+  @ApiProperty({ type: BoxResponseDto })
+  box_info: BoxResponseDto
+
+  @ApiProperty({ description: 'Whether this request created a new box' })
+  created: boolean
+}
+
 @ApiSchema({ name: 'ListBoxesResponse' })
 export class ListBoxesResponseDto {
   @ApiProperty({ type: [BoxResponseDto] })
