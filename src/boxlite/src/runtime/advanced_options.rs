@@ -709,4 +709,12 @@ pub struct AdvancedBoxOptions {
     #[doc(hidden)]
     #[serde(default)]
     pub kernel: Option<crate::experimental::custom_kernel::KernelOptions>,
+
+    /// Release-candidate nested virtualization.
+    ///
+    /// The runtime must explicitly enable
+    /// [`ExperimentalFeature::NestedVirtualization`](crate::experimental::ExperimentalFeature::NestedVirtualization).
+    #[doc(hidden)]
+    #[serde(default)]
+    pub nested_virtualization: bool,
 }

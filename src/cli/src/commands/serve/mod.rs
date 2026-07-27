@@ -1521,7 +1521,7 @@ mod tests {
     #[tokio::test]
     async fn serve_import_rejects_nested_virtualization_archive_before_provisioning() {
         assert_uploaded_archive_rejected_before_provisioning(
-            serde_json::json!({"nested_virtualization": true}),
+            serde_json::json!({"advanced": {"nested_virtualization": true}}),
             "nested virtualization",
         )
         .await;

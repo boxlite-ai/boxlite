@@ -111,10 +111,13 @@ fn main() -> BoxliteResult<()> {
 
     // Run the shim and handle errors
     run_shim(config, timing).inspect_err(|e| {
-        let message = e.to_string();
-        let info = ExitInfo::serialize_error(1, &message, ExitErrorKind::from_boxlite_error(e));
+        let info = ExitInfo::Error {
+            exit_code: 1,
+            message: e.to_string(),
+            error_kind: ExitErrorKind::of(e),
+        };
 
-        if let Ok(json) = info {
+        if let Ok(json) = serde_json::to_string(&info) {
             let _ = std::fs::write(&exit_file, json);
         }
     })

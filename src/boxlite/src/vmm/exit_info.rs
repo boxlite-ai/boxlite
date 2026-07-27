@@ -27,59 +27,46 @@ use std::path::Path;
 
 use boxlite_shared::errors::BoxliteError;
 
-/// Stable machine-readable category for errors returned by the shim.
+/// Machine-readable category of an [`ExitInfo::Error`], so the host can map a
+/// shim failure back onto the right [`BoxliteError`] variant.
 ///
-/// Older exit files omit this value and are treated as [`Self::Engine`].
-/// Unknown values are also treated as engine failures by the host, allowing a
-/// newer shim to remain readable by hosts that do not recognize a new category.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// `Engine` is the catch-all: it is what every shim error was before this field
+/// existed, and what any category this build does not recognize decodes to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[doc(hidden)]
 #[serde(rename_all = "snake_case")]
 pub enum ExitErrorKind {
+    #[default]
     Engine,
     Unsupported,
 }
 
 impl ExitErrorKind {
-    /// Collapse shim-side errors into the categories understood by the host.
-    ///
-    /// Only `Unsupported` needs distinct caller-visible behavior today. All
-    /// other variants retain the existing generic engine-error behavior.
-    pub fn from_boxlite_error(error: &BoxliteError) -> Self {
+    /// Categorize a shim-side error. Only `Unsupported` needs caller-visible
+    /// behavior of its own; everything else stays a generic engine failure.
+    pub fn of(error: &BoxliteError) -> Self {
         match error {
             BoxliteError::Unsupported(_) => Self::Unsupported,
             _ => Self::Engine,
         }
     }
 
-    fn from_wire_name(value: Option<&str>) -> Self {
-        match value {
-            Some("unsupported") => Self::Unsupported,
-            _ => Self::Engine,
-        }
+    fn is_engine(&self) -> bool {
+        matches!(self, Self::Engine)
     }
 }
 
-/// Shim-only extension of the public [`ExitInfo::Error`] JSON shape.
-///
-/// Keep this record private so adding wire metadata does not add a required
-/// field to the public enum variant and break downstream constructors.
-#[derive(Serialize)]
-struct ShimErrorExit<'a> {
-    exit_code: i32,
-    #[serde(rename = "type")]
-    record_type: &'static str,
-    message: &'a str,
-    error_kind: ExitErrorKind,
-}
-
-/// Minimal view used to recover optional shim error metadata.
-#[derive(Deserialize)]
-struct ShimErrorMetadata {
-    #[serde(rename = "type")]
-    record_type: String,
-    #[serde(default)]
-    error_kind: Option<String>,
+impl<'de> Deserialize<'de> for ExitErrorKind {
+    /// Decoded by hand so an unrecognized category degrades to `Engine` instead
+    /// of failing the whole record. A box keeps its exit file across upgrades
+    /// and downgrades, so the BoxLite reading one is not always the one that
+    /// wrote it, and losing the message would hide the actual crash.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match String::deserialize(deserializer)?.as_str() {
+            "unsupported" => Self::Unsupported,
+            _ => Self::Engine,
+        })
+    }
 }
 
 /// Exit information written to the exit file as JSON.
@@ -100,28 +87,18 @@ pub enum ExitInfo {
         location: String,
     },
     /// Normal error returned from shim (e.g., instance.enter() failed).
-    Error { exit_code: i32, message: String },
+    Error {
+        exit_code: i32,
+        message: String,
+        /// Omitted from the JSON unless it carries information, so the record
+        /// an engine failure writes is byte-identical to the historical one.
+        #[doc(hidden)]
+        #[serde(default, skip_serializing_if = "ExitErrorKind::is_engine")]
+        error_kind: ExitErrorKind,
+    },
 }
 
 impl ExitInfo {
-    /// Serialize an error record with shim-only machine-readable metadata.
-    ///
-    /// The shim is a separate crate, so this narrow helper is public while the
-    /// extended wire record remains private to this module.
-    #[doc(hidden)]
-    pub fn serialize_error(
-        exit_code: i32,
-        message: &str,
-        error_kind: ExitErrorKind,
-    ) -> serde_json::Result<String> {
-        serde_json::to_string(&ShimErrorExit {
-            exit_code,
-            record_type: "error",
-            message,
-            error_kind,
-        })
-    }
-
     /// Parse exit info from a JSON file.
     ///
     /// Returns `None` if file doesn't exist or JSON is invalid.
@@ -163,24 +140,12 @@ impl ExitInfo {
         }
     }
 
-    /// Read the effective category from an error exit file.
-    ///
-    /// Legacy records without a category and records with a category unknown
-    /// to this host retain the historical generic engine-error behavior.
-    pub(crate) fn error_kind_from_file(path: &Path) -> Option<ExitErrorKind> {
-        let content = std::fs::read_to_string(path).ok()?;
-        Self::error_kind_from_json(&content)
-    }
-
-    fn error_kind_from_json(content: &str) -> Option<ExitErrorKind> {
-        let metadata: ShimErrorMetadata = serde_json::from_str(content).ok()?;
-        if metadata.record_type != "error" {
-            return None;
+    /// Get the error category. Signals and panics are always engine failures.
+    pub fn error_kind(&self) -> ExitErrorKind {
+        match self {
+            ExitInfo::Error { error_kind, .. } => *error_kind,
+            ExitInfo::Signal { .. } | ExitInfo::Panic { .. } => ExitErrorKind::Engine,
         }
-
-        Some(ExitErrorKind::from_wire_name(
-            metadata.error_kind.as_deref(),
-        ))
     }
 
     /// Check if this is a signal crash.
@@ -274,21 +239,11 @@ mod tests {
     }
 
     #[test]
-    fn test_error_variant_preserves_original_constructor_shape() {
-        let info = ExitInfo::Error {
-            exit_code: 1,
-            message: "legacy source remains valid".to_string(),
-        };
-
-        assert_eq!(info.exit_code(), 1);
-        assert_eq!(info.error_message(), Some("legacy source remains valid"));
-    }
-
-    #[test]
     fn test_error_serialization() {
         let info = ExitInfo::Error {
             exit_code: 1,
             message: "Failed to create VM instance".to_string(),
+            error_kind: ExitErrorKind::Engine,
         };
 
         let json = serde_json::to_string(&info).unwrap();
@@ -300,28 +255,50 @@ mod tests {
         let parsed: ExitInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.exit_code(), 1);
         assert_eq!(parsed.error_message(), Some("Failed to create VM instance"));
+        assert_eq!(parsed.error_kind(), ExitErrorKind::Engine);
         assert!(parsed.is_error());
     }
 
+    /// `Deserialize` is hand-written while `Serialize` is derived, so every
+    /// category must survive a trip through the wire names or the two have
+    /// drifted apart.
     #[test]
-    fn test_unsupported_error_kind_roundtrip() {
-        let json = ExitInfo::serialize_error(
-            1,
-            "nested virtualization is unavailable",
-            ExitErrorKind::Unsupported,
-        )
-        .unwrap();
-        assert!(json.contains(r#""error_kind":"unsupported""#));
+    fn test_error_kind_roundtrips_through_wire_names() {
+        for kind in [ExitErrorKind::Engine, ExitErrorKind::Unsupported] {
+            let info = ExitInfo::Error {
+                exit_code: 1,
+                message: "boom".to_string(),
+                error_kind: kind,
+            };
 
-        let parsed: ExitInfo = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            parsed.error_message(),
-            Some("nested virtualization is unavailable")
-        );
-        assert_eq!(
-            ExitInfo::error_kind_from_json(&json),
-            Some(ExitErrorKind::Unsupported)
-        );
+            let json = serde_json::to_string(&info).unwrap();
+            let parsed: ExitInfo = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed.error_kind(), kind, "{json}");
+        }
+    }
+
+    #[test]
+    fn test_unsupported_error_kind_uses_expected_wire_name() {
+        let json = serde_json::to_string(&ExitInfo::Error {
+            exit_code: 1,
+            message: "nested virtualization is unavailable".to_string(),
+            error_kind: ExitErrorKind::Unsupported,
+        })
+        .unwrap();
+
+        assert!(json.contains(r#""error_kind":"unsupported""#));
+    }
+
+    /// A box keeps its exit file across BoxLite upgrades, so a category this
+    /// build does not know must still yield a readable crash message.
+    #[test]
+    fn test_unknown_error_kind_keeps_the_record_readable() {
+        let json =
+            r#"{"type":"error","exit_code":1,"message":"new error","error_kind":"future_kind"}"#;
+
+        let parsed: ExitInfo = serde_json::from_str(json).expect("unknown category must not fail");
+        assert_eq!(parsed.error_message(), Some("new error"));
+        assert_eq!(parsed.error_kind(), ExitErrorKind::Engine);
     }
 
     #[test]
@@ -339,36 +316,23 @@ mod tests {
         let info = result.unwrap();
         assert_eq!(info.exit_code(), 1);
         assert_eq!(info.error_message(), Some("test error"));
-        assert_eq!(
-            ExitInfo::error_kind_from_file(&path),
-            Some(ExitErrorKind::Engine)
-        );
+        // An exit file written before categories existed stays an engine error.
+        assert_eq!(info.error_kind(), ExitErrorKind::Engine);
         assert!(info.is_error());
-    }
-
-    #[test]
-    fn test_unknown_error_kind_falls_back_safely() {
-        let json =
-            r#"{"type":"error","exit_code":1,"message":"new error","error_kind":"future_kind"}"#;
-
-        assert_eq!(
-            ExitInfo::error_kind_from_json(json),
-            Some(ExitErrorKind::Engine)
-        );
     }
 
     #[test]
     fn test_boxlite_error_mapping_only_special_cases_unsupported() {
         assert_eq!(
-            ExitErrorKind::from_boxlite_error(&BoxliteError::Unsupported("feature".into())),
+            ExitErrorKind::of(&BoxliteError::Unsupported("feature".into())),
             ExitErrorKind::Unsupported
         );
         assert_eq!(
-            ExitErrorKind::from_boxlite_error(&BoxliteError::Engine("vmm".into())),
+            ExitErrorKind::of(&BoxliteError::Engine("vmm".into())),
             ExitErrorKind::Engine
         );
         assert_eq!(
-            ExitErrorKind::from_boxlite_error(&BoxliteError::Config("invalid".into())),
+            ExitErrorKind::of(&BoxliteError::Config("invalid".into())),
             ExitErrorKind::Engine
         );
     }

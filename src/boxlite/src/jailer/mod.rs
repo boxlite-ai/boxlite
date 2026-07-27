@@ -209,16 +209,7 @@ use std::path::PathBuf;
 /// User volumes:
 /// {host_path}                     [per VolumeSpec.read_only]
 /// ```
-#[cfg(test)]
 fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Vec<PathAccess> {
-    build_path_access_with_additions(layout, volumes, &[])
-}
-
-fn build_path_access_with_additions(
-    layout: &BoxFilesystemLayout,
-    volumes: &[VolumeSpec],
-    additional_path_access: &[PathAccess],
-) -> Vec<PathAccess> {
     let mut paths = Vec::new();
 
     // Writable directories (shim creates files inside these at runtime)
@@ -344,8 +335,6 @@ fn build_path_access_with_additions(
             });
         }
     }
-
-    paths.extend_from_slice(additional_path_access);
 
     paths
 }
@@ -547,11 +536,8 @@ impl<S: Sandbox> Jailer<S> {
     ///
     /// Delegates to [`build_path_access`] for granular filesystem rules.
     fn context(&self) -> SandboxContext<'_> {
-        let paths = build_path_access_with_additions(
-            &self.layout,
-            &self.volumes,
-            &self.additional_path_access,
-        );
+        let mut paths = build_path_access(&self.layout, &self.volumes);
+        paths.extend_from_slice(&self.additional_path_access);
         tracing::debug!(
             box_id = %self.box_id,
             path_count = paths.len(),

@@ -25,6 +25,8 @@ pub struct KrunContext {
     ctx_id: u32,
 }
 
+/// Map `krun_check_nested_virt`: 1 supported, 0 unsupported, anything else a
+/// probe failure.
 fn check_nested_virtualization_status(status: i32) -> BoxliteResult<()> {
     match status {
         1 => Ok(()),
@@ -32,11 +34,8 @@ fn check_nested_virtualization_status(status: i32) -> BoxliteResult<()> {
             "nested virtualization is not supported on this host; Linux x86_64 requires nested KVM, and macOS requires an M3-or-newer Mac running macOS 15 or later"
                 .to_string(),
         )),
-        status if status < 0 => Err(BoxliteError::Engine(format!(
-            "krun_check_nested_virt failed with status {status}"
-        ))),
         status => Err(BoxliteError::Engine(format!(
-            "krun_check_nested_virt returned unexpected status {status}"
+            "krun_check_nested_virt returned {status}"
         ))),
     }
 }

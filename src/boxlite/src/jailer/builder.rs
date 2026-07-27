@@ -436,26 +436,22 @@ mod tests {
 
     #[test]
     fn builder_propagates_additional_path_access() {
-        let path_access = PathAccess {
-            path: PathBuf::from("/host/required-by-vmm"),
-            writable: false,
-        };
+        let extra = PathBuf::from("/host/required-by-vmm");
         let jailer = JailerBuilder::new()
             .with_box_id("test-box")
             .with_layout(test_layout("/tmp/box"))
-            .with_additional_path_access(vec![path_access.clone()])
+            .with_additional_path_access(vec![PathAccess {
+                path: extra.clone(),
+                writable: false,
+            }])
             .build()
             .expect("Should build successfully");
-
-        assert_eq!(jailer.additional_path_access.len(), 1);
-        assert_eq!(jailer.additional_path_access[0].path, path_access.path);
-        assert!(!jailer.additional_path_access[0].writable);
 
         let context = jailer.context();
         let propagated = context
             .paths
             .iter()
-            .find(|entry| entry.path == path_access.path)
+            .find(|entry| entry.path == extra)
             .expect("additional path access should reach the sandbox context");
         assert!(!propagated.writable);
     }

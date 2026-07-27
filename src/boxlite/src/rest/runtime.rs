@@ -78,6 +78,8 @@ fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
     LiteBox::new(box_backend, network_backend, snapshot_backend)
 }
 
+/// Host-only RC options a REST server never accepts from a client: they
+/// configure the server's own hardware, not the box the caller asked for.
 fn reject_remote_experimental_options(options: &BoxOptions) -> BoxliteResult<()> {
     if options.advanced.kernel.is_some() {
         return Err(BoxliteError::Unsupported(
@@ -85,10 +87,9 @@ fn reject_remote_experimental_options(options: &BoxOptions) -> BoxliteResult<()>
         ));
     }
 
-    if options.nested_virtualization {
+    if options.advanced.nested_virtualization {
         return Err(BoxliteError::Unsupported(
-            "nested virtualization is available only with a local runtime; REST servers do not expose this operator-controlled option"
-                .to_string(),
+            "nested virtualization is only supported by the local runtime".to_string(),
         ));
     }
 
@@ -453,7 +454,10 @@ mod tests {
         let options = BoxliteRestOptions::new("http://localhost:1");
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
         let box_options = BoxOptions {
-            nested_virtualization: true,
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                nested_virtualization: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -497,7 +501,10 @@ mod tests {
         let options = BoxliteRestOptions::new("http://localhost:1");
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
         let box_options = BoxOptions {
-            nested_virtualization: true,
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                nested_virtualization: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
 

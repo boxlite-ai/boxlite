@@ -8,10 +8,10 @@ use std::path::Path;
 use crate::service::server::GuestServer;
 use boxlite_shared::errors::BoxliteError;
 use boxlite_shared::{
-    container_init_response, container_start_response, rootfs_init, BoxliteError,
-    Container as ContainerService, ContainerInitError, ContainerInitErrorKind,
-    ContainerInitRequest, ContainerInitResponse, ContainerInitSuccess, ContainerStartRequest,
-    ContainerStartResponse, ContainerStartSuccess, Filesystem, RootfsInit,
+    container_init_response, container_start_response, rootfs_init, Container as ContainerService,
+    ContainerInitError, ContainerInitErrorKind, ContainerInitRequest, ContainerInitResponse,
+    ContainerInitSuccess, ContainerStartRequest, ContainerStartResponse, ContainerStartSuccess,
+    Filesystem, RootfsInit,
 };
 use nix::mount::{mount, MsFlags};
 use tonic::{Request, Response, Status};
@@ -28,13 +28,15 @@ fn internal_init_error(reason: impl Into<String>) -> ContainerInitError {
     }
 }
 
-fn container_creation_error(error: BoxliteError) -> ContainerInitError {
-    let kind = match &error {
+/// Report a failure under `context`, keeping `Unsupported` distinguishable so
+/// the host can tell a missing capability from a broken guest.
+fn init_error(context: &str, error: &BoxliteError) -> ContainerInitError {
+    let kind = match error {
         BoxliteError::Unsupported(_) => ContainerInitErrorKind::Unsupported,
         _ => ContainerInitErrorKind::Internal,
     };
     ContainerInitError {
-        reason: format!("Failed to create container: {error}"),
+        reason: format!("{context}: {error}"),
         kind: kind as i32,
     }
 }
@@ -139,20 +141,6 @@ impl ContainerService for GuestServer {
                 ))),
             }));
         }
-        // Resolve and validate all device nodes before rootfs or bundle setup
-        // performs side effects.
-        let devices = match ContainerDevices::from_proto(init_req.devices) {
-            Ok(devices) => devices,
-            Err(error) => {
-                error!("Invalid container device mapping: {error}");
-                return Ok(Response::new(ContainerInitResponse {
-                    result: Some(container_init_response::Result::Error(
-                        container_creation_error(error),
-                    )),
-                }));
-            }
-        };
-
         // Check if guest is initialized
         {
             let init_state = self.init_state.lock().await;
@@ -165,6 +153,21 @@ impl ContainerService for GuestServer {
                 }));
             }
         }
+
+        // Resolve device nodes now: this reads the guest's own /dev, and must
+        // fail before rootfs or bundle setup performs side effects.
+        let devices = match ContainerDevices::from_proto(init_req.devices) {
+            Ok(devices) => devices,
+            Err(error) => {
+                error!("Invalid container device mapping: {error}");
+                return Ok(Response::new(ContainerInitResponse {
+                    result: Some(container_init_response::Result::Error(init_error(
+                        "Invalid container device mapping",
+                        &error,
+                    ))),
+                }));
+            }
+        };
 
         // Extract container config
         let config = init_req
@@ -523,9 +526,10 @@ impl ContainerService for GuestServer {
             Err(e) => {
                 error!("Failed to create container: {}", e);
                 Ok(Response::new(ContainerInitResponse {
-                    result: Some(container_init_response::Result::Error(
-                        container_creation_error(e),
-                    )),
+                    result: Some(container_init_response::Result::Error(init_error(
+                        "Failed to create container",
+                        &e,
+                    ))),
                 }))
             }
         }

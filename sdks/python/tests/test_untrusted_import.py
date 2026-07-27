@@ -25,7 +25,7 @@ def _write_nested_virtualization_archive(path) -> None:
         "version": 3,
         "box_name": None,
         "image": "alpine:latest",
-        "box_options": {"nested_virtualization": True},
+        "box_options": {"advanced": {"nested_virtualization": True}},
         "guest_disk_checksum": "",
         "container_disk_checksum": "",
         "exported_at": "2026-07-26T00:00:00Z",

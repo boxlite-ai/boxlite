@@ -121,6 +121,7 @@ impl Container {
 
         // Validate inputs early
         start::validate_container_inputs(rootfs, &entrypoint, workdir)?;
+
         // Parse existing env into map (KEY=VALUE)
         let mut env_map: HashMap<String, String> = HashMap::new();
         for entry in &env {

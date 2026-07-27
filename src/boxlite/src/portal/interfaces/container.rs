@@ -4,8 +4,9 @@ use boxlite_shared::{
     BindMount, BoxliteError, BoxliteResult, CaCert,
     ContainerAdvancedOptions as ProtoContainerAdvancedOptions,
     ContainerCapabilities as ProtoContainerCapabilities, ContainerClient,
-    ContainerConfig as ProtoContainerConfig, ContainerDevice, ContainerInitErrorKind, ContainerInitRequest, DiskRootfs, MergedRootfs,
-    OverlayRootfs, RootfsInit, container_init_response,
+    ContainerConfig as ProtoContainerConfig, ContainerDevice, ContainerInitErrorKind,
+    ContainerInitRequest, DiskRootfs, MergedRootfs, OverlayRootfs, RootfsInit,
+    container_init_response,
 };
 use tonic::transport::Channel;
 
@@ -277,6 +278,7 @@ mod tests {
         ContainerInitSuccess, ContainerServer, ContainerStartRequest, ContainerStartResponse,
         ContainerStartSuccess, container_init_response, container_start_response,
     };
+    use std::sync::{Arc, Mutex};
     use tonic::transport::{Endpoint, Server};
     use tonic::{Request, Response, Status};
 
@@ -304,6 +306,8 @@ mod tests {
 
     struct StubGuest {
         start_reply: StartReply,
+        /// Last `Container.Init` request the stub saw, for wire assertions.
+        seen_init: Arc<Mutex<Option<ContainerInitRequest>>>,
     }
 
     #[tonic::async_trait]
@@ -312,7 +316,9 @@ mod tests {
             &self,
             request: Request<ContainerInitRequest>,
         ) -> Result<Response<ContainerInitResponse>, Status> {
-            let container_id = request.into_inner().container_id;
+            let request = request.into_inner();
+            let container_id = request.container_id.clone();
+            *self.seen_init.lock().unwrap() = Some(request);
             Ok(Response::new(ContainerInitResponse {
                 result: Some(container_init_response::Result::Success(
                     ContainerInitSuccess { container_id },
@@ -340,6 +346,13 @@ mod tests {
     /// Serve `StubGuest` on an ephemeral loopback port and return a
     /// `ContainerInterface` wired to it.
     async fn interface_for(start_reply: StartReply) -> ContainerInterface {
+        interface_recording(start_reply, Arc::new(Mutex::new(None))).await
+    }
+
+    async fn interface_recording(
+        start_reply: StartReply,
+        seen_init: Arc<Mutex<Option<ContainerInitRequest>>>,
+    ) -> ContainerInterface {
         // Bind with std to learn a free port, then hand the address to tonic.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -347,7 +360,10 @@ mod tests {
 
         tokio::spawn(async move {
             Server::builder()
-                .add_service(ContainerServer::new(StubGuest { start_reply }))
+                .add_service(ContainerServer::new(StubGuest {
+                    start_reply,
+                    seen_init,
+                }))
                 .serve(addr)
                 .await
                 .unwrap();
@@ -403,5 +419,44 @@ mod tests {
     async fn container_start_ok_on_success() {
         let mut iface = interface_for(StartReply::Success).await;
         assert!(iface.start("box-ok").await.is_ok());
+    }
+
+    /// Devices are container-scoped, so they must reach the guest on the
+    /// request itself rather than inside the process config — and init's
+    /// session id must equal the container id, the rule `LiteBox::attach()`
+    /// relies on. Asserted on what actually crossed the wire.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn container_init_sends_devices_and_session_id() {
+        let seen = Arc::new(Mutex::new(None));
+        let mut iface = interface_recording(StartReply::Success, Arc::clone(&seen)).await;
+
+        iface
+            .init(ContainerInitConfig {
+                container_id: "container-1".to_string(),
+                image: crate::images::ContainerImageConfig::default(),
+                rootfs: ContainerRootfsInitConfig::Merged,
+                mounts: Vec::new(),
+                ca_certs: Vec::new(),
+                tty: true,
+                devices: vec![ContainerDevice {
+                    source: "/dev/kvm".to_string(),
+                    destination: "/dev/kvm".to_string(),
+                    file_mode: Some(0o666),
+                }],
+                advanced: ContainerAdvancedConfig {
+                    capabilities: Default::default(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let request = seen.lock().unwrap().take().expect("guest saw Init");
+        assert_eq!(request.devices.len(), 1);
+        assert_eq!(request.devices[0].destination, "/dev/kvm");
+        assert_eq!(request.devices[0].file_mode, Some(0o666));
+        assert_eq!(request.container_id, "container-1");
+        assert_eq!(request.execution_id, "container-1");
+        // Non-default, so it proves the field is threaded rather than defaulted.
+        assert!(request.container_config.expect("process config").tty);
     }
 }

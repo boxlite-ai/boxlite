@@ -408,7 +408,10 @@ mod plan_tests {
     #[test]
     fn persisted_nested_virtualization_uses_injected_feature_state() {
         let options = crate::BoxOptions {
-            nested_virtualization: true,
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                nested_virtualization: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
 

@@ -27,7 +27,6 @@ pub(crate) async fn import_box(
 ) -> BoxliteResult<LiteBox> {
     let t0 = std::time::Instant::now();
     let archive_path = archive.path().to_path_buf();
-    let import_policy = archive.import_policy();
     if !archive_path.exists() {
         return Err(BoxliteError::NotFound(format!(
             "Archive not found: {}",
@@ -105,6 +104,12 @@ fn options_from_manifest(
     options.advanced.security = SecurityOptions::default();
 
     Ok(options)
+}
+
+fn rejected_upload(subject: &str) -> BoxliteError {
+    BoxliteError::Unsupported(format!(
+        "{subject} cannot be requested by an archive uploaded through a REST server"
+    ))
 }
 
 /// Extract archive, parse manifest, verify checksums.
@@ -238,12 +243,15 @@ mod tests {
     #[test]
     fn untrusted_import_rejects_nested_virtualization() {
         let options = BoxOptions {
-            nested_virtualization: true,
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                nested_virtualization: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
 
         let error =
-            resolve_import_options(v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
                 .unwrap_err();
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
@@ -252,13 +260,16 @@ mod tests {
 
     #[test]
     fn untrusted_import_rejects_custom_kernel() {
+        // A real file, so `sanitize()` passes and the upload policy — not path
+        // validation — is what rejects the archive.
+        let kernel = tempfile::NamedTempFile::new().unwrap();
         let mut options = BoxOptions::default();
         options.advanced.kernel = Some(crate::experimental::custom_kernel::KernelOptions::new(
-            "/host/vmlinux",
+            kernel.path(),
         ));
 
         let error =
-            resolve_import_options(v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
                 .unwrap_err();
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
@@ -275,7 +286,7 @@ mod tests {
         });
 
         let error =
-            resolve_import_options(v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
                 .expect_err("untrusted archives must not select server host paths");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
@@ -290,7 +301,7 @@ mod tests {
         };
 
         let error =
-            resolve_import_options(v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
                 .expect_err("untrusted archives must not select a server rootfs path");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
@@ -303,7 +314,7 @@ mod tests {
         options.advanced.security = SecurityOptions::disabled();
 
         let resolved =
-            resolve_import_options(v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
                 .unwrap();
 
         assert_eq!(resolved.advanced.security, SecurityOptions::default());
@@ -312,15 +323,18 @@ mod tests {
     #[test]
     fn trusted_import_preserves_archive_configuration() {
         let mut options = BoxOptions {
-            nested_virtualization: true,
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                nested_virtualization: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         options.advanced.security = SecurityOptions::disabled();
 
         let resolved =
-            resolve_import_options(v3_manifest(options), ArchiveImportPolicy::Trusted).unwrap();
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::Trusted).unwrap();
 
-        assert!(resolved.nested_virtualization);
+        assert!(resolved.advanced.nested_virtualization);
         assert_eq!(resolved.advanced.security, SecurityOptions::disabled());
     }
 
@@ -345,7 +359,7 @@ mod tests {
             exported_at: "2026-01-01T00:00:00Z".into(),
         };
 
-        let error = options_from_manifest(&manifest)
+        let error = options_from_manifest(&manifest, ArchiveImportPolicy::Trusted)
             .expect_err("malformed archived capability policy must be rejected");
         assert!(matches!(error, BoxliteError::InvalidArgument(_)));
         assert!(error.to_string().contains("NET-ADMIN"));

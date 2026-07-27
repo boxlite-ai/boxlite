@@ -7,5 +7,5 @@
 /// Box startup fails rather than falling back when the host cannot provide the
 /// requested virtualization support.
 pub fn configure(options: &mut crate::BoxOptions) {
-    options.nested_virtualization = true;
+    options.advanced.nested_virtualization = true;
 }

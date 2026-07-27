@@ -979,7 +979,7 @@ impl ManagementFlags {
                 boxlite::SecurityOptions::from_preset(preset).map_err(anyhow::Error::from)?;
         }
         if self.nested_virtualization {
-            opts.nested_virtualization = true;
+            opts.advanced.nested_virtualization = true;
         }
         Ok(())
     }
@@ -1908,11 +1908,11 @@ mod tests {
         };
 
         let mut opts = BoxOptions::default();
-        assert!(!opts.nested_virtualization);
+        assert!(!opts.advanced.nested_virtualization);
         args.management
             .apply_to(&mut opts)
             .expect("nested virtualization should apply");
 
-        assert!(opts.nested_virtualization);
+        assert!(opts.advanced.nested_virtualization);
     }
 }

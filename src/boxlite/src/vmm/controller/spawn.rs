@@ -13,30 +13,12 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::watchdog;
 
-fn nested_virtualization_probe_paths() -> [PathBuf; 2] {
-    [
-        PathBuf::from("/sys/module/kvm_intel/parameters/nested"),
-        PathBuf::from("/sys/module/kvm_amd/parameters/nested"),
-    ]
-}
-
-fn nested_virtualization_path_access(
-    enabled: bool,
-    probe_paths: impl IntoIterator<Item = PathBuf>,
-) -> Vec<PathAccess> {
-    if !enabled {
-        return Vec::new();
-    }
-
-    probe_paths
-        .into_iter()
-        .filter(|path| path.exists())
-        .map(|path| PathAccess {
-            path,
-            writable: false,
-        })
-        .collect()
-}
+/// Files `krun_check_nested_virt` reads on Linux to decide whether the loaded
+/// KVM module allows nesting. Absent on macOS, where the probe is a syscall.
+const NESTED_VIRT_PROBE_PATHS: [&str; 2] = [
+    "/sys/module/kvm_intel/parameters/nested",
+    "/sys/module/kvm_amd/parameters/nested",
+];
 
 /// A shim that was spawned, with its child process handle and optional keepalive.
 ///
@@ -63,6 +45,7 @@ pub struct ShimSpawner<'a> {
     layout: &'a BoxFilesystemLayout,
     box_id: &'a str,
     options: &'a BoxOptions,
+    nested_virtualization: bool,
 }
 
 impl<'a> ShimSpawner<'a> {
@@ -77,7 +60,40 @@ impl<'a> ShimSpawner<'a> {
             layout,
             box_id,
             options,
+            nested_virtualization: false,
         }
+    }
+
+    /// Grant the confined shim the host files libkrun probes before enabling
+    /// nested virtualization. The caller passes the value from the VM request
+    /// it is about to serialize, which is the authority on what the shim runs.
+    pub fn with_nested_virtualization(mut self, enabled: bool) -> Self {
+        self.nested_virtualization = enabled;
+        self
+    }
+
+    /// Host files this shim's VM request needs to read. Empty unless the box
+    /// asked for nesting, so an ordinary box widens its sandbox by nothing.
+    fn required_probe_paths(&self) -> &'static [&'static str] {
+        if self.nested_virtualization {
+            &NESTED_VIRT_PROBE_PATHS
+        } else {
+            &[]
+        }
+    }
+
+    /// Filesystem grants beyond the jailer's standard set: read-only, and only
+    /// the probes this host actually has — bwrap refuses to bind a missing one.
+    fn additional_path_access(&self) -> Vec<PathAccess> {
+        self.required_probe_paths()
+            .iter()
+            .map(PathBuf::from)
+            .filter(|path| path.exists())
+            .map(|path| PathAccess {
+                path,
+                writable: false,
+            })
+            .collect()
     }
 
     /// Spawn the shim subprocess with jailer isolation and optional watchdog.
@@ -88,11 +104,6 @@ impl<'a> ShimSpawner<'a> {
     /// # Returns
     /// * `SpawnedShim` containing the child process and optional keepalive
     pub fn spawn(&self, config_json: &str, detach: bool) -> BoxliteResult<SpawnedShim> {
-        let additional_path_access = nested_virtualization_path_access(
-            self.options.nested_virtualization,
-            nested_virtualization_probe_paths(),
-        );
-
         // 1. Create watchdog pipe (non-detached only)
         let (keepalive, child_setup) = if !detach {
             let (k, s) = watchdog::create()?;
@@ -109,7 +120,7 @@ impl<'a> ShimSpawner<'a> {
             .with_layout(self.layout.clone())
             .with_security(self.options.advanced.security.clone())
             .with_volumes(self.options.volumes.clone())
-            .with_additional_path_access(additional_path_access)
+            .with_additional_path_access(self.additional_path_access())
             .with_detach(detach);
 
         if let Some(ref setup) = child_setup {
@@ -215,50 +226,20 @@ impl<'a> ShimSpawner<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
     use std::ffi::OsStr;
-    use tempfile::tempdir;
 
-    #[test]
-    fn nested_virtualization_uses_libkrun_probe_paths() {
-        assert_eq!(
-            nested_virtualization_probe_paths(),
-            [
-                PathBuf::from("/sys/module/kvm_intel/parameters/nested"),
-                PathBuf::from("/sys/module/kvm_amd/parameters/nested"),
-            ]
-        );
-    }
-
-    #[test]
-    fn nested_virtualization_path_access_includes_only_existing_probes() {
-        let dir = tempdir().unwrap();
-        let existing_probe = dir.path().join("kvm_intel_nested");
-        let missing_probe = dir.path().join("kvm_amd_nested");
-        std::fs::write(&existing_probe, "Y\n").unwrap();
-
-        let disabled = nested_virtualization_path_access(
+    fn test_layout() -> BoxFilesystemLayout {
+        BoxFilesystemLayout::new(
+            PathBuf::from("/tmp/box"),
+            FsLayoutConfig::without_bind_mount(),
             false,
-            [existing_probe.clone(), missing_probe.clone()],
-        );
-        assert!(disabled.is_empty());
-
-        let enabled =
-            nested_virtualization_path_access(true, [existing_probe.clone(), missing_probe]);
-        assert_eq!(enabled.len(), 1);
-        assert_eq!(enabled[0].path, existing_probe);
-        assert!(!enabled[0].writable);
+        )
     }
 
     #[test]
     fn test_build_shim_args() {
-        use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
-        use std::path::PathBuf;
-
-        let layout = BoxFilesystemLayout::new(
-            PathBuf::from("/tmp/box"),
-            FsLayoutConfig::without_bind_mount(),
-            false,
-        );
+        let layout = test_layout();
         let options = BoxOptions::default();
 
         let spawner = ShimSpawner::new(
@@ -271,6 +252,66 @@ mod tests {
         // No CLI args — config is sent via stdin pipe
         // Just verify the spawner was created without error
         assert_eq!(spawner.box_id, "test-box");
+    }
+
+    /// The probe grant widens the shim's sandbox, so only a box that asked for
+    /// nesting may request it.
+    ///
+    /// Asserted on the requested set rather than the resolved grants: the
+    /// grants are filtered by what this host has, which would make the
+    /// off-by-default half vacuously true anywhere `/sys/module/kvm_*` is
+    /// absent — every macOS dev machine.
+    #[test]
+    fn only_nested_virtualization_requests_the_probe_paths() {
+        let layout = test_layout();
+        let options = BoxOptions::default();
+        let spawner = ShimSpawner::new(
+            Path::new("/usr/bin/boxlite-shim"),
+            &layout,
+            "test-box",
+            &options,
+        );
+
+        assert!(
+            spawner.required_probe_paths().is_empty(),
+            "a box that did not ask for nesting must request no extra paths"
+        );
+        assert_eq!(
+            spawner
+                .with_nested_virtualization(true)
+                .required_probe_paths(),
+            NESTED_VIRT_PROBE_PATHS,
+        );
+    }
+
+    /// Whatever survives the host filter must be read-only and inside the probe
+    /// set — a grant is sandbox surface, so it may never widen beyond that.
+    #[test]
+    fn probe_path_grants_are_read_only_and_confined() {
+        let layout = test_layout();
+        let options = BoxOptions::default();
+
+        for grant in ShimSpawner::new(
+            Path::new("/usr/bin/boxlite-shim"),
+            &layout,
+            "test-box",
+            &options,
+        )
+        .with_nested_virtualization(true)
+        .additional_path_access()
+        {
+            assert!(!grant.writable, "probe grants must be read-only: {grant:?}");
+            assert!(
+                grant.path.exists(),
+                "must not grant a path that is not there: {grant:?}"
+            );
+            assert!(
+                NESTED_VIRT_PROBE_PATHS
+                    .iter()
+                    .any(|probe| Path::new(probe) == grant.path),
+                "must not grant anything outside the probe set: {grant:?}"
+            );
+        }
     }
 
     #[test]

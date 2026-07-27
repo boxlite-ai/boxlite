@@ -368,18 +368,13 @@ impl VmmController for ShimController {
 
         // Measure subprocess spawn time
         let shim_spawn_start = Instant::now();
-        // InstanceSpec is the VM request handed to this controller. Keep the
-        // jailer's host capability-probe grant aligned with the exact value we
-        // serialized for the shim, even for low-level callers whose original
-        // BoxOptions differ from the InstanceSpec.
-        let mut spawn_options = self.options.clone();
-        spawn_options.nested_virtualization = config.nested_virtualization;
         let spawner = ShimSpawner::new(
             &self.binary_path,
             &self.layout,
             self.box_id.as_str(),
-            &spawn_options,
-        );
+            &self.options,
+        )
+        .with_nested_virtualization(config.nested_virtualization);
         let spawned = spawner.spawn(&config_json, config.detach)?;
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();

@@ -1914,7 +1914,10 @@ mod tests {
     #[tokio::test]
     async fn nested_virtualization_validation_uses_injected_features() {
         let options = BoxOptions {
-            nested_virtualization: true,
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                nested_virtualization: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -2882,7 +2885,10 @@ mod tests {
             .get_or_create(
                 BoxOptions {
                     rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    nested_virtualization: true,
+                    advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                        nested_virtualization: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 name,
@@ -2908,7 +2914,10 @@ mod tests {
             .get_or_create(
                 BoxOptions {
                     rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    nested_virtualization: true,
+                    advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                        nested_virtualization: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 name.clone(),

@@ -12,7 +12,6 @@ use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
 use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
 use crate::util::{ProcessExit, ProcessMonitor};
-use crate::vmm::ExitInfo;
 use crate::vmm::exit_info::ExitErrorKind;
 use async_trait::async_trait;
 use boxlite_shared::BoxTransport;
@@ -223,11 +222,6 @@ async fn wait_for_guest_ready(
             }
         }
         exit_code = wait_for_process_exit(shim_pid) => {
-            // Read the machine category separately from the human-facing crash
-            // report. Legacy records have no category and therefore retain the
-            // historical generic Engine behavior.
-            let error_kind = ExitInfo::error_kind_from_file(exit_file);
-
             // Parse exit file and present user-friendly message
             let report = CrashReport::from_exit_file(
                 exit_file,
@@ -245,12 +239,10 @@ async fn wait_for_guest_ready(
                 );
             }
 
-            match error_kind {
-                Some(ExitErrorKind::Unsupported) => {
-                    Err(BoxliteError::Unsupported(report.user_message))
-                }
-                _ => Err(BoxliteError::Engine(report.user_message)),
-            }
+            Err(match report.error_kind {
+                ExitErrorKind::Unsupported => BoxliteError::Unsupported(report.user_message),
+                ExitErrorKind::Engine => BoxliteError::Engine(report.user_message),
+            })
         }
     }
 }

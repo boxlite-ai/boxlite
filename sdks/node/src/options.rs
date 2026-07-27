@@ -436,9 +436,6 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             cpus: js_opts.cpus,
             memory_mib: js_opts.memory_mib,
             disk_size_gb: js_opts.disk_size_gb.map(|v| v as u64),
-            // RC options are not exposed until the Node runtime can inject
-            // explicit experimental feature state.
-            nested_virtualization: false,
             working_dir: js_opts.working_dir,
             env,
             rootfs,

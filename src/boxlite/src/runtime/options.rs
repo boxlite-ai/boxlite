@@ -323,17 +323,6 @@ pub struct BoxOptions {
     /// the container to write more data than the base image size.
     pub disk_size_gb: Option<u64>,
 
-    /// Release-candidate nested virtualization configuration.
-    ///
-    /// Configure this through
-    /// [`experimental::nested_virtualization::configure`](crate::experimental::nested_virtualization::configure)
-    /// and enable
-    /// [`ExperimentalFeature::NestedVirtualization`](crate::experimental::ExperimentalFeature::NestedVirtualization)
-    /// on the runtime.
-    #[doc(hidden)]
-    #[serde(default)]
-    pub nested_virtualization: bool,
-
     pub working_dir: Option<String>,
     pub env: Vec<(String, String)>,
     pub rootfs: RootfsSpec,
@@ -526,7 +515,6 @@ impl Default for BoxOptions {
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
-            nested_virtualization: false,
             working_dir: None,
             env: Vec::new(),
             rootfs: RootfsSpec::default(),
@@ -1122,19 +1110,20 @@ mod tests {
         assert!(opts.detach, "explicit detach=true should be respected");
     }
 
+    /// The opt-in is persisted with the box and rechecked on every start, so it
+    /// has to survive a manifest round-trip — and default to off when absent.
     #[test]
     fn nested_virtualization_option_roundtrips() {
-        let json = r#"{"nested_virtualization":true}"#;
-        let opts: BoxOptions = serde_json::from_str(json).unwrap();
-        assert!(opts.nested_virtualization);
-
-        let encoded = serde_json::to_value(opts).unwrap();
-
+        let stored: BoxOptions =
+            serde_json::from_str(r#"{"advanced":{"nested_virtualization":true}}"#).unwrap();
+        assert!(stored.advanced.nested_virtualization);
         assert_eq!(
-            encoded["nested_virtualization"],
+            serde_json::to_value(stored).unwrap()["advanced"]["nested_virtualization"],
             serde_json::Value::Bool(true)
         );
-        assert!(encoded["advanced"]["nested_virtualization"].is_null());
+
+        let legacy: BoxOptions = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.advanced.nested_virtualization);
     }
 
     #[test]

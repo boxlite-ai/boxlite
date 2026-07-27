@@ -98,7 +98,7 @@ impl ExperimentalFeatures {
         if options.advanced.kernel.is_some() {
             self.require(ExperimentalFeature::CustomKernel)?;
         }
-        if options.nested_virtualization {
+        if options.advanced.nested_virtualization {
             self.require(ExperimentalFeature::NestedVirtualization)?;
         }
         Ok(())
