@@ -5,9 +5,14 @@
 //!
 //! # What it does
 //!
-//! 1. **Close inherited FDs** - Prevents information leakage
-//! 2. **Apply rlimits** - Resource limits (max files, memory, CPU time, etc.)
-//! 3. **Write PID file** - Single source of truth for process tracking
+//! 1. **Write PID file** - Single source of truth for process tracking
+//! 2. **Close inherited FDs** - Prevents information leakage
+//! 3. **Apply rlimits** - Resource limits (max files, memory, CPU time, etc.)
+//!
+//! The order is load-bearing. `Command::spawn` blocks the parent only until
+//! the child closes its CLOEXEC exec-error pipe, and step 2 is what closes
+//! it — so anything after that point races the parent. The PID file goes
+//! first to keep "spawn returned" meaning "shim.pid is complete".
 //!
 //! Sandbox-specific pre_exec hooks (cgroup join, Landlock restriction) are
 //! added by each sandbox's `apply()` method — they run before this hook
@@ -32,7 +37,8 @@ use std::process::Command;
 /// Add pre-execution hook for process isolation (async-signal-safe).
 ///
 /// Runs after fork() but before the new program starts in the child process.
-/// Applies: FD preservation (dup2), FD cleanup, rlimits, PID file writing.
+/// Applies, in order: PID file writing, FD preservation (dup2), FD cleanup,
+/// rlimits. See the module docs for why the PID file goes first.
 ///
 /// # Arguments
 ///
@@ -85,7 +91,25 @@ pub fn add_pre_exec_hook(
     // See module documentation for details.
     unsafe {
         cmd.pre_exec(move || {
-            // 1. FD preservation + cleanup
+            // 1. Write PID file.
+            //
+            // This must precede the FD cleanup below. `Command::spawn` keeps
+            // the parent blocked only until the child closes its CLOEXEC
+            // exec-error pipe, and closing inherited FDs is what closes it —
+            // so every later step races the parent. Publishing the identity
+            // first makes "spawn returned" mean "shim.pid is complete", which
+            // is the ordering the init pipeline reads it under.
+            //
+            // Safe to run first: the write opens, writes and closes its own
+            // descriptor, so it neither survives into the cleanup below nor
+            // collides with a preserved-FD target.
+            if let Some(ref writer) = pid_writer {
+                writer
+                    .write_shim(&ShimPidRecord::current())
+                    .map_err(std::io::Error::from_raw_os_error)?;
+            }
+
+            // 2. FD preservation + cleanup
             // If preserved_fds is non-empty, dup2 each (source -> target),
             // then close everything above the highest target.
             // Otherwise, close all FDs >= 3 (default behavior).
@@ -102,16 +126,9 @@ pub fn add_pre_exec_hook(
                 common::fd::close_inherited_fds_raw().map_err(std::io::Error::from_raw_os_error)?;
             }
 
-            // 2. Apply resource limits (rlimits)
+            // 3. Apply resource limits (rlimits)
             common::rlimit::apply_limits_raw(&resource_limits)
                 .map_err(std::io::Error::from_raw_os_error)?;
-
-            // 3. Write PID file
-            if let Some(ref writer) = pid_writer {
-                writer
-                    .write_shim(&ShimPidRecord::current())
-                    .map_err(std::io::Error::from_raw_os_error)?;
-            }
 
             // 4. Detach=true → setsid: child becomes a session leader,
             // detaching from the parent's controlling terminal. Without
@@ -178,6 +195,82 @@ mod tests {
             "the spawn boundary must identify ServicesMux ownership before the parent can recover \
              the live shim"
         );
+    }
+
+    /// Regression: `spawn()` returning must imply `shim.pid` is readable as a
+    /// complete record.
+    ///
+    /// The parent is released when the child closes `Command`'s CLOEXEC
+    /// exec-error pipe, and the hook's FD cleanup is what closes it. Anything
+    /// the hook does after that point races every consumer of the file — the
+    /// init pipeline reads it as soon as `VmmSpawn` returns.
+    ///
+    /// Both production hook shapes are covered: the default spawn preserves the
+    /// watchdog pipe onto FD 3 and closes from 4 up, while a detached spawn
+    /// preserves nothing and closes everything from 3 up.
+    #[test]
+    fn pid_record_is_complete_before_spawn_returns() {
+        use std::os::fd::AsRawFd;
+
+        /// One of the two hook configurations production actually spawns with.
+        struct HookShape {
+            name: &'static str,
+            preserved_fds: Vec<(RawFd, i32)>,
+            detach: bool,
+        }
+
+        let keepalive = std::fs::File::open("/dev/null").expect("stand in for the watchdog pipe");
+        let shapes = [
+            HookShape {
+                name: "default",
+                preserved_fds: vec![(keepalive.as_raw_fd(), 3)],
+                detach: false,
+            },
+            HookShape {
+                name: "detached",
+                preserved_fds: Vec::new(),
+                detach: true,
+            },
+        ];
+
+        for HookShape {
+            name: shape,
+            preserved_fds,
+            detach,
+        } in shapes
+        {
+            for attempt in 0..32 {
+                let dir = tempfile::tempdir().expect("create temp directory");
+                let pid_path = dir.path().join("shim.pid");
+                let writer = PidFileWriter::at(&pid_path).expect("create PID writer");
+                let mut cmd = Command::new("/bin/sh");
+                cmd.args(["-c", "exec sleep 5"]);
+                add_pre_exec_hook(
+                    &mut cmd,
+                    ResourceLimits::default(),
+                    Some(writer),
+                    preserved_fds.clone(),
+                    detach,
+                );
+
+                let mut child = cmd.spawn().expect("spawn child with pre-exec hook");
+                // Read before reaping, through the same decoder production uses:
+                // this is the exact instant VmmSpawn hands the box on.
+                let observed = crate::util::PidFileReader::at(&pid_path).read_shim();
+                let _ = child.kill();
+                let _ = child.wait();
+
+                let record = observed.unwrap_or_else(|error| {
+                    panic!("{shape} attempt {attempt}: shim.pid unreadable when spawn() returned: {error}")
+                });
+                assert_eq!(record.identity().pid, child.id());
+                assert!(
+                    record.has_runtime_port_control(),
+                    "{shape} attempt {attempt}: record was truncated before its \
+                     capability line, which production reads as a legacy shim"
+                );
+            }
+        }
     }
 
     #[test]

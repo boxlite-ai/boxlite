@@ -160,7 +160,7 @@ pub trait Jail: Send + Sync {
     /// Build a confined command, ready to spawn.
     ///
     /// Returns a `Command` with sandbox wrapping and pre_exec hook
-    /// (FD cleanup, rlimits, cgroup join, PID file).
+    /// (PID file, FD cleanup, rlimits, cgroup join).
     fn command(&self, binary: &Path, args: &[String]) -> Command;
 }
 
@@ -478,7 +478,8 @@ impl<S: Sandbox> Jail for Jailer<S> {
             tracing::info!("Jailer disabled, running shim without sandbox isolation");
         }
 
-        // Pre-exec hook: FD preservation, FD cleanup, rlimits, PID file.
+        // Pre-exec hook: PID file, FD preservation, FD cleanup, rlimits. The
+        // PID file goes first on purpose — see `pre_exec`'s module docs.
         // Sandbox-specific pre_exec hooks (cgroup, Landlock) are already added
         // by sandbox.apply() above — Command supports multiple pre_exec closures.
         let resource_limits = self.security.resource_limits.clone();
