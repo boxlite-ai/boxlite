@@ -74,7 +74,7 @@ async def test_info_rejects_when_box_is_not_started():
     info = box.info()
     assert inspect.isawaitable(info)
     with pytest.raises(RuntimeError, match="Box not started"):
-        await info
+        _ = await info
 
 
 @pytest.mark.asyncio

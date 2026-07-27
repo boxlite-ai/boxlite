@@ -482,6 +482,7 @@ unsafe fn box_list(
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
+    use std::ptr::NonNull;
 
     use boxlite::runtime::options::PortProtocol;
     use boxlite::{NetworkInfo, NetworkMode, PublishedPort};
@@ -498,12 +499,13 @@ mod tests {
 
         assert!(network_to_c_ptr(&None).is_null());
 
-        let unresolved = network_to_c_ptr(&Some(NetworkInfo {
+        let unresolved = NonNull::new(network_to_c_ptr(&Some(NetworkInfo {
             mode: NetworkMode::Enabled,
             allow_net: vec!["api.example.com".to_string()],
             published_ports: None,
-        }));
-        let unresolved_ref = unsafe { &*unresolved };
+        })))
+        .expect("Some network metadata must allocate CNetworkInfo");
+        let unresolved_ref = unsafe { unresolved.as_ref() };
         assert_eq!(
             unresolved_ref.mode,
             BoxliteNetworkMode::BoxliteNetworkModeEnabled
@@ -516,14 +518,15 @@ mod tests {
             "api.example.com"
         );
         assert!(unresolved_ref.published_ports.is_null());
-        unsafe { free_network_info(unresolved) };
+        unsafe { free_network_info(unresolved.as_ptr()) };
 
-        let resolved_empty = network_to_c_ptr(&Some(NetworkInfo {
+        let resolved_empty = NonNull::new(network_to_c_ptr(&Some(NetworkInfo {
             mode: NetworkMode::Disabled,
             allow_net: Vec::new(),
             published_ports: Some(Vec::new()),
-        }));
-        let resolved_empty_ref = unsafe { &*resolved_empty };
+        })))
+        .expect("Some network metadata must allocate CNetworkInfo");
+        let resolved_empty_ref = unsafe { resolved_empty.as_ref() };
         assert_eq!(
             resolved_empty_ref.mode,
             BoxliteNetworkMode::BoxliteNetworkModeDisabled
@@ -532,9 +535,9 @@ mod tests {
         let resolved_empty_ports = unsafe { &*resolved_empty_ref.published_ports };
         assert!(resolved_empty_ports.items.is_null());
         assert_eq!(resolved_empty_ports.count, 0);
-        unsafe { free_network_info(resolved_empty) };
+        unsafe { free_network_info(resolved_empty.as_ptr()) };
 
-        let resolved = network_to_c_ptr(&Some(NetworkInfo {
+        let resolved = NonNull::new(network_to_c_ptr(&Some(NetworkInfo {
             mode: NetworkMode::Enabled,
             allow_net: Vec::new(),
             published_ports: Some(vec![PublishedPort {
@@ -543,8 +546,9 @@ mod tests {
                 host_port: 49152,
                 protocol: PortProtocol::Tcp,
             }]),
-        }));
-        let resolved_ref = unsafe { &*resolved };
+        })))
+        .expect("Some network metadata must allocate CNetworkInfo");
+        let resolved_ref = unsafe { resolved.as_ref() };
         assert!(!resolved_ref.published_ports.is_null());
         let resolved_ports = unsafe { &*resolved_ref.published_ports };
         assert_eq!(resolved_ports.count, 1);
@@ -556,7 +560,7 @@ mod tests {
             unsafe { CStr::from_ptr(port.host_ip) }.to_str().unwrap(),
             "127.0.0.1"
         );
-        unsafe { free_network_info(resolved) };
+        unsafe { free_network_info(resolved.as_ptr()) };
 
         let after = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(after - before, 2, "nested network strings must be freed");

@@ -51,6 +51,9 @@ static void serve_box_response(int listener, const char *body) {
   }
 
   char header[256];
+  /* snprintf is bounded here and Annex K's snprintf_s is unavailable on
+   * glibc, so keep the explicit truncation check below. */
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   int header_len = snprintf(header, sizeof(header),
                             "HTTP/1.1 200 OK\r\n"
                             "Content-Type: application/json\r\n"
@@ -143,8 +146,11 @@ int main(void) {
   pid_t server = start_info_server(&port);
 
   char base_url[64];
+  /* snprintf is bounded here and Annex K's snprintf_s is unavailable on
+   * glibc, so keep the explicit truncation check below. */
   int url_len =
-      snprintf(base_url, sizeof(base_url), "http://127.0.0.1:%u", port);
+      snprintf( // NOLINT(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+          base_url, sizeof(base_url), "http://127.0.0.1:%u", port);
   assert(url_len > 0 && (size_t)url_len < sizeof(base_url));
 
   CBoxliteError error = {0};
