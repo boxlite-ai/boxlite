@@ -25,6 +25,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import psycopg
+
 from . import _local_arm64
 from . import orchestrator
 from .config import InfraConfig, worktree_home
@@ -391,34 +393,51 @@ def _l1_rows(cfg: InfraConfig) -> list[tuple[str, str]]:
     return asyncio.run(go())
 
 
-# ── postgres helpers (psql via subprocess; port from the SPEC_PG literal) ───
+# ── postgres helpers (psycopg — no local `psql` binary required; port from
+# the SPEC_PG literal) ───────────────────────────────────────────────────────
 def _pg_port() -> int:
     return SERVICES["postgres"].ports[0][0]
 
 
-def _psql(cfg: InfraConfig, sql: str, *, tuples: bool = False) -> subprocess.CompletedProcess:
-    args = ["psql", "-h", "127.0.0.1", "-p", str(_pg_port()), "-U", cfg.pg_user, "-d", cfg.pg_db]
-    if tuples:
-        args += ["-tA"]
-    args += ["-c", sql]
-    return subprocess.run(
-        args,
-        env={**os.environ, "PGPASSWORD": cfg.pg_password},
-        capture_output=True,
-        text=True,
-        check=False,
+def _pg_connect(cfg: InfraConfig) -> psycopg.Connection:
+    # autocommit: every caller here is a single ad-hoc statement (health probe,
+    # scalar count, or DDL/TRUNCATE) — no multi-statement transaction to manage.
+    return psycopg.connect(
+        host="127.0.0.1",
+        port=_pg_port(),
+        user=cfg.pg_user,
+        password=cfg.pg_password,
+        dbname=cfg.pg_db,
+        connect_timeout=2,
+        autocommit=True,
     )
 
 
 def _pg_reachable(cfg: InfraConfig) -> bool:
-    return _psql(cfg, "SELECT 1", tuples=True).returncode == 0
+    try:
+        with _pg_connect(cfg) as conn:
+            conn.execute("SELECT 1")
+        return True
+    except psycopg.Error:
+        return False
 
 
 def _pg_count(cfg: InfraConfig, sql: str) -> int:
     try:
-        return int(_psql(cfg, sql, tuples=True).stdout.strip())
-    except (ValueError, AttributeError):
+        with _pg_connect(cfg) as conn:
+            return conn.execute(sql).fetchone()[0]
+    except psycopg.Error:
         return 0
+
+
+def _pg_exec(cfg: InfraConfig, sql: str) -> str | None:
+    """Run DDL/DML; return None on success, the error text on failure."""
+    try:
+        with _pg_connect(cfg) as conn:
+            conn.execute(sql)
+        return None
+    except psycopg.Error as e:
+        return str(e).strip()
 
 
 # ── stack-level commands (the former make stack-* targets) ─────────────────
@@ -695,10 +714,10 @@ def reset(cfg: InfraConfig, *, hard: bool = False) -> int:
         return 0
     if hard:
         log("wiping schema + rebuilding via migrations...")
-        r = _psql(cfg, "DROP SCHEMA public CASCADE; CREATE SCHEMA public; "
-                       f"GRANT ALL ON SCHEMA public TO {cfg.pg_user};")
-        if r.returncode != 0:
-            err(f"schema drop/recreate failed — aborting hard reset:\n{r.stderr.strip()}")
+        error = _pg_exec(cfg, "DROP SCHEMA public CASCADE; CREATE SCHEMA public; "
+                              f"GRANT ALL ON SCHEMA public TO {cfg.pg_user};")
+        if error:
+            err(f"schema drop/recreate failed — aborting hard reset:\n{error}")
             return 1
         if _migrate(cfg) != 0:
             err("migrations failed after schema reset — the schema may be incomplete")
@@ -709,8 +728,8 @@ def reset(cfg: InfraConfig, *, hard: bool = False) -> int:
         # Preserve identity + infra (user/org/region/runner/api_key); clear only
         # runtime/user-created state. Keeps OIDC sessions alive.
         log("truncating runtime data (identity + infra rows preserved)...")
-        r = _psql(cfg, "TRUNCATE TABLE box, job, volume, audit_log RESTART IDENTITY CASCADE;")
-        if r.returncode != 0:
+        error = _pg_exec(cfg, "TRUNCATE TABLE box, job, volume, audit_log RESTART IDENTITY CASCADE;")
+        if error:
             warn("truncate had errors (some tables may not exist on a fresh schema)")
         ok("soft reset complete (identity + L1 boxes + schema preserved — no re-login)")
     return 0
