@@ -560,7 +560,7 @@ impl RuntimeImpl {
         };
 
         if let Some(box_impl) = cached_box {
-            return Ok(Some(box_impl.info().await?));
+            return Ok(Some(box_impl.info()));
         }
 
         // Fall back to DB lookup - run on blocking thread pool
@@ -596,23 +596,18 @@ impl RuntimeImpl {
             infos.push(BoxInfo::new(&config, &state));
         }
 
-        // Snapshot strong references while holding the synchronous cache lock.
-        let in_memory_only = {
+        // Add in-memory boxes not yet persisted. `info()` reads the box's
+        // shim.pid, so collect the handles first rather than doing that file
+        // I/O while holding the cache lock.
+        let in_memory_only: Vec<_> = {
             let sync = self.sync_state.read().unwrap();
             sync.active_boxes_by_id
                 .iter()
-                .filter_map(|(box_id, weak)| {
-                    if seen_ids.contains(box_id) {
-                        None
-                    } else {
-                        weak.upgrade()
-                    }
-                })
-                .collect::<Vec<_>>()
+                .filter(|(box_id, _)| !seen_ids.contains(*box_id))
+                .filter_map(|(_, weak)| weak.upgrade())
+                .collect()
         };
-        for box_impl in in_memory_only {
-            infos.push(box_impl.info().await?);
-        }
+        infos.extend(in_memory_only.iter().map(|box_impl| box_impl.info()));
 
         // Sort by creation time (newest first)
         infos.sort_by_key(|b| std::cmp::Reverse(b.created_at));
@@ -1974,10 +1969,7 @@ mod tests {
 
         let (cached_box, inserted) = runtime.get_or_create_box_impl(config.clone(), cached_state);
         assert!(inserted);
-        assert_eq!(
-            cached_box.info().await.expect("cached box info").status,
-            BoxStatus::Configured
-        );
+        assert_eq!(cached_box.info().status, BoxStatus::Configured);
 
         let mut fresh_state = BoxState::new();
         fresh_state.status = BoxStatus::Stopped;
@@ -1990,10 +1982,7 @@ mod tests {
 
         assert_eq!(infos.len(), 1);
         assert_eq!(infos[0].status, BoxStatus::Stopped);
-        assert_eq!(
-            cached_box.info().await.expect("cached box info").status,
-            BoxStatus::Configured
-        );
+        assert_eq!(cached_box.info().status, BoxStatus::Configured);
     }
 
     // ====================================================================

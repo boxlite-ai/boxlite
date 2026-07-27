@@ -5,6 +5,7 @@ use crate::runtime::layout::dirs as const_dirs;
 use boxlite_shared::errors::BoxliteResult;
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use crate::runtime::advanced_options::AdvancedBoxOptions;
@@ -583,23 +584,7 @@ impl BoxOptions {
         }
 
         for port in &self.ports {
-            if port.guest_port == 0 {
-                return Err(boxlite_shared::errors::BoxliteError::Config(
-                    "guest port must be in range 1-65535".to_string(),
-                ));
-            }
-            if matches!(port.protocol, PortProtocol::Udp) {
-                return Err(boxlite_shared::errors::BoxliteError::Unsupported(
-                    "UDP port forwarding is not implemented; use TCP".to_string(),
-                ));
-            }
-            if let Some(host_ip) = port.host_ip.as_deref()
-                && host_ip.parse::<std::net::IpAddr>().is_err()
-            {
-                return Err(boxlite_shared::errors::BoxliteError::Config(format!(
-                    "invalid port host_ip {host_ip:?}; expected an IPv4 or IPv6 address"
-                )));
-            }
+            port.validate_publishable()?;
         }
 
         Ok(())
@@ -774,48 +759,66 @@ pub struct PortSpec {
     pub host_ip: Option<String>, // Optional bind IP, defaults to 0.0.0.0/:: if None
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct LegacyPortNormalization {
-    pub same_port_defaults: usize,
-    pub udp_coercions: usize,
-    pub discarded_host_ips: usize,
-    pub duplicate_host_ports: usize,
+impl PortSpec {
+    /// Check that this mapping can be published and return the host address to
+    /// bind. A zero port asks the OS to select one; `None` host_ip binds every
+    /// interface.
+    ///
+    /// This is the one place the publication rules live: option validation and
+    /// publication planning both go through it, so they can never disagree.
+    pub(crate) fn validate_publishable(&self) -> BoxliteResult<SocketAddr> {
+        if self.guest_port == 0 {
+            return Err(boxlite_shared::errors::BoxliteError::Config(
+                "guest port must be in range 1-65535".to_string(),
+            ));
+        }
+        if matches!(self.protocol, PortProtocol::Udp) {
+            return Err(boxlite_shared::errors::BoxliteError::Unsupported(
+                "UDP port forwarding is not implemented; use TCP".to_string(),
+            ));
+        }
+        let host_ip = match self.host_ip.as_deref() {
+            None => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            Some(host_ip) => host_ip.parse::<IpAddr>().map_err(|_| {
+                boxlite_shared::errors::BoxliteError::Config(format!(
+                    "invalid port host_ip {host_ip:?}; expected an IPv4 or IPv6 address"
+                ))
+            })?,
+        };
+        Ok(SocketAddr::new(host_ip, self.host_port.unwrap_or(0)))
+    }
 }
 
 /// Canonicalize mappings written before `host_port=None` meant automatic
 /// allocation. The old backend ignored protocol and bind IP, and duplicate
 /// host ports were resolved by the final entry inserted into its map.
-pub(crate) fn normalize_legacy_ports(ports: &mut Vec<PortSpec>) -> LegacyPortNormalization {
-    let mut report = LegacyPortNormalization::default();
+///
+/// Returns how many mappings the rewrite changed or dropped.
+pub(crate) fn normalize_legacy_ports(ports: &mut Vec<PortSpec>) -> usize {
+    let mut changed = 0;
     let mut by_host_port = std::collections::BTreeMap::new();
 
     for (index, mut port) in ports.drain(..).enumerate() {
-        let host_port = match port.host_port {
-            Some(host_port) => host_port,
-            None => {
-                report.same_port_defaults += 1;
-                port.guest_port
-            }
-        };
-
-        if port.protocol == PortProtocol::Udp {
-            report.udp_coercions += 1;
-            port.protocol = PortProtocol::Tcp;
-        }
-        if port.host_ip.take().is_some() {
-            report.discarded_host_ips += 1;
-        }
+        let original = port.clone();
+        let host_port = port.host_port.unwrap_or(port.guest_port);
         port.host_port = Some(host_port);
+        port.protocol = PortProtocol::Tcp;
+        port.host_ip = None;
+        if port != original {
+            changed += 1;
+        }
 
+        // The old backend keyed forwards by host port, so the last entry with a
+        // given host port is the one that was actually served.
         if by_host_port.insert(host_port, (index, port)).is_some() {
-            report.duplicate_host_ports += 1;
+            changed += 1;
         }
     }
 
     let mut normalized: Vec<_> = by_host_port.into_values().collect();
     normalized.sort_by_key(|(index, _)| *index);
     *ports = normalized.into_iter().map(|(_, port)| port).collect();
-    report
+    changed
 }
 
 /// A portable box archive (`.boxlite` file).
@@ -874,7 +877,7 @@ mod tests {
             },
         ];
 
-        let report = normalize_legacy_ports(&mut ports);
+        let changed = normalize_legacy_ports(&mut ports);
 
         assert_eq!(
             ports,
@@ -885,10 +888,24 @@ mod tests {
                 host_ip: None,
             }]
         );
-        assert_eq!(report.same_port_defaults, 1);
-        assert_eq!(report.udp_coercions, 1);
-        assert_eq!(report.discarded_host_ips, 1);
-        assert_eq!(report.duplicate_host_ports, 1);
+        assert_eq!(
+            changed, 3,
+            "two rewritten mappings plus one dropped duplicate"
+        );
+    }
+
+    #[test]
+    fn already_canonical_ports_are_left_alone() {
+        let mut ports = vec![PortSpec {
+            host_port: Some(18080),
+            guest_port: 80,
+            protocol: PortProtocol::Tcp,
+            host_ip: None,
+        }];
+        let canonical = ports.clone();
+
+        assert_eq!(normalize_legacy_ports(&mut ports), 0);
+        assert_eq!(ports, canonical);
     }
 
     #[test]

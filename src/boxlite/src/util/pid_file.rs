@@ -274,17 +274,20 @@ pub enum ProcessIdentity {
 ///
 /// Construct in the parent before fork via [`PidFileWriter::at`]; the
 /// returned handle owns a pre-allocated `CString` for the path. Capture
-/// the handle in a `pre_exec` closure and call [`PidFileWriter::write`]
+/// the handle in a `pre_exec` closure and call [`PidFileWriter::write_shim`]
 /// from the child — no further allocation is performed.
+///
+/// Internal: the record it writes is a [`ShimPidRecord`], whose capability
+/// line the runtime owns. Readers outside the crate use [`PidFileReader`].
 #[derive(Debug, Clone)]
-pub struct PidFileWriter {
+pub(crate) struct PidFileWriter {
     path: CString,
 }
 
 impl PidFileWriter {
     /// Validate the path and pre-allocate its `CString` form. Call from
     /// the parent before fork; fails if the path contains interior NUL.
-    pub fn at(path: &Path) -> BoxliteResult<Self> {
+    pub(crate) fn at(path: &Path) -> BoxliteResult<Self> {
         let cstr = CString::new(path.to_string_lossy().as_bytes()).map_err(|e| {
             BoxliteError::Storage(format!(
                 "PID file path {} contains interior NUL: {e}",
@@ -296,12 +299,6 @@ impl PidFileWriter {
 
     /// Write `record` to the file. Async-signal-safe: uses only
     /// `open`/`write`/`close` syscalls and a stack buffer.
-    pub fn write(&self, record: &PidRecord) -> Result<(), i32> {
-        let mut buf = [0u8; PID_RECORD_MAX_BYTES];
-        let len = record.encode(&mut buf);
-        self.write_bytes(&buf[..len])
-    }
-
     pub(crate) fn write_shim(&self, record: &ShimPidRecord) -> Result<(), i32> {
         let mut buf = [0u8; SHIM_PID_RECORD_MAX_BYTES];
         let len = record.encode(&mut buf);
@@ -653,13 +650,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("shim.pid");
         let writer = PidFileWriter::at(&path).expect("at");
-        let record = PidRecord {
+        let record = ShimPidRecord::with_runtime_port_control(PidRecord {
             pid: 999,
             start_time: Some(424242),
-        };
-        writer.write(&record).expect("write");
+        });
+        writer.write_shim(&record).expect("write");
 
-        let read_back = PidFileReader::at(&path).read().expect("read");
+        let read_back = PidFileReader::at(&path).read_shim().expect("read");
         assert_eq!(read_back, record);
     }
 
@@ -669,21 +666,24 @@ mod tests {
         let path = dir.path().join("shim.pid");
         let writer = PidFileWriter::at(&path).expect("at");
         writer
-            .write(&PidRecord {
+            .write_shim(&ShimPidRecord::with_runtime_port_control(PidRecord {
                 pid: 111111,
                 start_time: Some(1),
-            })
+            }))
             .expect("first write");
+        // Shorter than the first record on every line, so a stale tail would
+        // survive without O_TRUNC.
         writer
-            .write(&PidRecord {
+            .write_shim(&ShimPidRecord::legacy(PidRecord {
                 pid: 22,
                 start_time: None,
-            })
+            }))
             .expect("second write");
 
-        let read_back = PidFileReader::at(&path).read().expect("read");
-        assert_eq!(read_back.pid, 22);
-        assert_eq!(read_back.start_time, None);
+        let read_back = PidFileReader::at(&path).read_shim().expect("read");
+        assert_eq!(read_back.identity().pid, 22);
+        assert_eq!(read_back.identity().start_time, None);
+        assert!(!read_back.has_runtime_port_control());
     }
 
     #[test]

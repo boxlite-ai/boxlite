@@ -1597,15 +1597,17 @@ mod tests {
             "GET /v1/boxes/{{box_id}}/attach must be registered (405 = path matched, method did not)",
         );
 
-        let removed_ports = http
+        // A `/ports` discovery route existed earlier on this branch and was
+        // withdrawn: the REST surface reports bindings on the box resource.
+        let withdrawn_ports = http
             .get(format!("http://127.0.0.1:{port}/v1/boxes/box1/ports"))
             .send()
             .await
-            .expect("GET removed /ports route");
+            .expect("GET withdrawn /ports route");
         assert_eq!(
-            removed_ports.status().as_u16(),
+            withdrawn_ports.status().as_u16(),
             404,
-            "the dedicated /ports discovery route must stay removed",
+            "the withdrawn /ports discovery route must not come back",
         );
 
         let unrouted = http

@@ -1649,12 +1649,15 @@ mod tests {
         assert!(result.is_err(), "port 0 must be rejected by the parser");
     }
 
+    /// `boxlite port BOX` existed earlier on this branch and was withdrawn:
+    /// resolved bindings are reported through `boxlite inspect`, and remote
+    /// access goes through `boxlite network tunnel`.
     #[test]
-    fn removed_port_subcommand_is_rejected() {
+    fn withdrawn_port_subcommand_is_rejected() {
         let result = Cli::try_parse_from(["boxlite", "port", "mybox"]);
         assert!(
             result.is_err(),
-            "the dedicated port command must stay removed"
+            "the withdrawn port command must not come back"
         );
     }
 

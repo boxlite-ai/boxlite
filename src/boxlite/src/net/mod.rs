@@ -124,7 +124,9 @@ pub struct Forward {
 }
 
 /// Transport protocol for a runtime forward.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum TransportProtocol {
     #[default]
@@ -142,6 +144,27 @@ impl TransportProtocol {
             TransportProtocol::Udp => "udp",
             TransportProtocol::Unix => "unix",
             TransportProtocol::Npipe => "npipe",
+        }
+    }
+
+    /// Inverse of [`Self::as_str`]. `None` for a token this build does not know,
+    /// which a backend may still report on a forward it owns.
+    pub fn from_wire(token: &str) -> Option<Self> {
+        match token {
+            "tcp" => Some(TransportProtocol::Tcp),
+            "udp" => Some(TransportProtocol::Udp),
+            "unix" => Some(TransportProtocol::Unix),
+            "npipe" => Some(TransportProtocol::Npipe),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::runtime::options::PortProtocol> for TransportProtocol {
+    fn from(protocol: crate::runtime::options::PortProtocol) -> Self {
+        match protocol {
+            crate::runtime::options::PortProtocol::Tcp => TransportProtocol::Tcp,
+            crate::runtime::options::PortProtocol::Udp => TransportProtocol::Udp,
         }
     }
 }

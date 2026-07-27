@@ -236,56 +236,78 @@ impl GvproxyBackend {
         }
     }
 
+    /// Publish a forward on an OS-selected host port, retrying the handoff race
+    /// a bounded number of times.
+    ///
+    /// The pinned gvproxy stores the literal `:0` address, `/expose` returns an
+    /// empty body, and `/all` reports `:0` instead of the selected port — so a
+    /// second automatic mapping collides on that same literal key. Preselecting
+    /// a concrete kernel port keeps mappings distinct and lets callers discover
+    /// the binding. The reservation has to be released before gvproxy binds,
+    /// which is why a known bind-conflict response is retried rather than
+    /// surfaced.
     async fn expose_auto(
         &self,
         requested: SocketAddr,
         remote: &str,
         protocol: TransportProtocol,
     ) -> BoxliteResult<Forward> {
-        for attempt in 1..=EXPOSE_AUTO_PORT_ATTEMPTS {
-            // The pinned gvproxy stores the literal `:0` address, `/expose`
-            // returns an empty body, and `/all` reports `:0` instead of the
-            // selected port. A second automatic mapping then collides with that
-            // same literal key. Preselect a concrete kernel port so callers can
-            // discover it and mappings remain distinct. We must release the
-            // reservation before gvproxy binds, leaving a small handoff race;
-            // retry only gvproxy's known bind-conflict responses.
-            let reservation =
-                HostPortReservation::bind(SocketAddr::new(requested.ip(), 0), protocol)?;
-            let resolved_local = reservation.local_addr().map_err(|error| {
-                BoxliteError::Network(format!(
-                    "read preselected {} host port for gvproxy expose {requested}: {error}",
-                    protocol.as_str()
-                ))
-            })?;
-            let resolved_local = resolved_local.to_string();
-            drop(reservation);
+        // The first attempt also establishes the conflict to report if every
+        // retry loses the same race.
+        let mut conflict = match self.expose_preselected(requested, remote, protocol).await? {
+            Ok(forward) => return Ok(forward),
+            Err(conflict) => conflict,
+        };
+        for _ in 1..EXPOSE_AUTO_PORT_ATTEMPTS {
+            match self.expose_preselected(requested, remote, protocol).await? {
+                Ok(forward) => return Ok(forward),
+                Err(latest) => conflict = latest,
+            }
+        }
 
+        let (status, body) = conflict;
+        Err(bind_conflict_error(
+            &format!(
+                "gvproxy {EXPOSE_PATH} exhausted {EXPOSE_AUTO_PORT_ATTEMPTS} automatic \
+                 port attempts; last response"
+            ),
+            status,
+            &body,
+        ))
+    }
+
+    /// One automatic-allocation attempt: reserve a kernel-selected port, release
+    /// it, and ask gvproxy to bind that exact endpoint. `Err` carries gvproxy's
+    /// bind-conflict response, which is retryable; a real failure short-circuits.
+    async fn expose_preselected(
+        &self,
+        requested: SocketAddr,
+        remote: &str,
+        protocol: TransportProtocol,
+    ) -> BoxliteResult<Result<Forward, (u16, String)>> {
+        let reservation = HostPortReservation::bind(SocketAddr::new(requested.ip(), 0), protocol)?;
+        let resolved_local = reservation.local_addr().map_err(|error| {
+            BoxliteError::Network(format!(
+                "read preselected {} host port for gvproxy expose {requested}: {error}",
+                protocol.as_str()
+            ))
+        })?;
+        let resolved_local = resolved_local.to_string();
+        drop(reservation);
+
+        Ok(
             match self
                 .request_expose(&resolved_local, remote, protocol)
                 .await?
             {
-                ExposeResponse::Published => {
-                    return Ok(Forward {
-                        local: resolved_local,
-                        remote: remote.to_string(),
-                        protocol: protocol.as_str().to_string(),
-                    });
-                }
-                ExposeResponse::BindConflict { status, body }
-                    if attempt == EXPOSE_AUTO_PORT_ATTEMPTS =>
-                {
-                    let context = format!(
-                        "gvproxy {EXPOSE_PATH} exhausted {EXPOSE_AUTO_PORT_ATTEMPTS} automatic \
-                         port attempts; last response"
-                    );
-                    return Err(bind_conflict_error(&context, status, &body));
-                }
-                ExposeResponse::BindConflict { .. } => {}
-            }
-        }
-
-        unreachable!("automatic expose loop always returns or exhausts its final attempt")
+                ExposeResponse::Published => Ok(Forward {
+                    local: resolved_local,
+                    remote: remote.to_string(),
+                    protocol: protocol.as_str().to_string(),
+                }),
+                ExposeResponse::BindConflict { status, body } => Err((status, body)),
+            },
+        )
     }
 }
 
@@ -945,6 +967,9 @@ mod tests {
         assert!(message.contains("expected IP:port"));
     }
 
+    /// A released TCP reservation would leave a UDP port free too, so the
+    /// end-to-end UDP test cannot prove the reservation used the right
+    /// transport. Check the socket family directly.
     #[test]
     fn expose_protocol_contract_reserves_with_matching_transport() {
         let requested: SocketAddr = "127.0.0.1:0".parse().unwrap();

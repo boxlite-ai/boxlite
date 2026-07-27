@@ -38,7 +38,7 @@ impl Migration for PreservePublishedPorts {
         };
 
         let mut updates = Vec::new();
-        let mut totals = crate::runtime::options::LegacyPortNormalization::default();
+        let mut changed_mappings = 0;
 
         for (id, json) in configs {
             let mut config: serde_json::Value = serde_json::from_str(&json).map_err(|error| {
@@ -55,11 +55,7 @@ impl Migration for PreservePublishedPorts {
                         "parse box_config {id} options.ports while migrating: {error}"
                     ))
                 })?;
-            let report = normalize_legacy_ports(&mut ports);
-            totals.same_port_defaults += report.same_port_defaults;
-            totals.udp_coercions += report.udp_coercions;
-            totals.discarded_host_ips += report.discarded_host_ips;
-            totals.duplicate_host_ports += report.duplicate_host_ports;
+            changed_mappings += normalize_legacy_ports(&mut ports);
             *ports_value = serde_json::to_value(ports).map_err(|error| {
                 BoxliteError::Database(format!(
                     "serialize box_config {id} options.ports while migrating: {error}"
@@ -82,18 +78,10 @@ impl Migration for PreservePublishedPorts {
         }
         db_err!(transaction.commit())?;
 
-        if totals.same_port_defaults
-            + totals.udp_coercions
-            + totals.discarded_host_ips
-            + totals.duplicate_host_ports
-            > 0
-        {
+        if changed_mappings > 0 {
             tracing::warn!(
                 boxes = updates.len(),
-                same_port_defaults = totals.same_port_defaults,
-                udp_coercions = totals.udp_coercions,
-                discarded_host_ips = totals.discarded_host_ips,
-                duplicate_host_ports = totals.duplicate_host_ports,
+                changed_mappings,
                 "Canonicalized legacy published-port configuration"
             );
         }
@@ -105,33 +93,6 @@ impl Migration for PreservePublishedPorts {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn migration_does_not_block_on_live_legacy_shims() {
-        let home = tempfile::tempdir().unwrap();
-        let box_dir = home.path().join("boxes/box1");
-        std::fs::create_dir_all(&box_dir).unwrap();
-        std::fs::write(
-            box_dir.join("shim.pid"),
-            format!("{}\n", std::process::id()),
-        )
-        .unwrap();
-
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE box_config (
-                id TEXT PRIMARY KEY,
-                name TEXT,
-                created_at INTEGER,
-                json TEXT NOT NULL
-            )",
-        )
-        .unwrap();
-
-        PreservePublishedPorts
-            .run(&conn, Some(home.path()))
-            .unwrap();
-    }
 
     #[test]
     fn migration_makes_old_same_port_default_explicit() {

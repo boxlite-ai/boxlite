@@ -57,20 +57,14 @@ pub(crate) async fn import_box(
         rootfs: RootfsSpec::Image(manifest.image),
         ..Default::default()
     });
+    // Before archive v4, `host_port: null` meant "use the guest port" rather
+    // than "let the OS select one".
     if archive_version <= 3 {
-        let report = crate::runtime::options::normalize_legacy_ports(&mut options.ports);
-        if report.same_port_defaults
-            + report.udp_coercions
-            + report.discarded_host_ips
-            + report.duplicate_host_ports
-            > 0
-        {
+        let changed_mappings = crate::runtime::options::normalize_legacy_ports(&mut options.ports);
+        if changed_mappings > 0 {
             tracing::warn!(
                 archive_version,
-                same_port_defaults = report.same_port_defaults,
-                udp_coercions = report.udp_coercions,
-                discarded_host_ips = report.discarded_host_ips,
-                duplicate_host_ports = report.duplicate_host_ports,
+                changed_mappings,
                 "Canonicalized legacy archive port mappings"
             );
         }

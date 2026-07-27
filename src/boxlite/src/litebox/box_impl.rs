@@ -232,9 +232,13 @@ impl BoxImpl {
         self.config.container.id.as_str()
     }
 
-    fn build_info(&self) -> BoxInfo {
+    /// Metadata for this box. Local reads are synchronous: everything comes
+    /// from persisted state plus the bindings this handle itself published.
+    pub(crate) fn info(&self) -> BoxInfo {
         let state = self.state.read();
         let mut info = BoxInfo::new(&self.config, &state);
+        // Bindings are only reportable while the shim that owns their listeners
+        // is still the live one — a recycled PID must not inherit them.
         if state.status.is_active()
             && let Some(lifecycle) = crate::util::PidFileReader::at(self.layout.pid_file_path())
                 .verified_shim()
@@ -244,17 +248,12 @@ impl BoxImpl {
                 .live
                 .get()
                 .and_then(|live| live.published_ports.as_ref())
-                .filter(|published_ports| published_ports.lifecycle() == lifecycle)
-                .map(|published_ports| published_ports.bindings().to_vec())
+                .and_then(|published_ports| published_ports.bindings_for(lifecycle))
             && let Some(network) = info.network.as_mut()
         {
-            network.published_ports = Some(bindings);
+            network.published_ports = Some(bindings.to_vec());
         }
         info
-    }
-
-    pub(crate) async fn info(&self) -> BoxliteResult<BoxInfo> {
-        Ok(self.build_info())
     }
 
     // ========================================================================
@@ -1340,7 +1339,7 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     }
 
     async fn info(&self) -> BoxliteResult<BoxInfo> {
-        BoxImpl::info(self).await
+        Ok(BoxImpl::info(self))
     }
 
     async fn start(&self) -> BoxliteResult<()> {
@@ -1750,7 +1749,7 @@ mod tests {
             runtime.clone(),
             runtime.shutdown_token.child_token(),
         );
-        let before_reattach = box_impl.info().await.expect("read box info");
+        let before_reattach = box_impl.info();
         assert!(published_ports(&before_reattach).is_none());
 
         let live = LiveState::new(
@@ -1776,12 +1775,12 @@ mod tests {
         );
         assert!(box_impl.live.set(live).is_ok());
 
-        let info = box_impl.info().await.expect("read live box info");
+        let info = box_impl.info();
         assert_eq!(published_ports(&info), Some([resolved.clone()].as_slice()));
 
         assert!(crate::util::kill_process(pid));
         child.0.wait().expect("reap stopped stand-in");
-        let dead_lifecycle = box_impl.info().await.expect("read dead lifecycle info");
+        let dead_lifecycle = box_impl.info();
         assert!(
             published_ports(&dead_lifecycle).is_none(),
             "live bindings must not outlive their shim lifecycle"
@@ -1792,7 +1791,7 @@ mod tests {
             state.status = BoxStatus::Stopped;
             state.pid = None;
         }
-        let stopped = box_impl.info().await.expect("read stopped box info");
+        let stopped = box_impl.info();
         assert!(
             published_ports(&stopped).is_some_and(<[PublishedPort]>::is_empty),
             "a stopped box with no live shim has no published ports"

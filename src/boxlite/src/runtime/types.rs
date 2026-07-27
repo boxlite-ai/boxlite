@@ -408,7 +408,6 @@ impl BoxInfo {
         use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
         use crate::runtime::options::RootfsSpec;
 
-        let port_resolution = crate::litebox::ports::PortResolution::load(config, state);
         let network_config = NetworkConfig::from(&config.options.network);
 
         Self {
@@ -427,7 +426,7 @@ impl BoxInfo {
             network: Some(NetworkInfo {
                 mode: network_config.mode,
                 allow_net: network_config.allow_net,
-                published_ports: port_resolution.published_ports,
+                published_ports: crate::litebox::ports::resolved_from_state(config, state),
             }),
             labels: HashMap::new(),
             // Local runtimes do not sweep lifecycle deadlines, but metadata keeps
