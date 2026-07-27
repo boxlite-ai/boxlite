@@ -7,7 +7,7 @@ name = "infra-local"
 version = "0.1.0"
 description = "Local dev-stack orchestrator for apps/infra-local (the `compose` package)."
 requires-python = ">=3.10"
-dependencies = ["boxlite>=0.8", "psycopg[binary]>=3.1"]
+dependencies = ["boxlite>=0.8"]
 
 [tool.setuptools.packages.find]
 include = ["compose*"]
