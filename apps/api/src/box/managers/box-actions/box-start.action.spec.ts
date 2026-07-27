@@ -30,10 +30,10 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
 
     const ownRunner = { id: ownRunnerId, state: RunnerState.READY } as Runner
 
-    // findOneCurrentOrFail must return the runner that matches the requested id so we can
+    // findOneOrFail must return the runner that matches the requested id so we can
     // prove the action selected box.runnerId and nothing else.
     const runnerService = {
-      findOneCurrentOrFail: jest.fn(async (id: string) => {
+      findOneOrFail: jest.fn(async (id: string) => {
         if (id !== ownRunnerId) {
           throw new Error(`unexpected runner lookup: ${id}`)
         }
@@ -81,8 +81,8 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     // The action started the box on its OWN runner, not a different one.
     expect(runnerUsedForStart?.id).toBe(ownRunnerId)
     expect(startBox).toHaveBeenCalledWith(box.id, box.authToken, expect.any(Object))
-    // The current-state lookup was only ever asked about the box's own runner.
-    for (const call of runnerService.findOneCurrentOrFail.mock.calls) {
+    // findOneOrFail was only ever asked about the box's own runner.
+    for (const call of runnerService.findOneOrFail.mock.calls) {
       expect(call[0]).toBe(ownRunnerId)
     }
     expect(result).toBe(SYNC_AGAIN)
@@ -96,7 +96,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     box.desiredState = BoxDesiredState.STARTED
     box.pending = true
 
-    const runnerService = { findOneCurrentOrFail: jest.fn() }
+    const runnerService = { findOneOrFail: jest.fn() }
     const runnerAdapterFactory = { create: jest.fn() }
     const lockCode = new LockCode('lock-2')
     const updatedFields: Partial<Box>[] = []
@@ -122,7 +122,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     await (action as BoxAction).run(box, lockCode)
 
     // No runner lookup or adapter creation: there is no runner to recover onto.
-    expect(runnerService.findOneCurrentOrFail).not.toHaveBeenCalled()
+    expect(runnerService.findOneOrFail).not.toHaveBeenCalled()
     expect(runnerAdapterFactory.create).not.toHaveBeenCalled()
     expect(updatedFields.some((u) => u.state === BoxState.ERROR)).toBe(true)
   })
@@ -137,7 +137,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     box.advanced = { capabilities: { add: [], drop: ['NET_RAW'] } }
 
     const runner = { id: runnerId, state: RunnerState.READY, features: [] } as Runner
-    const runnerService = { findOneCurrentOrFail: jest.fn(async () => runner) }
+    const runnerService = { findOneOrFail: jest.fn(async () => runner) }
     const runnerAdapterFactory = { create: jest.fn() }
     const lockCode = new LockCode('lock-capability-restart')
     const updatedFields: Partial<Box>[] = []
@@ -185,7 +185,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
     box.pending = true
 
     const runner = { id: runnerId, state: RunnerState.READY } as Runner
-    const runnerService = { findOneCurrentOrFail: jest.fn(async () => runner) }
+    const runnerService = { findOneOrFail: jest.fn(async () => runner) }
 
     const createBox = jest.fn(async () => undefined)
     const runnerAdapterFactory = { create: jest.fn(async () => ({ createBox }) as any) }
@@ -228,7 +228,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
     box.pending = true
 
     const runner = { id: runnerId, state: RunnerState.READY } as Runner
-    const runnerService = { findOneCurrentOrFail: jest.fn(async () => runner) }
+    const runnerService = { findOneOrFail: jest.fn(async () => runner) }
 
     const createBox = jest.fn(async () => undefined)
     const runnerAdapterFactory = { create: jest.fn(async () => ({ createBox }) as any) }
@@ -271,7 +271,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
     box.advanced = { capabilities: { add: ['SYS_PTRACE'], drop: [] } }
 
     const runner = { id: runnerId, state: RunnerState.READY, features: [] } as Runner
-    const runnerService = { findOneCurrentOrFail: jest.fn(async () => runner) }
+    const runnerService = { findOneOrFail: jest.fn(async () => runner) }
     const runnerAdapterFactory = { create: jest.fn() }
     const lockCode = new LockCode('lock-capability-create')
     const updatedFields: Partial<Box>[] = []

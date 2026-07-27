@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BadRequestException } from '@nestjs/common'
 import { BoxDto } from '../../box/dto/box.dto'
 import { BoxState } from '../../box/enums/box-state.enum'
 import {
@@ -34,8 +33,6 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
 }
 
 export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): CreateBoxDto {
-  rejectUnsupportedCloudCreateOptions(dto)
-
   const createDto = new CreateBoxDto()
   createDto.name = dto.name
   createDto.image = dto.image
@@ -55,15 +52,6 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     createDto.networkAllowList = dto.network.mode === 'enabled' && allowNet?.length ? allowNet.join(',') : undefined
   }
   return createDto
-}
-
-function rejectUnsupportedCloudCreateOptions(dto: RestCreateBoxDto): void {
-  const unsupportedFields = (['rootfs_path', 'tty', 'secrets'] as const).filter((field) => dto[field] !== undefined)
-  if (unsupportedFields.length === 0) {
-    return
-  }
-
-  throw new BadRequestException(`${unsupportedFields.join(', ')} is not supported by the cloud REST API`)
 }
 
 function mapState(state: string | BoxState | undefined): string {

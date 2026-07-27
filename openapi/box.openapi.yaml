@@ -245,78 +245,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/ListBoxesResponse"
 
-  /{prefix}/boxes/strict:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-
-    post:
-      operationId: createBoxStrict
-      summary: Create a box with fail-closed option handling
-      description: |
-        Creates a box through a route introduced with strict option handling.
-        Clients MUST use this route when sending `advanced.capabilities` so a
-        schema-unaware server returns 404 instead of silently discarding those
-        security fields at the legacy create endpoint.
-      tags: [Boxes]
-      parameters:
-        - $ref: "#/components/parameters/idempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/StrictCreateBoxRequest"
-      responses:
-        "201":
-          description: Box created
-          headers:
-            Location:
-              description: URL of the created box
-              schema:
-                type: string
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-        "400":
-          $ref: "#/components/responses/BadRequestError"
-        "409":
-          $ref: "#/components/responses/ConflictError"
-        "422":
-          $ref: "#/components/responses/UnprocessableEntityError"
-
-  /{prefix}/boxes/get-or-create/strict:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-
-    post:
-      operationId: getOrCreateBoxStrict
-      summary: Get a named box or create it with backend compatibility checks
-      description: |
-        Atomically adopts an existing named box or creates it. The server
-        validates the requested options against an existing box before reuse;
-        clients delegate compatibility decisions to the backend.
-      tags: [Boxes]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/StrictCreateBoxRequest"
-      responses:
-        "200":
-          description: Existing or newly created box
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GetOrCreateBoxResponse"
-        "400":
-          $ref: "#/components/responses/BadRequestError"
-        "409":
-          $ref: "#/components/responses/ConflictError"
-        "422":
-          $ref: "#/components/responses/UnprocessableEntityError"
-
   /{prefix}/boxes/{box_id}:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -1632,16 +1560,6 @@ components:
           default: true
           description: Whether the box automatically resumes when accessed after AutoPause
 
-    GetOrCreateBoxResponse:
-      type: object
-      required: [box_info, created]
-      properties:
-        box_info:
-          $ref: "#/components/schemas/Box"
-        created:
-          type: boolean
-          description: Whether this request created a new box
-
     BoxStatus:
       type: string
       description: |
@@ -1661,18 +1579,13 @@ components:
         - unknown
 
     CreateBoxRequest:
-      allOf:
-        - $ref: "#/components/schemas/CreateBoxRequestBase"
-        - type: object
-          description: Legacy create request accepted by `POST /boxes`.
-          properties:
-            security:
-              $ref: "#/components/schemas/SecurityPreset"
-
-    CreateBoxRequestBase:
       type: object
-      description: Shared non-security configuration for creating a new box.
+      description: Configuration for creating a new box.
       properties:
+        advanced:
+          $ref: "#/components/schemas/CreateBoxAdvancedOptions"
+        security:
+          $ref: "#/components/schemas/SecurityPreset"
         name:
           type: string
           description: Unique name within the workspace
@@ -1766,22 +1679,9 @@ components:
           default: true
           description: Whether the box automatically resumes when accessed after AutoPause
 
-    StrictCreateBoxRequest:
-      allOf:
-        - $ref: "#/components/schemas/CreateBoxRequestBase"
-        - type: object
-          description: |
-            Fail-closed create request for security-sensitive options. This
-            schema is accepted by the strict create and strict get-or-create
-            routes.
-          properties:
-            advanced:
-              $ref: "#/components/schemas/CreateBoxAdvancedOptions"
-      unevaluatedProperties: false
-
     CreateBoxAdvancedOptions:
       type: object
-      description: Expert-only container options accepted by strict box creation routes.
+      description: Expert-only container options.
       additionalProperties: false
       properties:
         capabilities:

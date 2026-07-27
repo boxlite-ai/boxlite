@@ -22,7 +22,3 @@ export function normalizeBoxAdvancedOptions(
     },
   }
 }
-
-export function hasCapabilityPolicy(advanced?: BoxAdvancedOptions | null): boolean {
-  return !!(advanced?.capabilities.add.length || advanced?.capabilities.drop.length)
-}

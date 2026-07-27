@@ -615,57 +615,49 @@ enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
                                               void *user_data,
                                               CBoxliteError *out_error);
 
-/**
- * Borrow the box's network capability into a new owned handle.
- *
- * On success, `*out_network` must be released with `boxlite_network_free`.
- * Returns `InvalidArgument` for null input/output pointers and writes details
- * to `out_error` when provided.
- */
+// Borrow the box's network capability into a new owned handle.
+//
+// On success, `*out_network` must be released with `boxlite_network_free`.
+// Returns `InvalidArgument` for null input/output pointers and writes details
+// to `out_error` when provided.
 enum BoxliteErrorCode boxlite_box_network(CBoxHandle *handle,
                                           CBoxNetworkHandle **out_network,
                                           CBoxliteError *out_error);
 
-/** Release a network handle. Accepts NULL and does not affect the box handle. */
+// Release a network handle. Accepts NULL and does not affect the box handle.
 void boxlite_network_free(CBoxNetworkHandle *network);
 
-/**
- * Prepare a one-shot tunnel to `port` in the box.
- *
- * On success, `*out_tunnel` owns a handle that must be released with
- * `boxlite_tunnel_free`. Returns `InvalidArgument` for a null network/output
- * pointer or port zero, with details written to `out_error` when provided.
- */
+// Prepare a one-shot tunnel to `port` in the box.
+//
+// On success, `*out_tunnel` owns a handle that must be released with
+// `boxlite_tunnel_free`. Returns `InvalidArgument` for a null network/output
+// pointer or port zero, with details written to `out_error` when provided.
 enum BoxliteErrorCode boxlite_network_tunnel(CBoxNetworkHandle *network,
                                              uint16_t port,
                                              CBoxTunnelHandle **out_tunnel,
                                              CBoxliteError *out_error);
 
-/** Release a tunnel handle and any unconsumed connection. Accepts NULL. */
+// Release a tunnel handle and any unconsumed connection. Accepts NULL.
 void boxlite_tunnel_free(CBoxTunnelHandle *tunnel);
 
-/**
- * Inspect a prepared tunnel without transferring ownership.
- *
- * `out_type` selects the valid output: URI returns an allocated `*out_uri`
- * that the caller must release with `boxlite_free_string`; FileDescriptor
- * returns a borrowed `*out_fd` valid only while the tunnel remains alive.
- * Unused outputs are initialized to NULL and -1. Errors are returned as a
- * `BoxliteErrorCode` and described through `out_error` when provided.
- */
+// Inspect a prepared tunnel without transferring ownership.
+//
+// `out_type` selects the valid output: URI returns an allocated `*out_uri`
+// that the caller must release with `boxlite_free_string`; FileDescriptor
+// returns a borrowed `*out_fd` valid only while the tunnel remains alive.
+// Unused outputs are initialized to NULL and -1. Errors are returned as a
+// `BoxliteErrorCode` and described through `out_error` when provided.
 enum BoxliteErrorCode boxlite_tunnel_endpoint(CBoxTunnelHandle *tunnel,
                                               enum BoxliteEndpointType *out_type,
                                               char **out_uri,
                                               int32_t *out_fd,
                                               CBoxliteError *out_error);
 
-/**
- * Consume a tunnel's single connection and return its owned file descriptor.
- *
- * On success, the caller owns `*out_fd` and must close it. A second call
- * returns `InvalidState`. On failure `*out_fd` remains -1 and `out_error`
- * receives details when provided.
- */
+// Consume a tunnel's single connection and return its owned file descriptor.
+//
+// On success, the caller owns `*out_fd` and must close it. A second call
+// returns `InvalidState`. On failure `*out_fd` remains -1 and `out_error`
+// receives details when provided.
 enum BoxliteErrorCode boxlite_tunnel_connect(CBoxTunnelHandle *tunnel,
                                              int32_t *out_fd,
                                              CBoxliteError *out_error);
@@ -720,7 +712,7 @@ void boxlite_options_add_secret(CBoxliteOptions *opts,
                                 const char *const *hosts,
                                 int hosts_count);
 
-// Deprecated: use boxlite_options_set_auto_delete_interval.
+// Deprecated: use `boxlite_options_set_auto_delete_interval`.
 void boxlite_options_set_auto_remove(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_auto_pause_interval(CBoxliteOptions *opts, uint32_t seconds);

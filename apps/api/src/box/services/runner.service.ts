@@ -225,15 +225,6 @@ export class RunnerService {
     return runner
   }
 
-  /** Read security-sensitive runner state directly from the database. */
-  async findOneCurrentOrFail(id: string): Promise<Runner> {
-    const runner = await this.runnerRepository.findOne({ where: { id } })
-    if (!runner) {
-      throw new NotFoundException(`Runner with ID ${id} not found`)
-    }
-    return runner
-  }
-
   async findOneFullOrFail(id: string): Promise<RunnerFullDto> {
     const runner = await this.findOneOrFail(id)
     const region = await this.regionService.findOne(runner.region)

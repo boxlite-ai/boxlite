@@ -57,67 +57,6 @@ definitions:
     type: object
   CreateBoxDTO:
     properties:
-      authToken:
-        type: string
-      cpuQuota:
-        minimum: 1
-        type: integer
-      entrypoint:
-        items:
-          type: string
-        type: array
-      env:
-        additionalProperties:
-          type: string
-        type: object
-      fromVolumeId:
-        type: string
-      gpuQuota:
-        minimum: 0
-        type: integer
-      id:
-        type: string
-      memoryQuota:
-        minimum: 1
-        type: integer
-      metadata:
-        additionalProperties:
-          type: string
-        type: object
-      networkAllowList:
-        type: string
-      networkBlockAll:
-        type: boolean
-      organizationId:
-        description: Nullable for backward compatibility
-        type: string
-      osUser:
-        type: string
-      otelEndpoint:
-        type: string
-      regionId:
-        type: string
-      registry:
-        $ref: '#/definitions/RegistryDTO'
-      skipStart:
-        type: boolean
-      image:
-        type: string
-      storageQuota:
-        minimum: 1
-        type: integer
-      volumes:
-        items:
-          $ref: '#/definitions/dto.VolumeDTO'
-        type: array
-    required:
-      - id
-      - osUser
-      - image
-    type: object
-  CreateBoxWithCapabilitiesDTO:
-    additionalProperties: false
-    properties:
       advanced:
         $ref: '#/definitions/AdvancedBoxOptionsDTO'
       authToken:
@@ -140,8 +79,6 @@ definitions:
         type: integer
       id:
         type: string
-      image:
-        type: string
       memoryQuota:
         minimum: 1
         type: integer
@@ -166,6 +103,8 @@ definitions:
         $ref: '#/definitions/RegistryDTO'
       skipStart:
         type: boolean
+      image:
+        type: string
       storageQuota:
         minimum: 1
         type: integer
@@ -174,10 +113,9 @@ definitions:
           $ref: '#/definitions/dto.VolumeDTO'
         type: array
     required:
-      - advanced
       - id
-      - image
       - osUser
+      - image
     type: object
   ContainerCapabilitiesDTO:
     additionalProperties: false
@@ -257,6 +195,8 @@ definitions:
     type: object
   RecoverBoxDTO:
     properties:
+      advanced:
+        $ref: '#/definitions/AdvancedBoxOptionsDTO'
       backupErrorReason:
         type: string
       cpuQuota:
@@ -292,46 +232,6 @@ definitions:
           $ref: '#/definitions/dto.VolumeDTO'
         type: array
     required:
-      - errorReason
-      - osUser
-    type: object
-  RecoverBoxWithCapabilitiesDTO:
-    additionalProperties: false
-    properties:
-      advanced:
-        $ref: '#/definitions/AdvancedBoxOptionsDTO'
-      cpuQuota:
-        minimum: 1
-        type: integer
-      env:
-        additionalProperties:
-          type: string
-        type: object
-      errorReason:
-        type: string
-      fromVolumeId:
-        type: string
-      gpuQuota:
-        minimum: 0
-        type: integer
-      memoryQuota:
-        minimum: 1
-        type: integer
-      networkAllowList:
-        type: string
-      networkBlockAll:
-        type: boolean
-      osUser:
-        type: string
-      storageQuota:
-        minimum: 1
-        type: integer
-      volumes:
-        items:
-          $ref: '#/definitions/dto.VolumeDTO'
-        type: array
-    required:
-      - advanced
       - errorReason
       - osUser
     type: object
@@ -578,47 +478,6 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Create a box
-      tags:
-        - box
-  /boxes/strict:
-    post:
-      description: Fail-closed create contract for capability-bearing requests
-      operationId: CreateWithCapabilities
-      parameters:
-        - description: Create box with capabilities
-          in: body
-          name: box
-          required: true
-          schema:
-            $ref: '#/definitions/CreateBoxWithCapabilitiesDTO'
-      produces:
-        - application/json
-      responses:
-        '201':
-          description: Created
-          schema:
-            $ref: '#/definitions/StartBoxResponse'
-        '400':
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '401':
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '404':
-          description: Not Found
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '409':
-          description: Conflict
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '500':
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-      summary: Create a box with a capability policy
       tags:
         - box
   /boxes/{boxId}:
@@ -871,54 +730,6 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Recover box from error state
-      tags:
-        - box
-  /boxes/{boxId}/recover/strict:
-    post:
-      consumes:
-        - application/json
-      description: Fail-closed recovery contract for capability-bearing requests
-      operationId: RecoverWithCapabilities
-      parameters:
-        - description: Box ID
-          in: path
-          name: boxId
-          required: true
-          type: string
-        - description: Recovery parameters with capabilities
-          in: body
-          name: recovery
-          required: true
-          schema:
-            $ref: '#/definitions/RecoverBoxWithCapabilitiesDTO'
-      produces:
-        - application/json
-      responses:
-        '200':
-          description: Box recovered
-          schema:
-            type: string
-        '400':
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '401':
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '404':
-          description: Not Found
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '409':
-          description: Conflict
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '500':
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-      summary: Recover a box with a capability policy
       tags:
         - box
   /boxes/{boxId}/start:

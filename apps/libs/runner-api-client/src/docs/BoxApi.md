@@ -6,13 +6,11 @@ All URIs are relative to *http://localhost*
 |------------- | ------------- | -------------|
 |[**create**](#create) | **POST** /boxes | Create a box|
 |[**createBackup**](#createbackup) | **POST** /boxes/{boxId}/backup | Create box backup|
-|[**createWithCapabilities**](#createwithcapabilities) | **POST** /boxes/strict | Create a box with a capability policy|
 |[**destroy**](#destroy) | **POST** /boxes/{boxId}/destroy | Destroy box|
 |[**getNetworkSettings**](#getnetworksettings) | **GET** /boxes/{boxId}/network-settings | Get box network settings|
 |[**info**](#info) | **GET** /boxes/{boxId} | Get box info|
 |[**isRecoverable**](#isrecoverable) | **POST** /boxes/{boxId}/is-recoverable | Check if box error is recoverable|
 |[**recover**](#recover) | **POST** /boxes/{boxId}/recover | Recover box from error state|
-|[**recoverWithCapabilities**](#recoverwithcapabilities) | **POST** /boxes/{boxId}/recover/strict | Recover a box with a capability policy|
 |[**start**](#start) | **POST** /boxes/{boxId}/start | Start box|
 |[**stop**](#stop) | **POST** /boxes/{boxId}/stop | Stop box|
 |[**updateNetworkSettings**](#updatenetworksettings) | **POST** /boxes/{boxId}/network-settings | Update box network settings|
@@ -126,63 +124,6 @@ const { status, data } = await apiInstance.createBackup(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**201** | Backup started |  -  |
-|**400** | Bad Request |  -  |
-|**401** | Unauthorized |  -  |
-|**404** | Not Found |  -  |
-|**409** | Conflict |  -  |
-|**500** | Internal Server Error |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **createWithCapabilities**
-> StartBoxResponse createWithCapabilities(box)
-
-Fail-closed create contract for capability-bearing requests
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration,
-    CreateBoxWithCapabilitiesDTO
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let box: CreateBoxWithCapabilitiesDTO; //Create box with capabilities
-
-const { status, data } = await apiInstance.createWithCapabilities(
-    box
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **box** | **CreateBoxWithCapabilitiesDTO**| Create box with capabilities | |
-
-
-### Return type
-
-**StartBoxResponse**
-
-### Authorization
-
-[Bearer](../README.md#Bearer)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**201** | Created |  -  |
 |**400** | Bad Request |  -  |
 |**401** | Unauthorized |  -  |
 |**404** | Not Found |  -  |
@@ -446,66 +387,6 @@ const { status, data } = await apiInstance.recover(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **recovery** | **RecoverBoxDTO**| Recovery parameters | |
-| **boxId** | [**string**] | Box ID | defaults to undefined|
-
-
-### Return type
-
-**string**
-
-### Authorization
-
-[Bearer](../README.md#Bearer)
-
-### HTTP request headers
-
- - **Content-Type**: application/json
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Box recovered |  -  |
-|**400** | Bad Request |  -  |
-|**401** | Unauthorized |  -  |
-|**404** | Not Found |  -  |
-|**409** | Conflict |  -  |
-|**500** | Internal Server Error |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **recoverWithCapabilities**
-> string recoverWithCapabilities(recovery)
-
-Fail-closed recovery contract for capability-bearing requests
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration,
-    RecoverBoxWithCapabilitiesDTO
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxId: string; //Box ID (default to undefined)
-let recovery: RecoverBoxWithCapabilitiesDTO; //Recovery parameters with capabilities
-
-const { status, data } = await apiInstance.recoverWithCapabilities(
-    boxId,
-    recovery
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **recovery** | **RecoverBoxWithCapabilitiesDTO**| Recovery parameters with capabilities | |
 | **boxId** | [**string**] | Box ID | defaults to undefined|
 
 

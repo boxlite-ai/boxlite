@@ -10,9 +10,7 @@ describe('RunnerAdapterV0 capability propagation', () => {
   function makeAdapter() {
     const boxApiClient = {
       create: jest.fn().mockResolvedValue({ data: {} }),
-      createWithCapabilities: jest.fn().mockResolvedValue({ data: {} }),
       recover: jest.fn().mockResolvedValue({ data: {} }),
-      recoverWithCapabilities: jest.fn().mockResolvedValue({ data: {} }),
     }
     const adapter = new RunnerAdapterV0()
     Object.assign(adapter as any, { boxApiClient })
@@ -30,35 +28,33 @@ describe('RunnerAdapterV0 capability propagation', () => {
     return box
   }
 
-  it('uses the strict create contract for capability overrides', async () => {
+  it('forwards the capability policy on create', async () => {
     const { adapter, boxApiClient } = makeAdapter()
 
     await adapter.createBox(customCapabilityBox())
 
-    expect(boxApiClient.createWithCapabilities).toHaveBeenCalledWith(
+    expect(boxApiClient.create).toHaveBeenCalledWith(
       expect.objectContaining({
         advanced: { capabilities: { add: ['SYS_ADMIN'], drop: ['NET_RAW'] } },
       }),
     )
-    expect(boxApiClient.create).not.toHaveBeenCalled()
   })
 
-  it('uses the strict recovery contract for capability overrides', async () => {
+  it('forwards the capability policy on recovery', async () => {
     const { adapter, boxApiClient } = makeAdapter()
     const box = customCapabilityBox()
 
     await adapter.recoverBox(box)
 
-    expect(boxApiClient.recoverWithCapabilities).toHaveBeenCalledWith(
+    expect(boxApiClient.recover).toHaveBeenCalledWith(
       box.id,
       expect.objectContaining({
         advanced: { capabilities: { add: ['SYS_ADMIN'], drop: ['NET_RAW'] } },
       }),
     )
-    expect(boxApiClient.recover).not.toHaveBeenCalled()
   })
 
-  it('keeps capability-free creates on the legacy contract', async () => {
+  it('sends an empty policy for a box without capability overrides', async () => {
     const { adapter, boxApiClient } = makeAdapter()
     const box = customCapabilityBox()
     box.advanced = { capabilities: { add: [], drop: [] } }
@@ -66,22 +62,7 @@ describe('RunnerAdapterV0 capability propagation', () => {
     await adapter.createBox(box)
 
     expect(boxApiClient.create).toHaveBeenCalledWith(
-      expect.not.objectContaining({ advanced: expect.anything() }),
+      expect.objectContaining({ advanced: { capabilities: { add: [], drop: [] } } }),
     )
-    expect(boxApiClient.createWithCapabilities).not.toHaveBeenCalled()
-  })
-
-  it('keeps capability-free recovery on the legacy contract', async () => {
-    const { adapter, boxApiClient } = makeAdapter()
-    const box = customCapabilityBox()
-    box.advanced = { capabilities: { add: [], drop: [] } }
-
-    await adapter.recoverBox(box)
-
-    expect(boxApiClient.recover).toHaveBeenCalledWith(
-      box.id,
-      expect.not.objectContaining({ advanced: expect.anything() }),
-    )
-    expect(boxApiClient.recoverWithCapabilities).not.toHaveBeenCalled()
   })
 })

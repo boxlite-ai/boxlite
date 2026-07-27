@@ -51,44 +51,35 @@ the resolved type and cannot reinterpret the policy.
 
 ## Compatibility and rollout
 
-Capability policy is negotiated at every versioned boundary. A remote SDK
-rechecks `linux_capabilities_enabled` from `GET /v1/config` immediately before
-creating a box with a custom policy, then posts to the strict create route that
-schema-unaware API builds do not expose. This closes both stale discovery-cache
-and mixed-version load-balancer fail-open paths. A BoxLite host requires the guest's
-`linux-capabilities-v2` feature before sending the nested policy. The cloud control
-plane likewise schedules capability-bearing boxes only onto runners
-advertising the feature, and the start/restart action checks uncached persisted
-runner state again immediately before invoking the runner. Missing
-advertisements therefore fail closed; the second runner check also narrows the
-selection-to-dispatch race.
+Every versioned boundary negotiates capability support before a policy can be
+silently dropped:
 
-The structured host/guest protobuf carries the policy under an `advanced`
-message. The `-v2` feature token and capability-specific v2 job kinds keep
-mixed-version guests and queued jobs from silently ignoring the nested
-contract.
+- A remote SDK re-reads `linux_capabilities_enabled` from `GET /v1/config`
+  (uncached) immediately before creating a box with a custom policy, so a
+  server rollback cannot be masked by a stale discovery cache.
+- A BoxLite host requires the guest's `linux-capabilities-v2` Ping feature
+  before sending the nested policy.
+- The cloud control plane schedules capability-bearing boxes only onto runners
+  advertising the same feature, and re-checks it before start and recovery.
 
-Persistence has explicit downgrade barriers. Opening a local database migrates
-its schema to v9, so a v8 binary refuses to reopen it instead of discarding
-persisted capability fields. Ordinary exports remain archive v3 for backward
-compatibility; an export carrying `advanced.capabilities` is archive v4, which
-older importers reject. Imported archive options are validated before any disk
-is installed or box metadata is persisted.
+A missing advertisement therefore fails closed. Boundaries that do not carry a
+custom policy are unaffected: ordinary create, get, and list keep working
+against any server version. Inspection does not report the policy — it is
+create-time configuration, not box state.
 
-An older cloud API cannot understand fields that did not exist in its schema.
-For a mixed-version deployment, roll out the database migration and control
-plane first, then capable runners and guests, and expose capability-aware
-clients only after that path is healthy. The new control plane safely rejects
-custom policies while only old runners are available. Ordinary create, get,
-and list operations from older clients remain compatible throughout the
-rollout. Named `get_or_create` deliberately requires the strict server-side
-operation even for an empty requested policy: otherwise an old API could omit a
-persisted custom policy and make reuse appear safe. Drain a runner before downgrading or
-rolling it back: a previously positive advertisement cannot prove that the
-runner binary has not changed since its last heartbeat. Once a custom-policy
-box has been accepted, do not roll the control plane back to a build that
-predates these fields: such a build cannot preserve them while recreating or
-recovering a box. Roll forward to a capability-aware build instead.
+Named `get_or_create` on the local runtime refuses to adopt an existing box
+whose capability policy differs from the requested one, so reuse cannot
+silently widen or narrow privileges.
+
+An export carrying a capability policy is stamped archive v4; ordinary
+exports stay v3. A pre-capability importer accepts only up to v3, so it
+refuses the archive instead of dropping the policy and starting the box with
+wider privileges than the archive asked for.
+
+Once a custom-policy box exists, do not roll the control plane back to a build
+that predates these fields: such a build cannot preserve them while recreating
+or recovering a box. Roll forward instead, and drain a runner before
+downgrading it — a past advertisement cannot prove the binary is unchanged.
 
 ## Project research
 
@@ -138,8 +129,8 @@ from its OCI realization.
 - **Flat top-level add/drop fields:** common in Docker-compatible engine APIs,
   but BoxLite's top-level options also cover application lifecycle and resource
   settings. Grouping the expert-only privilege policy under `advanced` keeps
-  creation and inspection extensible and matches Kubernetes, ECS, ACI, and
-  Terraform's structured security models.
+  creation extensible and matches Kubernetes, ECS, ACI, and Terraform's
+  structured security models.
 - **Host semantic validation:** the host and guest may carry different OCI
   libraries or kernels. Freezing the supported list in Rust, TypeScript, and
   every SDK creates version skew; only lexical validation belongs upstream.

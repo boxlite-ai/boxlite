@@ -22,7 +22,10 @@ import { Type } from 'class-transformer'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxVolume } from './box.dto'
-import { IsLinuxCapabilityNameConstraint } from '../utils/capability-validation.util'
+import {
+  HasNoUnknownCapabilityFieldsConstraint,
+  IsLinuxCapabilityNameConstraint,
+} from '../utils/capability-validation.util'
 
 @ApiSchema({ name: 'CreateLinuxCapabilities' })
 export class CreateLinuxCapabilitiesDto {
@@ -55,6 +58,7 @@ export class CreateBoxAdvancedOptionsDto {
   @ValidateIf((_object, value) => value !== undefined)
   @IsObject()
   @ValidateNested()
+  @Validate(HasNoUnknownCapabilityFieldsConstraint, [['add', 'drop']])
   @Type(() => CreateLinuxCapabilitiesDto)
   capabilities?: CreateLinuxCapabilitiesDto
 }
@@ -100,6 +104,7 @@ export class CreateBoxDto {
   @ValidateIf((_object, value) => value !== undefined)
   @IsObject()
   @ValidateNested()
+  @Validate(HasNoUnknownCapabilityFieldsConstraint, [['capabilities']])
   @Type(() => CreateBoxAdvancedOptionsDto)
   advanced?: CreateBoxAdvancedOptionsDto
 

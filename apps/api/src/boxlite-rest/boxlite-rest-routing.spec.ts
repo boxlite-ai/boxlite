@@ -39,16 +39,6 @@ describe('BoxLite REST routing', () => {
             findAllDeprecated: jest.fn().mockResolvedValue([]),
             toBoxDtos: jest.fn().mockResolvedValue([]),
             findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-1' }),
-            getOrCreate: jest.fn().mockResolvedValue({
-              box: {
-                id: 'box-1',
-                name: 'named',
-                state: BoxState.STARTED,
-                labels: {},
-                advanced: { capabilities: { add: ['SYS_ADMIN'], drop: ['NET_RAW'] } },
-              },
-              created: false,
-            }),
             toBoxDto: jest.fn().mockResolvedValue({
               id: 'box-1',
               name: 'named',
@@ -87,15 +77,6 @@ describe('BoxLite REST routing', () => {
     return fetch(`http://127.0.0.1:${address.port}${path}`)
   }
 
-  async function post(path: string, body: unknown): Promise<Response> {
-    const address = app.getHttpServer().address() as AddressInfo
-    return fetch(`http://127.0.0.1:${address.port}${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-  }
-
   afterEach(async () => {
     await app?.close()
   })
@@ -125,88 +106,18 @@ describe('BoxLite REST routing', () => {
     expect(await legacy.json()).toEqual({ boxes: [] })
   })
 
-  it('delegates strict get-or-create compatibility to the box service', async () => {
+  it('serves the box read route without exposing capability metadata', async () => {
     await startRoutingTestApp()
 
-    const response = await post('/api/v1/boxes/get-or-create/strict', {
-      name: 'named',
-      image: 'alpine:latest',
-      advanced: { capabilities: { add: [], drop: [] } },
-    })
+    const canonical = await get('/api/v1/boxes/named')
+    const prefixed = await get('/api/v1/default/boxes/named')
 
-    expect(response.status).toBe(200)
-    const body = await response.json()
-    expect(body).toMatchObject({
-      box_info: {
-        box_id: 'box-1',
-      },
-      created: false,
-    })
-    expect(body.box_info.advanced).toBeUndefined()
+    expect(canonical.status).toBe(200)
+    const body = await canonical.json()
+    expect(body).toMatchObject({ box_id: 'box-1' })
+    expect(body.advanced).toBeUndefined()
+    expect(prefixed.status).toBe(200)
   })
-
-  it('rejects unknown fields at the strict create boundary', async () => {
-    await startRoutingTestApp()
-
-    const response = await post('/api/v1/boxes/strict', {
-      image: 'alpine:latest',
-      advanced: {
-        capabilities: {
-          drop: ['NET_RAW'],
-          future_security_option: true,
-        },
-      },
-    })
-
-    expect(response.status).toBe(400)
-  })
-
-  it('rejects explicit null throughout the strict advanced capability path', async () => {
-    await startRoutingTestApp()
-
-    const payloads = [
-      { advanced: null },
-      { advanced: { capabilities: null } },
-      { advanced: { capabilities: { add: null } } },
-      { advanced: { capabilities: { drop: null } } },
-    ]
-
-    for (const payload of payloads) {
-      const response = await post('/api/v1/boxes/strict', {
-        image: 'alpine:latest',
-        ...payload,
-      })
-      expect(response.status).toBe(400)
-    }
-  })
-
-  it.each([null, {}, { capabilities: { add: [], drop: [] } }])(
-    'rejects any advanced key at the legacy create boundary',
-    async (advanced) => {
-      await startRoutingTestApp()
-
-      const response = await post('/api/v1/boxes', {
-        image: 'alpine:latest',
-        advanced,
-      })
-
-      expect(response.status).toBe(400)
-    },
-  )
-
-  it.each(['capAdd', 'capDrop', 'cap_add', 'cap_drop'])(
-    'rejects prototype flat capability field %s at the legacy create boundary',
-    async (field) => {
-      await startRoutingTestApp()
-
-      const response = await post('/api/v1/boxes', {
-        image: 'alpine:latest',
-        [field]: [],
-      })
-
-      expect(response.status).toBe(400)
-    },
-  )
 
   it('matches websocket attach upgrades with or without a routing prefix', () => {
     const service = new BoxliteWsProxyService(

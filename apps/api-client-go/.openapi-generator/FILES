@@ -1,4 +1,5 @@
 .gitignore
+api/openapi.yaml
 api_admin.go
 api_api_keys.go
 api_audit.go

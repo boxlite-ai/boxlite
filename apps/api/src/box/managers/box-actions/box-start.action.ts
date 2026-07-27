@@ -59,7 +59,7 @@ export class BoxStartAction extends BoxAction {
   }
 
   private async handleRunnerBoxUnknownStateOnDesiredStateStart(box: Box, lockCode: LockCode): Promise<SyncState> {
-    const runner = await this.runnerService.findOneCurrentOrFail(box.runnerId)
+    const runner = await this.runnerService.findOneOrFail(box.runnerId)
     if (runner.state !== RunnerState.READY) {
       return DONT_SYNC_AGAIN
     }
@@ -98,7 +98,7 @@ export class BoxStartAction extends BoxAction {
       return DONT_SYNC_AGAIN
     }
 
-    const runner = await this.runnerService.findOneCurrentOrFail(box.runnerId)
+    const runner = await this.runnerService.findOneOrFail(box.runnerId)
 
     if (runner.state !== RunnerState.READY) {
       return DONT_SYNC_AGAIN

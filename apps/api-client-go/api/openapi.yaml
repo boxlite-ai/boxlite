@@ -7249,6 +7249,8 @@ components:
         proxyUrl: http://proxy.boxlite.example.com:8080
         apiUrl: http://api.boxlite.example.com:8080
         appVersion: v0.0.0-dev
+        features:
+        - linux-capabilities-v2
       properties:
         metrics:
           allOf:
@@ -7275,6 +7277,13 @@ components:
           description: Runner app version
           example: v0.0.0-dev
           type: string
+        features:
+          description: Optional runner features used for rollout negotiation
+          example:
+          - linux-capabilities-v2
+          items:
+            type: string
+          type: array
       required:
       - appVersion
       type: object

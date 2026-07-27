@@ -117,9 +117,9 @@ jobs:
         # Only test boxlite-shared - boxlite requires libkrun/libgvproxy not available in CI
         run: cargo llvm-cov nextest -p boxlite-shared --lib --profile ci --lcov --output-path lcov.info
 
-      - name: Run guest capability policy tests
+      - name: Run guest unit tests
         if: runner.os == 'Linux'
-        run: make test:unit:guest-capabilities
+        run: make test:unit:guest
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

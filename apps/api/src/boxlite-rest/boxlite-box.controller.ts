@@ -11,13 +11,10 @@ import {
   Delete,
   Head,
   Body,
-  BadRequestException,
   Param,
   Query,
   HttpCode,
   UseGuards,
-  UsePipes,
-  ValidationPipe,
   Logger,
   Res,
 } from '@nestjs/common'
@@ -32,15 +29,12 @@ import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { Box } from '../box/entities/box.entity'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
-import { BoxResponseDto, GetOrCreateBoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
+import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
 import { CreateBoxDto } from './dto/create-box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.mapper'
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
-
-const LEGACY_CAPABILITY_FIELDS = ['capAdd', 'capDrop', 'cap_add', 'cap_drop'] as const
-
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
 @ApiExcludeController()
@@ -93,17 +87,6 @@ export class BoxliteBoxController {
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() dto: CreateBoxDto,
   ): Promise<BoxResponseDto> {
-    const request = dto as CreateBoxDto & Record<string, unknown>
-    const hasFlatCapabilityField = LEGACY_CAPABILITY_FIELDS.some((field) =>
-      Object.prototype.hasOwnProperty.call(request, field),
-    )
-    if (dto.advanced !== undefined || hasFlatCapabilityField) {
-      throw new BadRequestException('advanced options require POST /v1/boxes/strict')
-    }
-    return this.createBoxWithOptions(authContext, dto)
-  }
-
-  private async createBoxWithOptions(authContext: OrganizationAuthContext, dto: CreateBoxDto): Promise<BoxResponseDto> {
     const organization = authContext.organization
     const createBoxDto = createBoxToCreateBox(dto)
 
@@ -112,102 +95,6 @@ export class BoxliteBoxController {
       box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
     }
     return boxToBoxResponse(box)
-  }
-
-  /**
-   * Fail-closed create route for options that older API builds may not know.
-   * Capability-aware clients use this path so a mixed-version deployment
-   * returns 404 on an old instance instead of silently stripping cap fields.
-   */
-  @Post('strict')
-  @HttpCode(201)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
-  @ApiResponse({
-    status: 201,
-    description: 'Box created with strict option handling',
-    type: BoxResponseDto,
-  })
-  @Audit({
-    action: AuditAction.CREATE,
-    targetType: AuditTarget.BOX,
-    targetIdFromResult: (result: BoxResponseDto) => result?.box_id,
-    requestMetadata: {
-      body: (req: TypedRequest<CreateBoxDto>) => ({
-        name: req.body?.name,
-        image: req.body?.image,
-        user: req.body?.user,
-        env: req.body?.env
-          ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
-          : undefined,
-        cpus: req.body?.cpus,
-        memory_mib: req.body?.memory_mib,
-        disk_size_gb: req.body?.disk_size_gb,
-        working_dir: req.body?.working_dir,
-        entrypoint: req.body?.entrypoint,
-        cmd: req.body?.cmd,
-        advanced: req.body?.advanced,
-        detach: req.body?.detach,
-        auto_pause: req.body?.auto_pause,
-        auto_delete: req.body?.auto_delete,
-        auto_resume: req.body?.auto_resume,
-      }),
-    },
-  })
-  async createBoxStrict(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Body() dto: CreateBoxDto,
-  ): Promise<BoxResponseDto> {
-    return this.createBoxWithOptions(authContext, dto)
-  }
-
-  @Post('get-or-create/strict')
-  @HttpCode(200)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
-  @ApiResponse({
-    status: 200,
-    description: 'Existing or newly created box',
-    type: GetOrCreateBoxResponseDto,
-  })
-  @Audit({
-    action: AuditAction.CREATE,
-    targetType: AuditTarget.BOX,
-    targetIdFromResult: (result: GetOrCreateBoxResponseDto) => result?.box_info?.box_id,
-    requestMetadata: {
-      body: (req: TypedRequest<CreateBoxDto>) => ({
-        name: req.body?.name,
-        image: req.body?.image,
-        user: req.body?.user,
-        env: req.body?.env
-          ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
-          : undefined,
-        cpus: req.body?.cpus,
-        memory_mib: req.body?.memory_mib,
-        disk_size_gb: req.body?.disk_size_gb,
-        working_dir: req.body?.working_dir,
-        entrypoint: req.body?.entrypoint,
-        cmd: req.body?.cmd,
-        advanced: req.body?.advanced,
-        detach: req.body?.detach,
-        auto_pause: req.body?.auto_pause,
-        auto_delete: req.body?.auto_delete,
-        auto_resume: req.body?.auto_resume,
-      }),
-    },
-  })
-  async getOrCreateBoxStrict(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Body() dto: CreateBoxDto,
-  ): Promise<GetOrCreateBoxResponseDto> {
-    const createBoxDto = createBoxToCreateBox(dto)
-    const result = await this.boxService.getOrCreate(createBoxDto, authContext.organization)
-    let box = result.box
-    if (result.created && box.state !== BoxState.STARTED) {
-      box = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30)
-    }
-    return {
-      box_info: boxToBoxResponse(box),
-      created: result.created,
-    }
   }
 
   @Get()

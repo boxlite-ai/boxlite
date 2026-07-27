@@ -471,10 +471,10 @@ impl RuntimeImpl {
         Ok((litebox_from_impl(box_impl), false))
     }
 
-    /// Check requested options before adopting an existing local box.
+    /// Reject reuse when the request disagrees with the box's stored options.
     ///
-    /// Comparisons for additional immutable options belong here so each
-    /// runtime backend owns its reuse policy.
+    /// Only the capability policy is compared: silently adopting a box whose
+    /// privileges differ from the request is the case that matters for safety.
     fn check_options_compatibility(
         requested: &BoxOptions,
         actual: &BoxConfig,

@@ -312,7 +312,7 @@ mod registry_options_tests {
 
 /// Options used when constructing a box.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct BoxOptions {
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
@@ -550,14 +550,14 @@ impl BoxOptions {
         self.effective_auto_delete() > 0
     }
 
-    /// Validate options before they enter a runtime backend.
+    /// Sanitize and validate options.
     ///
     /// Validates option combinations:
     /// - effective remove-on-stop (`auto_delete>0`, or deprecated `auto_remove`)
     ///   with `detach=true` is invalid
     /// - `advanced.isolate_mounts=true` is only supported on Linux
     /// - `advanced.capabilities` contains well-formed Linux capability names
-    pub fn validate(&self) -> BoxliteResult<()> {
+    pub fn sanitize(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::Config(
                 "remove-on-stop is incompatible with detach=true. Detached boxes should use \
@@ -576,13 +576,6 @@ impl BoxOptions {
         self.advanced.capabilities.validate()?;
 
         Ok(())
-    }
-
-    /// Backward-compatible name for [`Self::validate`].
-    ///
-    /// This method validates options without modifying them.
-    pub fn sanitize(&self) -> BoxliteResult<()> {
-        self.validate()
     }
 }
 
@@ -815,35 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn box_options_serde_rejects_unknown_flat_capability_fields() {
-        let error = serde_json::from_str::<BoxOptions>(r#"{"cap_drop":["NET_RAW"]}"#)
-            .expect_err("flat capability fields must not be silently ignored");
-
-        assert!(error.to_string().contains("cap_drop"));
-    }
-
-    #[test]
-    fn advanced_options_serde_rejects_misspelled_capabilities_field() {
-        let error = serde_json::from_str::<BoxOptions>(
-            r#"{"advanced":{"capabilites":{"drop":["NET_RAW"]}}}"#,
-        )
-        .expect_err("misspelled advanced capability fields must not be silently ignored");
-
-        assert!(error.to_string().contains("capabilites"));
-    }
-
-    #[test]
-    fn container_capabilities_serde_rejects_misspelled_drop_field() {
-        let error = serde_json::from_str::<BoxOptions>(
-            r#"{"advanced":{"capabilities":{"dorp":["NET_RAW"]}}}"#,
-        )
-        .expect_err("misspelled capability policy fields must not be silently ignored");
-
-        assert!(error.to_string().contains("dorp"));
-    }
-
-    #[test]
-    fn box_options_validate_accepts_valid_capability_names() {
+    fn box_options_sanitize_accepts_valid_capability_names() {
         let opts = BoxOptions {
             advanced: AdvancedBoxOptions {
                 capabilities: ContainerCapabilities {
@@ -855,12 +820,12 @@ mod tests {
             ..Default::default()
         };
 
-        opts.validate()
+        opts.sanitize()
             .expect("Docker-style capability names should be accepted");
     }
 
     #[test]
-    fn box_options_validate_accepts_future_capability_names() {
+    fn box_options_sanitize_accepts_future_capability_names() {
         let opts = BoxOptions {
             advanced: AdvancedBoxOptions {
                 capabilities: ContainerCapabilities {
@@ -872,12 +837,12 @@ mod tests {
             ..Default::default()
         };
 
-        opts.validate()
+        opts.sanitize()
             .expect("the guest runtime, not the host SDK, owns the supported capability list");
     }
 
     #[test]
-    fn box_options_validate_rejects_malformed_capability_names() {
+    fn box_options_sanitize_rejects_malformed_capability_names() {
         for opts in [
             BoxOptions {
                 advanced: AdvancedBoxOptions {
@@ -921,7 +886,7 @@ mod tests {
             },
         ] {
             let err = opts
-                .validate()
+                .sanitize()
                 .expect_err("malformed capability should be rejected");
             assert_eq!(err.http().0, 400);
             let err = err.to_string();
@@ -1062,40 +1027,36 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_remove_on_stop_detach_incompatible() {
+    fn test_sanitize_remove_on_stop_detach_incompatible() {
         let opts = BoxOptions {
             auto_delete: Some(1),
             detach: true,
             ..Default::default()
         };
-        let err_msg = opts.validate().unwrap_err().to_string();
+        let err_msg = opts.sanitize().unwrap_err().to_string();
         assert!(err_msg.contains("incompatible"));
     }
 
     #[test]
-    fn test_validate_valid_combinations() {
+    fn test_sanitize_valid_combinations() {
         let remove = BoxOptions {
             auto_delete: Some(1),
             ..Default::default()
         };
-        assert!(remove.validate().is_ok());
+        assert!(remove.sanitize().is_ok());
 
         let keep_detached = BoxOptions {
             auto_delete: Some(0),
             detach: true,
             ..Default::default()
         };
-        assert!(keep_detached.validate().is_ok());
+        assert!(keep_detached.sanitize().is_ok());
 
         let keep_attached = BoxOptions {
             auto_delete: Some(0),
             ..Default::default()
         };
-        assert!(keep_attached.validate().is_ok());
-
-        BoxOptions::default()
-            .sanitize()
-            .expect("the legacy sanitize name should continue to validate options");
+        assert!(keep_attached.sanitize().is_ok());
     }
 
     // ========================================================================

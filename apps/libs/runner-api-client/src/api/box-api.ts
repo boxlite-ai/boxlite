@@ -27,7 +27,6 @@ import type { BoxInfoResponse } from '../models';
 import type { CreateBackupDTO } from '../models';
 // @ts-ignore
 import type { CreateBoxDTO } from '../models';
-import type { CreateBoxWithCapabilitiesDTO } from '../models';
 // @ts-ignore
 import type { ErrorResponse } from '../models';
 // @ts-ignore
@@ -36,7 +35,6 @@ import type { IsRecoverableDTO } from '../models';
 import type { IsRecoverableResponse } from '../models';
 // @ts-ignore
 import type { RecoverBoxDTO } from '../models';
-import type { RecoverBoxWithCapabilitiesDTO } from '../models';
 // @ts-ignore
 import type { StartBoxResponse } from '../models';
 // @ts-ignore
@@ -101,44 +99,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
             assertParamExists('createBackup', 'box', box)
             const localVarPath = `/boxes/{boxId}/backup`
                 .replace('{boxId}', encodeURIComponent(String(boxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication Bearer required
-            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(box, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * Fail-closed create contract for capability-bearing requests
-         * @summary Create a box with a capability policy
-         * @param {CreateBoxWithCapabilitiesDTO} box Create box with capabilities
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        createWithCapabilities: async (box: CreateBoxWithCapabilitiesDTO, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'box' is not null or undefined
-            assertParamExists('createWithCapabilities', 'box', box)
-            const localVarPath = `/boxes/strict`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -362,48 +322,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
             };
         },
         /**
-         * Fail-closed recovery contract for capability-bearing requests
-         * @summary Recover a box with a capability policy
-         * @param {string} boxId Box ID
-         * @param {RecoverBoxWithCapabilitiesDTO} recovery Recovery parameters with capabilities
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        recoverWithCapabilities: async (boxId: string, recovery: RecoverBoxWithCapabilitiesDTO, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('recoverWithCapabilities', 'boxId', boxId)
-            // verify required parameter 'recovery' is not null or undefined
-            assertParamExists('recoverWithCapabilities', 'recovery', recovery)
-            const localVarPath = `/boxes/{boxId}/recover/strict`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication Bearer required
-            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(recovery, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
          * Start box
          * @summary Start box
          * @param {string} boxId Box ID
@@ -567,19 +485,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Fail-closed create contract for capability-bearing requests
-         * @summary Create a box with a capability policy
-         * @param {CreateBoxWithCapabilitiesDTO} box Create box with capabilities
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async createWithCapabilities(box: CreateBoxWithCapabilitiesDTO, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<StartBoxResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.createWithCapabilities(box, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.createWithCapabilities']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
          * Destroy box
          * @summary Destroy box
          * @param {string} boxId Box ID
@@ -644,20 +549,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.recover(boxId, recovery, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['BoxApi.recover']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * Fail-closed recovery contract for capability-bearing requests
-         * @summary Recover a box with a capability policy
-         * @param {string} boxId Box ID
-         * @param {RecoverBoxWithCapabilitiesDTO} recovery Recovery parameters with capabilities
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async recoverWithCapabilities(boxId: string, recovery: RecoverBoxWithCapabilitiesDTO, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<string>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.recoverWithCapabilities(boxId, recovery, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.recoverWithCapabilities']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -734,16 +625,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
             return localVarFp.createBackup(boxId, box, options).then((request) => request(axios, basePath));
         },
         /**
-         * Fail-closed create contract for capability-bearing requests
-         * @summary Create a box with a capability policy
-         * @param {CreateBoxWithCapabilitiesDTO} box Create box with capabilities
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        createWithCapabilities(box: CreateBoxWithCapabilitiesDTO, options?: RawAxiosRequestConfig): AxiosPromise<StartBoxResponse> {
-            return localVarFp.createWithCapabilities(box, options).then((request) => request(axios, basePath));
-        },
-        /**
          * Destroy box
          * @summary Destroy box
          * @param {string} boxId Box ID
@@ -794,17 +675,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          */
         recover(boxId: string, recovery: RecoverBoxDTO, options?: RawAxiosRequestConfig): AxiosPromise<string> {
             return localVarFp.recover(boxId, recovery, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * Fail-closed recovery contract for capability-bearing requests
-         * @summary Recover a box with a capability policy
-         * @param {string} boxId Box ID
-         * @param {RecoverBoxWithCapabilitiesDTO} recovery Recovery parameters with capabilities
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        recoverWithCapabilities(boxId: string, recovery: RecoverBoxWithCapabilitiesDTO, options?: RawAxiosRequestConfig): AxiosPromise<string> {
-            return localVarFp.recoverWithCapabilities(boxId, recovery, options).then((request) => request(axios, basePath));
         },
         /**
          * Start box
@@ -871,17 +741,6 @@ export class BoxApi extends BaseAPI {
     }
 
     /**
-     * Fail-closed create contract for capability-bearing requests
-     * @summary Create a box with a capability policy
-     * @param {CreateBoxWithCapabilitiesDTO} box Create box with capabilities
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public createWithCapabilities(box: CreateBoxWithCapabilitiesDTO, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).createWithCapabilities(box, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
      * Destroy box
      * @summary Destroy box
      * @param {string} boxId Box ID
@@ -936,18 +795,6 @@ export class BoxApi extends BaseAPI {
      */
     public recover(boxId: string, recovery: RecoverBoxDTO, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).recover(boxId, recovery, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * Fail-closed recovery contract for capability-bearing requests
-     * @summary Recover a box with a capability policy
-     * @param {string} boxId Box ID
-     * @param {RecoverBoxWithCapabilitiesDTO} recovery Recovery parameters with capabilities
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public recoverWithCapabilities(boxId: string, recovery: RecoverBoxWithCapabilitiesDTO, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).recoverWithCapabilities(boxId, recovery, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

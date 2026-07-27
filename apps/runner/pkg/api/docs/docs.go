@@ -98,68 +98,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/boxes/strict": {
-            "post": {
-                "description": "Fail-closed create contract for capability-bearing requests",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "box"
-                ],
-                "summary": "Create a box with a capability policy",
-                "operationId": "CreateWithCapabilities",
-                "parameters": [
-                    {
-                        "description": "Create box with capabilities",
-                        "name": "box",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/CreateBoxWithCapabilitiesDTO"
-                        }
-                    }
-                ],
-                "responses": {
-                    "201": {
-                        "description": "Created",
-                        "schema": {
-                            "$ref": "#/definitions/StartBoxResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/boxes/{boxId}": {
             "get": {
                 "description": "Get box info",
@@ -495,78 +433,6 @@ const docTemplate = `{
                         "required": true,
                         "schema": {
                             "$ref": "#/definitions/RecoverBoxDTO"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Box recovered",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/boxes/{boxId}/recover/strict": {
-            "post": {
-                "description": "Fail-closed recovery contract for capability-bearing requests",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "box"
-                ],
-                "summary": "Recover a box with a capability policy",
-                "operationId": "RecoverWithCapabilities",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Box ID",
-                        "name": "boxId",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Recovery parameters with capabilities",
-                        "name": "recovery",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/RecoverBoxWithCapabilitiesDTO"
                         }
                     }
                 ],
@@ -1382,95 +1248,6 @@ const docTemplate = `{
                 "image"
             ],
             "properties": {
-                "authToken": {
-                    "type": "string"
-                },
-                "cpuQuota": {
-                    "type": "integer",
-                    "minimum": 1
-                },
-                "entrypoint": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "env": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
-                },
-                "fromVolumeId": {
-                    "type": "string"
-                },
-                "gpuQuota": {
-                    "type": "integer",
-                    "minimum": 0
-                },
-                "id": {
-                    "type": "string"
-                },
-                "memoryQuota": {
-                    "type": "integer",
-                    "minimum": 1
-                },
-                "metadata": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
-                },
-                "networkAllowList": {
-                    "type": "string"
-                },
-                "networkBlockAll": {
-                    "type": "boolean"
-                },
-                "organizationId": {
-                    "description": "Nullable for backward compatibility",
-                    "type": "string"
-                },
-                "osUser": {
-                    "type": "string"
-                },
-                "otelEndpoint": {
-                    "type": "string"
-                },
-                "regionId": {
-                    "type": "string"
-                },
-                "registry": {
-                    "$ref": "#/definitions/RegistryDTO"
-                },
-                "skipStart": {
-                    "type": "boolean"
-                },
-                "image": {
-                    "type": "string"
-                },
-                "storageQuota": {
-                    "type": "integer",
-                    "minimum": 1
-                },
-                "volumes": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/dto.VolumeDTO"
-                    }
-                }
-            }
-        },
-        "CreateBoxWithCapabilitiesDTO": {
-            "type": "object",
-            "required": [
-                "advanced",
-                "id",
-                "image",
-                "osUser"
-            ],
-            "additionalProperties": false,
-            "properties": {
                 "advanced": {
                     "$ref": "#/definitions/AdvancedBoxOptionsDTO"
                 },
@@ -1503,9 +1280,6 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
-                "image": {
-                    "type": "string"
-                },
                 "memoryQuota": {
                     "type": "integer",
                     "minimum": 1
@@ -1540,6 +1314,9 @@ const docTemplate = `{
                 },
                 "skipStart": {
                     "type": "boolean"
+                },
+                "image": {
+                    "type": "string"
                 },
                 "storageQuota": {
                     "type": "integer",
@@ -1671,6 +1448,9 @@ const docTemplate = `{
                 "osUser"
             ],
             "properties": {
+                "advanced": {
+                    "$ref": "#/definitions/AdvancedBoxOptionsDTO"
+                },
                 "backupErrorReason": {
                     "type": "string"
                 },
@@ -1708,63 +1488,6 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "snapshot": {
-                    "type": "string"
-                },
-                "storageQuota": {
-                    "type": "integer",
-                    "minimum": 1
-                },
-                "volumes": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/dto.VolumeDTO"
-                    }
-                }
-            }
-        },
-        "RecoverBoxWithCapabilitiesDTO": {
-            "type": "object",
-            "required": [
-                "advanced",
-                "errorReason",
-                "osUser"
-            ],
-            "additionalProperties": false,
-            "properties": {
-                "advanced": {
-                    "$ref": "#/definitions/AdvancedBoxOptionsDTO"
-                },
-                "cpuQuota": {
-                    "type": "integer",
-                    "minimum": 1
-                },
-                "env": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
-                },
-                "errorReason": {
-                    "type": "string"
-                },
-                "fromVolumeId": {
-                    "type": "string"
-                },
-                "gpuQuota": {
-                    "type": "integer",
-                    "minimum": 0
-                },
-                "memoryQuota": {
-                    "type": "integer",
-                    "minimum": 1
-                },
-                "networkAllowList": {
-                    "type": "string"
-                },
-                "networkBlockAll": {
-                    "type": "boolean"
-                },
-                "osUser": {
                     "type": "string"
                 },
                 "storageQuota": {

@@ -160,6 +160,18 @@ describe('CreateBoxDto capability validation', () => {
     expect(errors).toHaveLength(0)
   })
 
+  it.each([
+    ['advanced', 'advanced', { advanced: { capabilites: { drop: ['NET_RAW'] } } }],
+    ['advanced.capabilities', 'capabilities', { advanced: { capabilities: { dorp: ['NET_RAW'] } } }],
+  ])('rejects an unknown key under %s instead of ignoring it', async (_label, property, payload) => {
+    const errors = await validate(plainToInstance(CreateBoxDto, payload))
+    const flattened = [...errors, ...errors.flatMap((error) => error.children ?? [])]
+
+    expect(flattened.find((error) => error.property === property)?.constraints).toHaveProperty(
+      'hasNoUnknownCapabilityFields',
+    )
+  })
+
   it('rejects malformed capability names', async () => {
     for (const capability of ['NET-ADMIN', '123', 'ß']) {
       const errors = await validate(
@@ -170,29 +182,5 @@ describe('CreateBoxDto capability validation', () => {
 
       expect(JSON.stringify(errors)).toContain('isLinuxCapabilityName')
     }
-  })
-})
-
-describe('CreateBoxDto unsupported cloud options', () => {
-  it.each([
-    ['rootfs_path', '/tmp/rootfs'],
-    ['tty', true],
-    [
-      'secrets',
-      [
-        {
-          name: 'registry-token',
-          value: 'redacted-test-value',
-          hosts: ['registry.example.com'],
-          placeholder: '<BOXLITE_SECRET:registry-token>',
-        },
-      ],
-    ],
-  ])('rejects %s instead of silently dropping it', async (field, value) => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { [field]: value }))
-
-    expect(errors.find((error) => error.property === field)?.constraints).toHaveProperty(
-      'isUnsupportedCloudCreateOption',
-    )
   })
 })

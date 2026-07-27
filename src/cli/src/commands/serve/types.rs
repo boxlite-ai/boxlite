@@ -39,11 +39,9 @@ pub(super) struct CreateBoxRequest {
     /// add one.
     #[serde(default)]
     pub tty: Option<bool>,
-    /// Expert-only container options. A small wrapper records presence so the
-    /// legacy route can reject this newer contract even when the object is
-    /// empty. Explicit `null` is rejected by the nested deserializer.
+    /// Expert-only container options.
     #[serde(default)]
-    pub advanced: AdvancedRequestField,
+    pub advanced: CreateBoxAdvancedOptions,
     #[serde(default)]
     pub network: Option<NetworkSpec>,
     #[serde(default)]
@@ -64,29 +62,10 @@ pub(super) struct CreateBoxRequest {
     // below for the wire-shape pin.
 }
 
-#[derive(Default)]
-pub(super) struct AdvancedRequestField {
-    pub is_present: bool,
-    pub capabilities: ContainerCapabilitiesRequest,
-}
-
-impl<'de> Deserialize<'de> for AdvancedRequestField {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = CreateBoxAdvancedOptions::deserialize(deserializer)?;
-        Ok(Self {
-            is_present: true,
-            capabilities: value.capabilities,
-        })
-    }
-}
-
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct CreateBoxAdvancedOptions {
-    capabilities: ContainerCapabilitiesRequest,
+pub(super) struct CreateBoxAdvancedOptions {
+    pub capabilities: ContainerCapabilitiesRequest,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -124,12 +103,6 @@ pub(super) struct BoxResponse {
     /// "not finished" apart from "finished with 0".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
-}
-
-#[derive(Serialize)]
-pub(super) struct GetOrCreateBoxResponse {
-    pub box_info: BoxResponse,
-    pub created: bool,
 }
 
 #[derive(Serialize)]

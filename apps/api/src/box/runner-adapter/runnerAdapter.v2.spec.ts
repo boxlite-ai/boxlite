@@ -27,7 +27,7 @@ describe('RunnerAdapterV2 capability propagation', () => {
     return box
   }
 
-  it('uses a distinct create job type for capability overrides', async () => {
+  it('forwards the capability policy on the create job', async () => {
     const { adapter, jobService } = makeAdapter()
     const box = customCapabilityBox()
 
@@ -35,7 +35,7 @@ describe('RunnerAdapterV2 capability propagation', () => {
 
     expect(jobService.createJob).toHaveBeenCalledWith(
       null,
-      JobType.CREATE_BOX_WITH_CAPABILITIES_V2,
+      JobType.CREATE_BOX,
       'runner-1',
       ResourceType.BOX,
       box.id,
@@ -45,7 +45,7 @@ describe('RunnerAdapterV2 capability propagation', () => {
     )
   })
 
-  it('uses a distinct recovery job type for capability overrides', async () => {
+  it('forwards the capability policy on the recovery job', async () => {
     const { adapter, jobService } = makeAdapter()
     const box = customCapabilityBox()
 
@@ -53,7 +53,7 @@ describe('RunnerAdapterV2 capability propagation', () => {
 
     expect(jobService.createJob).toHaveBeenCalledWith(
       null,
-      JobType.RECOVER_BOX_WITH_CAPABILITIES_V2,
+      JobType.RECOVER_BOX,
       'runner-1',
       ResourceType.BOX,
       box.id,
@@ -63,7 +63,7 @@ describe('RunnerAdapterV2 capability propagation', () => {
     )
   })
 
-  it('keeps capability-free creates on the legacy job type', async () => {
+  it('sends an empty policy for a box without capability overrides', async () => {
     const { adapter, jobService } = makeAdapter()
     const box = customCapabilityBox()
     box.advanced = { capabilities: { add: [], drop: [] } }
@@ -76,24 +76,7 @@ describe('RunnerAdapterV2 capability propagation', () => {
       'runner-1',
       ResourceType.BOX,
       box.id,
-      expect.not.objectContaining({ advanced: expect.anything() }),
-    )
-  })
-
-  it('keeps capability-free recovery on the legacy job type', async () => {
-    const { adapter, jobService } = makeAdapter()
-    const box = customCapabilityBox()
-    box.advanced = { capabilities: { add: [], drop: [] } }
-
-    await adapter.recoverBox(box)
-
-    expect(jobService.createJob).toHaveBeenCalledWith(
-      null,
-      JobType.RECOVER_BOX,
-      'runner-1',
-      ResourceType.BOX,
-      box.id,
-      expect.not.objectContaining({ advanced: expect.anything() }),
+      expect.objectContaining({ advanced: { capabilities: { add: [], drop: [] } } }),
     )
   })
 })

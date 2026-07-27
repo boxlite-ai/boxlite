@@ -19,7 +19,7 @@ import {
   UpdateNetworkSettingsDTO,
   RecoverBoxDTO,
 } from '@boxlite-ai/runner-api-client'
-import { hasCapabilityPolicy, normalizeBoxAdvancedOptions } from '../common/box-advanced-options'
+import { normalizeBoxAdvancedOptions } from '../common/box-advanced-options'
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
@@ -267,14 +267,9 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       authToken: box.authToken,
       organizationId: box.organizationId,
       regionId: box.region,
+      advanced: normalizeBoxAdvancedOptions(box.advanced),
     }
-    const advanced = normalizeBoxAdvancedOptions(box.advanced)
-    const response = hasCapabilityPolicy(advanced)
-      ? await this.boxApiClient.createWithCapabilities({
-          ...createBoxDTO,
-          advanced,
-        })
-      : await this.boxApiClient.create(createBoxDTO)
+    const response = await this.boxApiClient.create(createBoxDTO)
 
     if (!response?.data?.daemonVersion) {
       return undefined
@@ -340,14 +335,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
       errorReason: box.errorReason,
-    }
-    const advanced = normalizeBoxAdvancedOptions(box.advanced)
-    if (hasCapabilityPolicy(advanced)) {
-      await this.boxApiClient.recoverWithCapabilities(box.id, {
-        ...recoverBoxDTO,
-        advanced,
-      })
-      return
+      advanced: normalizeBoxAdvancedOptions(box.advanced),
     }
     await this.boxApiClient.recover(box.id, recoverBoxDTO)
   }

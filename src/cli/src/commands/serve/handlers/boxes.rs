@@ -7,9 +7,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
-use super::super::types::{
-    CreateBoxRequest, GetOrCreateBoxResponse, ListBoxesResponse, RemoveQuery,
-};
+use super::super::types::{CreateBoxRequest, ListBoxesResponse, RemoveQuery};
 use super::super::{
     AppState, box_info_to_response, build_box_options, error_from_boxlite, error_response,
     get_or_fetch_box,
@@ -19,58 +17,6 @@ pub(in crate::commands::serve) async fn create_box(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateBoxRequest>,
 ) -> Response {
-    create_box_inner(state, req).await
-}
-
-pub(in crate::commands::serve) async fn create_box_legacy(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateBoxRequest>,
-) -> Response {
-    if req.advanced.is_present {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "advanced capabilities require POST /v1/boxes/strict".to_string(),
-            "InvalidArgumentError",
-            "invalid_argument",
-        );
-    }
-    create_box_inner(state, req).await
-}
-
-pub(in crate::commands::serve) async fn get_or_create_box(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateBoxRequest>,
-) -> Response {
-    let name = req.name.clone();
-    let options = match build_box_options(&req) {
-        Ok(options) => options,
-        Err(error) => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                error.to_string(),
-                "InvalidArgumentError",
-                "invalid_argument",
-            );
-        }
-    };
-
-    let (litebox, created) = match state.runtime.get_or_create(options, name).await {
-        Ok(result) => result,
-        Err(error) => return error_from_boxlite(&error),
-    };
-
-    let info = litebox.info();
-    let box_id = info.id.to_string();
-    let response = GetOrCreateBoxResponse {
-        box_info: box_info_to_response(&info),
-        created,
-    };
-    state.boxes.write().await.insert(box_id, Arc::new(litebox));
-
-    (StatusCode::OK, Json(response)).into_response()
-}
-
-async fn create_box_inner(state: Arc<AppState>, req: CreateBoxRequest) -> Response {
     let name = req.name.clone();
     let options = match build_box_options(&req) {
         Ok(options) => options,

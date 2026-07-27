@@ -15,20 +15,20 @@ use crate::disk::constants::filenames as disk_filenames;
 /// Manifest filename inside the archive.
 pub(crate) const MANIFEST_FILENAME: &str = "manifest.json";
 
-/// Baseline archive format version for configurations representable by v3.
+/// Archive format version for configurations a v3 importer reads correctly.
 pub(crate) const ARCHIVE_VERSION: u32 = 3;
 
-/// First archive version that preserves a custom Linux capability policy.
+/// First archive version that carries a custom Linux capability policy.
+///
+/// A pre-capability importer accepts up to v3 and would silently drop
+/// `advanced.capabilities`, starting the box with wider privileges than the
+/// archive asked for. Stamping v4 makes that importer refuse the archive.
 pub(crate) const CAPABILITY_POLICY_ARCHIVE_VERSION: u32 = 4;
 
 /// Maximum archive version this build can import.
 pub(crate) const MAX_SUPPORTED_VERSION: u32 = CAPABILITY_POLICY_ARCHIVE_VERSION;
 
-/// Select the archive format for a box configuration.
-///
-/// Kept as a function so fields added to [`crate::runtime::options::BoxOptions`]
-/// can opt into a newer compatibility boundary without needlessly changing
-/// archives that only use the v3 representation.
+/// Pick the archive format an exported box needs.
 pub(crate) fn archive_version_for_options(options: &crate::runtime::options::BoxOptions) -> u32 {
     if options.advanced.capabilities.is_empty() {
         ARCHIVE_VERSION
@@ -42,7 +42,7 @@ pub(crate) fn archive_version_for_options(options: &crate::runtime::options::Box
 /// v1: plain tar, no checksums
 /// v2: tar.zst with checksums
 /// v3: adds `box_options` for full configuration preservation
-/// v4: `box_options.advanced` may include a custom capability policy
+/// v4: `box_options.advanced` carries a custom capability policy
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArchiveManifest {
     /// Archive format version (1 through 4).
@@ -256,10 +256,18 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    /// A capability-bearing export must not be readable by an importer that
+    /// would drop the policy: those archives are stamped v4, ordinary ones v3.
+    ///
+    /// The literals are the compatibility boundary itself — a pre-capability
+    /// importer accepts up to 3 — so pin them, not just the branch.
     #[test]
-    fn capability_policy_uses_archive_v4() {
+    fn only_a_capability_policy_raises_the_archive_version() {
+        assert_eq!(ARCHIVE_VERSION, 3);
+        assert_eq!(CAPABILITY_POLICY_ARCHIVE_VERSION, 4);
+
         let ordinary = crate::runtime::options::BoxOptions::default();
-        assert_eq!(archive_version_for_options(&ordinary), 3);
+        assert_eq!(archive_version_for_options(&ordinary), ARCHIVE_VERSION);
 
         let custom = crate::runtime::options::BoxOptions {
             advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
@@ -271,7 +279,10 @@ mod tests {
             },
             ..Default::default()
         };
-        assert_eq!(archive_version_for_options(&custom), 4);
+        assert_eq!(
+            archive_version_for_options(&custom),
+            CAPABILITY_POLICY_ARCHIVE_VERSION
+        );
     }
 
     #[test]

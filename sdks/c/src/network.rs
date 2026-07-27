@@ -50,6 +50,11 @@ pub enum BoxliteEndpointType {
     BoxliteEndpointTypeFileDescriptor = 1,
 }
 
+/// Borrow the box's network capability into a new owned handle.
+///
+/// On success, `*out_network` must be released with `boxlite_network_free`.
+/// Returns `InvalidArgument` for null input/output pointers and writes details
+/// to `out_error` when provided.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_box_network(
     handle: *mut CBoxHandle,
@@ -76,6 +81,7 @@ pub unsafe extern "C" fn boxlite_box_network(
     }
 }
 
+/// Release a network handle. Accepts NULL and does not affect the box handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_network_free(network: *mut CBoxNetworkHandle) {
     if !network.is_null() {
@@ -83,6 +89,11 @@ pub unsafe extern "C" fn boxlite_network_free(network: *mut CBoxNetworkHandle) {
     }
 }
 
+/// Prepare a one-shot tunnel to `port` in the box.
+///
+/// On success, `*out_tunnel` owns a handle that must be released with
+/// `boxlite_tunnel_free`. Returns `InvalidArgument` for a null network/output
+/// pointer or port zero, with details written to `out_error` when provided.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_network_tunnel(
     network: *mut CBoxNetworkHandle,
@@ -141,6 +152,7 @@ pub unsafe extern "C" fn boxlite_network_tunnel(
     }
 }
 
+/// Release a tunnel handle and any unconsumed connection. Accepts NULL.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_tunnel_free(tunnel: *mut CBoxTunnelHandle) {
     if !tunnel.is_null() {
@@ -148,6 +160,13 @@ pub unsafe extern "C" fn boxlite_tunnel_free(tunnel: *mut CBoxTunnelHandle) {
     }
 }
 
+/// Inspect a prepared tunnel without transferring ownership.
+///
+/// `out_type` selects the valid output: URI returns an allocated `*out_uri`
+/// that the caller must release with `boxlite_free_string`; FileDescriptor
+/// returns a borrowed `*out_fd` valid only while the tunnel remains alive.
+/// Unused outputs are initialized to NULL and -1. Errors are returned as a
+/// `BoxliteErrorCode` and described through `out_error` when provided.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_tunnel_endpoint(
     tunnel: *mut CBoxTunnelHandle,
@@ -216,6 +235,11 @@ pub unsafe extern "C" fn boxlite_tunnel_endpoint(
     }
 }
 
+/// Consume a tunnel's single connection and return its owned file descriptor.
+///
+/// On success, the caller owns `*out_fd` and must close it. A second call
+/// returns `InvalidState`. On failure `*out_fd` remains -1 and `out_error`
+/// receives details when provided.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_tunnel_connect(
     tunnel: *mut CBoxTunnelHandle,

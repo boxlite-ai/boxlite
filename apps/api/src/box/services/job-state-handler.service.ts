@@ -45,7 +45,6 @@ export class JobStateHandlerService {
 
     switch (job.type) {
       case JobType.CREATE_BOX:
-      case JobType.CREATE_BOX_WITH_CAPABILITIES_V2:
         await this.handleCreateBoxJobCompletion(job)
         break
       case JobType.START_BOX:
@@ -63,7 +62,6 @@ export class JobStateHandlerService {
       // TODO(image-rewrite): PULL_IMAGE / REMOVE_IMAGE job handling removed with
       // the runner image subsystems; rebuild artifact lifecycle handling here.
       case JobType.RECOVER_BOX:
-      case JobType.RECOVER_BOX_WITH_CAPABILITIES_V2:
         await this.handleRecoverBoxJobCompletion(job)
         break
       default:

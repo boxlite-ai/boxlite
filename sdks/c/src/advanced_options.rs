@@ -128,7 +128,7 @@ fn set_capability_list(
         }
         Err(()) => {
             // Keep the handle invalid if a caller ignores the return code. The
-            // subsequent BoxOptions::validate call then rejects the policy
+            // subsequent BoxOptions::sanitize call then rejects the policy
             // instead of silently falling back to the baseline.
             assign(
                 &mut handle.options,

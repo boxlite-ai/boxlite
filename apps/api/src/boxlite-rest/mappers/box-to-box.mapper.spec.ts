@@ -7,26 +7,6 @@ import { BoxState } from '../../box/enums/box-state.enum'
 import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 
 describe('BoxLite lifecycle policy mapper', () => {
-  it.each([
-    ['rootfs_path', { rootfs_path: '/tmp/rootfs' }],
-    ['tty', { tty: true }],
-    [
-      'secrets',
-      {
-        secrets: [
-          {
-            name: 'registry-token',
-            value: 'redacted-test-value',
-            hosts: ['registry.example.com'],
-            placeholder: '<BOXLITE_SECRET:registry-token>',
-          },
-        ],
-      },
-    ],
-  ])('refuses to silently drop unsupported %s', (_field, request) => {
-    expect(() => createBoxToCreateBox(request as any)).toThrow('not supported by the cloud REST API')
-  })
-
   it('maps capability overrides into the control-plane DTO', () => {
     const mapped = createBoxToCreateBox({
       advanced: {

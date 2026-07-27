@@ -172,7 +172,7 @@ impl BoxBuilder {
     ) -> BoxliteResult<Self> {
         // Get options reference from config (no reconstruction needed!)
         let options = &config.options;
-        options.validate()?;
+        options.sanitize()?;
 
         Ok(Self {
             runtime,

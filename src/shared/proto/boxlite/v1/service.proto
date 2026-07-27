@@ -312,7 +312,7 @@ message ContainerConfig {
   bool tty = 5;
 
   // Expert-only container process options.
-  ContainerAdvancedOptions advanced = 8;
+  ContainerAdvancedOptions advanced = 6;
 }
 
 message ContainerAdvancedOptions {

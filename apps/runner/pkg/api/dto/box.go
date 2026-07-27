@@ -4,12 +4,6 @@
 
 package dto
 
-import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-)
-
 type CreateBoxDTO struct {
 	Id               string            `json:"id" validate:"required"`
 	FromVolumeId     string            `json:"fromVolumeId,omitempty"`
@@ -34,96 +28,17 @@ type CreateBoxDTO struct {
 	OrganizationId *string `json:"organizationId,omitempty"`
 	RegionId       *string `json:"regionId,omitempty"`
 
-	// Advanced is execution-only on this legacy wire DTO. Capability-bearing
-	// requests use CreateBoxWithCapabilitiesDTO so old endpoints cannot silently
-	// discard policy fields they do not understand.
-	Advanced *AdvancedBoxOptionsDTO `json:"-" swaggerignore:"true"`
+	Advanced *AdvancedBoxOptionsDTO `json:"advanced,omitempty"`
 } //	@name	CreateBoxDTO
 
-type CreateBoxWithCapabilitiesDTO struct {
-	CreateBoxDTO
-	Advanced *AdvancedBoxOptionsDTO `json:"advanced" validate:"required"`
-} //	@name	CreateBoxWithCapabilitiesDTO
-
-func (d CreateBoxWithCapabilitiesDTO) HasCapabilityPolicy() bool {
-	return d.Advanced != nil && d.Advanced.HasCapabilityPolicy()
-}
-
-func (d CreateBoxWithCapabilitiesDTO) AsCreateBoxDTO() CreateBoxDTO {
-	request := d.CreateBoxDTO
-	request.Advanced = d.Advanced.Clone()
-	return request
-}
-
 type AdvancedBoxOptionsDTO struct {
-	Capabilities *ContainerCapabilitiesDTO `json:"capabilities" validate:"required"`
+	Capabilities *ContainerCapabilitiesDTO `json:"capabilities,omitempty"`
 } //	@name	AdvancedBoxOptionsDTO
 
-func (d *AdvancedBoxOptionsDTO) HasCapabilityPolicy() bool {
-	return d != nil && d.Capabilities != nil && !d.Capabilities.IsEmpty()
-}
-
-func (d *AdvancedBoxOptionsDTO) Clone() *AdvancedBoxOptionsDTO {
-	if d == nil {
-		return nil
-	}
-
-	clone := &AdvancedBoxOptionsDTO{}
-	if d.Capabilities != nil {
-		clone.Capabilities = &ContainerCapabilitiesDTO{
-			Add:  append([]string(nil), d.Capabilities.Add...),
-			Drop: append([]string(nil), d.Capabilities.Drop...),
-		}
-	}
-	return clone
-}
-
 type ContainerCapabilitiesDTO struct {
-	Add  []string `json:"add,omitempty" validate:"omitempty,dive,required"`
-	Drop []string `json:"drop,omitempty" validate:"omitempty,dive,required"`
+	Add  []string `json:"add,omitempty"`
+	Drop []string `json:"drop,omitempty"`
 } //	@name	ContainerCapabilitiesDTO
-
-func (d *ContainerCapabilitiesDTO) UnmarshalJSON(data []byte) error {
-	type containerCapabilitiesWire struct {
-		Add  json.RawMessage `json:"add"`
-		Drop json.RawMessage `json:"drop"`
-	}
-
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var wire containerCapabilitiesWire
-	if err := decoder.Decode(&wire); err != nil {
-		return err
-	}
-
-	add, err := decodeCapabilityList("add", wire.Add)
-	if err != nil {
-		return err
-	}
-	drop, err := decodeCapabilityList("drop", wire.Drop)
-	if err != nil {
-		return err
-	}
-
-	d.Add = add
-	d.Drop = drop
-	return nil
-}
-
-func decodeCapabilityList(field string, raw json.RawMessage) ([]string, error) {
-	if raw == nil {
-		return nil, nil
-	}
-	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return nil, fmt.Errorf("advanced.capabilities.%s must not be null", field)
-	}
-
-	var capabilities []string
-	if err := json.Unmarshal(raw, &capabilities); err != nil {
-		return nil, fmt.Errorf("decode advanced.capabilities.%s: %w", field, err)
-	}
-	return capabilities, nil
-}
 
 func (d *ContainerCapabilitiesDTO) IsEmpty() bool {
 	return d == nil || (len(d.Add) == 0 && len(d.Drop) == 0)
@@ -148,24 +63,8 @@ type RecoverBoxDTO struct {
 	NetworkAllowList *string           `json:"networkAllowList,omitempty"`
 	ErrorReason      string            `json:"errorReason" validate:"required"`
 
-	// Advanced is populated only after decoding the strict wire DTO.
-	Advanced *AdvancedBoxOptionsDTO `json:"-" swaggerignore:"true"`
+	Advanced *AdvancedBoxOptionsDTO `json:"advanced,omitempty"`
 } //	@name	RecoverBoxDTO
-
-type RecoverBoxWithCapabilitiesDTO struct {
-	RecoverBoxDTO
-	Advanced *AdvancedBoxOptionsDTO `json:"advanced" validate:"required"`
-} //	@name	RecoverBoxWithCapabilitiesDTO
-
-func (d RecoverBoxWithCapabilitiesDTO) HasCapabilityPolicy() bool {
-	return d.Advanced != nil && d.Advanced.HasCapabilityPolicy()
-}
-
-func (d RecoverBoxWithCapabilitiesDTO) AsRecoverBoxDTO() RecoverBoxDTO {
-	request := d.RecoverBoxDTO
-	request.Advanced = d.Advanced.Clone()
-	return request
-}
 
 type IsRecoverableDTO struct {
 	ErrorReason string `json:"errorReason" validate:"required"`

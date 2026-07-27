@@ -569,7 +569,7 @@ impl SecurityOptionsBuilder {
 /// explicit addition wins; with `add = ["ALL"]`, named removals win. With
 /// `drop = ["ALL"]`, explicit additions form the complete resulting set.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct ContainerCapabilities {
     /// Capabilities to add to BoxLite's Docker-compatible baseline.
     pub add: Vec<String>,
@@ -589,7 +589,7 @@ impl ContainerCapabilities {
         validate_capability_names("advanced.capabilities.drop", &self.drop)
     }
 
-    /// Check the requested policy against the policy reported for a box.
+    /// Check the requested policy against the one recorded for an existing box.
     pub(crate) fn check_compatibility(
         &self,
         actual: &Self,
@@ -598,17 +598,7 @@ impl ContainerCapabilities {
         let canonicalize = |capabilities: &[String]| {
             capabilities
                 .iter()
-                .map(|capability| {
-                    let normalized = capability.to_ascii_uppercase();
-                    if normalized == "ALL" {
-                        normalized
-                    } else {
-                        normalized
-                            .strip_prefix("CAP_")
-                            .unwrap_or(&normalized)
-                            .to_string()
-                    }
-                })
+                .map(|capability| canonical_capability_name(capability))
                 .collect::<std::collections::BTreeSet<_>>()
         };
 
@@ -620,11 +610,23 @@ impl ContainerCapabilities {
 
         Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
             format!(
-                "requested capability policy does not match the authoritative policy for box \
-                 '{box_name}'"
+                "box '{box_name}' already exists with a different capability policy; reuse it \
+                 with the same advanced.capabilities, or create a box under a new name"
             ),
         ))
     }
+}
+
+/// Uppercase a capability and strip its optional `CAP_` prefix.
+///
+/// Validation and reuse comparison share one canonical form so they cannot
+/// disagree about whether `net_raw` and `CAP_NET_RAW` are the same policy.
+fn canonical_capability_name(capability: &str) -> String {
+    let normalized = capability.to_ascii_uppercase();
+    normalized
+        .strip_prefix("CAP_")
+        .unwrap_or(&normalized)
+        .to_string()
 }
 
 fn validate_capability_names(
@@ -632,12 +634,11 @@ fn validate_capability_names(
     capabilities: &[String],
 ) -> boxlite_shared::errors::BoxliteResult<()> {
     for capability in capabilities {
-        let normalized = capability.to_ascii_uppercase();
-        if normalized == "ALL" {
+        let name = canonical_capability_name(capability);
+        if name == "ALL" {
             continue;
         }
 
-        let name = normalized.strip_prefix("CAP_").unwrap_or(&normalized);
         if name.is_empty() {
             return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
                 format!("empty Linux capability in {option}"),
@@ -662,7 +663,6 @@ fn validate_capability_names(
 /// Entry-level users can ignore this — the defaults are secure and sensible.
 /// Only modify these if you understand the security implications.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AdvancedBoxOptions {
     /// Linux capability policy for the container process.
     #[serde(default)]

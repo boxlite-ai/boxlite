@@ -16,7 +16,6 @@ docs/BoxliteApi.md
 docs/BuildSnapshotRequestDTO.md
 docs/CreateBackupDTO.md
 docs/CreateBoxDTO.md
-docs/CreateBoxWithCapabilitiesDTO.md
 docs/ContainerCapabilitiesDTO.md
 docs/DefaultApi.md
 docs/DtoVolumeDTO.md
@@ -28,7 +27,6 @@ docs/IsRecoverableDTO.md
 docs/IsRecoverableResponse.md
 docs/PullSnapshotRequestDTO.md
 docs/RecoverBoxDTO.md
-docs/RecoverBoxWithCapabilitiesDTO.md
 docs/RegistryDTO.md
 docs/RunnerInfoResponseDTO.md
 docs/RunnerMetrics.md
@@ -48,7 +46,6 @@ models/box-info-response.ts
 models/build-snapshot-request-dto.ts
 models/create-backup-dto.ts
 models/create-box-dto.ts
-models/create-box-with-capabilities-dto.ts
 models/container-capabilities-dto.ts
 models/dto-volume-dto.ts
 models/enums-backup-state.ts
@@ -60,7 +57,6 @@ models/is-recoverable-dto.ts
 models/is-recoverable-response.ts
 models/pull-snapshot-request-dto.ts
 models/recover-box-dto.ts
-models/recover-box-with-capabilities-dto.ts
 models/registry-dto.ts
 models/runner-info-response-dto.ts
 models/runner-metrics.ts

@@ -15,12 +15,16 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
+import type { AdvancedBoxOptionsDTO } from './advanced-box-options-dto';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { DtoVolumeDTO } from './dto-volume-dto';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { RegistryDTO } from './registry-dto';
 
 export interface CreateBoxDTO {
+    'advanced'?: AdvancedBoxOptionsDTO;
     'authToken'?: string;
     'cpuQuota'?: number;
     'entrypoint'?: Array<string>;

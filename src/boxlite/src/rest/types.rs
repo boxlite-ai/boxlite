@@ -269,12 +269,6 @@ pub(crate) struct BoxResponse {
     pub auto_resume: bool,
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct GetOrCreateBoxResponse {
-    pub box_info: BoxResponse,
-    pub created: bool,
-}
-
 impl BoxResponse {
     pub fn to_box_info(&self) -> boxlite_shared::errors::BoxliteResult<crate::BoxInfo> {
         use crate::runtime::id::BoxID;

@@ -154,7 +154,7 @@ class CreateBoxAdvancedOptions(BaseModel):
     capabilities: ContainerCapabilities = Field(default_factory=ContainerCapabilities)
 
 
-class CreateBoxRequestBase(BaseModel):
+class CreateBoxRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: Optional[str] = None
@@ -176,23 +176,8 @@ class CreateBoxRequestBase(BaseModel):
     auto_delete: Optional[int] = Field(default=None, ge=0)
     auto_resume: Optional[bool] = None
     detach: Optional[bool] = False
-
-
-class CreateBoxRequest(CreateBoxRequestBase):
-    # Legacy reference-server compatibility only. The strict capability route
-    # intentionally excludes client-controlled sandbox policy.
-    security: Optional[str] = None
-
-
-class StrictCreateBoxRequest(CreateBoxRequestBase):
     advanced: Optional[CreateBoxAdvancedOptions] = None
-
-    @field_validator("advanced", mode="before")
-    @classmethod
-    def reject_null_advanced(cls, advanced):
-        if advanced is None:
-            raise ValueError("advanced must be an object when provided")
-        return advanced
+    security: Optional[str] = None
 
 
 class StopBoxRequest(BaseModel):
@@ -393,7 +378,7 @@ def box_info_to_dict(info) -> dict:
     }
 
 
-def build_box_options(req: CreateBoxRequestBase) -> boxlite.BoxOptions:
+def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
     kwargs = {}
     if req.image and not req.rootfs_path:
         kwargs["image"] = req.image
@@ -420,14 +405,13 @@ def build_box_options(req: CreateBoxRequestBase) -> boxlite.BoxOptions:
         kwargs["cmd"] = req.cmd
     if req.user is not None:
         kwargs["user"] = req.user
-    advanced = getattr(req, "advanced", None)
-    if advanced is not None and (
-        advanced.capabilities.add or advanced.capabilities.drop
+    if req.advanced is not None and (
+        req.advanced.capabilities.add or req.advanced.capabilities.drop
     ):
         kwargs["advanced"] = boxlite.AdvancedBoxOptions(
             capabilities=boxlite.ContainerCapabilities(
-                add=advanced.capabilities.add,
-                drop=advanced.capabilities.drop,
+                add=req.advanced.capabilities.add,
+                drop=req.advanced.capabilities.drop,
             )
         )
     if req.secrets:
@@ -458,15 +442,14 @@ def build_box_options(req: CreateBoxRequestBase) -> boxlite.BoxOptions:
             (p.get("host_port", 0), p["guest_port"], p.get("protocol", "tcp"))
             for p in req.ports
         ]
-    security = getattr(req, "security", None)
-    if security:
+    if req.security:
         presets = {
             "development": boxlite.SecurityOptions.development,
             "standard": boxlite.SecurityOptions.standard,
             "maximum": boxlite.SecurityOptions.maximum,
         }
-        if security in presets:
-            kwargs["security"] = presets[security]()
+        if req.security in presets:
+            kwargs["security"] = presets[req.security]()
 
     return boxlite.BoxOptions(**kwargs)
 
@@ -641,19 +624,6 @@ async def create_box(
     req: CreateBoxRequest,
     _auth: dict = Depends(require_auth),
 ):
-    return await create_box_with_options(prefix, req)
-
-
-@app.post("/v1/{prefix}/boxes/strict", status_code=201)
-async def create_box_strict(
-    prefix: str,
-    req: StrictCreateBoxRequest,
-    _auth: dict = Depends(require_auth),
-):
-    return await create_box_with_options(prefix, req)
-
-
-async def create_box_with_options(prefix: str, req: CreateBoxRequestBase):
     options = build_box_options(req)
     box_handle = await state.runtime.create(options, req.name)
     await cache_box_handle(box_handle)
