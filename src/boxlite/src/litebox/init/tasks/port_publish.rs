@@ -19,19 +19,62 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// How long publication waits for the shim to start serving runtime port
-/// control, and how often it retries while waiting.
+/// A bounded poll for something the freshly spawned shim publishes
+/// asynchronously: how long to keep retrying, and how often.
 #[derive(Clone, Copy)]
-struct ControlReadyWait {
+struct RetryWindow {
     timeout: Duration,
     interval: Duration,
 }
 
-impl Default for ControlReadyWait {
-    fn default() -> Self {
-        Self {
-            timeout: Duration::from_secs(10),
-            interval: Duration::from_millis(50),
+impl RetryWindow {
+    /// Waiting for the shim to serve runtime port control. It binds the socket
+    /// during gvproxy initialization, well after the process itself exists.
+    const CONTROL_READY: Self = Self {
+        timeout: Duration::from_secs(10),
+        interval: Duration::from_millis(50),
+    };
+
+    /// Waiting for the shim's identity file. The child writes it from its
+    /// pre-exec hook, so it lands within moments of the fork.
+    const SHIM_IDENTITY: Self = Self {
+        timeout: Duration::from_secs(5),
+        interval: Duration::from_millis(5),
+    };
+
+    /// Run `attempt` until it succeeds or the window closes.
+    ///
+    /// Only failures `is_retryable` accepts are waited out; anything else is a
+    /// real error and short-circuits. `attempt` must be idempotent — both uses
+    /// are reads. `waiting_for` names the subject in the timeout error.
+    async fn poll<T, F, Fut>(
+        self,
+        waiting_for: &str,
+        is_retryable: fn(&BoxliteError) -> bool,
+        mut attempt: F,
+    ) -> BoxliteResult<T>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = BoxliteResult<T>>,
+    {
+        let deadline = tokio::time::Instant::now() + self.timeout;
+        loop {
+            let error = match tokio::time::timeout_at(deadline, attempt()).await {
+                Ok(Ok(value)) => return Ok(value),
+                Ok(Err(error)) if is_retryable(&error) => error,
+                Ok(Err(error)) => return Err(error),
+                Err(_) => {
+                    return Err(BoxliteError::Network(format!(
+                        "timed out waiting for {waiting_for} after {:?}",
+                        self.timeout
+                    )));
+                }
+            };
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Err(error);
+            }
+            tokio::time::sleep(self.interval.min(deadline - now)).await;
         }
     }
 }
@@ -181,7 +224,7 @@ struct PortPublisher<'a> {
     /// The plan in publication order — fixed endpoints first, so an automatic
     /// allocation can never take a host port another mapping asked for.
     planned: Vec<PlannedPort>,
-    control_ready: ControlReadyWait,
+    control_ready: RetryWindow,
     /// Forwards published by this run, in publication order: the rollback
     /// ledger. Adopted forwards are deliberately absent — they belong to the
     /// shim, not to this attempt.
@@ -195,13 +238,13 @@ impl<'a> PortPublisher<'a> {
         Self {
             backend,
             planned,
-            control_ready: ControlReadyWait::default(),
+            control_ready: RetryWindow::CONTROL_READY,
             published: Vec::new(),
         }
     }
 
     #[cfg(test)]
-    fn with_control_ready(mut self, control_ready: ControlReadyWait) -> Self {
+    fn with_control_ready(mut self, control_ready: RetryWindow) -> Self {
         self.control_ready = control_ready;
         self
     }
@@ -229,27 +272,15 @@ impl<'a> PortPublisher<'a> {
     /// returns once the shim process exists, but the shim binds its control
     /// socket slightly later, during gvproxy initialization.
     async fn wait_until_ready(&self) -> BoxliteResult<Vec<Forward>> {
-        let ControlReadyWait { timeout, interval } = self.control_ready;
-        let deadline = tokio::time::Instant::now() + timeout;
-
-        loop {
-            match tokio::time::timeout_at(deadline, self.backend.list_forwards()).await {
-                Ok(Ok(forwards)) => return Ok(forwards),
-                Ok(Err(error @ BoxliteError::Network(_))) => {
-                    let now = tokio::time::Instant::now();
-                    if now >= deadline {
-                        return Err(error);
-                    }
-                    tokio::time::sleep(interval.min(deadline - now)).await;
-                }
-                Ok(Err(error)) => return Err(error),
-                Err(_) => {
-                    return Err(BoxliteError::Network(format!(
-                        "timed out waiting for gvproxy runtime port control after {timeout:?}"
-                    )));
-                }
-            }
-        }
+        self.control_ready
+            .poll(
+                "gvproxy runtime port control",
+                // A control socket that is not yet bound surfaces as a
+                // connection failure; anything else is a real fault.
+                |error| matches!(error, BoxliteError::Network(_)),
+                || self.backend.list_forwards(),
+            )
+            .await
     }
 
     async fn assign(
@@ -415,13 +446,23 @@ enum PublicationMode {
 impl PublicationMode {
     /// Read the shim lifecycle that owns the listeners, then publish or repair
     /// against that exact lifecycle.
+    ///
+    /// `None` means the box has no live bindings to remember: either nothing was
+    /// requested, or a legacy shim's listeners were left alone.
     async fn run(
         self,
         backend: Option<&dyn NetworkBackend>,
         requested: &[PortSpec],
         pid_path: PathBuf,
     ) -> BoxliteResult<Option<LivePublishedPorts>> {
-        let lifecycle = PidFileReader::at(pid_path).read_shim()?;
+        // Nothing to publish: touch neither the shim's identity file nor the
+        // backend. `BoxInfo` already derives the empty set from configuration,
+        // so a box without ports needs nothing from this task.
+        if requested.is_empty() {
+            return Ok(None);
+        }
+
+        let lifecycle = self.read_lifecycle(pid_path).await?;
         let published = match self {
             Self::FreshStart => {
                 Some(PortPublishTask::publish(backend, requested, lifecycle).await?)
@@ -429,6 +470,33 @@ impl PublicationMode {
             Self::Reattach => PortPublishTask::reconcile(backend, requested, lifecycle).await?,
         };
         Ok(published.map(|ports| LivePublishedPorts::new(lifecycle.identity(), ports)))
+    }
+
+    /// Read the identity of the shim that owns the listeners.
+    ///
+    /// On a fresh start this races the shim: `VmmSpawn` returns once the fork
+    /// succeeds, but the child writes `shim.pid` from its pre-exec hook, so the
+    /// file can still be absent or half-written. Reattach has no such race —
+    /// the box was already running before the pipeline started.
+    async fn read_lifecycle(self, pid_path: PathBuf) -> BoxliteResult<ShimPidRecord> {
+        let read = || {
+            let pid_path = pid_path.clone();
+            async move { PidFileReader::at(pid_path).read_shim() }
+        };
+        match self {
+            Self::Reattach => read().await,
+            Self::FreshStart => {
+                RetryWindow::SHIM_IDENTITY
+                    .poll(
+                        "the shim to publish its identity",
+                        // A missing or partially written record both surface as
+                        // Storage; anything else is a real fault.
+                        |error| matches!(error, BoxliteError::Storage(_)),
+                        read,
+                    )
+                    .await
+            }
+        }
     }
 
     /// Decide the task's result from a publication outcome.
@@ -518,7 +586,7 @@ mod tests {
 
     /// Short enough that a bounded wait cannot slow the suite down, long enough
     /// to let a few retries through.
-    const TEST_CONTROL_READY: ControlReadyWait = ControlReadyWait {
+    const TEST_CONTROL_READY: RetryWindow = RetryWindow {
         timeout: Duration::from_millis(50),
         interval: Duration::from_millis(1),
     };
@@ -985,6 +1053,75 @@ mod tests {
                 .finish(&box_id, "port_publish", failure())
                 .is_err(),
             "a box that never came up must still fail its pipeline"
+        );
+    }
+
+    /// Regression: `VmmSpawn` returns as soon as the fork succeeds, while the
+    /// child writes `shim.pid` from its pre-exec hook. A box that publishes
+    /// nothing has no reason to look at that file, and must not fail its
+    /// pipeline just because the write has not landed yet.
+    #[tokio::test]
+    async fn no_requested_ports_never_reads_the_shim_identity() {
+        let absent = PathBuf::from("/nonexistent/boxlite-no-such-box/shim.pid");
+
+        for mode in [PublicationMode::FreshStart, PublicationMode::Reattach] {
+            let published = mode
+                .run(None, &[], absent.clone())
+                .await
+                .expect("a box without ports must start");
+            assert!(
+                published.is_none(),
+                "{mode:?} must record no live bindings for a box without ports"
+            );
+        }
+    }
+
+    /// The same race, on the path that does need the identity: the file may be
+    /// absent and then briefly partial before the child finishes writing it.
+    #[tokio::test]
+    async fn fresh_start_waits_out_an_absent_then_partial_identity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pid_path = dir.path().join("shim.pid");
+        let complete = ShimPidRecord::with_runtime_port_control(PidRecord {
+            pid: 4242,
+            start_time: Some(99),
+        });
+
+        let staged = pid_path.clone();
+        tokio::spawn(async move {
+            // Absent, then the torn state a reader can observe mid-write.
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            std::fs::write(&staged, b"").expect("stage an empty record");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            crate::util::PidFileWriter::at(&staged)
+                .expect("create PID writer")
+                .write_shim(&complete)
+                .expect("finish the record");
+        });
+
+        let lifecycle = PublicationMode::FreshStart
+            .read_lifecycle(pid_path)
+            .await
+            .expect("fresh start must wait for the shim's identity");
+
+        assert_eq!(lifecycle, complete);
+    }
+
+    /// Reattach has no such race — the box was already running — so a missing
+    /// identity is a real fault and must surface immediately.
+    #[tokio::test]
+    async fn reattach_does_not_wait_for_a_missing_identity() {
+        let started = std::time::Instant::now();
+
+        let error = PublicationMode::Reattach
+            .read_lifecycle(PathBuf::from("/nonexistent/boxlite-no-such-box/shim.pid"))
+            .await
+            .expect_err("a running box must already have written shim.pid");
+
+        assert!(matches!(error, BoxliteError::Storage(_)), "got {error:?}");
+        assert!(
+            started.elapsed() < RetryWindow::SHIM_IDENTITY.timeout,
+            "reattach must not spend the fresh-start wait on a fault"
         );
     }
 
