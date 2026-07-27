@@ -11,6 +11,26 @@ import { setTimeout as delay } from 'node:timers/promises'
 const scriptsRoot = path.dirname(fileURLToPath(import.meta.url))
 const appsRoot = path.resolve(scriptsRoot, '..')
 const repoRoot = path.resolve(appsRoot, '..')
+const isolatedDatabaseNamePattern = /^boxlite_bg_[a-f0-9]{12}$/
+const localDatabaseDefaults = {
+  host: 'localhost',
+  port: '5432',
+  username: 'postgres',
+  password: 'postgres',
+}
+const localCredentialEnvironment = Object.freeze({
+  ADMIN_API_KEY: 'boxlite-local-admin-key',
+  BOXLITE_RUNNER_TOKEN: 'boxlite-local-runner-key',
+  DEFAULT_RUNNER_API_KEY: 'boxlite-local-runner-key',
+  ENCRYPTION_KEY: 'boxlite-local-e2e-encryption-key',
+  ENCRYPTION_SALT: 'boxlite-local-e2e-encryption-salt',
+  INTERNAL_REGISTRY_ADMIN: 'boxlite-local-registry-user',
+  INTERNAL_REGISTRY_PASSWORD: 'boxlite-local-registry-password',
+  PROXY_API_KEY: 'boxlite-local-proxy-key',
+})
+const usesProcessGroups = process.platform !== 'win32'
+const gracefulShutdownTimeoutMs = 5_000
+const forcedShutdownTimeoutMs = 2_000
 
 const defaultConfig = {
   dashboardUrl: process.env.BOXLITE_E2E_BASE_URL || 'http://localhost:3000',
@@ -60,25 +80,88 @@ export async function runLocalDexEnvironment({ mode, command = [] }) {
   ensureGoBuildCacheTracksNativeLibrary()
   await waitForHttp(`${defaultConfig.dexIssuer}/.well-known/openid-configuration`, 'Dex')
 
-  const appsProcess = startApps(defaultConfig)
-  bindShutdown(appsProcess)
+  const database = createLocalDexDatabase()
+  let appsProcess
+  let commandProcess
+  let requestedSignal
+  let requestedExitCode = 0
+  let cleanupPromise
+  let resolveShutdown
+  const shutdownRequested = new Promise((resolve) => {
+    resolveShutdown = resolve
+  })
 
+  const cleanup = () => {
+    cleanupPromise ??= cleanupEnvironment({ appsProcess, commandProcess, database })
+    return cleanupPromise
+  }
+  const unbindShutdown = bindShutdown((signal) => {
+    requestedSignal ??= signal
+    resolveShutdown(requestedSignal)
+    cleanup().catch(() => {})
+  })
+  const throwIfShutdownRequested = () => {
+    if (requestedSignal) {
+      throw new Error(`Local Dex shutdown requested by ${requestedSignal}`)
+    }
+  }
+  const waitUnlessShutdown = async (operation) => {
+    throwIfShutdownRequested()
+    const outcome = await Promise.race([
+      operation.then((value) => ({ value })),
+      shutdownRequested.then((signal) => ({ signal })),
+    ])
+    throwIfShutdownRequested()
+    return outcome.value
+  }
+
+  let runError
   try {
-    await waitForHttp(`${defaultConfig.apiUrl}/config`, 'BoxLite API', appsProcess)
-    await waitForHttp(defaultConfig.dashboardUrl, 'BoxLite dashboard', appsProcess)
+    database.create()
+    appsProcess = startApps(defaultConfig, database.environment())
+
+    await waitUnlessShutdown(waitForHttp(`${defaultConfig.apiUrl}/config`, 'BoxLite API', appsProcess))
+    await waitUnlessShutdown(waitForHttp(defaultConfig.dashboardUrl, 'BoxLite dashboard', appsProcess))
     printReady(mode, command, defaultConfig)
 
-    if (command.length > 0) {
-      const exitCode = await runE2eCommand(command, defaultConfig)
-      shutdown(appsProcess)
-      process.exit(exitCode)
+    if (command.length === 0) {
+      requestedExitCode = await waitUnlessShutdown(waitForExit(appsProcess))
+    } else {
+      commandProcess = startE2eCommand(command, defaultConfig, database.environment())
+      requestedExitCode = await waitUnlessShutdown(waitForExit(commandProcess))
     }
-
-    process.exitCode = await waitForExit(appsProcess)
   } catch (error) {
-    shutdown(appsProcess)
-    throw error
+    runError = error
   }
+
+  let cleanupError
+  try {
+    await cleanup()
+  } catch (error) {
+    cleanupError = error
+  } finally {
+    unbindShutdown()
+  }
+
+  if (requestedSignal) {
+    if (cleanupError) {
+      throw new Error(`Local Dex cleanup failed after ${requestedSignal}`, { cause: cleanupError })
+    }
+    process.exitCode = requestedSignal === 'SIGINT' ? 130 : 143
+    return
+  }
+
+  if (runError && cleanupError) {
+    throw new AggregateError([runError, cleanupError], 'Local Dex run and cleanup both failed')
+  }
+  if (runError) {
+    throw runError
+  }
+  if (cleanupError) {
+    throw cleanupError
+  }
+
+  process.exitCode = requestedExitCode
 }
 
 export function parseCommand(argv) {
@@ -93,6 +176,123 @@ export function parseCommand(argv) {
 function shellCommand(command) {
   const shell = process.env.SHELL || '/bin/sh'
   return [shell, '-lc', command]
+}
+
+export function createLocalDexDatabase(environment = process.env, executeDocker = docker) {
+  return new LocalDexDatabase(resolveIsolatedDatabaseConfig(environment), executeDocker, 'boxlite-local-postgres')
+}
+
+class LocalDexDatabase {
+  #config
+  #executeDocker
+  #containerName
+  #isCreated = false
+
+  constructor(config, executeDocker, containerName) {
+    this.#config = config
+    this.#executeDocker = executeDocker
+    this.#containerName = containerName
+  }
+
+  environment() {
+    if (!this.#config) {
+      return {}
+    }
+
+    const { host, port, username, password, database } = this.#config
+    return {
+      DB_HOST: host,
+      DB_PORT: port,
+      DB_USERNAME: username,
+      DB_PASSWORD: password,
+      DB_DATABASE: database,
+      BOXLITE_E2E_DB_HOST: host,
+      BOXLITE_E2E_DB_PORT: port,
+      BOXLITE_E2E_DB_USERNAME: username,
+      BOXLITE_E2E_DB_PASSWORD: password,
+      BOXLITE_E2E_DB_DATABASE: database,
+      BILLING_E2E_DB_HOST: host,
+      BILLING_E2E_DB_PORT: port,
+      BILLING_E2E_DB_USERNAME: username,
+      BILLING_E2E_DB_PASSWORD: password,
+      BILLING_E2E_DB_DATABASE: database,
+    }
+  }
+
+  create() {
+    if (!this.#config || this.#isCreated) {
+      return
+    }
+
+    this.#runPsql(`CREATE DATABASE "${this.#config.database}"`)
+    this.#isCreated = true
+  }
+
+  drop() {
+    if (!this.#config || !this.#isCreated) {
+      return
+    }
+
+    this.#runPsql(`DROP DATABASE IF EXISTS "${this.#config.database}" WITH (FORCE)`)
+    this.#isCreated = false
+  }
+
+  #runPsql(sql) {
+    this.#executeDocker(
+      [
+        'exec',
+        this.#containerName,
+        'psql',
+        '--username',
+        localDatabaseDefaults.username,
+        '--dbname',
+        localDatabaseDefaults.username,
+        '--set',
+        'ON_ERROR_STOP=1',
+        '--command',
+        sql,
+      ],
+      { stdio: 'inherit' },
+    )
+  }
+}
+
+function resolveIsolatedDatabaseConfig(environment) {
+  if (environment.BOXLITE_E2E_ISOLATED_DATABASE !== '1') {
+    return null
+  }
+
+  const config = {
+    host: environmentValue(environment, 'BOXLITE_E2E_DB_HOST', localDatabaseDefaults.host),
+    port: environmentValue(environment, 'BOXLITE_E2E_DB_PORT', localDatabaseDefaults.port),
+    username: environmentValue(environment, 'BOXLITE_E2E_DB_USERNAME', localDatabaseDefaults.username),
+    password: environmentValue(environment, 'BOXLITE_E2E_DB_PASSWORD', localDatabaseDefaults.password),
+    database: environmentValue(environment, 'BOXLITE_E2E_DB_DATABASE', ''),
+  }
+
+  if (!isolatedDatabaseNamePattern.test(config.database)) {
+    throw new Error('BOXLITE_E2E_DB_DATABASE must match ^boxlite_bg_[a-f0-9]{12}$ for an isolated database')
+  }
+  if (!new Set(['localhost', '127.0.0.1', '::1']).has(config.host)) {
+    throw new Error('BOXLITE_E2E_DB_HOST must be loopback for an isolated database')
+  }
+  if (config.port !== localDatabaseDefaults.port) {
+    throw new Error(
+      `BOXLITE_E2E_DB_PORT must use local PostgreSQL port ${localDatabaseDefaults.port} for an isolated database`,
+    )
+  }
+  if (config.username !== localDatabaseDefaults.username) {
+    throw new Error('BOXLITE_E2E_DB_USERNAME must use the local PostgreSQL account for an isolated database')
+  }
+  if (config.password !== localDatabaseDefaults.password) {
+    throw new Error('BOXLITE_E2E_DB_PASSWORD must use the local PostgreSQL credential for an isolated database')
+  }
+
+  return config
+}
+
+function environmentValue(environment, name, fallback) {
+  return environment[name] === undefined ? fallback : String(environment[name])
 }
 
 function ensureDocker() {
@@ -203,6 +403,14 @@ function ensureRuntimeImages(config) {
 
 function runtimeImageRef(config, name) {
   return `${config.registryHost}/boxlite/${name}:${config.runtimeImageTag}`
+}
+
+function resolveE2eImageEnvironment(config, inheritedEnvironment = process.env) {
+  const imageRef = inheritedEnvironment.BOXLITE_E2E_IMAGE || runtimeImageRef(config, 'base')
+  return {
+    BOXLITE_E2E_IMAGE: imageRef,
+    BOXLITE_SYSTEM_BASE_IMAGE: imageRef,
+  }
 }
 
 function ensureGoSdkDevNativeLibrary() {
@@ -328,7 +536,7 @@ function isContainerRunning(name) {
   return docker(['ps', '--format', '{{.Names}}']).split(/\r?\n/).includes(name)
 }
 
-function startApps(config) {
+function startApps(config, databaseEnvironment) {
   fs.mkdirSync(config.runnerHomeDir, { recursive: true })
 
   const env = {
@@ -344,12 +552,10 @@ function startApps(config) {
     DISABLE_CRON_JOBS: process.env.DISABLE_CRON_JOBS ?? 'false',
     NOTIFICATION_GATEWAY_DISABLED: 'true',
     DEFAULT_TEMPLATE: 'boxlite/base',
-    BOXLITE_SYSTEM_BASE_IMAGE: runtimeImageRef(config, 'base'),
+    ...localCredentialEnvironment,
+    ...resolveE2eImageEnvironment(config, process.env),
     BOXLITE_SYSTEM_PYTHON_IMAGE: runtimeImageRef(config, 'python'),
     BOXLITE_SYSTEM_NODE_IMAGE: runtimeImageRef(config, 'node'),
-    ENCRYPTION_KEY: 'boxlite-local-e2e-encryption-key',
-    ENCRYPTION_SALT: 'boxlite-local-e2e-encryption-salt',
-    ADMIN_API_KEY: 'boxlite-local-admin-key',
     ADMIN_TOTAL_CPU_QUOTA: '10',
     ADMIN_TOTAL_MEMORY_QUOTA: '40',
     ADMIN_TOTAL_DISK_QUOTA: '100',
@@ -360,11 +566,8 @@ function startApps(config) {
     ADMIN_MAX_TEMPLATE_SIZE: '100',
     ADMIN_VOLUME_QUOTA: '100',
     INTERNAL_REGISTRY_URL: config.registryHost,
-    INTERNAL_REGISTRY_ADMIN: 'boxlite-local-registry-user',
-    INTERNAL_REGISTRY_PASSWORD: 'boxlite-local-registry-password',
     INTERNAL_REGISTRY_PROJECT_ID: 'boxlite',
     DEFAULT_RUNNER_NAME: 'local-runner',
-    DEFAULT_RUNNER_API_KEY: 'boxlite-local-runner-key',
     DEFAULT_RUNNER_API_VERSION: '2',
     DEFAULT_RUNNER_DOMAIN: 'localhost',
     DEFAULT_RUNNER_CPU: '4',
@@ -373,7 +576,6 @@ function startApps(config) {
     RUNNER_DECLARATIVE_BUILD_SCORE_THRESHOLD: '1',
     RUNNER_AVAILABILITY_SCORE_THRESHOLD: '1',
     RUNNER_START_SCORE_THRESHOLD: '1',
-    BOXLITE_RUNNER_TOKEN: 'boxlite-local-runner-key',
     API_VERSION: '2',
     API_PORT: '8080',
     RUNNER_DOMAIN: 'localhost',
@@ -384,7 +586,6 @@ function startApps(config) {
     PROXY_PROTOCOL: 'http',
     PROXY_DOMAIN: 'localhost:4000',
     PROXY_TEMPLATE_URL: 'http://localhost:4000/{{sandboxId}}/{{PORT}}',
-    PROXY_API_KEY: 'boxlite-local-proxy-key',
     BOXLITE_API_URL: config.apiUrl,
     DB_HOST: 'localhost',
     DB_PORT: '5432',
@@ -401,6 +602,7 @@ function startApps(config) {
     BOXLITE_E2E_DEX_ISSUER: config.dexIssuer,
     BOXLITE_E2E_LOGIN_EMAIL: config.loginEmail,
     BOXLITE_E2E_LOGIN_PASSWORD: config.loginPassword,
+    ...databaseEnvironment,
   }
 
   // Keep dashboard on the Vite /api proxy path; setting VITE_BASE_API_URL here
@@ -408,29 +610,36 @@ function startApps(config) {
   delete env.VITE_BASE_API_URL
   delete env.VITE_API_URL
 
-  return spawn('npm', ['--prefix', 'apps', 'run', 'serve-slim'], {
+  return spawnManagedProcess('BoxLite apps', 'npm', ['--prefix', 'apps', 'run', 'serve-slim'], {
     cwd: repoRoot,
     env,
     stdio: 'inherit',
+    detached: usesProcessGroups,
   })
 }
 
-async function runE2eCommand(command, config) {
+function startE2eCommand(command, config, databaseEnvironment) {
   const [program, ...args] = command
-  const child = spawn(program, args, {
+  return spawnManagedProcess('E2E command', program, args, {
     cwd: repoRoot,
-    env: {
-      ...process.env,
-      BOXLITE_E2E_BASE_URL: config.dashboardUrl,
-      BOXLITE_E2E_API_URL: config.apiUrl,
-      BOXLITE_E2E_DEX_ISSUER: config.dexIssuer,
-      BOXLITE_E2E_LOGIN_EMAIL: config.loginEmail,
-      BOXLITE_E2E_LOGIN_PASSWORD: config.loginPassword,
-    },
+    env: buildE2eCommandEnvironment(config, databaseEnvironment),
     stdio: 'inherit',
+    detached: usesProcessGroups,
   })
+}
 
-  return await waitForExit(child)
+export function buildE2eCommandEnvironment(config, databaseEnvironment, inheritedEnvironment = process.env) {
+  return {
+    ...inheritedEnvironment,
+    ...localCredentialEnvironment,
+    BOXLITE_E2E_BASE_URL: config.dashboardUrl,
+    BOXLITE_E2E_API_URL: config.apiUrl,
+    BOXLITE_E2E_DEX_ISSUER: config.dexIssuer,
+    BOXLITE_E2E_LOGIN_EMAIL: config.loginEmail,
+    BOXLITE_E2E_LOGIN_PASSWORD: config.loginPassword,
+    ...resolveE2eImageEnvironment(config, inheritedEnvironment),
+    ...databaseEnvironment,
+  }
 }
 
 async function waitForHttp(url, label, processToWatch) {
@@ -491,7 +700,7 @@ function printReady(mode, command, config) {
   console.log(`[local-dex] Dashboard: ${config.dashboardUrl}`)
   console.log(`[local-dex] API: ${config.apiUrl}`)
   console.log(`[local-dex] Dex issuer: ${config.dexIssuer}`)
-  console.log(`[local-dex] Test login: ${config.loginEmail} / ${config.loginPassword}`)
+  console.log(`[local-dex] Test login: ${formatLoginSummary(config)}`)
   console.log('')
 
   if (mode === 'e2e') {
@@ -505,41 +714,159 @@ function printReady(mode, command, config) {
   }
 }
 
-function throwIfExited(child, label) {
-  if (!child) {
-    return
-  }
-  if (child.exitCode !== null) {
-    throw new Error(`${label} startup failed because apps exited with code ${child.exitCode}`)
-  }
+export function formatLoginSummary({ loginEmail }) {
+  return `${loginEmail} / [configured]`
 }
 
-function waitForExit(child) {
-  return new Promise((resolve) => {
+function spawnManagedProcess(label, program, args, options) {
+  const child = spawn(program, args, options)
+  const managedProcess = {
+    child,
+    error: null,
+    label,
+    pid: child.pid,
+    result: null,
+    usesProcessGroup: options.detached === true,
+  }
+
+  managedProcess.completion = new Promise((resolve, reject) => {
+    child.once('error', (error) => {
+      managedProcess.error = new Error(`${label} failed to start: ${error.message}`, { cause: error })
+      reject(managedProcess.error)
+    })
     child.once('exit', (code, signal) => {
-      if (signal) {
-        resolve(1)
-        return
-      }
-      resolve(code ?? 0)
+      managedProcess.result = { code, signal }
+      resolve(managedProcess.result)
     })
   })
+  managedProcess.completion.catch(() => {})
+  return managedProcess
 }
 
-function shutdown(child) {
-  if (child && child.exitCode === null) {
-    child.kill('SIGTERM')
+function throwIfExited(managedProcess, label) {
+  if (!managedProcess) {
+    return
+  }
+  if (managedProcess.error) {
+    throw managedProcess.error
+  }
+  if (managedProcess.result) {
+    const exit = managedProcess.result.signal ?? `code ${managedProcess.result.code ?? 0}`
+    throw new Error(`${label} startup failed because apps exited with ${exit}`)
   }
 }
 
-function bindShutdown(child) {
-  const stop = (signal) => {
-    shutdown(child)
-    process.exit(signal === 'SIGINT' ? 130 : 143)
+async function waitForExit(managedProcess) {
+  const { code, signal } = await managedProcess.completion
+  return signal ? 1 : (code ?? 0)
+}
+
+async function cleanupEnvironment({ appsProcess, commandProcess, database }) {
+  const [commandStop, appsStop] = await Promise.allSettled([
+    terminateManagedProcess(commandProcess),
+    terminateManagedProcess(appsProcess),
+  ])
+  const errors = []
+
+  if (commandStop.status === 'rejected') {
+    errors.push(commandStop.reason)
+  }
+  if (appsStop.status === 'rejected') {
+    errors.push(appsStop.reason)
+  } else {
+    try {
+      database.drop()
+    } catch (error) {
+      errors.push(error)
+    }
   }
 
-  process.once('SIGINT', stop)
-  process.once('SIGTERM', stop)
+  if (errors.length === 1) {
+    throw errors[0]
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, 'Local Dex cleanup failed')
+  }
+}
+
+async function terminateManagedProcess(managedProcess) {
+  if (!isManagedProcessRunning(managedProcess)) {
+    return
+  }
+
+  signalManagedProcess(managedProcess, 'SIGTERM')
+  if (await waitForManagedProcessStop(managedProcess, gracefulShutdownTimeoutMs)) {
+    return
+  }
+
+  signalManagedProcess(managedProcess, 'SIGKILL')
+  if (await waitForManagedProcessStop(managedProcess, forcedShutdownTimeoutMs)) {
+    return
+  }
+
+  throw new Error(
+    `${managedProcess.label} process tree ${managedProcess.pid ?? '(unknown pid)'} did not stop after SIGKILL`,
+  )
+}
+
+function signalManagedProcess(managedProcess, signal) {
+  try {
+    if (managedProcess.usesProcessGroup && managedProcess.pid) {
+      process.kill(-managedProcess.pid, signal)
+      return
+    }
+
+    managedProcess.child.kill(signal)
+  } catch (error) {
+    if (error.code === 'ESRCH') {
+      return
+    }
+    throw new Error(`Failed to send ${signal} to ${managedProcess.label}`, { cause: error })
+  }
+}
+
+async function waitForManagedProcessStop(managedProcess, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (isManagedProcessRunning(managedProcess) && Date.now() < deadline) {
+    await delay(50)
+  }
+  return !isManagedProcessRunning(managedProcess)
+}
+
+function isManagedProcessRunning(managedProcess) {
+  if (!managedProcess || managedProcess.error) {
+    return false
+  }
+
+  if (managedProcess.usesProcessGroup && managedProcess.pid) {
+    try {
+      process.kill(-managedProcess.pid, 0)
+      return true
+    } catch (error) {
+      if (error.code === 'ESRCH') {
+        return false
+      }
+      if (error.code === 'EPERM') {
+        return true
+      }
+      throw new Error(`Failed to inspect ${managedProcess.label} process group`, { cause: error })
+    }
+  }
+
+  return !managedProcess.result && managedProcess.child.exitCode === null && managedProcess.child.signalCode === null
+}
+
+function bindShutdown(onSignal) {
+  const handlers = new Map(['SIGINT', 'SIGTERM'].map((signal) => [signal, () => onSignal(signal)]))
+  for (const [signal, handler] of handlers) {
+    process.on(signal, handler)
+  }
+
+  return () => {
+    for (const [signal, handler] of handlers) {
+      process.off(signal, handler)
+    }
+  }
 }
 
 function trimOutput(output) {

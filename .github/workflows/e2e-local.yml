@@ -7,10 +7,10 @@
 # Architecture:
 #   start-runner (ubuntu-latest)  →  e2e-tests (self-hosted)  →  stop-runner (ubuntu-latest)
 #     Start stopped EC2               Build + run tests             Stop EC2
-#     Wait for runner online           50-min timeout               if: always()
+#     Wait for runner online           70-min timeout               if: always()
 #
 # Concurrency: only ONE e2e run at a time (single persistent instance).
-# Queued runs wait; in-progress runs are cancelled by newer pushes.
+# Up to 100 queued runs wait; in-progress runs continue, and newer pushes queue.
 #
 # Cost: c8i.4xlarge on-demand rate only while running + ~$4/mo EBS storage.
 # Subsequent runs skip setup/compilation (cached) → ~5-10 min → ~$0.03/run.
@@ -28,6 +28,10 @@ on:
     branches: [main]
     paths:
       - 'src/boxlite/**'
+      - 'apps/**'
+      - 'make/**'
+      - 'scripts/setup/**'
+      - 'scripts/test/e2e/**'
       - 'src/shared/**'
       - 'src/cli/**'
       - 'src/guest/**'
@@ -35,17 +39,23 @@ on:
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/e2e-local.yml'
+      - 'Makefile'
   pull_request:
     types: [labeled, synchronize]
     branches: [main]
     paths:
       - 'src/boxlite/**'
+      - 'apps/**'
+      - 'make/**'
+      - 'scripts/setup/**'
+      - 'scripts/test/e2e/**'
       - 'src/shared/**'
       - 'src/cli/**'
       - 'src/guest/**'
       - 'sdks/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
+      - 'Makefile'
   workflow_dispatch:
     inputs:
       debug:
@@ -54,10 +64,12 @@ on:
         default: false
 
 # Single global concurrency group — only one e2e run at a time.
-# The persistent instance can only serve one job. Newer pushes cancel older runs.
+# The persistent instance can only serve one job. Queued runs wait so isolated
+# database and VM cleanup cannot be interrupted by a newer push.
 concurrency:
   group: e2e-runner
-  cancel-in-progress: true
+  queue: max
+  cancel-in-progress: false
 
 env:
   AWS_REGION: us-east-1
@@ -296,7 +308,7 @@ jobs:
     runs-on:
       - self-hosted
       - boxlite-e2e
-    timeout-minutes: 50
+    timeout-minutes: 70
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
@@ -311,40 +323,12 @@ jobs:
             git checkout -- . 2>/dev/null || true
           fi
 
-      - name: Stage prior-run logs for rescue
-        # If a previous run died mid-step (e.g. Worker ENOSPC), its logs
-        # are still on this persistent runner under /var/log/boxlite-ci/.
-        # Move them aside so the upload step below can ship them as a
-        # separate artifact, then clear them off the runner volume.
-        #
-        # Namespace key is "<run_id>-<run_attempt>": reruns of the same
-        # workflow share github.run_id and only github.run_attempt
-        # increments, so run_id alone would let attempt N misidentify
-        # attempt N-1's directory as its own and skip rescuing it.
-        env:
-          GH_RUN_ID: ${{ github.run_id }}
-          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+      - name: Purge prior-run logs
+        # Persistent-runner logs are untrusted after their producing run
+        # ends. Do not rescue or upload them under a later run.
         run: |
-          set -u
-          BASE=/var/log/boxlite-ci
-          STAGE=/tmp/boxlite-rescue
-          CURRENT="${GH_RUN_ID}-${GH_RUN_ATTEMPT}"
-          rm -rf "$STAGE" && mkdir -p "$STAGE"
-          if [ -d "$BASE" ]; then
-            for d in "$BASE"/*; do
-              [ -d "$d" ] || continue
-              [ "$(basename "$d")" = "$CURRENT" ] && continue
-              mv "$d" "$STAGE/"
-            done
-          fi
-
-      - name: Upload rescued prior-run logs
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-local-logs-rescued-${{ github.run_id }}-${{ github.run_attempt }}
-          path: /tmp/boxlite-rescue/
-          retention-days: 7
-          if-no-files-found: ignore
+          rm -rf /var/log/boxlite-ci
+          mkdir -p /var/log/boxlite-ci
 
       - name: Pre-flight runner cleanup (runner internals only — never caches)
         # Housekeeping for actions-runner's own diagnostic logs so they
@@ -435,6 +419,19 @@ jobs:
             exit 1
           fi
 
+      # corepack must be enabled before the Billing harness invokes Yarn
+      - name: Enable corepack (yarn 4)
+        run: corepack enable
+
+      - name: Prepare Billing golden-path prerequisites
+        run: |
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+          systemctl enable --now docker
+          make test:e2e:billing-golden-harness
+          cd apps
+          yarn playwright-core install --with-deps chromium
+
       - name: Run integration tests
         env:
           GH_RUN_ID: ${{ github.run_id }}
@@ -444,24 +441,60 @@ jobs:
           export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
           LOG_DIR="/var/log/boxlite-ci/${GH_RUN_ID}-${GH_RUN_ATTEMPT}"
           mkdir -p "$LOG_DIR"
-          # tee to persistent volume so logs survive runner Worker death.
-          # The next run's Stage step rescues + uploads "$LOG_DIR".
+          # Only this run-scoped integration log is eligible for the
+          # same run's failure artifact.
           set -o pipefail
           make test:integration 2>&1 | tee "${LOG_DIR}/integration.log"
 
+      - name: Prepare Billing golden-path evidence directory
+        id: billing-evidence
+        env:
+          BILLING_EVIDENCE_PREFIX: target/e2e/billing-golden/${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$BILLING_EVIDENCE_PREFIX")"
+          evidence_dir=$(mktemp -d "${BILLING_EVIDENCE_PREFIX}.XXXXXXXX")
+          printf 'path=%s\n' "$evidence_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Run Billing golden-path smoke
+        env:
+          BOXLITE_BILLING_E2E_ARTIFACTS: ${{ steps.billing-evidence.outputs.path }}
+        run: |
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+          make test:e2e:billing-golden
+
+      - name: Validate Billing golden-path evidence
+        if: always()
+        id: billing-evidence-ready
+        env:
+          BOXLITE_BILLING_E2E_ARTIFACTS: ${{ steps.billing-evidence.outputs.path }}
+        run: |
+          if [ -f "${BOXLITE_BILLING_E2E_ARTIFACTS}/.billing-golden-evidence-ready" ] &&
+             [ "$(cat "${BOXLITE_BILLING_E2E_ARTIFACTS}/.billing-golden-evidence-ready")" = "v1" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload Billing golden-path evidence
+        if: always() && steps.billing-evidence-ready.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: billing-golden-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.billing-evidence.outputs.path }}
+          retention-days: 7
+          if-no-files-found: warn
+
       - name: Upload test logs on failure or cancellation
-        # `failure()` alone misses cancelled jobs (concurrency cancellation,
-        # host reboot, timeout — all surface as `cancelled()`, not failure).
+        # `failure()` alone misses cancelled jobs (manual cancellation, host
+        # reboot, timeout — all surface as `cancelled()`, not failure).
         # We want logs for every non-success outcome.
         if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-local-logs-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            target/nextest/
-            /tmp/boxlite-*/
-            !/tmp/boxlite-rescue/
-            /var/log/boxlite-ci/${{ github.run_id }}-${{ github.run_attempt }}/
+          path: /var/log/boxlite-ci/${{ github.run_id }}-${{ github.run_attempt }}/integration.log
           retention-days: 7
           if-no-files-found: ignore
 

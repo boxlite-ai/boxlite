@@ -389,16 +389,21 @@ function ReceiptStatus({ status }: { status: BillingReceipt['status'] }) {
 
 function ReceiptRow({ receipt }: { receipt: BillingReceipt }) {
   return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-3 border-b border-border px-0.5 py-[15px] font-mono text-[12px] last:border-b-0 sm:grid-cols-[150px_110px_120px_1fr_130px_32px] sm:items-center sm:gap-x-6">
-      <span className="order-1 tabular-nums text-foreground">{formatReceiptDate(receipt.createdAt)}</span>
-      <span className="order-3 uppercase text-muted-foreground sm:order-2">
+    <div
+      data-testid="billing-receipt-row"
+      className="grid grid-cols-2 gap-x-4 gap-y-3 border-b border-border px-0.5 py-[15px] font-mono text-[12px] last:border-b-0 sm:grid-cols-[150px_110px_120px_1fr_130px_32px] sm:items-center sm:gap-x-6"
+    >
+      <span data-receipt-field="date" className="order-1 tabular-nums text-foreground">
+        {formatReceiptDate(receipt.createdAt)}
+      </span>
+      <span data-receipt-field="type" className="order-3 uppercase text-muted-foreground sm:order-2">
         {receipt.type === 'top_up' ? 'top up' : 'usage'}
       </span>
-      <span className="order-4 text-right sm:order-3 sm:text-left">
+      <span data-receipt-field="status" className="order-4 text-right sm:order-3 sm:text-left">
         <ReceiptStatus status={receipt.status} />
       </span>
       <span className="hidden sm:order-4 sm:block" />
-      <span className="order-2 text-right tabular-nums text-foreground sm:order-5">
+      <span data-receipt-field="amount" className="order-2 text-right tabular-nums text-foreground sm:order-5">
         {formatCents(receipt.amountCents)}
       </span>
       <span className="order-5 col-span-2 flex justify-end sm:order-6 sm:col-span-1">

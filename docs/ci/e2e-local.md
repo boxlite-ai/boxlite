@@ -1,8 +1,8 @@
 # E2E Local CI Runbook
 
-`e2e-local.yml` runs BoxLite's VM-based integration tests on a self-hosted AWS EC2
-runner. This is the operational reference for that workflow: how it runs, how it is
-provisioned, and how to fix it when it breaks.
+`e2e-local.yml` runs BoxLite's VM-based integration and Billing golden-path tests on a
+self-hosted AWS EC2 runner. This is the operational reference for that workflow: how it
+runs, how it is provisioned, and how to fix it when it breaks.
 
 ## Overview
 
@@ -11,7 +11,8 @@ real microVMs through libkrun — only run on hardware that allows nested virtua
 workflow keeps a single **persistent** EC2 instance for this: it is started before a run,
 runs the tests, then is **stopped** (never terminated) so its build and image caches survive
 on the EBS volume. Because there is exactly one instance, only one e2e run executes at a
-time — a newer run cancels an older queued one.
+time — up to 100 queued runs wait while the in-progress run continues; newer runs stay
+queued instead of replacing an earlier pending run.
 
 ## How it runs
 
@@ -20,7 +21,7 @@ The workflow is four jobs:
 ```mermaid
 flowchart LR
   gate["should-run (label gate)"] --> start["start-runner (boot EC2)"]
-  start --> tests["e2e-tests (integration tests)"]
+  start --> tests["e2e-tests (integration + Billing golden smoke)"]
   tests --> stop["stop-runner (stop EC2)"]
 ```
 
@@ -28,16 +29,18 @@ flowchart LR
   request runs only when a maintainer adds the `e2e-local` label.
 - **start-runner** — authenticates to AWS, starts the stopped instance (or creates one if
   none exists), and waits up to 3 minutes for the self-hosted runner to come online.
-- **e2e-tests** — runs on the self-hosted runner (`boxlite-e2e` label, 50-minute timeout):
-  verifies `/dev/kvm`, installs build dependencies, then runs `make test:integration`.
+- **e2e-tests** — runs on the self-hosted runner (`boxlite-e2e` label, 70-minute timeout):
+  verifies `/dev/kvm`, installs build dependencies, runs `make test:integration`, then runs
+  `make test:e2e:billing-golden` and uploads only that run's sanitized Billing evidence.
 - **stop-runner** — always runs at the end and stops the instance so it stops costing money.
 
 ### Triggers
 
-- Push to `main` touching runtime code (`src/boxlite`, `src/shared`, `src/cli`, `src/guest`,
-  `sdks/**`, any `Cargo.toml`, `Cargo.lock`, or the workflow file itself).
-- A pull request labeled `e2e-local` — the label is the cost gate, and only maintainers can
-  add it.
+- Push to `main` touching runtime or E2E code (`src/boxlite/**`, `src/shared/**`,
+  `src/cli/**`, `src/guest/**`, `sdks/**`, `apps/**`, `make/**`, `scripts/setup/**`,
+  `scripts/test/e2e/**`, any `Cargo.toml`, `Cargo.lock`, `Makefile`, or the workflow file).
+- A pull request touching the same runtime/E2E paths and labeled `e2e-local` — the label is
+  the cost gate, and only maintainers can add it.
 - Manual `workflow_dispatch`, with an optional `debug` input that opens an SSH session if the
   tests fail.
 

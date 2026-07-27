@@ -57,6 +57,8 @@ help:
 	@echo "    make test:apps              - Run the apps workspace test matrix"
 	@echo "    make test:e2e:setup         - Bootstrap local stack (PG/Redis/Registry/API/Runner) + fixture data; idempotent"
 	@echo "    make test:e2e               - Run E2E suite (SDK→API→Runner→VM); see scripts/test/e2e/README.md"
+	@echo "    make test:e2e:billing-golden - Run isolated Billing UI→SDK→Metering→ledger golden smoke"
+	@echo "    make test:e2e:billing-golden-harness - Run golden smoke oracle/launcher harness tests only"
 	@echo "    make test:e2e:two-sided     - PR_REF=<branch> required; proves test catches bug + PR fixes it"
 	@echo "    make test:stress:api-read   - Run read-only k6 stress test against a deployed REST API"
 	@echo "    make test:stress:api-read-local - Run low-rate local-network API stress canary"

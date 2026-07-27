@@ -148,6 +148,59 @@ make test:rest:e2e AUTH=oidc
 Both modes call `/v1/me` to refresh the route `path_prefix`; set
 `BOXLITE_E2E_PREFIX` only when you need to override that discovery.
 
+### Billing golden-path smoke
+
+Run the P0 Billing smoke as one isolated end-to-end case:
+
+```bash
+make test:e2e:billing-golden
+```
+
+It requires KVM, Docker, `psql`, and Chrome/Chromium. The target builds the
+Python and Go SDK bindings, serializes access to the fixed local ports, creates
+a fresh `boxlite_bg_<run-id>` database and a run-scoped Runner home, starts the
+local Dex stack, and drops the database after the app processes have stopped.
+Use `CHROME_EXECUTABLE_PATH` when Chrome is not in a standard location.
+
+The single top-level case validates each boundary in order:
+
+1. Log in through Dex, attach the fake `visa ···· 4242` payment method, make a
+   $25 manual top-up, then replay the exact request body and idempotency key.
+   The wallet must still contain one $25 credit.
+2. Create one Box through the Python REST SDK and observe four contiguous
+   Metering periods: `FULL → DISK_ONLY → FULL → DISK_ONLY`, followed by no open
+   period after destroy. FULL periods must match the runtime lease generation,
+   epoch, and compute cap; DISK_ONLY periods must have zero compute resources
+   and no runtime metadata.
+3. Stop the first FULL period while its independently projected price is
+   between 0.55 and 0.65 cents. The first settlement must write a zero-cent
+   `usage_debit` and carry the precise amount in the wallet remainder.
+4. After restart, continue until cumulative precise usage is at least 1.2
+   cents. For all four periods, the oracle rebuilds pricing segments from the
+   raw period plus `pricing_plan`, then checks seconds, resource totals, unit
+   rates, precise cents, half-up display cents, one-to-one rated/debit rows, and
+   `floor(remainder + precise)` with exact paid-balance debits and remainder
+   conservation. The live target deliberately sets `BILLING_TRIAL_GRANT_CENTS=0`,
+   so its free balance stays zero.
+5. Compare PostgreSQL with the Billing overview, per-Box API, and dashboard.
+   Finally enable auto-reload at `$25 → $35`; exactly one automatic top-up of
+   `1000 + usage debit` cents must restore the paid balance to $35.
+
+Polling bounds account for the 5-second archive cadence and one-minute
+settlement/auto-reload schedules; the Metering driver has a 20-minute overall
+deadline. Evidence is written beneath `target/e2e/billing-golden/<run-id>/`
+as sanitized JSON, screenshots, and a one-case JUnit XML file. Browser traces
+are intentionally excluded because they can contain credentials.
+
+The deterministic oracle and launcher/parser harness can run without KVM or a
+live stack. Its wallet fixture supplies nonzero free and paid buckets, proving
+free-first/paid-second debiting separately from the live path. Python temp
+storage defaults to `/tmp`; set `BOXLITE_E2E_TMPDIR` to override it.
+
+```bash
+make test:e2e:billing-golden-harness
+```
+
 ### Local billing system tests
 
 The authoritative billing ST is skipped unless explicitly enabled. The normal
@@ -194,9 +247,14 @@ scripts/test/e2e/
 ├── run.sh                   # bootstrap + fixture_setup + pytest
 ├── two_sided.sh             # Validates that test catches bug + PR fixes it
 ├── pytest.ini
+├── drivers/
+│   └── billing_golden_metering.py # Long-lived Billing REST/Metering driver
 ├── lib/
-│   ├── e2e_auth.py          # Auth context: API-key / OIDC, env vars / profile
-│   └── path_verification.py # Helpers that prove SDK→API→Runner was the route
+│   ├── billing_oracle.py     # Independent pricing, period, and wallet oracle
+│   ├── e2e_auth.py           # Auth context: API-key / OIDC, env vars / profile
+│   └── path_verification.py  # Helpers that prove SDK→API→Runner was the route
+├── tests/
+│   └── test_billing_oracle.py # Deterministic Billing oracle/driver tests
 ├── sdks/
 │   ├── node/                # TypeScript drivers (e2e_basic.ts, e2e_exec.ts, e2e_copy.ts, e2e_errors.ts)
 │   ├── go/                  # Go drivers (e2e_basic.go, e2e_exec_options.go, e2e_copy.go, e2e_errors.go)

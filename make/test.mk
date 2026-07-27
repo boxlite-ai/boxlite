@@ -427,6 +427,40 @@ test\:e2e\:setup:
 test\:e2e:
 	@cd scripts/test/e2e && python3 -m pytest cases/ -v
 
+test\:e2e\:billing-golden-harness: _ensure-apps-deps _ensure-python-deps
+	@. .venv/bin/activate && TMPDIR="$${BOXLITE_E2E_TMPDIR:-/tmp}" python -m pytest scripts/test/e2e/tests/test_billing_oracle.py -q
+	@cd apps && yarn node --test scripts/local-dex-env.test.mjs scripts/billing-golden-e2e.test.mjs
+
+test\:e2e\:billing-golden: _ensure-apps-deps
+	@$(MAKE) test:e2e:billing-golden-harness
+	@$(MAKE) dev:python
+	@$(MAKE) dev:go
+	@run_id=$$(node -e "process.stdout.write(require('node:crypto').randomBytes(6).toString('hex'))"); \
+	 artifacts="$${BOXLITE_BILLING_E2E_ARTIFACTS:-$(CURDIR)/target/e2e/billing-golden/$$run_id}"; \
+	 runner_dir="/tmp/boxlite-billing-golden-$$run_id"; \
+	 cleanup() { \
+		case "$$runner_dir" in \
+			/tmp/boxlite-billing-golden-????????????) rm -rf -- "$$runner_dir" ;; \
+			*) echo "refusing to clean unexpected runner directory: $$runner_dir" >&2; return 1 ;; \
+		esac; \
+	 }; \
+	 trap cleanup EXIT; \
+	 mkdir -p "$$artifacts" "$$runner_dir"; \
+	 flock -w 900 /tmp/boxlite-billing-golden.lock env \
+		BOXLITE_E2E_ISOLATED_DATABASE=1 \
+		BOXLITE_E2E_DB_DATABASE="boxlite_bg_$$run_id" \
+		BOXLITE_E2E_RUNNER_HOME_DIR="$$runner_dir" \
+		BOXLITE_E2E_IMAGE=ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3 \
+		BOXLITE_BILLING_E2E_ARTIFACTS="$$artifacts" \
+		BOXLITE_BILLING_GOLDEN_RUN_ID="$$run_id" \
+		BILLING_TRIAL_GRANT_CENTS=0 \
+		BILLING_PAYMENT_PROVIDER=fake \
+		BILLING_ENFORCEMENT_ENABLED=true \
+		BILLING_RUNTIME_LEASE_SECONDS=60 \
+		DISABLE_CRON_JOBS=false \
+		HEADLESS="$${HEADLESS:-true}" \
+		yarn --cwd apps e2e:local -- -- yarn --cwd apps e2e:billing:golden
+
 test\:e2e\:two-sided:
 	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash scripts/test/e2e/two_sided.sh
 

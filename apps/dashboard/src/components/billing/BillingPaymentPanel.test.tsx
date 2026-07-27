@@ -238,6 +238,17 @@ describe('BillingPaymentPanel', () => {
     expect(document.body.textContent).toContain('paid')
     expect(document.body.textContent).toContain('failed')
     expect(document.querySelector('a[href="https://billing.test/receipt-top-up"]')).toBeTruthy()
+    const receiptRows = [...document.querySelectorAll('[data-testid="billing-receipt-row"]')]
+    expect(
+      receiptRows.map((row) =>
+        ['date', 'type', 'status', 'amount'].map(
+          (field) => row.querySelector(`[data-receipt-field="${field}"]`)?.textContent?.trim() ?? '',
+        ),
+      ),
+    ).toEqual([
+      ['2026-07-10', 'top up', 'paid', '$500.00'],
+      ['2026-07-09', 'usage', 'failed', '$3.75'],
+    ])
     expect(document.body.textContent).not.toContain('Payment method')
     expect(document.body.textContent).not.toContain('Set up payment method')
     expect(document.body.textContent?.toLowerCase()).not.toMatch(/due date|overdue|pending invoice|coupon/)

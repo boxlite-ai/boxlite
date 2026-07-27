@@ -79,6 +79,10 @@ install_system_deps() {
         python3-pip
         python3-venv
 
+        # Local Dex / Billing golden-path E2E
+        docker.io          # PostgreSQL, Redis, Dex, and registry containers
+        postgresql-client  # Authoritative Metering and wallet assertions
+
         # Note: Go is installed separately via setup_go (distro packages are too old)
 
         # libkrun build dependencies

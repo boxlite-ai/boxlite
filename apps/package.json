@@ -17,6 +17,7 @@
     "dev:dex": "node scripts/dev-dex.mjs",
     "e2e:local": "node scripts/e2e-local.mjs",
     "e2e:billing:local": "node scripts/billing-local-e2e.mjs",
+    "e2e:billing:golden": "node scripts/billing-golden-e2e.mjs",
     "e2e:billing:enforcement:local": "BILLING_ENFORCEMENT_E2E=1 BILLING_E2E_TIMEOUT_MS=60000 node scripts/billing-local-e2e.mjs",
     "e2e:billing:stripe": "node scripts/billing-stripe-sandbox-e2e.mjs",
     "billing:stripe:listen": "node scripts/billing-stripe-sandbox-listener.mjs",
