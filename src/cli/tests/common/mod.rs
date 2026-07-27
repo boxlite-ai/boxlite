@@ -4,6 +4,7 @@ use assert_cmd::Command;
 use boxlite_test_utils::TEST_REGISTRIES;
 use boxlite_test_utils::home::PerTestBoxHome;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -108,6 +109,13 @@ pub fn boxlite() -> TestContext {
         home,
         _home: home_dir,
     }
+}
+
+pub fn temp_env_file(contents: &str) -> tempfile::NamedTempFile {
+    let mut file = tempfile::NamedTempFile::new().expect("create temporary environment file");
+    file.write_all(contents.as_bytes())
+        .expect("write temporary environment file");
+    file
 }
 
 #[cfg(test)]

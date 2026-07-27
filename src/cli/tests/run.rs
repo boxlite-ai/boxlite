@@ -236,6 +236,34 @@ fn test_run_env_var_empty_value() {
     ctx.cmd.assert().success().stdout("xx\n");
 }
 
+#[test]
+fn test_run_env_files_follow_precedence_and_host_substitution() {
+    let base_env = common::temp_env_file(
+        "# Base configuration\nBOXLITE_ENV_FILE_FIRST=one\nSHARED=from-base\nHOST_ONLY=${HOST_ONLY}\n",
+    );
+    let override_env = common::temp_env_file("\nSHARED=from-override\nEMPTY=\n");
+
+    let mut ctx = common::boxlite();
+    ctx.cmd.env("HOST_ONLY", "from-host");
+    ctx.cmd
+        .arg("run")
+        .arg("--rm")
+        .arg("--env-file")
+        .arg(base_env.path())
+        .arg("--env-file")
+        .arg(override_env.path())
+        .args([
+            "-e",
+            "SHARED=from-cli",
+            "alpine:latest",
+            "sh",
+            "-c",
+            "printf '%s|%s|%s|%s' \"$BOXLITE_ENV_FILE_FIRST\" \"$SHARED\" \"$HOST_ONLY\" \"$EMPTY\"",
+        ]);
+
+    ctx.cmd.assert().success().stdout("one|from-cli|from-host|");
+}
+
 // ============================================================================
 // Working Directory Tests
 // ============================================================================
@@ -873,7 +901,7 @@ fn test_run_invalid_image() {
 }
 
 #[test]
-fn test_run_tty_error_in_pipe() {
+fn test_run_foreground_tty_error_in_pipe() {
     let mut ctx = common::boxlite();
     ctx.cmd.args(["run", "--tty", "alpine:latest"]);
     // Simulate non-TTY input by writing to stdin
@@ -882,4 +910,23 @@ fn test_run_tty_error_in_pipe() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("input device is not a TTY"));
+}
+
+#[test]
+fn test_run_detach_with_tty_allowed() {
+    let mut ctx = common::boxlite();
+    let name = "run-detach-tty";
+    ctx.cmd.args([
+        "run",
+        "--detach",
+        "--tty",
+        "--name",
+        name,
+        "alpine:latest",
+        "sleep",
+        "300",
+    ]);
+    ctx.cmd.assert().success();
+
+    ctx.cleanup_box(name);
 }

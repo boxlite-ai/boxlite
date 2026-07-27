@@ -134,6 +134,35 @@ fn test_exec_env_override() {
 }
 
 #[test]
+fn test_exec_env_file_applies_to_command() {
+    let env_file = common::temp_env_file("EXEC_FROM=file\nOVERRIDE=file\n");
+
+    let mut ctx = common::boxlite();
+    ctx.cmd.args(["run", "-d", "alpine:latest", "sleep", "300"]);
+    let output = ctx.cmd.assert().success().get_output().clone();
+    let box_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    ctx.new_cmd()
+        .arg("exec")
+        .arg("--env-file")
+        .arg(env_file.path())
+        .args([
+            "-e",
+            "OVERRIDE=cli",
+            &box_id,
+            "--",
+            "sh",
+            "-c",
+            "printf '%s|%s' \"$EXEC_FROM\" \"$OVERRIDE\"",
+        ])
+        .assert()
+        .success()
+        .stdout("file|cli");
+
+    cleanup(&ctx, &box_id);
+}
+
+#[test]
 fn test_exec_inherits_box_workdir() {
     let mut ctx = common::boxlite();
 

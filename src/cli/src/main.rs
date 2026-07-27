@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod credentials;
 mod defaults;
+mod environment;
 mod formatter;
 pub mod terminal;
 pub mod util;

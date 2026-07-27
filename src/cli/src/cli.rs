@@ -2,6 +2,7 @@
 //! This module contains all CLI-related code including the main CLI structure,
 //! subcommands, and flag definitions.
 
+pub use crate::environment::EnvironmentFlags;
 use boxlite::experimental::custom_kernel::{KernelFormat, KernelOptions, configure};
 use boxlite::experimental::{
     EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
@@ -15,30 +16,6 @@ use clap::{Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::shells::{Bash, Fish, Zsh};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
-
-/// Helper to parse CLI environment variables and apply them to BoxOptions
-pub fn apply_env_vars(env: &[String], opts: &mut BoxOptions) {
-    apply_env_vars_with_lookup(env, opts, |k| std::env::var(k).ok())
-}
-
-/// Helper to parse CLI environment variables with custom lookup for host variables
-pub fn apply_env_vars_with_lookup<F>(env: &[String], opts: &mut BoxOptions, lookup: F)
-where
-    F: Fn(&str) -> Option<String>,
-{
-    for env_str in env {
-        if let Some((k, v)) = env_str.split_once('=') {
-            opts.env.push((k.to_string(), v.to_string()));
-        } else if let Some(val) = lookup(env_str) {
-            opts.env.push((env_str.to_string(), val));
-        } else {
-            tracing::warn!(
-                "Environment variable '{}' not found on host, skipping",
-                env_str
-            );
-        }
-    }
-}
 
 // ============================================================================
 // CLI Definition
@@ -375,6 +352,34 @@ impl GlobalFlags {
 // PROCESS FLAGS
 // ============================================================================
 
+pub(crate) struct BoxProcessOptions<'a> {
+    working_dir: Option<&'a str>,
+    environment: &'a [(String, String)],
+    entrypoint: Option<&'a str>,
+}
+
+impl<'a> BoxProcessOptions<'a> {
+    pub(crate) fn new(
+        working_dir: Option<&'a str>,
+        environment: &'a [(String, String)],
+        entrypoint: Option<&'a str>,
+    ) -> Self {
+        Self {
+            working_dir,
+            environment,
+            entrypoint,
+        }
+    }
+
+    pub(crate) fn apply_to(&self, opts: &mut BoxOptions) {
+        opts.working_dir = self.working_dir.map(str::to_string);
+        opts.env.extend(self.environment.iter().cloned());
+        if let Some(exec) = self.entrypoint {
+            opts.entrypoint = Some(vec![exec.to_string()]);
+        }
+    }
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct ProcessFlags {
     /// Keep STDIN open even if not attached
@@ -385,9 +390,8 @@ pub struct ProcessFlags {
     #[arg(short, long)]
     pub tty: bool,
 
-    /// Set environment variables
-    #[arg(short = 'e', long = "env")]
-    pub env: Vec<String>,
+    #[command(flatten)]
+    pub environment: EnvironmentFlags,
 
     /// Working directory inside the box
     #[arg(short = 'w', long = "workdir")]
@@ -407,27 +411,20 @@ pub struct ProcessFlags {
 
 impl ProcessFlags {
     /// Apply process configuration to BoxOptions
-    pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
-        self.apply_to_with_lookup(opts, |k| std::env::var(k).ok())
-    }
+    pub fn apply_to(&self, opts: &mut BoxOptions, environment: &[(String, String)]) {
+        BoxProcessOptions::new(
+            self.workdir.as_deref(),
+            environment,
+            self.entrypoint.as_deref(),
+        )
+        .apply_to(opts);
 
-    /// Internal helper for dependency injection of environment variables
-    fn apply_to_with_lookup<F>(&self, opts: &mut BoxOptions, lookup: F) -> anyhow::Result<()>
-    where
-        F: Fn(&str) -> Option<String>,
-    {
-        opts.working_dir = self.workdir.clone();
-        apply_env_vars_with_lookup(&self.env, opts, lookup);
-        if let Some(ref exec) = self.entrypoint {
-            opts.entrypoint = Some(vec![exec.clone()]);
-        }
         if let Some(ref user) = self.user {
             opts.user = Some(user.clone());
         }
         // `-t` is a property of the container's init, which COMMAND now is, so
         // it has to be decided here at create time rather than at attach.
         opts.tty = self.tty;
-        Ok(())
     }
 
     /// Validate process flags
@@ -441,13 +438,13 @@ impl ProcessFlags {
     }
 
     /// Configures a BoxCommand with process flags (env, workdir, tty)
-    pub fn configure_command(&self, mut cmd: BoxCommand) -> BoxCommand {
-        for env_str in &self.env {
-            if let Some((k, v)) = env_str.split_once('=') {
-                cmd = cmd.env(k, v);
-            } else if let Ok(val) = std::env::var(env_str) {
-                cmd = cmd.env(env_str, val);
-            }
+    pub fn configure_command(
+        &self,
+        mut cmd: BoxCommand,
+        environment: &[(String, String)],
+    ) -> BoxCommand {
+        for (key, value) in environment {
+            cmd = cmd.env(key, value);
         }
 
         if let Some(ref w) = self.workdir {
@@ -956,33 +953,50 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_apply_env_vars_with_lookup() {
-        let mut opts = BoxOptions::default();
-        let current_env = vec![
-            "TEST_VAR=test_value".to_string(),
-            "TEST_HOST_VAR".to_string(),
-            "NON_EXISTENT_VAR".to_string(),
-        ];
-
-        apply_env_vars_with_lookup(&current_env, &mut opts, |k| {
-            if k == "TEST_HOST_VAR" {
-                Some("host_value".to_string())
-            } else {
-                None
-            }
-        });
-
-        assert!(
-            opts.env
-                .contains(&("TEST_VAR".to_string(), "test_value".to_string()))
+    fn env_file_flag_is_available_on_run_create_and_exec() {
+        let run = Cli::try_parse_from(["boxlite", "run", "--env-file", "run.env", "alpine:latest"])
+            .unwrap();
+        let Commands::Run(run_args) = run.command else {
+            panic!("expected run command");
+        };
+        assert_eq!(
+            run_args.process.environment.env_files,
+            vec![PathBuf::from("run.env")]
         );
 
-        assert!(
-            opts.env
-                .contains(&("TEST_HOST_VAR".to_string(), "host_value".to_string()))
+        let create = Cli::try_parse_from([
+            "boxlite",
+            "create",
+            "--env-file",
+            "create.env",
+            "alpine:latest",
+        ])
+        .unwrap();
+        let Commands::Create(create_args) = create.command else {
+            panic!("expected create command");
+        };
+        assert_eq!(
+            create_args.environment.env_files,
+            vec![PathBuf::from("create.env")]
         );
 
-        assert!(!opts.env.iter().any(|(k, _)| k == "NON_EXISTENT_VAR"));
+        let exec = Cli::try_parse_from([
+            "boxlite",
+            "exec",
+            "--env-file",
+            "exec.env",
+            "box-id",
+            "--",
+            "env",
+        ])
+        .unwrap();
+        let Commands::Exec(exec_args) = exec.command else {
+            panic!("expected exec command");
+        };
+        assert_eq!(
+            exec_args.process.environment.env_files,
+            vec![PathBuf::from("exec.env")]
+        );
     }
 
     #[test]
@@ -1355,7 +1369,7 @@ mod tests {
         ProcessFlags {
             interactive: false,
             tty: false,
-            env: Vec::new(),
+            environment: EnvironmentFlags::default(),
             workdir: None,
             user: None,
             entrypoint: entrypoint.map(str::to_string),
@@ -1367,9 +1381,7 @@ mod tests {
         // --entrypoint <EXEC> reaches BoxOptions.entrypoint as a single-token
         // argv, which container_rootfs applies as config.entrypoint.
         let mut opts = BoxOptions::default();
-        process_flags_with_entrypoint(Some("/bin/bash"))
-            .apply_to(&mut opts)
-            .expect("entrypoint apply");
+        process_flags_with_entrypoint(Some("/bin/bash")).apply_to(&mut opts, &[]);
 
         assert_eq!(opts.entrypoint, Some(vec!["/bin/bash".to_string()]));
     }
@@ -1386,7 +1398,7 @@ mod tests {
 
         let mut flags = process_flags_with_entrypoint(None);
         flags.tty = true;
-        flags.apply_to(&mut opts).expect("tty apply");
+        flags.apply_to(&mut opts, &[]);
 
         assert!(opts.tty, "-t must make the main command a terminal");
     }
@@ -1396,11 +1408,22 @@ mod tests {
         // No --entrypoint leaves BoxOptions.entrypoint None so the image's
         // own entrypoint is used unchanged.
         let mut opts = BoxOptions::default();
-        process_flags_with_entrypoint(None)
-            .apply_to(&mut opts)
-            .expect("no-op apply");
+        process_flags_with_entrypoint(None).apply_to(&mut opts, &[]);
 
         assert_eq!(opts.entrypoint, None);
+    }
+
+    #[test]
+    fn box_process_options_apply_box_level_process_configuration() {
+        let environment = vec![("KEY".to_string(), "value".to_string())];
+        let mut opts = BoxOptions::default();
+
+        BoxProcessOptions::new(Some("/workspace"), &environment, Some("/bin/sh"))
+            .apply_to(&mut opts);
+
+        assert_eq!(opts.working_dir.as_deref(), Some("/workspace"));
+        assert_eq!(opts.env, environment);
+        assert_eq!(opts.entrypoint, Some(vec!["/bin/sh".to_string()]));
     }
 
     #[test]
