@@ -244,9 +244,6 @@ Metadata about a box.
 | `image` | `str` | OCI image used |
 | `cpus` | `int` | Allocated CPU cores |
 | `memory_mib` | `int` | Allocated memory in MiB |
-| `advanced.capabilities.add` | `List[str]` | Linux capabilities added to the default container set |
-| `advanced.capabilities.drop` | `List[str]` | Linux capabilities removed from the resulting container set |
-
 ---
 
 ### `boxlite.BoxStateInfo`

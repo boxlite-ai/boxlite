@@ -9,7 +9,6 @@ use std::fmt;
 use std::hash::Hash;
 
 pub use crate::litebox::{BoxState, BoxStatus, HealthStatus};
-use crate::runtime::advanced_options::ContainerCapabilities;
 use crate::runtime::id::BoxID;
 /// Re-exported here so the CLI can reach volume metadata the same way it
 /// reaches [`ImageInfo`] (`boxlite::runtime::types::VolumeInfo`). The type
@@ -307,17 +306,6 @@ impl BoxLifecyclePolicy {
     }
 }
 
-/// Expert-only public metadata about a box.
-///
-/// This intentionally contains inspection-safe state only. Runtime security
-/// configuration remains private to the owning runtime.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct BoxAdvancedInfo {
-    /// Linux capability policy applied to the container process.
-    pub capabilities: ContainerCapabilities,
-}
-
 /// Public metadata about a box (returned by list operations).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxInfo {
@@ -347,10 +335,6 @@ pub struct BoxInfo {
 
     /// Allocated memory in MiB.
     pub memory_mib: u32,
-
-    /// Expert-only inspection metadata.
-    #[serde(default)]
-    pub advanced: BoxAdvancedInfo,
 
     /// User-defined labels for filtering and organization.
     pub labels: HashMap<String, String>,
@@ -391,9 +375,6 @@ impl BoxInfo {
             },
             cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
-            advanced: BoxAdvancedInfo {
-                capabilities: config.options.advanced.capabilities.clone(),
-            },
             labels: HashMap::new(),
             // Local runtimes do not sweep lifecycle deadlines, but metadata keeps
             // the configured values so callers can inspect the effective policy.
@@ -415,7 +396,6 @@ impl PartialEq for BoxInfo {
             && self.image == other.image
             && self.cpus == other.cpus
             && self.memory_mib == other.memory_mib
-            && self.advanced == other.advanced
             && self.labels == other.labels
             && self.auto_pause == other.auto_pause
             && self.auto_delete == other.auto_delete

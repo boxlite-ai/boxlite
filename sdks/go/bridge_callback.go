@@ -307,15 +307,15 @@ func goBoxliteOnVolumeRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 
 // ─── Info callbacks ────────────────────────────────────────────────────────
 
-//export goBoxliteOnInfoV2
-func goBoxliteOnInfoV2(info *C.CBoxInfoV2, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+//export goBoxliteOnInfo
+func goBoxliteOnInfo(info *C.CBoxInfo, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
 	if h == 0 {
 		return
 	}
-	if !claimOrFreePayload(h, &info, func(i **C.CBoxInfoV2) {
+	if !claimOrFreePayload(h, &info, func(i **C.CBoxInfo) {
 		if i != nil && *i != nil {
-			C.boxlite_free_box_info_v2(*i)
+			C.boxlite_free_box_info(*i)
 		}
 	}) {
 		return
@@ -333,20 +333,20 @@ func goBoxliteOnInfoV2(info *C.CBoxInfoV2, errPtr *C.CBoxliteError, userData uns
 		ch <- infoResult{}
 		return
 	}
-	v := cBoxInfoV2ToGo(info)
-	C.boxlite_free_box_info_v2(info)
+	v := cBoxInfoToGo(info)
+	C.boxlite_free_box_info(info)
 	ch <- infoResult{value: &v}
 }
 
-//export goBoxliteOnInfoListV2
-func goBoxliteOnInfoListV2(list *C.CBoxInfoListV2, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+//export goBoxliteOnInfoList
+func goBoxliteOnInfoList(list *C.CBoxInfoList, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
 	if h == 0 {
 		return
 	}
-	if !claimOrFreePayload(h, &list, func(l **C.CBoxInfoListV2) {
+	if !claimOrFreePayload(h, &list, func(l **C.CBoxInfoList) {
 		if l != nil && *l != nil {
-			C.boxlite_free_box_info_list_v2(*l)
+			C.boxlite_free_box_info_list(*l)
 		}
 	}) {
 		return
@@ -360,9 +360,9 @@ func goBoxliteOnInfoListV2(list *C.CBoxInfoListV2, errPtr *C.CBoxliteError, user
 		ch <- infoListResult{err: err}
 		return
 	}
-	out := convertBoxInfoListV2(list)
+	out := convertBoxInfoList(list)
 	if list != nil {
-		C.boxlite_free_box_info_list_v2(list)
+		C.boxlite_free_box_info_list(list)
 	}
 	ch <- infoListResult{value: out}
 }

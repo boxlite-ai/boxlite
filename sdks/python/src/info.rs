@@ -1,8 +1,6 @@
 use boxlite::{BoxInfo, BoxStateInfo, BoxStatus, HealthState as CoreHealthState};
 use pyo3::prelude::*;
 
-use crate::advanced_options::PyContainerCapabilities;
-
 // ============================================================================
 // HealthState - Health check state enumeration
 // ============================================================================
@@ -161,27 +159,6 @@ impl From<BoxStateInfo> for PyBoxStateInfo {
 // BoxInfo - Container info with nested state
 // ============================================================================
 
-/// Expert-only, inspection-safe metadata about a box.
-#[pyclass(name = "BoxAdvancedInfo")]
-#[derive(Clone)]
-pub(crate) struct PyBoxAdvancedInfo {
-    #[pyo3(get)]
-    pub(crate) capabilities: PyContainerCapabilities,
-}
-
-#[pymethods]
-impl PyBoxAdvancedInfo {
-    fn __repr__(&self) -> String {
-        serde_json::to_string_pretty(&serde_json::json!({
-            "capabilities": {
-                "add": self.capabilities.add,
-                "drop": self.capabilities.drop,
-            }
-        }))
-        .unwrap_or_default()
-    }
-}
-
 #[pyclass(name = "BoxInfo")]
 #[derive(Clone)]
 pub(crate) struct PyBoxInfo {
@@ -199,9 +176,6 @@ pub(crate) struct PyBoxInfo {
     pub(crate) cpus: u8,
     #[pyo3(get)]
     pub(crate) memory_mib: u32,
-    #[pyo3(get)]
-    pub(crate) advanced: PyBoxAdvancedInfo,
-    #[pyo3(get)]
     pub(crate) auto_pause: u32,
     #[pyo3(get)]
     pub(crate) auto_delete: u32,
@@ -225,12 +199,6 @@ impl PyBoxInfo {
             "image": self.image,
             "cpus": self.cpus,
             "memory_mib": self.memory_mib,
-            "advanced": {
-                "capabilities": {
-                    "add": self.advanced.capabilities.add,
-                    "drop": self.advanced.capabilities.drop,
-                }
-            },
             "auto_pause": self.auto_pause,
             "auto_delete": self.auto_delete,
             "auto_resume": self.auto_resume,
@@ -254,13 +222,6 @@ impl From<BoxInfo> for PyBoxInfo {
             failures: info.health_status.failures,
             last_check: info.health_status.last_check.map(|dt| dt.to_rfc3339()),
         };
-        let advanced = PyBoxAdvancedInfo {
-            capabilities: PyContainerCapabilities {
-                add: info.advanced.capabilities.add,
-                drop: info.advanced.capabilities.drop,
-            },
-        };
-
         PyBoxInfo {
             id: info.id.to_string(),
             name: info.name,
@@ -269,7 +230,6 @@ impl From<BoxInfo> for PyBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
-            advanced,
             auto_pause: info.auto_pause,
             auto_delete: info.auto_delete,
             auto_resume: info.auto_resume,

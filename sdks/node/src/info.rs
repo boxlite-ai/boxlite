@@ -95,21 +95,6 @@ impl From<BoxStateInfo> for JsBoxStateInfo {
 // BoxInfo - Container info with nested state
 // ============================================================================
 
-/// Linux capability policy returned by box inspection.
-#[napi(object)]
-#[derive(Clone, Debug)]
-pub struct JsContainerCapabilitiesInfo {
-    pub add: Vec<String>,
-    pub drop: Vec<String>,
-}
-
-/// Expert-only, inspection-safe metadata about a box.
-#[napi(object)]
-#[derive(Clone, Debug)]
-pub struct JsBoxAdvancedInfo {
-    pub capabilities: JsContainerCapabilitiesInfo,
-}
-
 /// Public metadata about a box (returned by list operations).
 ///
 /// Provides read-only information about a box's identity, configuration,
@@ -138,9 +123,6 @@ pub struct JsBoxInfo {
     /// Allocated memory in MiB
     pub memory_mib: u32,
 
-    /// Expert-only inspection metadata.
-    pub advanced: JsBoxAdvancedInfo,
-
     /// Idle time in seconds before AutoPause; 0 disables it.
     #[napi(js_name = "autoPause")]
     pub auto_pause: u32,
@@ -166,13 +148,6 @@ impl From<BoxInfo> for JsBoxInfo {
             failures: info.health_status.failures,
             last_check: info.health_status.last_check.map(|dt| dt.to_rfc3339()),
         };
-        let advanced = JsBoxAdvancedInfo {
-            capabilities: JsContainerCapabilitiesInfo {
-                add: info.advanced.capabilities.add,
-                drop: info.advanced.capabilities.drop,
-            },
-        };
-
         Self {
             id: info.id.to_string(),
             name: info.name,
@@ -181,7 +156,6 @@ impl From<BoxInfo> for JsBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
-            advanced,
             auto_pause: info.auto_pause,
             auto_delete: info.auto_delete,
             auto_resume: info.auto_resume,

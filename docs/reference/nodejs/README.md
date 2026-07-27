@@ -214,9 +214,6 @@ Metadata about a box.
 | `createdAt` | `string` | Creation timestamp (ISO 8601) |
 | `lastUpdated` | `string` | Last state change (ISO 8601) |
 | `pid` | `number \| undefined` | Process ID (if running) |
-| `advanced.capabilities.add` | `string[]` | Linux capabilities added to the default container set |
-| `advanced.capabilities.drop` | `string[]` | Linux capabilities removed from the resulting container set |
-
 ---
 
 ## Command Execution

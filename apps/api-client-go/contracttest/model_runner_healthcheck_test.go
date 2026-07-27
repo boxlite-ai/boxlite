@@ -36,38 +36,3 @@ func TestRunnerHealthcheckDoesNotTreatFeaturesAsAdditional(t *testing.T) {
 		t.Fatal("known features field must not remain in AdditionalProperties")
 	}
 }
-
-func TestBoxDoesNotTreatCapabilitiesAsAdditional(t *testing.T) {
-	box := apiclient.NewBox(
-		"box-1",
-		"org-1",
-		"cap-box",
-		"boxlite",
-		map[string]string{},
-		*apiclient.NewBoxAdvancedOptions(*apiclient.NewLinuxCapabilities([]string{"SYS_ADMIN"}, []string{"NET_RAW"})),
-		map[string]string{},
-		true,
-		false,
-		"local",
-		1,
-		0,
-		1,
-		10,
-		"https://example.test/toolbox",
-	)
-	payload, err := json.Marshal(box)
-	if err != nil {
-		t.Fatalf("marshal box: %v", err)
-	}
-
-	var decoded apiclient.Box
-	if err := json.Unmarshal(payload, &decoded); err != nil {
-		t.Fatalf("unmarshal box: %v", err)
-	}
-	if _, exists := decoded.AdditionalProperties["advanced"]; exists {
-		t.Fatal("known advanced field must not remain in AdditionalProperties")
-	}
-	if !reflect.DeepEqual(decoded.Advanced.Capabilities.Add, []string{"SYS_ADMIN"}) {
-		t.Fatalf("advanced capabilities lost during round trip: %s", payload)
-	}
-}

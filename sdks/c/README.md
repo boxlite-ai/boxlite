@@ -493,12 +493,6 @@ if (boxlite_execute(box, &cmd, my_callback, NULL, &execution, &error) == Ok) {
 
 #### Discovery & Introspection
 
-New code should use the ABI-safe `boxlite_box_info_v2`,
-`boxlite_get_info_v2`, and `boxlite_list_info_v2` variants. `CBoxInfoV2`
-embeds the stable v1 fields as `base`. Its capability policy is available at
-`info->advanced.capabilities.add` and `.drop`; release the recursively owned
-arrays with the matching `_v2` free function.
-
 ```c
 // List all boxes
 BoxliteErrorCode boxlite_list_info(
@@ -686,8 +680,6 @@ make
    - `CBoxliteExecResult` → `boxlite_result_free()`
    - `CBoxInfo` → `boxlite_free_box_info()`
    - `CBoxInfoList` → `boxlite_free_box_info_list()`
-   - `CBoxInfoV2` → `boxlite_free_box_info_v2()`
-   - `CBoxInfoListV2` → `boxlite_free_box_info_list_v2()`
    - `CImagePullResult` → `boxlite_free_image_pull_result()`
    - `CImageInfoList` → `boxlite_free_image_info_list()`
 

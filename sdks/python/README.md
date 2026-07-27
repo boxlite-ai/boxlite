@@ -293,9 +293,6 @@ options = boxlite.BoxOptions(
 box = runtime.create(options)
 ```
 
-Inspection returns the effective policy at
-`info.advanced.capabilities.add` and `info.advanced.capabilities.drop`.
-
 ### Box Handle
 
 #### `boxlite.Box`

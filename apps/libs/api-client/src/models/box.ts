@@ -21,9 +21,6 @@ import type { BoxState } from './box-state'
 // May contain unused imports in some cases
 // @ts-ignore
 import type { BoxVolume } from './box-volume'
-// May contain unused imports in some cases
-// @ts-ignore
-import type { BoxAdvancedOptions } from './box-advanced-options'
 
 export interface Box {
   /**
@@ -46,10 +43,6 @@ export interface Box {
    * Environment variables for the box
    */
   env: { [key: string]: string }
-  /**
-   * Advanced box configuration
-   */
-  advanced: BoxAdvancedOptions
   /**
    * Labels for the box
    */

@@ -15,7 +15,6 @@ import {
 import { BoxResponseDto } from '../dto/box-response.dto'
 import { CreateBoxDto as RestCreateBoxDto } from '../dto/create-box.dto'
 import { CreateBoxDto } from '../../box/dto/create-box.dto'
-import { normalizeBoxAdvancedOptions } from '../../box/common/box-advanced-options'
 
 export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
   return {
@@ -27,7 +26,6 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     image: box.image || '',
     cpus: box.cpu || 1,
     memory_mib: (box.memory || 1) * 1024,
-    advanced: normalizeBoxAdvancedOptions(box.advanced),
     labels: box.labels || {},
     auto_pause: box.autoPause ?? DEFAULT_AUTO_PAUSE_SECONDS,
     auto_delete: box.autoDelete ?? AUTO_DELETE_DISABLED,
@@ -65,9 +63,7 @@ function rejectUnsupportedCloudCreateOptions(dto: RestCreateBoxDto): void {
     return
   }
 
-  throw new BadRequestException(
-    `${unsupportedFields.join(', ')} is not supported by the cloud REST API`,
-  )
+  throw new BadRequestException(`${unsupportedFields.join(', ')} is not supported by the cloud REST API`)
 }
 
 function mapState(state: string | BoxState | undefined): string {

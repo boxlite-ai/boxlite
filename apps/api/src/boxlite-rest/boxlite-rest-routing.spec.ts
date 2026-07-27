@@ -45,7 +45,7 @@ describe('BoxLite REST routing', () => {
                 name: 'named',
                 state: BoxState.STARTED,
                 labels: {},
-                advanced: { capabilities: { add: [], drop: [] } },
+                advanced: { capabilities: { add: ['SYS_ADMIN'], drop: ['NET_RAW'] } },
               },
               created: false,
             }),
@@ -54,7 +54,6 @@ describe('BoxLite REST routing', () => {
               name: 'named',
               state: BoxState.STARTED,
               labels: {},
-              advanced: { capabilities: { add: [], drop: [] } },
             }),
           },
         },
@@ -106,6 +105,14 @@ describe('BoxLite REST routing', () => {
     expect(Reflect.getMetadata(PATH_METADATA, BoxliteProxyController)).toEqual(['v1/boxes', 'v1/:prefix/boxes'])
   })
 
+  it('does not register capability-specific read aliases', () => {
+    const listPath = Reflect.getMetadata(PATH_METADATA, BoxliteBoxController.prototype.listBoxes)
+    const getPath = Reflect.getMetadata(PATH_METADATA, BoxliteBoxController.prototype.getBox)
+
+    expect(listPath).toBe('/')
+    expect(getPath).toBe(':boxId')
+  })
+
   it('registers canonical and legacy default-prefix routes in the Nest HTTP router', async () => {
     await startRoutingTestApp()
 
@@ -118,32 +125,6 @@ describe('BoxLite REST routing', () => {
     expect(await legacy.json()).toEqual({ boxes: [] })
   })
 
-  it('registers the strict policy-aware box read route', async () => {
-    await startRoutingTestApp()
-
-    const canonical = await get('/api/v1/boxes/named/strict')
-    const prefixed = await get('/api/v1/default/boxes/named/strict')
-
-    expect(canonical.status).toBe(200)
-    expect(await canonical.json()).toMatchObject({
-      box_id: 'box-1',
-      advanced: { capabilities: { add: [], drop: [] } },
-    })
-    expect(prefixed.status).toBe(200)
-  })
-
-  it('registers the strict policy-aware box list route', async () => {
-    await startRoutingTestApp()
-
-    const canonical = await get('/api/v1/boxes/strict')
-    const prefixed = await get('/api/v1/default/boxes/strict')
-
-    expect(canonical.status).toBe(200)
-    expect(await canonical.json()).toEqual({ boxes: [] })
-    expect(prefixed.status).toBe(200)
-    expect(await prefixed.json()).toEqual({ boxes: [] })
-  })
-
   it('delegates strict get-or-create compatibility to the box service', async () => {
     await startRoutingTestApp()
 
@@ -154,13 +135,14 @@ describe('BoxLite REST routing', () => {
     })
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toMatchObject({
+    const body = await response.json()
+    expect(body).toMatchObject({
       box_info: {
         box_id: 'box-1',
-        advanced: { capabilities: { add: [], drop: [] } },
       },
       created: false,
     })
+    expect(body.box_info.advanced).toBeUndefined()
   })
 
   it('rejects unknown fields at the strict create boundary', async () => {

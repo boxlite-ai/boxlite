@@ -210,7 +210,7 @@ export class BoxliteBoxController {
     }
   }
 
-  @Get(['', 'strict'])
+  @Get()
   @ApiResponse({
     status: 200,
     description: 'List boxes',
@@ -227,7 +227,7 @@ export class BoxliteBoxController {
     }
   }
 
-  @Get([':boxId', ':boxId/strict'])
+  @Get(':boxId')
   @ApiResponse({
     status: 200,
     description: 'Box details',

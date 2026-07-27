@@ -816,13 +816,6 @@ if (code == Ok) {
 
 ### Discovery & Introspection
 
-The original `CBoxInfo` layout remains stable for existing binaries. New code
-should call `boxlite_box_info_v2`, `boxlite_get_info_v2`, and
-`boxlite_list_info_v2`; `CBoxInfoV2.base` contains the original fields and the
-versioned structure adds `advanced.capabilities.add` and
-`advanced.capabilities.drop` string arrays. Free versioned
-results with `boxlite_free_box_info_v2` or `boxlite_free_box_info_list_v2`.
-
 #### boxlite_list_info
 
 List all boxes.
@@ -922,8 +915,6 @@ BoxliteErrorCode boxlite_box_metrics(
    - `CBoxliteExecResult` → `boxlite_result_free()`
    - `CBoxInfo` → `boxlite_free_box_info()`
    - `CBoxInfoList` → `boxlite_free_box_info_list()`
-   - `CBoxInfoV2` → `boxlite_free_box_info_v2()`
-   - `CBoxInfoListV2` → `boxlite_free_box_info_list_v2()`
    - `CImagePullResult` → `boxlite_free_image_pull_result()`
    - `CImageInfoList` → `boxlite_free_image_info_list()`
 
@@ -1096,13 +1087,10 @@ if (code != Ok) {
 | `boxlite_box_id()` | Get box ID |
 | `boxlite_box_free()` | Free box handle |
 | `boxlite_box_info()` | Get box info |
-| `boxlite_box_info_v2()` | Get box info including capability policy |
 | `boxlite_box_metrics()` | Get box metrics |
 | `boxlite_execute()` | Execute command |
 | `boxlite_list_info()` | List all boxes |
 | `boxlite_get_info()` | Get box info by ID |
-| `boxlite_list_info_v2()` | List boxes including capability policy |
-| `boxlite_get_info_v2()` | Get box info by ID including capability policy |
 | `boxlite_simple_new()` | Create simple box |
 | `boxlite_simple_run()` | Run command (simple) |
 | `boxlite_simple_free()` | Free simple box |

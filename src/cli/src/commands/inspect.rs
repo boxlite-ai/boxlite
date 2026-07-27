@@ -41,22 +41,6 @@ struct InspectPresenter {
     cpus: u8,
     #[serde(rename = "Memory")]
     memory: u64,
-    #[serde(rename = "Advanced")]
-    advanced: InspectAdvancedPresenter,
-}
-
-#[derive(Debug, Serialize)]
-struct InspectAdvancedPresenter {
-    #[serde(rename = "Capabilities")]
-    capabilities: InspectCapabilitiesPresenter,
-}
-
-#[derive(Debug, Serialize)]
-struct InspectCapabilitiesPresenter {
-    #[serde(rename = "Add")]
-    add: Vec<String>,
-    #[serde(rename = "Drop")]
-    drop: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,12 +73,6 @@ impl From<&BoxInfo> for InspectPresenter {
             },
             cpus: info.cpus,
             memory: info.memory_mib as u64 * 1024 * 1024,
-            advanced: InspectAdvancedPresenter {
-                capabilities: InspectCapabilitiesPresenter {
-                    add: info.advanced.capabilities.add.clone(),
-                    drop: info.advanced.capabilities.drop.clone(),
-                },
-            },
         }
     }
 }
@@ -254,7 +232,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn inspect_serializes_capability_policy() {
+    fn inspect_omits_advanced_capability_metadata() {
         let now = chrono::Utc::now();
         let info = BoxInfo {
             id: BoxID::parse("inspect-capabilities").unwrap(),
@@ -266,12 +244,6 @@ mod tests {
             image: "alpine:latest".into(),
             cpus: 1,
             memory_mib: 512,
-            advanced: boxlite::BoxAdvancedInfo {
-                capabilities: boxlite::ContainerCapabilities {
-                    add: vec!["SYS_ADMIN".into()],
-                    drop: vec!["NET_RAW".into()],
-                },
-            },
             labels: HashMap::new(),
             auto_pause: 0,
             auto_delete: 0,
@@ -281,13 +253,6 @@ mod tests {
         };
 
         let value = serde_json::to_value(InspectPresenter::from(&info)).unwrap();
-        assert_eq!(
-            value["Advanced"]["Capabilities"]["Add"],
-            serde_json::json!(["SYS_ADMIN"])
-        );
-        assert_eq!(
-            value["Advanced"]["Capabilities"]["Drop"],
-            serde_json::json!(["NET_RAW"])
-        );
+        assert!(value.get("Advanced").is_none());
     }
 }

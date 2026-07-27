@@ -109,9 +109,6 @@ for _, image := range cached {
   box, err := runtime.Create(ctx, "alpine:latest", boxlite.WithAdvancedOptions(advanced))
   ```
 
-Inspection uses the same grouping: `info.Advanced.Capabilities.Add` and
-`info.Advanced.Capabilities.Drop`.
-
 ## Development
 
 Build from source (requires Rust toolchain):

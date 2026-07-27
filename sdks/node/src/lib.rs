@@ -26,10 +26,7 @@ pub use box_handle::JsBox;
 pub use copy::JsCopyOptions;
 pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution};
 pub use images::{JsImageHandle, JsImageInfo, JsImagePullResult};
-pub use info::{
-    JsBoxAdvancedInfo, JsBoxInfo, JsBoxStateInfo, JsContainerCapabilitiesInfo, JsHealthState,
-    JsHealthStatus,
-};
+pub use info::{JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus};
 pub use metrics::{JsBoxMetrics, JsRuntimeMetrics};
 pub use network::{JsBoxConnection, JsBoxTunnel, JsNetworkHandle};
 pub use options::{

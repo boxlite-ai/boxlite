@@ -254,9 +254,6 @@ pub(crate) struct BoxResponse {
     pub image: String,
     pub cpus: u8,
     pub memory_mib: u32,
-    /// `None` means an older server omitted expert inspection metadata.
-    #[serde(default)]
-    pub advanced: Option<BoxAdvancedResponse>,
     #[serde(default)]
     pub labels: HashMap<String, String>,
     /// Absent while the box's main command is still running. An older server
@@ -279,18 +276,6 @@ pub(crate) struct GetOrCreateBoxResponse {
 }
 
 impl BoxResponse {
-    pub(crate) fn to_authoritative_box_info(
-        &self,
-    ) -> boxlite_shared::errors::BoxliteResult<crate::BoxInfo> {
-        if self.advanced.is_none() {
-            let box_name = self.name.as_deref().unwrap_or(&self.box_id);
-            return Err(BoxliteError::Unsupported(format!(
-                "REST server did not return an authoritative Linux capability policy for box {box_name}"
-            )));
-        }
-        self.to_box_info()
-    }
-
     pub fn to_box_info(&self) -> boxlite_shared::errors::BoxliteResult<crate::BoxInfo> {
         use crate::runtime::id::BoxID;
 
@@ -322,11 +307,6 @@ impl BoxResponse {
             image: self.image.clone(),
             cpus: self.cpus,
             memory_mib: self.memory_mib,
-            advanced: self
-                .advanced
-                .as_ref()
-                .map(BoxAdvancedResponse::to_core)
-                .unwrap_or_default(),
             labels: self.labels.clone(),
             auto_pause: self.auto_pause,
             auto_delete: self.auto_delete,
@@ -334,32 +314,6 @@ impl BoxResponse {
             health_status: crate::litebox::HealthStatus::new(), // REST API doesn't provide health status
             exit_code: self.exit_code,
         })
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct BoxAdvancedResponse {
-    pub capabilities: AuthoritativeContainerCapabilities,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct AuthoritativeContainerCapabilities {
-    pub add: Vec<String>,
-    pub drop: Vec<String>,
-}
-
-impl BoxAdvancedResponse {
-    pub(crate) fn capability_policy(&self) -> ContainerCapabilities {
-        ContainerCapabilities {
-            add: self.capabilities.add.clone(),
-            drop: self.capabilities.drop.clone(),
-        }
-    }
-
-    fn to_core(&self) -> crate::runtime::types::BoxAdvancedInfo {
-        crate::runtime::types::BoxAdvancedInfo {
-            capabilities: self.capability_policy(),
-        }
     }
 }
 
@@ -851,12 +805,6 @@ mod tests {
             image: "python:3.11".to_string(),
             cpus: 2,
             memory_mib: 512,
-            advanced: Some(BoxAdvancedResponse {
-                capabilities: AuthoritativeContainerCapabilities {
-                    add: vec!["SYS_ADMIN".into()],
-                    drop: vec!["NET_RAW".into()],
-                },
-            }),
             labels: HashMap::new(),
             exit_code: None,
             auto_pause: 1800,
@@ -868,8 +816,6 @@ mod tests {
         assert_eq!(info.image, "python:3.11");
         assert_eq!(info.cpus, 2);
         assert_eq!(info.memory_mib, 512);
-        assert_eq!(info.advanced.capabilities.add, ["SYS_ADMIN"]);
-        assert_eq!(info.advanced.capabilities.drop, ["NET_RAW"]);
         assert_eq!(info.auto_pause, 1800);
         assert_eq!(info.auto_delete, 604800);
     }
@@ -888,12 +834,6 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 1,
             memory_mib: 256,
-            advanced: Some(BoxAdvancedResponse {
-                capabilities: AuthoritativeContainerCapabilities {
-                    add: Vec::new(),
-                    drop: Vec::new(),
-                },
-            }),
             labels: HashMap::new(),
             exit_code: None,
             auto_pause: 900,
@@ -922,12 +862,6 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 1,
             memory_mib: 256,
-            advanced: Some(BoxAdvancedResponse {
-                capabilities: AuthoritativeContainerCapabilities {
-                    add: Vec::new(),
-                    drop: Vec::new(),
-                },
-            }),
             labels: HashMap::new(),
             exit_code: None,
             auto_pause: 900,
@@ -1000,12 +934,6 @@ mod tests {
             image: "python:3.11".to_string(),
             cpus: 2,
             memory_mib: 512,
-            advanced: Some(BoxAdvancedResponse {
-                capabilities: AuthoritativeContainerCapabilities {
-                    add: Vec::new(),
-                    drop: Vec::new(),
-                },
-            }),
             labels: HashMap::new(),
             exit_code: None,
             auto_pause: 900,

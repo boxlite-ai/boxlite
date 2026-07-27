@@ -69,7 +69,7 @@ describe('BoxLite lifecycle policy mapper', () => {
     expect(response.auto_resume).toBe(false)
   })
 
-  it('returns the persisted capability policy', () => {
+  it('omits persisted capabilities from the public response', () => {
     const response = boxToBoxResponse({
       id: 'box-1',
       name: 'demo',
@@ -78,8 +78,7 @@ describe('BoxLite lifecycle policy mapper', () => {
       advanced: { capabilities: { add: ['SYS_ADMIN'], drop: ['NET_RAW'] } },
     } as any)
 
-    expect(response.advanced.capabilities.add).toEqual(['SYS_ADMIN'])
-    expect(response.advanced.capabilities.drop).toEqual(['NET_RAW'])
+    expect((response as any).advanced).toBeUndefined()
   })
 
   it('defaults auto_resume to true when missing', () => {
@@ -91,6 +90,5 @@ describe('BoxLite lifecycle policy mapper', () => {
     } as any)
 
     expect(response.auto_resume).toBe(true)
-    expect(response.advanced).toEqual({ capabilities: { add: [], drop: [] } })
   })
 })

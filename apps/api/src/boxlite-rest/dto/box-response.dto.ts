@@ -5,7 +5,6 @@
  */
 
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
-import { BoxAdvancedOptionsDto } from '../../box/dto/box-advanced-options.dto'
 
 @ApiSchema({ name: 'Box' })
 export class BoxResponseDto {
@@ -62,13 +61,6 @@ export class BoxResponseDto {
     example: 4096,
   })
   memory_mib: number
-
-  @ApiProperty({
-    description: 'Advanced box configuration',
-    type: BoxAdvancedOptionsDto,
-    example: { capabilities: { add: ['SYS_ADMIN'], drop: ['NET_RAW'] } },
-  })
-  advanced: BoxAdvancedOptionsDto
 
   @ApiProperty({
     description: 'Labels attached to the box',

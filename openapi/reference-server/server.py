@@ -379,8 +379,6 @@ async def require_auth(
 
 
 def box_info_to_dict(info) -> dict:
-    advanced = getattr(info, "advanced", None)
-    capabilities = getattr(advanced, "capabilities", None)
     return {
         "box_id": info.id,
         "name": info.name,
@@ -391,12 +389,6 @@ def box_info_to_dict(info) -> dict:
         "image": info.image,
         "cpus": info.cpus,
         "memory_mib": info.memory_mib,
-        "advanced": {
-            "capabilities": {
-                "add": list(getattr(capabilities, "add", [])),
-                "drop": list(getattr(capabilities, "drop", [])),
-            }
-        },
         "labels": {},
     }
 
@@ -674,7 +666,6 @@ async def create_box_with_options(prefix: str, req: CreateBoxRequestBase):
     )
 
 
-@app.get("/v1/{prefix}/boxes/strict")
 @app.get("/v1/{prefix}/boxes")
 async def list_boxes(
     prefix: str,
@@ -690,7 +681,6 @@ async def list_boxes(
     return {"boxes": boxes, "next_page_token": None}
 
 
-@app.get("/v1/{prefix}/boxes/{box_id}/strict")
 @app.get("/v1/{prefix}/boxes/{box_id}")
 async def get_box(
     prefix: str,

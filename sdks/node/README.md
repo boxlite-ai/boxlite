@@ -220,7 +220,6 @@ console.log(pwdResult.stdout); // "/tmp\n"
 console.log(box.id);    // ULID
 console.log(box.name);  // Optional name
 console.log(box.info()); // Metadata
-// box.info().advanced.capabilities.add / .drop
 
 // Cleanup
 await box.stop();

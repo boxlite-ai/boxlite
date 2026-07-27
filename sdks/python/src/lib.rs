@@ -20,7 +20,7 @@ use crate::advanced_options::{
 use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
 use crate::images::{PyImageHandle, PyImageInfo, PyImagePullResult};
-use crate::info::{PyBoxAdvancedInfo, PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus};
+use crate::info::{PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus};
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
 use crate::network::{PyBoxConnection, PyBoxTunnel, PyNetworkHandle};
 use crate::options::{
@@ -55,7 +55,6 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyVolumeHandle>()?;
     m.add_class::<PyVolumeInfo>()?;
     m.add_class::<PyBoxInfo>()?;
-    m.add_class::<PyBoxAdvancedInfo>()?;
     m.add_class::<PyBoxStateInfo>()?;
     m.add_class::<PyHealthState>()?;
     m.add_class::<PyHealthStatus>()?;

@@ -290,35 +290,6 @@ typedef struct CBoxInfoList {
 // Box info list completion.
 typedef void (*CBoxInfoListCb)(struct CBoxInfoList*, CBoxliteError*, void*);
 
-// Versioned box metadata that adds capability policy without changing the
-// layout or array stride of the stable CBoxInfo ABI.
-typedef struct CContainerCapabilities {
-  char **add;
-  int add_count;
-  char **drop;
-  int drop_count;
-} CContainerCapabilities;
-
-typedef struct CBoxAdvancedInfo {
-  struct CContainerCapabilities capabilities;
-} CBoxAdvancedInfo;
-
-typedef struct CBoxInfoV2 {
-  struct CBoxInfo base;
-  struct CBoxAdvancedInfo advanced;
-} CBoxInfoV2;
-
-// Versioned box info completion with capability policy.
-typedef void (*CBoxInfoV2Cb)(struct CBoxInfoV2*, CBoxliteError*, void*);
-
-typedef struct CBoxInfoListV2 {
-  struct CBoxInfoV2 *items;
-  int count;
-} CBoxInfoListV2;
-
-// Versioned box info list completion with capability policy.
-typedef void (*CBoxInfoListV2Cb)(struct CBoxInfoListV2*, CBoxliteError*, void*);
-
 typedef struct CBoxMetrics {
   double cpu_percent;
   int64_t memory_bytes;
@@ -630,28 +601,9 @@ enum BoxliteErrorCode boxlite_list_info(CBoxliteRuntime *runtime,
                                         void *user_data,
                                         CBoxliteError *out_error);
 
-enum BoxliteErrorCode boxlite_box_info_v2(CBoxHandle *handle,
-                                          struct CBoxInfoV2 **out_info,
-                                          CBoxliteError *out_error);
-
-enum BoxliteErrorCode boxlite_get_info_v2(CBoxliteRuntime *runtime,
-                                          const char *id_or_name,
-                                          CBoxInfoV2Cb cb,
-                                          void *user_data,
-                                          CBoxliteError *out_error);
-
-enum BoxliteErrorCode boxlite_list_info_v2(CBoxliteRuntime *runtime,
-                                           CBoxInfoListV2Cb cb,
-                                           void *user_data,
-                                           CBoxliteError *out_error);
-
 void boxlite_free_box_info(struct CBoxInfo *info);
 
 void boxlite_free_box_info_list(struct CBoxInfoList *list);
-
-void boxlite_free_box_info_v2(struct CBoxInfoV2 *info);
-
-void boxlite_free_box_info_list_v2(struct CBoxInfoListV2 *list);
 
 enum BoxliteErrorCode boxlite_box_metrics(CBoxHandle *handle,
                                           CBoxMetricsCb cb,

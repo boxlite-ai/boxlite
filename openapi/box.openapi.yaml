@@ -249,31 +249,6 @@ paths:
     parameters:
       - $ref: "#/components/parameters/prefix"
 
-    get:
-      operationId: listBoxesStrict
-      summary: List boxes with authoritative security metadata
-      description: |
-        Returns a paginated list through a route introduced with Linux
-        capability policy support. Clients use this route so an older server
-        fails instead of omitting `advanced.capabilities` and making a custom
-        policy appear to be the baseline.
-      tags: [Boxes]
-      parameters:
-        - $ref: "#/components/parameters/pageSize"
-        - $ref: "#/components/parameters/pageToken"
-        - name: status
-          in: query
-          description: Filter by box status
-          schema:
-            $ref: "#/components/schemas/BoxStatus"
-      responses:
-        "200":
-          description: List of boxes with authoritative capability policies
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ListBoxesResponse"
-
     post:
       operationId: createBoxStrict
       summary: Create a box with fail-closed option handling
@@ -320,7 +295,7 @@ paths:
       description: |
         Atomically adopts an existing named box or creates it. The server
         validates the requested options against an existing box before reuse;
-        clients do not infer compatibility from inspection metadata.
+        clients delegate compatibility decisions to the backend.
       tags: [Boxes]
       requestBody:
         required: true
@@ -395,30 +370,6 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
-
-  /{prefix}/boxes/{box_id}/strict:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-      - $ref: "#/components/parameters/boxId"
-
-    get:
-      operationId: getBoxStrict
-      summary: Get authoritative box details
-      description: |
-        Returns box metadata through a route introduced with Linux capability
-        policy support. Clients that must compare a persisted security policy
-        use this route so an older server fails with 404 instead of omitting
-        `advanced.capabilities`.
-      tags: [Boxes]
-      responses:
-        "200":
-          description: Box details with an authoritative capability policy
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
 
   # -------------------------------------------------------------------------
   # Box Lifecycle
@@ -1612,7 +1563,7 @@ components:
     Box:
       type: object
       description: Box metadata (maps to BoxInfo)
-      required: [box_id, status, created_at, updated_at, image, cpus, memory_mib, advanced]
+      required: [box_id, status, created_at, updated_at, image, cpus, memory_mib]
       properties:
         box_id:
           type: string
@@ -1661,8 +1612,6 @@ components:
           minimum: 128
           description: Allocated memory in MiB
           example: 512
-        advanced:
-          $ref: "#/components/schemas/BoxAdvancedInfo"
         labels:
           type: object
           additionalProperties:
@@ -1861,32 +1810,6 @@ components:
             Linux capabilities to remove from the container capability set.
             Names are case-insensitive, may include the `CAP_` prefix, and may be `ALL`.
           example: [NET_RAW]
-
-    BoxAdvancedInfo:
-      type: object
-      description: Expert-only inspection metadata safe to expose to clients.
-      additionalProperties: false
-      required: [capabilities]
-      properties:
-        capabilities:
-          $ref: "#/components/schemas/ContainerCapabilities"
-
-    ContainerCapabilities:
-      type: object
-      description: Authoritative Linux capability policy for container processes.
-      additionalProperties: false
-      required: [add, drop]
-      properties:
-        add:
-          type: array
-          items:
-            type: string
-          description: Linux capabilities added to the default container set.
-        drop:
-          type: array
-          items:
-            type: string
-          description: Linux capabilities removed from the resulting container set.
 
     VolumeSpec:
       type: object

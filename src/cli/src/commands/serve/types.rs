@@ -115,7 +115,6 @@ pub(super) struct BoxResponse {
     pub image: String,
     pub cpus: u8,
     pub memory_mib: u32,
-    pub advanced: BoxAdvancedResponse,
     pub labels: HashMap<String, String>,
     pub auto_pause: u32,
     pub auto_delete: u32,
@@ -131,17 +130,6 @@ pub(super) struct BoxResponse {
 pub(super) struct GetOrCreateBoxResponse {
     pub box_info: BoxResponse,
     pub created: bool,
-}
-
-#[derive(Serialize)]
-pub(super) struct BoxAdvancedResponse {
-    pub capabilities: ContainerCapabilitiesResponse,
-}
-
-#[derive(Serialize)]
-pub(super) struct ContainerCapabilitiesResponse {
-    pub add: Vec<String>,
-    pub drop: Vec<String>,
 }
 
 #[derive(Serialize)]

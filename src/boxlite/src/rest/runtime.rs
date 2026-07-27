@@ -151,10 +151,10 @@ impl RuntimeBackend for RestRuntime {
     }
 
     async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
-        let path = format!("/boxes/{id_or_name}/strict");
+        let path = format!("/boxes/{id_or_name}");
         match self.client.get::<BoxResponse>(&path).await {
             Ok(resp) => {
-                let info = resp.to_authoritative_box_info()?;
+                let info = resp.to_box_info()?;
                 let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
                 Ok(Some(litebox_from_rest(rest_box)))
             }
@@ -164,20 +164,17 @@ impl RuntimeBackend for RestRuntime {
     }
 
     async fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
-        let path = format!("/boxes/{id_or_name}/strict");
+        let path = format!("/boxes/{id_or_name}");
         match self.client.get::<BoxResponse>(&path).await {
-            Ok(resp) => Ok(Some(resp.to_authoritative_box_info()?)),
+            Ok(resp) => Ok(Some(resp.to_box_info()?)),
             Err(BoxliteError::NotFound(_)) => Ok(None),
             Err(e) => Err(e),
         }
     }
 
     async fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>> {
-        let resp: ListBoxesResponse = self.client.get("/boxes/strict").await?;
-        resp.boxes
-            .iter()
-            .map(BoxResponse::to_authoritative_box_info)
-            .collect()
+        let resp: ListBoxesResponse = self.client.get("/boxes").await?;
+        resp.boxes.iter().map(BoxResponse::to_box_info).collect()
     }
 
     async fn exists(&self, id_or_name: &str) -> BoxliteResult<bool> {
@@ -403,7 +400,7 @@ mod tests {
             let mut requests = Vec::new();
             for body in [
                 r#"{"capabilities":{"linux_capabilities_enabled":true}}"#,
-                r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":null,"status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"advanced":{"capabilities":{"add":["SYS_ADMIN"],"drop":[]}},"labels":{}}"#,
+                r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":null,"status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{}}"#,
             ] {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut headers = Vec::new();
@@ -456,7 +453,7 @@ mod tests {
     async fn strict_create_does_not_recheck_server_options() {
         let (port, server) = json_server(vec![
             r#"{"capabilities":{"linux_capabilities_enabled":true}}"#,
-            r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":null,"status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"advanced":{"capabilities":{"add":["SYS_ADMIN"],"drop":[]}},"labels":{}}"#,
+            r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":null,"status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{}}"#,
         ])
         .await;
         let runtime =
@@ -575,7 +572,7 @@ mod tests {
     #[tokio::test]
     async fn get_or_create_does_not_recheck_server_options() {
         let (port, server) = json_server(vec![
-            r#"{"box_info":{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"advanced":{"capabilities":{"add":["SYS_ADMIN"],"drop":[]}},"labels":{}},"created":false}"#,
+            r#"{"box_info":{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{}},"created":false}"#,
         ])
         .await;
         let runtime =
@@ -592,58 +589,6 @@ mod tests {
         assert_eq!(
             server.await.unwrap(),
             ["POST /v1/boxes/get-or-create/strict HTTP/1.1"]
-        );
-    }
-
-    #[tokio::test]
-    async fn authoritative_inspection_rejects_responses_without_capability_policy() {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let box_json = r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{}}"#;
-            let list_json = format!(r#"{{"boxes":[{box_json}],"next_page_token":null}}"#);
-            let bodies = [box_json.to_string(), box_json.to_string(), list_json];
-            let mut requests = Vec::new();
-
-            for body in bodies {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut headers = Vec::new();
-                while !headers.ends_with(b"\r\n\r\n") {
-                    headers.push(socket.read_u8().await.unwrap());
-                }
-                let request = String::from_utf8(headers).unwrap();
-                requests.push(request.lines().next().unwrap().to_string());
-                socket
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            body.len(),
-                            body
-                        )
-                        .as_bytes(),
-                    )
-                    .await
-                    .unwrap();
-            }
-            requests
-        });
-
-        let runtime =
-            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
-        let get_result = RuntimeBackend::get(&runtime, "named").await;
-        let get_info_result = RuntimeBackend::get_info(&runtime, "named").await;
-        let list_result = RuntimeBackend::list_info(&runtime).await;
-
-        assert!(matches!(get_result, Err(BoxliteError::Unsupported(_))));
-        assert!(matches!(get_info_result, Err(BoxliteError::Unsupported(_))));
-        assert!(matches!(list_result, Err(BoxliteError::Unsupported(_))));
-        assert_eq!(
-            server.await.unwrap(),
-            [
-                "GET /v1/boxes/named/strict HTTP/1.1",
-                "GET /v1/boxes/named/strict HTTP/1.1",
-                "GET /v1/boxes/strict HTTP/1.1",
-            ]
         );
     }
 }

@@ -10,8 +10,6 @@ import { IsEnum, IsOptional } from 'class-validator'
 import { Box } from '../entities/box.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
-import { normalizeBoxAdvancedOptions } from '../common/box-advanced-options'
-import { BoxAdvancedOptionsDto } from './box-advanced-options.dto'
 
 @ApiSchema({ name: 'BoxVolume' })
 export class BoxVolume {
@@ -68,13 +66,6 @@ export class BoxDto {
     example: { NODE_ENV: 'production' },
   })
   env: Record<string, string>
-
-  @ApiProperty({
-    description: 'Advanced box configuration',
-    type: BoxAdvancedOptionsDto,
-    example: { capabilities: { add: ['SYS_ADMIN'], drop: ['NET_RAW'] } },
-  })
-  advanced: BoxAdvancedOptionsDto
 
   @ApiProperty({
     description: 'Labels for the box',
@@ -270,7 +261,6 @@ export class BoxDto {
       image: box.image,
       user: box.osUser,
       env: box.env,
-      advanced: normalizeBoxAdvancedOptions(box.advanced),
       cpu: box.cpu,
       gpu: box.gpu,
       memory: box.mem,

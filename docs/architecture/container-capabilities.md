@@ -16,10 +16,8 @@ container settings instead of widening the top-level box API:
 | C | `boxlite_advanced_options_set_capabilities_add` | `boxlite_advanced_options_set_capabilities_drop` |
 | CLI | repeatable `--cap-add` | repeatable `--cap-drop` |
 
-Create inputs and inspection outputs use that same nested path. Inspection uses
-a dedicated read-only advanced-info type so it exposes the effective capability
-policy without leaking runtime security or health-check configuration. The CLI
-flags remain familiar Docker-style shorthands and populate the nested object.
+Create inputs use that nested path. The CLI flags remain familiar Docker-style
+shorthands and populate the nested object.
 
 The values remain strings rather than a public enum. Linux can add
 capabilities independently of an SDK release, and the API host may run a
@@ -64,11 +62,6 @@ advertising the feature, and the start/restart action checks uncached persisted
 runner state again immediately before invoking the runner. Missing
 advertisements therefore fail closed; the second runner check also narrows the
 selection-to-dispatch race.
-
-Remote inspection uses the versioned strict get and list routes and rejects
-every box response that omits `advanced.capabilities`. Legacy read routes stay
-available for older clients, but capability-aware clients deliberately trade
-old-server inspection compatibility for authoritative security metadata.
 
 The structured host/guest protobuf carries the policy under an `advanced`
 message. The `-v2` feature token and capability-specific v2 job kinds keep

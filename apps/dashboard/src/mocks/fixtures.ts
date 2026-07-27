@@ -115,7 +115,6 @@ function buildBox(overrides: Partial<Box> & Pick<Box, 'id' | 'name' | 'state'>):
     class: BoxClassEnum.SMALL,
     toolboxProxyUrl: 'https://mock.local',
     ...overrides,
-    advanced: overrides.advanced ?? { capabilities: { add: [], drop: [] } },
   }
 }
 

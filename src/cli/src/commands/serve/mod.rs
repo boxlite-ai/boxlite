@@ -709,12 +709,6 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         image: info.image.clone(),
         cpus: info.cpus,
         memory_mib: info.memory_mib,
-        advanced: types::BoxAdvancedResponse {
-            capabilities: types::ContainerCapabilitiesResponse {
-                add: info.advanced.capabilities.add.clone(),
-                drop: info.advanced.capabilities.drop.clone(),
-            },
-        },
         labels: info.labels.clone(),
         auto_pause: info.auto_pause,
         auto_delete: info.auto_delete,
@@ -1101,7 +1095,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/v1/boxes/strict",
-            post(boxes::create_box).get(boxes::list_boxes),
+            post(boxes::create_box),
         )
         .route(
             "/v1/boxes",
@@ -1113,7 +1107,6 @@ fn build_router(state: Arc<AppState>) -> Router {
                 .delete(boxes::remove_box)
                 .head(boxes::head_box),
         )
-        .route("/v1/boxes/{box_id}/strict", get(boxes::get_box))
         // Box lifecycle
         .route(
             "/v1/boxes/{box_id}/start",

@@ -228,15 +228,6 @@ export interface JsBoxStateInfo {
   pid?: number;
 }
 
-export interface JsContainerCapabilitiesInfo {
-  add: string[];
-  drop: string[];
-}
-
-export interface JsBoxAdvancedInfo {
-  capabilities: JsContainerCapabilitiesInfo;
-}
-
 export interface JsBoxInfo {
   id: string;
   name?: string;
@@ -245,7 +236,6 @@ export interface JsBoxInfo {
   image: string;
   cpus: number;
   memoryMib: number;
-  advanced: JsBoxAdvancedInfo;
   autoPause: number;
   autoDelete: number;
   autoResume: boolean;

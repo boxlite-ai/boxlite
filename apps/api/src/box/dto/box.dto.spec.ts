@@ -18,7 +18,6 @@ describe('BoxDto public identity', () => {
 
     expect(dto.id).toBe(box.id)
     expect((dto as any).boxId).toBeUndefined()
-    expect(dto.advanced.capabilities.add).toEqual(['SYS_ADMIN'])
-    expect(dto.advanced.capabilities.drop).toEqual(['NET_RAW'])
+    expect((dto as any).advanced).toBeUndefined()
   })
 })
