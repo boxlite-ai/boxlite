@@ -548,6 +548,7 @@ mod process_group_tests {
 mod tests {
     use super::*;
     use futures::StreamExt;
+    use std::task::Poll;
     use std::time::Duration;
 
     #[test]
@@ -561,8 +562,21 @@ mod tests {
         runtime.block_on(async {
             let (read_fd, _write_fd) = nix::unistd::pipe().unwrap();
             let mut stdout = ExecStdout::new(read_fd).unwrap();
-            let output_read = tokio::spawn(async move { stdout.next().await });
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            let (pending_tx, pending_rx) = tokio::sync::oneshot::channel();
+            let output_read = tokio::spawn(async move {
+                let mut pending_tx = Some(pending_tx);
+                futures::future::poll_fn(move |cx| {
+                    let next = Pin::new(&mut stdout).poll_next(cx);
+                    if matches!(next, Poll::Pending) {
+                        if let Some(tx) = pending_tx.take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                    next
+                })
+                .await
+            });
+            pending_rx.await.unwrap();
 
             let temporary_file = tempfile::NamedTempFile::new().unwrap();
             std::fs::write(temporary_file.path(), b"ready").unwrap();
