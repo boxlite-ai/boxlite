@@ -547,7 +547,6 @@ mod process_group_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::StreamExt;
     use std::task::Poll;
     use std::time::Duration;
 
