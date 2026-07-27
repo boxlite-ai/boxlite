@@ -391,9 +391,7 @@ impl RuntimeImpl {
             && let Some((config, state)) = self.box_manager.lookup_box(name)?
         {
             return if reuse_existing {
-                options.sanitize_against(&config.options.advanced.capabilities, name)?;
-                let (box_impl, _) = self.get_or_create_box_impl(config, state);
-                Ok((litebox_from_impl(box_impl), false))
+                self.adopt_existing_box(&options, config, state)
             } else {
                 Err(BoxliteError::InvalidArgument(format!(
                     "box with name '{}' already exists",
@@ -432,9 +430,7 @@ impl RuntimeImpl {
                 && let Some(ref name) = name
                 && let Some((config, state)) = self.box_manager.lookup_box(name)?
             {
-                options.sanitize_against(&config.options.advanced.capabilities, name)?;
-                let (box_impl, _) = self.get_or_create_box_impl(config, state);
-                return Ok((litebox_from_impl(box_impl), false));
+                return self.adopt_existing_box(&options, config, state);
             }
 
             return Err(e);
@@ -461,6 +457,18 @@ impl RuntimeImpl {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         Ok((litebox_from_impl(box_impl), true))
+    }
+
+    /// Adopt a box found either by the initial lookup or duplicate-create recovery.
+    fn adopt_existing_box(
+        self: &Arc<Self>,
+        requested: &BoxOptions,
+        config: BoxConfig,
+        state: BoxState,
+    ) -> BoxliteResult<(LiteBox, bool)> {
+        requested.check_options_compatibility(&BoxInfo::new(&config, &state))?;
+        let (box_impl, _) = self.get_or_create_box_impl(config, state);
+        Ok((litebox_from_impl(box_impl), false))
     }
 
     /// Get a handle to an existing box by ID or name.
@@ -1776,6 +1784,25 @@ mod tests {
         options.auto_delete = Some(3600);
         assert!(reject_local_lifecycle_policy(&options).is_ok());
     }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_incompatible_existing_options() {
+        let (runtime, _dir) = create_test_runtime();
+        let mut config = test_box_config_in_layout(false, &runtime);
+        config.name = Some("existing".to_string());
+        config.options.advanced.capabilities.drop = vec!["NET_RAW".to_string()];
+        runtime
+            .box_manager
+            .add_box(&config, &BoxState::new())
+            .unwrap();
+
+        let result = runtime
+            .get_or_create(BoxOptions::default(), Some("existing".to_string()))
+            .await;
+
+        assert!(matches!(result, Err(BoxliteError::InvalidArgument(_))));
+    }
+
     /// Create a RuntimeImpl with isolated temp directory.
     fn create_test_runtime() -> (SharedRuntimeImpl, TempDir) {
         let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");

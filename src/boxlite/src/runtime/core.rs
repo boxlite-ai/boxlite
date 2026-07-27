@@ -280,7 +280,7 @@ impl BoxliteRuntime {
     ) -> BoxliteResult<LiteBox> {
         // Reject incompatible option combinations at the create boundary (fail
         // here, not at start), uniformly for the local and REST backends.
-        options.sanitize()?;
+        options.validate()?;
         self.backend.create(options, name).await
     }
 
@@ -295,7 +295,7 @@ impl BoxliteRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
-        options.sanitize()?;
+        options.validate()?;
         self.backend.get_or_create(options, name).await
     }
 

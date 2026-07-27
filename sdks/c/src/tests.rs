@@ -512,7 +512,7 @@ fn null_capability_element_cannot_weaken_policy() {
         boxlite_options_set_advanced(opts, advanced);
         (*opts)
             .options
-            .sanitize()
+            .validate()
             .expect_err("a null cap_drop element must fail closed");
         boxlite_advanced_options_free(advanced);
         boxlite_options_free(opts);
@@ -544,7 +544,7 @@ fn invalid_utf8_capability_cannot_weaken_policy() {
         boxlite_options_set_advanced(opts, advanced);
         (*opts)
             .options
-            .sanitize()
+            .validate()
             .expect_err("invalid UTF-8 in cap_add must fail closed");
         boxlite_advanced_options_free(advanced);
         boxlite_options_free(opts);

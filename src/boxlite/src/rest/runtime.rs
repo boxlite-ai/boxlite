@@ -30,6 +30,17 @@ impl RestRuntime {
         Ok(Self { client })
     }
 
+    fn compatible_box_info(options: &BoxOptions, response: &BoxResponse) -> BoxliteResult<BoxInfo> {
+        if response.advanced.is_none() {
+            return Err(BoxliteError::Unsupported(
+                "REST server did not return an authoritative Linux capability policy".into(),
+            ));
+        }
+        let info = response.to_box_info()?;
+        options.check_options_compatibility(&info)?;
+        Ok(info)
+    }
+
     async fn create_with_contract(
         &self,
         options: BoxOptions,
@@ -61,16 +72,11 @@ impl RestRuntime {
             "/boxes"
         };
         let resp: BoxResponse = self.client.post(create_path, &req).await?;
-        if uses_strict_contract {
-            let Some(advanced) = &resp.advanced else {
-                return Err(BoxliteError::Unsupported(
-                    "REST server did not return an authoritative Linux capability policy".into(),
-                ));
-            };
-            let box_name = resp.name.as_deref().unwrap_or(&resp.box_id);
-            options.sanitize_against(&advanced.capability_policy(), box_name)?;
-        }
-        let info = resp.to_box_info()?;
+        let info = if uses_strict_contract {
+            Self::compatible_box_info(&options, &resp)?
+        } else {
+            resp.to_box_info()?
+        };
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         Ok(litebox_from_rest(rest_box))
     }
@@ -141,14 +147,7 @@ impl RuntimeBackend for RestRuntime {
             let path = format!("/boxes/{box_name}/strict");
             match self.client.get::<BoxResponse>(&path).await {
                 Ok(resp) => {
-                    let Some(advanced) = &resp.advanced else {
-                        return Err(BoxliteError::Unsupported(
-                            "REST server did not return an authoritative Linux capability policy"
-                                .into(),
-                        ));
-                    };
-                    options.sanitize_against(&advanced.capability_policy(), box_name)?;
-                    let info = resp.to_box_info()?;
+                    let info = Self::compatible_box_info(&options, &resp)?;
                     let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
                     return Ok((litebox_from_rest(rest_box), false));
                 }
@@ -282,6 +281,36 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    async fn json_server(bodies: Vec<&'static str>) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for body in bodies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(socket.read_u8().await.unwrap());
+                }
+                let request = String::from_utf8(headers).unwrap();
+                requests.push(request.lines().next().unwrap().to_string());
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            requests
+        });
+        (port, server)
+    }
 
     #[tokio::test]
     async fn test_import_box_requires_capability() {
@@ -437,6 +466,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn strict_create_rejects_incompatible_options() {
+        let (port, server) = json_server(vec![
+            r#"{"capabilities":{"linux_capabilities_enabled":true}}"#,
+            r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":null,"status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"advanced":{"capabilities":{"add":["SYS_ADMIN"],"drop":[]}},"labels":{}}"#,
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let result = RuntimeBackend::create(
+            &runtime,
+            BoxOptions {
+                advanced: crate::AdvancedBoxOptions {
+                    capabilities: crate::ContainerCapabilities {
+                        add: vec!["NET_ADMIN".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            None,
+        )
+        .await;
+
+        assert!(matches!(result, Err(BoxliteError::InvalidArgument(_))));
+        assert_eq!(
+            server.await.unwrap(),
+            ["GET /v1/config HTTP/1.1", "POST /v1/boxes/strict HTTP/1.1"]
+        );
+    }
+
+    #[tokio::test]
     async fn strict_create_rejects_response_without_capability_policy() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -527,6 +588,28 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
         assert_eq!(server.await.unwrap(), "GET /v1/boxes/named/strict HTTP/1.1");
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_incompatible_existing_options() {
+        let (port, server) = json_server(vec![
+            r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"advanced":{"capabilities":{"add":["SYS_ADMIN"],"drop":[]}},"labels":{}}"#,
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let result = RuntimeBackend::get_or_create(
+            &runtime,
+            BoxOptions::default(),
+            Some("named".to_string()),
+        )
+        .await;
+
+        assert!(matches!(result, Err(BoxliteError::InvalidArgument(_))));
+        assert_eq!(
+            server.await.unwrap(),
+            ["GET /v1/boxes/named/strict HTTP/1.1"]
+        );
     }
 
     #[tokio::test]

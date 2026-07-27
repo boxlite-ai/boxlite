@@ -589,10 +589,10 @@ impl ContainerCapabilities {
         validate_capability_names("advanced.capabilities.drop", &self.drop)
     }
 
-    /// Validate the policy before `get_or_create` adopts an existing box.
-    pub(crate) fn ensure_matches(
+    /// Check the requested policy against the policy reported for a box.
+    pub(crate) fn check_compatibility(
         &self,
-        existing: &Self,
+        actual: &Self,
         box_name: &str,
     ) -> boxlite_shared::errors::BoxliteResult<()> {
         let canonicalize = |capabilities: &[String]| {
@@ -612,8 +612,8 @@ impl ContainerCapabilities {
                 .collect::<std::collections::BTreeSet<_>>()
         };
 
-        if canonicalize(&self.add) == canonicalize(&existing.add)
-            && canonicalize(&self.drop) == canonicalize(&existing.drop)
+        if canonicalize(&self.add) == canonicalize(&actual.add)
+            && canonicalize(&self.drop) == canonicalize(&actual.drop)
         {
             return Ok(());
         }

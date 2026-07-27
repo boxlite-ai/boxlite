@@ -80,7 +80,7 @@ fn options_from_manifest(manifest: &ArchiveManifest) -> BoxliteResult<BoxOptions
             CAPABILITY_POLICY_ARCHIVE_VERSION
         )));
     }
-    options.sanitize().map_err(|error| {
+    options.validate().map_err(|error| {
         BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
     })?;
     Ok(options)

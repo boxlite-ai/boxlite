@@ -550,14 +550,14 @@ impl BoxOptions {
         self.effective_auto_delete() > 0
     }
 
-    /// Sanitize and validate options.
+    /// Validate options before they enter a runtime backend.
     ///
     /// Validates option combinations:
     /// - effective remove-on-stop (`auto_delete>0`, or deprecated `auto_remove`)
     ///   with `detach=true` is invalid
     /// - `advanced.isolate_mounts=true` is only supported on Linux
     /// - `advanced.capabilities` contains well-formed Linux capability names
-    pub fn sanitize(&self) -> BoxliteResult<()> {
+    pub fn validate(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::Config(
                 "remove-on-stop is incompatible with detach=true. Detached boxes should use \
@@ -578,17 +578,22 @@ impl BoxOptions {
         Ok(())
     }
 
-    /// Sanitize options and verify the requested capability policy against an
-    /// authoritative policy returned by the local or remote backend.
-    pub(crate) fn sanitize_against(
-        &self,
-        authoritative: &crate::runtime::advanced_options::ContainerCapabilities,
-        box_name: &str,
-    ) -> BoxliteResult<()> {
-        self.sanitize()?;
+    /// Backward-compatible name for [`Self::validate`].
+    ///
+    /// This method validates options without modifying them.
+    pub fn sanitize(&self) -> BoxliteResult<()> {
+        self.validate()
+    }
+
+    /// Check requested options against the effective options reported for a box.
+    ///
+    /// This is the compatibility boundary for adopting or acknowledging a box.
+    /// Comparisons for additional immutable options belong here.
+    pub(crate) fn check_options_compatibility(&self, actual: &crate::BoxInfo) -> BoxliteResult<()> {
+        let box_name = actual.name.as_deref().unwrap_or_else(|| actual.id.as_str());
         self.advanced
             .capabilities
-            .ensure_matches(authoritative, box_name)
+            .check_compatibility(&actual.advanced.capabilities, box_name)
     }
 }
 
@@ -778,6 +783,31 @@ mod tests {
         ContainerCapabilities, SecurityOptions, SecurityOptionsBuilder,
     };
 
+    fn box_info_with_capabilities(
+        box_name: &str,
+        capabilities: ContainerCapabilities,
+    ) -> crate::BoxInfo {
+        let now = chrono::Utc::now();
+        crate::BoxInfo {
+            id: crate::runtime::id::BoxID::parse("test-box").unwrap(),
+            name: Some(box_name.to_string()),
+            status: crate::litebox::BoxStatus::Configured,
+            created_at: now,
+            last_updated: now,
+            pid: None,
+            image: "alpine:latest".to_string(),
+            cpus: 1,
+            memory_mib: 512,
+            advanced: crate::runtime::types::BoxAdvancedInfo { capabilities },
+            labels: Default::default(),
+            auto_pause: 0,
+            auto_delete: 0,
+            auto_resume: true,
+            health_status: Default::default(),
+            exit_code: None,
+        }
+    }
+
     #[test]
     #[allow(deprecated)]
     fn test_box_options_defaults() {
@@ -849,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn box_options_sanitize_accepts_valid_capability_names() {
+    fn box_options_validate_accepts_valid_capability_names() {
         let opts = BoxOptions {
             advanced: AdvancedBoxOptions {
                 capabilities: ContainerCapabilities {
@@ -861,12 +891,12 @@ mod tests {
             ..Default::default()
         };
 
-        opts.sanitize()
+        opts.validate()
             .expect("Docker-style capability names should be accepted");
     }
 
     #[test]
-    fn box_options_sanitize_accepts_future_capability_names() {
+    fn box_options_validate_accepts_future_capability_names() {
         let opts = BoxOptions {
             advanced: AdvancedBoxOptions {
                 capabilities: ContainerCapabilities {
@@ -878,12 +908,12 @@ mod tests {
             ..Default::default()
         };
 
-        opts.sanitize()
+        opts.validate()
             .expect("the guest runtime, not the host SDK, owns the supported capability list");
     }
 
     #[test]
-    fn box_options_sanitize_rejects_malformed_capability_names() {
+    fn box_options_validate_rejects_malformed_capability_names() {
         for opts in [
             BoxOptions {
                 advanced: AdvancedBoxOptions {
@@ -927,7 +957,7 @@ mod tests {
             },
         ] {
             let err = opts
-                .sanitize()
+                .validate()
                 .expect_err("malformed capability should be rejected");
             assert_eq!(err.http().0, 400);
             let err = err.to_string();
@@ -942,26 +972,14 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_against_rejects_capability_policy_drift() {
-        let malformed = BoxOptions {
-            advanced: AdvancedBoxOptions {
-                capabilities: ContainerCapabilities {
-                    add: vec!["NET-ADMIN".into()],
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let error = malformed
-            .sanitize_against(&malformed.advanced.capabilities, "malformed-policy")
-            .expect_err("contextual sanitization must reject malformed capability names");
-        assert!(error.to_string().contains("NET-ADMIN"));
-
+    fn check_options_compatibility_rejects_capability_policy_drift() {
         let baseline = BoxOptions::default();
         assert!(
             baseline
-                .sanitize_against(&ContainerCapabilities::default(), "same-policy")
+                .check_options_compatibility(&box_info_with_capabilities(
+                    "same-policy",
+                    ContainerCapabilities::default(),
+                ))
                 .is_ok()
         );
 
@@ -977,13 +995,13 @@ mod tests {
         };
         assert!(
             spelling_variant
-                .sanitize_against(
-                    &ContainerCapabilities {
+                .check_options_compatibility(&box_info_with_capabilities(
+                    "same-policy",
+                    ContainerCapabilities {
                         add: vec!["NET_ADMIN".into(), "CAP_SYS_ADMIN".into()],
                         ..Default::default()
                     },
-                    "same-policy"
-                )
+                ))
                 .is_ok()
         );
 
@@ -998,18 +1016,21 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            restricted.sanitize_against(&ContainerCapabilities::default(), "baseline-box"),
+            restricted.check_options_compatibility(&box_info_with_capabilities(
+                "baseline-box",
+                ContainerCapabilities::default(),
+            )),
             Err(boxlite_shared::errors::BoxliteError::InvalidArgument(_))
         ));
 
         assert!(matches!(
-            baseline.sanitize_against(
-                &ContainerCapabilities {
+            baseline.check_options_compatibility(&box_info_with_capabilities(
+                "privileged-box",
+                ContainerCapabilities {
                     add: vec!["CAP_SYS_ADMIN".into()],
                     ..Default::default()
                 },
-                "privileged-box"
-            ),
+            )),
             Err(boxlite_shared::errors::BoxliteError::InvalidArgument(_))
         ));
     }
@@ -1141,36 +1162,40 @@ mod tests {
     }
 
     #[test]
-    fn test_sanitize_remove_on_stop_detach_incompatible() {
+    fn test_validate_remove_on_stop_detach_incompatible() {
         let opts = BoxOptions {
             auto_delete: Some(1),
             detach: true,
             ..Default::default()
         };
-        let err_msg = opts.sanitize().unwrap_err().to_string();
+        let err_msg = opts.validate().unwrap_err().to_string();
         assert!(err_msg.contains("incompatible"));
     }
 
     #[test]
-    fn test_sanitize_valid_combinations() {
+    fn test_validate_valid_combinations() {
         let remove = BoxOptions {
             auto_delete: Some(1),
             ..Default::default()
         };
-        assert!(remove.sanitize().is_ok());
+        assert!(remove.validate().is_ok());
 
         let keep_detached = BoxOptions {
             auto_delete: Some(0),
             detach: true,
             ..Default::default()
         };
-        assert!(keep_detached.sanitize().is_ok());
+        assert!(keep_detached.validate().is_ok());
 
         let keep_attached = BoxOptions {
             auto_delete: Some(0),
             ..Default::default()
         };
-        assert!(keep_attached.sanitize().is_ok());
+        assert!(keep_attached.validate().is_ok());
+
+        BoxOptions::default()
+            .sanitize()
+            .expect("the legacy sanitize name should continue to validate options");
     }
 
     // ========================================================================
