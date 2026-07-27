@@ -7,7 +7,7 @@ use super::metrics::{PipelineMetrics, StageMetrics, TaskMetrics};
 use super::stage::{ExecutionMode, Stage};
 use super::task::BoxedTask;
 use boxlite_shared::errors::BoxliteResult;
-use futures::future::try_join_all;
+use futures::future::join_all;
 use std::time::Instant;
 
 pub struct ExecutionPlan<Ctx> {
@@ -81,7 +81,14 @@ impl PipelineExecutor {
                             })
                         }
                     });
-                    try_join_all(futures).await?
+                    // Every started task may own side effects that require an
+                    // async completion path. Wait for all siblings before
+                    // returning the first error in declaration order; a
+                    // fail-fast join would cancel those cleanup paths.
+                    join_all(futures)
+                        .await
+                        .into_iter()
+                        .collect::<BoxliteResult<Vec<_>>>()?
                 }
                 ExecutionMode::Sequential => {
                     let mut task_metrics = Vec::new();
@@ -110,5 +117,79 @@ impl PipelineExecutor {
             total_duration_ms: total_start.elapsed().as_millis(),
             stages: stage_metrics,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pipeline::PipelineTask;
+    use async_trait::async_trait;
+    use boxlite_shared::errors::BoxliteError;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Barrier;
+
+    #[derive(Clone)]
+    struct ParallelTestContext {
+        started: Arc<Barrier>,
+        cleanup_finished: Arc<AtomicBool>,
+    }
+
+    struct FailingTask;
+
+    #[async_trait]
+    impl PipelineTask<ParallelTestContext> for FailingTask {
+        async fn run(
+            self: Box<Self>,
+            ctx: ParallelTestContext,
+        ) -> boxlite_shared::errors::BoxliteResult<()> {
+            ctx.started.wait().await;
+            Err(BoxliteError::Internal("parallel task failed".to_string()))
+        }
+
+        fn name(&self) -> &str {
+            "failing"
+        }
+    }
+
+    struct CleanupTask;
+
+    #[async_trait]
+    impl PipelineTask<ParallelTestContext> for CleanupTask {
+        async fn run(
+            self: Box<Self>,
+            ctx: ParallelTestContext,
+        ) -> boxlite_shared::errors::BoxliteResult<()> {
+            ctx.started.wait().await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            ctx.cleanup_finished.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn name(&self) -> &str {
+            "cleanup"
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_stage_waits_for_started_sibling_cleanup_before_returning_error() {
+        let cleanup_finished = Arc::new(AtomicBool::new(false));
+        let ctx = ParallelTestContext {
+            started: Arc::new(Barrier::new(2)),
+            cleanup_finished: Arc::clone(&cleanup_finished),
+        };
+        let pipeline = Pipeline::new(vec![Stage::parallel(vec![
+            Box::new(FailingTask),
+            Box::new(CleanupTask),
+        ])]);
+
+        let error = PipelineExecutor::execute(pipeline, ctx).await.unwrap_err();
+
+        assert!(error.to_string().contains("parallel task failed"));
+        assert!(
+            cleanup_finished.load(Ordering::SeqCst),
+            "parallel siblings must finish cleanup before the stage returns"
+        );
     }
 }

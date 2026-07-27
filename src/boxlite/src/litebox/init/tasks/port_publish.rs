@@ -18,14 +18,14 @@ use std::time::Duration;
 
 const DEFAULT_HOST_IP: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 #[cfg(not(test))]
-const REATTACH_CONTROL_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const PORT_CONTROL_READY_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(test)]
-const REATTACH_CONTROL_READY_TIMEOUT: Duration = Duration::from_millis(50);
+const PORT_CONTROL_READY_TIMEOUT: Duration = Duration::from_millis(50);
 
 #[cfg(not(test))]
-const REATTACH_CONTROL_READY_INTERVAL: Duration = Duration::from_millis(50);
+const PORT_CONTROL_READY_INTERVAL: Duration = Duration::from_millis(50);
 #[cfg(test)]
-const REATTACH_CONTROL_READY_INTERVAL: Duration = Duration::from_millis(1);
+const PORT_CONTROL_READY_INTERVAL: Duration = Duration::from_millis(1);
 
 #[derive(Clone)]
 struct PlannedPort {
@@ -153,14 +153,14 @@ async fn publish_ports(
         )
     })?;
 
-    // Reattach can follow a core-process crash at any instruction boundary.
-    // Adopt forwards that gvproxy already owns so publication is idempotent
-    // even when the prior process died immediately after publication. PID
-    // publication precedes shim startup, so wait through the bounded window
-    // where the lifecycle is live but ServicesMux has not bound its socket yet.
-    // A fresh backend cannot own forwards, so it need not implement discovery.
+    // VMM spawn returns after starting the shim process, while the shim binds
+    // ServicesMux slightly later during gvproxy initialization. Probe the
+    // read-only control endpoint before the first mutation so publication can
+    // safely overlap the guest-ready wait. Reattach also adopts forwards that
+    // gvproxy already owns, making repair idempotent after a core-process crash.
+    let observed_forwards = list_forwards_when_ready(backend).await?;
     let active_forwards = if is_reattach {
-        list_forwards_when_ready(backend).await?
+        observed_forwards
     } else {
         Vec::new()
     };
@@ -225,7 +225,7 @@ async fn publish_ports(
 }
 
 async fn list_forwards_when_ready(backend: &dyn NetworkBackend) -> BoxliteResult<Vec<Forward>> {
-    let deadline = tokio::time::Instant::now() + REATTACH_CONTROL_READY_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + PORT_CONTROL_READY_TIMEOUT;
 
     loop {
         match tokio::time::timeout_at(deadline, backend.list_forwards()).await {
@@ -235,12 +235,12 @@ async fn list_forwards_when_ready(backend: &dyn NetworkBackend) -> BoxliteResult
                 if now >= deadline {
                     return Err(error);
                 }
-                tokio::time::sleep(REATTACH_CONTROL_READY_INTERVAL.min(deadline - now)).await;
+                tokio::time::sleep(PORT_CONTROL_READY_INTERVAL.min(deadline - now)).await;
             }
             Ok(Err(error)) => return Err(error),
             Err(_) => {
                 return Err(BoxliteError::Network(format!(
-                    "timed out waiting for gvproxy runtime port control after {REATTACH_CONTROL_READY_TIMEOUT:?}"
+                    "timed out waiting for gvproxy runtime port control after {PORT_CONTROL_READY_TIMEOUT:?}"
                 )));
             }
         }
@@ -738,7 +738,7 @@ mod tests {
             *backend.exposed.lock().unwrap(),
             vec!["127.0.0.1:0", "127.0.0.1:0"]
         );
-        assert_eq!(backend.list_call_count(), 0);
+        assert_eq!(backend.list_call_count(), 1);
     }
 
     #[tokio::test]
@@ -835,6 +835,28 @@ mod tests {
             &[mapping(None, 3000)],
             lifecycle(116, 1016),
             true,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(backend.list_call_count(), 3);
+        assert_eq!(*backend.exposed.lock().unwrap(), vec!["127.0.0.1:0"]);
+        assert_eq!(resolved, vec![published_port(49152, 3000)]);
+    }
+
+    #[tokio::test]
+    async fn fresh_publication_waits_for_runtime_control_socket_before_mutating() {
+        let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:49152")])
+            .with_transient_list_errors([
+                "gvproxy services connect failed: No such file or directory",
+                "gvproxy services connect failed: Connection refused",
+            ]);
+
+        let resolved = publish_ports(
+            Some(&backend),
+            &[mapping(None, 3000)],
+            lifecycle(125, 1025),
+            false,
         )
         .await
         .unwrap();
