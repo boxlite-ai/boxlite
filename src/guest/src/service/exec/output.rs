@@ -10,7 +10,7 @@ use tonic::Status;
 
 const BUFFER_CAPACITY_BYTES: usize = 1024 * 1024;
 
-pub(crate) type OutputStream = Pin<Box<dyn Stream<Item = Result<ExecOutput, Status>> + Send>>;
+pub(crate) type AttachStream = Pin<Box<dyn Stream<Item = Result<ExecOutput, Status>> + Send>>;
 
 #[derive(Clone)]
 pub(crate) struct OutputManager {
@@ -90,7 +90,7 @@ impl OutputManager {
         manager
     }
 
-    pub(crate) async fn attach(&self) -> Result<OutputStream, Status> {
+    pub(crate) async fn attach(&self) -> Result<AttachStream, Status> {
         {
             let mut state = self.inner.lock().await;
             if state.attached {
