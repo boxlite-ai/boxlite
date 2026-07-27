@@ -57,15 +57,19 @@ silently dropped:
 - A remote SDK re-reads `linux_capabilities_enabled` from `GET /v1/config`
   (uncached) immediately before creating a box with a custom policy, so a
   server rollback cannot be masked by a stale discovery cache.
-- A BoxLite host requires the guest's `linux-capabilities-v2` Ping feature
-  before sending the nested policy.
+- A BoxLite host requires the guest to report version 0.9.8 or newer from
+  Ping before sending the nested policy. Guest rootfs images are cached per
+  version and reused, so an older guest can outlive its release; it would
+  decode the new field as unknown proto and drop it.
 - The cloud control plane schedules capability-bearing boxes only onto runners
-  advertising the same feature, and re-checks it before start and recovery.
+  advertising `linux-capabilities-v2`, and re-checks it before start and
+  recovery. That token is the runner's own, independent of the guest version
+  the host checks.
 
-A missing advertisement therefore fails closed. Boundaries that do not carry a
-custom policy are unaffected: ordinary create, get, and list keep working
-against any server version. Inspection does not report the policy — it is
-create-time configuration, not box state.
+A missing advertisement or too-old guest therefore fails closed. Boundaries
+that do not carry a custom policy are unaffected: ordinary create, get, and
+list keep working against any server version. Inspection does not report the
+policy — it is create-time configuration, not box state.
 
 Named `get_or_create` on the local runtime refuses to adopt an existing box
 whose capability policy differs from the requested one, so reuse cannot

@@ -83,9 +83,6 @@ impl GuestService for GuestServer {
         debug!("Received ping request");
         Ok(Response::new(PingResponse {
             version: env!("CARGO_PKG_VERSION").to_string(),
-            features: vec![
-                boxlite_shared::constants::guest_features::LINUX_CAPABILITIES_V2.to_string(),
-            ],
         }))
     }
 

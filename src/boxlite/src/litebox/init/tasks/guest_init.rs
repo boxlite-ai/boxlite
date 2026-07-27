@@ -14,6 +14,13 @@ use crate::portal::interfaces::{ContainerInitConfig, GuestInitConfig, NetworkIni
 use async_trait::async_trait;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+/// Oldest guest release that honors `advanced.capabilities` on
+/// `Container.Init`. An earlier guest drops the field and starts the container
+/// with the default capability set while the caller believes a policy applied.
+/// Guest rootfs images are cached per version and reused, so a host can meet
+/// one long after its own release.
+const MIN_CAPABILITY_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion = (0, 9, 8);
+
 pub struct GuestInitTask;
 
 struct GuestBootstrapConfig {
@@ -113,7 +120,7 @@ async fn run_guest_init(
     let mut guest_interface = guest_session.guest().await?;
     if !bootstrap.container.advanced.capabilities.is_empty() {
         guest_interface
-            .require_feature(boxlite_shared::constants::guest_features::LINUX_CAPABILITIES_V2)
+            .require_min_version(MIN_CAPABILITY_GUEST_VERSION)
             .await?;
     }
     guest_interface.init(bootstrap.guest).await?;

@@ -184,9 +184,6 @@ message PingRequest {}
 
 message PingResponse {
   string version = 1;  // Guest agent version
-  // Optional capabilities used for host/guest rollout negotiation. Unknown
-  // entries are ignored; an older guest decodes as an empty list.
-  repeated string features = 2;
 }
 
 message ShutdownRequest {}

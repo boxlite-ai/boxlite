@@ -68,11 +68,15 @@ impl GuestInterface {
         Ok(())
     }
 
-    /// Fail before initialization if the connected guest cannot honor a
-    /// security-sensitive request field. Older guests return no features.
-    pub async fn require_feature(&mut self, feature: &str) -> BoxliteResult<()> {
+    /// Fail before initialization if the guest predates a required field.
+    ///
+    /// A guest built before the field existed decodes it as an unknown proto
+    /// field and drops it, so the request would appear to succeed while the
+    /// setting was never applied. The guest reports its own build version;
+    /// gate on that instead of letting the request through.
+    pub async fn require_min_version(&mut self, minimum: GuestVersion) -> BoxliteResult<()> {
         let response = self.client.ping(PingRequest {}).await?.into_inner();
-        ensure_guest_feature(&response.version, &response.features, feature)
+        ensure_guest_version(&response.version, minimum)
     }
 
     /// Shutdown the guest agent.
@@ -100,13 +104,35 @@ impl GuestInterface {
     }
 }
 
-fn ensure_guest_feature(version: &str, features: &[String], required: &str) -> BoxliteResult<()> {
-    if features.iter().any(|candidate| candidate == required) {
+/// A guest agent version as `(major, minor, patch)`.
+pub type GuestVersion = (u32, u32, u32);
+
+/// Parse the `major.minor.patch` core of a guest version.
+///
+/// Any pre-release or build suffix is ignored, so a `0.9.8-rc1` guest counts
+/// as 0.9.8: it is built from the tree that carries the field. Anything that
+/// does not parse yields `None` and is rejected by the caller.
+fn parse_guest_version(version: &str) -> Option<GuestVersion> {
+    let mut parts = version.split(['-', '+']).next()?.split('.');
+    let mut next = || parts.next()?.parse::<u32>().ok();
+    let parsed = (next()?, next()?, next()?);
+    parts.next().is_none().then_some(parsed)
+}
+
+fn ensure_guest_version(version: &str, minimum: GuestVersion) -> BoxliteResult<()> {
+    let (major, minor, patch) = minimum;
+    let Some(reported) = parse_guest_version(version) else {
+        return Err(BoxliteError::Unsupported(format!(
+            "guest reported an unrecognized version '{version}'; {major}.{minor}.{patch} or newer is required"
+        )));
+    };
+
+    if reported >= minimum {
         return Ok(());
     }
 
     Err(BoxliteError::Unsupported(format!(
-        "guest {version} does not support required feature '{required}'; recreate the box with the current runtime"
+        "guest {version} is older than the required {major}.{minor}.{patch}; recreate the box with the current runtime"
     )))
 }
 
@@ -114,23 +140,38 @@ fn ensure_guest_feature(version: &str, features: &[String], required: &str) -> B
 mod tests {
     use super::*;
 
-    #[test]
-    fn old_guest_without_features_is_rejected_for_required_policy() {
-        let error = ensure_guest_feature("0.9.6", &[], "linux-capabilities-v2")
-            .expect_err("an old guest must not silently ignore security policy");
+    const MINIMUM: GuestVersion = (0, 9, 8);
 
-        assert!(matches!(error, BoxliteError::Unsupported(_)));
-        assert!(error.to_string().contains("linux-capabilities-v2"));
+    #[test]
+    fn guest_older_than_the_minimum_is_rejected() {
+        for version in ["0.9.7", "0.8.9", "0.9.7-rc1"] {
+            let error = ensure_guest_version(version, MINIMUM)
+                .expect_err("an old guest must not silently drop the field");
+
+            assert!(matches!(error, BoxliteError::Unsupported(_)));
+            assert!(
+                error.to_string().contains(version) && error.to_string().contains("0.9.8"),
+                "error should name both versions: {error}"
+            );
+        }
     }
 
     #[test]
-    fn advertised_guest_feature_is_accepted() {
-        ensure_guest_feature(
-            "0.9.7",
-            &["linux-capabilities-v2".to_string()],
-            "linux-capabilities-v2",
-        )
-        .expect("current guest advertises the feature");
+    fn guest_at_or_above_the_minimum_is_accepted() {
+        for version in ["0.9.8", "0.9.9", "0.10.0", "1.0.0", "0.9.8-rc1"] {
+            ensure_guest_version(version, MINIMUM)
+                .unwrap_or_else(|error| panic!("{version} should be accepted: {error}"));
+        }
+    }
+
+    #[test]
+    fn unparseable_guest_version_is_rejected() {
+        for version in ["", "0.9", "0.9.8.1", "abc", "0.x.8"] {
+            let error = ensure_guest_version(version, MINIMUM)
+                .expect_err("an unreadable version must fail closed");
+
+            assert!(matches!(error, BoxliteError::Unsupported(_)));
+        }
     }
 }
 
