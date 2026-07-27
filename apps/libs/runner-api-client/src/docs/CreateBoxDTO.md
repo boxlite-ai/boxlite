@@ -5,7 +5,6 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**advanced** | [**AdvancedBoxOptionsDTO**](AdvancedBoxOptionsDTO.md) |  | [optional] [default to undefined]
 **authToken** | **string** |  | [optional] [default to undefined]
 **cpuQuota** | **number** |  | [optional] [default to undefined]
 **entrypoint** | **Array&lt;string&gt;** |  | [optional] [default to undefined]

@@ -1156,18 +1156,6 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "AdvancedBoxOptionsDTO": {
-            "type": "object",
-            "required": [
-                "capabilities"
-            ],
-            "additionalProperties": false,
-            "properties": {
-                "capabilities": {
-                    "$ref": "#/definitions/ContainerCapabilitiesDTO"
-                }
-            }
-        },
         "BoxInfoResponse": {
             "type": "object",
             "properties": {
@@ -1248,9 +1236,6 @@ const docTemplate = `{
                 "image"
             ],
             "properties": {
-                "advanced": {
-                    "$ref": "#/definitions/AdvancedBoxOptionsDTO"
-                },
                 "authToken": {
                     "type": "string"
                 },
@@ -1326,24 +1311,6 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/dto.VolumeDTO"
-                    }
-                }
-            }
-        },
-        "ContainerCapabilitiesDTO": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "add": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "drop": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
                     }
                 }
             }
@@ -1448,9 +1415,6 @@ const docTemplate = `{
                 "osUser"
             ],
             "properties": {
-                "advanced": {
-                    "$ref": "#/definitions/AdvancedBoxOptionsDTO"
-                },
                 "backupErrorReason": {
                     "type": "string"
                 },
@@ -1527,12 +1491,6 @@ const docTemplate = `{
             "properties": {
                 "appVersion": {
                     "type": "string"
-                },
-                "features": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
                 },
                 "metrics": {
                     "$ref": "#/definitions/RunnerMetrics"

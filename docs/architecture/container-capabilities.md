@@ -61,15 +61,18 @@ silently dropped:
   Ping before sending the nested policy. Guest rootfs images are cached per
   version and reused, so an older guest can outlive its release; it would
   decode the new field as unknown proto and drop it.
-- The cloud control plane schedules capability-bearing boxes only onto runners
-  advertising `linux-capabilities-v2`, and re-checks it before start and
-  recovery. That token is the runner's own, independent of the guest version
-  the host checks.
 
-A missing advertisement or too-old guest therefore fails closed. Boundaries
-that do not carry a custom policy are unaffected: ordinary create, get, and
-list keep working against any server version. Inspection does not report the
-policy — it is create-time configuration, not box state.
+A stale server or too-old guest therefore fails closed. Boundaries that do
+not carry a custom policy are unaffected: ordinary create, get, and list keep
+working against any server version. Inspection does not report the policy —
+it is create-time configuration, not box state.
+
+The cloud control plane does not carry the policy yet. `boxlite serve` and the
+reference server are the server side of the contract above. The hosted API
+does not advertise `linux_capabilities_enabled`, so a BoxLite client refuses
+to send a policy to it — the gate is on the client, not the server. A client
+that skips that negotiation and posts `advanced` anyway has the field
+dropped, because the hosted API does not reject unknown properties.
 
 Named `get_or_create` on the local runtime refuses to adopt an existing box
 whose capability policy differs from the requested one, so reuse cannot
@@ -80,10 +83,9 @@ exports stay v3. A pre-capability importer accepts only up to v3, so it
 refuses the archive instead of dropping the policy and starting the box with
 wider privileges than the archive asked for.
 
-Once a custom-policy box exists, do not roll the control plane back to a build
-that predates these fields: such a build cannot preserve them while recreating
-or recovering a box. Roll forward instead, and drain a runner before
-downgrading it — a past advertisement cannot prove the binary is unchanged.
+Once a custom-policy box exists, do not roll a server back to a build that
+predates these fields: such a build cannot preserve them while recreating the
+box. Roll forward instead.
 
 ## Project research
 

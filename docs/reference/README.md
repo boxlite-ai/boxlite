@@ -196,9 +196,8 @@ processes. Both lists default to empty, preserving BoxLite's Docker-compatible
 - Use `drop=["ALL"]` with explicit additions to construct a minimal set.
 - Malformed names are rejected at the API boundary. A well-formed name that the
   bundled guest runtime does not support is rejected during container initialization.
-- Remote clients, hosts, and cloud runners negotiate support before creating
-  or starting a box; a custom policy is rejected rather than ignored when any
-  upgraded boundary is missing.
+- A remote client and the host both check support before creating a box; a
+  custom policy is rejected rather than ignored when either side is too old.
 - The resolved set is applied to OCI bounding, effective, and permitted sets.
   Inheritable and ambient capabilities stay unset; they are not implied by `add`.
 

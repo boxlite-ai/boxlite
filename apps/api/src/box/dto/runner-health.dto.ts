@@ -159,14 +159,4 @@ export class RunnerHealthcheckDto {
   })
   @IsString()
   appVersion: string
-
-  @ApiPropertyOptional({
-    description: 'Optional runner features used for rollout negotiation',
-    type: [String],
-    example: ['linux-capabilities-v2'],
-  })
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  features?: string[]
 }

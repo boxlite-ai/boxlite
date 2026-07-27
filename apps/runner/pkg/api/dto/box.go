@@ -27,22 +27,7 @@ type CreateBoxDTO struct {
 	// Nullable for backward compatibility
 	OrganizationId *string `json:"organizationId,omitempty"`
 	RegionId       *string `json:"regionId,omitempty"`
-
-	Advanced *AdvancedBoxOptionsDTO `json:"advanced,omitempty"`
 } //	@name	CreateBoxDTO
-
-type AdvancedBoxOptionsDTO struct {
-	Capabilities *ContainerCapabilitiesDTO `json:"capabilities,omitempty"`
-} //	@name	AdvancedBoxOptionsDTO
-
-type ContainerCapabilitiesDTO struct {
-	Add  []string `json:"add,omitempty"`
-	Drop []string `json:"drop,omitempty"`
-} //	@name	ContainerCapabilitiesDTO
-
-func (d *ContainerCapabilitiesDTO) IsEmpty() bool {
-	return d == nil || (len(d.Add) == 0 && len(d.Drop) == 0)
-}
 
 type UpdateNetworkSettingsDTO struct {
 	NetworkBlockAll    *bool   `json:"networkBlockAll,omitempty"`
@@ -62,8 +47,6 @@ type RecoverBoxDTO struct {
 	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
 	NetworkAllowList *string           `json:"networkAllowList,omitempty"`
 	ErrorReason      string            `json:"errorReason" validate:"required"`
-
-	Advanced *AdvancedBoxOptionsDTO `json:"advanced,omitempty"`
 } //	@name	RecoverBoxDTO
 
 type IsRecoverableDTO struct {

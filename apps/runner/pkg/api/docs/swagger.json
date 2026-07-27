@@ -1078,16 +1078,6 @@
     }
   },
   "definitions": {
-    "AdvancedBoxOptionsDTO": {
-      "type": "object",
-      "required": ["capabilities"],
-      "additionalProperties": false,
-      "properties": {
-        "capabilities": {
-          "$ref": "#/definitions/ContainerCapabilitiesDTO"
-        }
-      }
-    },
     "BoxInfoResponse": {
       "type": "object",
       "properties": {
@@ -1158,9 +1148,6 @@
       "type": "object",
       "required": ["id", "osUser", "image"],
       "properties": {
-        "advanced": {
-          "$ref": "#/definitions/AdvancedBoxOptionsDTO"
-        },
         "authToken": {
           "type": "string"
         },
@@ -1236,24 +1223,6 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/dto.VolumeDTO"
-          }
-        }
-      }
-    },
-    "ContainerCapabilitiesDTO": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "add": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "drop": {
-          "type": "array",
-          "items": {
-            "type": "string"
           }
         }
       }
@@ -1344,9 +1313,6 @@
       "type": "object",
       "required": ["errorReason", "osUser"],
       "properties": {
-        "advanced": {
-          "$ref": "#/definitions/AdvancedBoxOptionsDTO"
-        },
         "backupErrorReason": {
           "type": "string"
         },
@@ -1421,12 +1387,6 @@
       "properties": {
         "appVersion": {
           "type": "string"
-        },
-        "features": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
         },
         "metrics": {
           "$ref": "#/definitions/RunnerMetrics"

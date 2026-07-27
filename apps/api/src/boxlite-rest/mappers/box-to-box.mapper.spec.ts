@@ -7,20 +7,6 @@ import { BoxState } from '../../box/enums/box-state.enum'
 import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 
 describe('BoxLite lifecycle policy mapper', () => {
-  it('maps capability overrides into the control-plane DTO', () => {
-    const mapped = createBoxToCreateBox({
-      advanced: {
-        capabilities: {
-          add: ['SYS_ADMIN'],
-          drop: ['CAP_NET_RAW'],
-        },
-      },
-    } as any)
-
-    expect(mapped.advanced?.capabilities?.add).toEqual(['SYS_ADMIN'])
-    expect(mapped.advanced?.capabilities?.drop).toEqual(['CAP_NET_RAW'])
-  })
-
   it('maps second-based create fields into the control-plane DTO', () => {
     const mapped = createBoxToCreateBox({
       auto_pause: 1800,
@@ -47,18 +33,6 @@ describe('BoxLite lifecycle policy mapper', () => {
     expect(response.auto_pause).toBe(1800)
     expect(response.auto_delete).toBe(604800)
     expect(response.auto_resume).toBe(false)
-  })
-
-  it('omits persisted capabilities from the public response', () => {
-    const response = boxToBoxResponse({
-      id: 'box-1',
-      name: 'demo',
-      state: BoxState.STARTED,
-      labels: {},
-      advanced: { capabilities: { add: ['SYS_ADMIN'], drop: ['NET_RAW'] } },
-    } as any)
-
-    expect((response as any).advanced).toBeUndefined()
   })
 
   it('defaults auto_resume to true when missing', () => {

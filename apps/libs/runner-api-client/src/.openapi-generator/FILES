@@ -9,14 +9,12 @@ api/snapshots-api.ts
 base.ts
 common.ts
 configuration.ts
-docs/AdvancedBoxOptionsDTO.md
 docs/BoxApi.md
 docs/BoxInfoResponse.md
 docs/BoxliteApi.md
 docs/BuildSnapshotRequestDTO.md
 docs/CreateBackupDTO.md
 docs/CreateBoxDTO.md
-docs/ContainerCapabilitiesDTO.md
 docs/DefaultApi.md
 docs/DtoVolumeDTO.md
 docs/EnumsBackupState.md
@@ -41,12 +39,10 @@ docs/TagImageRequestDTO.md
 docs/UpdateNetworkSettingsDTO.md
 git_push.sh
 index.ts
-models/advanced-box-options-dto.ts
 models/box-info-response.ts
 models/build-snapshot-request-dto.ts
 models/create-backup-dto.ts
 models/create-box-dto.ts
-models/container-capabilities-dto.ts
 models/dto-volume-dto.ts
 models/enums-backup-state.ts
 models/enums-box-state.ts

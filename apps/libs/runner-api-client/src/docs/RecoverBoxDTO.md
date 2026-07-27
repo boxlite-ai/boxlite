@@ -5,7 +5,6 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**advanced** | [**AdvancedBoxOptionsDTO**](AdvancedBoxOptionsDTO.md) |  | [optional] [default to undefined]
 **backupErrorReason** | **string** |  | [optional] [default to undefined]
 **cpuQuota** | **number** |  | [optional] [default to undefined]
 **env** | **{ [key: string]: string; }** |  | [optional] [default to undefined]

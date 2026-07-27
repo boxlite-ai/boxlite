@@ -5,14 +5,12 @@
 package common
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/boxlite-ai/runner/internal/util"
-	boxlitesdk "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/containerd/errdefs"
 	"github.com/gin-gonic/gin"
 
@@ -20,18 +18,6 @@ import (
 )
 
 func HandlePossibleDockerError(ctx *gin.Context, err error) common_errors.ErrorResponse {
-	var boxliteErr *boxlitesdk.Error
-	if errors.As(err, &boxliteErr) && boxliteErr.Code == boxlitesdk.ErrInvalidArgument {
-		return common_errors.ErrorResponse{
-			StatusCode: http.StatusBadRequest,
-			Message:    fmt.Sprintf("bad request: %s", boxliteErr.Message),
-			Code:       "BAD_REQUEST",
-			Timestamp:  time.Now(),
-			Path:       ctx.Request.URL.Path,
-			Method:     ctx.Request.Method,
-		}
-	}
-
 	if errdefs.IsUnauthorized(err) || strings.Contains(err.Error(), "unauthorized") {
 		return common_errors.ErrorResponse{
 			StatusCode: http.StatusUnauthorized,

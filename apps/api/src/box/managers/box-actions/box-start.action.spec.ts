@@ -10,7 +10,7 @@ jest.mock('uuid', () => ({
 }))
 
 import { BoxStartAction } from './box-start.action'
-import { BoxAction, DONT_SYNC_AGAIN, SYNC_AGAIN } from './box.action'
+import { BoxAction, SYNC_AGAIN } from './box.action'
 import { Box } from '../../entities/box.entity'
 import { Runner } from '../../entities/runner.entity'
 import { BoxState } from '../../enums/box-state.enum'
@@ -126,51 +126,6 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     expect(runnerAdapterFactory.create).not.toHaveBeenCalled()
     expect(updatedFields.some((u) => u.state === BoxState.ERROR)).toBe(true)
   })
-
-  it('rejects a capability policy when its assigned runner does not advertise support', async () => {
-    const runnerId = 'runner-without-capabilities'
-    const box = new Box('region-1', 'stopped-capability-box')
-    box.runnerId = runnerId
-    box.state = BoxState.STOPPED
-    box.desiredState = BoxDesiredState.STARTED
-    box.pending = true
-    box.advanced = { capabilities: { add: [], drop: ['NET_RAW'] } }
-
-    const runner = { id: runnerId, state: RunnerState.READY, features: [] } as Runner
-    const runnerService = { findOneOrFail: jest.fn(async () => runner) }
-    const runnerAdapterFactory = { create: jest.fn() }
-    const lockCode = new LockCode('lock-capability-restart')
-    const updatedFields: Partial<Box>[] = []
-    const boxRepository = {
-      update: jest.fn(async (_id: string, opts: { updateData: Partial<Box> }) => {
-        updatedFields.push(opts.updateData)
-        return box
-      }),
-    }
-    const redisLockProvider = { getCode: jest.fn(async () => lockCode) }
-    const organizationService = { findOne: jest.fn(async () => ({ boxMetadata: {} })) }
-
-    const action = new BoxStartAction(
-      runnerService as any,
-      runnerAdapterFactory as any,
-      boxRepository as any,
-      organizationService as any,
-      {} as any,
-      redisLockProvider as any,
-      {} as any,
-    )
-
-    const result = await (action as BoxAction).run(box, lockCode)
-
-    expect(result).toBe(DONT_SYNC_AGAIN)
-    expect(runnerAdapterFactory.create).not.toHaveBeenCalled()
-    expect(updatedFields).toContainEqual(
-      expect.objectContaining({
-        state: BoxState.ERROR,
-        errorReason: expect.stringContaining('linux-capabilities-v2'),
-      }),
-    )
-  })
 })
 
 describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => {
@@ -258,51 +213,5 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
 
     expect(createBox).not.toHaveBeenCalled()
     expect(updatedFields.some((u) => u.state === BoxState.ERROR)).toBe(true)
-  })
-
-  it('rejects a capability policy when its assigned runner does not advertise support', async () => {
-    const runnerId = 'runner-without-capabilities'
-    const box = new Box('region-1', 'new-capability-box')
-    box.runnerId = runnerId
-    box.image = 'boxlite/base'
-    box.state = BoxState.UNKNOWN
-    box.desiredState = BoxDesiredState.STARTED
-    box.pending = true
-    box.advanced = { capabilities: { add: ['SYS_PTRACE'], drop: [] } }
-
-    const runner = { id: runnerId, state: RunnerState.READY, features: [] } as Runner
-    const runnerService = { findOneOrFail: jest.fn(async () => runner) }
-    const runnerAdapterFactory = { create: jest.fn() }
-    const lockCode = new LockCode('lock-capability-create')
-    const updatedFields: Partial<Box>[] = []
-    const boxRepository = {
-      update: jest.fn(async (_id: string, opts: { updateData: Partial<Box> }) => {
-        updatedFields.push(opts.updateData)
-        return box
-      }),
-    }
-    const redisLockProvider = { getCode: jest.fn(async () => lockCode) }
-    const organizationService = { findOne: jest.fn(async () => ({ boxMetadata: {} })) }
-
-    const action = new BoxStartAction(
-      runnerService as any,
-      runnerAdapterFactory as any,
-      boxRepository as any,
-      organizationService as any,
-      {} as any,
-      redisLockProvider as any,
-      {} as any,
-    )
-
-    const result = await (action as BoxAction).run(box, lockCode)
-
-    expect(result).toBe(DONT_SYNC_AGAIN)
-    expect(runnerAdapterFactory.create).not.toHaveBeenCalled()
-    expect(updatedFields).toContainEqual(
-      expect.objectContaining({
-        state: BoxState.ERROR,
-        errorReason: expect.stringContaining('linux-capabilities-v2'),
-      }),
-    )
   })
 })

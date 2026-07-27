@@ -11,7 +11,6 @@ Name | Type | Description | Notes
 **proxyUrl** | **string** | Runner proxy URL | [optional] [default to undefined]
 **apiUrl** | **string** | Runner API URL | [optional] [default to undefined]
 **appVersion** | **string** | Runner app version | [default to undefined]
-**features** | **Array&lt;string&gt;** | Optional runner features used for rollout negotiation | [optional] [default to undefined]
 
 ## Example
 
@@ -25,7 +24,6 @@ const instance: RunnerHealthcheck = {
     proxyUrl,
     apiUrl,
     appVersion,
-    features,
 };
 ```
 

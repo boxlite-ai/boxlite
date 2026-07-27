@@ -12,7 +12,6 @@ import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
-import { BoxState } from '../box/enums/box-state.enum'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
@@ -38,13 +37,6 @@ describe('BoxLite REST routing', () => {
           useValue: {
             findAllDeprecated: jest.fn().mockResolvedValue([]),
             toBoxDtos: jest.fn().mockResolvedValue([]),
-            findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-1' }),
-            toBoxDto: jest.fn().mockResolvedValue({
-              id: 'box-1',
-              name: 'named',
-              state: BoxState.STARTED,
-              labels: {},
-            }),
           },
         },
         {
@@ -86,14 +78,6 @@ describe('BoxLite REST routing', () => {
     expect(Reflect.getMetadata(PATH_METADATA, BoxliteProxyController)).toEqual(['v1/boxes', 'v1/:prefix/boxes'])
   })
 
-  it('does not register capability-specific read aliases', () => {
-    const listPath = Reflect.getMetadata(PATH_METADATA, BoxliteBoxController.prototype.listBoxes)
-    const getPath = Reflect.getMetadata(PATH_METADATA, BoxliteBoxController.prototype.getBox)
-
-    expect(listPath).toBe('/')
-    expect(getPath).toBe(':boxId')
-  })
-
   it('registers canonical and legacy default-prefix routes in the Nest HTTP router', async () => {
     await startRoutingTestApp()
 
@@ -104,19 +88,6 @@ describe('BoxLite REST routing', () => {
     expect(await canonical.json()).toEqual({ boxes: [] })
     expect(legacy.status).toBe(200)
     expect(await legacy.json()).toEqual({ boxes: [] })
-  })
-
-  it('serves the box read route without exposing capability metadata', async () => {
-    await startRoutingTestApp()
-
-    const canonical = await get('/api/v1/boxes/named')
-    const prefixed = await get('/api/v1/default/boxes/named')
-
-    expect(canonical.status).toBe(200)
-    const body = await canonical.json()
-    expect(body).toMatchObject({ box_id: 'box-1' })
-    expect(body.advanced).toBeUndefined()
-    expect(prefixed.status).toBe(200)
   })
 
   it('matches websocket attach upgrades with or without a routing prefix', () => {

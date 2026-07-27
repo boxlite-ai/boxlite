@@ -16,14 +16,11 @@ import {
   Min,
   IsIn,
   Validate,
-  ValidateIf,
   ValidateNested,
   ValidatorConstraint,
   ValidatorConstraintInterface,
 } from 'class-validator'
 import { isValidNetworkAllowEntry, MAX_NETWORK_ALLOW_LIST_ENTRIES } from '../../box/utils/network-validation.util'
-import { CreateBoxAdvancedOptionsDto } from '../../box/dto/create-box.dto'
-import { HasNoUnknownCapabilityFieldsConstraint } from '../../box/utils/capability-validation.util'
 
 @ValidatorConstraint({ name: 'isNetworkAllowEntry', async: false })
 class IsNetworkAllowEntryConstraint implements ValidatorConstraintInterface {
@@ -94,13 +91,6 @@ export class CreateBoxDto {
   @IsOptional()
   @IsString()
   user?: string
-
-  @ValidateIf((_object, value) => value !== undefined)
-  @IsObject()
-  @ValidateNested()
-  @Validate(HasNoUnknownCapabilityFieldsConstraint, [['capabilities']])
-  @Type(() => CreateBoxAdvancedOptionsDto)
-  advanced?: CreateBoxAdvancedOptionsDto
 
   @IsOptional()
   @IsBoolean()

@@ -45,9 +45,5 @@ export interface RunnerHealthcheck {
      * Runner app version
      */
     'appVersion': string;
-    /**
-     * Optional runner features used for rollout negotiation
-     */
-    'features'?: Array<string>;
 }
 

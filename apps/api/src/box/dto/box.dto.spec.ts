@@ -12,12 +12,10 @@ describe('BoxDto public identity', () => {
     const box = new Box('us', 'data-loader')
     box.organizationId = '057963b2-60ca-4356-81fc-11503e15f249'
     box.osUser = 'boxlite'
-    box.advanced = { capabilities: { add: ['SYS_ADMIN'], drop: ['NET_RAW'] } }
 
     const dto = BoxDto.fromBox(box, 'https://proxy.boxlite.dev/toolbox')
 
     expect(dto.id).toBe(box.id)
     expect((dto as any).boxId).toBeUndefined()
-    expect((dto as any).advanced).toBeUndefined()
   })
 })

@@ -338,7 +338,6 @@ export class RunnerController {
       healthcheck.serviceHealth,
       healthcheck.metrics,
       healthcheck.appVersion,
-      healthcheck.features,
     )
   }
 }

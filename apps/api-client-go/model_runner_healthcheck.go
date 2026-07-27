@@ -33,8 +33,6 @@ type RunnerHealthcheck struct {
 	ApiUrl *string `json:"apiUrl,omitempty"`
 	// Runner app version
 	AppVersion string `json:"appVersion"`
-	// Optional runner features used for rollout negotiation
-	Features []string `json:"features,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -242,38 +240,6 @@ func (o *RunnerHealthcheck) SetAppVersion(v string) {
 	o.AppVersion = v
 }
 
-// GetFeatures returns the Features field value if set, zero value otherwise.
-func (o *RunnerHealthcheck) GetFeatures() []string {
-	if o == nil || IsNil(o.Features) {
-		var ret []string
-		return ret
-	}
-	return o.Features
-}
-
-// GetFeaturesOk returns a tuple with the Features field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *RunnerHealthcheck) GetFeaturesOk() ([]string, bool) {
-	if o == nil || IsNil(o.Features) {
-		return nil, false
-	}
-	return o.Features, true
-}
-
-// HasFeatures returns a boolean if a field has been set.
-func (o *RunnerHealthcheck) HasFeatures() bool {
-	if o != nil && !IsNil(o.Features) {
-		return true
-	}
-
-	return false
-}
-
-// SetFeatures gets a reference to the given []string and assigns it to the Features field.
-func (o *RunnerHealthcheck) SetFeatures(v []string) {
-	o.Features = v
-}
-
 func (o RunnerHealthcheck) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -300,9 +266,6 @@ func (o RunnerHealthcheck) ToMap() (map[string]interface{}, error) {
 		toSerialize["apiUrl"] = o.ApiUrl
 	}
 	toSerialize["appVersion"] = o.AppVersion
-	if !IsNil(o.Features) {
-		toSerialize["features"] = o.Features
-	}
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -352,7 +315,6 @@ func (o *RunnerHealthcheck) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "proxyUrl")
 		delete(additionalProperties, "apiUrl")
 		delete(additionalProperties, "appVersion")
-		delete(additionalProperties, "features")
 		o.AdditionalProperties = additionalProperties
 	}
 

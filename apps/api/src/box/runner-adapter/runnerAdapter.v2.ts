@@ -13,7 +13,6 @@ import { Box } from '../entities/box.entity'
 import { Job } from '../entities/job.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { JobType } from '../enums/job-type.enum'
-import { normalizeBoxAdvancedOptions } from '../common/box-advanced-options'
 import { JobStatus } from '../enums/job-status.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
@@ -142,10 +141,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       regionId: box.region,
     }
 
-    await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, {
-      ...payload,
-      advanced: normalizeBoxAdvancedOptions(box.advanced),
-    })
+    await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
 
     this.logger.debug(`Created CREATE_BOX job for box ${box.id} on runner ${this.runner.id}`)
 
@@ -200,10 +196,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       networkAllowList: box.networkAllowList,
       errorReason: box.errorReason,
     }
-    await this.jobService.createJob(null, JobType.RECOVER_BOX, this.runner.id, ResourceType.BOX, box.id, {
-      ...recoverBoxDTO,
-      advanced: normalizeBoxAdvancedOptions(box.advanced),
-    })
+    await this.jobService.createJob(null, JobType.RECOVER_BOX, this.runner.id, ResourceType.BOX, box.id, recoverBoxDTO)
 
     this.logger.debug(`Created RECOVER_BOX job for box ${box.id} on runner ${this.runner.id}`)
   }

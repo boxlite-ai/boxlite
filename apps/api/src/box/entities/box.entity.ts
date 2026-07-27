@@ -17,7 +17,6 @@ import {
   DEFAULT_AUTO_PAUSE_SECONDS,
   DEFAULT_AUTO_RESUME,
 } from '../constants/box-lifecycle.constants'
-import { BoxAdvancedOptions, normalizeBoxAdvancedOptions } from '../common/box-advanced-options'
 
 @Entity('box')
 @Unique(['organizationId', 'name'])
@@ -108,12 +107,6 @@ export class Box {
     default: {},
   })
   env: { [key: string]: string } = {}
-
-  @Column({
-    type: 'jsonb',
-    default: () => `'${JSON.stringify(normalizeBoxAdvancedOptions())}'::jsonb`,
-  })
-  advanced: BoxAdvancedOptions = normalizeBoxAdvancedOptions()
 
   @Column({ default: false, type: 'boolean' })
   public = false

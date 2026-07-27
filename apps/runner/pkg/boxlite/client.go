@@ -247,21 +247,6 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if len(boxDto.Entrypoint) > 0 {
 		opts = append(opts, boxlite.WithEntrypoint(boxDto.Entrypoint...))
 	}
-	if boxDto.Advanced != nil && boxDto.Advanced.Capabilities != nil {
-		capabilities := boxDto.Advanced.Capabilities
-		advancedOptions, err := boxlite.NewAdvancedBoxOptions()
-		if err != nil {
-			return "", "", fmt.Errorf("create advanced box options: %w", err)
-		}
-		defer advancedOptions.Close()
-		if err := advancedOptions.SetCapabilities(boxlite.ContainerCapabilities{
-			Add:  capabilities.Add,
-			Drop: capabilities.Drop,
-		}); err != nil {
-			return "", "", fmt.Errorf("configure advanced container capabilities: %w", err)
-		}
-		opts = append(opts, boxlite.WithAdvancedOptions(advancedOptions))
-	}
 
 	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
 	if err != nil {
