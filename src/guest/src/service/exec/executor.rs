@@ -161,19 +161,25 @@ fn spawn_with_pipes(req: &ExecRequest) -> BoxliteResult<ExecHandle> {
         cmd.stderr(std::process::Stdio::from_raw_fd(stderr_write.into_raw_fd()));
     }
 
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .map_err(|e| BoxliteError::Internal(format!("Failed to spawn '{}': {}", req.program, e)))?;
 
     let pid = child.id();
 
     // Non-PTY mode: stdout and stderr are separate pipes
-    ExecHandle::new(
+    match ExecHandle::new(
         Pid::from_raw(pid as i32),
         stdin_write,
         stdout_read,
         Some(stderr_read),
-    )
+    ) {
+        Ok(handle) => Ok(handle),
+        Err(error) => {
+            terminate_child(&mut child);
+            Err(error)
+        }
+    }
 }
 
 /// Spawn process with PTY (interactive mode).
@@ -242,7 +248,7 @@ fn spawn_with_pty(req: &ExecRequest, config: PtyConfig) -> BoxliteResult<ExecHan
         });
     }
 
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .map_err(|e| BoxliteError::Internal(format!("Failed to spawn '{}': {}", req.program, e)))?;
 
@@ -256,16 +262,36 @@ fn spawn_with_pty(req: &ExecRequest, config: PtyConfig) -> BoxliteResult<ExecHan
     // ONE reader from the PTY master. Creating separate readers would cause a race
     // condition where data could be captured by the "wrong" reader, resulting in
     // out-of-order output.
-    let stdin_fd = dup(master.as_raw_fd())
-        .map_err(|e| BoxliteError::Internal(format!("Failed to dup PTY for stdin: {}", e)))?;
-    let stdout_fd = dup(master.as_raw_fd())
-        .map_err(|e| BoxliteError::Internal(format!("Failed to dup PTY for stdout: {}", e)))?;
+    let stdin_fd = match dup(master.as_raw_fd()) {
+        Ok(fd) => fd,
+        Err(error) => {
+            terminate_child(&mut child);
+            return Err(BoxliteError::Internal(format!(
+                "Failed to dup PTY for stdin: {error}"
+            )));
+        }
+    };
+    let stdout_fd = match dup(master.as_raw_fd()) {
+        Ok(fd) => fd,
+        Err(error) => {
+            terminate_child(&mut child);
+            return Err(BoxliteError::Internal(format!(
+                "Failed to dup PTY for stdout: {error}"
+            )));
+        }
+    };
 
     let stdin = unsafe { OwnedFd::from_raw_fd(stdin_fd) };
     let stdout = unsafe { OwnedFd::from_raw_fd(stdout_fd) };
 
     // PTY mode: stderr is None (merged into stdout)
-    let mut handle = ExecHandle::new(Pid::from_raw(pid as i32), stdin, stdout, None)?;
+    let mut handle = match ExecHandle::new(Pid::from_raw(pid as i32), stdin, stdout, None) {
+        Ok(handle) => handle,
+        Err(error) => {
+            terminate_child(&mut child);
+            return Err(error);
+        }
+    };
 
     // Keep master FD for resize operations
     let pty_controller = {
@@ -276,4 +302,27 @@ fn spawn_with_pty(req: &ExecRequest, config: PtyConfig) -> BoxliteResult<ExecHan
     handle.set_pty(pty_controller, config);
 
     Ok(handle)
+}
+
+fn terminate_child(child: &mut std::process::Child) {
+    let _fence = crate::reaper::reap_fence();
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminate_child_kills_and_reaps_process() {
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30"])
+            .spawn()
+            .unwrap();
+
+        terminate_child(&mut child);
+
+        assert!(child.try_wait().unwrap().is_some());
+    }
 }

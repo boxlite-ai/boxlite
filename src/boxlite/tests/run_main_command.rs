@@ -8,7 +8,7 @@
 
 mod common;
 
-use boxlite::{BoxOptions, RootfsSpec};
+use boxlite::{BoxCommand, BoxOptions, LiteBox, RootfsSpec};
 use tokio_stream::StreamExt;
 
 /// Create a box whose main command is `cmd`, optionally on a PTY.
@@ -63,6 +63,29 @@ async fn attached_stdout(opts: BoxOptions) -> String {
     stdout
 }
 
+async fn wait_for_file(handle: &LiteBox, path: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let execution = handle
+                .exec(BoxCommand::new("test").args(["-e", path]))
+                .await
+                .expect("check main command marker");
+            if execution
+                .wait()
+                .await
+                .expect("wait for marker check")
+                .exit_code
+                == 0
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("main command must reach marker");
+}
+
 #[tokio::test]
 async fn main_command_exits_after_large_output_without_attach() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
@@ -113,14 +136,21 @@ async fn late_attach_reports_output_dropped() {
 
     let handle = runtime
         .create(
-            main_command_opts(&["sh", "-c", "head -c 2097152 /dev/zero; sleep 30"], false),
+            main_command_opts(
+                &[
+                    "sh",
+                    "-c",
+                    "head -c 2097152 /dev/zero; touch /tmp/main-output-ready; sleep 30",
+                ],
+                false,
+            ),
             None,
         )
         .await
         .expect("create box");
 
     handle.start().await.expect("start box");
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    wait_for_file(&handle, "/tmp/main-output-ready").await;
 
     let mut execution = handle
         .attach(None)

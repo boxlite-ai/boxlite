@@ -558,10 +558,9 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let (read_fd, _write_fd) = nix::unistd::pipe().unwrap();
-        let mut stdout = ExecStdout::new(read_fd).unwrap();
-
         runtime.block_on(async {
+            let (read_fd, _write_fd) = nix::unistd::pipe().unwrap();
+            let mut stdout = ExecStdout::new(read_fd).unwrap();
             let output_read = tokio::spawn(async move { stdout.next().await });
             tokio::time::sleep(Duration::from_millis(50)).await;
 

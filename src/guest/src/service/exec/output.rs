@@ -26,6 +26,7 @@ struct OutputState {
     pending_dropped: DroppedBytes,
     open_readers: usize,
     attached: bool,
+    attachment_next_sequence: Option<u64>,
 }
 
 struct OutputEntry {
@@ -74,6 +75,7 @@ impl OutputManager {
                 pending_dropped: DroppedBytes::default(),
                 open_readers,
                 attached: false,
+                attachment_next_sequence: None,
             })),
             updated,
         };
@@ -95,6 +97,7 @@ impl OutputManager {
                 return Err(Status::already_exists("Already attached"));
             }
             state.attached = true;
+            state.attachment_next_sequence = Some(0);
         }
 
         let manager = self.clone();
@@ -114,12 +117,19 @@ impl OutputManager {
 
                     if next_sequence < state.oldest_sequence {
                         next_sequence = state.oldest_sequence;
+                        state.attachment_next_sequence = Some(next_sequence);
                         Next::Item(dropped_output(state.pending_dropped.take()))
                     } else if next_sequence < state.next_sequence {
                         let index = (next_sequence - state.oldest_sequence) as usize;
-                        let entry = state.entries.get(index).expect("ring sequence must exist");
+                        let output = state
+                            .entries
+                            .get(index)
+                            .expect("ring sequence must exist")
+                            .output
+                            .clone();
                         next_sequence += 1;
-                        Next::Item(entry.output.clone())
+                        state.attachment_next_sequence = Some(next_sequence);
+                        Next::Item(output)
                     } else if state.open_readers == 0 {
                         Next::Done
                     } else {
@@ -183,14 +193,18 @@ impl OutputManager {
 
         while state.buffered_bytes + byte_len > BUFFER_CAPACITY_BYTES {
             let Some(removed) = state.entries.pop_front() else {
-                state.pending_dropped.record(source, byte_len);
+                if state.entry_is_unread(sequence) {
+                    state.pending_dropped.record(source, byte_len);
+                }
                 state.oldest_sequence = state.next_sequence;
                 break;
             };
             state.buffered_bytes -= removed.byte_len;
-            state
-                .pending_dropped
-                .record(removed.source, removed.byte_len);
+            if state.entry_is_unread(removed.sequence) {
+                state
+                    .pending_dropped
+                    .record(removed.source, removed.byte_len);
+            }
             state.oldest_sequence = removed.sequence + 1;
         }
 
@@ -215,11 +229,48 @@ impl OutputManager {
     }
 }
 
+impl OutputState {
+    fn entry_is_unread(&self, sequence: u64) -> bool {
+        self.attachment_next_sequence
+            .is_none_or(|next_sequence| sequence >= next_sequence)
+    }
+}
+
 fn dropped_output(dropped: DroppedBytes) -> ExecOutput {
     ExecOutput {
         event: Some(exec_output::Event::Dropped(OutputDropped {
             stdout_bytes: dropped.stdout,
             stderr_bytes: dropped.stderr,
         })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn dropped_counts_only_entries_the_attachment_has_not_received() {
+        let manager = OutputManager::new(None, None);
+        manager
+            .push(OutputSource::Stdout, b"already sent".to_vec())
+            .await;
+
+        let mut output = manager.attach().await.unwrap();
+        assert!(matches!(
+            output.next().await.unwrap().unwrap().event,
+            Some(exec_output::Event::Stdout(_))
+        ));
+
+        for _ in 0..=BUFFER_CAPACITY_BYTES / 1024 {
+            manager.push(OutputSource::Stderr, vec![0; 1024]).await;
+        }
+
+        let dropped = output.next().await.unwrap().unwrap();
+        let Some(exec_output::Event::Dropped(dropped)) = dropped.event else {
+            panic!("the unread stderr must be reported as dropped");
+        };
+        assert_eq!(dropped.stdout_bytes, 0);
+        assert!(dropped.stderr_bytes > 0);
     }
 }
