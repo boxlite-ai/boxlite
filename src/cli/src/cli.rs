@@ -2,6 +2,10 @@
 //! This module contains all CLI-related code including the main CLI structure,
 //! subcommands, and flag definitions.
 
+use boxlite::experimental::custom_kernel::{KernelFormat, KernelOptions, configure};
+use boxlite::experimental::{
+    EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
+};
 use boxlite::runtime::options::{NetworkConfig, NetworkMode, PortProtocol, PortSpec, VolumeSpec};
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime, ImageRegistry,
@@ -10,7 +14,7 @@ use boxlite::{
 use clap::{Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::shells::{Bash, Fish, Zsh};
 use std::io::{IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Helper to parse CLI environment variables and apply them to BoxOptions
 pub fn apply_env_vars(env: &[String], opts: &mut BoxOptions) {
@@ -53,6 +57,7 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 #[non_exhaustive]
 pub enum Commands {
+    /// Run a command in a new box
     Run(crate::commands::run::RunArgs),
     /// Execute a command in a running box
     Exec(crate::commands::exec::ExecArgs),
@@ -131,10 +136,59 @@ pub struct CompletionArgs {
 
 /// Writes a completion script for the given shell to `out`.
 pub fn generate_completion(shell: &Shell, cmd: &mut Command, name: &str, out: &mut dyn Write) {
+    // clap_complete's AOT generators enumerate hidden arguments. Generate
+    // from a projection of the affected commands so RC flags remain
+    // parseable without becoming a discovery surface.
+    let mut cmd = completion_projection(cmd);
     match shell {
-        Shell::Bash => clap_complete::generate(Bash, cmd, name, out),
-        Shell::Zsh => clap_complete::generate(Zsh, cmd, name, out),
-        Shell::Fish => clap_complete::generate(Fish, cmd, name, out),
+        Shell::Bash => clap_complete::generate(Bash, &mut cmd, name, out),
+        Shell::Zsh => clap_complete::generate(Zsh, &mut cmd, name, out),
+        Shell::Fish => clap_complete::generate(Fish, &mut cmd, name, out),
+    }
+}
+
+fn completion_projection(cmd: &Command) -> Command {
+    cmd.clone()
+        .mut_subcommand("run", without_hidden_arguments)
+        .mut_subcommand("create", without_hidden_arguments)
+}
+
+fn without_hidden_arguments(command: Command) -> Command {
+    let name = match command.get_name() {
+        "run" => "run",
+        "create" => "create",
+        other => panic!("completion projection is not defined for {other}"),
+    };
+    let about = command.get_about().cloned();
+    let long_about = command.get_long_about().cloned();
+    let display_order = command.get_display_order();
+    let visible_arguments = command
+        .get_arguments()
+        .filter(|argument| !argument.is_hide_set())
+        .cloned()
+        .collect::<Vec<_>>();
+    let subcommands = command.get_subcommands().cloned().collect::<Vec<_>>();
+
+    let mut projected = Command::new(name)
+        .display_order(display_order)
+        .args(visible_arguments)
+        .subcommands(subcommands);
+    if let Some(about) = about {
+        projected = projected.about(about);
+    }
+    if let Some(long_about) = long_about {
+        projected = projected.long_about(long_about);
+    }
+    projected
+}
+
+pub(crate) fn experimental_features_from_env() -> boxlite::BoxliteResult<ExperimentalFeatures> {
+    match std::env::var(EXPERIMENTAL_FEATURES_ENV) {
+        Ok(value) => ExperimentalFeatures::parse(&value),
+        Err(std::env::VarError::NotPresent) => Ok(ExperimentalFeatures::default()),
+        Err(std::env::VarError::NotUnicode(_)) => Err(boxlite::BoxliteError::Config(format!(
+            "{EXPERIMENTAL_FEATURES_ENV} must contain valid UTF-8"
+        ))),
     }
 }
 
@@ -185,6 +239,9 @@ pub struct GlobalFlags {
     /// `/v1/boxes/...`).
     #[arg(long = "path-prefix", global = true, env = "BOXLITE_REST_PATH_PREFIX")]
     pub path_prefix: Option<String>,
+
+    #[arg(skip)]
+    pub(crate) experimental_features: ExperimentalFeatures,
 }
 
 impl GlobalFlags {
@@ -198,6 +255,10 @@ impl GlobalFlags {
             .filter(|s| !s.is_empty())
             .unwrap_or(crate::credentials::DEFAULT_PROFILE)
             .to_string()
+    }
+
+    pub fn experimental_features(&self) -> &ExperimentalFeatures {
+        &self.experimental_features
     }
 
     /// Resolve runtime options from config file and CLI overrides (--home, --registry).
@@ -229,7 +290,10 @@ impl GlobalFlags {
         &self,
         options: BoxliteOptions,
     ) -> anyhow::Result<BoxliteRuntime> {
-        BoxliteRuntime::new(options).map_err(Into::into)
+        RuntimeBuilder::new(options)
+            .with_features(self.experimental_features.clone())
+            .build()
+            .map_err(Into::into)
     }
 
     pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
@@ -463,6 +527,92 @@ impl ResourceFlags {
         if let Some(gb) = self.disk_size_gb {
             opts.disk_size_gb = Some(gb);
         }
+    }
+}
+
+// ============================================================================
+// KERNEL FLAGS
+// ============================================================================
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum KernelFormatArg {
+    Auto,
+    Raw,
+    Elf,
+    PeGz,
+    ImageBz2,
+    ImageGz,
+    ImageZstd,
+}
+
+impl From<KernelFormatArg> for KernelFormat {
+    fn from(format: KernelFormatArg) -> Self {
+        match format {
+            KernelFormatArg::Auto => Self::Auto,
+            KernelFormatArg::Raw => Self::Raw,
+            KernelFormatArg::Elf => Self::Elf,
+            KernelFormatArg::PeGz => Self::PeGz,
+            KernelFormatArg::ImageBz2 => Self::ImageBz2,
+            KernelFormatArg::ImageGz => Self::ImageGz,
+            KernelFormatArg::ImageZstd => Self::ImageZstd,
+        }
+    }
+}
+
+// Direct Linux boot options. Companion flags are valid only with `--kernel`.
+#[derive(Args, Debug, Clone, Default)]
+pub struct KernelFlags {
+    /// Boot with this Linux kernel image instead of BoxLite's bundled kernel.
+    #[arg(long, value_name = "PATH", hide = true)]
+    pub kernel: Option<PathBuf>,
+
+    /// Kernel image format. Auto-detected by default.
+    #[arg(
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        requires = "kernel",
+        hide = true
+    )]
+    pub kernel_format: Option<KernelFormatArg>,
+
+    /// Initial ramdisk to load with the custom kernel.
+    #[arg(long, value_name = "PATH", requires = "kernel", hide = true)]
+    pub initramfs: Option<PathBuf>,
+
+    /// Replace libkrun's default Linux kernel command line.
+    #[arg(
+        long = "kernel-args",
+        value_name = "ARGS",
+        requires = "kernel",
+        hide = true
+    )]
+    pub kernel_args: Option<String>,
+}
+
+impl KernelFlags {
+    pub fn require_enabled(&self, features: &ExperimentalFeatures) -> boxlite::BoxliteResult<()> {
+        if self.kernel.is_none() {
+            return Ok(());
+        }
+
+        features.require(ExperimentalFeature::CustomKernel)
+    }
+
+    pub fn apply_to(&self, opts: &mut BoxOptions) {
+        let Some(path) = &self.kernel else {
+            return;
+        };
+        configure(
+            opts,
+            KernelOptions {
+                path: path.clone(),
+                format: self.kernel_format.map(Into::into).unwrap_or_default(),
+                initramfs: self.initramfs.clone(),
+                command_line: self.kernel_args.clone(),
+            },
+        );
     }
 }
 
@@ -822,7 +972,9 @@ impl ManagementFlags {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
@@ -881,6 +1033,7 @@ mod tests {
             url: None,
             profile: None,
             path_prefix: None,
+            experimental_features: ExperimentalFeatures::default(),
         };
 
         let options = flags.resolve_runtime_options().unwrap();
@@ -908,6 +1061,7 @@ mod tests {
             url: url.map(str::to_string),
             profile: profile.map(str::to_string),
             path_prefix: path_prefix.map(str::to_string),
+            experimental_features: ExperimentalFeatures::default(),
         }
     }
 
@@ -1030,6 +1184,120 @@ mod tests {
         flags.apply_to(&mut opts);
 
         assert_eq!(opts.disk_size_gb, None);
+    }
+
+    #[test]
+    fn custom_kernel_flags_are_applied_as_one_boot_configuration() {
+        let flags = KernelFlags {
+            kernel: Some(PathBuf::from("/tmp/vmlinux")),
+            kernel_format: Some(KernelFormatArg::Elf),
+            initramfs: Some(PathBuf::from("/tmp/initramfs.img")),
+            kernel_args: Some("console=ttyS0 panic=-1".to_string()),
+        };
+
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+
+        let kernel = opts.advanced.kernel.expect("custom kernel configuration");
+        assert_eq!(kernel.path, PathBuf::from("/tmp/vmlinux"));
+        assert_eq!(kernel.format, KernelFormat::Elf);
+        assert_eq!(kernel.initramfs, Some(PathBuf::from("/tmp/initramfs.img")));
+        assert_eq!(
+            kernel.command_line.as_deref(),
+            Some("console=ttyS0 panic=-1")
+        );
+    }
+
+    #[test]
+    fn custom_kernel_gate_uses_explicit_feature_state() {
+        let flags = KernelFlags {
+            kernel: Some(PathBuf::from("/tmp/vmlinux")),
+            ..Default::default()
+        };
+
+        let error = flags
+            .require_enabled(&ExperimentalFeatures::default())
+            .expect_err("custom kernel must be disabled by default");
+        assert!(
+            error
+                .to_string()
+                .contains("ExperimentalFeature::CustomKernel")
+        );
+
+        let enabled = ExperimentalFeatures::parse("custom-kernel").unwrap();
+        flags.require_enabled(&enabled).unwrap();
+    }
+
+    #[test]
+    fn custom_kernel_flags_are_hidden_from_help() {
+        for command in ["run", "create"] {
+            let error = Cli::try_parse_from(["boxlite", command, "--help"]).unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+
+            let help = error.to_string();
+            for rc_flag in [
+                "--kernel",
+                "--kernel-format",
+                "--initramfs",
+                "--kernel-args",
+            ] {
+                assert!(
+                    !help.contains(rc_flag),
+                    "{rc_flag} leaked into {command} help:\n{help}"
+                );
+            }
+            assert!(
+                !help.contains("\nAdvanced boot options:\n"),
+                "empty advanced boot section leaked into {command} help:\n{help}"
+            );
+        }
+    }
+
+    #[test]
+    fn custom_kernel_flags_are_hidden_from_completions() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let mut output = Vec::new();
+            generate_completion(&shell, &mut Cli::command(), "boxlite", &mut output);
+            let completion = String::from_utf8(output).unwrap();
+
+            for name in ["kernel", "kernel-format", "initramfs", "kernel-args"] {
+                let rc_flag = match shell {
+                    Shell::Fish => format!("-l {name}"),
+                    Shell::Bash | Shell::Zsh => format!("--{name}"),
+                };
+                assert!(
+                    !completion.contains(&rc_flag),
+                    "{rc_flag} leaked into {shell:?} completion"
+                );
+            }
+            for name in ["rootfs", "cpus", "network"] {
+                let stable_flag = match shell {
+                    Shell::Fish => format!("-l {name}"),
+                    Shell::Bash | Shell::Zsh => format!("--{name}"),
+                };
+                assert!(
+                    completion.contains(&stable_flag),
+                    "{stable_flag} missing from {shell:?} completion"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kernel_companion_flags_require_kernel() {
+        let error = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "--initramfs",
+            "/tmp/initramfs.img",
+            "alpine",
+        ])
+        .unwrap_err();
+
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
     }
 
     fn network_flags(network: Option<&str>, allow_net: &[&str]) -> NetworkFlags {

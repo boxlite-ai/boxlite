@@ -301,6 +301,7 @@ impl FilesystemLayout {
 /// Each box has its own directory containing:
 /// - sockets/: Unix sockets for communication
 /// - tmp/: Per-box temp directory for shim/libkrun transient files
+/// - boot/: Immutable generations of staged custom kernel assets
 /// - mounts/: Host preparation area (writable by host)
 /// - shared/: Guest-visible directory (bind mount or symlink to mounts/)
 /// - disk.qcow2: Virtual disk for the box
@@ -319,6 +320,12 @@ impl FilesystemLayout {
 /// │   ├── box.sock        # gRPC communication
 /// │   └── ready.sock      # Ready notification
 /// ├── tmp/                # Per-box temp files for shim/libkrun
+/// ├── boot/               # Custom direct-boot assets (when configured)
+/// │   ├── current.json        # Atomically published active generation
+/// │   └── generations/
+/// │       └── {generation}/
+/// │           ├── kernel
+/// │           └── initramfs   # Optional
 /// ├── mounts/             # Host preparation (SharedGuestLayout)
 /// │   └── containers/
 /// │       └── {cid}/
@@ -469,6 +476,15 @@ impl BoxFilesystemLayout {
     /// by the jailer for memory isolation between boxes.
     pub fn bin_dir(&self) -> PathBuf {
         self.box_dir.join("bin")
+    }
+
+    /// Boot assets directory: ~/.boxlite/boxes/{box_id}/boot
+    ///
+    /// Contains immutable generations of a custom kernel and optional
+    /// initramfs. `current.json` publishes one complete generation atomically,
+    /// and the shim receives read-only access to the directory.
+    pub fn boot_dir(&self) -> PathBuf {
+        self.box_dir.join("boot")
     }
 
     /// CA directory: ~/.boxlite/boxes/{box_id}/ca
@@ -996,6 +1012,15 @@ mod tests {
     }
 
     #[test]
+    fn test_box_layout_boot_dir() {
+        let layout = test_box_layout("/home/.boxlite/boxes/mybox");
+        assert_eq!(
+            layout.boot_dir(),
+            PathBuf::from("/home/.boxlite/boxes/mybox/boot")
+        );
+    }
+
+    #[test]
     fn test_box_layout_tmp_dir() {
         let layout = test_box_layout("/home/.boxlite/boxes/mybox");
         assert_eq!(
@@ -1041,6 +1066,7 @@ mod tests {
         let paths = [
             layout.logs_dir(),
             layout.bin_dir(),
+            layout.boot_dir(),
             layout.sockets_dir(),
             layout.tmp_dir(),
             layout.guest_rootfs_disk_path(),

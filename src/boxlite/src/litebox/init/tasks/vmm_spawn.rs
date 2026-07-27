@@ -7,7 +7,7 @@ use super::guest_entrypoint::GuestEntrypointBuilder;
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::DiskFormat;
 use crate::images::ContainerImageConfig;
-use crate::litebox::init::types::resolve_user_volumes;
+use crate::litebox::init::types::{InitPipelineContext, resolve_user_volumes};
 use crate::net::{NetworkBackend, NetworkBackendConfig};
 use crate::pipeline::PipelineTask;
 use crate::rootfs::guest::{GuestRootfs, Strategy};
@@ -19,7 +19,7 @@ use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::ContainerID;
 use crate::util::find_binary;
 use crate::vmm::controller::{ShimController, VmmController, VmmHandler};
-use crate::vmm::{Entrypoint, InstanceSpec, VmmKind};
+use crate::vmm::{Entrypoint, InstanceSpec, PreparedKernel, VmmKind};
 use crate::volumes::{
     ContainerMount, ContainerVolumeManager, GuestVolumeManager, stage_single_file,
 };
@@ -27,9 +27,61 @@ use async_trait::async_trait;
 use boxlite_shared::BoxTransport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct VmmSpawnTask;
+
+struct VmmSpawnInputs {
+    options: BoxOptions,
+    layout: BoxFilesystemLayout,
+    container_image_config: ContainerImageConfig,
+    prepared_kernel: Option<PreparedKernel>,
+    container_disk_path: PathBuf,
+    guest_disk_path: Option<PathBuf>,
+    container_id: ContainerID,
+    runtime: SharedRuntimeImpl,
+    reuse_rootfs: bool,
+}
+
+impl VmmSpawnInputs {
+    fn from_context(ctx: &InitPipelineContext) -> BoxliteResult<Self> {
+        let layout = ctx
+            .layout
+            .clone()
+            .ok_or_else(|| BoxliteError::Internal("filesystem task must run first".into()))?;
+        let container_image_config = ctx
+            .container_image_config
+            .clone()
+            .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?;
+        let prepared_kernel = ctx
+            .boot_assets
+            .as_ref()
+            .ok_or_else(|| BoxliteError::Internal("boot assets task must run first".into()))?
+            .kernel
+            .clone();
+        let container_disk_path = ctx
+            .container_disk
+            .as_ref()
+            .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?
+            .path()
+            .to_path_buf();
+
+        Ok(Self {
+            options: ctx.config.options.clone(),
+            layout,
+            container_image_config,
+            prepared_kernel,
+            container_disk_path,
+            guest_disk_path: ctx
+                .guest_disk
+                .as_ref()
+                .map(|disk| disk.path().to_path_buf()),
+            container_id: ctx.config.container.id.clone(),
+            runtime: ctx.runtime.clone(),
+            reuse_rootfs: ctx.reuse_rootfs,
+        })
+    }
+}
 
 #[async_trait]
 impl PipelineTask<InitCtx> for VmmSpawnTask {
@@ -38,62 +90,19 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         let box_id = task_start(&ctx, task_name).await;
 
         // Gather all inputs from previous tasks
-        let (
-            options,
-            layout,
-            container_image_config,
-            container_disk_path,
-            guest_disk_path,
-            container_id,
-            runtime,
-            reuse_rootfs,
-        ) = {
+        let inputs = {
             let ctx = ctx.lock().await;
-            let layout = ctx
-                .layout
-                .clone()
-                .ok_or_else(|| BoxliteError::Internal("filesystem task must run first".into()))?;
-            let container_image_config = ctx
-                .container_image_config
-                .clone()
-                .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?;
-            let container_disk_path = ctx
-                .container_disk
-                .as_ref()
-                .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?
-                .path()
-                .to_path_buf();
-            let guest_disk_path = ctx.guest_disk.as_ref().map(|d| d.path().to_path_buf());
-            (
-                ctx.config.options.clone(),
-                layout,
-                container_image_config,
-                container_disk_path,
-                guest_disk_path,
-                ctx.config.container.id.clone(),
-                ctx.runtime.clone(),
-                ctx.reuse_rootfs,
-            )
+            VmmSpawnInputs::from_context(&ctx)?
         };
 
         // Build config and get outputs
         let (instance_spec, volume_mgr, rootfs_init, container_mounts, network_backend) =
-            build_config(
-                &box_id,
-                &options,
-                &layout,
-                &container_image_config,
-                &container_disk_path,
-                guest_disk_path.as_deref(),
-                &container_id,
-                &runtime,
-                reuse_rootfs,
-            )
-            .await
-            .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
+            build_config(&box_id, &inputs)
+                .await
+                .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         // Spawn VM
-        let handler = spawn_vm(&box_id, &instance_spec, &options, &layout)
+        let handler = spawn_vm(&box_id, &instance_spec, &inputs.options, &inputs.layout)
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
@@ -118,17 +127,9 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
 }
 
 /// Build VMM config from prepared rootfs outputs.
-#[allow(clippy::too_many_arguments)]
 async fn build_config(
     box_id: &BoxID,
-    options: &BoxOptions,
-    layout: &BoxFilesystemLayout,
-    container_image_config: &ContainerImageConfig,
-    container_disk_path: &Path,
-    guest_disk_path: Option<&Path>,
-    container_id: &ContainerID,
-    runtime: &SharedRuntimeImpl,
-    reuse_rootfs: bool,
+    inputs: &VmmSpawnInputs,
 ) -> BoxliteResult<(
     InstanceSpec,
     GuestVolumeManager,
@@ -136,6 +137,18 @@ async fn build_config(
     Vec<ContainerMount>,
     Option<Box<dyn NetworkBackend>>,
 )> {
+    let VmmSpawnInputs {
+        options,
+        layout,
+        container_image_config,
+        prepared_kernel,
+        container_disk_path,
+        guest_disk_path,
+        container_id,
+        runtime,
+        reuse_rootfs,
+    } = inputs;
+
     // BoxTransport setup
     let transport = BoxTransport::unix(layout.socket_path());
     let ready_transport = BoxTransport::unix(layout.ready_socket_path());
@@ -212,7 +225,8 @@ async fn build_config(
         .ok_or_else(|| BoxliteError::Internal("guest_rootfs not initialized".into()))?
         .clone();
 
-    let guest_rootfs = configure_guest_rootfs(guest_rootfs, guest_disk_path, &mut volume_mgr)?;
+    let guest_rootfs =
+        configure_guest_rootfs(guest_rootfs, guest_disk_path.as_deref(), &mut volume_mgr)?;
 
     // Build VMM config from volume manager
     let vmm_config = volume_mgr.build_vmm_config();
@@ -235,6 +249,7 @@ async fn build_config(
         // VM resources
         cpus: options.cpus,
         memory_mib: options.memory_mib,
+        kernel: prepared_kernel.clone(),
         // Filesystem and devices
         fs_shares: vmm_config.fs_shares,
         block_devices: vmm_config.block_devices,

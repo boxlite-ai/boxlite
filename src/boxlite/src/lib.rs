@@ -11,6 +11,7 @@ use tracing_subscriber::EnvFilter;
 static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
 pub mod event_listener;
+pub mod experimental;
 pub mod jailer;
 pub mod litebox;
 pub mod lock;

@@ -1,4 +1,5 @@
 use crate::db::{BoxStore, Database};
+use crate::experimental::ExperimentalFeatures;
 use crate::images::{ImageDiskManager, ImageManager};
 use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
@@ -147,6 +148,9 @@ pub struct RuntimeImpl {
     /// Runtime-wide metrics (AtomicU64 based, lock-free)
     pub(crate) runtime_metrics: RuntimeMetricsStorage,
 
+    /// Immutable release-candidate capability opt-ins for this runtime.
+    pub(crate) experimental_features: ExperimentalFeatures,
+
     /// Base disk manager for clone base lifecycle and ref-count tracking.
     pub(crate) base_disk_mgr: crate::disk::BaseDiskManager,
 
@@ -199,6 +203,13 @@ impl RuntimeImpl {
     ///
     /// Performs all initialization: filesystem setup, locks, managers, and box recovery.
     pub fn new(options: BoxliteOptions) -> BoxliteResult<SharedRuntimeImpl> {
+        Self::new_with_experimental_features(options, ExperimentalFeatures::default())
+    }
+
+    pub(crate) fn new_with_experimental_features(
+        options: BoxliteOptions,
+        experimental_features: ExperimentalFeatures,
+    ) -> BoxliteResult<SharedRuntimeImpl> {
         let _sys = crate::system_check::SystemCheck::run()?;
 
         // Validate Early: Check preconditions before expensive work
@@ -306,6 +317,7 @@ impl RuntimeImpl {
             guest_rootfs_mgr,
             guest_rootfs: Arc::new(OnceCell::new()),
             runtime_metrics: RuntimeMetricsStorage::new(),
+            experimental_features,
             base_disk_mgr,
             snapshot_mgr,
             lock_manager,
@@ -1647,10 +1659,29 @@ fn reject_local_lifecycle_policy(options: &BoxOptions) -> BoxliteResult<()> {
     }
     Ok(())
 }
+
+async fn sanitize_local_options(
+    features: &ExperimentalFeatures,
+    options: BoxOptions,
+) -> BoxliteResult<BoxOptions> {
+    features.require_for_options(&options)?;
+    tokio::task::spawn_blocking(move || {
+        options.sanitize()?;
+        Ok(options)
+    })
+    .await
+    .map_err(|error| {
+        BoxliteError::Internal(format!(
+            "failed to join box option validation task: {error}"
+        ))
+    })?
+}
+
 #[async_trait::async_trait]
 impl super::backend::RuntimeBackend for LocalRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
         reject_local_lifecycle_policy(&options)?;
+        let options = sanitize_local_options(&self.0.experimental_features, options).await?;
         self.0.create(options, name).await
     }
 
@@ -1660,6 +1691,7 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
         reject_local_lifecycle_policy(&options)?;
+        let options = sanitize_local_options(&self.0.experimental_features, options).await?;
         self.0.get_or_create(options, name).await
     }
 
@@ -1776,6 +1808,7 @@ impl Drop for RuntimeImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::experimental::custom_kernel::KernelOptions;
     use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
     use crate::runtime::backend::RuntimeBackend;
     use crate::runtime::images::ImageBackend;
@@ -1837,6 +1870,31 @@ mod tests {
         assert!(matches!(result, Err(BoxliteError::InvalidArgument(_))));
     }
 
+    #[tokio::test]
+    async fn local_option_validation_uses_injected_features() {
+        let mut options = BoxOptions::default();
+        options.advanced.kernel = Some(KernelOptions::new("/definitely/missing/vmlinux"));
+
+        let disabled_error =
+            sanitize_local_options(&ExperimentalFeatures::default(), options.clone())
+                .await
+                .expect_err("custom kernel must be disabled by default");
+        assert!(
+            disabled_error
+                .to_string()
+                .contains("BOXLITE_EXPERIMENTAL=custom-kernel")
+        );
+
+        let enabled = ExperimentalFeatures::parse("custom-kernel").unwrap();
+        let validation_error = sanitize_local_options(&enabled, options)
+            .await
+            .expect_err("enabled feature should continue to kernel validation");
+        assert!(
+            validation_error
+                .to_string()
+                .contains("custom kernel must be a regular file")
+        );
+    }
     /// Create a RuntimeImpl with isolated temp directory.
     fn create_test_runtime() -> (SharedRuntimeImpl, TempDir) {
         let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");

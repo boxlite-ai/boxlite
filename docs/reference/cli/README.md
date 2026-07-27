@@ -638,6 +638,7 @@ Used by `run` and `create` (defined at `src/cli/src/cli.rs:287-310`).
 |------|------|-------------|
 | `--cpus N` | u32 | Number of CPUs (capped at 255; values above 255 log a warning) |
 | `--memory MiB` | u32 | Memory limit in mebibytes |
+| `--disk-size GB` | u64 | Sparse root filesystem disk size in gigabytes |
 
 ### `PublishFlags`
 

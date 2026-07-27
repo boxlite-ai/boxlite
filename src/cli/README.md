@@ -69,8 +69,6 @@ cargo build --release -p boxlite-cli
 # Binary: target/release/boxlite
 ```
 
-
-
 ### System Requirements
 
 | Platform       | Architecture          | Status           |

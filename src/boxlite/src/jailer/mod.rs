@@ -187,6 +187,7 @@ use std::path::PathBuf;
 /// ```text
 /// {box_dir}/                          # NOT granted wholesale
 /// ├── bin/                        [RO]  # copied shim binary + libkrunfw
+/// ├── boot/                       [RO]  # staged custom kernel + initramfs
 /// ├── shared/                     [RW]  # guest-visible virtio-fs share root
 /// ├── sockets/                    [RW]  # libkrun vsock/unix sockets
 /// ├── tmp/                        [RW]  # shim/libkrun transient temp files
@@ -273,13 +274,14 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         }
     }
 
-    // Read-only directory (copied shim binary + libkrunfw)
-    let bin_dir = layout.bin_dir();
-    if bin_dir.exists() {
-        paths.push(PathAccess {
-            path: bin_dir,
-            writable: false,
-        });
+    // Read-only directories (copied shim/libraries and staged boot assets).
+    for dir in [layout.bin_dir(), layout.boot_dir()] {
+        if dir.exists() {
+            paths.push(PathAccess {
+                path: dir,
+                writable: false,
+            });
+        }
     }
 
     // shared/ is exposed as a read-write virtio-fs share root on macOS.
@@ -693,8 +695,9 @@ mod tests {
         let box_dir = dir.path().to_path_buf();
         let layout = test_layout(box_dir.clone());
 
-        // Create bin + shared dirs
+        // Create bin + boot + shared dirs
         std::fs::create_dir_all(layout.bin_dir()).unwrap();
+        std::fs::create_dir_all(layout.boot_dir()).unwrap();
         std::fs::create_dir_all(layout.shared_dir()).unwrap();
 
         let paths = build_path_access(&layout, &[]);
@@ -702,6 +705,10 @@ mod tests {
         let bin = paths.iter().find(|p| p.path == layout.bin_dir());
         assert!(bin.is_some(), "bin/ should be included");
         assert!(!bin.unwrap().writable, "bin/ should be read-only");
+
+        let boot = paths.iter().find(|p| p.path == layout.boot_dir());
+        assert!(boot.is_some(), "boot/ should be included");
+        assert!(!boot.unwrap().writable, "boot/ should be read-only");
 
         let shared = paths.iter().find(|p| p.path == layout.shared_dir());
         assert!(shared.is_some(), "shared/ should be included");
