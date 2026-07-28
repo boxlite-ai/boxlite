@@ -18,7 +18,6 @@ import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import { assertSupportedImage } from '../constants/curated-images.constant'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -76,6 +75,7 @@ import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidati
 import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
+import { OrgBoxImageService } from './org-box-image.service'
 import {
   AUTO_DELETE_DISABLED,
   AUTO_PAUSE_DISABLED,
@@ -114,6 +114,7 @@ export class BoxService {
     private readonly regionService: RegionService,
     private readonly boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
     private readonly boxActivityService: BoxActivityService,
+    private readonly orgBoxImageService: OrgBoxImageService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -175,9 +176,9 @@ export class BoxService {
       // Reject over-limit requests at the boundary (the "security option"
       // per-box ceilings) rather than persisting out-of-range values.
       assertWithinPerBoxLimits(cpu, mem, disk, organization)
-      // Restrict box creation to the supported pinned images; reject anything else
-      // at the request boundary (defaults undefined -> base image).
-      const image = assertSupportedImage(createBoxDto.image)
+      // Restrict box creation to system images or images registered to this org.
+      // Undefined defaults to the system base image.
+      const image = await this.orgBoxImageService.resolveImage(organization.id, createBoxDto.image)
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 

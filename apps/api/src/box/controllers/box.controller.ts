@@ -67,6 +67,8 @@ import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 import { RegionBoxAccessGuard } from '../guards/region-box-access.guard'
+import { CreateOrgBoxImageDto, BoxImageDto } from '../dto/org-box-image.dto'
+import { OrgBoxImageService } from '../services/org-box-image.service'
 
 @ApiTags('box')
 @Controller('box')
@@ -81,6 +83,7 @@ export class BoxController {
   constructor(
     private readonly runnerService: RunnerService,
     private readonly boxService: BoxService,
+    private readonly orgBoxImageService: OrgBoxImageService,
     @InjectRedis() private readonly redis: Redis,
   ) {
     this.redisSubscriber = this.redis.duplicate()
@@ -251,6 +254,41 @@ export class BoxController {
     const boxes = await this.boxService.findByRunnerId(runnerContext.runnerId, stateArray, skip)
 
     return this.boxService.toBoxDtos(boxes)
+  }
+
+  @Get('supported-images')
+  @ApiOperation({
+    summary: 'List box images available to the current organization',
+    operationId: 'listSupportedBoxImages',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'System images plus organization-scoped images',
+    type: [BoxImageDto],
+  })
+  async listSupportedBoxImages(@AuthContext() authContext: OrganizationAuthContext): Promise<BoxImageDto[]> {
+    return await this.orgBoxImageService.listAvailable(authContext.organizationId)
+  }
+
+  @Post('org-images')
+  @HttpCode(200)
+  @UseInterceptors(ContentTypeInterceptor)
+  @ApiOperation({
+    summary: 'Register a box image for the current organization',
+    operationId: 'createOrgBoxImage',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'The organization image has been registered.',
+    type: BoxImageDto,
+  })
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  async createOrgBoxImage(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Body() dto: CreateOrgBoxImageDto,
+  ): Promise<BoxImageDto> {
+    const image = await this.orgBoxImageService.create(authContext.organizationId, dto, authContext.userId)
+    return BoxImageDto.fromOrgImage(image)
   }
 
   @Get(':boxIdOrName')

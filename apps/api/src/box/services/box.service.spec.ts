@@ -51,6 +51,7 @@ function makeService() {
     noop, // regionService
     noop, // boxLookupCacheInvalidationService
     noop, // boxActivityService
+    noop, // orgBoxImageService
   )
   return { service, boxRepository, eventEmitter, organizationService, organizationUsageService }
 }
@@ -93,6 +94,7 @@ function makePreviewUrlService() {
     regionService, // regionService
     noop, // boxLookupCacheInvalidationService
     noop, // boxActivityService
+    noop, // orgBoxImageService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -269,6 +271,7 @@ function makeNetworkTunnelService() {
     regionService,
     noop,
     noop,
+    noop,
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -301,6 +304,7 @@ describe('BoxService public defaults', () => {
       },
       redis: { exists: jest.fn().mockResolvedValue(1) },
       runnerService: { getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: 'runner-1' }) },
+      orgBoxImageService: { resolveImage: jest.fn().mockResolvedValue('base-ref') },
       boxRepository,
       eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
       toBoxDto: jest.fn((box) => box),
