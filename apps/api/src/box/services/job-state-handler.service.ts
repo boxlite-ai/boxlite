@@ -13,9 +13,10 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { sanitizeBoxError } from '../utils/sanitize-error.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { Box } from '../entities/box.entity'
-import { RedisLockProvider } from '../common/redis-lock.provider'
 import { ResourceType } from '../enums/resource-type.enum'
-import { getStateChangeLockKey } from '../utils/lock-key.util'
+import { isBoxLifecycleJobType } from '../constants/box-lifecycle-job-types.constant'
+import { BoxConflictError } from '../errors/box-conflict.error'
+import { RuntimeLeaseService, RuntimeStartFinalizationStatus } from './runtime-lease.service'
 
 /**
  * Service for handling entity state updates based on job completion (v2 runners only).
@@ -27,7 +28,7 @@ export class JobStateHandlerService {
 
   constructor(
     private readonly boxRepository: BoxRepository,
-    private readonly redisLockProvider: RedisLockProvider,
+    private readonly runtimeLeaseService?: RuntimeLeaseService,
   ) {}
 
   /**
@@ -43,50 +44,65 @@ export class JobStateHandlerService {
       return
     }
 
-    switch (job.type) {
-      case JobType.CREATE_BOX:
-        await this.handleCreateBoxJobCompletion(job)
-        break
-      case JobType.START_BOX:
-        await this.handleStartBoxJobCompletion(job)
-        break
-      case JobType.STOP_BOX:
-        await this.handleStopBoxJobCompletion(job)
-        break
-      case JobType.DESTROY_BOX:
-        await this.handleDestroyBoxJobCompletion(job)
-        break
-      case JobType.RESIZE_BOX:
-        await this.handleResizeBoxJobCompletion(job)
-        break
-      // TODO(image-rewrite): PULL_IMAGE / REMOVE_IMAGE job handling removed with
-      // the runner image subsystems; rebuild artifact lifecycle handling here.
-      case JobType.RECOVER_BOX:
-        await this.handleRecoverBoxJobCompletion(job)
-        break
-      default:
-        break
+    let lifecycleBox: Box | undefined
+    if (job.resourceType === ResourceType.BOX && isBoxLifecycleJobType(job.type)) {
+      lifecycleBox = (await this.boxRepository.findOne({ where: { id: job.resourceId } })) ?? undefined
+      if (!lifecycleBox || lifecycleBox.lifecycleJobId !== job.id) {
+        this.logger.debug(
+          `Ignoring stale lifecycle job ${job.id} for Box ${job.resourceId}; current job is ${lifecycleBox?.lifecycleJobId ?? 'none'}`,
+        )
+        return
+      }
     }
 
-    switch (job.resourceType) {
-      case ResourceType.BOX: {
-        const lockKey = getStateChangeLockKey(job.resourceId)
-        this.redisLockProvider
-          .unlock(lockKey)
-          .catch((error) => this.logger.error(`Error unlocking Redis lock for box ${job.resourceId}:`, error)) // Clean up lock after job completion
-        break
+    try {
+      switch (job.type) {
+        case JobType.CREATE_BOX:
+          await this.handleCreateBoxJobCompletion(job, lifecycleBox)
+          break
+        case JobType.START_BOX:
+          await this.handleStartBoxJobCompletion(job, lifecycleBox)
+          break
+        case JobType.STOP_BOX:
+          await this.handleStopBoxJobCompletion(job, lifecycleBox)
+          break
+        case JobType.DESTROY_BOX:
+          await this.handleDestroyBoxJobCompletion(job, lifecycleBox)
+          break
+        case JobType.RESIZE_BOX:
+          await this.handleResizeBoxJobCompletion(job, lifecycleBox)
+          break
+        // TODO(image-rewrite): PULL_IMAGE / REMOVE_IMAGE job handling removed with
+        // the runner image subsystems; rebuild artifact lifecycle handling here.
+        case JobType.RECOVER_BOX:
+          await this.handleRecoverBoxJobCompletion(job, lifecycleBox)
+          break
+        default:
+          break
       }
-      default:
-        break
+    } catch (error) {
+      if (!(error instanceof BoxConflictError) || !lifecycleBox) {
+        throw error
+      }
+
+      const currentBox = await this.boxRepository.findOne({ where: { id: lifecycleBox.id } })
+      if (currentBox?.lifecycleJobId === job.id) {
+        throw error
+      }
+
+      this.logger.debug(
+        `Lifecycle job ${job.id} for Box ${lifecycleBox.id} was completed or superseded concurrently; treating the callback as an idempotent replay`,
+      )
+      return
     }
   }
 
-  private async handleCreateBoxJobCompletion(job: Job): Promise<void> {
+  private async handleCreateBoxJobCompletion(job: Job, currentBox?: Box): Promise<void> {
     const boxId = job.resourceId
     if (!boxId) return
 
     try {
-      const box = await this.boxRepository.findOne({ where: { id: boxId } })
+      const box = currentBox ?? (await this.boxRepository.findOne({ where: { id: boxId } }))
       if (!box) {
         this.logger.warn(`Box ${boxId} not found for CREATE_BOX job ${job.id}`)
         return
@@ -96,39 +112,40 @@ export class JobStateHandlerService {
         this.logger.error(
           `Box ${boxId} is not in desired state STARTED for CREATE_BOX job ${job.id}. Desired state: ${box.desiredState}`,
         )
+        await this.applyLifecycleUpdate(job, box, {})
         return
       }
 
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`CREATE_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
-        updateData.state = BoxState.STARTED
-        updateData.errorReason = null
-        const metadata = job.getResultMetadata()
-        if (metadata?.daemonVersion && typeof metadata.daemonVersion === 'string') {
-          updateData.daemonVersion = metadata.daemonVersion
-        }
+        await this.finalizeStartedRuntime(job)
+        return
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`CREATE_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
+        updateData.runtimeAuthorized = false
+        updateData.runtimeUnavailable = false
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
         updateData.errorReason = errorReason || 'Failed to create box'
         updateData.recoverable = recoverable
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.applyLifecycleUpdate(job, box, updateData)
     } catch (error) {
-      this.logger.error(`Error handling CREATE_BOX job completion for box ${boxId}:`, error)
+      if (!(error instanceof BoxConflictError)) {
+        this.logger.error(`Error handling CREATE_BOX job completion for box ${boxId}:`, error)
+      }
+      throw error
     }
   }
 
-  private async handleStartBoxJobCompletion(job: Job): Promise<void> {
+  private async handleStartBoxJobCompletion(job: Job, currentBox?: Box): Promise<void> {
     const boxId = job.resourceId
     if (!boxId) return
 
     try {
-      const box = await this.boxRepository.findOne({ where: { id: boxId } })
+      const box = currentBox ?? (await this.boxRepository.findOne({ where: { id: boxId } }))
       if (!box) {
         this.logger.warn(`Box ${boxId} not found for START_BOX job ${job.id}`)
         return
@@ -138,39 +155,40 @@ export class JobStateHandlerService {
         this.logger.error(
           `Box ${boxId} is not in desired state STARTED for START_BOX job ${job.id}. Desired state: ${box.desiredState}`,
         )
+        await this.applyLifecycleUpdate(job, box, {})
         return
       }
 
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`START_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
-        updateData.state = BoxState.STARTED
-        updateData.errorReason = null
-        const metadata = job.getResultMetadata()
-        if (metadata?.daemonVersion && typeof metadata.daemonVersion === 'string') {
-          updateData.daemonVersion = metadata.daemonVersion
-        }
+        await this.finalizeStartedRuntime(job)
+        return
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`START_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
+        updateData.runtimeAuthorized = false
+        updateData.runtimeUnavailable = false
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
         updateData.errorReason = errorReason || 'Failed to start box'
         updateData.recoverable = recoverable
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.applyLifecycleUpdate(job, box, updateData)
     } catch (error) {
-      this.logger.error(`Error handling START_BOX job completion for box ${boxId}:`, error)
+      if (!(error instanceof BoxConflictError)) {
+        this.logger.error(`Error handling START_BOX job completion for box ${boxId}:`, error)
+      }
+      throw error
     }
   }
 
-  private async handleStopBoxJobCompletion(job: Job): Promise<void> {
+  private async handleStopBoxJobCompletion(job: Job, currentBox?: Box): Promise<void> {
     const boxId = job.resourceId
     if (!boxId) return
 
     try {
-      const box = await this.boxRepository.findOne({ where: { id: boxId } })
+      const box = currentBox ?? (await this.boxRepository.findOne({ where: { id: boxId } }))
       if (!box) {
         this.logger.warn(`Box ${boxId} not found for STOP_BOX job ${job.id}`)
         return
@@ -180,6 +198,7 @@ export class JobStateHandlerService {
         this.logger.error(
           `Box ${boxId} is not in desired state STOPPED for STOP_BOX job ${job.id}. Desired state: ${box.desiredState}`,
         )
+        await this.applyLifecycleUpdate(job, box, {})
         return
       }
 
@@ -189,26 +208,33 @@ export class JobStateHandlerService {
         this.logger.debug(`STOP_BOX job ${job.id} completed successfully, marking box ${boxId} as STOPPED`)
         updateData.state = BoxState.STOPPED
         updateData.errorReason = null
+        updateData.runtimeAuthorized = false
+        updateData.runtimeUnavailable = false
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`STOP_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
+        updateData.runtimeAuthorized = false
+        updateData.runtimeUnavailable = false
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
         updateData.errorReason = errorReason || 'Failed to stop box'
         updateData.recoverable = recoverable
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.applyLifecycleUpdate(job, box, updateData)
     } catch (error) {
-      this.logger.error(`Error handling STOP_BOX job completion for box ${boxId}:`, error)
+      if (!(error instanceof BoxConflictError)) {
+        this.logger.error(`Error handling STOP_BOX job completion for box ${boxId}:`, error)
+      }
+      throw error
     }
   }
 
-  private async handleDestroyBoxJobCompletion(job: Job): Promise<void> {
+  private async handleDestroyBoxJobCompletion(job: Job, currentBox?: Box): Promise<void> {
     const boxId = job.resourceId
     if (!boxId) return
 
     try {
-      const box = await this.boxRepository.findOne({ where: { id: boxId } })
+      const box = currentBox ?? (await this.boxRepository.findOne({ where: { id: boxId } }))
       if (!box) {
         this.logger.warn(`Box ${boxId} not found for DESTROY_BOX job ${job.id}`)
         return
@@ -220,29 +246,37 @@ export class JobStateHandlerService {
           this.logger.debug(`DESTROY_BOX job ${job.id} completed successfully, marking box ${boxId} as DESTROYED`)
           updateData.state = BoxState.DESTROYED
           updateData.errorReason = null
+          updateData.runtimeAuthorized = false
+          updateData.runtimeUnavailable = false
         } else if (job.status === JobStatus.FAILED) {
           this.logger.error(`DESTROY_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
           updateData.state = BoxState.ERROR
+          updateData.runtimeAuthorized = false
+          updateData.runtimeUnavailable = false
           const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
           updateData.errorReason = errorReason || 'Failed to destroy box'
           updateData.recoverable = recoverable
         }
       } else {
+        await this.applyLifecycleUpdate(job, box, {})
         return
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.applyLifecycleUpdate(job, box, updateData)
     } catch (error) {
-      this.logger.error(`Error handling DESTROY_BOX job completion for box ${boxId}:`, error)
+      if (!(error instanceof BoxConflictError)) {
+        this.logger.error(`Error handling DESTROY_BOX job completion for box ${boxId}:`, error)
+      }
+      throw error
     }
   }
 
-  private async handleRecoverBoxJobCompletion(job: Job): Promise<void> {
+  private async handleRecoverBoxJobCompletion(job: Job, currentBox?: Box): Promise<void> {
     const boxId = job.resourceId
     if (!boxId) return
 
     try {
-      const box = await this.boxRepository.findOne({ where: { id: boxId } })
+      const box = currentBox ?? (await this.boxRepository.findOne({ where: { id: boxId } }))
       if (!box) {
         this.logger.warn(`Box ${boxId} not found for RECOVER_BOX job ${job.id}`)
         return
@@ -252,33 +286,38 @@ export class JobStateHandlerService {
         this.logger.error(
           `Box ${boxId} is not in desired state STARTED for RECOVER_BOX job ${job.id}. Desired state: ${box.desiredState}`,
         )
+        await this.applyLifecycleUpdate(job, box, {})
         return
       }
 
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`RECOVER_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
-        updateData.state = BoxState.STARTED
-        updateData.errorReason = null
+        await this.finalizeStartedRuntime(job)
+        return
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`RECOVER_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
         updateData.errorReason = job.errorMessage || 'Failed to recover box'
+        updateData.runtimeAuthorized = false
+        updateData.runtimeUnavailable = false
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.applyLifecycleUpdate(job, box, updateData)
     } catch (error) {
-      this.logger.error(`Error handling RECOVER_BOX job completion for box ${boxId}:`, error)
+      if (!(error instanceof BoxConflictError)) {
+        this.logger.error(`Error handling RECOVER_BOX job completion for box ${boxId}:`, error)
+      }
+      throw error
     }
   }
 
-  private async handleResizeBoxJobCompletion(job: Job): Promise<void> {
+  private async handleResizeBoxJobCompletion(job: Job, currentBox?: Box): Promise<void> {
     const boxId = job.resourceId
     if (!boxId) return
 
     try {
-      const box = await this.boxRepository.findOne({ where: { id: boxId } })
+      const box = currentBox ?? (await this.boxRepository.findOne({ where: { id: boxId } }))
       if (!box) {
         this.logger.warn(`Box ${boxId} not found for RESIZE_BOX job ${job.id}`)
         return
@@ -286,6 +325,7 @@ export class JobStateHandlerService {
 
       if (box.state !== BoxState.RESIZING) {
         this.logger.warn(`Box ${boxId} is not in RESIZING state for RESIZE_BOX job ${job.id}. State: ${box.state}`)
+        await this.applyLifecycleUpdate(job, box, {})
         return
       }
 
@@ -299,6 +339,7 @@ export class JobStateHandlerService {
 
       if (!previousState) {
         this.logger.error(`Box ${boxId} has unexpected desiredState ${box.desiredState} for RESIZE_BOX job ${job.id}`)
+        await this.applyLifecycleUpdate(job, box, {})
         return
       }
 
@@ -320,9 +361,36 @@ export class JobStateHandlerService {
         updateData.state = previousState
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.applyLifecycleUpdate(job, box, updateData)
     } catch (error) {
-      this.logger.error(`Error handling RESIZE_BOX job completion for box ${boxId}:`, error)
+      if (!(error instanceof BoxConflictError)) {
+        this.logger.error(`Error handling RESIZE_BOX job completion for box ${boxId}:`, error)
+      }
+      throw error
     }
+  }
+
+  private async finalizeStartedRuntime(job: Job): Promise<void> {
+    if (!this.runtimeLeaseService) {
+      throw new Error(
+        `Runtime confirmation is not yet valid for ${job.type} job ${job.id}; leaving Box unapproved for compute billing`,
+      )
+    }
+    const status = await this.runtimeLeaseService.finalizeStartedJob(job)
+    if (status === RuntimeStartFinalizationStatus.WAITING) {
+      throw new Error(
+        `Runtime confirmation is not yet valid for ${job.type} job ${job.id}; leaving Box unapproved for compute billing`,
+      )
+    }
+  }
+
+  private async applyLifecycleUpdate(job: Job, box: Box, updateData: Partial<Box>): Promise<void> {
+    if (box.lifecycleJobId !== job.id) {
+      throw new Error(`Lifecycle job ${job.id} no longer owns Box ${box.id}`)
+    }
+    await this.boxRepository.update(box.id, {
+      updateData: { ...updateData, lifecycleJobId: null },
+      entity: box,
+    })
   }
 }

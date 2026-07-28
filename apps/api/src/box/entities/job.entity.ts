@@ -60,6 +60,9 @@ export class Job {
   @Column()
   runnerId: string
 
+  @Column({ type: 'uuid', nullable: true })
+  executionEpoch: string | null
+
   @Column({
     type: 'enum',
     enum: ResourceType,
@@ -131,6 +134,7 @@ export class Job {
     this.type = params.type
     this.status = params.status || JobStatus.PENDING
     this.runnerId = params.runnerId
+    this.executionEpoch = null
     this.resourceType = params.resourceType
     this.resourceId = params.resourceId
     this.payload = params.payload || null

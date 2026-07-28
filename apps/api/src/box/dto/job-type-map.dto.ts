@@ -13,6 +13,9 @@ import { ResourceType } from '../enums/resource-type.enum'
  * resourceType is an array of allowed ResourceTypes - the user can supply any of them
  */
 export interface JobTypeMap {
+  [JobType.STOP_ORPHAN_RUNTIME]: {
+    resourceType: [ResourceType.BOX]
+  },
   [JobType.CREATE_BOX]: {
     resourceType: [ResourceType.BOX]
   }

@@ -4,9 +4,30 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Controller, Get, Post, Body, Param, Query, UseGuards, Logger, Req, NotFoundException } from '@nestjs/common'
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+  Logger,
+  Req,
+  NotFoundException,
+  Headers,
+} from '@nestjs/common'
 import { Request } from 'express'
-import { ApiOAuth2, ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger'
+import {
+  ApiOAuth2,
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiResponse,
+  ApiParam,
+  ApiQuery,
+  ApiHeader,
+} from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { RunnerAuthGuard } from '../../auth/runner-auth.guard'
 import { RunnerContextDecorator } from '../../common/decorators/runner-context.decorator'
@@ -21,6 +42,7 @@ import {
 } from '../dto/job.dto'
 import { JobService } from '../services/job.service'
 import { JobAccessGuard } from '../guards/job-access.guard'
+import { CustomHeaders } from '../../common/constants/header.constants'
 
 @ApiTags('jobs')
 @Controller('jobs')
@@ -63,11 +85,19 @@ export class JobController {
     description: 'List of jobs for the runner',
     type: PaginatedJobsDto,
   })
+  @ApiHeader(CustomHeaders.RUNNER_EPOCH)
   async listJobs(
     @RunnerContextDecorator() runnerContext: RunnerContext,
     @Query() query: ListJobsQueryDto,
+    @Headers(CustomHeaders.RUNNER_EPOCH.name) runnerEpoch: string,
   ): Promise<PaginatedJobsDto> {
-    return await this.jobService.findJobsForRunner(runnerContext.runnerId, query.status, query.page, query.limit)
+    return await this.jobService.findJobsForRunner(
+      runnerContext.runnerId,
+      query.status,
+      query.page,
+      query.limit,
+      runnerEpoch,
+    )
   }
 
   @Get('poll')
@@ -94,9 +124,11 @@ export class JobController {
     description: 'List of jobs for the runner',
     type: PollJobsResponseDto,
   })
+  @ApiHeader(CustomHeaders.RUNNER_EPOCH)
   async pollJobs(
     @Req() req: Request,
     @RunnerContextDecorator() runnerContext: RunnerContext,
+    @Headers(CustomHeaders.RUNNER_EPOCH.name) runnerEpoch: string,
     @Query('timeout') timeout?: number,
     @Query('limit') limit?: number,
   ): Promise<PollJobsResponseDto> {
@@ -119,6 +151,7 @@ export class JobController {
         limitNumber,
         timeoutSeconds,
         abortController.signal,
+        runnerEpoch,
       )
       this.logger.debug(`Returning ${jobs.length} jobs to runner ${runnerContext.runnerId}`)
       return { jobs }
@@ -149,11 +182,16 @@ export class JobController {
     description: 'Job details',
     type: JobDto,
   })
+  @ApiHeader(CustomHeaders.RUNNER_EPOCH)
   @UseGuards(JobAccessGuard)
-  async getJob(@RunnerContextDecorator() runnerContext: RunnerContext, @Param('jobId') jobId: string): Promise<JobDto> {
+  async getJob(
+    @RunnerContextDecorator() runnerContext: RunnerContext,
+    @Param('jobId') jobId: string,
+    @Headers(CustomHeaders.RUNNER_EPOCH.name) runnerEpoch: string,
+  ): Promise<JobDto> {
     this.logger.log(`Runner ${runnerContext.runnerId} fetching job ${jobId}`)
 
-    const job = await this.jobService.findOne(jobId)
+    const job = await this.jobService.findOneForRunner(jobId, runnerContext.runnerId, runnerEpoch)
     if (!job) {
       throw new NotFoundException(`Job ${jobId} not found`)
     }
@@ -176,11 +214,13 @@ export class JobController {
     description: 'Job status updated successfully',
     type: JobDto,
   })
+  @ApiHeader(CustomHeaders.RUNNER_EPOCH)
   @UseGuards(JobAccessGuard)
   async updateJobStatus(
     @RunnerContextDecorator() runnerContext: RunnerContext,
     @Param('jobId') jobId: string,
     @Body() updateJobStatusDto: UpdateJobStatusDto,
+    @Headers(CustomHeaders.RUNNER_EPOCH.name) runnerEpoch: string,
   ): Promise<JobDto> {
     this.logger.debug(`Runner ${runnerContext.runnerId} updating job ${jobId} status to ${updateJobStatusDto.status}`)
 
@@ -189,6 +229,7 @@ export class JobController {
       updateJobStatusDto.status,
       updateJobStatusDto.errorMessage,
       updateJobStatusDto.resultMetadata,
+      { runnerId: runnerContext.runnerId, runnerEpoch },
     )
 
     return new JobDto(job)

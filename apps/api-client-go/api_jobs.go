@@ -85,6 +85,13 @@ type JobsAPIGetJobRequest struct {
 	ctx context.Context
 	ApiService JobsAPI
 	jobId string
+	xBoxLiteRunnerEpoch *string
+}
+
+// Fences runner job polling and status updates to the current process epoch
+func (r JobsAPIGetJobRequest) XBoxLiteRunnerEpoch(xBoxLiteRunnerEpoch string) JobsAPIGetJobRequest {
+	r.xBoxLiteRunnerEpoch = &xBoxLiteRunnerEpoch
+	return r
 }
 
 func (r JobsAPIGetJobRequest) Execute() (*Job, *http.Response, error) {
@@ -127,6 +134,9 @@ func (a *JobsAPIService) GetJobExecute(r JobsAPIGetJobRequest) (*Job, *http.Resp
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
+	if r.xBoxLiteRunnerEpoch == nil {
+		return localVarReturnValue, nil, reportError("xBoxLiteRunnerEpoch is required and must be specified")
+	}
 
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
@@ -145,6 +155,7 @@ func (a *JobsAPIService) GetJobExecute(r JobsAPIGetJobRequest) (*Job, *http.Resp
 	if localVarHTTPHeaderAccept != "" {
 		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
 	}
+	parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Runner-Epoch", r.xBoxLiteRunnerEpoch, "simple", "")
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
 		return localVarReturnValue, nil, err
@@ -185,10 +196,17 @@ func (a *JobsAPIService) GetJobExecute(r JobsAPIGetJobRequest) (*Job, *http.Resp
 type JobsAPIListJobsRequest struct {
 	ctx context.Context
 	ApiService JobsAPI
+	xBoxLiteRunnerEpoch *string
 	page *float32
 	limit *float32
 	status *JobStatus
 	offset *float32
+}
+
+// Fences runner job polling and status updates to the current process epoch
+func (r JobsAPIListJobsRequest) XBoxLiteRunnerEpoch(xBoxLiteRunnerEpoch string) JobsAPIListJobsRequest {
+	r.xBoxLiteRunnerEpoch = &xBoxLiteRunnerEpoch
+	return r
 }
 
 // Page number of the results
@@ -254,6 +272,9 @@ func (a *JobsAPIService) ListJobsExecute(r JobsAPIListJobsRequest) (*PaginatedJo
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
+	if r.xBoxLiteRunnerEpoch == nil {
+		return localVarReturnValue, nil, reportError("xBoxLiteRunnerEpoch is required and must be specified")
+	}
 
 	if r.page != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "page", r.page, "form", "")
@@ -292,6 +313,7 @@ func (a *JobsAPIService) ListJobsExecute(r JobsAPIListJobsRequest) (*PaginatedJo
 	if localVarHTTPHeaderAccept != "" {
 		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
 	}
+	parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Runner-Epoch", r.xBoxLiteRunnerEpoch, "simple", "")
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
 		return localVarReturnValue, nil, err
@@ -332,8 +354,15 @@ func (a *JobsAPIService) ListJobsExecute(r JobsAPIListJobsRequest) (*PaginatedJo
 type JobsAPIPollJobsRequest struct {
 	ctx context.Context
 	ApiService JobsAPI
+	xBoxLiteRunnerEpoch *string
 	timeout *float32
 	limit *float32
+}
+
+// Fences runner job polling and status updates to the current process epoch
+func (r JobsAPIPollJobsRequest) XBoxLiteRunnerEpoch(xBoxLiteRunnerEpoch string) JobsAPIPollJobsRequest {
+	r.xBoxLiteRunnerEpoch = &xBoxLiteRunnerEpoch
+	return r
 }
 
 // Timeout in seconds for long polling (default: 30, max: 60)
@@ -387,6 +416,9 @@ func (a *JobsAPIService) PollJobsExecute(r JobsAPIPollJobsRequest) (*PollJobsRes
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
+	if r.xBoxLiteRunnerEpoch == nil {
+		return localVarReturnValue, nil, reportError("xBoxLiteRunnerEpoch is required and must be specified")
+	}
 
 	if r.timeout != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "timeout", r.timeout, "form", "")
@@ -411,6 +443,7 @@ func (a *JobsAPIService) PollJobsExecute(r JobsAPIPollJobsRequest) (*PollJobsRes
 	if localVarHTTPHeaderAccept != "" {
 		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
 	}
+	parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Runner-Epoch", r.xBoxLiteRunnerEpoch, "simple", "")
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
 		return localVarReturnValue, nil, err
@@ -452,7 +485,14 @@ type JobsAPIUpdateJobStatusRequest struct {
 	ctx context.Context
 	ApiService JobsAPI
 	jobId string
+	xBoxLiteRunnerEpoch *string
 	updateJobStatus *UpdateJobStatus
+}
+
+// Fences runner job polling and status updates to the current process epoch
+func (r JobsAPIUpdateJobStatusRequest) XBoxLiteRunnerEpoch(xBoxLiteRunnerEpoch string) JobsAPIUpdateJobStatusRequest {
+	r.xBoxLiteRunnerEpoch = &xBoxLiteRunnerEpoch
+	return r
 }
 
 func (r JobsAPIUpdateJobStatusRequest) UpdateJobStatus(updateJobStatus UpdateJobStatus) JobsAPIUpdateJobStatusRequest {
@@ -500,6 +540,9 @@ func (a *JobsAPIService) UpdateJobStatusExecute(r JobsAPIUpdateJobStatusRequest)
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
+	if r.xBoxLiteRunnerEpoch == nil {
+		return localVarReturnValue, nil, reportError("xBoxLiteRunnerEpoch is required and must be specified")
+	}
 	if r.updateJobStatus == nil {
 		return localVarReturnValue, nil, reportError("updateJobStatus is required and must be specified")
 	}
@@ -521,6 +564,7 @@ func (a *JobsAPIService) UpdateJobStatusExecute(r JobsAPIUpdateJobStatusRequest)
 	if localVarHTTPHeaderAccept != "" {
 		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
 	}
+	parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Runner-Epoch", r.xBoxLiteRunnerEpoch, "simple", "")
 	// body params
 	localVarPostBody = r.updateJobStatus
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)

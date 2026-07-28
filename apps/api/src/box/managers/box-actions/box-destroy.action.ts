@@ -54,7 +54,7 @@ export class BoxDestroyAction extends BoxAction {
 
       if (box.state !== BoxState.DESTROYING) {
         await runnerAdapter.destroyBox(box.id)
-        await this.updateBoxState(box, BoxState.DESTROYING, lockCode)
+        await this.updateBoxState(await this.reloadBoxAfterRunnerJob(box.id), BoxState.DESTROYING, lockCode)
       }
 
       return SYNC_AGAIN

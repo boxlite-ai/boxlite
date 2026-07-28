@@ -4,6 +4,12 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { BoxRuntimeLease } from './entities/box-runtime-lease.entity'
+import { RunnerRuntimeEpoch } from './entities/runner-runtime-epoch.entity'
+import { BoxRuntimeCleanup } from './entities/box-runtime-cleanup.entity'
+import { RuntimeLeaseService } from './services/runtime-lease.service'
+import { RuntimeOrphanCleanupService } from './services/runtime-orphan-cleanup.service'
+import { NoopRuntimeUsageSink, RUNTIME_USAGE_SINK } from './services/runtime-usage-sink'
 import { Module } from '@nestjs/common'
 import { DataSource } from 'typeorm'
 import { BoxController } from './controllers/box.controller'
@@ -59,6 +65,11 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
   providers: [
+    RuntimeLeaseService,
+    RuntimeOrphanCleanupService,
+    // Metering implements this port; until it lands nothing consumes the
+    // reconciler's observations, which is the pre-billing status quo.
+    { provide: RUNTIME_USAGE_SINK, useClass: NoopRuntimeUsageSink },
     BoxService,
     BoxManager,
     BoxWarmPoolService,

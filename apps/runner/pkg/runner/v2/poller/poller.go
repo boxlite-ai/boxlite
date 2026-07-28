@@ -21,6 +21,7 @@ type PollerServiceConfig struct {
 	PollLimit   int
 	Logger      *slog.Logger
 	Executor    *executor.Executor
+	RunnerEpoch string
 }
 
 // Service handles job polling from the API
@@ -30,6 +31,7 @@ type Service struct {
 	pollLimit   int
 	executor    *executor.Executor
 	client      *apiclient.APIClient
+	runnerEpoch string
 }
 
 // NewService creates a new poller service
@@ -38,6 +40,9 @@ func NewService(cfg *PollerServiceConfig) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API client: %w", err)
 	}
+	if cfg.RunnerEpoch == "" {
+		return nil, fmt.Errorf("runner epoch is required for poller")
+	}
 
 	return &Service{
 		log:         cfg.Logger.With(slog.String("component", "poller")),
@@ -45,12 +50,17 @@ func NewService(cfg *PollerServiceConfig) (*Service, error) {
 		pollLimit:   cfg.PollLimit,
 		executor:    cfg.Executor,
 		client:      apiClient,
+		runnerEpoch: cfg.RunnerEpoch,
 	}, nil
 }
 
 // Start begins the job polling loop
 func (s *Service) Start(ctx context.Context) {
-	inProgressJobs, _, err := s.client.JobsAPI.ListJobs(ctx).Status(apiclient.JOBSTATUS_IN_PROGRESS).Execute()
+	inProgressJobs, _, err := s.client.JobsAPI.
+		ListJobs(ctx).
+		XBoxLiteRunnerEpoch(s.runnerEpoch).
+		Status(apiclient.JOBSTATUS_IN_PROGRESS).
+		Execute()
 	if err != nil {
 		// Only log error
 		s.log.WarnContext(ctx, "Failed to fetch IN_PROGRESS jobs", "error", err)
@@ -101,6 +111,7 @@ func (s *Service) pollJobs(ctx context.Context) ([]apiclient.Job, error) {
 	limit := float32(s.pollLimit)
 
 	req := s.client.JobsAPI.PollJobs(ctx).
+		XBoxLiteRunnerEpoch(s.runnerEpoch).
 		Timeout(timeout).
 		Limit(limit)
 

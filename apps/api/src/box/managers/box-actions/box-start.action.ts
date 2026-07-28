@@ -7,6 +7,7 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { BoxRepository } from '../../repositories/box.repository'
 import { Box } from '../../entities/box.entity'
+import { Runner } from '../../entities/runner.entity'
 import { BoxState } from '../../enums/box-state.enum'
 import { DONT_SYNC_AGAIN, BoxAction, SYNC_AGAIN, SyncState } from './box.action'
 import { RunnerState } from '../../enums/runner-state.enum'
@@ -61,6 +62,9 @@ export class BoxStartAction extends BoxAction {
     if (runner.state !== RunnerState.READY) {
       return DONT_SYNC_AGAIN
     }
+    if (await this.rejectRunnerWithoutRuntimeLeases(box, runner, lockCode)) {
+      return DONT_SYNC_AGAIN
+    }
 
     if (!box.image) {
       await this.updateBoxState(box, BoxState.ERROR, lockCode, undefined, 'Box has no image to create from')
@@ -79,7 +83,7 @@ export class BoxStartAction extends BoxAction {
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
     await runnerAdapter.createBox(box, metadata)
 
-    await this.updateBoxState(box, BoxState.CREATING, lockCode)
+    await this.updateBoxState(await this.reloadBoxAfterRunnerJob(box.id), BoxState.CREATING, lockCode)
     return SYNC_AGAIN
   }
 
@@ -97,6 +101,9 @@ export class BoxStartAction extends BoxAction {
     if (runner.state !== RunnerState.READY) {
       return DONT_SYNC_AGAIN
     }
+    if (await this.rejectRunnerWithoutRuntimeLeases(box, runner, lockCode)) {
+      return DONT_SYNC_AGAIN
+    }
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
@@ -109,7 +116,7 @@ export class BoxStartAction extends BoxAction {
 
     await runnerAdapter.startBox(box.id, box.authToken, metadata)
 
-    await this.updateBoxState(box, BoxState.STARTING, lockCode)
+    await this.updateBoxState(await this.reloadBoxAfterRunnerJob(box.id), BoxState.STARTING, lockCode)
     return SYNC_AGAIN
   }
 
@@ -205,6 +212,20 @@ export class BoxStartAction extends BoxAction {
     return false
   }
 
+  private async rejectRunnerWithoutRuntimeLeases(box: Box, runner: Runner, lockCode: LockCode): Promise<boolean> {
+    if (runner.apiVersion === '2') {
+      return false
+    }
+    await this.updateBoxState(
+      box,
+      BoxState.ERROR,
+      lockCode,
+      undefined,
+      `Runner ${runner.id} uses API version ${runner.apiVersion}, which cannot prove actual runtime state for metering`,
+    )
+    return true
+  }
+
   private async removeBoxFromPreviousRunner(box: Box): Promise<void> {
     const runner = await this.runnerService.findOne(box.prevRunnerId)
     if (!runner) {
@@ -214,15 +235,19 @@ export class BoxStartAction extends BoxAction {
       return
     }
 
-    const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-
-    try {
-      // First try to destroy the box
-      await runnerAdapter.destroyBox(box.id)
-    } catch (error) {
-      if (error.response?.status !== 404 && error.statusCode !== 404) {
-        this.logger.error(`Failed to cleanup box ${box.id} on previous runner ${runner.id}:`, error)
-        throw error
+    if (runner.apiVersion === '2') {
+      this.logger.debug(
+        `Deferring cleanup of Box ${box.id} on previous v2 runner ${runner.id} until its exact runtime tuple is observed`,
+      )
+    } else {
+      const runnerAdapter = await this.runnerAdapterFactory.create(runner)
+      try {
+        await runnerAdapter.destroyBox(box.id)
+      } catch (error) {
+        if (error.response?.status !== 404 && error.statusCode !== 404) {
+          this.logger.error(`Failed to cleanup box ${box.id} on previous runner ${runner.id}:`, error)
+          throw error
+        }
       }
     }
 
