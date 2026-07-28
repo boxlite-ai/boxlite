@@ -100,12 +100,13 @@ impl GuestService for GuestServer {
         // Stop accepts, close established transports, and wait until their
         // handlers can no longer register new executions before snapshotting
         // the execution registry below.
-        self.ssh_manager.shutdown().await.map_err(|error| {
-            error!(%error, "SSH sessions did not quiesce during guest shutdown");
-            Status::deadline_exceeded(format!(
-                "guest shutdown stopped before execution teardown: {error}"
-            ))
-        })?;
+        // Best-effort: the quiesce only buys ordering, so a stuck session must
+        // not strand containers or skip the filesystem sync below, which COW
+        // disk consistency on restart depends on. `shutting_down` is already
+        // set, so nothing else would finish the teardown if this returned.
+        let quiesce = self.ssh_manager.shutdown().await.inspect_err(|error| {
+            error!(%error, "SSH sessions did not quiesce; continuing guest teardown");
+        });
 
         // Step 1: Gracefully shutdown all running executions
         info!("Stopping running executions...");
@@ -166,6 +167,14 @@ impl GuestService for GuestServer {
             nix::libc::sync();
         }
 
+        // Report the degraded quiesce only now that containers are stopped,
+        // exit records are written and the filesystems are synced.
+        if let Err(error) = quiesce {
+            return Err(Status::deadline_exceeded(format!(
+                "guest teardown completed but SSH sessions did not quiesce: {error}"
+            )));
+        }
+
         info!("Graceful shutdown complete");
         Ok(Response::new(ShutdownResponse {}))
     }
@@ -201,5 +210,38 @@ impl GuestService for GuestServer {
         stored.clear();
 
         Ok(Response::new(ThawResponse { thawed_count }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::GuestLayout;
+    use crate::reaper::ExitSlot;
+    use crate::service::exec::exec_handle::ExitStatus;
+
+    /// A quiesce that fails must not strand the rest of the teardown: the exit
+    /// record still reaches disk, and the failure is reported afterwards.
+    #[tokio::test]
+    async fn shutdown_writes_exit_records_when_ssh_fails_to_quiesce() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let server = GuestServer::new(GuestLayout::with_base(root.path()));
+        let exit_file = server.layout.shared().container("c1").exit_file();
+        std::fs::create_dir_all(exit_file.parent().expect("container root"))
+            .expect("container dir");
+        server.init_exits.lock().await.insert(
+            "c1".to_string(),
+            ExitSlot::settled_for_test(ExitStatus::Code(7)),
+        );
+
+        server.ssh_manager.close_connection_budget_for_test();
+        let status = server
+            .shutdown(Request::new(ShutdownRequest {}))
+            .await
+            .expect_err("a failed quiesce is reported to the host");
+
+        assert_eq!(status.code(), tonic::Code::DeadlineExceeded);
+        let written = boxlite_shared::layout::ExitRecord::read(&exit_file);
+        assert_eq!(written.map(|record| record.exit_code), Some(7));
     }
 }

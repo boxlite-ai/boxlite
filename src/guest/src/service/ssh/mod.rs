@@ -444,6 +444,13 @@ impl SshManager {
             Err(_) => Err(SshShutdownError::TimedOut),
         }
     }
+
+    /// Force the next `shutdown` to fail without waiting out its timeout, so
+    /// callers can be tested against a degraded quiesce.
+    #[cfg(test)]
+    pub(crate) fn close_connection_budget_for_test(&self) {
+        self.connection_permits.close();
+    }
 }
 
 fn start_listener(
