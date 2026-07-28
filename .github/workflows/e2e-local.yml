@@ -345,7 +345,6 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
-      BOXLITE_TEST_NESTED_VIRTUALIZATION: '1'
       HOME: /root
     steps:
       - name: Clean workspace (persistent runner)
@@ -491,6 +490,22 @@ jobs:
             echo "::error::Only ${FREE_GB} GB free on / (floor=${MIN_FREE_GB}) — refusing to run integration tests."
             exit 1
           fi
+
+      # The runner is a reused, tagged instance, so its hardware is not implied
+      # by this workflow. Enable the nested-KVM test only where the loaded KVM
+      # module actually reports nesting; warn loudly otherwise, because a silent
+      # skip is indistinguishable from a pass.
+      - name: Probe runner for nested virtualization
+        run: |
+          for probe in /sys/module/kvm_intel/parameters/nested \
+                       /sys/module/kvm_amd/parameters/nested; do
+            if grep -qiE '^(Y|1)$' "$probe" 2>/dev/null; then
+              echo "BOXLITE_TEST_NESTED_VIRTUALIZATION=1" >> "$GITHUB_ENV"
+              echo "nested virtualization available via $probe"
+              exit 0
+            fi
+          done
+          echo "::warning::Runner does not report nested KVM; nested_virtualization_can_create_kvm_vm will not run."
 
       - name: Run integration tests
         env:
