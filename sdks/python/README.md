@@ -206,7 +206,7 @@ pair, or any other multi-segment value such as `us-east/team-42`.
 ```python
 rt = Boxlite.rest(
     BoxliteRestOptions(
-        url="https://api.boxlite.ai/api",
+        url="https://app.boxlite.ai/api",
         credential=ApiKeyCredential("blk_live_…"),
         path_prefix="acme",  # → requests hit /v1/acme/boxes
     )

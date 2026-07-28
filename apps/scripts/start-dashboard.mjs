@@ -18,7 +18,7 @@ const appsBinPath = path.join(appsRoot, 'node_modules', '.bin')
 const API_TARGETS = {
   local: 'http://localhost:3001',
   dev: 'https://dev.boxlite.ai',
-  // prod: 'https://api.boxlite.ai', // placeholder — set the real prod API origin and
+  // prod: 'https://app.boxlite.ai', // placeholder — set the real prod API origin and
   //                                  // uncomment once the prod stage exists. Prod is
   //                                  // also guarded below (needs --yes-prod).
 }

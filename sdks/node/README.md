@@ -130,7 +130,7 @@ pair, or any other multi-segment value such as `us-east/team-42`.
 import { JsBoxlite, BoxliteRestOptions, ApiKeyCredential } from '@boxlite-ai/boxlite';
 
 const rt = JsBoxlite.rest(new BoxliteRestOptions({
-  url: 'https://api.boxlite.ai/api',
+  url: 'https://app.boxlite.ai/api',
   credential: new ApiKeyCredential('blk_live_…'),
   pathPrefix: 'acme',   // → requests hit /v1/acme/boxes
 }));

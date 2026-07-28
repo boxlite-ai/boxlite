@@ -99,12 +99,12 @@ servers:
         default: https
         enum: [https, http]
       host:
-        default: api.boxlite.ai
+        default: app.boxlite.ai
       basePath:
         description: |
           Deployment-defined hostpath prefix. Empty for local servers
           (`boxlite serve` at `http://localhost:8100/v1/…`); typically
-          `/api` for cloud deployments (`https://api.boxlite.ai/api/v1/…`).
+          `/api` for cloud deployments (`https://app.boxlite.ai/api/v1/…`).
         default: ""
 
 # ---------------------------------------------------------------------------
