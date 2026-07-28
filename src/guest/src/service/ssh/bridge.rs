@@ -21,6 +21,12 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
+/// Starting directory for a session helper. The helper chdirs to the passwd
+/// home itself once it is inside the container (`session::enter_root_home`),
+/// which is the only place that directory can be read, so the request just
+/// needs a directory every image is guaranteed to have.
+const SESSION_WORKDIR: &str = "/";
+
 const GRACEFUL_TERMINATION_SIGNALS: [i32; 2] = [1, 15]; // SIGHUP, SIGTERM
 const FORCED_TERMINATION_SIGNAL: i32 = 9; // SIGKILL
 
@@ -118,8 +124,8 @@ impl ChannelBridge {
         channel_id: ChannelId,
         session_handle: SessionHandle,
     ) -> Result<Self, BridgeError> {
-        let (container_id, profile) = resolve_single_container_profile(&server).await?;
-        let launch = execution_launch(command, tty, env, &container_id, &profile);
+        let container_id = resolve_single_container(&server).await?;
+        let launch = execution_launch(command, tty, env, &container_id);
         let completion = launch.completion;
 
         let response = tokio::time::timeout(
@@ -326,18 +332,9 @@ impl Drop for ChannelBridge {
     }
 }
 
-pub(super) async fn resolve_single_container_profile(
-    server: &GuestServer,
-) -> Result<(String, crate::container::user_profile::RootSessionProfile), BridgeError> {
+pub(super) async fn resolve_single_container(server: &GuestServer) -> Result<String, BridgeError> {
     let containers = server.containers.lock().await;
-    let container_id = select_single_container_id(containers.keys())?;
-    let container = containers
-        .get(&container_id)
-        .expect("selected container remains registered while map is locked")
-        .clone();
-    drop(containers);
-    let profile = container.lock().await.root_session_profile();
-    Ok((container_id, profile))
+    select_single_container_id(containers.keys())
 }
 
 fn select_single_container_id<'a>(
@@ -374,12 +371,18 @@ fn container_exec_env(
 pub(super) fn session_exec_env(
     mut env: HashMap<String, String>,
     container_id: &str,
-    profile: &crate::container::user_profile::RootSessionProfile,
 ) -> HashMap<String, String> {
-    // Account identity is server-owned. Insert it after client-provided env so
-    // AcceptEnv cannot move a root login away from its passwd profile.
-    env.insert("HOME".into(), profile.home_dir.clone());
-    env.insert("SHELL".into(), profile.login_shell.clone());
+    // Account identity is server-owned. Apply it after client-provided env so
+    // an env request cannot rename a root login or point it at another home.
+    //
+    // HOME and SHELL are dropped rather than overwritten: neither is knowable
+    // out here, so there is no correct value to send. The session sets both
+    // once it is inside the container, from the passwd entry it can finally
+    // read, and libcontainer seeds HOME ahead of it when absent. Dropping is
+    // belt-and-braces against a future path that forwards client env without
+    // reaching that session — it is not what makes the account values win.
+    env.remove("HOME");
+    env.remove("SHELL");
     env.insert("USER".into(), SSH_USER.into());
     env.insert("LOGNAME".into(), SSH_USER.into());
     container_exec_env(env, container_id)
@@ -401,16 +404,15 @@ fn execution_launch(
     tty: Option<TtyConfig>,
     env: HashMap<String, String>,
     container_id: &str,
-    profile: &crate::container::user_profile::RootSessionProfile,
 ) -> ExecutionLaunch {
     match command {
         Command::Shell => {
-            let helper = session_launch(container_id, profile, env, SshWorkload::Shell);
+            let helper = session_launch(container_id, env, SshWorkload::Shell);
             ExecutionLaunch {
                 program: helper.program,
                 args: helper.args,
                 env: helper.env,
-                workdir: profile.home_dir.clone(),
+                workdir: SESSION_WORKDIR.into(),
                 tty,
                 user: helper.user,
                 completion: ChannelCompletion::Session,
@@ -418,12 +420,12 @@ fn execution_launch(
             }
         }
         Command::Exec(command) => {
-            let helper = session_launch(container_id, profile, env, SshWorkload::Exec { command });
+            let helper = session_launch(container_id, env, SshWorkload::Exec { command });
             ExecutionLaunch {
                 program: helper.program,
                 args: helper.args,
                 env: helper.env,
-                workdir: profile.home_dir.clone(),
+                workdir: SESSION_WORKDIR.into(),
                 tty,
                 user: helper.user,
                 completion: ChannelCompletion::Session,
@@ -431,12 +433,12 @@ fn execution_launch(
             }
         }
         Command::Sftp => {
-            let helper = sftp_launch(container_id, profile);
+            let helper = sftp_launch(container_id);
             ExecutionLaunch {
                 program: helper.program,
                 args: helper.args,
                 env: helper.env,
-                workdir: profile.home_dir.clone(),
+                workdir: SESSION_WORKDIR.into(),
                 tty: None,
                 user: helper.user,
                 completion: ChannelCompletion::Session,
@@ -444,7 +446,7 @@ fn execution_launch(
             }
         }
         Command::Streamlocal(socket_path) => {
-            let helper = streamlocal_launch(container_id, profile, socket_path);
+            let helper = streamlocal_launch(container_id, socket_path);
             ExecutionLaunch {
                 program: helper.program,
                 args: helper.args,
@@ -470,7 +472,6 @@ struct InternalHelperLaunch {
 
 fn internal_helper_launch(
     container_id: &str,
-    profile: &crate::container::user_profile::RootSessionProfile,
     workload: SshWorkload,
     env: HashMap<String, String>,
 ) -> InternalHelperLaunch {
@@ -481,7 +482,7 @@ fn internal_helper_launch(
         // requiring a helper executable in the container image.
         program,
         args,
-        env: session_exec_env(env, container_id, profile),
+        env: session_exec_env(env, container_id),
         // Server-owned SSH work always runs as container root. A numeric
         // identity works in scratch images that deliberately omit passwd.
         user: Some("0:0".to_string()),
@@ -491,28 +492,19 @@ fn internal_helper_launch(
 
 fn session_launch(
     container_id: &str,
-    profile: &crate::container::user_profile::RootSessionProfile,
     env: HashMap<String, String>,
     workload: SshWorkload,
 ) -> InternalHelperLaunch {
-    internal_helper_launch(container_id, profile, workload, env)
+    internal_helper_launch(container_id, workload, env)
 }
 
-fn sftp_launch(
-    container_id: &str,
-    profile: &crate::container::user_profile::RootSessionProfile,
-) -> InternalHelperLaunch {
-    internal_helper_launch(container_id, profile, SshWorkload::Sftp, HashMap::new())
+fn sftp_launch(container_id: &str) -> InternalHelperLaunch {
+    internal_helper_launch(container_id, SshWorkload::Sftp, HashMap::new())
 }
 
-fn streamlocal_launch(
-    container_id: &str,
-    profile: &crate::container::user_profile::RootSessionProfile,
-    socket_path: String,
-) -> InternalHelperLaunch {
+fn streamlocal_launch(container_id: &str, socket_path: String) -> InternalHelperLaunch {
     internal_helper_launch(
         container_id,
-        profile,
         SshWorkload::DirectStreamlocal { socket_path },
         HashMap::new(),
     )
@@ -885,13 +877,6 @@ mod tests {
     use crate::service::exec::state::ExecutionState;
     use nix::unistd::{pipe, Pid};
 
-    fn root_profile() -> crate::container::user_profile::RootSessionProfile {
-        crate::container::user_profile::RootSessionProfile {
-            home_dir: "/root".into(),
-            login_shell: "/bin/bash".into(),
-        }
-    }
-
     async fn pending_execution(
         registry: &ExecutionRegistry,
         execution_id: &str,
@@ -940,8 +925,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_launch_uses_the_container_profile_and_protects_account_environment() {
-        let profile = root_profile();
+    fn shell_launch_protects_account_environment() {
         let mut env = HashMap::from([
             ("HOME".to_string(), "/attacker".to_string()),
             ("SHELL".to_string(), "/tmp/shell".to_string()),
@@ -951,7 +935,7 @@ mod tests {
         ]);
         env.insert(executor_const::ENV_VAR.to_string(), "guest".into());
 
-        let launch = execution_launch(Command::Shell, None, env, "container-1", &profile);
+        let launch = execution_launch(Command::Shell, None, env, "container-1");
 
         assert_eq!(
             launch.program,
@@ -961,12 +945,11 @@ mod tests {
             launch.args,
             [crate::service::ssh::session::INTERNAL_SESSION_ARG, "shell"]
         );
-        assert_eq!(launch.workdir, "/root");
-        assert_eq!(launch.env.get("HOME").map(String::as_str), Some("/root"));
-        assert_eq!(
-            launch.env.get("SHELL").map(String::as_str),
-            Some("/bin/bash")
-        );
+        assert_eq!(launch.workdir, "/");
+        // Not overwritten — removed, so libcontainer and the in-container
+        // session can supply the real account values.
+        assert!(!launch.env.contains_key("HOME"));
+        assert!(!launch.env.contains_key("SHELL"));
         assert_eq!(launch.env.get("USER").map(String::as_str), Some("root"));
         assert_eq!(launch.env.get("LOGNAME").map(String::as_str), Some("root"));
         assert_eq!(
@@ -987,7 +970,6 @@ mod tests {
             None,
             HashMap::new(),
             "container-1",
-            &root_profile(),
         );
 
         assert_eq!(
@@ -998,11 +980,11 @@ mod tests {
                 command
             ]
         );
-        assert_eq!(launch.workdir, "/root");
+        assert_eq!(launch.workdir, "/");
     }
 
     #[test]
-    fn sftp_launch_uses_root_home_without_a_tty_or_client_environment() {
+    fn sftp_launch_drops_the_tty_and_client_environment() {
         let mut env = HashMap::new();
         env.insert("LC_ALL".into(), "client-controlled".into());
         let launch = execution_launch(
@@ -1010,18 +992,16 @@ mod tests {
             Some(TtyConfig::default()),
             env,
             "container-1",
-            &root_profile(),
         );
 
-        assert_eq!(launch.workdir, "/root");
+        assert_eq!(launch.workdir, "/");
         assert!(launch.tty.is_none());
         assert!(!launch.env.contains_key("LC_ALL"));
-        assert_eq!(launch.env.get("HOME").map(String::as_str), Some("/root"));
     }
 
     #[test]
     fn sftp_uses_the_internal_container_workload() {
-        let launch = sftp_launch("container-1", &root_profile());
+        let launch = sftp_launch("container-1");
 
         assert_eq!(
             launch.program,
@@ -1029,8 +1009,7 @@ mod tests {
         );
         assert_eq!(launch.args, [crate::service::ssh::sftp::INTERNAL_SFTP_ARG]);
         assert_eq!(launch.user.as_deref(), Some("0:0"));
-        assert_eq!(launch.env.len(), 5);
-        assert_eq!(launch.env.get("HOME").map(String::as_str), Some("/root"));
+        assert_eq!(launch.env.len(), 3);
         assert_eq!(
             launch.env.get(executor_const::ENV_VAR).map(String::as_str),
             Some("container=container-1")
@@ -1039,7 +1018,7 @@ mod tests {
 
     #[test]
     fn streamlocal_uses_the_internal_container_workload() {
-        let launch = streamlocal_launch("container-1", &root_profile(), "/run/service.sock".into());
+        let launch = streamlocal_launch("container-1", "/run/service.sock".into());
 
         assert_eq!(
             launch.program,
@@ -1053,8 +1032,7 @@ mod tests {
             ]
         );
         assert_eq!(launch.user.as_deref(), Some("0:0"));
-        assert_eq!(launch.env.len(), 5);
-        assert_eq!(launch.env.get("HOME").map(String::as_str), Some("/root"));
+        assert_eq!(launch.env.len(), 3);
         assert_eq!(
             launch.env.get(executor_const::ENV_VAR).map(String::as_str),
             Some("container=container-1")

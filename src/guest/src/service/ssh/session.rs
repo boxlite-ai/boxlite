@@ -25,10 +25,15 @@ pub(crate) fn parse_internal_args(args: &[String]) -> BoxliteResult<SessionActio
     }
 }
 
-/// Run after libcontainer has applied the tenant's namespaces and credentials.
+/// Run after libcontainer has applied the tenant's namespaces and credentials,
+/// which is what makes the passwd lookup resolve inside the container.
 pub(crate) fn run_internal(action: SessionAction) -> BoxliteResult<()> {
-    let profile = root_session_profile(Path::new("/"));
+    let profile = root_session_profile();
     enter_root_home(&profile)?;
+    // OpenSSH exports the account's shell alongside HOME (session.c, `do_child`).
+    // libcontainer already seeded HOME from the same passwd entry, and
+    // `enter_root_home` narrows it to the directory actually entered.
+    std::env::set_var("SHELL", &profile.login_shell);
 
     match action {
         SessionAction::Shell => exec_login_shell(&profile),
@@ -38,7 +43,7 @@ pub(crate) fn run_internal(action: SessionAction) -> BoxliteResult<()> {
 
 /// Apply root's home before the SFTP protocol loop starts.
 pub(crate) fn prepare_sftp_home() -> BoxliteResult<()> {
-    enter_root_home(&root_session_profile(Path::new("/")))
+    enter_root_home(&root_session_profile())
 }
 
 fn enter_root_home(profile: &RootSessionProfile) -> BoxliteResult<()> {

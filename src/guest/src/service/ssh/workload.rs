@@ -293,7 +293,6 @@ mod tests {
     use libcontainer::oci_spec::runtime::{ProcessBuilder, SpecBuilder, UserBuilder};
     use std::fs;
     use std::io::{Read as _, Write as _};
-    use std::os::unix::fs::PermissionsExt as _;
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
     use std::time::{Duration, Instant};
@@ -537,29 +536,20 @@ mod tests {
         }
     }
 
-    fn is_executable(path: &Path) -> bool {
-        path.is_absolute()
-            && fs::metadata(path).is_ok_and(|metadata| {
-                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-            })
-    }
+    /// Values the SSH session never chooses, seeded into the subprocess so an
+    /// assertion on `$HOME`/`$SHELL` cannot be satisfied by what the runner
+    /// happened to export.
+    const INHERITED_HOME_SENTINEL: &str = "/nonexistent/inherited-home";
+    const INHERITED_SHELL_SENTINEL: &str = "/nonexistent/inherited-shell";
 
+    /// Mirror of the production rule: the passwd shell is used verbatim and
+    /// only an empty field becomes `/bin/sh`. A shell the image does not ship
+    /// is *not* substituted, so this oracle must not probe for one either.
     fn selected_shell(configured: PathBuf) -> PathBuf {
-        if is_executable(&configured) {
-            return configured;
+        if configured.as_os_str().is_empty() {
+            return PathBuf::from("/bin/sh");
         }
-        [
-            "/bin/bash",
-            "/bin/ash",
-            "/bin/sh",
-            "/usr/bin/bash",
-            "/usr/bin/ash",
-            "/usr/bin/sh",
-        ]
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|path| is_executable(path))
-        .expect("Linux test environment has a fallback shell")
+        configured
     }
 
     #[test]
@@ -680,10 +670,12 @@ mod tests {
     }
 
     #[test]
-    fn exec_workload_preserves_one_command_argument_and_root_home() {
+    fn exec_workload_preserves_one_command_argument_and_exports_the_account_profile() {
         let inherited_cwd = tempfile::tempdir().unwrap();
-        let expected_home = selected_home(root_record().0);
-        let command = r#"printf '\036%s\0%s\037' "$PWD" 'literal spaces ; $(not reparsed)'"#;
+        let (home, shell) = root_record();
+        let expected_home = selected_home(home);
+        let expected_shell = selected_shell(shell);
+        let command = r#"printf '\036%s\0%s\0%s\0%s\037' "$PWD" "$HOME" "$SHELL" 'literal spaces ; $(not reparsed)'"#;
         let output = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -693,6 +685,11 @@ mod tests {
             ])
             .env(SUBPROCESS_CASE, "exec")
             .env(SUBPROCESS_COMMAND, command)
+            // Values the session must overwrite. Inheriting the runner's own
+            // HOME/SHELL would let this pass without the session exporting
+            // anything.
+            .env("HOME", INHERITED_HOME_SENTINEL)
+            .env("SHELL", INHERITED_SHELL_SENTINEL)
             .current_dir(inherited_cwd.path())
             .output()
             .unwrap();
@@ -701,14 +698,21 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        // HOME is exported as the directory actually entered, so it tracks $PWD.
         let expected = format!(
-            "\u{1e}{}\0literal spaces ; $(not reparsed)\u{1f}",
-            expected_home.display()
+            "\u{1e}{}\0{}\0{}\0literal spaces ; $(not reparsed)\u{1f}",
+            expected_home.display(),
+            expected_home.display(),
+            expected_shell.display()
         );
-        assert!(output
-            .stdout
-            .windows(expected.len())
-            .any(|window| window == expected.as_bytes()));
+        assert!(
+            output
+                .stdout
+                .windows(expected.len())
+                .any(|window| window == expected.as_bytes()),
+            "expected {expected:?} in {:?}",
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
 
     #[test]

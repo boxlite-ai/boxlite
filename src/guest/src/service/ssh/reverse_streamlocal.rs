@@ -524,10 +524,10 @@ impl RunningHelper {
         ingress: SocketAddrV4,
         token: String,
     ) -> Result<Self, String> {
-        let (container_id, profile) = super::bridge::resolve_single_container_profile(&server)
+        let container_id = super::bridge::resolve_single_container(&server)
             .await
             .map_err(|error| error.to_string())?;
-        let launch = helper_execution_launch(&container_id, &profile, socket_path, ingress);
+        let launch = helper_execution_launch(&container_id, socket_path, ingress);
         let response = tokio::time::timeout(
             CONTROL_CALL_TIMEOUT,
             crate::service::exec::start_ssh_execution(&server, launch.request, launch.workload),
@@ -713,7 +713,6 @@ struct HelperExecutionLaunch {
 
 fn helper_execution_launch(
     container_id: &str,
-    profile: &crate::container::user_profile::RootSessionProfile,
     socket_path: &str,
     ingress: SocketAddrV4,
 ) -> HelperExecutionLaunch {
@@ -727,8 +726,9 @@ fn helper_execution_launch(
             execution_id: None,
             program,
             args,
-            env: super::bridge::session_exec_env(HashMap::new(), container_id, profile),
-            workdir: profile.home_dir.clone(),
+            env: super::bridge::session_exec_env(HashMap::new(), container_id),
+            // A socket relay never resolves a path against its cwd.
+            workdir: "/".to_string(),
             timeout_ms: 0,
             tty: None,
             user: Some("0:0".to_string()),
@@ -1195,13 +1195,8 @@ mod tests {
 
     #[test]
     fn helper_launch_keeps_the_token_out_of_logged_argv_and_env() {
-        let profile = crate::container::user_profile::RootSessionProfile {
-            home_dir: "/root".into(),
-            login_shell: "/bin/ash".into(),
-        };
         let launch = helper_execution_launch(
             "container-1",
-            &profile,
             "/run/service.sock",
             SocketAddrV4::new(Ipv4Addr::LOCALHOST, 32_000),
         );
@@ -1221,14 +1216,11 @@ mod tests {
         );
         assert!(request.args.iter().all(|value| !value.contains(TOKEN)));
         assert!(request.env.values().all(|value| !value.contains(TOKEN)));
-        assert_eq!(request.env.get("HOME").map(String::as_str), Some("/root"));
-        assert_eq!(
-            request.env.get("SHELL").map(String::as_str),
-            Some("/bin/ash")
-        );
+        assert!(!request.env.contains_key("HOME"));
+        assert!(!request.env.contains_key("SHELL"));
         assert_eq!(request.env.get("USER").map(String::as_str), Some("root"));
         assert_eq!(request.user.as_deref(), Some("0:0"));
-        assert_eq!(request.workdir, "/root");
+        assert_eq!(request.workdir, "/");
         assert!(matches!(
             launch.workload,
             crate::service::ssh::SshWorkload::ReverseStreamlocal { .. }
