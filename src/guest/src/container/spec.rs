@@ -55,14 +55,12 @@ impl ContainerDevices {
 /// Read a guest device node's type and numbers, and describe it as the OCI
 /// device the container should get.
 fn resolve_device(device: ProtoContainerDevice) -> BoxliteResult<LinuxDevice> {
-    let source = validate_absolute_path("source", &device.source)?;
-    let destination = validate_absolute_path("destination", &device.destination)?;
-    if destination == Path::new("/dev") || !destination.starts_with("/dev") {
-        return Err(unsupported_device(
-            &destination,
-            "must be below /dev".to_string(),
-        ));
-    }
+    // Both ends are confined: the source names a node this guest already
+    // publishes under /dev, and the destination names where the workload sees
+    // it. Confining only one end would let a caller read a device node from
+    // anywhere in the guest filesystem.
+    let source = validate_device_path("source", &device.source)?;
+    let destination = validate_device_path("destination", &device.destination)?;
     if let Some(file_mode) = device.file_mode {
         if file_mode & !0o777 != 0 {
             return Err(unsupported_device(
@@ -115,7 +113,9 @@ fn unsupported_device(path: &Path, problem: String) -> BoxliteError {
     BoxliteError::Unsupported(format!("container device {} {problem}", path.display()))
 }
 
-fn validate_absolute_path(field: &str, value: &str) -> BoxliteResult<PathBuf> {
+/// A device path must be absolute, free of `.`/`..`, and name something strictly
+/// below `/dev` — never `/dev` itself, which is the directory, not a node.
+fn validate_device_path(field: &str, value: &str) -> BoxliteResult<PathBuf> {
     let path = Path::new(value);
     if !path.is_absolute()
         || path
@@ -124,6 +124,11 @@ fn validate_absolute_path(field: &str, value: &str) -> BoxliteResult<PathBuf> {
     {
         return Err(BoxliteError::Unsupported(format!(
             "container device {field} must be a normalized absolute path: {value}"
+        )));
+    }
+    if path == Path::new("/dev") || !path.starts_with("/dev") {
+        return Err(BoxliteError::Unsupported(format!(
+            "container device {field} must be below /dev: {value}"
         )));
     }
 
@@ -726,8 +731,20 @@ mod tests {
     fn device_mapping_rejects_unusable_requests() {
         let regular_file = tempfile::NamedTempFile::new().unwrap();
         let cases = [
+            // A directory, so it clears the /dev confinement and is refused by
+            // the node-type check instead. If a runner lacks /dev/shm the error
+            // becomes "is unavailable" and this case fails loudly rather than
+            // passing for the wrong reason.
             (
                 "not a character or block device",
+                "/dev/shm".to_string(),
+                "/dev/test-device".to_string(),
+                None,
+            ),
+            // Source is confined too, so a path outside /dev is refused before
+            // its node type is ever inspected.
+            (
+                "source must be below /dev",
                 regular_file.path().display().to_string(),
                 "/dev/test-device".to_string(),
                 None,
