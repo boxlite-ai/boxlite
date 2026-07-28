@@ -89,6 +89,20 @@ pub(crate) fn parse_internal_args(args: &[String]) -> BoxliteResult<InternalArgs
     })
 }
 
+/// Bind a pathname socket that is owner-only from the moment it appears.
+///
+/// `bind` creates the pathname with `0777 & ~umask`, and `connect(2)` on a
+/// pathname socket needs only write permission, so a later chmod still leaves a
+/// window in which any container process could reach the listener. The socket
+/// may sit anywhere the target validator allows, including a world-writable
+/// directory, so the umask has to be narrow across the bind itself.
+fn bind_owner_only(socket_path: impl AsRef<Path>) -> std::io::Result<UnixListener> {
+    let previous_umask = unsafe { nix::libc::umask(0o177) };
+    let listener = UnixListener::bind(socket_path);
+    unsafe { nix::libc::umask(previous_umask) };
+    listener
+}
+
 async fn serve_reverse_streamlocal<R, W>(
     args: InternalArgs,
     mut control: R,
@@ -105,7 +119,7 @@ where
 
     // Deliberately do not pre-unlink. Existing filesystem entries belong to
     // the container and a forwarding request must not destroy them.
-    let listener = UnixListener::bind(&args.socket_path).map_err(|error| {
+    let listener = bind_owner_only(&args.socket_path).map_err(|error| {
         BoxliteError::Execution(format!("reverse streamlocal bind failed: {error}"))
     })?;
     let mut bound_socket = BoundSocket::capture(&args.socket_path).map_err(|error| {
@@ -1134,6 +1148,22 @@ mod tests {
         let mut response = [0; 8];
         unix.read_exact(&mut response).await.unwrap();
         assert_eq!(&response, b"response");
+    }
+
+    /// The pathname must never be reachable by a container process, not even
+    /// for the window between `bind` and the chmod that follows it.
+    #[tokio::test]
+    async fn the_listener_pathname_is_owner_only_before_any_chmod() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("forward.sock");
+
+        let permissive = unsafe { nix::libc::umask(0) };
+        let listener = bind_owner_only(&socket_path);
+        unsafe { nix::libc::umask(permissive) };
+        listener.expect("bind");
+
+        let mode = std::fs::metadata(&socket_path).expect("stat").mode();
+        assert_eq!(mode & 0o777, 0o600, "actual mode {:o}", mode & 0o777);
     }
 
     #[test]
