@@ -2,8 +2,8 @@
 # Order matters: the LAST matching pattern for a path wins.
 # Referenced teams must have explicit repo access or the rule is ignored by GitHub.
 
-# All code is owned by the reviewers team.
-*                          @boxlite-ai/reviewers
+# All code is owned by the reviewer team.
+*                          @boxlite-ai/reviewer
 
 # Legal and contributor policy changes require project owner review.
 /CONTRIBUTING.md           @DorianZheng
