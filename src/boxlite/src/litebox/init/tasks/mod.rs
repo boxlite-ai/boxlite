@@ -5,27 +5,26 @@
 //! ```text
 //! Filesystem ───────┐
 //!                   │
-//! BootAssets ───────┤                 ┌─→ GuestConnect ─┐
-//! ContainerRootfs ──┼──→ VmmSpawn ───┤                 ├─→ GuestInit
-//! GuestRootfs ──────┘                 └─→ PortPublish ──┘
+//! BootAssets ───────┤                              ┌─→ GuestInit
+//! ContainerRootfs ──┼──→ VmmSpawn ──→ GuestConnect ─┤
+//! GuestRootfs ──────┘                              └─→ PortPublish
 //!
 //! Starting (new box):
 //! - Stage 1 (sequential): [Filesystem]
 //! - Stage 2 (parallel):   [BootAssets, ContainerRootfs, GuestRootfs]
 //! - Stage 3 (sequential): [VmmSpawn]
-//! - Stage 4 (parallel):   [GuestConnect, PortPublish]
-//! - Stage 5 (sequential): [GuestInit]
+//! - Stage 4 (sequential): [GuestConnect]
+//! - Stage 5 (parallel):   [GuestInit, PortPublish]
 //!
 //! Stopped (restart):
 //! - Stage 1 (sequential): [Filesystem]
 //! - Stage 2 (parallel):   [BootAssets, ContainerRootfs, GuestRootfs]
 //! - Stage 3 (sequential): [VmmSpawn]
-//! - Stage 4 (parallel):   [GuestConnect, PortPublish]
-//! - Stage 5 (sequential): [GuestInit]
+//! - Stage 4 (sequential): [GuestConnect]
+//! - Stage 5 (parallel):   [GuestInit, PortPublish]
 //!
 //! Running (reattach):
-//! - Stage 1 (sequential): [VmmAttach]
-//! - Stage 2 (parallel):   [GuestConnect, PortPublish]
+//! - Stages 1-3 (sequential): [VmmAttach], [GuestConnect], [PortPublish]
 //! ```
 
 mod boot_assets;

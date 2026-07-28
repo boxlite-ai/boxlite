@@ -3,6 +3,13 @@
 //! The backend owns endpoint allocation. This task owns lifecycle policy:
 //! fixed endpoints are published before automatic ones, partial publication is
 //! rolled back, and concrete bindings are returned in request order.
+//!
+//! The task never has to wait for the shim's runtime port control. The shim
+//! creates gvproxy before it boots the VM, and `gvproxy_create` returns only
+//! once the ServicesMux control socket is listening — so by the time any plan
+//! reaches this task, the socket has been serving since before the guest ran
+//! its first instruction. Nothing downstream reads the bindings either, so
+//! publication runs alongside container init rather than gating it.
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::litebox::ports::LivePublishedPorts;
@@ -17,24 +24,6 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::time::Duration;
-
-/// How long publication waits for the shim to start serving runtime port
-/// control, and how often it retries while waiting.
-#[derive(Clone, Copy)]
-struct ControlReadyWait {
-    timeout: Duration,
-    interval: Duration,
-}
-
-impl Default for ControlReadyWait {
-    fn default() -> Self {
-        Self {
-            timeout: Duration::from_secs(10),
-            interval: Duration::from_millis(50),
-        }
-    }
-}
 
 /// The endpoints a planned mapping may adopt from an already-running backend.
 ///
@@ -181,7 +170,6 @@ struct PortPublisher<'a> {
     /// The plan in publication order — fixed endpoints first, so an automatic
     /// allocation can never take a host port another mapping asked for.
     planned: Vec<PlannedPort>,
-    control_ready: ControlReadyWait,
     /// Forwards published by this run, in publication order: the rollback
     /// ledger. Adopted forwards are deliberately absent — they belong to the
     /// shim, not to this attempt.
@@ -195,23 +183,14 @@ impl<'a> PortPublisher<'a> {
         Self {
             backend,
             planned,
-            control_ready: ControlReadyWait::default(),
             published: Vec::new(),
         }
     }
 
-    #[cfg(test)]
-    fn with_control_ready(mut self, control_ready: ControlReadyWait) -> Self {
-        self.control_ready = control_ready;
-        self
-    }
-
     /// Publish every configured mapping on a freshly spawned shim.
+    ///
+    /// A new shim owns no forwards, so there is nothing to adopt.
     async fn publish(mut self) -> BoxliteResult<Vec<PublishedPort>> {
-        // A new shim owns no forwards yet, so the probe only proves its control
-        // socket is serving before the first mutation. That is what lets
-        // publication overlap the guest-ready wait instead of following it.
-        self.wait_until_ready().await?;
         self.assign(AdoptableForwards::default()).await
     }
 
@@ -221,35 +200,8 @@ impl<'a> PortPublisher<'a> {
     /// be idempotent: a mapping the backend already serves is claimed, never
     /// duplicated.
     async fn reconcile(mut self) -> BoxliteResult<Vec<PublishedPort>> {
-        let active = self.wait_until_ready().await?;
+        let active = self.backend.list_forwards().await?;
         self.assign(AdoptableForwards::new(&active)).await
-    }
-
-    /// Poll the read-only control endpoint until the shim serves it. VMM spawn
-    /// returns once the shim process exists, but the shim binds its control
-    /// socket slightly later, during gvproxy initialization.
-    async fn wait_until_ready(&self) -> BoxliteResult<Vec<Forward>> {
-        let ControlReadyWait { timeout, interval } = self.control_ready;
-        let deadline = tokio::time::Instant::now() + timeout;
-
-        loop {
-            match tokio::time::timeout_at(deadline, self.backend.list_forwards()).await {
-                Ok(Ok(forwards)) => return Ok(forwards),
-                Ok(Err(error @ BoxliteError::Network(_))) => {
-                    let now = tokio::time::Instant::now();
-                    if now >= deadline {
-                        return Err(error);
-                    }
-                    tokio::time::sleep(interval.min(deadline - now)).await;
-                }
-                Ok(Err(error)) => return Err(error),
-                Err(_) => {
-                    return Err(BoxliteError::Network(format!(
-                        "timed out waiting for gvproxy runtime port control after {timeout:?}"
-                    )));
-                }
-            }
-        }
     }
 
     async fn assign(
@@ -526,13 +478,6 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
 
-    /// Short enough that a bounded wait cannot slow the suite down, long enough
-    /// to let a few retries through.
-    const TEST_CONTROL_READY: ControlReadyWait = ControlReadyWait {
-        timeout: Duration::from_millis(50),
-        interval: Duration::from_millis(1),
-    };
-
     #[derive(Debug)]
     enum ExposeResult {
         Bound(&'static str),
@@ -546,8 +491,6 @@ mod tests {
         exposed: Mutex<Vec<String>>,
         unexposed: Mutex<Vec<String>>,
         list_error: Mutex<Option<&'static str>>,
-        transient_list_errors: Mutex<VecDeque<&'static str>>,
-        list_delay: Mutex<Option<Duration>>,
         list_calls: Mutex<usize>,
     }
 
@@ -566,19 +509,6 @@ mod tests {
 
         fn with_list_error(self, message: &'static str) -> Self {
             *self.list_error.lock().unwrap() = Some(message);
-            self
-        }
-
-        fn with_transient_list_errors(
-            self,
-            messages: impl IntoIterator<Item = &'static str>,
-        ) -> Self {
-            *self.transient_list_errors.lock().unwrap() = messages.into_iter().collect();
-            self
-        }
-
-        fn with_list_delay(self, delay: Duration) -> Self {
-            *self.list_delay.lock().unwrap() = Some(delay);
             self
         }
 
@@ -636,13 +566,6 @@ mod tests {
 
         async fn list_forwards(&self) -> BoxliteResult<Vec<Forward>> {
             *self.list_calls.lock().unwrap() += 1;
-            let delay = *self.list_delay.lock().unwrap();
-            if let Some(delay) = delay {
-                tokio::time::sleep(delay).await;
-            }
-            if let Some(message) = self.transient_list_errors.lock().unwrap().pop_front() {
-                return Err(BoxliteError::Network(message.to_string()));
-            }
             if let Some(message) = *self.list_error.lock().unwrap() {
                 return Err(BoxliteError::Network(message.to_string()));
             }
@@ -689,8 +612,7 @@ mod tests {
         backend: &'a MockBackend,
         requested: &[PortSpec],
     ) -> BoxliteResult<PortPublisher<'a>> {
-        Ok(PortPublisher::new(backend, PlannedPort::plan(requested)?)
-            .with_control_ready(TEST_CONTROL_READY))
+        Ok(PortPublisher::new(backend, PlannedPort::plan(requested)?))
     }
 
     async fn publish(
@@ -780,7 +702,11 @@ mod tests {
             *backend.exposed.lock().unwrap(),
             vec!["127.0.0.1:0", "127.0.0.1:0"]
         );
-        assert_eq!(backend.list_call_count(), 1, "readiness is probed once");
+        assert_eq!(
+            backend.list_call_count(),
+            0,
+            "a fresh publication has nothing to adopt and never lists forwards"
+        );
     }
 
     #[tokio::test]
@@ -839,30 +765,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn publication_waits_for_runtime_control_socket_before_mutating() {
-        let transient = [
-            "gvproxy services connect failed: No such file or directory",
-            "gvproxy services connect failed: Connection refused",
-        ];
-        for is_reattach in [false, true] {
-            let backend = MockBackend::new([ExposeResult::Bound("127.0.0.1:49152")])
-                .with_transient_list_errors(transient);
-            let requested = [mapping(None, 3000)];
-
-            let resolved = if is_reattach {
-                reconcile(&backend, &requested).await
-            } else {
-                publish(&backend, &requested).await
-            }
-            .unwrap();
-
-            assert_eq!(backend.list_call_count(), 3, "two retries, then success");
-            assert_eq!(*backend.exposed.lock().unwrap(), vec!["127.0.0.1:0"]);
-            assert_eq!(resolved, vec![published_port(49152, 3000)]);
-        }
-    }
-
-    #[tokio::test]
     async fn reattach_ambiguity_rolls_back_newly_published_forwards() {
         let original = vec![
             active_forward("127.0.0.1:49152", 3000),
@@ -885,25 +787,6 @@ mod tests {
             original,
             "adopted forwards belong to the shim and must survive a rollback"
         );
-    }
-
-    #[tokio::test]
-    async fn control_wait_bounds_a_hanging_request() {
-        let backend = MockBackend::default().with_list_delay(Duration::from_secs(1));
-
-        let error = publish(&backend, &[mapping(None, 3000)]).await.unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("timed out waiting for gvproxy runtime port control")
-        );
-        assert_eq!(
-            backend.list_call_count(),
-            1,
-            "a single hanging request must not escape the deadline"
-        );
-        assert!(backend.exposed.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

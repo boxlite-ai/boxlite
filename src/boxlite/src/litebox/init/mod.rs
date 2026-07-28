@@ -11,9 +11,9 @@
 //!      ContainerRootfs  ├─  (pull image, create COW disk)
 //!      GuestRootfs      ─┘  (prepare guest, create COW disk)
 //!   3. VmmSpawn             (build config + spawn VM)
-//!   4. GuestConnect    ─┬─   (wait for guest ready)
-//!      PortPublish     ─┘    (wait for backend ready + publish host ports)
-//!   5. GuestInit            (initialize container)
+//!   4. GuestConnect         (wait for guest ready)
+//!   5. GuestInit       ─┬─   (initialize container)
+//!      PortPublish     ─┘    (publish host ports)
 //!
 //! Stopped (restart):
 //!   1. Filesystem           (load existing layout)
@@ -21,14 +21,14 @@
 //!      ContainerRootfs  ├─  (reuse existing COW disk - preserves user data)
 //!      GuestRootfs      ─┘  (reuse existing COW disk)
 //!   3. VmmSpawn             (build config + spawn NEW VM)
-//!   4. GuestConnect    ─┬─   (wait for guest ready)
-//!      PortPublish     ─┘    (wait for backend ready + republish host ports)
-//!   5. GuestInit            (re-initialize container in new VM)
+//!   4. GuestConnect         (wait for guest ready)
+//!   5. GuestInit       ─┬─   (re-initialize container in new VM)
+//!      PortPublish     ─┘    (republish host ports)
 //!
 //! Running (reattach):
 //!   1. VmmAttach            (attach to running VM)
-//!   2. GuestConnect    ─┬─   (reconnect to guest)
-//!      PortPublish     ─┘    (reconcile publication after a core crash)
+//!   2. GuestConnect         (reconnect to guest)
+//!   3. PortPublish          (reconcile publication after a core crash)
 //! ```
 //!
 //! `CleanupGuard` provides RAII cleanup on failure.
@@ -81,10 +81,8 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
             ]),
             // Phase 3: Build config and spawn VM
             Stage::sequential(vec![Box::new(VmmSpawnTask)]),
-            // Phase 4: Guest boot and backend control readiness are
-            // independent once the shim has spawned.
-            Stage::parallel(vec![Box::new(GuestConnectTask), Box::new(PortPublishTask)]),
-            Stage::sequential(vec![Box::new(GuestInitTask)]),
+            Stage::sequential(vec![Box::new(GuestConnectTask)]),
+            Stage::parallel(vec![Box::new(GuestInitTask), Box::new(PortPublishTask)]),
         ],
         // Stopped and Failed both run the restart pipeline. A Failed box
         // has its rootfs preserved (per BoxStatus::Failed doc) and is
@@ -99,16 +97,17 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
                 Box::new(GuestRootfsTask),
             ]),
             Stage::sequential(vec![Box::new(VmmSpawnTask)]),
-            Stage::parallel(vec![Box::new(GuestConnectTask), Box::new(PortPublishTask)]),
+            Stage::sequential(vec![Box::new(GuestConnectTask)]),
             // GuestInit must run - new VM process has fresh guest daemon
-            Stage::sequential(vec![Box::new(GuestInitTask)]),
+            Stage::parallel(vec![Box::new(GuestInitTask), Box::new(PortPublishTask)]),
         ],
         BoxStatus::Running => vec![
             // Reattach: vmm_attach gates on ProcessIdentity AND surfaces
             // any crash via exit_file, then connect to guest and reconcile
             // any publication interrupted by a prior core-process crash.
             Stage::sequential(vec![Box::new(VmmAttachTask)]),
-            Stage::parallel(vec![Box::new(GuestConnectTask), Box::new(PortPublishTask)]),
+            Stage::sequential(vec![Box::new(GuestConnectTask)]),
+            Stage::sequential(vec![Box::new(PortPublishTask)]),
         ],
         other => {
             return Err(BoxliteError::InvalidState(format!(
@@ -361,11 +360,13 @@ mod plan_tests {
                 ],
             ),
             (ExecutionMode::Sequential, vec!["vmm_spawn".to_string()]),
+            (ExecutionMode::Sequential, vec!["guest_connect".to_string()]),
+            // Publication needs a live gvproxy, which the guest-ready wait
+            // already proves; it has no reason to gate container init.
             (
                 ExecutionMode::Parallel,
-                vec!["guest_connect".to_string(), "port_publish".to_string()],
+                vec!["guest_init".to_string(), "port_publish".to_string()],
             ),
-            (ExecutionMode::Sequential, vec!["guest_init".to_string()]),
         ]
     }
 
@@ -387,10 +388,9 @@ mod plan_tests {
             plan_shape(BoxStatus::Running),
             vec![
                 (ExecutionMode::Sequential, vec!["vmm_attach".to_string()]),
-                (
-                    ExecutionMode::Parallel,
-                    vec!["guest_connect".to_string(), "port_publish".to_string()],
-                ),
+                (ExecutionMode::Sequential, vec!["guest_connect".to_string()]),
+                // Reattach has no guest_init to overlap with.
+                (ExecutionMode::Sequential, vec!["port_publish".to_string()]),
             ]
         );
     }
