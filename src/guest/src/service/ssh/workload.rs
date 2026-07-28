@@ -520,8 +520,17 @@ mod tests {
         (fields[5].into(), fields[6].into())
     }
 
+    /// Mirror the fallback in `session::enter_root_home`.
+    ///
+    /// Existence is not enough: the session chdir's into this directory, so it
+    /// needs search permission. In a container the workload is root and always
+    /// has it; under `cargo test` the runner is whoever invoked it, and root's
+    /// home is typically 0700 — so an unprivileged run legitimately lands on
+    /// `/` and the expectation has to follow.
     fn selected_home(home: PathBuf) -> PathBuf {
-        if home.is_absolute() && home.is_dir() {
+        let traversable =
+            home.is_dir() && nix::unistd::access(&home, nix::unistd::AccessFlags::X_OK).is_ok();
+        if home.is_absolute() && traversable {
             home
         } else {
             PathBuf::from("/")
@@ -560,13 +569,27 @@ mod tests {
         };
         if case == "close-fds" {
             let file = fs::File::open("/dev/null").unwrap();
-            const HIGH_FD: i32 = 4096;
+            // The highest descriptor this process may hold. dup2 rejects a
+            // target at or above RLIMIT_NOFILE with EBADF, so a fixed number
+            // fails before the code under test ever runs wherever the soft
+            // limit is lower.
+            let high_fd = {
+                let mut limit = nix::libc::rlimit {
+                    rlim_cur: 0,
+                    rlim_max: 0,
+                };
+                assert_eq!(
+                    unsafe { nix::libc::getrlimit(nix::libc::RLIMIT_NOFILE, &mut limit) },
+                    0
+                );
+                i32::try_from(limit.rlim_cur.saturating_sub(1).min(4096)).unwrap()
+            };
             assert_eq!(
-                unsafe { nix::libc::dup2(std::os::fd::AsRawFd::as_raw_fd(&file), HIGH_FD) },
-                HIGH_FD
+                unsafe { nix::libc::dup2(std::os::fd::AsRawFd::as_raw_fd(&file), high_fd) },
+                high_fd
             );
             close_inherited_fds().unwrap();
-            let high_closed = unsafe { nix::libc::fcntl(HIGH_FD, nix::libc::F_GETFD) } == -1;
+            let high_closed = unsafe { nix::libc::fcntl(high_fd, nix::libc::F_GETFD) } == -1;
             let stdio_open =
                 (0..=2).all(|fd| unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) } != -1);
             if high_closed && stdio_open {

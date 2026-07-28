@@ -136,6 +136,20 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install protobuf
 
+      # Only the macOS branch of `make clippy` cross-compiles boxlite-guest to
+      # linux-musl, and the guest links C since russh brought in ring. This is
+      # the same bottled toolchain and cross-linker config that
+      # scripts/setup/setup-macos.sh gives developers.
+      - name: Install guest cross toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install FiloSottile/musl-cross/musl-cross
+          mkdir -p "$HOME/.cargo"
+          {
+            printf '\n[target.x86_64-unknown-linux-musl]\nlinker = "x86_64-linux-musl-gcc"\n'
+            printf '\n[target.aarch64-unknown-linux-musl]\nlinker = "aarch64-linux-musl-gcc"\n'
+          } >> "$HOME/.cargo/config.toml"
+
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
         continue-on-error: true
