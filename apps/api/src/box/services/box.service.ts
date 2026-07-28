@@ -278,66 +278,12 @@ export class BoxService {
             }
           }
 
-      const runner = await this.runnerService.getRandomAvailableRunner({
-        regions: [region.id],
-        boxClass,
-      })
-
-      const box = new Box(region.id, createBoxDto.name)
-
-      box.organizationId = organization.id
-
-      //  TODO: make configurable
-      box.class = boxClass
-      //  TODO: default user should be configurable
-      box.osUser = createBoxDto.user || 'boxlite'
-      box.env = createBoxDto.env || {}
-      box.labels = createBoxDto.labels || {}
-
-      box.image = image
-      box.cpu = cpu
-      box.gpu = gpu
-      box.mem = mem
-      box.disk = disk
-
-      box.public = createBoxDto.public ?? true
-
-      if (createBoxDto.networkBlockAll !== undefined) {
-        box.networkBlockAll = createBoxDto.networkBlockAll
-      }
-
-      if (createBoxDto.networkAllowList !== undefined) {
-        box.networkAllowList = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
-      }
-
-      const lifecyclePolicy = this.resolveLifecyclePolicy({
-        autoPause: createBoxDto.autoPause,
-        autoDelete: createBoxDto.autoDelete,
-        autoResume: createBoxDto.autoResume,
-      })
-      box.autoPause = lifecyclePolicy.autoPause
-      box.autoDelete = lifecyclePolicy.autoDelete
-      box.autoResume = lifecyclePolicy.autoResume
-
-      if (createBoxDto.volumes !== undefined) {
-        box.volumes = this.resolveVolumes(createBoxDto.volumes)
-      }
-
-      box.runnerId = runner.id
-      box.pending = true
-
-      // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),
-      // falling back to "cozy-otter-{boxId}" if it collides with the per-org
-      // @Unique(['organizationId', 'name']) constraint.
-      const insertedBox = createBoxDto.name
-        ? await this.boxRepository.insert(box)
-        : await persistWithGeneratedBoxName(box.id, (name) => {
-            box.name = name
-            return this.boxRepository.insert(box)
+          const runner = await this.runnerService.getRandomAvailableRunner({
+            regions: [region.id],
+            boxClass,
           })
 
           const box = new Box(region.id, createBoxDto.name)
-
           box.organizationId = organization.id
 
           //  TODO: make configurable
@@ -353,7 +299,7 @@ export class BoxService {
           box.mem = mem
           box.disk = disk
 
-          box.public = createBoxDto.public || false
+          box.public = createBoxDto.public ?? true
 
           if (createBoxDto.networkBlockAll !== undefined) {
             box.networkBlockAll = createBoxDto.networkBlockAll
@@ -363,13 +309,14 @@ export class BoxService {
             box.networkAllowList = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
           }
 
-          if (createBoxDto.autoStopInterval !== undefined) {
-            box.autoStopInterval = this.resolveAutoStopInterval(createBoxDto.autoStopInterval)
-          }
-
-          if (createBoxDto.autoDeleteInterval !== undefined) {
-            box.autoDeleteInterval = createBoxDto.autoDeleteInterval
-          }
+          const lifecyclePolicy = this.resolveLifecyclePolicy({
+            autoPause: createBoxDto.autoPause,
+            autoDelete: createBoxDto.autoDelete,
+            autoResume: createBoxDto.autoResume,
+          })
+          box.autoPause = lifecyclePolicy.autoPause
+          box.autoDelete = lifecyclePolicy.autoDelete
+          box.autoResume = lifecyclePolicy.autoResume
 
           if (createBoxDto.volumes !== undefined) {
             box.volumes = this.resolveVolumes(createBoxDto.volumes)
