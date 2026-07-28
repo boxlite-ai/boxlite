@@ -2,6 +2,7 @@
 //!
 //! This module contains the gRPC server and service implementations:
 //! - `guest`: Guest initialization and management (Init, Ping, Shutdown RPCs)
+//! - `ssh`: Live configure/status/disable control plus the SSH data plane
 //! - `container`: Container lifecycle (Init RPC)
 //! - `execution`: Command execution (Exec, Wait, Kill RPCs)
 
@@ -10,3 +11,4 @@ pub(crate) mod exec;
 pub(crate) mod files;
 mod guest;
 pub(crate) mod server;
+pub(crate) mod ssh;

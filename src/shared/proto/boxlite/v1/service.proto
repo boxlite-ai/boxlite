@@ -47,6 +47,21 @@ service Guest {
   rpc Thaw(ThawRequest) returns (ThawResponse);
 }
 
+// Live control for the embedded SSH listener. SSH is deliberately separate
+// from Guest.Init so credentials and listener policy can be rotated without
+// rebuilding or restarting the guest.
+service Ssh {
+  // Enable SSH or replace policy for subsequent authentication attempts.
+  // Pre-auth transports close; authenticated connections retain their snapshot.
+  rpc Configure(SshConfigureRequest) returns (SshConfigureResponse);
+
+  // Return the currently active listener state.
+  rpc Status(SshStatusRequest) returns (SshStatusResponse);
+
+  // Stop accepts and close pre-auth transports. Authenticated sessions may drain.
+  rpc Disable(SshDisableRequest) returns (SshDisableResponse);
+}
+
 // Command execution
 service Execution {
   // Start execution immediately.
@@ -202,6 +217,45 @@ message ThawRequest {}
 message ThawResponse {
   // Number of filesystems successfully thawed
   uint32 thawed_count = 1;
+}
+
+// ============================================================================
+// SSH Service Messages
+// ============================================================================
+
+message SshConfigureRequest {
+  // Guest TCP socket address, for example "0.0.0.0:22".
+  string listen_address = 1;
+  // OpenSSH public key for the CA trusted to sign user certificates.
+  string ca_public_key = 2;
+  // Required certificate principal (normally the host-owned Box ID).
+  string principal = 3;
+}
+
+message SshConfigureResponse {
+  SshStatus status = 1;
+}
+
+message SshStatusRequest {}
+
+message SshStatusResponse {
+  SshStatus status = 1;
+}
+
+message SshDisableRequest {}
+
+message SshDisableResponse {
+  SshStatus status = 1;
+}
+
+message SshStatus {
+  bool enabled = 1;
+  // Actual bound address. Empty while disabled.
+  string listen_address = 2;
+  // Increases when SSH state changes in this guest process; resets on restart.
+  uint64 generation = 3;
+  // SHA-256 fingerprint of the persistent guest host key. Empty while disabled.
+  string host_key_fingerprint = 4;
 }
 
 // ============================================================================
@@ -363,6 +417,13 @@ message TtyConfig {
   uint32 cols = 2;      // Terminal width
   uint32 x_pixels = 3;  // Optional: pixel width
   uint32 y_pixels = 4;  // Optional: pixel height
+  repeated TtyMode modes = 5; // RFC 4254 section 8 terminal modes
+}
+
+// One RFC 4254 terminal mode opcode and its uint32 argument.
+message TtyMode {
+  uint32 opcode = 1;
+  uint32 value = 2;
 }
 
 message ExecResponse {
@@ -423,6 +484,9 @@ message WaitResponse {
 message KillRequest {
   string execution_id = 1;
   int32 signal = 2;  // Signal number (default: 9 = SIGKILL)
+  // Signal the execution's process group. The guest verifies that the tracked
+  // PID is still the group leader before using a negative-PID kill target.
+  bool process_group = 3;
 }
 
 message KillResponse {

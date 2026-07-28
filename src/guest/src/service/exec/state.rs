@@ -1,10 +1,11 @@
+use crate::service::exec::error::ExecutionError;
 use crate::service::exec::exec_handle::ExecHandle;
 use boxlite_shared::ExecOutput;
+use futures::Stream;
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
-use tokio::task::JoinHandle;
-use tonic::Status;
+use tokio::task::{AbortHandle, JoinHandle};
 use tracing::info;
 
 /// Abstraction for checking container init health.
@@ -25,14 +26,29 @@ pub(crate) trait InitHealthCheck: Send + Sync {
 struct Inner {
     /// The process handle (owns pid, pty_controller, stdin, stdout, stderr)
     handle: Option<ExecHandle>,
+    /// Abort handles for stdin forwarding tasks that may own the taken stdin FD.
+    input_tasks: Vec<AbortHandle>,
     /// Stdout/stderr forwarding tasks (set on attach)
     output_tasks: Vec<JoinHandle<()>>,
+    /// Set once ephemeral callers explicitly release this execution's resources.
+    released: bool,
     /// Timeout flag
     #[allow(dead_code)] // Will be used for timeout handling
     timed_out: bool,
     /// Optional init health checker for the container this exec runs in.
     /// Used to detect container init death when exec gets SIGKILL.
     init_health: Option<Arc<Mutex<dyn InitHealthCheck>>>,
+}
+
+/// How an execution ended, already classified.
+///
+/// `error_message` carries the container-death diagnosis when pid-namespace
+/// teardown is what killed the process; it is empty otherwise.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExecutionExit {
+    pub exit_code: i32,
+    pub signal: i32,
+    pub error_message: String,
 }
 
 /// Execution state.
@@ -61,12 +77,22 @@ impl ExecutionState {
         Self::from_inner(
             Inner {
                 handle: Some(handle),
+                input_tasks: Vec::new(),
                 output_tasks: Vec::new(),
+                released: false,
                 timed_out: false,
                 init_health: None,
             },
             exit,
         )
+    }
+
+    #[cfg(test)]
+    pub(in crate::service) fn new_for_test(
+        handle: ExecHandle,
+        exit: crate::reaper::ExitSlot,
+    ) -> Self {
+        Self::new(handle, exit)
     }
 
     /// Create execution state with an init health checker.
@@ -81,7 +107,9 @@ impl ExecutionState {
         Self::from_inner(
             Inner {
                 handle: Some(handle),
+                input_tasks: Vec::new(),
                 output_tasks: Vec::new(),
+                released: false,
                 timed_out: false,
                 init_health: Some(init_health),
             },
@@ -98,7 +126,9 @@ impl ExecutionState {
         Self::from_inner(
             Inner {
                 handle: Some(handle),
+                input_tasks: Vec::new(),
                 output_tasks: Vec::new(),
+                released: false,
                 timed_out: false,
                 init_health: None,
             },
@@ -133,41 +163,46 @@ impl ExecutionState {
     pub async fn send_input(
         &self,
         first: boxlite_shared::ExecStdin,
-        mut stream: tonic::Streaming<boxlite_shared::ExecStdin>,
-    ) -> Result<JoinHandle<Result<(), Status>>, Status> {
+        stream: impl Stream<Item = Result<boxlite_shared::ExecStdin, ExecutionError>>
+            + Send
+            + Unpin
+            + 'static,
+    ) -> Result<JoinHandle<Result<(), ExecutionError>>, ExecutionError> {
+        use futures::StreamExt as _;
+
         // Take stdin from handle
         let mut stdin = {
             let mut inner = self.inner.lock().await;
             let handle = inner
                 .handle
                 .as_mut()
-                .ok_or_else(|| Status::failed_precondition("Handle not available"))?;
+                .ok_or(ExecutionError::HandleUnavailable)?;
 
-            handle
-                .stdin()
-                .ok_or_else(|| Status::already_exists("Stdin already taken"))?
+            handle.stdin().ok_or(ExecutionError::StdinTaken)?
         };
 
         // Spawn forwarding task
+        let mut stream = stream;
         let task = tokio::spawn(async move {
             // Write first message data
             if !first.data.is_empty() {
                 stdin
                     .write_all(&first.data)
                     .await
-                    .map_err(|e| Status::internal(format!("Stdin write failed: {}", e)))?;
+                    .map_err(|e| ExecutionError::Io(e.to_string()))?;
             }
             if first.close {
                 return Ok(());
             }
 
             // Forward remaining messages
-            while let Some(msg) = stream.message().await? {
+            while let Some(msg) = stream.next().await {
+                let msg = msg?;
                 if !msg.data.is_empty() {
                     stdin
                         .write_all(&msg.data)
                         .await
-                        .map_err(|e| Status::internal(format!("Stdin write failed: {}", e)))?;
+                        .map_err(|e| ExecutionError::Io(e.to_string()))?;
                 }
                 if msg.close {
                     break;
@@ -175,8 +210,22 @@ impl ExecutionState {
             }
             Ok(())
         });
+        self.track_input_task(task.abort_handle()).await;
 
         Ok(task)
+    }
+
+    /// Track a task that owns stdin after it has been taken from the handle.
+    ///
+    /// Release can race with task creation. A task registered after release is
+    /// aborted immediately instead of escaping the execution's lifetime.
+    async fn track_input_task(&self, task: AbortHandle) {
+        let mut inner = self.inner.lock().await;
+        if inner.released {
+            task.abort();
+        } else {
+            inner.input_tasks.push(task);
+        }
     }
 
     /// Wait for process to exit.
@@ -192,6 +241,52 @@ impl ExecutionState {
         self.exit.get().await
     }
 
+    /// Wait for exit and classify it.
+    ///
+    /// The SIGKILL diagnosis lives here rather than in a caller because
+    /// [`Self::check_container_death`] is private to the exec module: every
+    /// consumer — the RPC adapter and the in-process SSH bridge alike — must get
+    /// the same answer, including the reason a tenant was killed by pid-namespace
+    /// teardown rather than by its own exit.
+    pub(crate) async fn wait_exit(&self, exec_id: &str) -> ExecutionExit {
+        use crate::service::exec::exec_handle::ExitStatus;
+
+        match self.wait_process().await {
+            ExitStatus::Code(code) => {
+                tracing::debug!(execution_id = %exec_id, exit_code = code, "Process exited with code");
+                ExecutionExit {
+                    exit_code: code,
+                    signal: 0,
+                    error_message: String::new(),
+                }
+            }
+            ExitStatus::Signal(signal) => {
+                let mut error_message = String::new();
+                // PID namespace teardown SIGKILLs every process when init exits,
+                // so a bare SIGKILL is ambiguous without asking the container.
+                if signal == nix::sys::signal::Signal::SIGKILL {
+                    if let Some(diagnosis) = self.check_container_death().await {
+                        tracing::warn!(
+                            execution_id = %exec_id,
+                            signal = signal as i32,
+                            diagnosis = %diagnosis,
+                            "Process killed by container init death (PID namespace teardown). \
+                             The container's init process exited, causing all exec'd processes \
+                             to receive SIGKILL."
+                        );
+                        error_message = diagnosis;
+                    }
+                }
+                tracing::debug!(execution_id = %exec_id, signal = signal as i32, "Process exited due to signal");
+                ExecutionExit {
+                    exit_code: 0,
+                    signal: signal as i32,
+                    error_message,
+                }
+            }
+        }
+    }
+
     /// Attach to execution output.
     ///
     /// Takes stdout/stderr from handle and starts forwarding tasks.
@@ -199,7 +294,7 @@ impl ExecutionState {
     pub async fn attach(
         &self,
         exec_id: &str,
-    ) -> Result<mpsc::Receiver<Result<ExecOutput, Status>>, Status> {
+    ) -> Result<mpsc::Receiver<ExecOutput>, ExecutionError> {
         use boxlite_shared::{exec_output, Stderr, Stdout};
         use futures::StreamExt;
 
@@ -210,13 +305,13 @@ impl ExecutionState {
             let mut inner = self.inner.lock().await;
 
             if !inner.output_tasks.is_empty() {
-                return Err(Status::already_exists("Already attached"));
+                return Err(ExecutionError::AlreadyAttached);
             }
 
             let handle = inner
                 .handle
                 .as_mut()
-                .ok_or_else(|| Status::failed_precondition("Handle not available"))?;
+                .ok_or(ExecutionError::HandleUnavailable)?;
 
             let stdout = handle.stdout();
             let stderr = handle.stderr();
@@ -236,7 +331,7 @@ impl ExecutionState {
                     let msg = ExecOutput {
                         event: Some(exec_output::Event::Stdout(Stdout { data: chunk })),
                     };
-                    if tx.send(Ok(msg)).await.is_err() {
+                    if tx.send(msg).await.is_err() {
                         break;
                     }
                 }
@@ -254,7 +349,7 @@ impl ExecutionState {
                     let msg = ExecOutput {
                         event: Some(exec_output::Event::Stderr(Stderr { data: chunk })),
                     };
-                    if tx.send(Ok(msg)).await.is_err() {
+                    if tx.send(msg).await.is_err() {
                         break;
                     }
                 }
@@ -266,20 +361,55 @@ impl ExecutionState {
         // Store tasks
         {
             let mut inner = self.inner.lock().await;
-            inner.output_tasks = tasks;
+            if inner.released {
+                for task in tasks {
+                    task.abort();
+                }
+            } else {
+                inner.output_tasks = tasks;
+            }
         }
 
         Ok(rx)
     }
 
+    /// Drop every resource owned by an explicitly ephemeral execution.
+    ///
+    /// Ordinary SDK executions never call this method, so their repeatable wait
+    /// contract remains unchanged. Taking the handle closes any retained stdin,
+    /// stdout/stderr, and PTY controller descriptors even when another state
+    /// clone still exists. Forwarders are aborted because stdin may already have
+    /// moved out of the handle into one of those tasks.
+    pub(super) async fn release_resources(&self) -> bool {
+        let mut inner = self.inner.lock().await;
+        if inner.released {
+            return false;
+        }
+        inner.released = true;
+
+        for task in inner.input_tasks.drain(..) {
+            task.abort();
+        }
+        for task in inner.output_tasks.drain(..) {
+            task.abort();
+        }
+        drop(inner.handle.take());
+        drop(inner.init_health.take());
+        true
+    }
+
     /// Kill process with signal.
     ///
     /// Returns true if signal was sent, false if already exited.
-    pub async fn kill(&self, signal: nix::sys::signal::Signal) -> bool {
+    pub async fn kill(&self, signal: nix::sys::signal::Signal, process_group: bool) -> bool {
         let inner = self.inner.lock().await;
 
         if let Some(ref handle) = inner.handle {
-            handle.kill(signal).is_ok()
+            if process_group {
+                handle.kill_process_group(signal).is_ok()
+            } else {
+                handle.kill(signal).is_ok()
+            }
         } else {
             false
         }
@@ -292,7 +422,7 @@ impl ExecutionState {
         cols: u16,
         x_pixels: u16,
         y_pixels: u16,
-    ) -> Result<(), Status> {
+    ) -> Result<(), ExecutionError> {
         use nix::libc::TIOCSWINSZ;
         use nix::pty::Winsize;
 
@@ -301,11 +431,9 @@ impl ExecutionState {
         let handle = inner
             .handle
             .as_ref()
-            .ok_or_else(|| Status::failed_precondition("handle already consumed"))?;
+            .ok_or(ExecutionError::HandleUnavailable)?;
 
-        let controller = handle
-            .pty_controller()
-            .ok_or_else(|| Status::failed_precondition("not a PTY"))?;
+        let controller = handle.pty_controller().ok_or(ExecutionError::NotAPty)?;
 
         let winsize = Winsize {
             ws_row: rows,
@@ -317,10 +445,101 @@ impl ExecutionState {
         // Send TIOCSWINSZ ioctl
         unsafe {
             if nix::libc::ioctl(controller.as_raw_fd(), TIOCSWINSZ, &winsize as *const _) == -1 {
-                return Err(Status::internal("ioctl TIOCSWINSZ failed"));
+                return Err(ExecutionError::Io("ioctl TIOCSWINSZ failed".into()));
             }
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+    use crate::reaper::ExitSlot;
+    use crate::service::exec::exec_handle::{ExitStatus, PtyConfig};
+    use nix::unistd::{pipe, Pid};
+    use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+
+    fn fd_is_open(fd: RawFd) -> bool {
+        (unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) }) != -1
+    }
+
+    fn state_with_tracked_handle() -> (ExecutionState, [RawFd; 4], Vec<OwnedFd>) {
+        let (stdin_peer, stdin) = pipe().unwrap();
+        let (stdout, stdout_peer) = pipe().unwrap();
+        let (stderr, stderr_peer) = pipe().unwrap();
+        let (pty_controller, pty_peer) = pipe().unwrap();
+        let tracked = [
+            stdin.as_raw_fd(),
+            stdout.as_raw_fd(),
+            stderr.as_raw_fd(),
+            pty_controller.as_raw_fd(),
+        ];
+
+        let mut handle = ExecHandle::new(Pid::from_raw(42_424), stdin, stdout, Some(stderr));
+        handle.set_pty(
+            std::fs::File::from(pty_controller),
+            PtyConfig {
+                rows: 24,
+                cols: 80,
+                x_pixels: 0,
+                y_pixels: 0,
+                modes: Vec::new(),
+            },
+        );
+        let state = ExecutionState::new(handle, ExitSlot::settled_for_test(ExitStatus::Code(0)));
+        (
+            state,
+            tracked,
+            vec![stdin_peer, stdout_peer, stderr_peer, pty_peer],
+        )
+    }
+
+    #[tokio::test]
+    async fn release_closes_handle_fds_and_aborts_forwarders_idempotently() {
+        let (state, tracked_fds, _peers) = state_with_tracked_handle();
+        let retained_clone = state.clone();
+        let (task_fd, task_peer) = pipe().unwrap();
+        let task_raw_fd = task_fd.as_raw_fd();
+        let task = tokio::spawn(async move {
+            let _task_fd = task_fd;
+            std::future::pending::<()>().await;
+        });
+        state.track_input_task(task.abort_handle()).await;
+
+        assert!(tracked_fds.into_iter().all(fd_is_open));
+        assert!(fd_is_open(task_raw_fd));
+        assert!(state.release_resources().await);
+        assert!(!state.release_resources().await);
+
+        assert!(tracked_fds.into_iter().all(|fd| !fd_is_open(fd)));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), task)
+                .await
+                .expect("aborted input task must finish")
+                .expect_err("input task must be cancelled")
+                .is_cancelled()
+        );
+        assert!(!fd_is_open(task_raw_fd));
+        assert!(retained_clone.get_pid().await.is_none());
+        drop(task_peer);
+    }
+
+    #[tokio::test]
+    async fn a_forwarder_registered_after_release_is_aborted() {
+        let (state, _tracked_fds, _peers) = state_with_tracked_handle();
+        assert!(state.release_resources().await);
+
+        let task = tokio::spawn(std::future::pending::<()>());
+        state.track_input_task(task.abort_handle()).await;
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), task)
+                .await
+                .expect("late forwarder must finish")
+                .expect_err("late forwarder must be cancelled")
+                .is_cancelled()
+        );
     }
 }

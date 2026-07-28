@@ -74,6 +74,8 @@ mod start;
 #[cfg(target_os = "linux")]
 mod stdio;
 #[cfg(target_os = "linux")]
+pub(crate) mod user_profile;
+#[cfg(target_os = "linux")]
 pub(crate) mod zygote;
 
 #[cfg(target_os = "linux")]

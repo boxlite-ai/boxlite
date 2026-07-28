@@ -208,8 +208,10 @@ test\:unit\:rust:
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
 # excluded from test:unit:rust because the zygote suite forks real processes.
-# Runs the pure-logic modules, which is where capability resolution and OCI
-# spec construction live — otherwise nothing exercises them.
+# nextest's process-per-test isolation is what makes the whole crate runnable:
+# several suites assert on process-global state (raw fd numbers, waitpid), so
+# they can interfere under a shared process. The cargo fallback has no such
+# isolation, so it stays on the two modules that are pure logic.
 test\:unit\:guest:
 	@if [ "$$(uname)" != "Linux" ]; then \
 		echo "⏭️  Guest unit tests require Linux"; \
@@ -217,7 +219,7 @@ test\:unit\:guest:
 	fi; \
 	echo "🧪 Running guest unit tests..."; \
 	if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --no-tests=fail -p boxlite-guest -E 'test(~capabilit) + test(~spec::tests)'; \
+		cargo nextest run --no-tests=fail -p boxlite-guest; \
 	else \
 		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests; \
 	fi

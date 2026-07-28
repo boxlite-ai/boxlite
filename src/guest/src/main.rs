@@ -123,6 +123,19 @@ async fn async_main() -> BoxliteResult<()> {
     mounts::mount_essential_tmpfs()?;
     eprintln!("[guest] T+{}ms: tmpfs mounted", boot_elapsed_ms());
 
+    // Seal the root before any container — and therefore any tenant process —
+    // can exist, so a workload that enters the container by fork cannot have
+    // its inherited /proc/self/exe reopened for write. The host key is created
+    // first because it is the one guest-root write that outlives startup; a
+    // failure here is not fatal to the box, it only leaves SSH unable to start
+    // later, which is the same outcome the lazy path already reported through
+    // `SshStartError::HostKey`.
+    if let Err(error) = service::ssh::provision_host_key() {
+        tracing::warn!(%error, "SSH host key not provisioned; SSH cannot start on this boot");
+    }
+    mounts::seal_root_readonly()?;
+    eprintln!("[guest] T+{}ms: root sealed read-only", boot_elapsed_ms());
+
     // Install the child-reaper before serving: one waitpid(-1) loop reaps the
     // container init, exec tenants (both reparent to us via as_sibling), and
     // guest processes, so a finished command is observed and the box stops

@@ -56,6 +56,7 @@ pub(crate) struct BuildSpec {
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub args: Vec<String>,
+    pub ssh_workload: Option<crate::service::ssh::SshWorkload>,
     pub uid: u32,
     pub gid: u32,
     pub capabilities: CapabilitySet,
@@ -93,6 +94,8 @@ enum ZygoteRequest {
     Build(BuildSpec),
     /// Build a container's init process. Same fd-passing contract as `Build`.
     BuildInit(InitBuildSpec),
+    #[cfg(test)]
+    InspectAmbientRuntimeEnvironment,
 }
 
 /// Tagged IPC response from zygote to parent, matched 1:1 with requests.
@@ -105,6 +108,8 @@ enum ZygoteRequest {
 enum ZygoteResponse {
     Build(BuildResult),
     BuildInit(BuildResult),
+    #[cfg(test)]
+    AmbientRuntimeEnvironment(Vec<String>),
 }
 
 impl Zygote {
@@ -127,6 +132,7 @@ impl Zygote {
             Ok(ForkResult::Child) => {
                 // Child: close parent's end, enter serve loop (never returns)
                 drop(parent_sock);
+                sanitize_ambient_runtime_environment();
                 serve(child_sock);
             }
             Ok(ForkResult::Parent { child }) => {
@@ -181,6 +187,19 @@ impl Zygote {
             ))),
         }
     }
+
+    #[cfg(test)]
+    fn inspect_ambient_runtime_environment(&self) -> BoxliteResult<Vec<String>> {
+        let sock = self.sock.lock().unwrap();
+        let fd = sock.as_raw_fd();
+        send_request(fd, &ZygoteRequest::InspectAmbientRuntimeEnvironment, None)?;
+        match recv_response(fd)? {
+            ZygoteResponse::AmbientRuntimeEnvironment(variables) => Ok(variables),
+            other => Err(BoxliteError::Internal(format!(
+                "zygote protocol violation: environment probe answered with {other:?}"
+            ))),
+        }
+    }
 }
 
 // ============================================================================
@@ -207,6 +226,15 @@ fn serve(sock: OwnedFd) -> ! {
                     ZygoteRequest::BuildInit(spec) => {
                         ZygoteResponse::BuildInit(do_build_init(spec, fds))
                     }
+                    #[cfg(test)]
+                    ZygoteRequest::InspectAmbientRuntimeEnvironment => {
+                        let retained = ["LISTEN_FDS", "LISTEN_PID", "LISTEN_FDNAMES"]
+                            .into_iter()
+                            .filter(|variable| std::env::var_os(variable).is_some())
+                            .map(str::to_owned)
+                            .collect();
+                        ZygoteResponse::AmbientRuntimeEnvironment(retained)
+                    }
                 };
                 if let Err(e) = send_response(fd, &response) {
                     eprintln!("[zygote] send_response failed: {e}");
@@ -220,6 +248,20 @@ fn serve(sock: OwnedFd) -> ! {
                 std::process::exit(0);
             }
         }
+    }
+}
+
+/// Remove process-launch variables that libcontainer interprets as runtime
+/// control rather than target environment.
+///
+/// Box image and caller environment is inherited by the guest process. Youki
+/// reads ambient `LISTEN_FDS` when deciding which zygote descriptors survive a
+/// tenant exec, so accepting it here could leak the zygote control socket into
+/// the container. The requested target environment is carried independently in
+/// [`BuildSpec`] and remains untouched.
+fn sanitize_ambient_runtime_environment() {
+    for variable in ["LISTEN_FDS", "LISTEN_PID", "LISTEN_FDNAMES"] {
+        std::env::remove_var(variable);
     }
 }
 
@@ -247,6 +289,14 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             .with_console_socket(spec.console_socket.clone())
             .validate_id()
             .map_err(|e| format!("Invalid container ID: {e}"))?;
+
+        // The image entrypoint and ordinary exec requests retain Youki's
+        // default executor. Only a typed internal SSH workload installs the
+        // direct BoxLite dispatcher in the final tenant child.
+        if let Some(workload) = spec.ssh_workload.clone() {
+            builder =
+                builder.with_executor(crate::service::ssh::BoxliteWorkloadExecutor::new(workload));
+        }
 
         if let Some((stdin, stdout, stderr)) = owned_fds {
             builder = builder
@@ -563,6 +613,11 @@ fn recv_response(sock: RawFd) -> BoxliteResult<ZygoteResponse> {
 mod tests {
     use super::*;
     use crate::container::capabilities::CapabilitySet;
+    use std::process::Command;
+
+    const AMBIENT_ENV_PROBE: &str = "BOXLITE_ZYGOTE_AMBIENT_ENV_PROBE";
+    const AMBIENT_ENV_TEST: &str =
+        "container::zygote::tests::zygote_removes_ambient_runtime_control_environment";
 
     // ========================================================================
     // Serialization tests (pure logic, no fork needed)
@@ -584,6 +639,7 @@ mod tests {
                 "-c".to_string(),
                 "echo hello world".to_string(),
             ],
+            ssh_workload: None,
             uid: 1000,
             gid: 1000,
             capabilities: CapabilitySet::default(),
@@ -596,6 +652,18 @@ mod tests {
         let json = serde_json::to_vec(&spec).unwrap();
         let decoded: BuildSpec = serde_json::from_slice(&json).unwrap();
         assert_eq!(spec, decoded);
+    }
+
+    #[test]
+    fn build_spec_preserves_a_typed_ssh_workload() {
+        let mut spec = sample_spec();
+        spec.ssh_workload = Some(crate::service::ssh::SshWorkload::ReverseStreamlocal {
+            socket_path: "/run/service.sock".into(),
+            ingress: "127.0.0.1:32000".parse().unwrap(),
+        });
+        let json = serde_json::to_vec(&spec).unwrap();
+        let decoded: BuildSpec = serde_json::from_slice(&json).unwrap();
+        assert_eq!(decoded, spec);
     }
 
     #[test]
@@ -640,6 +708,7 @@ mod tests {
             cwd: PathBuf::from("/"),
             env: HashMap::new(),
             args: vec![],
+            ssh_workload: None,
             uid: 0,
             gid: 0,
             capabilities: CapabilitySet::default(),
@@ -798,6 +867,7 @@ mod tests {
             cwd: PathBuf::from("/workspace/project/subdir"),
             env,
             args,
+            ssh_workload: None,
             uid: 65534,
             gid: 65534,
             capabilities: CapabilitySet::default(),
@@ -828,6 +898,7 @@ mod tests {
             cwd: PathBuf::from("/"),
             env,
             args: vec![],
+            ssh_workload: None,
             uid: 0,
             gid: 0,
             capabilities: CapabilitySet::default(),
@@ -887,6 +958,48 @@ mod tests {
 
         // Drop releases the OwnedFd, closing the socket.
         // The zygote child will exit on recv error.
+    }
+
+    #[test]
+    fn zygote_removes_ambient_runtime_control_environment() {
+        if std::env::var_os(AMBIENT_ENV_PROBE).is_none() {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", AMBIENT_ENV_TEST, "--test-threads=1"])
+                .env(AMBIENT_ENV_PROBE, "1")
+                .env("LISTEN_FDS", "8")
+                .env("LISTEN_PID", "1")
+                .env("LISTEN_FDNAMES", "boxlite-control")
+                .output()
+                .expect("run isolated zygote environment probe");
+            assert!(
+                output.status.success(),
+                "isolated zygote environment probe failed:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let zygote = Zygote::start().expect("zygote should start");
+        let retained = zygote
+            .inspect_ambient_runtime_environment()
+            .expect("inspect zygote environment");
+
+        let children_path = format!("/proc/self/task/{}/children", nix::unistd::gettid());
+        let children = std::fs::read_to_string(children_path).expect("read probe child list");
+        let child_pids: Vec<i32> = children
+            .split_whitespace()
+            .map(|pid| pid.parse().expect("child pid must be numeric"))
+            .collect();
+        assert_eq!(child_pids.len(), 1, "probe must have exactly one child");
+        let zygote_pid = Pid::from_raw(child_pids[0]);
+
+        drop(zygote);
+        nix::sys::wait::waitpid(zygote_pid, None).expect("reap environment probe zygote");
+        assert!(
+            retained.is_empty(),
+            "zygote retained runtime control variables: {retained:?}"
+        );
     }
 
     #[test]
@@ -978,6 +1091,7 @@ mod tests {
                     cwd: PathBuf::from("/"),
                     env: HashMap::new(),
                     args: vec!["echo".to_string()],
+                    ssh_workload: None,
                     uid: 0,
                     gid: 0,
                     capabilities: CapabilitySet::default(),
@@ -1019,6 +1133,7 @@ mod tests {
             cwd: PathBuf::from("/"),
             env: HashMap::new(),
             args: vec!["true".to_string()],
+            ssh_workload: None,
             uid: 0,
             gid: 0,
             capabilities: CapabilitySet::default(),
@@ -1128,6 +1243,9 @@ mod tests {
                             .parse()
                             .expect("init id carries its index");
                         ZygoteResponse::BuildInit(BuildResult::Spawned { pid: 3000 + i })
+                    }
+                    ZygoteRequest::InspectAmbientRuntimeEnvironment => {
+                        panic!("unexpected environment probe")
                     }
                 };
                 send_response(child_fd, &response).unwrap();
@@ -1362,6 +1480,7 @@ mod tests {
                 cwd: PathBuf::from("/"),
                 env: HashMap::new(),
                 args: vec!["true".to_string()],
+                ssh_workload: None,
                 uid: 0,
                 gid: 0,
                 capabilities: CapabilitySet::default(),

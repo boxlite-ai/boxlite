@@ -34,7 +34,7 @@ pub(super) fn start_timeout_watcher(
         use nix::sys::signal::Signal;
 
         // Stage 1: SIGTERM — polite termination request.
-        if !exec_state.kill(Signal::SIGTERM).await {
+        if !exec_state.kill(Signal::SIGTERM, false).await {
             // Process already exited on its own; nothing more to do.
             return;
         }
@@ -51,7 +51,7 @@ pub(super) fn start_timeout_watcher(
 
         // Stage 3: SIGKILL fallback. Returns false if SIGTERM was honored
         // during the grace window (clean exit, no escalation needed).
-        if exec_state.kill(Signal::SIGKILL).await {
+        if exec_state.kill(Signal::SIGKILL, false).await {
             warn!(
                 execution_id = %exec_id,
                 "SIGKILL after grace expired; workload did not exit on SIGTERM"

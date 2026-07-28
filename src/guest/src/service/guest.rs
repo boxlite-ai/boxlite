@@ -97,6 +97,16 @@ impl GuestService for GuestServer {
         self.shutting_down
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
+        // Stop accepts, close established transports, and wait until their
+        // handlers can no longer register new executions before snapshotting
+        // the execution registry below.
+        self.ssh_manager.shutdown().await.map_err(|error| {
+            error!(%error, "SSH sessions did not quiesce during guest shutdown");
+            Status::deadline_exceeded(format!(
+                "guest shutdown stopped before execution teardown: {error}"
+            ))
+        })?;
+
         // Step 1: Gracefully shutdown all running executions
         info!("Stopping running executions...");
         self.registry

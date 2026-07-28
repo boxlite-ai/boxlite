@@ -169,6 +169,9 @@ impl ExecutionInterface {
         let request = KillRequest {
             execution_id: execution_id.to_string(),
             signal,
+            // Host signals address the execution's leader; process-group
+            // teardown is an in-guest policy (see the SSH bridge).
+            process_group: false,
         };
 
         let response = self.client.kill(request).await?.into_inner();
@@ -272,6 +275,8 @@ impl ExecProtocol {
                     cols,
                     x_pixels: 0,
                     y_pixels: 0,
+                    // The host CLI sends no RFC 4254 modes; SSH sessions do.
+                    modes: Vec::new(),
                 })
             } else {
                 None

@@ -29,6 +29,7 @@ const DEFAULT_INIT_PTY: PtyConfig = PtyConfig {
     cols: 80,
     x_pixels: 0,
     y_pixels: 0,
+    modes: Vec::new(),
 };
 
 /// OCI container
@@ -74,6 +75,12 @@ pub struct Container {
 }
 
 impl Container {
+    /// Resolve the root account's home and login shell from this container's
+    /// mounted rootfs. Invalid or unavailable fields use conservative defaults.
+    pub(crate) fn root_session_profile(&self) -> super::user_profile::RootSessionProfile {
+        super::user_profile::root_session_profile(&self.bundle_path.join("rootfs"))
+    }
+
     /// Create and start an OCI container
     ///
     /// Creates a container with the specified rootfs and starts the init process.
