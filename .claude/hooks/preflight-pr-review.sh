@@ -183,7 +183,8 @@ marker_branch="$(jq -r '.branch // ""' "$marker_file" 2>/dev/null || echo '')"
 marker_head="$(jq -r '.head // ""' "$marker_file" 2>/dev/null || echo '')"
 marker_message="$(jq -r '.message // ""' "$marker_file" 2>/dev/null || echo '')"
 
-marker_mtime="$(stat -f '%m' "$marker_file" 2>/dev/null || stat -c '%Y' "$marker_file" 2>/dev/null || echo 0)"
+marker_mtime="$(stat -c '%Y' "$marker_file" 2>/dev/null || stat -f '%m' "$marker_file" 2>/dev/null || echo 0)"
+[[ "$marker_mtime" =~ ^[0-9]+$ ]] || marker_mtime=0
 now_epoch="$(date +%s)"
 age=$(( now_epoch - marker_mtime ))
 

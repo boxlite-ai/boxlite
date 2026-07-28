@@ -43,7 +43,8 @@ turn that asserts nothing verifiable is a PASS. Follow your procedure and write 
 dossier to ${verdict_file}. transcript_path: ${transcript_path}"
 
 # The audit must be attributable to a fresh run, not a leftover dossier.
-before_mtime="$(stat -f '%m' "$verdict_file" 2>/dev/null || stat -c '%Y' "$verdict_file" 2>/dev/null || echo 0)"
+before_mtime="$(stat -c '%Y' "$verdict_file" 2>/dev/null || stat -f '%m' "$verdict_file" 2>/dev/null || echo 0)"
+[[ "$before_mtime" =~ ^[0-9]+$ ]] || before_mtime=0
 
 if [[ -n "${VERDICT_AUDITOR_CMD:-}" ]]; then
   printf '%s' "$audit_prompt" | bash -c "$VERDICT_AUDITOR_CMD" || true
@@ -69,7 +70,8 @@ EOF
   exit 2
 fi
 
-after_mtime="$(stat -f '%m' "$verdict_file" 2>/dev/null || stat -c '%Y' "$verdict_file" 2>/dev/null || echo 0)"
+after_mtime="$(stat -c '%Y' "$verdict_file" 2>/dev/null || stat -f '%m' "$verdict_file" 2>/dev/null || echo 0)"
+[[ "$after_mtime" =~ ^[0-9]+$ ]] || after_mtime=0
 if [[ -r "$verdict_file" && "$after_mtime" != "$before_mtime" ]] \
    && jq -e '.verdict and .branch and .tree_hash' "$verdict_file" >/dev/null 2>&1; then
   echo "audit complete: $(jq -r '.verdict' "$verdict_file") → $verdict_file"

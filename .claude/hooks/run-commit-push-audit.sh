@@ -113,7 +113,8 @@ valid_push_audit_context() {
   ctx_command_hash="$(jq -r '.command_hash // ""' "$push_context_meta_file" 2>/dev/null || echo '')"
   ctx_pushed_diff_hash="$(jq -r '.pushed_diff_hash // ""' "$push_context_meta_file" 2>/dev/null || echo '')"
   actual_diff_hash="$(hash_file "$push_context_diff_file")"
-  ctx_mtime="$(stat -f '%m' "$push_context_meta_file" 2>/dev/null || stat -c '%Y' "$push_context_meta_file" 2>/dev/null || echo 0)"
+  ctx_mtime="$(stat -c '%Y' "$push_context_meta_file" 2>/dev/null || stat -f '%m' "$push_context_meta_file" 2>/dev/null || echo 0)"
+  [[ "$ctx_mtime" =~ ^[0-9]+$ ]] || ctx_mtime=0
   now_epoch="$(date +%s)"
   age=$(( now_epoch - ctx_mtime ))
 

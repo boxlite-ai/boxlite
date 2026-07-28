@@ -140,7 +140,8 @@ valid_handoff_command_hash() {
   handoff_kind="$(jq -r '.command_kind // ""' "$handoff_file" 2>/dev/null || echo '')"
   handoff_diff_hash="$(jq -r '.diff_hash // ""' "$handoff_file" 2>/dev/null || echo '')"
   handoff_command_hash="$(jq -r '.command_hash // ""' "$handoff_file" 2>/dev/null || echo '')"
-  handoff_mtime="$(stat -f '%m' "$handoff_file" 2>/dev/null || stat -c '%Y' "$handoff_file" 2>/dev/null || echo 0)"
+  handoff_mtime="$(stat -c '%Y' "$handoff_file" 2>/dev/null || stat -f '%m' "$handoff_file" 2>/dev/null || echo 0)"
+  [[ "$handoff_mtime" =~ ^[0-9]+$ ]] || handoff_mtime=0
   now_epoch="$(date +%s)"
   handoff_age=$(( now_epoch - handoff_mtime ))
 
@@ -199,9 +200,12 @@ ${invoke_instruction}"
 Retry the push through the git-level pre-push gate so it can produce the exact ref-update audit command."
   fi
 
-  # File mtime as freshness signal: portable across BSD (stat -f %m) and GNU
-  # (stat -c %Y) without parsing self-reported timestamps.
-  audit_mtime="$(stat -f '%m' "$audit_file" 2>/dev/null || stat -c '%Y' "$audit_file" 2>/dev/null || echo 0)"
+  # File mtime as freshness signal, without parsing self-reported timestamps.
+  # GNU (stat -c %Y) first: on GNU/uutils, BSD's `stat -f` is --file-system and
+  # exits nonzero while printing an FS block to stdout, which the `||` would
+  # concatenate with the epoch. Real BSD lacks -c, so it falls through to -f.
+  audit_mtime="$(stat -c '%Y' "$audit_file" 2>/dev/null || stat -f '%m' "$audit_file" 2>/dev/null || echo 0)"
+  [[ "$audit_mtime" =~ ^[0-9]+$ ]] || audit_mtime=0
   now_epoch="$(date +%s)"
   age=$(( now_epoch - audit_mtime ))
 

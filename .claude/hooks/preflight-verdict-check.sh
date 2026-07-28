@@ -301,8 +301,14 @@ if [[ -r "$verdict_file" ]]; then
   v_tree="$(jq -r '.tree_hash // ""'   "$verdict_file" 2>/dev/null || echo '')"
   v_verdict="$(jq -r '.verdict // ""'  "$verdict_file" 2>/dev/null || echo '')"
 
-  # mtime as freshness signal — portable across BSD (stat -f %m) and GNU (stat -c %Y).
-  v_mtime="$(stat -f '%m' "$verdict_file" 2>/dev/null || stat -c '%Y' "$verdict_file" 2>/dev/null || echo 0)"
+  # mtime as freshness signal. Try GNU (stat -c %Y) FIRST. On GNU/uutils, BSD's
+  # `stat -f %m` reads as --file-system with %m and the file as two operands: %m
+  # errors to stderr (swallowed), the file's FS block prints to *stdout* (not
+  # swallowed), and it exits 1 — so the `||` also runs -c %Y, concatenating the
+  # FS block and the epoch into v_mtime and poisoning the arithmetic below.
+  # GNU `-c` genuinely fails on real BSD, so BSD still falls through to -f.
+  v_mtime="$(stat -c '%Y' "$verdict_file" 2>/dev/null || stat -f '%m' "$verdict_file" 2>/dev/null || echo 0)"
+  [[ "$v_mtime" =~ ^[0-9]+$ ]] || v_mtime=0
   now_epoch="$(date +%s)"
   age=$(( now_epoch - v_mtime ))
 
