@@ -46,7 +46,7 @@
 # currently needs.
 #
 # Triggers mirror e2e-local: push on main, a label-gated PR trigger, and
-# manual dispatch. The `e2e-dev` label is the cost gate — every run
+# manual dispatch. The `e2e-cloud` label is the cost gate — every run
 # consumes dev-stack capacity, so PRs opt in rather than run by default.
 #
 # Fork PRs: DENIED, and this is the one place the model diverges from
@@ -67,7 +67,7 @@
 #
 # Runbook: docs/ci/e2e-local.md covers the shared label/gate mechanics.
 
-name: E2E dev
+name: E2E cloud
 
 on:
   push:
@@ -81,7 +81,7 @@ on:
       - 'scripts/test/e2e/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/e2e-dev.yml'
+      - '.github/workflows/e2e-cloud.yml'
   pull_request_target:
     types: [labeled, synchronize]
     branches: [main]
@@ -123,7 +123,7 @@ permissions:
 # GitHub retains only the newest *pending* run per group, so intermediate
 # queued pushes are still superseded before they ever start.
 concurrency:
-  group: e2e-dev
+  group: e2e-cloud
   cancel-in-progress: false
 
 env:
@@ -135,7 +135,7 @@ env:
 
 jobs:
   # =========================================================================
-  # Gate: PRs require the 'e2e-dev' label (only maintainers can add it).
+  # Gate: PRs require the 'e2e-cloud' label (only maintainers can add it).
   # Same-repo PRs re-run while labeled. Fork PRs never run — see the header:
   # this workflow's only job holds a live dev API key.
   # =========================================================================
@@ -155,7 +155,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"   # push / workflow_dispatch
             exit 0
           fi
-          if ! echo "$LABELS" | jq -e 'index("e2e-dev")' > /dev/null 2>&1; then
+          if ! echo "$LABELS" | jq -e 'index("e2e-cloud")' > /dev/null 2>&1; then
             echo "run=false" >> "$GITHUB_OUTPUT"  # label is the cost gate
             exit 0
           fi
@@ -163,11 +163,11 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Fork PRs cannot run E2E dev: the suite needs a live dev API key in the same job that runs the PR's code. Use workflow_dispatch from a maintainer branch instead."
+            echo "::notice::Fork PRs cannot run E2E cloud: the suite needs a live dev API key in the same job that runs the PR's code. Use workflow_dispatch from a maintainer branch instead."
           fi
 
   e2e:
-    name: E2E suite (dev)
+    name: E2E suite (cloud)
     needs: should-run
     if: needs.should-run.outputs.run == 'true'
     runs-on: ubuntu-latest
