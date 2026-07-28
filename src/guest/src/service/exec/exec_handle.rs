@@ -353,4 +353,39 @@ impl ExecHandle {
             ))
         })
     }
+
+    /// Send `signal` to the execution's whole process group when the
+    /// process leads its own group, so descendants that outlive the direct
+    /// child — e.g. a shell that forked a long-running command — are also
+    /// terminated.
+    ///
+    /// Why this matters: an orphaned grandchild keeps the stdout/stderr
+    /// pipe write-end open. The attach forwarding tasks then never observe
+    /// EOF, the drain-folded `Execution.Wait` (see PR #563) never returns,
+    /// and the exec appears to "run" forever even though the tracked child
+    /// is dead. This is exactly the exec-timeout hang: the timeout watcher
+    /// SIGKILLs the shell, but its `sleep` child survives holding the pipe.
+    ///
+    /// Falls back to a single-pid kill when the process is NOT a group
+    /// leader, preserving today's behaviour (no regression) until every
+    /// spawn path isolates the exec into its own group.
+    pub fn kill_process_group(&self, signal: Signal) -> BoxliteResult<()> {
+        use nix::sys::signal::killpg;
+        use nix::unistd::getpgid;
+
+        // Only broadcast to the group when the process is its own group
+        // leader (pgid == pid). Otherwise a group-kill could hit unrelated
+        // execs / the guest service sharing the group, so fall back.
+        if let Ok(pgid) = getpgid(Some(self.pid)) {
+            if pgid == self.pid {
+                return killpg(pgid, signal).map_err(|e| {
+                    BoxliteError::Internal(format!(
+                        "Failed to send signal {} to process group {}: {}",
+                        signal, pgid, e
+                    ))
+                });
+            }
+        }
+        self.kill(signal)
+    }
 }

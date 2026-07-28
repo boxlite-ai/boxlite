@@ -285,6 +285,20 @@ impl ExecutionState {
         }
     }
 
+    /// Like [`kill`](Self::kill), but targets the exec's whole process
+    /// group when it leads one, so descendants (e.g. a shell's forked
+    /// child) are terminated too. Used by the timeout watcher; see
+    /// [`ExecHandle::kill_process_group`] for the rationale.
+    pub async fn kill_group(&self, signal: nix::sys::signal::Signal) -> bool {
+        let inner = self.inner.lock().await;
+
+        if let Some(ref handle) = inner.handle {
+            handle.kill_process_group(signal).is_ok()
+        } else {
+            false
+        }
+    }
+
     /// Resize PTY window.
     pub async fn resize_pty(
         &self,
