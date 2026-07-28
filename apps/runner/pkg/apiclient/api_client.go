@@ -15,6 +15,7 @@ import (
 var apiClient *apiclient.APIClient
 
 const BoxliteSourceHeader = "X-BoxLite-Source"
+const RunnerEpochHeader = "X-BoxLite-Runner-Epoch"
 
 func GetApiClient() (*apiclient.APIClient, error) {
 	c, err := config.GetConfig()

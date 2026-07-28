@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -25,9 +26,11 @@ import (
 	"github.com/boxlite-ai/runner/pkg/runner/v2/executor"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/healthcheck"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/poller"
+	"github.com/boxlite-ai/runner/pkg/runner/v2/runtimegeneration"
 	"github.com/boxlite-ai/runner/pkg/services"
 	"github.com/boxlite-ai/runner/pkg/sshgateway"
 	"github.com/boxlite-ai/runner/pkg/telemetry/filters"
+	"github.com/google/uuid"
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
 )
@@ -131,12 +134,14 @@ func run() int {
 
 	boxService := services.NewBoxService(logger, boxliteClient)
 
-	boxSyncService := services.NewBoxSyncService(services.BoxSyncServiceConfig{
-		Logger:   logger,
-		Boxlite:  boxliteClient,
-		Interval: 10 * time.Second,
-	})
-	boxSyncService.StartSyncProcess(ctx)
+	if cfg.ApiVersion != 2 {
+		boxSyncService := services.NewBoxSyncService(services.BoxSyncServiceConfig{
+			Logger:   logger,
+			Boxlite:  boxliteClient,
+			Interval: 10 * time.Second,
+		})
+		boxSyncService.StartSyncProcess(ctx)
+	}
 
 	// Initialize SSH Gateway if enabled
 	if sshgateway.IsSSHGatewayEnabled() {
@@ -174,16 +179,35 @@ func run() int {
 	boxBackend := backend.NewBoxliteAdapter(boxliteClient)
 
 	if cfg.ApiVersion == 2 {
+		generationRegistryPath, err := runtimeGenerationRegistryPath(cfg.BoxliteHomeDir)
+		if err != nil {
+			logger.Error("Failed to resolve runtime generation registry path", "error", err)
+			return 2
+		}
+		generationRegistry, err := runtimegeneration.NewRegistry(generationRegistryPath)
+		if err != nil {
+			logger.Error("Failed to initialize runtime generation registry", "error", err)
+			return 2
+		}
+		runnerIncarnation, err := generationRegistry.NextRunnerIncarnation()
+		if err != nil {
+			logger.Error("Failed to advance runner incarnation", "error", err)
+			return 2
+		}
+		runnerEpoch := uuid.NewString()
 		healthcheckService, err := healthcheck.NewService(&healthcheck.HealthcheckServiceConfig{
-			Interval:   cfg.HealthcheckInterval,
-			Timeout:    cfg.HealthcheckTimeout,
-			Collector:  metricsCollector,
-			Logger:     logger,
-			Domain:     cfg.Domain,
-			ApiPort:    cfg.ApiPort,
-			ProxyPort:  cfg.ApiPort,
-			TlsEnabled: cfg.EnableTLS,
-			Boxlite:    boxliteClient,
+			Interval:          cfg.HealthcheckInterval,
+			Timeout:           cfg.HealthcheckTimeout,
+			Collector:         metricsCollector,
+			Logger:            logger,
+			Domain:            cfg.Domain,
+			ApiPort:           cfg.ApiPort,
+			ProxyPort:         cfg.ApiPort,
+			TlsEnabled:        cfg.EnableTLS,
+			Boxlite:           boxliteClient,
+			RunnerEpoch:       runnerEpoch,
+			RunnerIncarnation: runnerIncarnation,
+			Generations:       generationRegistry,
 		})
 		if err != nil {
 			logger.Error("Failed to create healthcheck service", "error", err)
@@ -196,9 +220,11 @@ func run() int {
 		}()
 
 		executorService, err := executor.NewExecutor(&executor.ExecutorConfig{
-			Logger:    logger,
-			Backend:   boxBackend,
-			Collector: metricsCollector,
+			Logger:      logger,
+			Backend:     boxBackend,
+			Collector:   metricsCollector,
+			RunnerEpoch: runnerEpoch,
+			Generations: generationRegistry,
 		})
 		if err != nil {
 			logger.Error("Failed to create executor service", "error", err)
@@ -210,6 +236,7 @@ func run() int {
 			PollLimit:   cfg.PollLimit,
 			Logger:      logger,
 			Executor:    executorService,
+			RunnerEpoch: runnerEpoch,
 		})
 		if err != nil {
 			logger.Error("Failed to create poller service", "error", err)
@@ -267,4 +294,15 @@ func run() int {
 		logger.Info("Shutdown complete")
 		return 143
 	}
+}
+
+func runtimeGenerationRegistryPath(boxliteHomeDir string) (string, error) {
+	if boxliteHomeDir != "" {
+		return filepath.Join(boxliteHomeDir, "runner-runtime-generations.json"), nil
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "boxlite", "runner-runtime-generations.json"), nil
 }

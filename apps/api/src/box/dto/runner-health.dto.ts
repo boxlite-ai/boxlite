@@ -5,8 +5,21 @@
  */
 
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
-import { IsArray, IsBoolean, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator'
+import {
+  IsArray,
+  IsBoolean,
+  IsEnum,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  Min,
+  ValidateNested,
+} from 'class-validator'
 import { Type } from 'class-transformer'
+import { BoxState } from '../enums/box-state.enum'
 
 @ApiSchema({ name: 'RunnerHealthMetrics' })
 export class RunnerHealthMetricsDto {
@@ -113,8 +126,84 @@ export class RunnerServiceHealthDto {
   errorReason?: string
 }
 
+@ApiSchema({ name: 'RunnerBoxObservation' })
+export class RunnerBoxObservationDto {
+  @ApiProperty({
+    description: 'Control-plane box ID observed on the runner',
+    example: 'box000000001',
+  })
+  @IsString()
+  boxId: string
+
+  @ApiProperty({
+    description: 'Actual box state observed by the runner',
+    enum: BoxState,
+    enumName: 'BoxState',
+    example: BoxState.STARTED,
+  })
+  @IsEnum(BoxState)
+  actualState: BoxState
+
+  @ApiProperty({
+    description:
+      'Control-plane runtime generation associated with the observed instance. Zero means the runner cannot provide generation evidence.',
+    type: 'integer',
+    format: 'int64',
+    minimum: 0,
+    example: 12,
+  })
+  @IsInt()
+  @Min(0)
+  runtimeGeneration: number
+}
+
 @ApiSchema({ name: 'RunnerHealthcheck' })
 export class RunnerHealthcheckDto {
+  @ApiProperty({
+    description: 'Unique epoch generated when the runner process starts',
+    format: 'uuid',
+    example: '32b49a8e-2cf8-44af-9484-e2f52aa985ea',
+  })
+  @IsUUID()
+  runnerEpoch: string
+
+  @ApiProperty({
+    description: 'Monotonically increasing process incarnation persisted by the runner',
+    type: 'integer',
+    format: 'int64',
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+    example: 3,
+  })
+  @IsInt()
+  @Min(1)
+  @Max(Number.MAX_SAFE_INTEGER)
+  runnerIncarnation: number
+
+  @ApiProperty({
+    description: 'Monotonically increasing healthcheck sequence within the runner epoch',
+    type: 'integer',
+    format: 'int64',
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+    example: 42,
+  })
+  @IsInt()
+  @Min(1)
+  @Max(Number.MAX_SAFE_INTEGER)
+  sequence: number
+
+  @ApiPropertyOptional({
+    description:
+      'Complete local box inventory. Omitted when inventory collection fails; an empty array is a successful empty snapshot.',
+    type: [RunnerBoxObservationDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RunnerBoxObservationDto)
+  boxes?: RunnerBoxObservationDto[]
+
   @ApiPropertyOptional({
     description: 'Runner metrics',
     type: RunnerHealthMetricsDto,
