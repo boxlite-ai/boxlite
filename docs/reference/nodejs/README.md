@@ -107,8 +107,23 @@ Configuration options for creating a box.
 | `network` | `NetworkSpec` | `{ mode: "enabled" }` | Structured network configuration |
 | `ports` | `JsPortSpec[]` | `[]` | Local TCP port mappings; omit `hostPort` for automatic allocation |
 | `secrets` | `Secret[]` | `[]` | Outbound HTTP(S) secret substitution rules |
+| `advanced` | `AdvancedBoxOptions` | `{}` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
 | `autoRemove` | `boolean` | `false` | Auto cleanup when stopped |
 | `detach` | `boolean` | `false` | Survive parent process exit |
+
+Capability policy is intentionally nested with the other expert-only options:
+
+```typescript
+const options = {
+  image: "alpine:latest",
+  advanced: {
+    capabilities: {
+      add: ["NET_BIND_SERVICE"],
+      drop: ["NET_RAW"],
+    },
+  },
+};
+```
 
 #### `NetworkSpec`
 
@@ -370,6 +385,12 @@ interface SimpleBoxOptions {
   network?: NetworkSpec;
   ports?: PortSpec[];     // Port mappings
   secrets?: Secret[];
+  advanced?: {
+    capabilities?: {
+      add?: string[];     // Add Linux capabilities
+      drop?: string[];    // Remove Linux capabilities
+    };
+  };
 }
 ```
 

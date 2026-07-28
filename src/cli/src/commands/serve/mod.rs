@@ -766,6 +766,13 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         cmd: req.cmd.clone(),
         user: req.user.clone(),
         tty: req.tty.unwrap_or(false),
+        advanced: boxlite::AdvancedBoxOptions {
+            capabilities: boxlite::ContainerCapabilities {
+                add: req.advanced.capabilities.add.clone(),
+                drop: req.advanced.capabilities.drop.clone(),
+            },
+            ..Default::default()
+        },
         auto_pause: req.auto_pause,
         auto_delete: Some(auto_delete),
         auto_resume: req.auto_resume,
@@ -1328,6 +1335,18 @@ mod tests {
     }
 
     #[test]
+    fn build_box_options_carries_container_capabilities_from_the_wire() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","advanced":{"capabilities":{"add":["SYS_ADMIN"],"drop":["CAP_NET_RAW"]}}}"#,
+        )
+        .expect("capability request must deserialize");
+
+        let opts = build_box_options(&req).expect("build capability options");
+        assert_eq!(opts.advanced.capabilities.add, vec!["SYS_ADMIN"]);
+        assert_eq!(opts.advanced.capabilities.drop, vec!["CAP_NET_RAW"]);
+    }
+
+    #[test]
     fn build_box_options_carries_lifecycle_policy_and_uses_compatible_detach_default() {
         let req: super::types::CreateBoxRequest = serde_json::from_str(
             r#"{"auto_pause": 900, "auto_delete": 3600, "auto_resume": false}"#,
@@ -1411,6 +1430,130 @@ mod tests {
             msg.contains("unknown field") && msg.contains("security_settings"),
             "expected deny-unknown-fields rejection mentioning `security_settings`; got {msg}"
         );
+    }
+
+    fn uploaded_v3_archive(box_options: serde_json::Value) -> Vec<u8> {
+        let backing_path = b"/server/path/must-not-be-read";
+        let mut disk = vec![0_u8; 1024];
+        disk[0..4].copy_from_slice(&0x5146_49fbu32.to_be_bytes());
+        disk[4..8].copy_from_slice(&3_u32.to_be_bytes());
+        disk[8..16].copy_from_slice(&512_u64.to_be_bytes());
+        disk[16..20].copy_from_slice(&(backing_path.len() as u32).to_be_bytes());
+        disk[512..512 + backing_path.len()].copy_from_slice(backing_path);
+
+        let manifest = serde_json::json!({
+            "version": 3,
+            "box_name": null,
+            "image": "alpine:latest",
+            "box_options": box_options,
+            "guest_disk_checksum": "",
+            "container_disk_checksum": "",
+            "exported_at": "2026-07-26T00:00:00Z"
+        });
+        let manifest = serde_json::to_vec(&manifest).expect("serialize manifest");
+        let mut archive = tar::Builder::new(Vec::new());
+
+        for (name, bytes) in [
+            ("manifest.json", manifest.as_slice()),
+            ("disk.qcow2", disk.as_slice()),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o600);
+            header.set_size(bytes.len() as u64);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, name, bytes)
+                .expect("append archive entry");
+        }
+
+        archive.finish().expect("finish archive");
+        archive.into_inner().expect("archive bytes")
+    }
+
+    async fn upload_v3_archive(
+        state: Arc<AppState>,
+        box_options: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = handlers::advanced::import_box(
+            State(state),
+            axum::extract::Query(types::ImportQuery { name: None }),
+            axum::body::Bytes::from(uploaded_v3_archive(box_options)),
+        )
+        .await;
+        let status = response.status();
+        let response_body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let body = serde_json::from_slice(&response_body).expect("JSON response");
+        (status, body)
+    }
+
+    async fn assert_uploaded_archive_rejected_before_provisioning(
+        box_options: serde_json::Value,
+        expected_message: &str,
+    ) {
+        let home = tempfile::tempdir().expect("runtime home");
+        let runtime = BoxliteRuntime::new(boxlite::BoxliteOptions {
+            home_dir: home.path().join("boxlite"),
+            ..Default::default()
+        })
+        .expect("local runtime");
+        let state = Arc::new(AppState {
+            runtime: runtime.clone(),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+        });
+        let (control_status, control_error) =
+            upload_v3_archive(state.clone(), serde_json::json!({})).await;
+        assert_eq!(control_status, StatusCode::CONFLICT);
+        assert_eq!(control_error["error"]["type"], "InvalidStateError");
+        assert_eq!(control_error["error"]["code"], "invalid_state");
+        assert!(
+            control_error["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("backing file reference")),
+            "control upload must reach disk validation: {control_error}"
+        );
+
+        let (status, error) = upload_v3_archive(state, box_options).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["type"], "UnsupportedError");
+        assert_eq!(error["error"]["code"], "unsupported");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(expected_message))
+        );
+        assert!(
+            runtime.list_info().await.expect("list boxes").is_empty(),
+            "rejected upload must not provision a box"
+        );
+        runtime.shutdown(Some(1)).await.expect("shutdown runtime");
+    }
+
+    #[tokio::test]
+    async fn serve_import_rejects_nested_virtualization_archive_before_provisioning() {
+        assert_uploaded_archive_rejected_before_provisioning(
+            serde_json::json!({"advanced": {"nested_virtualization": true}}),
+            "nested virtualization",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn serve_import_rejects_host_volume_archive_before_provisioning() {
+        assert_uploaded_archive_rejected_before_provisioning(
+            serde_json::json!({
+                "volumes": [{
+                    "host_path": "/",
+                    "guest_path": "/host",
+                    "read_only": false
+                }]
+            }),
+            "host volume mounts",
+        )
+        .await;
     }
 
     /// Build an `ActiveExecution` backed by a stub `Execution` whose

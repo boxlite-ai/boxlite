@@ -281,11 +281,10 @@ pub unsafe fn free_box_info_list(list: *mut CBoxInfoList) {
             free_box_info(list_ref.items.add(idx as usize));
         }
         if !list_ref.items.is_null() {
-            drop(Vec::from_raw_parts(
+            drop(Box::from_raw(ptr::slice_from_raw_parts_mut(
                 list_ref.items,
                 list_ref.count as usize,
-                list_ref.count as usize,
-            ));
+            )));
         }
         drop(Box::from_raw(list));
     }
@@ -455,10 +454,19 @@ unsafe fn box_list(
 
         runtime_ref.tokio_rt.spawn(async move {
             let result = runtime_clone.list_info().await.map(|boxes| {
-                let mut items: Vec<CBoxInfo> = boxes.iter().map(CBoxInfo::from_box_info).collect();
+                let mut items = boxes
+                    .iter()
+                    .map(CBoxInfo::from_box_info)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
                 let count = items.len() as c_int;
-                let ptr = items.as_mut_ptr();
-                std::mem::forget(items);
+                let ptr = if items.is_empty() {
+                    ptr::null_mut()
+                } else {
+                    let ptr = items.as_mut_ptr();
+                    Box::leak(items);
+                    ptr
+                };
                 crate::event_queue::OwnedFfiPtr::new_with(
                     Box::new(CBoxInfoList { items: ptr, count }),
                     free_box_info_list,

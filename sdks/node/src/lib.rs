@@ -21,7 +21,7 @@ mod util;
 mod volumes;
 
 // Re-export all public types
-pub use advanced_options::JsSecurityOptions;
+pub use advanced_options::{JsAdvancedBoxOptions, JsContainerCapabilities, JsSecurityOptions};
 pub use box_handle::JsBox;
 pub use copy::JsCopyOptions;
 pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution};

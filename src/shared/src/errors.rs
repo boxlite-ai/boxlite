@@ -152,6 +152,17 @@ impl From<tonic::transport::Error> for BoxliteError {
 ///   500 because they indicate a server-side bug or data-plane
 ///   corruption — not a recoverable condition.
 impl BoxliteError {
+    /// Convert an error returned by request validation into a gRPC status.
+    ///
+    /// Validators use [`BoxliteError::InvalidArgument`] for caller mistakes;
+    /// other variants indicate that validation itself could not be completed.
+    pub fn into_validation_status(self) -> tonic::Status {
+        match self {
+            BoxliteError::InvalidArgument(message) => tonic::Status::invalid_argument(message),
+            error => tonic::Status::internal(error.to_string()),
+        }
+    }
+
     pub fn http(&self) -> (u16, &'static str, &'static str) {
         match self {
             BoxliteError::InvalidArgument(_) => (400, "InvalidArgumentError", "invalid_argument"),
@@ -185,6 +196,22 @@ impl BoxliteError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validation_status_distinguishes_caller_input_from_internal_failure() {
+        let invalid =
+            BoxliteError::InvalidArgument("unknown capability".into()).into_validation_status();
+        assert_eq!(invalid.code(), tonic::Code::InvalidArgument);
+        assert_eq!(invalid.message(), "unknown capability");
+
+        let internal = BoxliteError::Internal("cannot read capability ceiling".into())
+            .into_validation_status();
+        assert_eq!(internal.code(), tonic::Code::Internal);
+        assert_eq!(
+            internal.message(),
+            "internal error: cannot read capability ceiling"
+        );
+    }
 
     /// Canonical `BoxliteError → (status, error_type, code)` table.
     ///

@@ -1,4 +1,4 @@
-PHONY_TARGETS += test
+PHONY_TARGETS += test test\:unit\:guest
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -205,6 +205,22 @@ test\:unit\:rust:
 		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 	fi; \
 	exit $$rc
+
+# Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
+# excluded from test:unit:rust because the zygote suite forks real processes.
+# Runs the pure-logic modules, which is where capability resolution and OCI
+# spec construction live — otherwise nothing exercises them.
+test\:unit\:guest:
+	@if [ "$$(uname)" != "Linux" ]; then \
+		echo "⏭️  Guest unit tests require Linux"; \
+		exit 0; \
+	fi; \
+	echo "🧪 Running guest unit tests..."; \
+	if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run --no-tests=fail -p boxlite-guest -E 'test(~capabilit) + test(~spec::tests)'; \
+	else \
+		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests; \
+	fi
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
 test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)

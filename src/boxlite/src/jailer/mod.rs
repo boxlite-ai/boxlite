@@ -391,6 +391,8 @@ pub struct Jailer<S: Sandbox> {
     /// — `true` adds `setsid()` to the pre_exec chain, `false` sets the
     /// child's process group to itself at `Command` build time.
     pub(crate) detach: bool,
+    /// Caller-defined filesystem permissions required by the confined shim.
+    pub(crate) additional_path_access: Vec<PathAccess>,
 }
 
 impl<S: Sandbox> Jail for Jailer<S> {
@@ -535,7 +537,8 @@ impl<S: Sandbox> Jailer<S> {
     ///
     /// Delegates to [`build_path_access`] for granular filesystem rules.
     fn context(&self) -> SandboxContext<'_> {
-        let paths = build_path_access(&self.layout, &self.volumes);
+        let mut paths = build_path_access(&self.layout, &self.volumes);
+        paths.extend_from_slice(&self.additional_path_access);
         tracing::debug!(
             box_id = %self.box_id,
             path_count = paths.len(),

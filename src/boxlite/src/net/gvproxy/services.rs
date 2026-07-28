@@ -1478,7 +1478,6 @@ mod tests {
     #[ignore]
     async fn expose_unexpose_roundtrip_over_services_socket() {
         use crate::net::gvproxy::GvproxyInstance;
-        use std::time::Duration;
 
         // Short socket dir (sun_path budget); auto-removed on drop.
         let dir = tempfile::Builder::new()
@@ -1500,16 +1499,11 @@ mod tests {
         };
         let ctl = GvproxyBackend::from_config(&config);
 
-        // The services socket is bound just after create returns; wait for it.
-        let mut ready = false;
-        for _ in 0..50 {
-            if ctl.list_forwards().await.is_ok() {
-                ready = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        assert!(ready, "services socket never became reachable");
+        // `gvproxy_create` returns only once the services socket is listening,
+        // so a single call must succeed.
+        ctl.list_forwards()
+            .await
+            .expect("services socket is bound before create returns");
 
         let local = "127.0.0.1:18080";
         let has = |fs: &[Forward]| fs.iter().any(|f| f.local == local);
@@ -1545,7 +1539,6 @@ mod tests {
     #[ignore]
     async fn tunnel_handshake_over_services_socket() {
         use crate::net::gvproxy::GvproxyInstance;
-        use std::time::Duration;
 
         let dir = tempfile::Builder::new()
             .prefix("bl-tun-test-")
@@ -1563,16 +1556,12 @@ mod tests {
         };
         let backend = GvproxyBackend::from_config(&config);
 
-        // Wait for the services socket to be served.
-        let mut ready = false;
-        for _ in 0..50 {
-            if backend.list_forwards().await.is_ok() {
-                ready = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        assert!(ready, "services socket never became reachable");
+        // `gvproxy_create` returns only once the services socket is listening,
+        // so a single call must succeed.
+        backend
+            .list_forwards()
+            .await
+            .expect("services socket is bound before create returns");
 
         let target: SocketAddr = "192.168.127.2:8080".parse().unwrap();
         let tunnel = backend.tunnel(target).await.expect("tunnel handshake");

@@ -236,8 +236,16 @@ where
 
 /// Create a standard table with Boxlite styling.
 pub fn create_table<T: Tabled>(data: impl IntoIterator<Item = T>) -> Table {
-    let mut table = Table::new(data);
-    table.with(Style::sharp());
+    let mut rows = data.into_iter().peekable();
+    let is_empty = rows.peek().is_none();
+    let mut table = Table::new(rows);
+
+    if is_empty {
+        table.with(Style::sharp().remove_horizontals());
+    } else {
+        table.with(Style::sharp());
+    }
+
     table
 }
 
@@ -251,6 +259,28 @@ mod tests {
     struct TestData {
         name: String,
         value: i32,
+    }
+
+    #[derive(Tabled)]
+    struct TestRow {
+        #[tabled(rename = "NAME")]
+        name: String,
+        #[tabled(rename = "VALUE")]
+        value: i32,
+    }
+
+    #[test]
+    fn test_create_table_closes_empty_table() {
+        let rows: Vec<TestRow> = Vec::new();
+
+        assert_eq!(
+            create_table(rows).to_string(),
+            concat!(
+                "┌──────┬───────┐\n",
+                "│ NAME │ VALUE │\n",
+                "└──────┴───────┘"
+            )
+        );
     }
 
     #[test]

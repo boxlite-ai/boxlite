@@ -247,6 +247,9 @@ Configuration options for creating a box.
   - Portable local/remote code uses `box.network.tunnel(port)`; each tunnel
     handle represents one connection
 - `secrets: List[Secret]` - Host-side HTTP(S) secret substitution rules
+- `advanced: AdvancedBoxOptions | None` - Expert-only container options
+  - `capabilities.add: List[str]` - Capabilities added to BoxLite's baseline
+  - `capabilities.drop: List[str]` - Capabilities removed from the resulting set
 - `auto_remove: bool` - Auto cleanup after stop (default: True)
 
 `NetworkSpec` uses:
@@ -277,6 +280,12 @@ options = boxlite.BoxOptions(
     network=boxlite.NetworkSpec(
         mode="enabled",
         allow_net=["api.openai.com"],
+    ),
+    advanced=boxlite.AdvancedBoxOptions(
+        capabilities=boxlite.ContainerCapabilities(
+            add=["NET_ADMIN"],
+            drop=["NET_RAW"],
+        ),
     ),
     secrets=[
         boxlite.Secret(

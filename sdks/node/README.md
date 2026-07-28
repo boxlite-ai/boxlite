@@ -182,6 +182,12 @@ const box = new SimpleBox({
     mode: 'enabled',
     allowNet: ['api.openai.com'],
   },
+  advanced: {
+    capabilities: {
+      add: ['NET_ADMIN'],
+      drop: ['NET_RAW'],
+    },
+  },
   env: { FOO: 'bar' },
   volumes: [
     { hostPath: '/tmp/data', guestPath: '/data', readOnly: false }

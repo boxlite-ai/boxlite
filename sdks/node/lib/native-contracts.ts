@@ -121,6 +121,15 @@ export interface JsHealthCheckOptions {
   startPeriod: number;
 }
 
+export interface JsContainerCapabilities {
+  add?: string[];
+  drop?: string[];
+}
+
+export interface JsAdvancedBoxOptions {
+  capabilities?: JsContainerCapabilities;
+}
+
 export interface JsBoxOptions {
   image?: string;
   rootfsPath?: string;
@@ -148,6 +157,7 @@ export interface JsBoxOptions {
   entrypoint?: string[];
   cmd?: string[];
   user?: string;
+  advanced?: JsAdvancedBoxOptions;
   security?: JsSecurityOptions;
   healthCheck?: JsHealthCheckOptions;
   secrets?: JsSecret[];

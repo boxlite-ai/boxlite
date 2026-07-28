@@ -3,8 +3,9 @@
 //! Provides container creation, startup, and status checking using libcontainer.
 //! Follows the OCI Runtime Specification.
 
+use super::capabilities::CapabilitySet;
 use super::command::ContainerCommand;
-use super::spec::UserMount;
+use super::spec::{ContainerDevices, UserMount};
 use super::stdio::{ContainerStdio, InitIo};
 use super::{console_socket, kill, spec, start};
 use crate::layout::GuestLayout;
@@ -62,6 +63,8 @@ pub struct Container {
     env: HashMap<String, String>,
     /// Resolved (uid, gid) from image USER directive, propagated to exec commands.
     user: (u32, u32),
+    /// Resolved capability set shared by init and every exec process.
+    capabilities: CapabilitySet,
     /// Stdio pipes that keep init process alive.
     /// Dropping this closes pipes → init gets EOF → init exits.
     #[allow(dead_code)]
@@ -89,6 +92,7 @@ impl Container {
     /// - `env`: Environment variables in "KEY=VALUE" format
     /// - `workdir`: Working directory inside container
     /// - `user_mounts`: Bind mounts from guest VM paths into container
+    /// - `capabilities`: capability policy resolved at the RPC boundary
     ///
     /// # Errors
     ///
@@ -106,6 +110,8 @@ impl Container {
         user: &str,
         user_mounts: Vec<UserMount>,
         tty: bool,
+        capabilities: CapabilitySet,
+        devices: ContainerDevices,
     ) -> BoxliteResult<Self> {
         let rootfs = rootfs.as_ref();
         let workdir = workdir.as_ref();
@@ -178,9 +184,11 @@ impl Container {
             workdir,
             uid,
             gid,
+            &capabilities,
             &layout.containers_dir(),
             &user_mounts,
             tty,
+            &devices,
         )?;
 
         let stdio = if tty {
@@ -218,6 +226,7 @@ impl Container {
             bundle_path,
             env: env_map,
             user: (uid, gid),
+            capabilities,
             stdio,
             is_shutdown: std::sync::atomic::AtomicBool::new(false),
         })
@@ -366,6 +375,7 @@ impl Container {
             self.env.clone(),
             self.user,
             self.bundle_path.join("rootfs"),
+            self.capabilities.clone(),
         )
     }
 

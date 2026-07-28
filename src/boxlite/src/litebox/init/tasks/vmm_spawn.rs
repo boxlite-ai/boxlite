@@ -246,6 +246,7 @@ async fn build_config(
         // Box identification and security
         box_id: box_id.to_string(),
         security: options.advanced.security.clone(),
+        nested_virtualization: options.advanced.nested_virtualization,
         // VM resources
         cpus: options.cpus,
         memory_mib: options.memory_mib,

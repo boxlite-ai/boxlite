@@ -519,7 +519,11 @@ paths:
       summary: Import a box from an archive
       description: |
         Imports a `.boxlite` archive (produced by the export endpoint) to create
-        a new box. The archive is uploaded as a binary payload.
+        a new box. The archive is uploaded as a binary payload and treated as
+        untrusted: archived security settings are replaced by the server's
+        defaults. Archives selecting server host paths through a local rootfs or
+        volume mount are rejected, as are archives requiring host-only
+        experimental features such as custom kernels or nested virtualization.
       tags: [Boxes]
       parameters:
         - name: name
@@ -1249,6 +1253,10 @@ components:
           type: object
           description: Server capability limits and feature flags
           properties:
+            linux_capabilities_enabled:
+              type: boolean
+              description: Whether Docker-style Linux capability add/drop policy is supported
+              example: true
             max_cpus:
               type: integer
               description: Maximum allowed vCPUs per box
@@ -1584,6 +1592,10 @@ components:
         endpoint for remote service access.
       additionalProperties: false
       properties:
+        advanced:
+          $ref: "#/components/schemas/CreateBoxAdvancedOptions"
+        security:
+          $ref: "#/components/schemas/SecurityPreset"
         name:
           type: string
           description: Unique name within the workspace
@@ -1672,8 +1684,38 @@ components:
           type: boolean
           default: true
           description: Whether the box automatically resumes when accessed after AutoPause
-        security:
-          $ref: "#/components/schemas/SecurityPreset"
+
+    CreateBoxAdvancedOptions:
+      type: object
+      description: Expert-only container options.
+      additionalProperties: false
+      properties:
+        capabilities:
+          $ref: "#/components/schemas/CreateContainerCapabilities"
+
+    CreateContainerCapabilities:
+      type: object
+      description: Linux capability additions and removals for container processes.
+      additionalProperties: false
+      properties:
+        add:
+          type: array
+          items:
+            type: string
+          default: []
+          description: |
+            Linux capabilities to add to the default container capability set.
+            Names are case-insensitive, may include the `CAP_` prefix, and may be `ALL`.
+          example: [SYS_ADMIN]
+        drop:
+          type: array
+          items:
+            type: string
+          default: []
+          description: |
+            Linux capabilities to remove from the container capability set.
+            Names are case-insensitive, may include the `CAP_` prefix, and may be `ALL`.
+          example: [NET_RAW]
 
     VolumeSpec:
       type: object

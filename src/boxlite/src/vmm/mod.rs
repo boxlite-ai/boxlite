@@ -200,6 +200,10 @@ pub struct InstanceSpec {
     /// On Linux, these control seccomp filtering applied in the shim.
     #[serde(default)]
     pub security: SecurityOptions,
+    /// Whether libkrun should expose nested virtualization to the guest.
+    #[doc(hidden)]
+    #[serde(default)]
+    pub nested_virtualization: bool,
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
     /// Optional direct Linux boot configuration prepared inside the box before

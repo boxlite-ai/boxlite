@@ -58,7 +58,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 import boxlite
@@ -121,6 +121,39 @@ class NetworkSpec(BaseModel):
         return self
 
 
+class ContainerCapabilities(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    add: list[str] = Field(default_factory=list)
+    drop: list[str] = Field(default_factory=list)
+
+    @field_validator("add", "drop")
+    @classmethod
+    def validate_capabilities(cls, capabilities: list[str]) -> list[str]:
+        for capability in capabilities:
+            if not capability.isascii():
+                raise ValueError("capability names must contain only ASCII characters")
+            normalized = capability.upper()
+            if normalized == "ALL":
+                continue
+            name = normalized.removeprefix("CAP_")
+            if (
+                not name
+                or not name[0].isalpha()
+                or not all(
+                    char.isalpha() or char.isdigit() or char == "_" for char in name
+                )
+            ):
+                raise ValueError(f"malformed Linux capability: {capability}")
+        return capabilities
+
+
+class CreateBoxAdvancedOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capabilities: ContainerCapabilities = Field(default_factory=ContainerCapabilities)
+
+
 class CreateBoxRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -142,6 +175,7 @@ class CreateBoxRequest(BaseModel):
     auto_delete: Optional[int] = Field(default=None, ge=0)
     auto_resume: Optional[bool] = None
     detach: Optional[bool] = False
+    advanced: Optional[CreateBoxAdvancedOptions] = None
     security: Optional[str] = None
 
 
@@ -214,6 +248,7 @@ def get_server_config() -> ServerConfig:
     if state.server_config is None:
         raise RuntimeError("server configuration not initialized")
     return state.server_config
+
 
 # ============================================================================
 # Error Mapping
@@ -369,6 +404,15 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
         kwargs["cmd"] = req.cmd
     if req.user is not None:
         kwargs["user"] = req.user
+    if req.advanced is not None and (
+        req.advanced.capabilities.add or req.advanced.capabilities.drop
+    ):
+        kwargs["advanced"] = boxlite.AdvancedBoxOptions(
+            capabilities=boxlite.ContainerCapabilities(
+                add=req.advanced.capabilities.add,
+                drop=req.advanced.capabilities.drop,
+            )
+        )
     if req.secrets:
         kwargs["secrets"] = [
             boxlite.Secret(
@@ -554,6 +598,7 @@ async def get_config():
         },
         "overrides": {},
         "capabilities": {
+            "linux_capabilities_enabled": True,
             "max_cpus": 32,
             "max_memory_mib": 16384,
             "max_disk_size_gb": 100,
@@ -802,7 +847,9 @@ async def import_box(
         with open(archive_path, "wb") as f:
             f.write(payload)
 
-        imported = await state.runtime.import_box(archive_path, name=name)
+        imported = await state.runtime.import_box(
+            archive_path, name=name, untrusted=True
+        )
 
     await cache_box_handle(imported)
     info = await imported.info()

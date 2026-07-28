@@ -3,6 +3,7 @@
 //! Provides a builder pattern for spawning processes inside containers,
 //! following the `std::process::Command` pattern.
 
+use super::capabilities::CapabilitySet;
 use super::zygote::{self, BuildSpec};
 use crate::service::exec::exec_handle::{ExecHandle, PtyConfig};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -57,6 +58,9 @@ pub struct ContainerCommand {
     /// Rootfs path for resolving user overrides from /etc/passwd.
     rootfs: Option<PathBuf>,
 
+    /// Resolved capability set inherited by every exec process.
+    capabilities: CapabilitySet,
+
     /// Working directory (None = use default "/")
     cwd: Option<String>,
 
@@ -78,6 +82,7 @@ impl ContainerCommand {
         env: HashMap<String, String>,
         user: (u32, u32),
         rootfs: PathBuf,
+        capabilities: CapabilitySet,
     ) -> Self {
         Self {
             program: None,
@@ -86,6 +91,7 @@ impl ContainerCommand {
             user,
             user_override: None,
             rootfs: Some(rootfs),
+            capabilities,
             cwd: None,
             console_socket: None,
             pty_config: None,
@@ -386,6 +392,7 @@ impl ContainerCommand {
             args: container_args.clone(),
             uid,
             gid,
+            capabilities: self.capabilities.clone(),
         };
 
         // Blocking IPC to zygote — use spawn_blocking to not block tokio.
@@ -560,6 +567,7 @@ mod tests {
             HashMap::new(),
             (0, 0),
             PathBuf::from("/tmp/rootfs"),
+            CapabilitySet::default(),
         )
     }
 

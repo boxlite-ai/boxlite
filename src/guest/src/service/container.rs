@@ -6,18 +6,40 @@
 use std::path::Path;
 
 use crate::service::server::GuestServer;
+use boxlite_shared::errors::BoxliteError;
 use boxlite_shared::{
     container_init_response, container_start_response, rootfs_init, Container as ContainerService,
-    ContainerInitError, ContainerInitRequest, ContainerInitResponse, ContainerInitSuccess,
-    ContainerStartRequest, ContainerStartResponse, ContainerStartSuccess, Filesystem, RootfsInit,
+    ContainerInitError, ContainerInitErrorKind, ContainerInitRequest, ContainerInitResponse,
+    ContainerInitSuccess, ContainerStartRequest, ContainerStartResponse, ContainerStartSuccess,
+    Filesystem, RootfsInit,
 };
 use nix::mount::{mount, MsFlags};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
-use crate::container::{Container, UserMount};
+use crate::container::{CapabilitySet, Container, ContainerDevices, UserMount};
 use crate::layout::GuestLayout;
 use crate::storage::block_device::BlockDeviceMount;
+
+fn internal_init_error(reason: impl Into<String>) -> ContainerInitError {
+    ContainerInitError {
+        reason: reason.into(),
+        kind: ContainerInitErrorKind::Internal as i32,
+    }
+}
+
+/// Report a failure under `context`, keeping `Unsupported` distinguishable so
+/// the host can tell a missing capability from a broken guest.
+fn init_error(context: &str, error: &BoxliteError) -> ContainerInitError {
+    let kind = match error {
+        BoxliteError::Unsupported(_) => ContainerInitErrorKind::Unsupported,
+        _ => ContainerInitErrorKind::Internal,
+    };
+    ContainerInitError {
+        reason: format!("{context}: {error}"),
+        kind: kind as i32,
+    }
+}
 
 /// Prepare container rootfs based on the initialization strategy.
 ///
@@ -100,9 +122,9 @@ impl ContainerService for GuestServer {
         if container_id.is_empty() {
             error!("Missing container_id in Init request");
             return Ok(Response::new(ContainerInitResponse {
-                result: Some(container_init_response::Result::Error(ContainerInitError {
-                    reason: "Missing container_id in Init request".to_string(),
-                })),
+                result: Some(container_init_response::Result::Error(internal_init_error(
+                    "Missing container_id in Init request",
+                ))),
             }));
         }
 
@@ -114,25 +136,38 @@ impl ContainerService for GuestServer {
         if init_execution_id.is_empty() {
             error!("Missing execution_id in Init request");
             return Ok(Response::new(ContainerInitResponse {
-                result: Some(container_init_response::Result::Error(ContainerInitError {
-                    reason: "Missing execution_id in Init request".to_string(),
-                })),
+                result: Some(container_init_response::Result::Error(internal_init_error(
+                    "Missing execution_id in Init request",
+                ))),
             }));
         }
-
         // Check if guest is initialized
         {
             let init_state = self.init_state.lock().await;
             if !init_state.initialized {
                 error!("Guest not initialized (Guest.Init must be called first)");
                 return Ok(Response::new(ContainerInitResponse {
-                    result: Some(container_init_response::Result::Error(ContainerInitError {
-                        reason: "Guest not initialized (Guest.Init must be called first)"
-                            .to_string(),
-                    })),
+                    result: Some(container_init_response::Result::Error(internal_init_error(
+                        "Guest not initialized (Guest.Init must be called first)",
+                    ))),
                 }));
             }
         }
+
+        // Resolve device nodes now: this reads the guest's own /dev, and must
+        // fail before rootfs or bundle setup performs side effects.
+        let devices = match ContainerDevices::from_proto(init_req.devices) {
+            Ok(devices) => devices,
+            Err(error) => {
+                error!("Invalid container device mapping: {error}");
+                return Ok(Response::new(ContainerInitResponse {
+                    result: Some(container_init_response::Result::Error(init_error(
+                        "Invalid container device mapping",
+                        &error,
+                    ))),
+                }));
+            }
+        };
 
         // Extract container config
         let config = init_req
@@ -143,11 +178,22 @@ impl ContainerService for GuestServer {
         if config.entrypoint.is_empty() {
             error!("Invalid container config: entrypoint cannot be empty");
             return Ok(Response::new(ContainerInitResponse {
-                result: Some(container_init_response::Result::Error(ContainerInitError {
-                    reason: "Invalid container config: entrypoint cannot be empty".to_string(),
-                })),
+                result: Some(container_init_response::Result::Error(internal_init_error(
+                    "Invalid container config: entrypoint cannot be empty",
+                ))),
             }));
         }
+
+        // Validate and resolve the privilege policy before creating directories,
+        // mounting the rootfs, or modifying its trust store. A malformed or
+        // unsupported name is caller input, not a partially initialized box.
+        let capability_policy = config
+            .advanced
+            .unwrap_or_default()
+            .capabilities
+            .unwrap_or_default();
+        let capabilities = CapabilitySet::resolve(&capability_policy.add, &capability_policy.drop)
+            .map_err(BoxliteError::into_validation_status)?;
 
         info!("🚀 Starting OCI container with received configuration");
 
@@ -164,9 +210,9 @@ impl ContainerService for GuestServer {
         if let Err(e) = std::fs::create_dir_all(&bundle_rootfs) {
             error!("Failed to create bundle rootfs directory: {}", e);
             return Ok(Response::new(ContainerInitResponse {
-                result: Some(container_init_response::Result::Error(ContainerInitError {
-                    reason: format!("Failed to create bundle rootfs directory: {}", e),
-                })),
+                result: Some(container_init_response::Result::Error(internal_init_error(
+                    format!("Failed to create bundle rootfs directory: {}", e),
+                ))),
             }));
         }
 
@@ -180,9 +226,9 @@ impl ContainerService for GuestServer {
         {
             error!("{}", reason);
             return Ok(Response::new(ContainerInitResponse {
-                result: Some(container_init_response::Result::Error(ContainerInitError {
+                result: Some(container_init_response::Result::Error(internal_init_error(
                     reason,
-                })),
+                ))),
             }));
         }
 
@@ -196,9 +242,9 @@ impl ContainerService for GuestServer {
         ) {
             error!("Failed to bind mount rootfs: {}", e);
             return Ok(Response::new(ContainerInitResponse {
-                result: Some(container_init_response::Result::Error(ContainerInitError {
-                    reason: format!("Failed to bind mount rootfs: {}", e),
-                })),
+                result: Some(container_init_response::Result::Error(internal_init_error(
+                    format!("Failed to bind mount rootfs: {}", e),
+                ))),
             }));
         }
 
@@ -257,6 +303,7 @@ impl ContainerService for GuestServer {
             bundle_rootfs = %bundle_rootfs.display(),
             container_id = %container_id,
             user_mounts_count = user_mounts.len(),
+            device_count = devices.len(),
             "Container configuration"
         );
 
@@ -270,9 +317,9 @@ impl ContainerService for GuestServer {
             if e.kind() != std::io::ErrorKind::NotFound {
                 error!("Failed to clear stale exit file: {}", e);
                 return Ok(Response::new(ContainerInitResponse {
-                    result: Some(container_init_response::Result::Error(ContainerInitError {
-                        reason: format!("Failed to clear stale exit file: {}", e),
-                    })),
+                    result: Some(container_init_response::Result::Error(internal_init_error(
+                        format!("Failed to clear stale exit file: {}", e),
+                    ))),
                 }));
             }
         }
@@ -295,6 +342,8 @@ impl ContainerService for GuestServer {
             &config.user,
             user_mounts,
             config.tty,
+            capabilities,
+            devices,
         ) {
             Ok(mut container) => {
                 // Init is created, not yet running — Init never runs it; the
@@ -430,11 +479,10 @@ impl ContainerService for GuestServer {
                         error!(container_id = %container_id, "init has no pid or its stdio was already taken");
                         return Ok(Response::new(ContainerInitResponse {
                             result: Some(container_init_response::Result::Error(
-                                ContainerInitError {
-                                    reason: "Container started but its init process could not be \
-                                             exposed as a session (no pid or stdio)"
-                                        .to_string(),
-                                },
+                                internal_init_error(
+                                    "Container started but its init process could not be \
+                                     exposed as a session (no pid or stdio)",
+                                ),
                             )),
                         }));
                     }
@@ -442,9 +490,10 @@ impl ContainerService for GuestServer {
                         error!(container_id = %container_id, error = %e, "failed to build init session");
                         return Ok(Response::new(ContainerInitResponse {
                             result: Some(container_init_response::Result::Error(
-                                ContainerInitError {
-                                    reason: format!("Failed to build the init session: {}", e),
-                                },
+                                internal_init_error(format!(
+                                    "Failed to build the init session: {}",
+                                    e
+                                )),
                             )),
                         }));
                     }
@@ -477,9 +526,10 @@ impl ContainerService for GuestServer {
             Err(e) => {
                 error!("Failed to create container: {}", e);
                 Ok(Response::new(ContainerInitResponse {
-                    result: Some(container_init_response::Result::Error(ContainerInitError {
-                        reason: format!("Failed to create container: {}", e),
-                    })),
+                    result: Some(container_init_response::Result::Error(init_error(
+                        "Failed to create container",
+                        &e,
+                    ))),
                 }))
             }
         }
@@ -504,7 +554,7 @@ impl ContainerService for GuestServer {
             })),
             Err(reason) => Ok(Response::new(ContainerStartResponse {
                 result: Some(container_start_response::Result::Error(
-                    ContainerInitError { reason },
+                    internal_init_error(reason),
                 )),
             })),
         }

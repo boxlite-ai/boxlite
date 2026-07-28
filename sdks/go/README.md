@@ -98,6 +98,18 @@ for _, image := range cached {
 - `WithPort(boxlite.PortSpec{Guest: 3000})` publishes TCP locally on an OS-selected host port; after checking `BoxInfo.Network != nil`, read the concrete binding from `Network.PublishedPorts`.
 - A nil `PublishedPorts` slice means the current handle does not know the bindings; a non-nil empty slice means there are no active publications. `Box.Info`, `Runtime.GetInfo`, and `Runtime.ListInfo` use callback-backed runtime operations and honor context cancellation.
 - `WithSecret(boxlite.Secret{...})` configures host-side HTTP(S) secret substitution; `Placeholder` defaults to `<BOXLITE_SECRET:{Name}>`.
+- Container capabilities live under advanced options:
+
+  ```go
+  advanced, err := boxlite.NewAdvancedBoxOptions()
+  if err != nil { log.Fatal(err) }
+  defer advanced.Close()
+  if err := advanced.SetCapabilities(boxlite.ContainerCapabilities{
+      Add: []string{"NET_ADMIN"},
+      Drop: []string{"NET_RAW"},
+  }); err != nil { log.Fatal(err) }
+  box, err := runtime.Create(ctx, "alpine:latest", boxlite.WithAdvancedOptions(advanced))
+  ```
 
 Port publication is local-only. Remote runtimes reject it with guidance to use
 the existing network tunnel API. Each tunnel handle represents one connection.

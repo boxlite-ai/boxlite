@@ -264,7 +264,10 @@ class SyncBoxlite:
         Create a new box.
 
         Args:
-            options: BoxOptions specifying image, resources, etc.
+            options: BoxOptions specifying image, resources, etc. General
+                options are ignored when a box is reused; the local runtime
+                additionally refuses to reuse a box whose capability policy
+                differs from the requested one.
             name: Optional unique name for the box.
 
         Returns:

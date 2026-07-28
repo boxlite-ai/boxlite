@@ -357,7 +357,10 @@ impl RuntimeImpl {
     ///
     /// Returns `(LiteBox, true)` if a new box was created, or `(LiteBox, false)`
     /// if an existing box with the given name was found. When an existing box is
-    /// returned, the provided `options` are ignored (no config drift validation).
+    /// returned, general options are ignored, but its capability policy must
+    /// match exactly and it must already provide any required nested
+    /// virtualization, so reuse cannot silently weaken privileges or drop a
+    /// requested capability.
     pub async fn get_or_create(
         self: &Arc<Self>,
         options: BoxOptions,
@@ -402,8 +405,7 @@ impl RuntimeImpl {
             && let Some((config, state)) = self.box_manager.lookup_box(name)?
         {
             return if reuse_existing {
-                let (box_impl, _) = self.get_or_create_box_impl(config, state);
-                Ok((litebox_from_impl(box_impl), false))
+                self.adopt_existing_box(&options, config, state)
             } else {
                 Err(BoxliteError::InvalidArgument(format!(
                     "box with name '{}' already exists",
@@ -442,8 +444,7 @@ impl RuntimeImpl {
                 && let Some(ref name) = name
                 && let Some((config, state)) = self.box_manager.lookup_box(name)?
             {
-                let (box_impl, _) = self.get_or_create_box_impl(config, state);
-                return Ok((litebox_from_impl(box_impl), false));
+                return self.adopt_existing_box(&options, config, state);
             }
 
             return Err(e);
@@ -470,6 +471,46 @@ impl RuntimeImpl {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         Ok((litebox_from_impl(box_impl), true))
+    }
+
+    /// Adopt a box found either by the initial lookup or duplicate-create recovery.
+    fn adopt_existing_box(
+        self: &Arc<Self>,
+        requested: &BoxOptions,
+        config: BoxConfig,
+        state: BoxState,
+    ) -> BoxliteResult<(LiteBox, bool)> {
+        Self::check_options_compatibility(requested, &config)?;
+        let (box_impl, _) = self.get_or_create_box_impl(config, state);
+        Ok((litebox_from_impl(box_impl), false))
+    }
+
+    /// Reject reuse when the request disagrees with the box's stored options.
+    ///
+    /// Only the capability policy is compared: silently adopting a box whose
+    /// privileges differ from the request is the case that matters for safety.
+    fn check_options_compatibility(
+        requested: &BoxOptions,
+        actual: &BoxConfig,
+    ) -> BoxliteResult<()> {
+        let box_name = actual.name.as_deref().unwrap_or_else(|| actual.id.as_str());
+        requested
+            .advanced
+            .capabilities
+            .check_compatibility(&actual.options.advanced.capabilities, box_name)?;
+
+        // One-way: a nested-capable box satisfies any request, but a plain box
+        // cannot satisfy one that needs /dev/kvm. Reusing it would look like a
+        // success and defer the failure into the guest.
+        if requested.advanced.nested_virtualization
+            && !actual.options.advanced.nested_virtualization
+        {
+            return Err(BoxliteError::Unsupported(format!(
+                "box '{box_name}' was created without nested virtualization and cannot satisfy a required nested virtualization request; use a different name or recreate the box"
+            )));
+        }
+
+        Ok(())
     }
 
     /// Get a handle to an existing box by ID or name.
@@ -1808,6 +1849,43 @@ mod tests {
         assert!(reject_local_lifecycle_policy(&options).is_ok());
     }
 
+    #[test]
+    fn options_compatibility_normalizes_capability_names() {
+        let mut actual = test_box_config(false);
+        actual.options.advanced.capabilities.add =
+            vec!["NET_ADMIN".to_string(), "CAP_SYS_ADMIN".to_string()];
+        let requested = BoxOptions {
+            advanced: crate::AdvancedBoxOptions {
+                capabilities: crate::ContainerCapabilities {
+                    add: vec!["sys_admin".to_string(), "CAP_NET_ADMIN".to_string()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(RuntimeImpl::check_options_compatibility(&requested, &actual).is_ok());
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_incompatible_existing_options() {
+        let (runtime, _dir) = create_test_runtime();
+        let mut config = test_box_config_in_layout(false, &runtime);
+        config.name = Some("existing".to_string());
+        config.options.advanced.capabilities.drop = vec!["NET_RAW".to_string()];
+        runtime
+            .box_manager
+            .add_box(&config, &BoxState::new())
+            .unwrap();
+
+        let result = runtime
+            .get_or_create(BoxOptions::default(), Some("existing".to_string()))
+            .await;
+
+        assert!(matches!(result, Err(BoxliteError::InvalidArgument(_))));
+    }
+
     #[tokio::test]
     async fn local_option_validation_uses_injected_features() {
         let mut options = BoxOptions::default();
@@ -1833,6 +1911,30 @@ mod tests {
                 .contains("custom kernel must be a regular file")
         );
     }
+
+    #[tokio::test]
+    async fn nested_virtualization_validation_uses_injected_features() {
+        let options = BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                nested_virtualization: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = sanitize_local_options(&ExperimentalFeatures::default(), options.clone())
+            .await
+            .expect_err("nested virtualization must be disabled by default");
+        assert!(
+            error
+                .to_string()
+                .contains("BOXLITE_EXPERIMENTAL=nested-virtualization")
+        );
+
+        let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
+        sanitize_local_options(&enabled, options).await.unwrap();
+    }
+
     /// Create a RuntimeImpl with isolated temp directory.
     fn create_test_runtime() -> (SharedRuntimeImpl, TempDir) {
         let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
@@ -2865,6 +2967,83 @@ mod tests {
             }
             _ => panic!("Expected NotFound for missing archive"),
         }
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_nested_virtualization_upgrade() {
+        let (runtime, _dir) = create_test_runtime();
+        let name = Some("plain-box".to_string());
+
+        let (_, created) = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    ..Default::default()
+                },
+                name.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(created);
+
+        let result = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                        nested_virtualization: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                name,
+            )
+            .await;
+
+        match result {
+            Err(BoxliteError::Unsupported(message)) => {
+                assert!(message.contains("nested virtualization"));
+                assert!(message.contains("plain-box"));
+            }
+            Err(other) => panic!("expected Unsupported error, got: {other}"),
+            Ok(_) => panic!("get_or_create must not reuse a non-nested box"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_or_create_allows_nested_box_for_default_request() {
+        let (runtime, _dir) = create_test_runtime();
+        let name = Some("nested-box".to_string());
+
+        let (nested_box, created) = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                        nested_virtualization: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                name.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(created);
+
+        let (reused_box, created) = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    ..Default::default()
+                },
+                name,
+            )
+            .await
+            .unwrap();
+
+        assert!(!created);
+        assert_eq!(reused_box.id(), nested_box.id());
     }
 
     // ====================================================================

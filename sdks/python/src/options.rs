@@ -408,7 +408,7 @@ pub(crate) struct PyBoxOptions {
     #[pyo3(get, set)]
     pub(crate) user: Option<String>,
 
-    /// Advanced options for expert users (security, mount isolation, health check).
+    /// Advanced options for expert users (capabilities, security, mount isolation, health check).
     #[pyo3(get, set)]
     pub(crate) advanced: Option<PyAdvancedBoxOptions>,
 
@@ -564,6 +564,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             if let Some(health_check) = advanced.health_check {
                 opts.advanced.health_check = Some(HealthCheckOptions::from(health_check));
             }
+            opts.advanced.capabilities = advanced.capabilities.into();
         }
 
         // Convert Python secrets to Rust secrets

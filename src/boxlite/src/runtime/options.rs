@@ -323,6 +323,7 @@ pub struct BoxOptions {
     /// If set, the COW overlay will have this virtual size, allowing
     /// the container to write more data than the base image size.
     pub disk_size_gb: Option<u64>,
+
     pub working_dir: Option<String>,
     pub env: Vec<(String, String)>,
     pub rootfs: RootfsSpec,
@@ -376,7 +377,7 @@ pub struct BoxOptions {
     #[serde(default = "default_detach")]
     pub detach: bool,
 
-    /// Advanced options for expert users (security, mount isolation).
+    /// Advanced options for expert users (capabilities, security, mount isolation).
     ///
     /// Defaults are secure — most users can ignore this entirely.
     /// See [`AdvancedBoxOptions`] for details.
@@ -561,6 +562,7 @@ impl BoxOptions {
     /// - effective remove-on-stop (`auto_delete>0`, or deprecated `auto_remove`)
     ///   with `detach=true` is invalid
     /// - `advanced.isolate_mounts=true` is only supported on Linux
+    /// - `advanced.capabilities` contains well-formed Linux capability names
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::Config(
@@ -576,6 +578,8 @@ impl BoxOptions {
                 "isolate_mounts is only supported on Linux".to_string(),
             ));
         }
+
+        self.advanced.capabilities.validate()?;
 
         if matches!(self.network, NetworkSpec::Disabled) && !self.ports.is_empty() {
             return Err(boxlite_shared::errors::BoxliteError::Config(
@@ -821,6 +825,12 @@ pub(crate) fn normalize_legacy_ports(ports: &mut Vec<PortSpec>) -> usize {
     changed
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArchiveImportPolicy {
+    Trusted,
+    UntrustedRemote,
+}
+
 /// A portable box archive (`.boxlite` file).
 ///
 /// Self-contained bundle: disk images + configuration manifest.
@@ -828,17 +838,43 @@ pub(crate) fn normalize_legacy_ports(ports: &mut Vec<PortSpec>) -> usize {
 #[derive(Debug, Clone)]
 pub struct BoxArchive {
     path: PathBuf,
+    import_policy: ArchiveImportPolicy,
 }
 
 impl BoxArchive {
-    /// Create a BoxArchive handle from an archive file path.
+    /// Create a trusted `BoxArchive` handle from an archive file path.
+    ///
+    /// This preserves all v3 archive configuration and is intended for local
+    /// import/export workflows where the caller owns both the archive and the
+    /// runtime.
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            import_policy: ArchiveImportPolicy::Trusted,
+        }
+    }
+
+    /// Create an archive handle for bytes received across an untrusted server
+    /// boundary.
+    ///
+    /// Remote import rejects host-only features and host filesystem paths, then
+    /// replaces archive-carried security settings with the runtime's secure
+    /// defaults. HTTP servers must use this constructor rather than
+    /// [`BoxArchive::new`].
+    pub fn from_untrusted_upload(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            import_policy: ArchiveImportPolicy::UntrustedRemote,
+        }
     }
 
     /// Path to the archive file.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(crate) fn import_policy(&self) -> ArchiveImportPolicy {
+        self.import_policy
     }
 }
 
@@ -858,7 +894,9 @@ pub struct CloneOptions {}
 mod tests {
     use super::*;
     use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
-    use crate::runtime::advanced_options::{SecurityOptions, SecurityOptionsBuilder};
+    use crate::runtime::advanced_options::{
+        ContainerCapabilities, SecurityOptions, SecurityOptionsBuilder,
+    };
 
     #[test]
     fn legacy_ports_keep_old_same_port_and_last_write_wins_semantics() {
@@ -934,6 +972,129 @@ mod tests {
             "auto_remove should keep its legacy default"
         );
         assert!(!opts.detach, "detach should default to false");
+        assert!(
+            opts.advanced.capabilities.is_empty(),
+            "advanced capabilities should default to empty"
+        );
+    }
+
+    #[test]
+    fn box_options_capabilities_serde_roundtrip() {
+        let json = r#"{
+            "advanced": {
+                "capabilities": {
+                    "add": ["SYS_ADMIN", "CAP_NET_ADMIN"],
+                    "drop": ["NET_RAW"]
+                }
+            }
+        }"#;
+
+        let opts: BoxOptions = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            opts.advanced.capabilities.add,
+            ["SYS_ADMIN", "CAP_NET_ADMIN"]
+        );
+        assert_eq!(opts.advanced.capabilities.drop, ["NET_RAW"]);
+
+        let serialized = serde_json::to_string(&opts).unwrap();
+        let roundtripped: BoxOptions = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(
+            roundtripped.advanced.capabilities,
+            opts.advanced.capabilities
+        );
+    }
+
+    #[test]
+    fn box_options_sanitize_accepts_valid_capability_names() {
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                capabilities: ContainerCapabilities {
+                    add: vec!["sys_admin".into(), "CAP_NET_ADMIN".into()],
+                    drop: vec!["NET_RAW".into()],
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        opts.sanitize()
+            .expect("Docker-style capability names should be accepted");
+    }
+
+    #[test]
+    fn box_options_sanitize_accepts_future_capability_names() {
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                capabilities: ContainerCapabilities {
+                    add: vec!["FUTURE_KERNEL_FEATURE".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        opts.sanitize()
+            .expect("the guest runtime, not the host SDK, owns the supported capability list");
+    }
+
+    #[test]
+    fn box_options_sanitize_rejects_malformed_capability_names() {
+        for opts in [
+            BoxOptions {
+                advanced: AdvancedBoxOptions {
+                    capabilities: ContainerCapabilities {
+                        add: vec!["".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            BoxOptions {
+                advanced: AdvancedBoxOptions {
+                    capabilities: ContainerCapabilities {
+                        drop: vec!["NET-ADMIN".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            BoxOptions {
+                advanced: AdvancedBoxOptions {
+                    capabilities: ContainerCapabilities {
+                        add: vec!["123".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            BoxOptions {
+                advanced: AdvancedBoxOptions {
+                    capabilities: ContainerCapabilities {
+                        add: vec!["ß".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ] {
+            let err = opts
+                .sanitize()
+                .expect_err("malformed capability should be rejected");
+            assert_eq!(err.http().0, 400);
+            let err = err.to_string();
+            assert!(
+                err.contains("empty")
+                    || err.contains("NET-ADMIN")
+                    || err.contains("123")
+                    || err.contains("ß"),
+                "error should identify the malformed capability, got: {err}"
+            );
+        }
     }
 
     #[test]
@@ -1091,6 +1252,22 @@ mod tests {
         let opts: BoxOptions = serde_json::from_str(json).unwrap();
         assert_eq!(opts.auto_delete, Some(0));
         assert!(opts.detach, "explicit detach=true should be respected");
+    }
+
+    /// The opt-in is persisted with the box and rechecked on every start, so it
+    /// has to survive a manifest round-trip — and default to off when absent.
+    #[test]
+    fn nested_virtualization_option_roundtrips() {
+        let stored: BoxOptions =
+            serde_json::from_str(r#"{"advanced":{"nested_virtualization":true}}"#).unwrap();
+        assert!(stored.advanced.nested_virtualization);
+        assert_eq!(
+            serde_json::to_value(stored).unwrap()["advanced"]["nested_virtualization"],
+            serde_json::Value::Bool(true)
+        );
+
+        let legacy: BoxOptions = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.advanced.nested_virtualization);
     }
 
     #[test]

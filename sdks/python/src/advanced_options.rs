@@ -1,4 +1,6 @@
-use boxlite::runtime::advanced_options::{HealthCheckOptions, ResourceLimits, SecurityOptions};
+use boxlite::runtime::advanced_options::{
+    ContainerCapabilities, HealthCheckOptions, ResourceLimits, SecurityOptions,
+};
 use pyo3::prelude::*;
 
 // ============================================================================
@@ -253,6 +255,44 @@ impl From<PySecurityOptions> for SecurityOptions {
 // Advanced Options
 // ============================================================================
 
+/// Linux capability policy for the container process.
+#[pyclass(name = "ContainerCapabilities")]
+#[derive(Clone, Debug, Default)]
+pub struct PyContainerCapabilities {
+    /// Capabilities added to BoxLite's Docker-compatible baseline.
+    #[pyo3(get, set)]
+    pub add: Vec<String>,
+
+    /// Capabilities removed from the resulting capability set.
+    #[pyo3(get, set)]
+    pub drop: Vec<String>,
+}
+
+#[pymethods]
+impl PyContainerCapabilities {
+    #[new]
+    #[pyo3(signature = (add=vec![], drop=vec![]))]
+    fn new(add: Vec<String>, drop: Vec<String>) -> Self {
+        Self { add, drop }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ContainerCapabilities(add={:?}, drop={:?})",
+            self.add, self.drop
+        )
+    }
+}
+
+impl From<PyContainerCapabilities> for ContainerCapabilities {
+    fn from(capabilities: PyContainerCapabilities) -> Self {
+        Self {
+            add: capabilities.add,
+            drop: capabilities.drop,
+        }
+    }
+}
+
 /// Advanced options for expert users.
 ///
 /// Entry-level users can ignore this — defaults are compatibility-focused.
@@ -266,19 +306,25 @@ pub struct PyAdvancedBoxOptions {
     /// Health check options.
     #[pyo3(get, set)]
     pub health_check: Option<PyHealthCheckOptions>,
+
+    /// Linux capability policy for the container process.
+    #[pyo3(get, set)]
+    pub capabilities: PyContainerCapabilities,
 }
 
 #[pymethods]
 impl PyAdvancedBoxOptions {
     #[new]
-    #[pyo3(signature = (security=None, health_check=None))]
+    #[pyo3(signature = (security=None, health_check=None, capabilities=None))]
     fn new(
         security: Option<PySecurityOptions>,
         health_check: Option<PyHealthCheckOptions>,
+        capabilities: Option<PyContainerCapabilities>,
     ) -> Self {
         Self {
             security,
             health_check,
+            capabilities: capabilities.unwrap_or_default(),
         }
     }
 }

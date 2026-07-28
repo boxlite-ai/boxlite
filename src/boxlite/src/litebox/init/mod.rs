@@ -361,8 +361,8 @@ mod plan_tests {
             ),
             (ExecutionMode::Sequential, vec!["vmm_spawn".to_string()]),
             (ExecutionMode::Sequential, vec!["guest_connect".to_string()]),
-            // Publication needs a live gvproxy, which the guest-ready wait
-            // already proves; it has no reason to gate container init.
+            // Publication needs a live gvproxy, which the shim binds before
+            // it boots the VM; it has no reason to gate container init.
             (
                 ExecutionMode::Parallel,
                 vec!["guest_init".to_string(), "port_publish".to_string()],
@@ -416,6 +416,28 @@ mod plan_tests {
         );
 
         let enabled = ExperimentalFeatures::parse("custom-kernel").unwrap();
+        validate_persisted_options(&enabled, &options).unwrap();
+    }
+
+    #[test]
+    fn persisted_nested_virtualization_uses_injected_feature_state() {
+        let options = crate::BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                nested_virtualization: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = validate_persisted_options(&ExperimentalFeatures::default(), &options)
+            .expect_err("persisted nested virtualization must be disabled by default");
+        assert!(
+            error
+                .to_string()
+                .contains("ExperimentalFeature::NestedVirtualization")
+        );
+
+        let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
         validate_persisted_options(&enabled, &options).unwrap();
     }
 }

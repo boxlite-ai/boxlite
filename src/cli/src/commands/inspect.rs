@@ -224,3 +224,36 @@ fn write_inspect_output<W: std::io::Write>(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use boxlite::{BoxID, BoxStatus, HealthStatus};
+    use std::collections::HashMap;
+
+    #[test]
+    fn inspect_omits_advanced_capability_metadata() {
+        let now = chrono::Utc::now();
+        let info = BoxInfo {
+            id: BoxID::parse("inspect-capabilities").unwrap(),
+            name: Some("cap-box".into()),
+            status: BoxStatus::Configured,
+            created_at: now,
+            last_updated: now,
+            pid: None,
+            image: "alpine:latest".into(),
+            cpus: 1,
+            memory_mib: 512,
+            network: None,
+            labels: HashMap::new(),
+            auto_pause: 0,
+            auto_delete: 0,
+            auto_resume: true,
+            health_status: HealthStatus::new(),
+            exit_code: None,
+        };
+
+        let value = serde_json::to_value(InspectPresenter::from(&info)).unwrap();
+        assert!(value.get("Advanced").is_none());
+    }
+}

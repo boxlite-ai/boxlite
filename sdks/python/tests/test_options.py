@@ -36,6 +36,27 @@ class TestBoxOptionsDefaults:
         # Python side defaults to None, Rust side defaults to False
         assert opts.detach is None
 
+    def test_capability_lists_default_to_empty(self):
+        """Test that capability overrides are empty under advanced options."""
+        advanced = boxlite.AdvancedBoxOptions()
+        assert advanced.capabilities.add == []
+        assert advanced.capabilities.drop == []
+
+    def test_custom_capability_lists_are_preserved(self):
+        """Test supplying Docker-style capability additions and removals."""
+        capabilities = boxlite.ContainerCapabilities(
+            add=["NET_ADMIN", "SYS_PTRACE"],
+            drop=["MKNOD", "NET_RAW"],
+        )
+        opts = boxlite.BoxOptions(
+            image="alpine:latest",
+            advanced=boxlite.AdvancedBoxOptions(capabilities=capabilities),
+        )
+        assert opts.advanced.capabilities.add == ["NET_ADMIN", "SYS_PTRACE"]
+        assert opts.advanced.capabilities.drop == ["MKNOD", "NET_RAW"]
+        assert not hasattr(opts, "cap_add")
+        assert not hasattr(opts, "cap_drop")
+
     def test_explicit_auto_remove_true(self):
         """Test setting auto_remove=True explicitly."""
         opts = boxlite.BoxOptions(image="alpine:latest", auto_remove=True)

@@ -11,7 +11,7 @@
 //!
 //! See `docs/investigations/concurrent-exec-deadlock.md` for full analysis.
 
-use super::capabilities::capability_names;
+use super::capabilities::CapabilitySet;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::syscall::syscall::SyscallType;
@@ -58,6 +58,7 @@ pub(crate) struct BuildSpec {
     pub args: Vec<String>,
     pub uid: u32,
     pub gid: u32,
+    pub capabilities: CapabilitySet,
 }
 
 /// What init to build. Serialized over IPC to the zygote.
@@ -265,9 +266,15 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             // The PTY path passes no stdio fds — youki wires the PTY slave instead.
             let env_vec: Vec<String> = spec.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
             let cwd = spec.cwd.to_str().unwrap_or("/");
-            let process =
-                super::spec::build_tty_exec_process(&spec.args, &env_vec, cwd, spec.uid, spec.gid)
-                    .map_err(|e| format!("build tty exec process: {e}"))?;
+            let process = super::spec::build_tty_exec_process(
+                &spec.args,
+                &env_vec,
+                cwd,
+                spec.uid,
+                spec.gid,
+                spec.capabilities.clone(),
+            )
+            .map_err(|e| format!("build tty exec process: {e}"))?;
             let process_json = serde_json::to_vec(&process)
                 .map_err(|e| format!("serialize tty process.json: {e}"))?;
             let process_path = spec
@@ -292,7 +299,7 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
                 // CLONE_PARENT so the tenant reparents to guest main (not the
                 // zygote); guest main's reaper owns its exit. The zygote never waits.
                 .as_sibling(true)
-                .with_capabilities(capability_names())
+                .with_capabilities(spec.capabilities.names())
                 .with_no_new_privs(false)
                 .with_detach(false)
                 .with_cwd(Some(spec.cwd))
@@ -555,6 +562,7 @@ fn recv_response(sock: RawFd) -> BoxliteResult<ZygoteResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::container::capabilities::CapabilitySet;
 
     // ========================================================================
     // Serialization tests (pure logic, no fork needed)
@@ -578,6 +586,7 @@ mod tests {
             ],
             uid: 1000,
             gid: 1000,
+            capabilities: CapabilitySet::default(),
         }
     }
 
@@ -633,6 +642,7 @@ mod tests {
             args: vec![],
             uid: 0,
             gid: 0,
+            capabilities: CapabilitySet::default(),
         };
         let json = serde_json::to_vec(&spec).unwrap();
         let decoded: BuildSpec = serde_json::from_slice(&json).unwrap();
@@ -790,6 +800,7 @@ mod tests {
             args,
             uid: 65534,
             gid: 65534,
+            capabilities: CapabilitySet::default(),
         };
 
         send_request(fd_a, &ZygoteRequest::Build(spec.clone()), None).unwrap();
@@ -819,6 +830,7 @@ mod tests {
             args: vec![],
             uid: 0,
             gid: 0,
+            capabilities: CapabilitySet::default(),
         };
 
         let (a, _b) = socketpair(
@@ -968,6 +980,7 @@ mod tests {
                     args: vec!["echo".to_string()],
                     uid: 0,
                     gid: 0,
+                    capabilities: CapabilitySet::default(),
                 };
                 z.build(spec, None).unwrap()
             }));
@@ -1008,6 +1021,7 @@ mod tests {
             args: vec!["true".to_string()],
             uid: 0,
             gid: 0,
+            capabilities: CapabilitySet::default(),
         }
     }
 
@@ -1350,6 +1364,7 @@ mod tests {
                 args: vec!["true".to_string()],
                 uid: 0,
                 gid: 0,
+                capabilities: CapabilitySet::default(),
             };
             do_build(spec, Some(fds))
         });

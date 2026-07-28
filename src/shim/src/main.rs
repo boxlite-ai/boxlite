@@ -19,6 +19,7 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use boxlite::vmm::exit_info::ExitErrorKind;
 use boxlite::{
     util,
     vmm::{self, ExitInfo, InstanceSpec, VmmConfig, controller::watchdog},
@@ -113,6 +114,7 @@ fn main() -> BoxliteResult<()> {
         let info = ExitInfo::Error {
             exit_code: 1,
             message: e.to_string(),
+            error_kind: ExitErrorKind::of(e),
         };
 
         if let Ok(json) = serde_json::to_string(&info) {

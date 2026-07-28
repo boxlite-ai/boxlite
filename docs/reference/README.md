@@ -182,6 +182,25 @@ Host-side secret substitution rules for outbound HTTP(S) requests.
 - The placeholder is also exposed as `BOXLITE_SECRET_<NAME>` inside the guest.
 - C SDK users configure secrets with `boxlite_options_add_secret()`.
 
+#### `advanced.capabilities`
+
+Linux capability overrides for the container's init and all later exec
+processes. Both lists default to empty, preserving BoxLite's Docker-compatible
+14-capability baseline.
+
+- Names are case-insensitive and accept either `NET_ADMIN` or `CAP_NET_ADMIN`.
+- `ALL` is supported in either list.
+- Without `ALL`, drops are applied to the baseline before explicit additions,
+  so the same specifically named capability in both lists remains enabled.
+- With `add=["ALL"]`, explicit drops win, matching Docker.
+- Use `drop=["ALL"]` with explicit additions to construct a minimal set.
+- Malformed names are rejected at the API boundary. A well-formed name that the
+  bundled guest runtime does not support is rejected during container initialization.
+- A remote client and the host both check support before creating a box; a
+  custom policy is rejected rather than ignored when either side is too old.
+- The resolved set is applied to OCI bounding, effective, and permitted sets.
+  Inheritable and ambient capabilities stay unset; they are not implied by `add`.
+
 #### `cpus: int`
 
 Number of CPU cores allocated to the box.

@@ -453,6 +453,22 @@ void boxlite_advanced_options_free(CAdvancedBoxOptions *opts);
 // genuinely can't sandbox). Null `opts` is a no-op.
 void boxlite_advanced_options_set_security_enabled(CAdvancedBoxOptions *opts, int enabled);
 
+// Replace the capabilities added to BoxLite's Docker-compatible baseline.
+//
+// A zero count clears the list. Negative counts, null handles, null arrays
+// with a positive count, null elements, and invalid UTF-8 fail closed.
+enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_add(CAdvancedBoxOptions *opts,
+                                                                    const char *const *capabilities,
+                                                                    int count);
+
+// Replace the capabilities removed from the container capability set.
+//
+// A zero count clears the list. Negative counts, null handles, null arrays
+// with a positive count, null elements, and invalid UTF-8 fail closed.
+enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_drop(CAdvancedBoxOptions *opts,
+                                                                     const char *const *capabilities,
+                                                                     int count);
+
 enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
                                          CBoxliteOptions *opts,
                                          CBoxCreateBoxCb cb,
@@ -751,7 +767,7 @@ void boxlite_options_set_auto_resume_enabled(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
 
-// Apply a `CAdvancedBoxOptions` (security, mount isolation, health check) to a
+// Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
 // `CBoxliteOptions`. Clones the advanced configuration into the box options —
 // the caller retains ownership of `advanced_opts` and is responsible for
 // freeing it via `boxlite_advanced_options_free`.
