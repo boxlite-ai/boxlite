@@ -94,11 +94,21 @@ export class CreateBoxDto {
 
   @IsOptional()
   @IsBoolean()
-  auto_remove?: boolean
+  detach?: boolean
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  auto_pause?: number
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  auto_delete?: number
 
   @IsOptional()
   @IsBoolean()
-  detach?: boolean
+  auto_resume?: boolean
 
   @IsOptional()
   @ValidateNested()

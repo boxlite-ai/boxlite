@@ -12,14 +12,17 @@ mod exec;
 mod init;
 pub(crate) mod local_snapshot;
 mod manager;
+mod network;
 mod snapshot;
 pub(crate) mod snapshot_mgr;
 mod state;
+mod watcher;
 
 pub use copy::CopyOptions;
 pub(crate) use crash_report::CrashReport;
 pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
 pub(crate) use manager::BoxManager;
+pub use network::{BoxConnection, BoxEndpoint, BoxTunnel, NetworkHandle};
 pub use snapshot::SnapshotHandle;
 pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
 
@@ -31,7 +34,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::metrics::BoxMetrics;
-use crate::runtime::backend::{BoxBackend, SnapshotBackend};
+use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
 use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
 use crate::{BoxID, BoxInfo};
 use boxlite_shared::errors::BoxliteResult;
@@ -50,6 +53,8 @@ pub struct LiteBox {
     name: Option<String>,
     /// Backend for lifecycle/exec/file operations.
     box_backend: Arc<dyn BoxBackend>,
+    /// Backend for network operations.
+    network_backend: Arc<dyn BoxNetworkBackend>,
     /// Backend for snapshot lifecycle operations.
     snapshot_backend: Arc<dyn SnapshotBackend>,
 }
@@ -58,6 +63,7 @@ impl LiteBox {
     /// Create a LiteBox from backend implementations.
     pub(crate) fn new(
         box_backend: Arc<dyn BoxBackend>,
+        network_backend: Arc<dyn BoxNetworkBackend>,
         snapshot_backend: Arc<dyn SnapshotBackend>,
     ) -> Self {
         let id = box_backend.id().clone();
@@ -66,6 +72,7 @@ impl LiteBox {
             id,
             name,
             box_backend,
+            network_backend,
             snapshot_backend,
         }
     }
@@ -98,13 +105,22 @@ impl LiteBox {
         self.box_backend.exec(command).await
     }
 
-    /// Reattach to a running execution by id, returning a fresh
-    /// `Execution` handle. The caller discards any previous handle for
-    /// the same id. Used after a transient WebSocket drop to resume
-    /// stdio without restarting the underlying process. Returns
-    /// `BoxliteError::SessionReaped` if the session is no longer
-    /// attachable on the server side.
-    pub async fn attach(&self, execution_id: &str) -> BoxliteResult<Execution> {
+    /// Attach to a session in the box.
+    ///
+    /// - `None` — the box's main command session (`run IMAGE COMMAND` runs
+    ///   COMMAND *as* the container init, docker semantics; the unqualified verb
+    ///   follows the ecosystem convention `docker attach` / `podman attach` /
+    ///   CRI `Attach`). This boots the box but does not run the command — call
+    ///   `start()` after. That is docker's create → attach → start: attach first,
+    ///   so a command that finishes instantly cannot outrun the stream and take
+    ///   its output and exit code with it.
+    /// - `Some(id)` — reattach to a running exec session by id (docker's
+    ///   `ContainerExecAttach`), returning a fresh `Execution` on a new stream;
+    ///   the caller discards any previous handle for the same id. Used after a
+    ///   transient WebSocket drop to resume stdio without restarting the process.
+    ///   `BoxliteError::SessionReaped` if it is no longer attachable. Only the
+    ///   REST backend models these; a local box supports `None` only.
+    pub async fn attach(&self, execution_id: Option<&str>) -> BoxliteResult<Execution> {
         self.box_backend.attach(execution_id).await
     }
 
@@ -138,6 +154,11 @@ impl LiteBox {
         self.box_backend
             .copy_out(container_src.as_ref(), host_dst.as_ref(), opts)
             .await
+    }
+
+    /// Get a network handle for raw tunnel operations.
+    pub fn network(&self) -> NetworkHandle {
+        NetworkHandle::new(Arc::clone(&self.network_backend))
     }
 
     /// Get a snapshot handle for snapshot operations.

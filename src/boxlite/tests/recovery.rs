@@ -431,15 +431,15 @@ async fn successful_start_stashes_stale_exit_file() {
 // ============================================================================
 
 #[tokio::test]
-async fn recovery_removes_auto_remove_true_boxes() {
-    // Test that boxes with auto_remove=true are removed during recovery
+async fn recovery_removes_auto_delete_boxes() {
+    // Test that boxes with auto_delete>0 are removed during recovery
     // This simulates a crash scenario where boxes weren't properly cleaned up
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let home_dir = temp_dir.path().to_path_buf();
 
     let persistent_box_id: BoxID;
 
-    // Create two boxes: one with auto_remove=true, one with auto_remove=false
+    // Create two boxes: one with auto_delete>0, one with auto_delete=0
     {
         let options = BoxliteOptions {
             home_dir: home_dir.clone(),
@@ -447,27 +447,27 @@ async fn recovery_removes_auto_remove_true_boxes() {
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
-        // Create auto_remove=true box (should be cleaned up on recovery)
-        let auto_remove_box = runtime
+        // Create auto_delete>0 box (should be cleaned up on recovery)
+        let ephemeral_box = runtime
             .create(common::alpine_opts_auto(), None)
             .await
             .unwrap();
 
-        // Create auto_remove=false box (should persist)
+        // Create auto_delete=0 box (should persist)
         let persistent_box = runtime.create(common::alpine_opts(), None).await.unwrap();
         persistent_box_id = persistent_box.id().clone();
 
         // Both boxes should exist before shutdown
-        assert!(runtime.exists(auto_remove_box.id().as_str()).await.unwrap());
+        assert!(runtime.exists(ephemeral_box.id().as_str()).await.unwrap());
         assert!(runtime.exists(persistent_box_id.as_str()).await.unwrap());
 
         // Stop the persistent box normally (it stays in DB)
         persistent_box.stop().await.unwrap();
 
-        // Verify both exist in DB (auto_remove box is still Starting)
+        // Verify both exist in DB (remove-on-stop box is still Starting)
         assert_eq!(runtime.list_info().await.unwrap().len(), 2);
 
-        // Drop runtime without stopping auto_remove_box - simulates crash
+        // Drop runtime without stopping ephemeral_box - simulates crash
         // The box will remain in database but should be cleaned on recovery
     }
 
@@ -479,8 +479,8 @@ async fn recovery_removes_auto_remove_true_boxes() {
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
 
-        // auto_remove=true box should be removed during recovery
-        // auto_remove=false box should be recovered
+        // auto_delete>0 box should be removed during recovery
+        // auto_delete=0 box should be recovered
         let boxes = runtime.list_info().await.unwrap();
         assert_eq!(
             boxes.len(),

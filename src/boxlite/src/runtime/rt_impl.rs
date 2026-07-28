@@ -1,4 +1,5 @@
 use crate::db::{BoxStore, Database};
+use crate::experimental::ExperimentalFeatures;
 use crate::images::{ImageDiskManager, ImageManager};
 use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
@@ -21,10 +22,37 @@ use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
 fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
+    // Every handle this runtime hands out starts following its box's main
+    // command, if the box is running and nobody is following it yet.
+    //
+    // `start()` arms the watcher for boxes *we* start. This covers the ones we
+    // merely adopt — recovered from a previous process, already Running with a
+    // live shim. That is what a long-lived runtime meets on every restart
+    // (`boxlite serve`, the cloud), and without it such a box would run to
+    // completion entirely unobserved and be reported Running forever: exactly
+    // the lie the watcher exists to stop telling.
+    box_impl.arm_watcher(None);
+
     let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = box_impl.clone();
+    let network_backend: Arc<dyn crate::runtime::backend::BoxNetworkBackend> = box_impl.clone();
     let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> =
         Arc::new(LocalSnapshotBackend::new(box_impl));
-    LiteBox::new(box_backend, snapshot_backend)
+    LiteBox::new(box_backend, network_backend, snapshot_backend)
+}
+
+/// Record that the box's main command is over, taking its exit code from the
+/// guest-written exit file.
+///
+/// Two callers reach this from opposite directions and must agree: the live
+/// watcher in `BoxImpl` (a long-lived runtime sees the shim die) and
+/// `recover_boxes` (a fresh process finds a Running box with a dead shim).
+/// A missing record leaves `exit_code` as None rather than inventing a 0 —
+/// the box stopped, but nobody witnessed how.
+pub(crate) fn record_main_command_exit(state: &mut BoxState, exit_file: &std::path::Path) {
+    if let Some(record) = boxlite_shared::layout::ExitRecord::read(exit_file) {
+        state.exit_code = Some(record.exit_code);
+    }
+    state.mark_stop();
 }
 
 /// Archive the active exit file as `exit.previous`, freeing the canonical
@@ -120,6 +148,9 @@ pub struct RuntimeImpl {
     /// Runtime-wide metrics (AtomicU64 based, lock-free)
     pub(crate) runtime_metrics: RuntimeMetricsStorage,
 
+    /// Immutable release-candidate capability opt-ins for this runtime.
+    pub(crate) experimental_features: ExperimentalFeatures,
+
     /// Base disk manager for clone base lifecycle and ref-count tracking.
     pub(crate) base_disk_mgr: crate::disk::BaseDiskManager,
 
@@ -172,6 +203,13 @@ impl RuntimeImpl {
     ///
     /// Performs all initialization: filesystem setup, locks, managers, and box recovery.
     pub fn new(options: BoxliteOptions) -> BoxliteResult<SharedRuntimeImpl> {
+        Self::new_with_experimental_features(options, ExperimentalFeatures::default())
+    }
+
+    pub(crate) fn new_with_experimental_features(
+        options: BoxliteOptions,
+        experimental_features: ExperimentalFeatures,
+    ) -> BoxliteResult<SharedRuntimeImpl> {
         let _sys = crate::system_check::SystemCheck::run()?;
 
         // Validate Early: Check preconditions before expensive work
@@ -279,6 +317,7 @@ impl RuntimeImpl {
             guest_rootfs_mgr,
             guest_rootfs: Arc::new(OnceCell::new()),
             runtime_metrics: RuntimeMetricsStorage::new(),
+            experimental_features,
             base_disk_mgr,
             snapshot_mgr,
             lock_manager,
@@ -781,14 +820,26 @@ impl RuntimeImpl {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
 
-            state.mark_stop();
-            let _ = self.box_manager.save_box(&config.id, &state);
-            let pid_file = self
+            let box_layout = self
                 .layout
                 .box_layout(config.id.as_str(), false)
-                .expect("box_layout is infallible")
-                .pid_file_path();
-            let _ = std::fs::remove_file(&pid_file);
+                .expect("box_layout is infallible");
+
+            // The third way a box dies, and it must report the exit code like the
+            // other two. `stop()` records it, and so does the live watcher — but
+            // this path is the one a *non-detached* box takes when its runtime
+            // goes away, which is every `boxlite create` + `boxlite start`. Left
+            // as a bare `mark_stop()`, it marked the box Stopped with no code, and
+            // `recover_boxes` could not backfill it afterwards (its branch only
+            // fires on a box still marked Running). `inspect .State.ExitCode`
+            // answered 0 for a command that exited 23.
+            record_main_command_exit(
+                &mut state,
+                &box_layout.container_exit_file(config.container.id.as_str()),
+            );
+            let _ = self.box_manager.save_box(&config.id, &state);
+
+            let _ = std::fs::remove_file(box_layout.pid_file_path());
         }
     }
 
@@ -829,7 +880,7 @@ impl RuntimeImpl {
     /// Remove a box from the runtime (internal implementation).
     ///
     /// This is the internal implementation called by both `BoxliteRuntime::remove()`
-    /// and `LiteBox::stop()` (when `auto_remove=true`).
+    /// and `LiteBox::stop()` when its removal policy is enabled.
     ///
     /// Handles both persisted boxes (in database) and in-memory-only boxes
     /// (created but not yet started).
@@ -1144,7 +1195,7 @@ impl RuntimeImpl {
         let persisted = self.box_manager.all_boxes(true)?;
 
         // Phase 1: Clean up boxes that shouldn't persist
-        // - auto_remove=true boxes: these are ephemeral and shouldn't survive restarts
+        // - remove-on-stop boxes (auto_delete): ephemeral, shouldn't survive restarts
         // - Orphaned active boxes: was Running but directory is missing (crashed mid-operation)
         //
         // Note: We don't remove Configured or Stopped boxes without directories because:
@@ -1153,10 +1204,10 @@ impl RuntimeImpl {
         // - Only Running boxes must have a directory
         let mut boxes_to_remove = Vec::new();
         for (config, state) in &persisted {
-            let should_remove = if config.options.auto_remove {
+            let should_remove = if config.options.removes_on_stop() {
                 tracing::info!(
                     box_id = %config.id,
-                    "Removing auto_remove=true box during recovery"
+                    "Removing ephemeral (remove-on-stop) box during recovery"
                 );
                 true
             } else if state.status.is_active() && !config.box_home.exists() {
@@ -1208,7 +1259,7 @@ impl RuntimeImpl {
 
         if !boxes_to_remove.is_empty() {
             tracing::info!(
-                "Cleaned up {} boxes during recovery (auto_remove or orphaned)",
+                "Cleaned up {} boxes during recovery (remove-on-stop or orphaned)",
                 boxes_to_remove.len()
             );
         }
@@ -1329,9 +1380,21 @@ impl RuntimeImpl {
                             "Box crashed; marked Failed with crash report"
                         );
                     } else if state.status == BoxStatus::Running {
-                        state.mark_stop();
+                        // A Running box whose shim is gone: the guest powered
+                        // off because its main command exited (docker
+                        // semantics), and no live watcher was around to see it
+                        // — this process was not running at the time. Take the
+                        // exit code from the record the guest left behind.
+                        //
+                        // The container id lives in the box *config*
+                        // (BoxState.container_id is never persisted).
+                        record_main_command_exit(
+                            &mut state,
+                            &box_layout.container_exit_file(config.container.id.as_str()),
+                        );
                         tracing::warn!(
                             box_id = %box_id,
+                            exit_code = ?state.exit_code,
                             "Shim not verifiable (file missing, process dead, or PID reuse); \
                              marked Stopped"
                         );
@@ -1569,9 +1632,39 @@ impl std::fmt::Debug for RuntimeImpl {
 /// Trait methods use `&self`. This newtype holds the Arc as a field to bridge the gap.
 pub(crate) struct LocalRuntime(pub(crate) SharedRuntimeImpl);
 
+fn reject_local_lifecycle_policy(options: &BoxOptions) -> BoxliteResult<()> {
+    // Local runtimes support auto_delete as a remove-on-stop policy, but AutoPause
+    // needs a sweeper that the local runtime does not have, so it stays REST-only.
+    if options.auto_pause.is_some_and(|seconds| seconds > 0) {
+        return Err(BoxliteError::Unsupported(
+            "AutoPause is only supported by REST runtimes".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn sanitize_local_options(
+    features: &ExperimentalFeatures,
+    options: BoxOptions,
+) -> BoxliteResult<BoxOptions> {
+    features.require_for_options(&options)?;
+    tokio::task::spawn_blocking(move || {
+        options.sanitize()?;
+        Ok(options)
+    })
+    .await
+    .map_err(|error| {
+        BoxliteError::Internal(format!(
+            "failed to join box option validation task: {error}"
+        ))
+    })?
+}
+
 #[async_trait::async_trait]
 impl super::backend::RuntimeBackend for LocalRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
+        reject_local_lifecycle_policy(&options)?;
+        let options = sanitize_local_options(&self.0.experimental_features, options).await?;
         self.0.create(options, name).await
     }
 
@@ -1580,6 +1673,8 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        reject_local_lifecycle_policy(&options)?;
+        let options = sanitize_local_options(&self.0.experimental_features, options).await?;
         self.0.get_or_create(options, name).await
     }
 
@@ -1646,6 +1741,34 @@ impl super::images::ImageBackend for LocalRuntime {
     }
 }
 
+// Named-volume operations (separate from RuntimeBackend). The concrete backend
+// is not yet implemented: the local filesystem store was removed in favor of a
+// future managed volume backend, so every operation returns `Unsupported`.
+#[async_trait::async_trait]
+impl super::volumes::VolumeBackend for LocalRuntime {
+    async fn create_volume(&self) -> BoxliteResult<crate::volumes::VolumeInfo> {
+        Err(volumes_unsupported())
+    }
+
+    async fn list_volumes(&self) -> BoxliteResult<Vec<crate::volumes::VolumeInfo>> {
+        Err(volumes_unsupported())
+    }
+
+    async fn get_volume(&self, _id: &str) -> BoxliteResult<crate::volumes::VolumeInfo> {
+        Err(volumes_unsupported())
+    }
+
+    async fn remove_volume(&self, _id: &str, _force: bool) -> BoxliteResult<()> {
+        Err(volumes_unsupported())
+    }
+}
+
+/// Error returned by every named-volume operation until a volume backend is
+/// wired up.
+fn volumes_unsupported() -> BoxliteError {
+    BoxliteError::Unsupported("named volumes are not supported yet".to_string())
+}
+
 // ============================================================================
 // Drop — Safety net for non-default runtimes
 // ============================================================================
@@ -1668,12 +1791,56 @@ impl Drop for RuntimeImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::experimental::custom_kernel::KernelOptions;
     use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
     use crate::runtime::backend::RuntimeBackend;
     use crate::runtime::images::ImageBackend;
     use crate::runtime::options::RootfsSpec;
     use tempfile::TempDir;
 
+    #[test]
+    fn local_runtime_rejects_explicit_lifecycle_policy() {
+        let mut options = BoxOptions::default();
+        assert!(reject_local_lifecycle_policy(&options).is_ok());
+
+        options.auto_pause = Some(0);
+        assert!(reject_local_lifecycle_policy(&options).is_ok());
+
+        options.auto_pause = Some(1);
+        assert!(matches!(
+            reject_local_lifecycle_policy(&options),
+            Err(BoxliteError::Unsupported(_))
+        ));
+        options.auto_pause = None;
+        options.auto_delete = Some(3600);
+        assert!(reject_local_lifecycle_policy(&options).is_ok());
+    }
+
+    #[tokio::test]
+    async fn local_option_validation_uses_injected_features() {
+        let mut options = BoxOptions::default();
+        options.advanced.kernel = Some(KernelOptions::new("/definitely/missing/vmlinux"));
+
+        let disabled_error =
+            sanitize_local_options(&ExperimentalFeatures::default(), options.clone())
+                .await
+                .expect_err("custom kernel must be disabled by default");
+        assert!(
+            disabled_error
+                .to_string()
+                .contains("BOXLITE_EXPERIMENTAL=custom-kernel")
+        );
+
+        let enabled = ExperimentalFeatures::parse("custom-kernel").unwrap();
+        let validation_error = sanitize_local_options(&enabled, options)
+            .await
+            .expect_err("enabled feature should continue to kernel validation");
+        assert!(
+            validation_error
+                .to_string()
+                .contains("custom kernel must be a regular file")
+        );
+    }
     /// Create a RuntimeImpl with isolated temp directory.
     fn create_test_runtime() -> (SharedRuntimeImpl, TempDir) {
         let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
@@ -1697,7 +1864,7 @@ mod tests {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 detach,
-                auto_remove: false,
+                auto_delete: Some(0),
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
@@ -1751,7 +1918,7 @@ mod tests {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 detach,
-                auto_remove: false,
+                auto_delete: Some(0),
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
@@ -2488,12 +2655,17 @@ mod tests {
             .expect("Failed to get box")
             .expect("Box should exist");
 
+        // Refused by the status gate on `exec` (BoxStatus::can_exec), before any
+        // attempt to boot a VM. It used to be refused a layer deeper, by the
+        // init pipeline's plan lookup ("Cannot initialize box in Unknown
+        // state"); the gate now catches it first, because a lazy boot is no
+        // longer a harmless thing to attempt — it runs the box's main command.
         let result = litebox.exec(BoxCommand::new("true")).await;
         match result {
             Err(BoxliteError::InvalidState(msg)) => {
                 assert!(
-                    msg.contains("Cannot initialize box"),
-                    "Expected initialization state error, got: {msg}"
+                    msg.contains("unknown"),
+                    "the refusal must name the state that caused it, got: {msg}"
                 );
             }
             Err(other) => panic!("Expected InvalidState error, got: {other}"),

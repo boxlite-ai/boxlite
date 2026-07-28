@@ -18,7 +18,7 @@ export class PortPreviewUrlDto {
 
   @ApiProperty({
     description: 'Preview url',
-    example: 'https://{port}-{boxId}.{proxyDomain}',
+    example: 'https://{port}-{encodedBoxId}.{proxyDomain}',
   })
   @IsString()
   url: string

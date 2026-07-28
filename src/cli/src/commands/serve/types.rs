@@ -33,10 +33,20 @@ pub(super) struct CreateBoxRequest {
     pub cmd: Option<Vec<String>>,
     #[serde(default)]
     pub user: Option<String>,
+    /// Run the box's main command on a terminal (docker `run -t`). Belongs on
+    /// *create* because the main command is the container's init: whether it
+    /// gets a PTY is fixed when the container is built, and no later attach can
+    /// add one.
+    #[serde(default)]
+    pub tty: Option<bool>,
     #[serde(default)]
     pub network: Option<NetworkSpec>,
     #[serde(default)]
-    pub auto_remove: Option<bool>,
+    pub auto_pause: Option<u32>,
+    #[serde(default)]
+    pub auto_delete: Option<u32>,
+    #[serde(default)]
+    pub auto_resume: Option<bool>,
     #[serde(default)]
     pub detach: Option<bool>,
     // `security` / `security_settings` are intentionally absent from
@@ -69,11 +79,35 @@ pub(super) struct BoxResponse {
     pub cpus: u8,
     pub memory_mib: u32,
     pub labels: HashMap<String, String>,
+    pub auto_pause: u32,
+    pub auto_delete: u32,
+    pub auto_resume: bool,
+    /// The status the box's main command exited with, once it has. `None`
+    /// while it is still running — a remote `inspect` must be able to tell
+    /// "not finished" apart from "finished with 0".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Serialize)]
 pub(super) struct ListBoxesResponse {
     pub boxes: Vec<BoxResponse>,
+}
+
+// ============================================================================
+// Named volume types (`/v1/volumes`)
+// ============================================================================
+
+#[derive(Serialize)]
+pub(super) struct VolumeResponse {
+    pub id: String,
+    pub created_at: String,
+    pub size_bytes: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub(super) struct ListVolumesResponse {
+    pub volumes: Vec<VolumeResponse>,
 }
 
 // ============================================================================

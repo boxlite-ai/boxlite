@@ -11,6 +11,7 @@ use tracing_subscriber::EnvFilter;
 static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
 pub mod event_listener;
+pub mod experimental;
 pub mod jailer;
 pub mod litebox;
 pub mod lock;
@@ -32,7 +33,7 @@ mod rest;
 mod rootfs;
 mod volumes;
 
-pub use litebox::LiteBox;
+pub use litebox::{BoxConnection, BoxTunnel, LiteBox};
 pub use portal::GuestSession;
 pub use runtime::{AuthHandle, BoxliteRuntime, ImageHandle, Principal};
 
@@ -58,7 +59,7 @@ pub use runtime::options::{
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use runtime::id::{BaseDiskID, BaseDiskIDMint, BoxID, BoxIDMint};
 pub use runtime::types::ContainerID;
-pub use runtime::types::{BoxInfo, BoxState, BoxStateInfo, BoxStatus};
+pub use runtime::types::{BoxInfo, BoxLifecyclePolicy, BoxState, BoxStateInfo, BoxStatus};
 
 #[cfg(feature = "rest")]
 pub use rest::credential::{AccessToken, ApiKeyCredential, Credential};

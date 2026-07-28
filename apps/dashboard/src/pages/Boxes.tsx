@@ -24,7 +24,7 @@ import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
 import { useApi } from '@/hooks/useApi'
-import { deleteBoxViaBoxApi, startBoxViaBoxApi, stopBoxViaBoxApi } from '@/lib/cloudBox'
+import { deleteBoxViaBoxApi, formatLifecycleSeconds, startBoxViaBoxApi, stopBoxViaBoxApi } from '@/lib/cloudBox'
 import { useConfig } from '@/hooks/useConfig'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import {
@@ -47,7 +47,7 @@ import {
   type OnboardingProgress,
 } from '@/lib/onboarding-progress'
 import { getBoxRouteId } from '@/lib/box-identity'
-import { formatDuration, pluralize } from '@/lib/utils'
+import { pluralize } from '@/lib/utils'
 import {
   OrganizationRolePermissionsEnum,
   OrganizationUserRoleEnum,
@@ -439,9 +439,9 @@ const Boxes: React.FC = () => {
       await stopBoxViaBoxApi(api, selectedOrganization.id, id)
       toast.success(
         `Stopping box with ID: ${id}`,
-        boxToStop?.autoDeleteInterval !== undefined && boxToStop.autoDeleteInterval >= 0
+        boxToStop?.autoDelete !== undefined && boxToStop.autoDelete > 0
           ? {
-              description: `This box will be deleted automatically ${boxToStop.autoDeleteInterval === 0 ? 'upon stopping' : `in ${formatDuration(boxToStop.autoDeleteInterval)} unless it is started again`}.`,
+              description: `This box will be deleted automatically in ${formatLifecycleSeconds(boxToStop.autoDelete)} unless it is started again.`,
             }
           : undefined,
       )

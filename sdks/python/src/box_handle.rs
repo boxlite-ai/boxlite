@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::exec::PyExecution;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyBoxMetrics;
+use crate::network::PyNetworkHandle;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions};
 use crate::snapshots::PySnapshotHandle;
 use crate::util::map_err;
@@ -40,6 +41,14 @@ impl PyBox {
         }
     }
 
+    /// Get the network handle for this box.
+    #[getter]
+    fn network(&self) -> PyNetworkHandle {
+        PyNetworkHandle {
+            handle: Arc::clone(&self.handle),
+        }
+    }
+
     #[pyo3(signature = (command, args=None, env=None, tty=false, user=None, timeout_secs=None, cwd=None))]
     #[allow(clippy::too_many_arguments)]
     fn exec<'a>(
@@ -72,7 +81,7 @@ impl PyBox {
                 cmd = cmd.user(user);
             }
             if let Some(secs) = timeout_secs {
-                cmd = cmd.timeout(std::time::Duration::from_secs_f64(secs));
+                cmd = cmd.timeout_seconds(secs).map_err(map_err)?;
             }
             if let Some(cwd) = cwd {
                 cmd = cmd.working_dir(cwd);
@@ -86,14 +95,25 @@ impl PyBox {
         })
     }
 
-    /// Reattach to a running execution by id. Returns a fresh
-    /// `Execution` wired to a new WebSocket; the caller discards any
-    /// previous handle for the same id. Raises if the server reports
-    /// the session is no longer attachable.
-    fn attach<'a>(&self, py: Python<'a>, execution_id: String) -> PyResult<Bound<'a, PyAny>> {
+    /// Attach to a session in the box (docker-py shape):
+    /// - no argument → the box's main command session (`run`'s COMMAND
+    ///   runs as the container init; this follows it).
+    /// - with `execution_id` → reattach to that exec session on a fresh
+    ///   WebSocket; the caller discards any previous handle for the same
+    ///   id. Raises if the server reports the session is no longer
+    ///   attachable.
+    #[pyo3(signature = (execution_id=None))]
+    fn attach<'a>(
+        &self,
+        py: Python<'a>,
+        execution_id: Option<String>,
+    ) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let execution = handle.attach(&execution_id).await.map_err(map_err)?;
+            let execution = handle
+                .attach(execution_id.as_deref())
+                .await
+                .map_err(map_err)?;
             Ok(PyExecution {
                 execution: Arc::new(execution),
             })

@@ -813,23 +813,29 @@ fn test_run_python_import_stdlib() {
 fn test_run_signal_exit_code_sigterm() {
     let mut ctx = common::boxlite();
 
-    // Sends SIGTERM to itself using kill
-    // SIGTERM = 15
+    // The command is the container's init (PID 1 of the pid namespace).
+    // The kernel drops signals sent to a pid-ns init from inside its own
+    // namespace unless a handler is installed — including self-signals —
+    // so `kill -TERM $$` is a no-op and the shell exits 0. Verified
+    // docker-parity: `podman run --rm alpine sh -c 'kill -TERM $$'` → 0.
+    // (The old 143 assertion reflected the pre-init-semantics tenant
+    // behavior, where the command was an ordinary process.)
     ctx.cmd
         .args(["run", "--rm", "alpine:latest", "sh", "-c", "kill -TERM $$"]);
 
-    ctx.cmd.assert().code(143);
+    ctx.cmd.assert().code(0);
 }
 
 #[test]
 fn test_run_signal_exit_code_sigkill() {
     let mut ctx = common::boxlite();
 
-    // SIGKILL = 9
+    // Same pid-ns-init signal protection as the SIGTERM case above:
+    // self-SIGKILL of PID 1 is dropped by the kernel; podman-verified → 0.
     ctx.cmd
         .args(["run", "--rm", "alpine:latest", "sh", "-c", "kill -KILL $$"]);
 
-    ctx.cmd.assert().code(137);
+    ctx.cmd.assert().code(0);
 }
 
 #[test]

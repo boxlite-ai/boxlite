@@ -1224,11 +1224,12 @@ test('documents the Billing CI timeout, concurrency, and trigger contract', asyn
   const job = workflow.jobs?.['e2e-tests']
 
   assert.equal(workflow.concurrency?.['cancel-in-progress'], false)
-  assert.equal(workflow.concurrency?.queue, 'max')
+  assert.equal('queue' in (workflow.concurrency ?? {}), false)
   assert.equal(job?.['timeout-minutes'], 70)
   assert.match(workflowSource, /70-min timeout/)
-  assert.match(workflowSource, /in-progress runs continue/)
-  assert.match(runbook, /queued runs wait[^.]*in-progress run continues/s)
+  assert.match(workflowSource, /in-progress run instead of cancelling it/)
+  assert.match(workflowSource, /newest pending run[^.]*intermediate queued pushes are superseded/s)
+  assert.match(runbook, /newest pending run waits[^.]*intermediate\s+pending runs are superseded/s)
   assert.match(runbook, /70-minute timeout/)
   assert.match(runbook, /make test:integration/)
   assert.match(runbook, /make test:e2e:billing-golden/)

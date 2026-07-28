@@ -28,6 +28,7 @@ export interface CreateBoxDTO {
     'fromVolumeId'?: string;
     'gpuQuota'?: number;
     'id': string;
+    'image': string;
     'memoryQuota'?: number;
     'metadata'?: { [key: string]: string; };
     'networkAllowList'?: string;
@@ -41,7 +42,6 @@ export interface CreateBoxDTO {
     'regionId'?: string;
     'registry'?: RegistryDTO;
     'skipStart'?: boolean;
-    'image': string;
     'storageQuota'?: number;
     'volumes'?: Array<DtoVolumeDTO>;
 }

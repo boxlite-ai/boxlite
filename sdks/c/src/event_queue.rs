@@ -14,6 +14,7 @@ use boxlite::BoxliteError;
 use crate::images::{CImageInfoList, CImagePullResult};
 use crate::info::{CBoxInfo, CBoxInfoList};
 use crate::metrics::{CBoxMetrics, CRuntimeMetrics};
+use crate::volumes::{CVolumeInfo, CVolumeInfoList};
 
 /// Maximum number of buffered events before producer tasks yield.
 pub const QUEUE_CAPACITY: usize = 4096;
@@ -117,6 +118,34 @@ pub type CBoxImageListCb =
     Option<extern "C" fn(*mut CImageInfoList, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxImageListFn =
     extern "C" fn(*mut CImageInfoList, *mut crate::CBoxliteError, *mut c_void);
+
+/// Volume create completion.
+///
+/// On success the callback takes ownership of the non-null metadata pointer and
+/// must release it with `boxlite_free_volume_info`. On failure the pointer is
+/// null. The error pointer is borrowed for callback dispatch only.
+pub type CBoxVolumeCreateCb =
+    Option<extern "C" fn(*mut CVolumeInfo, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxVolumeCreateFn =
+    extern "C" fn(*mut CVolumeInfo, *mut crate::CBoxliteError, *mut c_void);
+
+/// Volume get completion with the same ownership contract as volume create.
+pub type CBoxVolumeGetCb =
+    Option<extern "C" fn(*mut CVolumeInfo, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxVolumeGetFn =
+    extern "C" fn(*mut CVolumeInfo, *mut crate::CBoxliteError, *mut c_void);
+
+/// Volume list completion. A successful callback owns the list and must release
+/// it with `boxlite_free_volume_info_list`; the error pointer is callback-scoped.
+pub type CBoxVolumeListCb =
+    Option<extern "C" fn(*mut CVolumeInfoList, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxVolumeListFn =
+    extern "C" fn(*mut CVolumeInfoList, *mut crate::CBoxliteError, *mut c_void);
+
+/// Volume remove completion. The error pointer is borrowed for callback dispatch
+/// only and no result allocation is produced.
+pub type CBoxVolumeRemoveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxVolumeRemoveFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
 /// Copy (into / out of) completion.
 pub type CBoxCopyCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
@@ -318,6 +347,26 @@ pub enum RuntimeEvent {
         cb: CBoxImageListFn,
         user_data: usize,
         result: Result<OwnedFfiPtr<CImageInfoList>, BoxliteError>,
+    },
+    VolumeCreate {
+        cb: CBoxVolumeCreateFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CVolumeInfo>, BoxliteError>,
+    },
+    VolumeGet {
+        cb: CBoxVolumeGetFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CVolumeInfo>, BoxliteError>,
+    },
+    VolumeList {
+        cb: CBoxVolumeListFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CVolumeInfoList>, BoxliteError>,
+    },
+    VolumeRemove {
+        cb: CBoxVolumeRemoveFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
     },
     Copy {
         cb: CBoxCopyFn,
@@ -1137,6 +1186,9 @@ mod owned_ffi_ptr_nested_leak_tests {
             cpus: 1,
             memory_mib: 256,
             created_at: 0,
+            auto_pause: 900,
+            auto_delete: 0,
+            auto_resume: 1,
         });
 
         let owned = OwnedFfiPtr::new_with(payload, crate::info::free_box_info_ptr);
@@ -1204,6 +1256,9 @@ mod owned_ffi_ptr_nested_leak_tests {
             cpus: 2,
             memory_mib: 512,
             created_at: 0,
+            auto_pause: 900,
+            auto_delete: 0,
+            auto_resume: 1,
         }];
         let items_ptr = items_vec.as_mut_ptr();
         let items_len = items_vec.len();

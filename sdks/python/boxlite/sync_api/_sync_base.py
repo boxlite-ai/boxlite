@@ -8,7 +8,8 @@ execute async operations using greenlet fiber switching.
 import asyncio
 import inspect
 import traceback
-from typing import Any, Awaitable, Coroutine, TypeVar, Union
+from collections.abc import Awaitable, Coroutine
+from typing import Any, TypeVar
 
 from greenlet import greenlet
 
@@ -54,7 +55,7 @@ class SyncBase:
 
     def _sync(
         self,
-        coro: Union[Coroutine[Any, Any, T], Awaitable[T]],
+        coro: Coroutine[Any, Any, T] | Awaitable[T],
     ) -> T:
         """
         Run async coroutine synchronously using greenlet fiber switching.
@@ -94,8 +95,8 @@ class SyncBase:
         task: asyncio.Task = asyncio.ensure_future(coro, loop=self._loop)
 
         # 3. Attach debug info for better stack traces
-        setattr(task, "__boxlite_stack__", inspect.stack(0))
-        setattr(task, "__boxlite_stack_trace__", traceback.extract_stack(limit=10))
+        task.__boxlite_stack__ = inspect.stack(0)
+        task.__boxlite_stack_trace__ = traceback.extract_stack(limit=10)
 
         # 4. When task completes, switch back to us
         task.add_done_callback(lambda _: g_self.switch())
@@ -120,7 +121,7 @@ class SyncContextManager(SyncBase):
     Subclasses should override close() for cleanup logic.
     """
 
-    def __enter__(self) -> "SyncContextManager":
+    def __enter__(self) -> "SyncContextManager":  # noqa: PYI034 - typing.Self needs 3.11+; project supports 3.10+
         """Enter context manager."""
         return self
 
@@ -134,4 +135,3 @@ class SyncContextManager(SyncBase):
 
         Override in subclasses to implement cleanup logic.
         """
-        pass

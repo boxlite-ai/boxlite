@@ -550,6 +550,15 @@ func TestWithAutoRemove(t *testing.T) {
 	}
 }
 
+func TestBuildCOptionsAllowsAutoRemoveAndAutoDelete(t *testing.T) {
+	cfg := &boxConfig{}
+	WithAutoRemove(false)(cfg)
+	WithAutoDeleteInterval(60)(cfg)
+	if err := buildAndFreeCOptions("alpine:latest", cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestWithDetach(t *testing.T) {
 	cfg := &boxConfig{}
 	WithDetach(true)(cfg)

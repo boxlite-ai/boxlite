@@ -115,7 +115,7 @@ async fn test_rest_box_exists() {
 async fn test_rest_start_stop_box() {
     let rt = rest_runtime();
     let opts = BoxOptions {
-        auto_remove: false, // Keep box after stop so we can inspect status
+        auto_delete: Some(0), // Keep box after stop so we can inspect status
         ..Default::default()
     };
 
@@ -242,7 +242,7 @@ async fn test_rest_not_found() {
 async fn test_rest_snapshot_lifecycle() {
     let rt = rest_runtime();
     let opts = BoxOptions {
-        auto_remove: false,
+        auto_delete: Some(0),
         ..Default::default()
     };
 
@@ -302,7 +302,7 @@ async fn test_rest_snapshot_lifecycle() {
 async fn test_rest_clone_from_snapshot() {
     let rt = rest_runtime();
     let opts = BoxOptions {
-        auto_remove: false,
+        auto_delete: Some(0),
         ..Default::default()
     };
 
@@ -336,7 +336,7 @@ async fn test_rest_clone_from_snapshot() {
 async fn test_rest_export_box() {
     let rt = rest_runtime();
     let opts = BoxOptions {
-        auto_remove: false,
+        auto_delete: Some(0),
         ..Default::default()
     };
 

@@ -193,8 +193,21 @@ pub struct JsBoxOptions {
     /// Port mappings as array of port specs
     pub ports: Option<Vec<JsPortSpec>>,
 
-    /// Automatically remove box when stopped (default: false)
+    /// Automatically remove box when stopped (default: false).
+    /// @deprecated Use autoDelete.
     pub auto_remove: Option<bool>,
+
+    /// Idle time in seconds before AutoPause; 0 disables AutoPause.
+    #[napi(js_name = "autoPause")]
+    pub auto_pause: Option<u32>,
+
+    /// Time in seconds after stop before AutoDelete; 0 disables AutoDelete.
+    #[napi(js_name = "autoDelete")]
+    pub auto_delete: Option<u32>,
+
+    /// Whether the box automatically resumes when accessed after AutoPause.
+    #[napi(js_name = "autoResume")]
+    pub auto_resume: Option<bool>,
 
     /// Run box in detached mode (survives parent process exit, default: false)
     pub detach: Option<bool>,
@@ -343,7 +356,10 @@ impl TryFrom<JsNetworkSpec> for NetworkSpec {
 impl TryFrom<JsBoxOptions> for BoxOptions {
     type Error = boxlite_shared::errors::BoxliteError;
 
+    #[allow(deprecated)]
     fn try_from(js_opts: JsBoxOptions) -> Result<Self, Self::Error> {
+        let auto_remove = js_opts.auto_remove.unwrap_or(false);
+        let auto_delete = js_opts.auto_delete;
         // Convert volumes
         let volumes = js_opts
             .volumes
@@ -416,16 +432,23 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             volumes,
             network,
             ports,
+            auto_remove,
             advanced: AdvancedBoxOptions {
                 security,
                 health_check,
                 ..Default::default()
             },
-            auto_remove: js_opts.auto_remove.unwrap_or(false),
+            auto_pause: js_opts.auto_pause,
+            auto_delete,
+            auto_resume: js_opts.auto_resume,
             detach: js_opts.detach.unwrap_or(false),
             entrypoint: js_opts.entrypoint,
             cmd: js_opts.cmd,
             user: js_opts.user,
+            // Not surfaced on JsBoxOptions yet: a TTY is only useful to a
+            // client that attaches to the main command, which the SDKs cannot
+            // do until they grow `attach()` (see sdk-run-semantics-api.md).
+            tty: false,
             secrets,
         })
     }
@@ -686,6 +709,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn box_options_from_js_allow_net() {
         let js = JsBoxOptions {
             image: Some("alpine:latest".into()),
@@ -702,6 +726,9 @@ mod tests {
             }),
             ports: None,
             auto_remove: None,
+            auto_pause: None,
+            auto_delete: None,
+            auto_resume: None,
             detach: None,
             entrypoint: None,
             cmd: None,
@@ -711,7 +738,16 @@ mod tests {
             secrets: None,
         };
 
+        let mut both = js.clone();
+        both.auto_remove = Some(false);
+        both.auto_delete = Some(60);
+        let both = BoxOptions::try_from(both).unwrap();
+        assert!(!both.auto_remove);
+        assert_eq!(both.auto_delete, Some(60));
+
         let opts = BoxOptions::try_from(js).unwrap();
+        assert!(!opts.auto_remove);
+        assert_eq!(opts.auto_delete, None);
         match opts.network {
             NetworkSpec::Enabled { allow_net } => {
                 assert_eq!(allow_net, vec!["example.com", "*.openai.com"]);
@@ -734,6 +770,9 @@ mod tests {
             network: None,
             ports: None,
             auto_remove: None,
+            auto_pause: None,
+            auto_delete: None,
+            auto_resume: None,
             detach: None,
             entrypoint: None,
             cmd: None,

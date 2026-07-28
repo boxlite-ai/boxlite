@@ -10,6 +10,7 @@ use crate::info::JsBoxInfo;
 use crate::metrics::JsRuntimeMetrics;
 use crate::options::{JsBoxOptions, JsBoxliteRestOptions, JsOptions, js_options_into_core};
 use crate::util::map_err;
+use crate::volumes::JsVolumeHandle;
 
 /// BoxLite runtime instance.
 ///
@@ -285,6 +286,15 @@ impl JsBoxlite {
     pub fn images(&self) -> Result<JsImageHandle> {
         let handle = self.runtime.images().map_err(map_err)?;
         Ok(JsImageHandle {
+            handle: Arc::new(handle),
+        })
+    }
+
+    /// Get the runtime volume handle.
+    #[napi(getter)]
+    pub fn volumes(&self) -> Result<JsVolumeHandle> {
+        let handle = self.runtime.volumes().map_err(map_err)?;
+        Ok(JsVolumeHandle {
             handle: Arc::new(handle),
         })
     }

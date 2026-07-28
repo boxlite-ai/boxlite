@@ -1,7 +1,10 @@
 //! Task: Guest initialization.
 //!
-//! Sends init configuration to guest and starts container.
-//! Builds guest volumes from volume manager, uses rootfs config from vmm_config stage.
+//! Sends init configuration to the guest and *creates* the container. Running
+//! its init is a separate, host-driven step (`Container.Start`), so a client can
+//! attach to the created-but-not-started session first and miss none of its
+//! output. Builds guest volumes from the volume manager, uses rootfs config from
+//! the vmm_config stage.
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::images::ContainerImageConfig;
@@ -32,6 +35,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             container_mounts,
             network_spec,
             ca_cert_pem,
+            tty,
         ) =
             {
                 let mut ctx = ctx.lock().await;
@@ -54,6 +58,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                 })?;
                 let network_spec = ctx.config.options.network.clone();
                 let ca_cert_pem = ctx.ca_cert_pem.clone();
+                let tty = ctx.config.options.tty;
                 (
                     guest_session,
                     container_image_config,
@@ -63,6 +68,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     container_mounts,
                     network_spec,
                     ca_cert_pem,
+                    tty,
                 )
             };
 
@@ -75,6 +81,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             &container_mounts,
             &network_spec,
             ca_cert_pem.as_deref(),
+            tty,
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -93,7 +100,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
     }
 }
 
-/// Initialize guest and start container.
+/// Initialize the guest and create the container (init is *not* run here).
 #[allow(clippy::too_many_arguments)]
 async fn run_guest_init(
     guest_session: GuestSession,
@@ -104,6 +111,7 @@ async fn run_guest_init(
     container_mounts: &[ContainerMount],
     network_spec: &NetworkSpec,
     ca_cert_pem: Option<&str>,
+    tty: bool,
 ) -> BoxliteResult<()> {
     let container_id_str = container_id.as_str();
 
@@ -130,7 +138,8 @@ async fn run_guest_init(
     guest_interface.init(guest_init_config).await?;
     tracing::info!("Guest initialized successfully");
 
-    // Step 2: Container Init (rootfs + container image config + user volume mounts)
+    // Step 2: create the container (rootfs + image config + user mounts). This
+    // does NOT run init — Container.Init only creates.
     tracing::info!("Sending container configuration to guest");
     let mut container_interface = guest_session.container().await?;
     let ca_certs: Vec<String> = ca_cert_pem.into_iter().map(|s| s.to_string()).collect();
@@ -141,9 +150,14 @@ async fn run_guest_init(
             rootfs_init.clone(),
             container_mounts.to_vec(),
             ca_certs,
+            tty,
         )
         .await?;
-    tracing::info!(container_id = %returned_id, "Container initialized");
+    tracing::info!(container_id = %returned_id, "Container created");
+
+    // Running init is deliberately *not* done here. The container is created and
+    // left standing at the gate; the host runs it with `Container.Start` after a
+    // client has attached, so nothing it prints can be missed however fast it is.
 
     Ok(())
 }

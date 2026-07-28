@@ -3,6 +3,7 @@
 //! Type definitions for executing commands in a box.
 //! The actual execution logic is in BoxImpl::exec().
 
+use crate::BoxliteError;
 use crate::runtime::backend::ExecBackend;
 use boxlite_shared::errors::BoxliteResult;
 use futures::Stream;
@@ -79,6 +80,16 @@ impl BoxCommand {
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
+    }
+
+    /// Set execution timeout from API-facing seconds.
+    pub fn timeout_seconds(self, seconds: f64) -> BoxliteResult<Self> {
+        let timeout = Duration::try_from_secs_f64(seconds).map_err(|_| {
+            BoxliteError::InvalidArgument(
+                "timeout_seconds must be a non-negative finite number".to_string(),
+            )
+        })?;
+        Ok(self.timeout(timeout))
     }
 
     /// Set working directory.
@@ -461,6 +472,29 @@ mod tests {
     fn test_box_command_user_whitespace_only_becomes_none() {
         let cmd = BoxCommand::new("id").user("  ");
         assert_eq!(cmd.user, None);
+    }
+
+    #[test]
+    fn timeout_seconds_rejects_negative_and_non_finite_values() {
+        for seconds in [-1.0, f64::NAN, f64::INFINITY] {
+            let err = BoxCommand::new("true")
+                .timeout_seconds(seconds)
+                .expect_err("invalid timeout should fail");
+
+            assert!(
+                matches!(err, BoxliteError::InvalidArgument(ref msg) if msg.contains("timeout_seconds")),
+                "unexpected error for {seconds:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn timeout_seconds_accepts_positive_finite_values() {
+        let cmd = BoxCommand::new("true")
+            .timeout_seconds(1.5)
+            .expect("positive finite timeout should be accepted");
+
+        assert_eq!(cmd.timeout, Some(Duration::from_millis(1500)));
     }
 
     // ─── wait must not block kill ─────────────────────────────────────

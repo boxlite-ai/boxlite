@@ -153,7 +153,7 @@ class SyncSkillBox(SyncSimpleBox):
         self._session_id: str = "default"
         self._setup_complete: bool = False
 
-    def __enter__(self) -> "SyncSkillBox":
+    def __enter__(self) -> "SyncSkillBox":  # noqa: PYI034 - typing.Self needs 3.11+; project supports 3.10+
         """Enter context - validates token and creates/reuses box."""
         if not self._oauth_token:
             raise ValueError(
@@ -383,14 +383,14 @@ class SyncSkillBox(SyncSimpleBox):
         if self._stdin:
             try:
                 self._stdin.close()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - teardown must not raise if the process already died
                 logger.debug("Error closing stdin: %s", e)
             self._stdin = None
 
         if self._process:
             try:
                 self._process.wait()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - teardown must not raise if the process already died
                 logger.debug("Error waiting for process: %s", e)
             self._process = None
 

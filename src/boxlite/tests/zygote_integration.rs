@@ -45,7 +45,7 @@ async fn create_concurrent_box(runtime: &BoxliteRuntime) -> Arc<LiteBox> {
             BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 cpus: Some(2),
-                auto_remove: false,
+                auto_delete: Some(0),
                 ..Default::default()
             },
             None,
@@ -150,6 +150,46 @@ async fn test_zygote_high_concurrency_16() {
     for result in results {
         let (i, exit_code) = result.unwrap().unwrap();
         assert_eq!(exit_code, 0, "task {} should exit 0", i);
+    }
+
+    cleanup_concurrent_box(handle, runtime).await;
+}
+
+/// 16 concurrent execs, each exiting with a DISTINCT code. Beyond the deadlock
+/// guard above, this catches cross-delivery: the guest reaper is pid-keyed, so
+/// every waiter must receive ITS tenant's exit and never another's, even when
+/// many exits are reaped and delivered under contention.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_zygote_concurrent_distinct_exit_codes() {
+    let (home, runtime) = create_test_runtime();
+    let handle = create_concurrent_box(&runtime).await;
+    let box_id = handle.id().to_string();
+
+    let mut tasks = Vec::new();
+    for i in 0..16i32 {
+        let h = handle.clone();
+        tasks.push(tokio::spawn(async move {
+            let code = i + 1; // 1..=16 — all distinct, all below the signal range
+            let execution = h
+                .exec(BoxCommand::new("sh").arg("-c").arg(format!("exit {code}")))
+                .await?;
+            let result = execution.wait().await?;
+            Ok::<(i32, i32), BoxliteError>((code, result.exit_code))
+        }));
+    }
+
+    let outcome =
+        tokio::time::timeout(Duration::from_secs(120), futures::future::join_all(tasks)).await;
+    dump_guest_logs(&home.path, &box_id);
+
+    let results =
+        outcome.expect("TIMEOUT after 120s: 16 concurrent distinct-exit execs — likely deadlock");
+    for result in results {
+        let (want, got) = result.unwrap().unwrap();
+        assert_eq!(
+            got, want,
+            "concurrent exec `exit {want}` returned {got} — exit codes crossed under concurrency"
+        );
     }
 
     cleanup_concurrent_box(handle, runtime).await;
@@ -789,6 +829,55 @@ async fn test_zygote_concurrent_stdin_pipes() {
             stdout
         );
     }
+
+    cleanup_concurrent_box(handle, runtime).await;
+}
+
+// ============================================================================
+// INIT BUILD ROUTING
+// ============================================================================
+
+/// Mechanism proof: box start's init creation routes through the zygote.
+///
+/// The refactor moving the init build into the zygote is intentionally
+/// behavior-identical, so its honest check is that the path is actually taken:
+/// the zygote prints a marker to the guest console (captured in the box's
+/// logs/console.log) when it builds an init. A started box without the marker means init
+/// creation silently reverted to an in-guest ContainerBuilder call — the
+/// clone3-in-threaded-musl hazard this routing exists to prevent.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_init_build_routes_through_zygote() {
+    const MARKER: &str = "[zygote] init build: container_id=";
+
+    let (home, runtime) = create_test_runtime();
+    let handle = create_concurrent_box(&runtime).await;
+    let box_id = handle.id().to_string();
+
+    // The marker was printed during box start, before the warmup exec that
+    // create_concurrent_box already ran; poll briefly for console flush lag.
+    // The guest's serial console lands in logs/console.log
+    // (layout::console_output_path), not in shim.stderr.
+    let console_log = home
+        .path
+        .join("boxes")
+        .join(&box_id)
+        .join("logs")
+        .join("console.log");
+    let mut console = String::new();
+    for _ in 0..50 {
+        console = std::fs::read_to_string(&console_log).unwrap_or_default();
+        if console.contains(MARKER) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        console.contains(MARKER),
+        "guest console has no zygote init-build marker — init creation \
+         bypassed the zygote?\nconsole ({}):\n{}",
+        console_log.display(),
+        console
+    );
 
     cleanup_concurrent_box(handle, runtime).await;
 }

@@ -40,6 +40,37 @@ describe('CreateBoxDto resource minimums', () => {
   })
 })
 
+describe('CreateBoxDto lifecycle policy', () => {
+  it('accepts second-based lifecycle fields', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, { auto_pause: 900, auto_delete: 604800 }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('accepts the auto-resume switch', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { auto_resume: false }))
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('rejects a non-boolean auto_resume', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { auto_resume: 'false' }))
+
+    expect(errors.find((error) => error.property === 'auto_resume')?.constraints).toHaveProperty('isBoolean')
+  })
+
+  it.each([
+    ['auto_pause', -1],
+    ['auto_delete', -2],
+  ])('rejects invalid %s values', async (field, value) => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { [field]: value }))
+
+    expect(errors.find((error) => error.property === field)?.constraints).toHaveProperty('min')
+  })
+})
+
 describe('CreateBoxDto network validation', () => {
   it('accepts supported allow_net entry types', async () => {
     const errors = await validate(

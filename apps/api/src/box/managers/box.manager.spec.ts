@@ -27,6 +27,7 @@ describe('BoxManager state lock ownership', () => {
     const manager = new BoxManager(
       boxRepository as never,
       {} as never,
+      {} as never,
       redisLockProvider as never,
       {} as never,
       {} as never,
@@ -60,6 +61,7 @@ describe('BoxManager state lock ownership', () => {
     const manager = new BoxManager(
       boxRepository as never,
       {} as never,
+      {} as never,
       redisLockProvider as never,
       { run: jest.fn().mockRejectedValue(new Error('old request failed')) } as never,
       {} as never,
@@ -91,6 +93,7 @@ describe('BoxManager state lock ownership', () => {
     }
     const manager = new BoxManager(
       boxRepository as never,
+      {} as never,
       {} as never,
       redisLockProvider as never,
       { run: jest.fn().mockRejectedValue(new Error('owned request failed')) } as never,
@@ -130,6 +133,7 @@ describe('BoxManager state lock ownership', () => {
     }
     const manager = new BoxManager(
       boxRepository as never,
+      {} as never,
       {} as never,
       redisLockProvider as never,
       { run: jest.fn().mockRejectedValue(new Error('owned request failed')) } as never,

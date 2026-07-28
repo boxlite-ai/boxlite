@@ -6,11 +6,13 @@ mod exec;
 mod images;
 mod info;
 mod metrics;
+mod network;
 mod options;
 mod runtime;
 mod snapshot_options;
 mod snapshots;
 mod util;
+mod volumes;
 
 use crate::advanced_options::{PyAdvancedBoxOptions, PyHealthCheckOptions, PySecurityOptions};
 use crate::box_handle::PyBox;
@@ -18,6 +20,7 @@ use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
 use crate::images::{PyImageHandle, PyImageInfo, PyImagePullResult};
 use crate::info::{PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus};
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
+use crate::network::{PyBoxConnection, PyBoxTunnel, PyNetworkHandle};
 use crate::options::{
     PyAccessToken, PyApiKeyCredential, PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions,
     PyImageRegistry, PyNetworkSpec, PyOptions, PySecret,
@@ -25,6 +28,7 @@ use crate::options::{
 use crate::runtime::PyBoxlite;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions, PySnapshotOptions};
 use crate::snapshots::{PySnapshotHandle, PySnapshotInfo};
+use crate::volumes::{PyVolumeHandle, PyVolumeInfo};
 use pyo3::prelude::*;
 
 #[pymodule(name = "boxlite")]
@@ -45,12 +49,17 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyImageHandle>()?;
     m.add_class::<PyImageInfo>()?;
     m.add_class::<PyImagePullResult>()?;
+    m.add_class::<PyVolumeHandle>()?;
+    m.add_class::<PyVolumeInfo>()?;
     m.add_class::<PyBoxInfo>()?;
     m.add_class::<PyBoxStateInfo>()?;
     m.add_class::<PyHealthState>()?;
     m.add_class::<PyHealthStatus>()?;
     m.add_class::<PyRuntimeMetrics>()?;
     m.add_class::<PyBoxMetrics>()?;
+    m.add_class::<PyNetworkHandle>()?;
+    m.add_class::<PyBoxTunnel>()?;
+    m.add_class::<PyBoxConnection>()?;
     m.add_class::<PyCopyOptions>()?;
     m.add_class::<PySnapshotInfo>()?;
     m.add_class::<PySnapshotHandle>()?;

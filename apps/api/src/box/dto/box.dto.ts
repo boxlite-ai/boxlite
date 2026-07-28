@@ -170,21 +170,30 @@ export class BoxDto {
   recoverable?: boolean
 
   @ApiPropertyOptional({
-    description: 'Auto-stop interval in minutes (0 means disabled)',
-    example: 30,
+    description: 'Auto-pause interval in seconds (0 means disabled)',
+    example: 900,
+    type: 'integer',
     required: false,
   })
   @IsOptional()
-  autoStopInterval?: number
+  autoPause?: number
 
   @ApiPropertyOptional({
-    description:
-      'Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)',
-    example: 30,
+    description: 'Auto-delete interval in seconds (0 means disabled)',
+    example: 604800,
+    type: 'integer',
     required: false,
   })
   @IsOptional()
-  autoDeleteInterval?: number
+  autoDelete?: number
+
+  @ApiPropertyOptional({
+    description: 'Whether the box should be automatically resumed on proxy access',
+    example: true,
+    required: false,
+  })
+  @IsOptional()
+  autoResume?: boolean
 
   @ApiPropertyOptional({
     description: 'Array of volumes attached to the box',
@@ -265,8 +274,9 @@ export class BoxDto {
       desiredState: box.desiredState,
       errorReason: box.errorReason,
       recoverable: box.recoverable,
-      autoStopInterval: box.autoStopInterval,
-      autoDeleteInterval: box.autoDeleteInterval,
+      autoPause: box.autoPause,
+      autoDelete: box.autoDelete,
+      autoResume: box.autoResume,
       class: box.class,
       createdAt: box.createdAt ? new Date(box.createdAt).toISOString() : undefined,
       updatedAt: box.updatedAt ? new Date(box.updatedAt).toISOString() : undefined,

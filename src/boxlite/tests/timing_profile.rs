@@ -184,7 +184,7 @@ async fn boot_timing_profile_no_jailer() {
 
     let opts = BoxOptions {
         rootfs: boxlite::runtime::options::RootfsSpec::Image("alpine:latest".into()),
-        auto_remove: false,
+        auto_delete: Some(0),
         advanced: boxlite::AdvancedBoxOptions {
             security: boxlite::SecurityOptions {
                 jailer_enabled: false,

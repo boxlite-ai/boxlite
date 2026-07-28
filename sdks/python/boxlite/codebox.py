@@ -4,12 +4,18 @@ CodeBox - Secure Python code execution container.
 Provides a simple, secure environment for running untrusted Python code.
 """
 
-from typing import Optional, TYPE_CHECKING
+import asyncio
+from typing import TYPE_CHECKING, Optional
 
 from .simplebox import SimpleBox
 
 if TYPE_CHECKING:
     from .boxlite import Boxlite
+
+
+def _read_text_file(path: str) -> str:
+    with open(path) as f:
+        return f.read()
 
 
 class CodeBox(SimpleBox):
@@ -27,8 +33,8 @@ class CodeBox(SimpleBox):
     def __init__(
         self,
         image: str = "python:slim",
-        memory_mib: Optional[int] = None,
-        cpus: Optional[int] = None,
+        memory_mib: int | None = None,
+        cpus: int | None = None,
         runtime: Optional["Boxlite"] = None,
         **kwargs,
     ):
@@ -46,7 +52,7 @@ class CodeBox(SimpleBox):
             image=image, memory_mib=memory_mib, cpus=cpus, runtime=runtime, **kwargs
         )
 
-    async def run(self, code: str, timeout: Optional[int] = None) -> str:
+    async def run(self, code: str, timeout: int | None = None) -> str:
         """
         Execute Python code in the secure container.
 
@@ -83,8 +89,7 @@ class CodeBox(SimpleBox):
         Returns:
             Execution stdout as a string
         """
-        with open(script_path, "r") as f:
-            code = f.read()
+        code = await asyncio.to_thread(_read_text_file, script_path)
         return await self.run(code)
 
     async def install_package(self, package: str) -> str:

@@ -105,7 +105,7 @@ impl PerTestBoxHome {
 ///
 /// Detached shims are `setsid()`'d daemons (see `vmm/controller/spawn.rs`)
 /// that intentionally outlive the parent process. The production
-/// stop paths — `box.stop()`, `auto_remove`, `runtime.remove()` —
+/// stop paths — `box.stop()`, remove-on-stop, and `runtime.remove()` —
 /// are what should kill them; if the shim is still alive at drop
 /// time, something on the production side did not run.
 ///
@@ -128,7 +128,7 @@ impl Drop for PerTestBoxHome {
             leaks.is_empty(),
             "PerTestBoxHome dropped with {n} live shim(s): {leaks:?}. \
              Tests must stop boxes (e.g. `box.stop()`, `runtime.remove()`, \
-             or `auto_remove=true`) before the home goes out of scope. A \
+             or configure remove-on-stop) before the home goes out of scope. A \
              live shim here means a production cleanup path did not run.",
             n = leaks.len(),
         );
@@ -215,7 +215,7 @@ mod tests {
 
     /// `PerTestBoxHome::drop` must fail the test if a referenced
     /// shim is still alive — the production stop path (box.stop,
-    /// auto_remove, runtime.remove) is what should have killed it.
+    /// remove-on-stop, runtime.remove) is what should have killed it.
     /// Silently reaping would mask that gap.
     ///
     /// Revert procedure: replace the `impl Drop` body with an empty

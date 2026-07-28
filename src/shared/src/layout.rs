@@ -6,7 +6,46 @@
 //!
 //! Lives in boxlite-shared so both host and guest can use these definitions.
 
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+// ============================================================================
+// EXIT RECORD
+// ============================================================================
+
+/// Contents of a container's [`SharedContainerLayout::exit_file`] — written by
+/// the guest when init exits, read by the host to surface the box's exit code
+/// and by the guest to refuse execs against a container whose init is gone.
+///
+/// It crosses a process boundary (guest → host, over the virtiofs shared dir),
+/// so the schema is owned here rather than hand-rolled at each end.
+///
+/// The code alone, in the docker convention (signal death is `128 + n`) — the
+/// same single value conmon/podman keep per container. The true `ExitStatus`
+/// is logged by the guest where it has diagnostic value; persisting the signal
+/// separately would just be a field nobody reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExitRecord {
+    pub exit_code: i32,
+}
+
+impl ExitRecord {
+    /// Read the record, or `None` if it is absent or unreadable.
+    ///
+    /// Callers deciding *whether the container exited* must test the file's
+    /// presence, not this returning `Some`: a torn or truncated record still
+    /// means init is gone, and treating it as "still running" would re-open
+    /// the exec path this file exists to close.
+    pub fn read(path: &Path) -> Option<Self> {
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    }
+
+    /// Write the record, replacing any previous run's.
+    pub fn write(&self, path: &Path) -> std::io::Result<()> {
+        let json = serde_json::to_string(self).expect("one i32 field is infallible to serialize");
+        std::fs::write(path, json)
+    }
+}
 
 // ============================================================================
 // CONSTANTS
@@ -62,9 +101,10 @@ pub const GUEST_BASE: &str = "/run/boxlite";
 /// │   ├── upper/             # Overlayfs upper (writable layer)
 /// │   └── work/              # Overlayfs work directory
 /// ├── rootfs/                # All rootfs strategies mount here
-/// └── volumes/               # User volumes (virtiofs mounts)
-///     ├── {volume-name-1}/
-///     └── {volume-name-2}/
+/// ├── volumes/               # User volumes (virtiofs mounts)
+/// │   ├── {volume-name-1}/
+/// │   └── {volume-name-2}/
+/// └── exit.json              # This run's exit status (absent while running)
 /// ```
 #[derive(Clone, Debug)]
 pub struct SharedContainerLayout {
@@ -80,6 +120,19 @@ impl SharedContainerLayout {
     /// Root directory of this container: shared/containers/{cid}
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// This container's exit file: {root}/exit.json — an [`ExitRecord`].
+    ///
+    /// The container's exit *is* its init's exit (docker's `State.ExitCode`),
+    /// so the containing directory already says whose it is. Named for the
+    /// same record conmon/podman keep per container (`exitFilePath`).
+    ///
+    /// Scoped to one *run*: `Container.Init` removes it before starting a
+    /// container, so its presence means "this container ran and is over".
+    /// Both sides derive the path from here.
+    pub fn exit_file(&self) -> PathBuf {
+        self.root.join("exit.json")
     }
 
     /// Overlayfs directory: {root}/overlayfs
@@ -165,7 +218,8 @@ impl SharedContainerLayout {
 /// └── containers/
 ///     └── {cid}/              # SharedContainerLayout
 ///         ├── overlayfs/{upper,work}
-///         └── rootfs/
+///         ├── rootfs/
+///         └── exit.json       # beside rootfs, never inside it
 /// ```
 ///
 /// # Example
@@ -184,6 +238,13 @@ impl SharedContainerLayout {
 /// let guest_container = guest_layout.container("main");
 /// assert!(host_container.rootfs_dir().ends_with("containers/main/rootfs"));
 /// assert!(guest_container.rootfs_dir().ends_with("containers/main/rootfs"));
+///
+/// // Each container's exit file lives in that container's own directory —
+/// // not in a central exits/ registry (podman's shape) — and beside the
+/// // rootfs rather than within it, so a container cannot see its own exit.
+/// let exit = guest_container.exit_file();
+/// assert!(exit.ends_with("containers/main/exit.json"));
+/// assert!(!exit.starts_with(guest_container.rootfs_dir()));
 /// ```
 #[derive(Clone, Debug)]
 pub struct SharedGuestLayout {
@@ -216,6 +277,40 @@ impl SharedGuestLayout {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    // ========================================================================
+    // ExitRecord (guest → host wire format)
+    // ========================================================================
+
+    /// The guest writes this file and the host reads it from a *different*
+    /// binary, so the on-disk shape is a contract between two processes, not
+    /// an implementation detail. Pin the exact bytes: renaming the field or
+    /// re-adding one silently breaks exit-code recovery at runtime.
+    #[test]
+    fn exit_record_wire_format_is_exit_code_only() {
+        let json = serde_json::to_string(&ExitRecord { exit_code: 137 }).unwrap();
+        assert_eq!(json, r#"{"exit_code":137}"#);
+
+        let parsed: ExitRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, ExitRecord { exit_code: 137 });
+    }
+
+    /// Absent file is the "still running" signal, and must not be confused
+    /// with a container that exited — hence `Option`, not a default.
+    #[test]
+    fn exit_record_read_returns_none_when_absent() {
+        assert_eq!(ExitRecord::read(Path::new("/nonexistent/exit.json")), None);
+    }
+
+    #[test]
+    fn exit_record_round_trips_through_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("exit.json");
+
+        ExitRecord { exit_code: 42 }.write(&path).unwrap();
+
+        assert_eq!(ExitRecord::read(&path), Some(ExitRecord { exit_code: 42 }));
+    }
 
     // ========================================================================
     // SharedContainerLayout tests

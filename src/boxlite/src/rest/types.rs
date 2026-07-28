@@ -114,9 +114,19 @@ pub(crate) struct CreateBoxRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<CreateBoxSecret>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub auto_remove: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub detach: Option<bool>,
+    /// A terminal for the main command (`run -t`). Only sent when asked for:
+    /// the server rejects unknown fields, so an older one would 400 on it —
+    /// which is the right failure. Degrading `-it` to pipes silently, as the
+    /// alternative, is how this whole class of bug happens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tty: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_pause: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_delete: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_resume: Option<bool>,
 }
 
 impl CreateBoxRequest {
@@ -165,8 +175,14 @@ impl CreateBoxRequest {
             cmd: options.cmd.clone(),
             user: options.user.clone(),
             secrets,
-            auto_remove: Some(options.auto_remove),
             detach: Some(options.detach),
+            tty: options.tty.then_some(true),
+            // The deprecated remove-on-stop flag was never applied by the cloud
+            // control-plane mapper. Keep remote defaults unchanged and only send
+            // the modern lifecycle fields when callers explicitly configure them.
+            auto_pause: options.auto_pause,
+            auto_delete: options.auto_delete,
+            auto_resume: options.auto_resume,
         }
     }
 }
@@ -225,6 +241,17 @@ pub(crate) struct BoxResponse {
     pub memory_mib: u32,
     #[serde(default)]
     pub labels: HashMap<String, String>,
+    /// Absent while the box's main command is still running. An older server
+    /// omits it entirely, which reads the same as "still running" — the
+    /// honest answer when it cannot say.
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    #[serde(default = "default_auto_pause")]
+    pub auto_pause: u32,
+    #[serde(default = "default_auto_delete")]
+    pub auto_delete: u32,
+    #[serde(default = "default_auto_resume")]
+    pub auto_resume: bool,
 }
 
 impl BoxResponse {
@@ -261,9 +288,25 @@ impl BoxResponse {
             cpus: self.cpus,
             memory_mib: self.memory_mib,
             labels: self.labels.clone(),
+            auto_pause: self.auto_pause,
+            auto_delete: self.auto_delete,
+            auto_resume: self.auto_resume,
             health_status: crate::litebox::HealthStatus::new(), // REST API doesn't provide health status
+            exit_code: self.exit_code,
         })
     }
+}
+
+fn default_auto_pause() -> u32 {
+    900
+}
+
+fn default_auto_delete() -> u32 {
+    0
+}
+
+fn default_auto_resume() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -271,6 +314,44 @@ pub(crate) struct ListBoxesResponse {
     pub boxes: Vec<BoxResponse>,
     #[allow(dead_code)]
     pub next_page_token: Option<String>,
+}
+
+// ============================================================================
+// Named volumes (`/v1/volumes`)
+// ============================================================================
+
+/// Body for `POST /v1/volumes`. Volume creation takes no parameters — the
+/// server assigns the id — so the body is empty.
+#[derive(Debug, Serialize)]
+pub(crate) struct CreateVolumeRequest {}
+
+/// A single volume as returned by the REST API.
+#[derive(Debug, Deserialize)]
+pub(crate) struct VolumeResponse {
+    pub id: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+}
+
+impl VolumeResponse {
+    pub fn to_volume_info(&self) -> crate::volumes::VolumeInfo {
+        let created_at = chrono::DateTime::parse_from_rfc3339(&self.created_at)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now());
+
+        crate::volumes::VolumeInfo {
+            id: self.id.clone(),
+            created_at,
+            size_bytes: self.size_bytes,
+        }
+    }
+}
+
+/// Response for `GET /v1/volumes`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ListVolumesResponse {
+    pub volumes: Vec<VolumeResponse>,
 }
 
 // ============================================================================
@@ -475,6 +556,7 @@ fn parse_box_status(status: &str) -> BoxStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::options::BoxOptions;
 
     #[test]
     fn test_create_box_request_serialization() {
@@ -494,14 +576,17 @@ mod tests {
             entrypoint: None,
             cmd: None,
             user: None,
+            tty: None,
             secrets: Some(vec![CreateBoxSecret {
                 name: "openai".into(),
                 value: "sk-test".into(),
                 hosts: vec!["api.openai.com".into()],
                 placeholder: "<BOXLITE_SECRET:openai>".into(),
             }]),
-            auto_remove: Some(true),
             detach: None,
+            auto_pause: Some(900),
+            auto_delete: Some(604800),
+            auto_resume: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"name\":\"mybox\""));
@@ -533,6 +618,8 @@ mod tests {
                 hosts: vec!["api.openai.com".into()],
                 placeholder: "<BOXLITE_SECRET:openai>".into(),
             }],
+            auto_pause: Some(1800),
+            auto_delete: Some(604800),
             ..Default::default()
         };
         let req = CreateBoxRequest::from_options(&opts, Some("test-box".into()));
@@ -550,10 +637,37 @@ mod tests {
             Some(vec!["api.openai.com".into()])
         );
         assert_eq!(req.secrets.as_ref().map(Vec::len), Some(1));
+        assert_eq!(req.auto_pause, Some(1800));
+        assert_eq!(req.auto_delete, Some(604800));
         assert_eq!(
             req.secrets.as_ref().unwrap()[0].placeholder,
             "<BOXLITE_SECRET:openai>"
         );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_auto_remove_does_not_change_rest_lifecycle_defaults() {
+        for auto_remove in [false, true] {
+            let opts = BoxOptions {
+                auto_remove,
+                auto_delete: None,
+                ..Default::default()
+            };
+            let req = CreateBoxRequest::from_options(&opts, None);
+            assert_eq!(req.auto_pause, None);
+            assert_eq!(req.auto_delete, None);
+        }
+
+        let modern = BoxOptions {
+            auto_remove: true,
+            auto_pause: Some(900),
+            auto_delete: Some(3600),
+            ..Default::default()
+        };
+        let req = CreateBoxRequest::from_options(&modern, None);
+        assert_eq!(req.auto_pause, Some(900));
+        assert_eq!(req.auto_delete, Some(3600));
     }
 
     #[test]
@@ -625,6 +739,8 @@ mod tests {
         assert_eq!(resp.status, "running");
         assert_eq!(resp.pid, Some(1234));
         assert_eq!(resp.cpus, 2);
+        assert_eq!(resp.auto_pause, 900);
+        assert_eq!(resp.auto_delete, 0);
     }
 
     #[test]
@@ -640,12 +756,18 @@ mod tests {
             cpus: 2,
             memory_mib: 512,
             labels: HashMap::new(),
+            exit_code: None,
+            auto_pause: 1800,
+            auto_delete: 604800,
+            auto_resume: true,
         };
         let info = resp.to_box_info().expect("valid ULID box_id should parse");
         assert_eq!(info.name.as_deref(), Some("mybox"));
         assert_eq!(info.image, "python:3.11");
         assert_eq!(info.cpus, 2);
         assert_eq!(info.memory_mib, 512);
+        assert_eq!(info.auto_pause, 1800);
+        assert_eq!(info.auto_delete, 604800);
     }
 
     #[test]
@@ -663,6 +785,10 @@ mod tests {
             cpus: 1,
             memory_mib: 256,
             labels: HashMap::new(),
+            exit_code: None,
+            auto_pause: 900,
+            auto_delete: 0,
+            auto_resume: true,
         };
         let info = resp.to_box_info().expect("UUID box_id should parse");
         assert_eq!(info.id.as_str(), "d406c59d-eb09-4bc3-9b3a-62455c7e8f32");
@@ -687,6 +813,10 @@ mod tests {
             cpus: 1,
             memory_mib: 256,
             labels: HashMap::new(),
+            exit_code: None,
+            auto_pause: 900,
+            auto_delete: 0,
+            auto_resume: true,
         };
         assert!(mk("").to_box_info().is_err(), "empty");
         assert!(mk("a/b").to_box_info().is_err(), "slash");
@@ -755,6 +885,10 @@ mod tests {
             cpus: 2,
             memory_mib: 512,
             labels: HashMap::new(),
+            exit_code: None,
+            auto_pause: 900,
+            auto_delete: 0,
+            auto_resume: true,
         };
 
         // Legacy transient statuses map to Unknown (no longer valid)

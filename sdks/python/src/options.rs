@@ -383,8 +383,15 @@ pub(crate) struct PyBoxOptions {
     #[pyo3(get, set)]
     pub(crate) network: Option<PyNetworkSpec>,
     pub(crate) ports: Vec<PyPortSpec>,
+    /// Deprecated compatibility option; use auto_delete.
     #[pyo3(get, set)]
     pub(crate) auto_remove: Option<bool>,
+    #[pyo3(get, set)]
+    pub(crate) auto_pause: Option<u32>,
+    #[pyo3(get, set)]
+    pub(crate) auto_delete: Option<u32>,
+    #[pyo3(get, set)]
+    pub(crate) auto_resume: Option<bool>,
     #[pyo3(get, set)]
     pub(crate) detach: Option<bool>,
     /// Override the image's ENTRYPOINT directive.
@@ -425,6 +432,9 @@ impl PyBoxOptions {
         network=None,
         ports=vec![],
         auto_remove=None,
+        auto_pause=None,
+        auto_delete=None,
+        auto_resume=None,
         detach=None,
         entrypoint=None,
         cmd=None,
@@ -445,6 +455,9 @@ impl PyBoxOptions {
         network: Option<PyNetworkSpec>,
         ports: Vec<PyPortSpec>,
         auto_remove: Option<bool>,
+        auto_pause: Option<u32>,
+        auto_delete: Option<u32>,
+        auto_resume: Option<bool>,
         detach: Option<bool>,
         entrypoint: Option<Vec<String>>,
         cmd: Option<Vec<String>>,
@@ -464,6 +477,9 @@ impl PyBoxOptions {
             network,
             ports,
             auto_remove,
+            auto_pause,
+            auto_delete,
+            auto_resume,
             detach,
             entrypoint,
             cmd,
@@ -488,7 +504,10 @@ impl PyBoxOptions {
 impl TryFrom<PyBoxOptions> for BoxOptions {
     type Error = boxlite::BoxliteError;
 
+    #[allow(deprecated)]
     fn try_from(py_opts: PyBoxOptions) -> Result<Self, Self::Error> {
+        let auto_remove = py_opts.auto_remove;
+        let auto_delete = py_opts.auto_delete;
         let volumes = py_opts.volumes.into_iter().map(VolumeSpec::from).collect();
 
         let network = match py_opts.network {
@@ -520,15 +539,17 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             volumes,
             network,
             ports,
+            auto_pause: py_opts.auto_pause,
+            auto_delete,
+            auto_resume: py_opts.auto_resume,
             entrypoint: py_opts.entrypoint,
             cmd: py_opts.cmd,
             user: py_opts.user,
             ..Default::default()
         };
 
-        // These fields have non-None defaults (auto_remove=true, detach=false),
-        // so None means "keep default" rather than "set to None".
-        if let Some(auto_remove) = py_opts.auto_remove {
+        // These core fields have concrete defaults. `None` means keep the default.
+        if let Some(auto_remove) = auto_remove {
             opts.auto_remove = auto_remove;
         }
 

@@ -114,7 +114,6 @@ export default function (cfg) {
       cpus: Number(__ENV.BOXLITE_STRESS_CPUS || 1),
       memory_mib: Number(__ENV.BOXLITE_STRESS_MEMORY_MIB || 256),
       disk_size_gb: Number(__ENV.BOXLITE_STRESS_DISK_SIZE_GB || 1),
-      auto_remove: true,
       detach: true,
     })
 

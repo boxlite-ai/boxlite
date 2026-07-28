@@ -7,12 +7,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { calculateBoxHourlyCost, formatUsdFromCents } from '@/components/billing/cost'
 import type { BillingPricing } from '@/billing-api'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Switch } from '@/components/ui/switch'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useBillingPricingQuery } from '@/hooks/queries/useBillingPricingQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
+import { validateLifecyclePolicy } from '@/lib/cloudBox'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
 import { ChevronDown, Plus } from '@/components/ui/icon'
@@ -28,7 +30,7 @@ const SUPPORTED_BOX_IMAGES = [
   { id: 'node', name: 'Node.js', ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3', isDefault: false },
 ] as const
 
-const DEFAULTS = { cpu: 1, memory: 1, disk: 10 }
+const DEFAULTS = { cpu: 1, memory: 1, disk: 10, autoPauseIntervalSeconds: 900, autoDelete: 0 }
 
 const SUPPORT_EMAIL = 'support@boxlite.ai'
 
@@ -227,6 +229,9 @@ export const CreateBoxDialog = ({
   const [cpu, setCpu] = useState(initialCpu)
   const [memory, setMemory] = useState(initialMemory)
   const [disk, setDisk] = useState(initialDisk)
+  const [autoPauseIntervalSeconds, setAutoPauseIntervalSeconds] = useState(DEFAULTS.autoPauseIntervalSeconds)
+  const [autoDelete, setAutoDeleteInterval] = useState(DEFAULTS.autoDelete)
+  const [autoResume, setAutoResumeEnabled] = useState(true)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [capped, setCapped] = useState({ cpu: false, memory: false, disk: false })
@@ -248,6 +253,9 @@ export const CreateBoxDialog = ({
     setCpu(initialCpu)
     setMemory(initialMemory)
     setDisk(initialDisk)
+    setAutoPauseIntervalSeconds(DEFAULTS.autoPauseIntervalSeconds)
+    setAutoDeleteInterval(DEFAULTS.autoDelete)
+    setAutoResumeEnabled(true)
     setAdvancedOpen(false)
     setSubmitting(false)
     setCapped({ cpu: false, memory: false, disk: false })
@@ -273,6 +281,7 @@ export const CreateBoxDialog = ({
 
   const selectedImage = SUPPORTED_BOX_IMAGES.find((i) => i.ref === imageRef) ?? defaultImage
   const nameValid = !name || NAME_REGEX.test(name)
+  const lifecycleError = validateLifecyclePolicy({ autoPauseIntervalSeconds, autoDelete })
 
   const handleCreate = async () => {
     if (!selectedOrganization?.id) {
@@ -283,6 +292,10 @@ export const CreateBoxDialog = ({
       toast.error('Only letters, digits, dots, underscores and dashes are allowed in the name.')
       return
     }
+    if (lifecycleError) {
+      toast.error(lifecycleError)
+      return
+    }
     setSubmitting(true)
     try {
       const box = await createBoxMutation.mutateAsync({
@@ -290,6 +303,9 @@ export const CreateBoxDialog = ({
         image: imageRef || defaultImage.ref,
         network: { mode: 'enabled' },
         resources: { cpu, memory, disk },
+        autoPauseIntervalSeconds,
+        autoDelete,
+        autoResume,
       })
       onCreated?.(box)
       toast.success('Box created')
@@ -380,7 +396,7 @@ export const CreateBoxDialog = ({
               Advanced Options
               {!advancedOpen && (
                 <span className="basis-full pl-5 font-mono text-[11px] normal-case tracking-normal text-muted-foreground/80 sm:basis-auto sm:pl-0">
-                  · {cpu} vCPU · {memory} GiB · {disk} GiB
+                  · {cpu} vCPU · {memory} GiB · {disk} GiB · pause {autoPauseIntervalSeconds}s
                 </span>
               )}
             </button>
@@ -419,6 +435,43 @@ export const CreateBoxDialog = ({
                     capped.disk && limits.disk != null && { label: 'Disk', unit: 'GiB', max: limits.disk },
                   ].filter((r): r is { label: string; unit: string; max: number } => Boolean(r))}
                 />
+                <div className="grid grid-cols-1 gap-[14px] border-t border-dashed border-border pt-[14px] sm:grid-cols-2">
+                  <label className="flex flex-col gap-[9px]">
+                    <span className="font-mono text-[10px] uppercase tracking-[1px]">
+                      Auto-pause <span className="text-muted-foreground">(seconds, 0 disables)</span>
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={autoPauseIntervalSeconds}
+                      onChange={(event) => setAutoPauseIntervalSeconds(Number(event.target.value))}
+                      className="border border-border bg-card px-3 py-[9px] font-mono text-[13px] outline-none focus:border-brand"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-[9px]">
+                    <span className="font-mono text-[10px] uppercase tracking-[1px]">
+                      Auto-delete <span className="text-muted-foreground">(seconds, 0 disables)</span>
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={autoDelete}
+                      onChange={(event) => setAutoDeleteInterval(Number(event.target.value))}
+                      className="border border-border bg-card px-3 py-[9px] font-mono text-[13px] outline-none focus:border-brand"
+                    />
+                  </label>
+                </div>
+                <label className="flex items-center justify-between gap-3 border-t border-dashed border-border pt-[14px]">
+                  <span className="font-mono text-[10px] uppercase tracking-[1px]">Auto-resume on proxy access</span>
+                  <Switch
+                    aria-label="Auto-resume on proxy access"
+                    checked={autoResume}
+                    onCheckedChange={setAutoResumeEnabled}
+                  />
+                </label>
+                {lifecycleError && <p className="text-[11px] text-destructive">{lifecycleError}</p>}
               </div>
             )}
           </div>
@@ -438,7 +491,7 @@ export const CreateBoxDialog = ({
           <button
             type="button"
             onClick={handleCreate}
-            disabled={submitting || !selectedOrganization?.id || !nameValid}
+            disabled={submitting || !selectedOrganization?.id || !nameValid || Boolean(lifecycleError)}
             className="bg-primary px-5 py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-50 sm:py-[10px]"
           >
             {submitting ? 'Creating…' : 'Create Box'}

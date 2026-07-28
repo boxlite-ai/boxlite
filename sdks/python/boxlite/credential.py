@@ -28,4 +28,4 @@ class Credential(ABC):
 # hierarchy without inheritance.
 Credential.register(ApiKeyCredential)
 
-__all__ = ["Credential", "AccessToken", "ApiKeyCredential"]
+__all__ = ["AccessToken", "ApiKeyCredential", "Credential"]

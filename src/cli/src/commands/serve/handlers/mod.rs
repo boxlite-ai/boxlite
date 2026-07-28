@@ -6,3 +6,4 @@ pub(super) mod files;
 pub(super) mod me;
 pub(super) mod metrics;
 pub(super) mod snapshots;
+pub(super) mod volumes;

@@ -3,14 +3,15 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ForbiddenException, HttpException, HttpStatus } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus } from '@nestjs/common'
 import { BoxService } from './box.service'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxEvents } from '../constants/box-events.constants'
 
-// ensureStartedForProxy only touches boxRepository + eventEmitter +
-// organizationService; every other injected dependency is irrelevant.
+// ensureStartedForProxy touches boxRepository + eventEmitter +
+// organizationService + organizationUsageService; every other injected
+// dependency is irrelevant.
 function makeService(options: { billingEnabled?: boolean; billingError?: Error } = {}) {
   const boxRepository = {
     findOneByIdOrName: jest.fn(),
@@ -51,6 +52,13 @@ function makeService(options: { billingEnabled?: boolean; billingError?: Error }
       return null
     }),
   } as any
+  // Quota check passes by default; tests assert reservations are released when
+  // the box does not actually start.
+  const organizationUsageService = {
+    validateOrganizationQuotas: jest.fn().mockResolvedValue({ cpu: 0, memory: 0, disk: 0, gpu: 0, count: 0 }),
+    rollbackPendingUsage: jest.fn().mockResolvedValue(undefined),
+  } as any
+
   const noop = {} as any
   const service = new BoxService(
     boxRepository, // boxRepository
@@ -62,6 +70,7 @@ function makeService(options: { billingEnabled?: boolean; billingError?: Error }
     warmPoolService, // warmPoolService
     eventEmitter, // eventEmitter
     organizationService, // organizationService
+    organizationUsageService, // organizationUsageService
     noop, // runnerAdapterFactory
     redisLockProvider, // redisLockProvider
     redis, // redis
@@ -79,6 +88,7 @@ function makeService(options: { billingEnabled?: boolean; billingError?: Error }
     redisLockProvider,
     regionService,
     billingAccessService,
+    organizationUsageService,
   }
 }
 
@@ -146,26 +156,63 @@ describe('BoxService billing admission', () => {
 
     expect(boxRepository.conditionalStartForProxy).not.toHaveBeenCalled()
   })
+})
+function makePreviewUrlService() {
+  const configService = {
+    getOrThrow: jest.fn((key: string) => {
+      if (key === 'proxy.domain') return 'proxy.example.test'
+      if (key === 'proxy.protocol') return 'https'
+      throw new Error(`unexpected config key ${key}`)
+    }),
+  } as any
+  const redis = { setex: jest.fn() } as any
+  const regionService = { findOne: jest.fn().mockResolvedValue(null) } as any
+  const noop = {} as any
+  const service = new BoxService(
+    noop, // boxRepository
+    noop, // runnerRepository
+    noop, // sshAccessRepository
+    noop, // runnerService
+    noop, // volumeService
+    configService, // configService
+    noop, // warmPoolService
+    noop, // eventEmitter
+    noop, // organizationService
+    noop, // organizationUsageService
+    noop, // runnerAdapterFactory
+    noop, // redisLockProvider
+    redis, // redis
+    regionService, // regionService
+    noop, // boxLookupCacheInvalidationService
+    noop, // boxActivityService
+    noop, // billingAccessService
+  )
+  jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
+    id: 'MixedCaseBox',
+    authToken: 'preview-token',
+    region: 'region-1',
+  } as any)
 
-  it('rejects a running Box resource increase before entering the resizing state', async () => {
-    const { service, boxRepository, billingAccessService } = makeService({
-      billingEnabled: true,
-      billingError: insufficientBalance,
-    })
-    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
-      ...stoppedBox,
-      runnerId: 'runner-1',
-      state: BoxState.STARTED,
-      desiredState: BoxDesiredState.STARTED,
-    } as any)
+  return { service, redis }
+}
 
-    await expect(service.resize('box-1', { cpu: 2 }, activeOrg)).rejects.toBe(insufficientBalance)
+describe('BoxService preview URLs', () => {
+  it('creates case-safe direct preview URLs for service ports', async () => {
+    const { service } = makePreviewUrlService()
 
-    expect(billingAccessService.assertHasAccess).toHaveBeenCalledWith(
-      'org-1',
-      expect.objectContaining({ boxId: 'box-1', cpu: 2 }),
-    )
-    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+    const result = await service.getPortPreviewUrl('MixedCaseBox', 'org-1', 3000)
+
+    expect(result.boxId).toBe('MixedCaseBox')
+    expect(result.url).toBe('https://3000-d-4d6978656443617365426f78.proxy.example.test')
+    expect(result.token).toBe('preview-token')
+  })
+
+  it('keeps the existing direct preview URL format for terminal', async () => {
+    const { service } = makePreviewUrlService()
+
+    const result = await service.getPortPreviewUrl('MixedCaseBox', 'org-1', 22222)
+
+    expect(result.url).toBe('https://22222-MixedCaseBox.proxy.example.test')
   })
 })
 
@@ -240,26 +287,153 @@ describe('BoxService.ensureStartedForProxy', () => {
     expect(boxRepository.conditionalStartForProxy).not.toHaveBeenCalled()
   })
 
-  // Conditional UPDATE matched zero rows = race lost or box transitioned out
-  // of the eligible state between snapshot and write. Same no-op semantics
-  // as the old BoxConflictError swallow.
-  it('emits nothing when the conditional update matches zero rows (race lost)', async () => {
+  // Conditional UPDATE matched zero rows = race lost. The docstring's contract is
+  // "transitional states are returned unchanged", so the current box is returned and
+  // nothing is emitted.
+  it('returns the box unchanged and emits nothing when the conditional update matches zero rows (race lost)', async () => {
     const { service, boxRepository, eventEmitter } = makeService()
     jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
     boxRepository.conditionalStartForProxy.mockResolvedValue(null)
 
-    await expect(service.ensureStartedForProxy('box-1', activeOrg)).resolves.toBeUndefined()
+    await expect(service.ensureStartedForProxy('box-1', activeOrg)).resolves.toBe(stoppedBox)
     expect(eventEmitter.emit).not.toHaveBeenCalled()
   })
 
-  it('swallows an unexpected DB failure without emitting', async () => {
+  // Docstring: "Unexpected database errors propagate; AutoResume must never proxy
+  // before readiness." So the error is rethrown, not swallowed.
+  it('propagates an unexpected DB failure without emitting', async () => {
     const { service, boxRepository, eventEmitter } = makeService()
     jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
     boxRepository.conditionalStartForProxy.mockRejectedValue(new Error('db connection lost'))
-    const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined)
 
-    await expect(service.ensureStartedForProxy('box-1', activeOrg)).resolves.toBeUndefined()
+    await expect(service.ensureStartedForProxy('box-1', activeOrg)).rejects.toThrow('db connection lost')
     expect(eventEmitter.emit).not.toHaveBeenCalled()
-    expect(warn).toHaveBeenCalled()
+  })
+
+  it('rejects auto-resume when the org is over quota and does not start the box', async () => {
+    const { service, boxRepository, organizationUsageService } = makeService()
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
+    organizationUsageService.validateOrganizationQuotas.mockRejectedValue(
+      new BadRequestException('Organization quota exceeded'),
+    )
+
+    await expect(service.ensureStartedForProxy('box-1', activeOrg)).rejects.toThrow(BadRequestException)
+    expect(boxRepository.conditionalStartForProxy).not.toHaveBeenCalled()
+  })
+
+  it('releases the quota reservation when the conditional start matches zero rows', async () => {
+    const { service, boxRepository, organizationUsageService } = makeService()
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
+    boxRepository.conditionalStartForProxy.mockResolvedValue(null)
+
+    await service.ensureStartedForProxy('box-1', activeOrg)
+
+    expect(organizationUsageService.rollbackPendingUsage).toHaveBeenCalled()
+  })
+})
+
+function makeNetworkTunnelService() {
+  const configService = {
+    getOrThrow: jest.fn((key: string) => {
+      if (key === 'proxy.domain') return 'proxy.example.test'
+      if (key === 'proxy.protocol') return 'https'
+      throw new Error(`unexpected config key ${key}`)
+    }),
+  } as any
+  const regionService = { findOne: jest.fn().mockResolvedValue(null) } as any
+  const noop = {} as any
+  const service = new BoxService(
+    noop,
+    noop,
+    noop,
+    noop,
+    noop,
+    configService,
+    noop,
+    noop,
+    noop,
+    noop, // organizationUsageService
+    noop,
+    noop,
+    noop,
+    regionService,
+    noop,
+    noop,
+    noop,
+  )
+  jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
+    id: 'MixedCaseBox',
+    region: 'region-1',
+  } as any)
+  return service
+}
+
+describe('BoxService network tunnel URLs', () => {
+  it('creates a case-safe endpoint for an SDK tunnel', async () => {
+    const service = makeNetworkTunnelService()
+
+    const result = await service.getNetworkTunnelUrl('MixedCaseBox', 'org-1', 3000)
+
+    expect(result).toBe('https://3000-d-4d6978656443617365426f78.proxy.example.test')
+  })
+})
+
+describe('BoxService public defaults', () => {
+  function makeCreateService() {
+    const boxRepository = { insert: jest.fn(async (box: any) => box) } as any
+    const service = Object.create(BoxService.prototype) as BoxService
+    Object.assign(service as any, {
+      getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
+      getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
+      organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+      organizationUsageService: {
+        validateOrganizationQuotas: jest.fn().mockResolvedValue({ cpu: 0, memory: 0, disk: 0, gpu: 0, count: 0 }),
+        rollbackPendingUsage: jest.fn().mockResolvedValue(undefined),
+      },
+      redis: { exists: jest.fn().mockResolvedValue(1) },
+      runnerService: { getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: 'runner-1' }) },
+      billingAccessService: { isEnabled: jest.fn().mockReturnValue(false) },
+      boxRepository,
+      eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
+      toBoxDto: jest.fn((box) => box),
+    })
+    return { service, boxRepository }
+  }
+
+  it.each([
+    [undefined, true],
+    [false, false],
+  ])('defaults a fresh box to public=%s', async (requestedPublic, expectedPublic) => {
+    const { service, boxRepository } = makeCreateService()
+
+    await service.create({ name: 'fresh-box', public: requestedPublic } as any, { id: 'org-1' } as any)
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }))
+  })
+
+  it.each([
+    [undefined, true],
+    [false, false],
+  ])('defaults an assigned warm-pool box to public=%s', async (requestedPublic, expectedPublic) => {
+    const warmPoolBox = { id: 'warm-box', runnerId: 'runner-1', name: 'warm-box' } as any
+    const update = jest.fn().mockResolvedValue(warmPoolBox)
+    const service = Object.create(BoxService.prototype) as BoxService
+    Object.assign(service as any, {
+      boxRepository: { update },
+      boxLookupCacheInvalidationService: { invalidateOrgId: jest.fn() },
+      eventEmitter: { emit: jest.fn() },
+      toBoxDto: jest.fn((box) => box),
+    })
+
+    await (service as any).assignWarmPoolBox(
+      warmPoolBox,
+      { name: 'assigned-box', public: requestedPublic },
+      { id: 'org-1' },
+    )
+
+    expect(update).toHaveBeenCalledWith(
+      'warm-box',
+      expect.objectContaining({ updateData: expect.objectContaining({ public: expectedPublic }) }),
+    )
   })
 })

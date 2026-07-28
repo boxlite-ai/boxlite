@@ -152,7 +152,6 @@ crash handling live in the runtime, not the runner.
 | `POST` | `/boxes/:id/start` | `Start` | Boot a stopped box (optional auth token + metadata) |
 | `POST` | `/boxes/:id/stop` | `Stop` | Graceful or `force` shutdown |
 | `POST` | `/boxes/:id/destroy` | `Destroy` | Tear down completely |
-| `POST` | `/boxes/:id/resize` | `Resize` | Adjust CPU / memory / disk |
 | `POST` | `/boxes/:id/recover` | `Recover` | Bring an `error` box back via a named strategy |
 | `POST` | `/boxes/:id/is-recoverable` | `IsRecoverable` | Static check against `common.IsRecoverable(reason)` |
 | `POST` | `/boxes/:id/network-settings` | `UpdateNetworkSettings` | Set block-all / allow-list |
@@ -552,7 +551,6 @@ the Swagger UI (development only).
 | `POST` | `/boxes/:id/start` | Start |
 | `POST` | `/boxes/:id/stop` | Stop (graceful or `force`) |
 | `POST` | `/boxes/:id/destroy` | Destroy |
-| `POST` | `/boxes/:id/resize` | Resize CPU / memory / disk |
 | `POST` | `/boxes/:id/backup` | Async backup |
 | `POST` | `/boxes/:id/recover` | Recover from error state |
 | `POST` | `/boxes/:id/is-recoverable` | Check whether an error reason is recoverable |

@@ -38,10 +38,10 @@ class SyncCodeBox(SyncSimpleBox):
     def __init__(
         self,
         image: str = "python:slim",
-        memory_mib: Optional[int] = None,
-        cpus: Optional[int] = None,
+        memory_mib: int | None = None,
+        cpus: int | None = None,
         runtime: Optional["SyncBoxlite"] = None,
-        name: Optional[str] = None,
+        name: str | None = None,
         auto_remove: bool = True,
         **kwargs,
     ):
@@ -67,7 +67,7 @@ class SyncCodeBox(SyncSimpleBox):
             **kwargs,
         )
 
-    def run(self, code: str, timeout: Optional[int] = None) -> str:
+    def run(self, code: str, timeout: int | None = None) -> str:
         """
         Execute Python code synchronously.
 

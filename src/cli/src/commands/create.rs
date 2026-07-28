@@ -1,4 +1,6 @@
-use crate::cli::{GlobalFlags, NetworkFlags, PublishFlags, ResourceFlags, VolumeFlags};
+use crate::cli::{
+    GlobalFlags, KernelFlags, NetworkFlags, PublishFlags, ResourceFlags, VolumeFlags,
+};
 use boxlite::{BoxOptions, RootfsSpec};
 use clap::Args;
 
@@ -40,6 +42,14 @@ pub struct CreateArgs {
 
     #[command(flatten)]
     pub network: NetworkFlags,
+
+    /// Command to run as the container's init (replaces the image CMD;
+    /// the image ENTRYPOINT is preserved), mirroring `docker create`.
+    #[arg(index = 2, trailing_var_arg = true)]
+    pub command: Vec<String>,
+
+    #[command(flatten, next_help_heading = "Advanced boot options")]
+    pub boot: KernelFlags,
 }
 
 pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
@@ -54,15 +64,33 @@ pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<(
 
 impl CreateArgs {
     fn to_box_options(&self, global: &GlobalFlags) -> anyhow::Result<BoxOptions> {
+        self.boot.require_enabled(global.experimental_features())?;
         let mut options = BoxOptions::default();
         self.resource.apply_to(&mut options);
+        self.boot.apply_to(&mut options);
         self.management.apply_to(&mut options)?;
         self.publish.apply_to(&mut options)?;
         self.volume.apply_to(&mut options, global.home.as_deref())?;
         self.network.apply_to(&mut options)?;
+
+        // A `create`d box is a background box: `create` then `start`/`exec` runs
+        // its main command detached (docker's create → start), so the launching
+        // CLI's exit must not tear it down. Foreground/interactive lifecycles go
+        // through `run` instead, which sets detach from `-d`. Without this, a
+        // non-detached created box is killed by the exiting `start` CLI (its
+        // watchdog + the runtime's drop-time auto-stop) before its main command
+        // records an exit code — the box then reports 0 instead of its real
+        // code. Detached boxes have no foreground watcher, so auto-remove cannot
+        // apply — the same rule `run -d` enforces (remove-on-stop with detach is
+        // rejected at sanitize).
+        options.detach = true;
+        options.auto_delete = Some(0);
         options.working_dir = self.workdir.clone();
         if let Some(ref exec) = self.entrypoint {
             options.entrypoint = Some(vec![exec.clone()]);
+        }
+        if !self.command.is_empty() {
+            options.cmd = Some(self.command.clone());
         }
         crate::cli::apply_env_vars(&self.env, &mut options);
         options.rootfs = self.rootfs_spec()?;

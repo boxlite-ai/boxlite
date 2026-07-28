@@ -21,7 +21,8 @@ use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error
 use crate::event_queue::{CRuntimeShutdownCb, EventQueue, RuntimeEvent, push_event};
 use crate::images::ImageHandle;
 use crate::util::c_str_to_string;
-use crate::{CBoxliteError, CBoxliteImageHandle, CBoxliteRuntime};
+use crate::volumes::VolumeHandle;
+use crate::{CBoxliteError, CBoxliteImageHandle, CBoxliteRuntime, CBoxliteVolumeHandle};
 
 /// Opaque handle to a BoxliteRuntime instance with its Tokio runtime and the
 /// per-runtime event queue used by the post-and-drain callback API.
@@ -117,6 +118,26 @@ pub unsafe extern "C" fn boxlite_runtime_images(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     runtime_images(runtime, out_handle, out_error)
+}
+
+#[unsafe(no_mangle)]
+/// Create a runtime-scoped named-volume handle.
+///
+/// On success ownership of `*out_handle` transfers to the caller, which must
+/// release it with `boxlite_volume_free`. The handle may submit operations from
+/// multiple threads; callbacks run only while the parent runtime is drained.
+/// `out_error` may be null and otherwise receives synchronous failures.
+///
+/// # Safety
+///
+/// `runtime` must be a live runtime pointer and `out_handle` must be non-null
+/// and writable. The returned handle must not be used after it is freed.
+pub unsafe extern "C" fn boxlite_runtime_volumes(
+    runtime: *mut CBoxliteRuntime,
+    out_handle: *mut *mut CBoxliteVolumeHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    runtime_volumes(runtime, out_handle, out_error)
 }
 
 /// Async + callback variant of runtime shutdown.
@@ -347,6 +368,47 @@ unsafe fn runtime_images(
     }
 }
 
+unsafe fn runtime_volumes(
+    runtime: *mut RuntimeHandle,
+    out_handle: *mut *mut VolumeHandle,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if runtime.is_null() {
+            write_error(out_error, null_pointer_error("runtime"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if out_handle.is_null() {
+            write_error(out_error, null_pointer_error("out_handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let runtime_ref = &*runtime;
+        if let Err(e) = crate::util::ensure_runtime_live(&runtime_ref.liveness, "access volumes") {
+            let code = error_to_code(&e);
+            write_error(out_error, e);
+            return code;
+        }
+
+        match runtime_ref.runtime.volumes() {
+            Ok(handle) => {
+                *out_handle = Box::into_raw(Box::new(VolumeHandle {
+                    handle,
+                    tokio_rt: runtime_ref.tokio_rt.clone(),
+                    liveness: runtime_ref.liveness.clone(),
+                    queue: runtime_ref.queue.clone(),
+                }));
+                BoxliteErrorCode::Ok
+            }
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
 unsafe fn shutdown_runtime(
     runtime: *mut RuntimeHandle,
     timeout: Option<i32>,
@@ -519,6 +581,26 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::CImageInfoList>(result, user_data, cb),
+            RuntimeEvent::VolumeCreate {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CVolumeInfo>(result, user_data, cb),
+            RuntimeEvent::VolumeGet {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CVolumeInfo>(result, user_data, cb),
+            RuntimeEvent::VolumeList {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CVolumeInfoList>(result, user_data, cb),
+            RuntimeEvent::VolumeRemove {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
             RuntimeEvent::Copy {
                 cb,
                 user_data,

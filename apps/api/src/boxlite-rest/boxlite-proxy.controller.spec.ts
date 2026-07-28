@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ForbiddenException, HttpException, HttpStatus, ServiceUnavailableException } from '@nestjs/common'
+import { ForbiddenException } from '@nestjs/common'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 
@@ -12,44 +12,34 @@ jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
   fixRequestBody: jest.fn(),
 }))
-jest.mock('uuid', () => ({
-  v4: jest.fn(() => 'mock-uuid'),
-  validate: jest.fn(() => true),
-}))
+jest.mock('uuid', () => ({ v4: jest.fn(() => 'mock-uuid'), validate: jest.fn(() => true) }))
 
 const activeAuth = {
   organizationId: 'org-1',
   organization: { id: 'org-1', suspended: false } as any,
 }
 
-function makeBoxService(overrides: Partial<Record<string, any>> = {}) {
-  return {
-    findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1' }),
+function makeHarness() {
+  const boxService = {
+    findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
-    ensureStartedForProxy: jest.fn().mockResolvedValue(undefined),
-    isBillingEnforcementEnabled: jest.fn().mockReturnValue(false),
-    ...overrides,
+    getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
   }
-}
-
-function makeRunnerService() {
-  return {
+  const runnerService = {
     findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
   }
+  const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }
+  const controller = new BoxliteProxyController(boxService as never, runnerService as never, autoResume as never)
+  return { controller, boxService, autoResume }
 }
 
 describe('BoxliteProxyController', () => {
-  beforeEach(() => {
-    jest.clearAllMocks()
-  })
+  beforeEach(() => jest.clearAllMocks())
 
-  it('rewrites public box ids to internal box ids before proxying exec requests to the runner', async () => {
+  it('rewrites public box ids to internal box ids before proxying exec', async () => {
     const proxyHandler = jest.fn()
     jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
-
-    const boxService = makeBoxService()
-    const runnerService = makeRunnerService()
-    const controller = new BoxliteProxyController(boxService as never, runnerService as never)
+    const { controller, boxService } = makeHarness()
     const req = { url: '/api/v1/boxes/public-box/exec' }
     const res = {}
     const next = jest.fn()
@@ -63,171 +53,68 @@ describe('BoxliteProxyController', () => {
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
   })
 
-  it('asks the control plane to start the box before proxying exec, so an auto-started box is not stopped back', async () => {
+  it('returns the public endpoint for JSON tunnel requests', async () => {
+    const { controller, boxService } = makeHarness()
+
+    const result = await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)
+
+    expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
+    expect(result).toEqual({ uri: 'https://3000-box.proxy.test' })
+  })
+
+  it('auto-resumes exec and files but treats metrics as observation-only', async () => {
     jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller, boxService, autoResume } = makeHarness()
 
-    const boxService = makeBoxService()
-    const runnerService = makeRunnerService()
-    const controller = new BoxliteProxyController(boxService as never, runnerService as never)
-    const req = { url: '/api/v1/boxes/public-box/exec' }
+    await controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn())
+    await controller.proxyFiles(activeAuth as never, 'public-box', { url: '/files' } as never, {} as never, jest.fn())
+    expect(autoResume.ensureReady).toHaveBeenCalledTimes(2)
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(2)
 
-    await controller.proxyExec(activeAuth as never, 'public-box', req as never, {} as never, jest.fn())
-
-    expect(boxService.ensureStartedForProxy).toHaveBeenCalledWith('public-box', activeAuth.organization)
-  })
-
-  it('also fires the start hint for files and metrics proxy paths', async () => {
-    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
-
-    const boxService = makeBoxService()
-    const runnerService = makeRunnerService()
-    const controller = new BoxliteProxyController(boxService as never, runnerService as never)
-    const req = { url: '/api/v1/boxes/public-box/files?path=/tmp' }
-
-    await controller.proxyFiles(activeAuth as never, 'public-box', req as never, {} as never, jest.fn())
-    expect(boxService.ensureStartedForProxy).toHaveBeenCalledWith('public-box', activeAuth.organization)
-
-    boxService.ensureStartedForProxy.mockClear()
-    const metricsReq = { url: '/api/v1/boxes/public-box/metrics' }
-    await controller.proxyMetrics(activeAuth as never, 'public-box', metricsReq as never, {} as never, jest.fn())
-    expect(boxService.ensureStartedForProxy).toHaveBeenCalledWith('public-box', activeAuth.organization)
-  })
-
-  it('still proxies the exec when the control-plane start hint fails (best-effort)', async () => {
-    const proxyHandler = jest.fn()
-    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
-
-    const boxService = makeBoxService({
-      ensureStartedForProxy: jest.fn().mockRejectedValue(new Error('db down')),
-    })
-    const runnerService = makeRunnerService()
-    const controller = new BoxliteProxyController(boxService as never, runnerService as never)
-    const req = { url: '/api/v1/boxes/public-box/exec' }
-    const res = {}
-    const next = jest.fn()
-
-    await controller.proxyExec(activeAuth as never, 'public-box', req as never, res as never, next)
-
-    expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
-  })
-
-  it('refuses to proxy when Billing rejects the auto-start', async () => {
-    const proxyHandler = jest.fn()
-    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
-    const billingError = new HttpException({ code: 'BILLING_BALANCE_REQUIRED' }, HttpStatus.PAYMENT_REQUIRED)
-    const boxService = makeBoxService({
-      ensureStartedForProxy: jest.fn().mockRejectedValue(billingError),
-      isBillingEnforcementEnabled: jest.fn().mockReturnValue(true),
-    })
-    const controller = new BoxliteProxyController(boxService as never, makeRunnerService() as never)
-
-    await expect(
-      controller.proxyExec(
-        activeAuth as never,
-        'public-box',
-        { url: '/api/v1/boxes/public-box/exec' } as never,
-        {} as never,
-        jest.fn(),
-      ),
-    ).rejects.toBe(billingError)
-    expect(proxyHandler).not.toHaveBeenCalled()
-  })
-
-  it('refuses to proxy when the Billing admission lock is unavailable', async () => {
-    const proxyHandler = jest.fn()
-    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
-    const billingError = new ServiceUnavailableException('Billing access check is unavailable')
-    const boxService = makeBoxService({
-      ensureStartedForProxy: jest.fn().mockRejectedValue(billingError),
-      isBillingEnforcementEnabled: jest.fn().mockReturnValue(true),
-    })
-    const controller = new BoxliteProxyController(boxService as never, makeRunnerService() as never)
-
-    await expect(
-      controller.proxyExec(
-        activeAuth as never,
-        'public-box',
-        { url: '/api/v1/boxes/public-box/exec' } as never,
-        {} as never,
-        jest.fn(),
-      ),
-    ).rejects.toBe(billingError)
-    expect(proxyHandler).not.toHaveBeenCalled()
-  })
-
-  // ❶ regression guard: if the hint ever regresses to a blocking write that
-  // never resolves, the 2s race fallback must still let the proxy proceed.
-  // Without this test, future refactors could silently drop the setTimeout
-  // tier of Promise.race and the proxy would hang forever.
-  it('still proxies the exec when the start hint hangs past the 2s timeout', async () => {
-    jest.useFakeTimers()
-    const proxyHandler = jest.fn()
-    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
-
-    const boxService = makeBoxService({
-      // Never resolves — simulates the contended-row-lock scenario.
-      ensureStartedForProxy: jest.fn().mockReturnValue(new Promise<void>(() => {})),
-    })
-    const runnerService = makeRunnerService()
-    const controller = new BoxliteProxyController(boxService as never, runnerService as never)
-    const req = { url: '/api/v1/boxes/public-box/exec' }
-    const res = {}
-    const next = jest.fn()
-
-    const pending = controller.proxyExec(activeAuth as never, 'public-box', req as never, res as never, next)
-
-    // Advance past the 2s hint timeout so the setTimeout tier of the race wins.
-    await jest.advanceTimersByTimeAsync(2500)
-    await pending
-
-    expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
-    jest.useRealTimers()
-  })
-
-  it('fails closed when the start hint times out while Billing enforcement is enabled', async () => {
-    jest.useFakeTimers()
-    const proxyHandler = jest.fn()
-    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
-    const boxService = makeBoxService({
-      ensureStartedForProxy: jest.fn().mockReturnValue(new Promise<void>(() => {})),
-      isBillingEnforcementEnabled: jest.fn().mockReturnValue(true),
-    })
-    const controller = new BoxliteProxyController(boxService as never, makeRunnerService() as never)
-
-    const pending = controller.proxyExec(
+    autoResume.ensureReady.mockClear()
+    boxService.updateLastActivityAt.mockClear()
+    await controller.proxyMetrics(
       activeAuth as never,
       'public-box',
-      { url: '/api/v1/boxes/public-box/exec' } as never,
+      { url: '/metrics' } as never,
       {} as never,
       jest.fn(),
     )
-    const assertion = expect(pending).rejects.toThrow(ServiceUnavailableException)
-    await jest.advanceTimersByTimeAsync(2500)
-    await assertion
-
-    expect(proxyHandler).not.toHaveBeenCalled()
-    jest.useRealTimers()
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+    expect(boxService.updateLastActivityAt).not.toHaveBeenCalled()
   })
 
-  // ❷ suspension is a hard wall: ForbiddenException must surface as 403 to
-  // the caller and the proxy must NOT run. Without re-throw, a suspended org
-  // could exec / files / metrics a STOPPED box back to STARTED, bypassing
-  // the start() gate entirely.
-  it('refuses to proxy when the start hint reports a suspended organization', async () => {
+  it('does not proxy when the strict AutoResume gate fails', async () => {
     const proxyHandler = jest.fn()
     jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
-
-    const boxService = makeBoxService({
-      ensureStartedForProxy: jest.fn().mockRejectedValue(new ForbiddenException('Organization is suspended')),
-    })
-    const runnerService = makeRunnerService()
-    const controller = new BoxliteProxyController(boxService as never, runnerService as never)
-    const req = { url: '/api/v1/boxes/public-box/exec' }
+    const { controller, autoResume } = makeHarness()
+    autoResume.ensureReady.mockRejectedValue(new Error('start failed'))
 
     await expect(
-      controller.proxyExec(activeAuth as never, 'public-box', req as never, {} as never, jest.fn()),
-    ).rejects.toThrow(ForbiddenException)
+      controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn()),
+    ).rejects.toThrow('start failed')
+    expect(proxyHandler).not.toHaveBeenCalled()
+  })
 
+  it('does not auto-resume a box whose autoResume switch is off', async () => {
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller, boxService, autoResume } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: false })
+
+    await controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn())
+
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+  })
+
+  it('surfaces suspended-organization failures and never proxies', async () => {
+    const proxyHandler = jest.fn()
+    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
+    const { controller, autoResume } = makeHarness()
+    autoResume.ensureReady.mockRejectedValue(new ForbiddenException('Organization is suspended'))
+
+    await expect(
+      controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn()),
+    ).rejects.toThrow(ForbiddenException)
     expect(proxyHandler).not.toHaveBeenCalled()
   })
 })

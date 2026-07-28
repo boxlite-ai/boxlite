@@ -1,7 +1,7 @@
 package boxlite
 
 /*
-#include "boxlite.h"
+#include <boxlite.h>
 #include <stdlib.h>
 */
 import "C"
@@ -183,6 +183,9 @@ type boxConfig struct {
 	entrypoint []string
 	cmd        []string
 	autoRemove *bool
+	autoPause  *uint32
+	autoDelete *uint32
+	autoResume *bool
 	detach     *bool
 	network    *NetworkSpec
 	secrets    []Secret
@@ -295,7 +298,26 @@ func WithSecret(secret Secret) BoxOption {
 	}
 }
 
+// WithAutoPauseInterval configures the cloud AutoPause idle TTL in seconds.
+// A value of 0 disables AutoPause. Local runtimes return Unsupported.
+func WithAutoPauseInterval(seconds uint32) BoxOption {
+	return func(c *boxConfig) { c.autoPause = &seconds }
+}
+
+// WithAutoDeleteInterval configures the cloud AutoDelete TTL in seconds.
+// A value of 0 disables AutoDelete. Local runtimes return Unsupported.
+func WithAutoDeleteInterval(seconds uint32) BoxOption {
+	return func(c *boxConfig) { c.autoDelete = &seconds }
+}
+
+// WithAutoResumeEnabled configures whether the box automatically resumes when
+// accessed after AutoPause. Defaults to true to preserve existing behavior.
+func WithAutoResumeEnabled(enabled bool) BoxOption {
+	return func(c *boxConfig) { c.autoResume = &enabled }
+}
+
 // WithAutoRemove sets whether the box is auto-removed on stop.
+// Deprecated: use WithAutoDeleteInterval.
 func WithAutoRemove(v bool) BoxOption {
 	return func(c *boxConfig) { c.autoRemove = &v }
 }
@@ -465,8 +487,17 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		C.free(unsafe.Pointer(cValue))
 		C.free(unsafe.Pointer(cPlaceholder))
 	}
+	if cfg.autoPause != nil {
+		C.boxlite_options_set_auto_pause_interval(cOpts, C.uint32_t(*cfg.autoPause))
+	}
 	if cfg.autoRemove != nil {
 		C.boxlite_options_set_auto_remove(cOpts, boolToCInt(*cfg.autoRemove))
+	}
+	if cfg.autoDelete != nil {
+		C.boxlite_options_set_auto_delete_interval(cOpts, C.uint32_t(*cfg.autoDelete))
+	}
+	if cfg.autoResume != nil {
+		C.boxlite_options_set_auto_resume_enabled(cOpts, boolToCInt(*cfg.autoResume))
 	}
 	if cfg.detach != nil {
 		C.boxlite_options_set_detach(cOpts, boolToCInt(*cfg.detach))

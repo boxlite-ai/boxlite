@@ -5,15 +5,30 @@
 
 use super::command::ContainerCommand;
 use super::spec::UserMount;
-use super::stdio::ContainerStdio;
-use super::{kill, spec, start};
+use super::stdio::{ContainerStdio, InitIo};
+use super::{console_socket, kill, spec, start};
 use crate::layout::GuestLayout;
+use crate::service::exec::exec_handle::{ExecHandle, PtyConfig};
 use crate::service::exec::InitHealthCheck;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::Container as LibContainer;
 use libcontainer::signal::Signal;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+/// Size init's PTY opens at.
+///
+/// Deliberately not configurable at create time: a box outlives the clients
+/// that attach to it, so a size captured then would describe a terminal that no
+/// longer exists. The attaching client's `ResizeTty` sets the real size, and
+/// until one attaches nothing is rendering anyway. 80x24 is the VT100 default
+/// every terminal falls back to.
+const DEFAULT_INIT_PTY: PtyConfig = PtyConfig {
+    rows: 24,
+    cols: 80,
+    x_pixels: 0,
+    y_pixels: 0,
+};
 
 /// OCI container
 ///
@@ -81,6 +96,7 @@ impl Container {
     /// - Failed to create container directory
     /// - Failed to create or start container
     /// - Init process exited immediately
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         container_id: &str,
         rootfs: impl AsRef<Path>,
@@ -89,6 +105,7 @@ impl Container {
         workdir: impl AsRef<Path>,
         user: &str,
         user_mounts: Vec<UserMount>,
+        tty: bool,
     ) -> BoxliteResult<Self> {
         let rootfs = rootfs.as_ref();
         let workdir = workdir.as_ref();
@@ -163,15 +180,37 @@ impl Container {
             gid,
             &layout.containers_dir(),
             &user_mounts,
+            tty,
         )?;
 
-        // Create stdio pipes before container creation.
-        // These keep the init process alive by holding stdin open.
-        let (stdio, init_fds) = ContainerStdio::new()?;
+        let stdio = if tty {
+            // libcontainer allocates the PTY while creating init and passes the
+            // master back over this socket, so the socket must exist before the
+            // build and be read after it — a PTY, unlike a pipe, cannot be made
+            // before the process that owns the other end.
+            let socket = console_socket::ConsoleSocket::new(container_id)?;
+            start::create_container_with_stdio(
+                container_id,
+                &state_root,
+                &bundle_path,
+                start::InitIoSetup::Console(socket.path().to_string()),
+            )?;
+            ContainerStdio::pty(socket.receive_pty_master()?)
+        } else {
+            // Pipes exist before the container does. The guest holds stdin's
+            // write-end, so init's read() blocks instead of seeing EOF.
+            let (stdio, init_fds) = ContainerStdio::pipes()?;
+            start::create_container_with_stdio(
+                container_id,
+                &state_root,
+                &bundle_path,
+                start::InitIoSetup::Pipes(init_fds),
+            )?;
+            stdio
+        };
 
-        // Create and start container with custom stdio
-        start::create_container_with_stdio(container_id, &state_root, &bundle_path, init_fds)?;
-        start::start_container(container_id, &state_root)?;
+        // Note: init is *created*, not started. `run_init()` does that, so a
+        // caller can attach to the main command before it runs.
 
         Ok(Self {
             id: container_id.to_string(),
@@ -182,6 +221,16 @@ impl Container {
             stdio,
             is_shutdown: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// Run the init process of a container that was created but not started.
+    ///
+    /// Separated from creation so the host can attach to the main command first
+    /// — docker's create → attach → start. Fused, a command that finishes
+    /// immediately can be gone before an attach issued after start reaches the
+    /// guest, taking its output and exit code with it when the VM powers off.
+    pub fn run_init(&self) -> BoxliteResult<()> {
+        start::start_container(&self.id, &self.state_root)
     }
 
     /// Check if container init process is running
@@ -238,6 +287,57 @@ impl Container {
     #[allow(dead_code)] // API completeness, may be used by future RPC handlers
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// PID of the container's init process, from libcontainer state.
+    ///
+    /// `None` if the state can't be loaded or init never started.
+    pub fn init_pid(&self) -> Option<nix::unistd::Pid> {
+        let container_state_path = self.container_state_path();
+        match LibContainer::load(container_state_path) {
+            Ok(libcontainer) => libcontainer.pid(),
+            Err(e) => {
+                tracing::warn!(
+                    container_id = %self.id,
+                    error = %e,
+                    "Failed to load container state for init pid"
+                );
+                None
+            }
+        }
+    }
+
+    /// Build the exec-session handle for the container's init process — the
+    /// session the host attaches to as the box's *main command*.
+    ///
+    /// Whether init sits on pipes or a PTY is decided at container creation and
+    /// is nobody else's business, so it is resolved here rather than leaking a
+    /// tuple of fds and a terminal flag to the service layer.
+    ///
+    /// Returns `None` if init has no pid (it is gone) or its stdio was already
+    /// taken. Callable once.
+    pub fn take_init_exec_handle(&mut self) -> BoxliteResult<Option<ExecHandle>> {
+        let Some(pid) = self.init_pid() else {
+            return Ok(None);
+        };
+        let Some(io) = self.stdio.take_init_io()? else {
+            return Ok(None);
+        };
+
+        let handle = match io {
+            InitIo::Pipes {
+                stdin,
+                stdout,
+                stderr,
+            } => ExecHandle::new(pid, stdin, stdout, Some(stderr)),
+            // Mirrors the tenant PTY path: the master becomes stdin+stdout and
+            // is retained for window-size ioctls, so ResizeTty reaches the main
+            // command exactly as it reaches an exec.
+            InitIo::Pty { master } => {
+                super::command::create_pty_child(pid, master, DEFAULT_INIT_PTY)?
+            }
+        };
+        Ok(Some(handle))
     }
 
     /// Create a command builder for executing processes in this container

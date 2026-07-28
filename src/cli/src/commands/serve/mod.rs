@@ -73,6 +73,36 @@ struct AppState {
     api_key: Option<String>,
 }
 
+/// Which stdio session an [`ActiveExecution`] fronts.
+///
+/// Both kinds live in the same `executions` registry, keyed by execution
+/// id — but only an exec session can be *addressed* by that id: the main
+/// session's id is the container id, which the guest assigns and `BoxInfo`
+/// does not carry, so a client on `/boxes/{id}/attach` can only name the
+/// box. Marking the kind at insert time is what lets `find_main_session`
+/// recognize an already-open main session from the box id alone.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::commands::serve) enum SessionKind {
+    /// A tenant exec — `POST /boxes/{box_id}/exec`.
+    Exec,
+    /// The box's main command session: the container's init (docker
+    /// semantics — `run IMAGE COMMAND` runs COMMAND *as* init). The guest
+    /// registers it under `execution_id == container_id`.
+    Main,
+}
+
+/// Response header on the `/boxes/{box_id}/attach` upgrade carrying the
+/// main session's execution id (the container id).
+///
+/// The client cannot know that id up front, but it needs one for every
+/// *other* thing an `Execution` does — signal, resize, kill, status probe,
+/// reconnect — all of which are addressed by execution id. Handing it back
+/// on the 101 makes the main session an ordinary session from that point
+/// on: no parallel control path, no second-class `Execution`. The client
+/// half of this contract is `RestBox::attach` in
+/// `src/boxlite/src/rest/litebox.rs`, which pins the same header name.
+pub(in crate::commands::serve) const MAIN_SESSION_ID_HEADER: &str = "x-boxlite-execution-id";
+
 /// Server-side state for one execution. The underlying `Execution`'s
 /// stdout/stderr are consumed once at creation and tee'd into broadcast
 /// channels so any number of attach sessions (over time) can subscribe.
@@ -80,6 +110,7 @@ struct AppState {
 /// `signal()`, `resize_tty()` and reattach all work.
 pub(in crate::commands::serve) struct ActiveExecution {
     box_id: String,
+    kind: SessionKind,
     execution: Execution,
     /// Stdin sink owned by the WS `/attach` session.
     stdin: tokio::sync::Mutex<Option<ExecStdin>>,
@@ -226,7 +257,12 @@ impl BacklogReceiver {
 }
 
 impl ActiveExecution {
-    fn new(box_id: String, mut execution: Execution, stdin: Option<ExecStdin>) -> Arc<Self> {
+    fn new(
+        box_id: String,
+        kind: SessionKind,
+        mut execution: Execution,
+        stdin: Option<ExecStdin>,
+    ) -> Arc<Self> {
         let stdout = execution.stdout();
         let stderr = execution.stderr();
 
@@ -243,6 +279,7 @@ impl ActiveExecution {
         let now = Instant::now();
         let active = Arc::new(Self {
             box_id,
+            kind,
             execution,
             stdin: tokio::sync::Mutex::new(stdin),
             stdout_bus: stdout_bus.clone(),
@@ -314,6 +351,10 @@ impl ActiveExecution {
 
     pub(in crate::commands::serve) fn box_id(&self) -> &str {
         &self.box_id
+    }
+
+    pub(in crate::commands::serve) fn kind(&self) -> SessionKind {
+        self.kind
     }
 
     pub(in crate::commands::serve) fn stdout_bus(&self) -> &BacklogBroadcast {
@@ -556,10 +597,28 @@ async fn run_reap_once(
         // failing for an already-exited process.
         if active.is_done() {
             if !active.should_retain(now) {
-                state.executions.write().await.remove(&id);
+                // Compare-and-remove, for the same reason as `try_kill_and_evict`:
+                // a restarted box re-registers its main session under the same
+                // container id, and this snapshot may already be stale.
+                evict_if_same(state, &id, &active).await;
             }
             continue;
         }
+
+        // A main session is never an orphan and never stale: it is the box's
+        // init, so killing it powers the VM off and destroys the box. A client
+        // walking away from `docker attach` does not stop the container, and
+        // neither may this; nor may the lifetime cap, which exists to bound
+        // *exec* sessions, not the workload they run beside.
+        //
+        // Every branch below signals or kills, so Main stops here. The
+        // done-eviction above still applies to it — a main session whose init
+        // has exited really is finished, and evicting a dead entry kills
+        // nothing.
+        if active.kind() == SessionKind::Main {
+            continue;
+        }
+
         if now.duration_since(active.created_at()) > max_lifetime {
             active.mark_reaping_kill().await;
             tracing::warn!(exec_id = %id, "session lifetime cap reached, killing");
@@ -605,7 +664,7 @@ async fn try_kill_and_evict(state: &AppState, id: &str, active: &Arc<ActiveExecu
     let result = tokio::time::timeout(REAPER_SIGNAL_TIMEOUT, active.execution().kill()).await;
     match result {
         Ok(Ok(())) => {
-            state.executions.write().await.remove(id);
+            evict_if_same(state, id, active).await;
         }
         Ok(Err(e)) => {
             tracing::warn!(exec_id = %id, err = %e, "kill failed, will retry next tick");
@@ -613,6 +672,25 @@ async fn try_kill_and_evict(state: &AppState, id: &str, active: &Arc<ActiveExecu
         Err(_) => {
             tracing::warn!(exec_id = %id, "kill timed out, will retry next tick");
         }
+    }
+}
+
+/// Remove `id` only if it still maps to the session we decided to reap.
+///
+/// The reaper works from a snapshot taken under an earlier read lock and awaits
+/// in between (a kill can block for `REAPER_SIGNAL_TIMEOUT`), so by the time it
+/// evicts, the key may have been rebound. That is not hypothetical for the main
+/// session: its id *is* the container id, which is fixed at box creation, so a
+/// box that restarts re-registers a brand-new session under the very same key.
+/// A bare `remove(id)` would then delete the live session out from under its
+/// client — and the client could not recover, because the guest refuses a second
+/// `Attach` on a session that already has one.
+async fn evict_if_same(state: &AppState, id: &str, doomed: &Arc<ActiveExecution>) {
+    let mut map = state.executions.write().await;
+    if let Some(current) = map.get(id)
+        && Arc::ptr_eq(current, doomed)
+    {
+        map.remove(id);
     }
 }
 
@@ -632,6 +710,18 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         cpus: info.cpus,
         memory_mib: info.memory_mib,
         labels: info.labels.clone(),
+        auto_pause: info.auto_pause,
+        auto_delete: info.auto_delete,
+        auto_resume: info.auto_resume,
+        exit_code: info.exit_code,
+    }
+}
+
+fn volume_info_to_response(info: &boxlite::runtime::types::VolumeInfo) -> types::VolumeResponse {
+    types::VolumeResponse {
+        id: info.id.clone(),
+        created_at: info.created_at.to_rfc3339(),
+        size_bytes: info.size_bytes,
     }
 }
 
@@ -663,6 +753,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
     // uniformly. Operators who want a different policy run the
     // server with a different default; clients cannot relax it.
 
+    let auto_delete = req.auto_delete.unwrap_or(0);
     Ok(BoxOptions {
         rootfs,
         cpus: req.cpus,
@@ -674,13 +765,18 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         entrypoint: req.entrypoint.clone(),
         cmd: req.cmd.clone(),
         user: req.user.clone(),
-        auto_remove: req.auto_remove.unwrap_or(false),
-        detach: req.detach.unwrap_or(true),
+        tty: req.tty.unwrap_or(false),
+        auto_pause: req.auto_pause,
+        auto_delete: Some(auto_delete),
+        auto_resume: req.auto_resume,
+        // Preserve the serve API's historical detached default for persistent
+        // boxes, but do not synthesize an invalid detached remove-on-stop box.
+        detach: req.detach.unwrap_or(auto_delete == 0),
         ..Default::default()
     })
 }
 
-fn build_box_command(req: &ExecRequest) -> BoxCommand {
+fn build_box_command(req: &ExecRequest) -> Result<BoxCommand, boxlite::BoxliteError> {
     let mut cmd = BoxCommand::new(&req.command).args(req.args.iter().map(String::as_str));
 
     if let Some(ref env_map) = req.env {
@@ -695,9 +791,9 @@ fn build_box_command(req: &ExecRequest) -> BoxCommand {
         cmd = cmd.tty(true);
     }
     if let Some(secs) = req.timeout_seconds {
-        cmd = cmd.timeout(std::time::Duration::from_secs_f64(secs));
+        cmd = cmd.timeout_seconds(secs)?;
     }
-    cmd
+    Ok(cmd)
 }
 
 // ============================================================================
@@ -817,10 +913,24 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 // ============================================================================
 
 async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>, Response> {
-    // Check cache first
-    if let Some(b) = state.boxes.read().await.get(box_id) {
-        return Ok(Arc::clone(b));
+    // Check cache first.
+    //
+    // A cached handle is only good while its box is up. A box can now stop
+    // *itself* — its main command exits and the guest powers the VM off — and
+    // such a handle is spent: it holds the dead VM and can never boot another.
+    // The runtime's own cache is invalidated by the exit watcher, but this one is
+    // ours, and nothing was clearing it. Serving from it would answer every later
+    // `/exec`, `/files` and `/attach` on that box with a corpse, forever.
+    //
+    // So a non-Running box gets a fresh handle, which *can* boot it. That is the
+    // auto-restart the cloud depends on: its reaper stops idle boxes and the next
+    // SDK call is expected to bring them back.
+    if let Some(cached) = state.boxes.read().await.get(box_id)
+        && cached.info().status.is_active()
+    {
+        return Ok(Arc::clone(cached));
     }
+    state.boxes.write().await.remove(box_id);
 
     // Fetch from runtime
     match state.runtime.get(box_id).await {
@@ -841,11 +951,119 @@ async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>
 }
 
 // ============================================================================
+// Main Session (container init)
+// ============================================================================
+
+/// Find a box's already-open main session in the registry.
+///
+/// Linear, because the registry is keyed by execution id and the main
+/// session's id (the container id) is exactly what the caller doesn't
+/// know — see [`SessionKind`]. The registry holds one entry per live
+/// session on this server, so the scan is bounded by that, and it only
+/// runs on attach.
+fn find_main_session(
+    executions: &HashMap<String, Arc<ActiveExecution>>,
+    box_id: &str,
+) -> Option<Arc<ActiveExecution>> {
+    executions
+        .values()
+        // `is_done()` matters here in a way it never did for execs. A main
+        // session's id is the container id, which is fixed at box creation and
+        // is therefore the *same across reboots* — so a finished session from
+        // the previous run would still match this box, and an attach after a
+        // restart would be handed the old VM's dead stream, its stale backlog
+        // and its stale exit code. An exec cannot collide that way: it gets a
+        // fresh id every time.
+        .find(|active| {
+            active.box_id() == box_id && active.kind() == SessionKind::Main && !active.is_done()
+        })
+        .cloned()
+}
+
+/// Return the box's main session, calling `open` to create it only if the
+/// box does not have one yet.
+///
+/// `open` runs at most once per box while the session is registered: the
+/// guest binds init's stdout/stderr to the *first* `Attach` RPC and
+/// answers later ones with `already_exists` (guest `ExecState::attach`),
+/// so a second `LiteBox::attach()` would hand back a permanently silent
+/// `Execution` — and, whichever one won the registry, leave a client
+/// attached to a dead stream. The caller therefore holds the registry
+/// write lock across this whole function, which is what makes the
+/// check-then-open atomic against a concurrent first attach.
+async fn register_main_session<F, Fut>(
+    executions: &mut HashMap<String, Arc<ActiveExecution>>,
+    box_id: &str,
+    open: F,
+) -> Result<Arc<ActiveExecution>, boxlite::BoxliteError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<Execution, boxlite::BoxliteError>>,
+{
+    if let Some(active) = find_main_session(executions, box_id) {
+        return Ok(active);
+    }
+
+    let mut execution = open().await?;
+    let stdin = execution.stdin();
+    let exec_id = execution.id().clone();
+    let active = ActiveExecution::new(box_id.to_string(), SessionKind::Main, execution, stdin);
+    executions.insert(exec_id, Arc::clone(&active));
+    Ok(active)
+}
+
+/// Get the box's main session for `GET /boxes/{box_id}/attach`, opening it
+/// on the first attach.
+///
+/// A cold box is now booted *inside* the registry write lock, which the earlier
+/// design deliberately avoided. It has to be: the client must be attached before
+/// the main command runs (create → attach → start), so the attach is no longer
+/// separable from the boot, and the check-then-open has to stay atomic — the
+/// guest refuses a second Attach on one session, so a racing client would end up
+/// holding a permanently silent `Execution`. The cost is stated plainly at the
+/// call site and it is not small: a cold boot pulls the image, which is
+/// unbounded, and everything else queues behind it.
+///
+/// It deliberately does NOT call `start()` first. `start()` on a *Stopped* box
+/// runs the restart pipeline, and the box's init is the user's main command —
+/// so attaching to a finished job would silently run the job again. `attach()`
+/// already does the right thing for every status by itself: it boots a
+/// `Configured` box (which has never run) and refuses a `Stopped` one.
+async fn get_or_attach_main_session(
+    state: &AppState,
+    box_id: &str,
+) -> Result<Arc<ActiveExecution>, Response> {
+    if let Some(active) = find_main_session(&*state.executions.read().await, box_id) {
+        return Ok(active);
+    }
+
+    let litebox = get_or_fetch_box(state, box_id).await?;
+
+    // Attaching boots the box (creating its container) and subscribes to the main
+    // command's session, but does *not* run init — `POST /start` does. So a client
+    // mid `run --url` is registered here, on the stream, before it starts the box:
+    // docker's create → attach → start, split across the two calls it makes.
+    //
+    // This runs under the registry write lock, and booting a cold box pulls its
+    // image, which is unbounded, so every other `/exec`, `/attach` and the reaper
+    // wait behind it. The lock buys the atomic check-then-open that stops two
+    // clients opening two guest streams for one session — the guest refuses a
+    // second Attach, so the loser would get a permanently silent Execution. A
+    // per-box open lock would scope that to the same box; worth doing, not here.
+    let mut executions = state.executions.write().await;
+    register_main_session(&mut executions, box_id, || async {
+        litebox.attach(None).await
+    })
+    .await
+    .map_err(|e| error_from_boxlite(&e))
+}
+
+// ============================================================================
 // Router
 // ============================================================================
 
 fn build_router(state: Arc<AppState>) -> Router {
-    use handlers::{advanced, boxes, config, executions, files, me, metrics, snapshots};
+    use handlers::{advanced, boxes, config, executions, files, me, metrics, snapshots, volumes};
 
     Router::new()
         // Identity (no tenant prefix)
@@ -853,6 +1071,15 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/config", get(config::get_config))
         // Runtime metrics
         .route("/v1/metrics", get(metrics::runtime_metrics))
+        // Named volumes
+        .route(
+            "/v1/volumes",
+            post(volumes::create_volume).get(volumes::list_volumes),
+        )
+        .route(
+            "/v1/volumes/{id}",
+            get(volumes::get_volume).delete(volumes::remove_volume),
+        )
         // Box CRUD (import first — static path before param path)
         .route("/v1/boxes/import", post(advanced::import_box))
         .route(
@@ -878,6 +1105,12 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/v1/boxes/{box_id}/metrics",
             get(metrics::box_metrics),
+        )
+        // Main command session (container init) — docker's
+        // `POST /containers/{id}/attach`, distinct from exec-attach below.
+        .route(
+            "/v1/boxes/{box_id}/attach",
+            get(executions::attach_box),
         )
         // Execution
         .route(
@@ -1024,6 +1257,27 @@ mod tests {
         assert!(constant_time_eq(b"", b""));
     }
 
+    #[test]
+    fn build_box_command_rejects_invalid_timeout_seconds() {
+        for seconds in [-1.0, f64::NAN, f64::INFINITY] {
+            let req = ExecRequest {
+                command: "true".to_string(),
+                args: Vec::new(),
+                stdin: None,
+                env: None,
+                timeout_seconds: Some(seconds),
+                working_dir: None,
+                tty: false,
+            };
+
+            let err = build_box_command(&req).expect_err("invalid timeout should fail");
+            assert!(
+                matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("timeout_seconds")),
+                "unexpected error for {seconds:?}: {err}"
+            );
+        }
+    }
+
     // ============================================================
     // REST `security` wire contract: server-owned only.
     //
@@ -1034,6 +1288,50 @@ mod tests {
     // is rejected at deserialize time (i.e. 400 from the API)
     // rather than silently relaxing the server's policy.
     // ============================================================
+
+    /// `-t` has to survive the wire, or a REST `run -it` silently gets pipes.
+    ///
+    /// The terminal belongs to the container's init, so it is decided at
+    /// *create* and nothing downstream can add it. The client only sends the
+    /// field when asked (the server rejects unknown fields), so both shapes
+    /// must work: present-and-true, and absent.
+    #[test]
+    fn build_box_options_carries_tty_from_the_wire() {
+        let with_tty: super::types::CreateBoxRequest =
+            serde_json::from_str(r#"{"image": "alpine:latest", "tty": true}"#)
+                .expect("body with tty must deserialize");
+        assert!(
+            build_box_options(&with_tty).expect("build").tty,
+            "a REST client asking for a terminal must get one"
+        );
+
+        let without: super::types::CreateBoxRequest =
+            serde_json::from_str(r#"{"image": "alpine:latest"}"#).expect("body must deserialize");
+        assert!(
+            !build_box_options(&without).expect("build").tty,
+            "no tty asked for, none granted"
+        );
+    }
+
+    #[test]
+    fn build_box_options_carries_lifecycle_policy_and_uses_compatible_detach_default() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"auto_pause": 900, "auto_delete": 3600, "auto_resume": false}"#,
+        )
+        .expect("lifecycle body must deserialize");
+        let opts = build_box_options(&req).expect("build lifecycle options");
+        assert_eq!(opts.auto_pause, Some(900));
+        assert_eq!(opts.auto_delete, Some(3600));
+        assert_eq!(opts.auto_resume, Some(false));
+        assert!(!opts.detach, "remove-on-stop must not default to detached");
+
+        let persistent: super::types::CreateBoxRequest =
+            serde_json::from_str(r#"{"auto_delete": 0}"#).expect("body must deserialize");
+        assert!(
+            build_box_options(&persistent).expect("build").detach,
+            "persistent boxes keep the serve API's historical detached default"
+        );
+    }
 
     #[test]
     fn build_box_options_empty_body_lands_on_server_default_security() {
@@ -1111,8 +1409,192 @@ mod tests {
     ) {
         let (exec, stdout_tx, stderr_tx, _stdin_rx, result_tx) =
             boxlite::Execution::stub("test-exec");
-        let active = ActiveExecution::new("test-box".to_string(), exec, None);
+        let active = ActiveExecution::new("test-box".to_string(), SessionKind::Exec, exec, None);
         (active, stdout_tx, stderr_tx, result_tx)
+    }
+
+    // ---------------------------------------------------------------
+    // Main session (container init) — `GET /boxes/{id}/attach`
+    // ---------------------------------------------------------------
+
+    /// Channel handles that keep a stub `Execution` alive. Dropping them
+    /// closes the result channel, which the wait task reads as "process
+    /// exited"; a main session under test must stay running.
+    #[allow(dead_code)]
+    struct StubChannels(
+        tokio::sync::mpsc::UnboundedSender<String>,
+        tokio::sync::mpsc::UnboundedSender<String>,
+        tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+        tokio::sync::mpsc::UnboundedSender<boxlite::ExecResult>,
+    );
+
+    fn stub_execution(id: &str) -> (Execution, StubChannels) {
+        let (exec, stdout_tx, stderr_tx, stdin_rx, result_tx) = boxlite::Execution::stub(id);
+        (
+            exec,
+            StubChannels(stdout_tx, stderr_tx, stdin_rx, result_tx),
+        )
+    }
+
+    // A second `GET /boxes/{id}/attach` must reuse the registered main
+    // session, never open a second one. The guest binds init's stdout to
+    // the first Attach RPC and rejects later ones, so a second
+    // `LiteBox::attach()` would return an Execution that never streams —
+    // and would hand a second client a live attach slot. The registry
+    // entry is the record that the session is already open, so the second
+    // call must find it and get refused by `mark_connected()` (the 409).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn second_attach_reuses_main_session_and_never_reopens_it() {
+        let mut executions: HashMap<String, Arc<ActiveExecution>> = HashMap::new();
+        let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        // A tenant exec on the same box must not be mistaken for the main
+        // session — it is addressed by its own id and has its own slot.
+        let (tenant, _tenant_channels) = stub_execution("exec-1");
+        executions.insert(
+            "exec-1".to_string(),
+            ActiveExecution::new("box1".to_string(), SessionKind::Exec, tenant, None),
+        );
+
+        let (init, _init_channels) = stub_execution("container-1");
+        let mut init = Some(init);
+        let first = register_main_session(&mut executions, "box1", || {
+            opens.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let init = init.take().expect("opener runs once");
+            async move { Ok(init) }
+        })
+        .await
+        .expect("first attach opens the main session");
+
+        // Second attach: the opener here would produce a *different*
+        // session. If it ever runs, we have opened a second guest stream.
+        let (decoy, _decoy_channels) = stub_execution("container-DECOY");
+        let mut decoy = Some(decoy);
+        let second = register_main_session(&mut executions, "box1", || {
+            opens.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let decoy = decoy.take().expect("opener runs once");
+            async move { Ok(decoy) }
+        })
+        .await
+        .expect("second attach resolves the main session");
+
+        assert_eq!(
+            opens.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the second attach must reuse the registered main session, not open another one",
+        );
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "both attaches must resolve to the same ActiveExecution",
+        );
+        assert_eq!(
+            second.execution().id(),
+            "container-1",
+            "the main session keeps the container id it was opened with",
+        );
+        assert!(
+            executions.contains_key("container-1"),
+            "the main session is registered under its container id, alongside tenant execs: {:?}",
+            executions.keys().collect::<Vec<_>>(),
+        );
+
+        // The single-attach claim is what turns the reused entry into a
+        // 409 for the second client, exactly as for an exec session.
+        assert!(first.mark_connected().await, "first client claims the slot");
+        assert!(
+            !second.mark_connected().await,
+            "a second client on an attached main session must be refused (409)",
+        );
+    }
+
+    // The main session is found by box id — the container id is not
+    // knowable to the caller. Exec sessions and other boxes' sessions must
+    // never answer that lookup.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn find_main_session_matches_only_the_boxs_init_session() {
+        let mut executions: HashMap<String, Arc<ActiveExecution>> = HashMap::new();
+
+        let (exec, _exec_channels) = stub_execution("exec-1");
+        executions.insert(
+            "exec-1".to_string(),
+            ActiveExecution::new("box1".to_string(), SessionKind::Exec, exec, None),
+        );
+        let (other_init, _other_channels) = stub_execution("container-2");
+        executions.insert(
+            "container-2".to_string(),
+            ActiveExecution::new("box2".to_string(), SessionKind::Main, other_init, None),
+        );
+
+        assert!(
+            find_main_session(&executions, "box1").is_none(),
+            "box1 has only an exec session — attaching must open its main session, not adopt the exec",
+        );
+
+        let (init, _init_channels) = stub_execution("container-1");
+        executions.insert(
+            "container-1".to_string(),
+            ActiveExecution::new("box1".to_string(), SessionKind::Main, init, None),
+        );
+
+        let found = find_main_session(&executions, "box1").expect("box1 main session");
+        assert_eq!(
+            found.execution().id(),
+            "container-1",
+            "must not return box2's main session",
+        );
+    }
+
+    // The container-attach route must be registered at the path the client
+    // builds (`RestBox::attach` → `/v1/boxes/{id}/attach`). A method it
+    // does not serve proves the path matched (405); an adjacent path that
+    // was never registered proves the opposite (404). Neither reaches a
+    // handler, so no box or VM is touched.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn container_attach_route_is_registered() {
+        // A REST-backed runtime keeps AppState cheap: no local runtime
+        // dirs, no embedded-runtime extraction. Routing is decided before
+        // any handler runs, so the runtime is never called.
+        let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+            "http://127.0.0.1:1".to_string(),
+        ))
+        .expect("rest runtime");
+        let state = Arc::new(AppState {
+            runtime,
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+        });
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, build_router(state)).await;
+        });
+
+        let http = reqwest::Client::new();
+        let attached = http
+            .post(format!("http://127.0.0.1:{port}/v1/boxes/box1/attach"))
+            .send()
+            .await
+            .expect("POST /attach");
+        assert_eq!(
+            attached.status().as_u16(),
+            405,
+            "GET /v1/boxes/{{box_id}}/attach must be registered (405 = path matched, method did not)",
+        );
+
+        let unrouted = http
+            .get(format!("http://127.0.0.1:{port}/v1/boxes/box1/attach/nope"))
+            .send()
+            .await
+            .expect("GET unregistered path");
+        assert_eq!(
+            unrouted.status().as_u16(),
+            404,
+            "control: an unregistered path must 404, so the 405 above is meaningful",
+        );
+
+        server.abort();
     }
 
     // ---------------------------------------------------------------
@@ -1268,6 +1750,126 @@ mod tests {
         assert!(
             !active.should_retain(far_future),
             "exec past the retention grace must not be retained",
+        );
+    }
+
+    /// A finished main session must not be handed to a restarted box.
+    ///
+    /// Unlike an exec — which gets a fresh id every time — the main session's id
+    /// is the container id, fixed at box creation and therefore identical across
+    /// reboots. So the previous run's dead session still matches this box, and
+    /// without an `is_done()` filter a post-restart attach would be given the
+    /// old VM's stream, its stale backlog and its stale exit code, while the new
+    /// boot's init session was never registered at all.
+    #[tokio::test]
+    async fn find_main_session_skips_a_finished_one_so_a_restart_gets_a_new_session() {
+        let (exec, channels) = stub_execution("cid-main");
+        let finished = ActiveExecution::new("box1".to_string(), SessionKind::Main, exec, None);
+
+        let mut executions = HashMap::new();
+        executions.insert("cid-main".to_string(), Arc::clone(&finished));
+
+        assert!(
+            find_main_session(&executions, "box1").is_some(),
+            "precondition: a live main session is found"
+        );
+
+        // End it, exactly as init exiting would: send the result and drop the
+        // stream senders so the pumps finish.
+        let StubChannels(stdout_tx, stderr_tx, _stdin_rx, result_tx) = channels;
+        drop(stdout_tx);
+        drop(stderr_tx);
+        result_tx
+            .send(boxlite::ExecResult {
+                exit_code: 0,
+                error_message: None,
+            })
+            .unwrap();
+        for _ in 0..40 {
+            if finished.is_done() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(finished.is_done(), "precondition: the main session ended");
+
+        assert!(
+            find_main_session(&executions, "box1").is_none(),
+            "a finished main session must not be reused — the restarted box needs a new one"
+        );
+    }
+
+    /// The reaper must never reap the box's main session.
+    ///
+    /// That session is the container's init, so killing it powers the VM off
+    /// and takes the whole box with it. Registering it in `state.executions` is
+    /// what makes `/boxes/{id}/attach` work — but that map is the one the
+    /// reaper walks, which put the user's box on the orphan-escalation path
+    /// (SIGHUP → SIGTERM → SIGKILL → evict) the moment their client
+    /// disconnected, and under the 24h lifetime cap even while still attached.
+    /// Detaching from `docker attach` does not stop a container; nor may this.
+    #[tokio::test]
+    async fn reaper_never_reaps_the_boxs_main_session() {
+        let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+            "http://127.0.0.1:1".to_string(),
+        ))
+        .expect("rest runtime");
+        let state = AppState {
+            runtime,
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+        };
+
+        // The box's main command, and an ordinary exec running beside it.
+        let (init, _init_channels) = stub_execution("cid-main");
+        let main = Arc::new(ActiveExecution::new(
+            "box1".to_string(),
+            SessionKind::Main,
+            init,
+            None,
+        ));
+        let (tenant_exec, _tenant_channels) = stub_execution("exec-1");
+        let tenant = Arc::new(ActiveExecution::new(
+            "box1".to_string(),
+            SessionKind::Exec,
+            tenant_exec,
+            None,
+        ));
+        {
+            let mut map = state.executions.write().await;
+            map.insert("cid-main".to_string(), Arc::clone(&main));
+            map.insert("exec-1".to_string(), Arc::clone(&tenant));
+        }
+
+        // Neither was ever attached, and we reap from far enough in the future
+        // that the lifetime cap has long since passed — the harshest state the
+        // reaper knows.
+        let doomsday = Instant::now() + Duration::from_secs(48 * 60 * 60);
+        run_reap_once(
+            &state,
+            doomsday,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(60),
+        )
+        .await;
+
+        let surviving = state.executions.read().await;
+        assert!(
+            surviving.contains_key("cid-main"),
+            "the box's main session must survive the reaper — reaping it kills init and destroys the box"
+        );
+        assert!(
+            !main.is_reaping_kill().await,
+            "the main session must never even be marked for kill"
+        );
+
+        // Control: the exec beside it *is* reaped under the same tick, so this
+        // proves the Main guard rather than a reaper that happens to be inert.
+        assert!(
+            !surviving.contains_key("exec-1"),
+            "an orphaned exec past the lifetime cap must still be killed and evicted"
         );
     }
 }

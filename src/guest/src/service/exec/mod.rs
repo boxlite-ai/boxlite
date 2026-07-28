@@ -20,7 +20,7 @@
 pub mod exec_handle;
 pub(in crate::service) mod executor;
 pub(in crate::service) mod registry;
-mod state;
+pub(in crate::service) mod state;
 mod timeout;
 
 // Re-export trait so container module can implement it
@@ -138,7 +138,7 @@ impl Execution for GuestServer {
             .ok_or_else(|| Status::not_found(format!("Execution not found: {}", exec_id)))?;
 
         // Wait for process to exit
-        let exit_status = state.wait_process().await?;
+        let exit_status = state.wait_process().await;
 
         let (exit_code, signal, error_message) = match exit_status {
             ExitStatus::Code(code) => {
@@ -293,19 +293,34 @@ async fn spawn_execution(
 ) -> Result<ExecResponse, ExecResponse> {
     let started_at_ms = now_ms();
 
+    // Read the clock before the spawn: the tenant is built in the zygote and is
+    // already running when its pid comes back over IPC, so it can exit before we
+    // ever see the pid. Anything reaped after this instant is therefore ours;
+    // anything older belongs to a previous owner of a recycled pid.
+    let spawned_at = std::time::Instant::now();
+
     // Step 1: Spawn process using executor selected by BOXLITE_EXECUTOR env var
     let (child, container_ref) = spawn_with_executor(server, &req, &execution_id).await?;
 
     let pid = child.pid().as_raw() as u32;
+
+    // Claim this pid's exit slot. A detached exec sends no Wait until its caller
+    // chooses to, so the slot must exist from the spawn rather than from the
+    // wait, or the exit would age out as an ownerless stray in between.
+    let exit = crate::reaper::REAPER
+        .get()
+        .expect("reaper installed at startup")
+        .register(child.pid(), spawned_at)
+        .await;
 
     // Step 2: Create execution state and register
     // If running inside a container, pass the init health checker for death detection
     let state = match container_ref {
         Some(container) => {
             let health: std::sync::Arc<tokio::sync::Mutex<dyn InitHealthCheck>> = container;
-            state::ExecutionState::new_with_init_health(child, health)
+            state::ExecutionState::new_with_init_health(child, health, exit)
         }
-        None => state::ExecutionState::new(child),
+        None => state::ExecutionState::new(child, exit),
     };
     server
         .registry
@@ -407,11 +422,43 @@ async fn spawn_with_executor(
                     format!("Invalid {}: missing container_id", executor_const::ENV_VAR),
                 ));
             }
+            // Caller-controllable (a client can override BOXLITE_EXECUTOR in its
+            // exec env) and joined into a filesystem path below, so require a
+            // single normal component — `..`/`/…` must not escape containers/.
+            if !is_single_path_component(container_id) {
+                return Err(spawn_error(
+                    execution_id,
+                    format!(
+                        "Invalid {}: container_id must be a single path component",
+                        executor_const::ENV_VAR
+                    ),
+                ));
+            }
             debug!(
                 execution_id = %execution_id,
                 container_id = %container_id,
                 "Using ContainerExecutor"
             );
+            // Refuse cleanly when the container's init has already exited
+            // (docker semantics: no exec in a stopped container). Without
+            // this, the tenant build reaches libcontainer against a dead
+            // init and surfaces an opaque procfs internal error.
+            //
+            // Presence is the signal, not parseability: a torn record still
+            // means init is gone, and letting a bad parse fall through here
+            // would hand the exec straight back to the panic.
+            let exit_file = server.layout.shared().container(container_id).exit_file();
+            if exit_file.exists() {
+                let how = boxlite_shared::layout::ExitRecord::read(&exit_file).map_or_else(
+                    || "init exited".to_string(),
+                    |record| format!("init exited with code {}", record.exit_code),
+                );
+                return Err(spawn_error(
+                    execution_id,
+                    format!("container is not running: {how}"),
+                ));
+            }
+
             // Look up container from registry
             let container_arc = {
                 let containers_guard = server.containers.lock().await;
@@ -459,5 +506,29 @@ async fn spawn_with_executor(
                 ),
             ))
         }
+    }
+}
+
+/// True when `id` is a single normal path component (no `..`, `/`, or a prefix),
+/// so joining it under `containers/` cannot escape that directory. Real container
+/// ids are 64-char hex, so this never rejects a legitimate one.
+fn is_single_path_component(id: &str) -> bool {
+    let mut components = std::path::Path::new(id).components();
+    matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+}
+
+#[cfg(test)]
+mod container_id_path_tests {
+    use super::is_single_path_component;
+
+    #[test]
+    fn rejects_ids_that_would_escape_the_containers_dir() {
+        for bad in ["../../etc", "/etc/passwd", "a/b", "..", ".", ""] {
+            assert!(!is_single_path_component(bad), "must reject {bad:?}");
+        }
+        assert!(is_single_path_component(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
     }
 }

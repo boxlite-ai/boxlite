@@ -12,6 +12,7 @@ import (
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/common"
+	"github.com/containerd/errdefs"
 )
 
 func (e *Executor) createBox(ctx context.Context, job *apiclient.Job) (any, error) {
@@ -199,22 +200,10 @@ func (e *Executor) recoverBox(ctx context.Context, job *apiclient.Job) (any, err
 	}, nil
 }
 
-func (e *Executor) resizeBox(ctx context.Context, job *apiclient.Job) (any, error) {
-	var resizeBoxDto dto.ResizeBoxDTO
-	err := e.parsePayload(job.Payload, &resizeBoxDto)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
-	}
-
-	err = e.backend.Resize(ctx, job.ResourceId, resizeBoxDto)
-	if err != nil {
-		common.ContainerOperationCount.WithLabelValues("resize", string(common.PrometheusOperationStatusFailure)).Inc()
-		return nil, common.FormatRecoverableError(err)
-	}
-
-	common.ContainerOperationCount.WithLabelValues("resize", string(common.PrometheusOperationStatusSuccess)).Inc()
-
-	return nil, nil
+// resizeBox remains as a compatibility sink for jobs created by older API
+// deployments. It must fail before touching the box.
+func (e *Executor) resizeBox(_ context.Context, _ *apiclient.Job) (any, error) {
+	return nil, errdefs.ErrNotImplemented.WithMessage("box resource resize is not supported")
 }
 
 func (e *Executor) runtimeGeneration(job *apiclient.Job) (int64, error) {

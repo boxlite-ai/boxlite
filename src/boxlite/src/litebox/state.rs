@@ -105,8 +105,18 @@ impl BoxStatus {
         )
     }
 
-    /// Check if exec() can be called from this state.
-    /// Configured and Stopped will trigger implicit start().
+    /// Whether an operation that needs a live VM (`exec`, `attach`, `cp`,
+    /// `metrics`) may run from this state, booting the box first if it is not up.
+    ///
+    /// `Configured` and `Stopped` both trigger an implicit start. Two models
+    /// depend on that and neither is optional: the SDK's create-then-exec, and
+    /// the cloud's auto-stop — an idle box is stopped by a reaper and revived by
+    /// the next SDK call, which goes straight to `/exec` and never calls start.
+    ///
+    /// This is a *status* question only. Whether the implicit start is safe also
+    /// depends on what init is: restarting a box whose init is the user's own
+    /// command re-runs that command. `BoxImpl::ensure_usable_without_rerunning_main`
+    /// owns that half, because only it can see the box's config.
     pub fn can_exec(&self) -> bool {
         matches!(
             self,
@@ -217,6 +227,11 @@ pub struct BoxState {
     /// Serde default keeps existing DB rows readable without migration.
     #[serde(default)]
     pub error_reason: Option<String>,
+    /// Exit code of the container's init process (docker semantics: set
+    /// when the box stopped because its main command exited). Serde default
+    /// keeps existing DB rows readable without migration.
+    #[serde(default)]
+    pub exit_code: Option<i32>,
 }
 
 /// Health status of a box.
@@ -315,6 +330,7 @@ impl BoxState {
             lock_id: None,
             health_status: HealthStatus::new(),
             error_reason: None,
+            exit_code: None,
         }
     }
 
@@ -480,8 +496,15 @@ mod tests {
     fn test_status_can_exec() {
         assert!(BoxStatus::Configured.can_exec());
         assert!(BoxStatus::Running.can_exec());
-        assert!(!BoxStatus::Stopping.can_exec());
+
+        // Stopped stays exec-able at the *status* level: the cloud stops idle
+        // boxes on a reaper and revives them on the next SDK call, which goes
+        // straight to /exec and never calls start. Whether that implicit restart
+        // is safe depends on what init is, which a status cannot know — see
+        // BoxImpl::ensure_usable_without_rerunning_main.
         assert!(BoxStatus::Stopped.can_exec());
+
+        assert!(!BoxStatus::Stopping.can_exec());
         assert!(!BoxStatus::Paused.can_exec());
         assert!(!BoxStatus::Unknown.can_exec());
     }

@@ -35,6 +35,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             entrypoint_override,
             cmd_override,
             user_override,
+            working_dir_override,
         ) = {
             let ctx = ctx.lock().await;
             let layout = ctx
@@ -56,6 +57,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
                 ctx.config.options.entrypoint.clone(),
                 ctx.config.options.cmd.clone(),
                 ctx.config.options.user.clone(),
+                ctx.config.options.working_dir.clone(),
             )
         };
 
@@ -69,6 +71,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             entrypoint_override.as_deref(),
             cmd_override.as_deref(),
             user_override.as_deref(),
+            working_dir_override.as_deref(),
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -97,6 +100,7 @@ async fn run_container_rootfs(
     entrypoint_override: Option<&[String]>,
     cmd_override: Option<&[String]>,
     user_override: Option<&str>,
+    working_dir_override: Option<&str>,
 ) -> BoxliteResult<(ContainerImageConfig, Disk)> {
     let disk_path = layout.disk_path();
 
@@ -145,6 +149,7 @@ async fn run_container_rootfs(
             entrypoint_override,
             cmd_override,
             user_override,
+            working_dir_override,
         );
 
         return Ok((container_image_config, disk));
@@ -192,6 +197,7 @@ async fn run_container_rootfs(
         entrypoint_override,
         cmd_override,
         user_override,
+        working_dir_override,
     );
 
     let disk = create_cow_disk(&rootfs_result, layout, disk_size_gb)?;
@@ -256,12 +262,15 @@ fn create_cow_disk(
     }
 }
 
-/// Apply user overrides to container image config (entrypoint, CMD, and user).
+/// Apply user overrides to container image config (entrypoint, CMD, user,
+/// and working dir) — the docker `run` override set, applied to the init
+/// process configuration.
 fn apply_user_overrides(
     config: &mut ContainerImageConfig,
     entrypoint_override: Option<&[String]>,
     cmd_override: Option<&[String]>,
     user_override: Option<&str>,
+    working_dir_override: Option<&str>,
 ) {
     if let Some(ep) = entrypoint_override {
         config.entrypoint = ep.to_vec();
@@ -271,6 +280,9 @@ fn apply_user_overrides(
     }
     if let Some(user) = user_override {
         config.user = user.to_string();
+    }
+    if let Some(wd) = working_dir_override {
+        config.working_dir = wd.to_string();
     }
 }
 

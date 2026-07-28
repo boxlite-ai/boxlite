@@ -54,6 +54,7 @@ pub fn create_oci_spec(
     gid: u32,
     bundle_path: &Path,
     user_mounts: &[UserMount],
+    tty: bool,
 ) -> BoxliteResult<Spec> {
     let caps = build_default_capabilities()?;
     let namespaces = build_default_namespaces()?;
@@ -90,7 +91,7 @@ pub fn create_oci_spec(
         );
     }
 
-    let process = build_process_spec(entrypoint, env, workdir, uid, gid, caps)?;
+    let process = build_process_spec(entrypoint, env, workdir, uid, gid, caps, tty)?;
     let root = build_root_spec(rootfs)?;
     let linux = build_linux_spec(container_id, namespaces)?;
 
@@ -310,6 +311,7 @@ fn build_process_spec(
     uid: u32,
     gid: u32,
     caps: oci_spec::runtime::LinuxCapabilities,
+    tty: bool,
 ) -> BoxliteResult<oci_spec::runtime::Process> {
     let user = UserBuilder::default()
         .uid(uid)
@@ -329,7 +331,9 @@ fn build_process_spec(
         .map_err(|e| BoxliteError::Internal(format!("Failed to build rlimit: {}", e)))?];
 
     ProcessBuilder::default()
-        .terminal(false)
+        // OCI `process.terminal`: with it set, the runtime allocates a PTY for
+        // init and passes the master back over the console socket.
+        .terminal(tty)
         .user(user)
         .args(entrypoint.to_vec())
         .env(env)

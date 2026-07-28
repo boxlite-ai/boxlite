@@ -28,8 +28,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
 use crate::net::{
-    BoxTunnel, DnsZoneSpec, Forward, NetworkBackend, NetworkBackendConfig, NetworkBackendSpec,
-    NetworkBackendStats, TransportProtocol,
+    BoxInternalTunnel, DnsZoneSpec, Forward, NetworkBackend, NetworkBackendConfig,
+    NetworkBackendSpec, NetworkBackendStats, TransportProtocol,
 };
 
 /// Upper bound on a single control exchange. A bound-but-unserved socket (the
@@ -252,7 +252,7 @@ impl NetworkBackend for GvproxyBackend {
         parse_stats(&body)
     }
 
-    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxInternalTunnel> {
         // `/tunnel` hijacks the HTTP connection — no HTTP response is returned —
         // so we speak it raw (not via hyper): send gvproxy's request, read its
         // literal "OK" ack, and the socket becomes a raw pipe to the guest target.
@@ -297,7 +297,7 @@ impl NetworkBackend for GvproxyBackend {
             )));
         }
 
-        Ok(BoxTunnel::from_local(stream, target))
+        Ok(BoxInternalTunnel::from_local(stream, target))
     }
 }
 
@@ -1065,6 +1065,5 @@ mod tests {
         let tunnel = backend.tunnel(target).await.expect("tunnel handshake");
         assert_eq!(tunnel.peer_addr(), target);
         // The owned OS fd is recoverable for an SDK handoff.
-        assert!(tunnel.into_fd().is_some());
     }
 }

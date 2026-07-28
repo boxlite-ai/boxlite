@@ -59,10 +59,12 @@ type Box struct {
 	ErrorReason *string `json:"errorReason,omitempty"`
 	// Whether the box error is recoverable.
 	Recoverable *bool `json:"recoverable,omitempty"`
-	// Auto-stop interval in minutes (0 means disabled)
-	AutoStopInterval *float32 `json:"autoStopInterval,omitempty"`
-	// Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
-	AutoDeleteInterval *float32 `json:"autoDeleteInterval,omitempty"`
+	// Auto-pause interval in seconds (0 means disabled)
+	AutoPause *int32 `json:"autoPause,omitempty"`
+	// Auto-delete interval in seconds (0 means disabled)
+	AutoDelete *int32 `json:"autoDelete,omitempty"`
+	// Whether the box should be automatically resumed on proxy access
+	AutoResume *bool `json:"autoResume,omitempty"`
 	// Array of volumes attached to the box
 	Volumes []BoxVolume `json:"volumes,omitempty"`
 	// The creation timestamp of the box
@@ -618,68 +620,100 @@ func (o *Box) SetRecoverable(v bool) {
 	o.Recoverable = &v
 }
 
-// GetAutoStopInterval returns the AutoStopInterval field value if set, zero value otherwise.
-func (o *Box) GetAutoStopInterval() float32 {
-	if o == nil || IsNil(o.AutoStopInterval) {
-		var ret float32
+// GetAutoPause returns the AutoPause field value if set, zero value otherwise.
+func (o *Box) GetAutoPause() int32 {
+	if o == nil || IsNil(o.AutoPause) {
+		var ret int32
 		return ret
 	}
-	return *o.AutoStopInterval
+	return *o.AutoPause
 }
 
-// GetAutoStopIntervalOk returns a tuple with the AutoStopInterval field value if set, nil otherwise
+// GetAutoPauseOk returns a tuple with the AutoPause field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *Box) GetAutoStopIntervalOk() (*float32, bool) {
-	if o == nil || IsNil(o.AutoStopInterval) {
+func (o *Box) GetAutoPauseOk() (*int32, bool) {
+	if o == nil || IsNil(o.AutoPause) {
 		return nil, false
 	}
-	return o.AutoStopInterval, true
+	return o.AutoPause, true
 }
 
-// HasAutoStopInterval returns a boolean if a field has been set.
-func (o *Box) HasAutoStopInterval() bool {
-	if o != nil && !IsNil(o.AutoStopInterval) {
+// HasAutoPause returns a boolean if a field has been set.
+func (o *Box) HasAutoPause() bool {
+	if o != nil && !IsNil(o.AutoPause) {
 		return true
 	}
 
 	return false
 }
 
-// SetAutoStopInterval gets a reference to the given float32 and assigns it to the AutoStopInterval field.
-func (o *Box) SetAutoStopInterval(v float32) {
-	o.AutoStopInterval = &v
+// SetAutoPause gets a reference to the given int32 and assigns it to the AutoPause field.
+func (o *Box) SetAutoPause(v int32) {
+	o.AutoPause = &v
 }
 
-// GetAutoDeleteInterval returns the AutoDeleteInterval field value if set, zero value otherwise.
-func (o *Box) GetAutoDeleteInterval() float32 {
-	if o == nil || IsNil(o.AutoDeleteInterval) {
-		var ret float32
+// GetAutoDelete returns the AutoDelete field value if set, zero value otherwise.
+func (o *Box) GetAutoDelete() int32 {
+	if o == nil || IsNil(o.AutoDelete) {
+		var ret int32
 		return ret
 	}
-	return *o.AutoDeleteInterval
+	return *o.AutoDelete
 }
 
-// GetAutoDeleteIntervalOk returns a tuple with the AutoDeleteInterval field value if set, nil otherwise
+// GetAutoDeleteOk returns a tuple with the AutoDelete field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *Box) GetAutoDeleteIntervalOk() (*float32, bool) {
-	if o == nil || IsNil(o.AutoDeleteInterval) {
+func (o *Box) GetAutoDeleteOk() (*int32, bool) {
+	if o == nil || IsNil(o.AutoDelete) {
 		return nil, false
 	}
-	return o.AutoDeleteInterval, true
+	return o.AutoDelete, true
 }
 
-// HasAutoDeleteInterval returns a boolean if a field has been set.
-func (o *Box) HasAutoDeleteInterval() bool {
-	if o != nil && !IsNil(o.AutoDeleteInterval) {
+// HasAutoDelete returns a boolean if a field has been set.
+func (o *Box) HasAutoDelete() bool {
+	if o != nil && !IsNil(o.AutoDelete) {
 		return true
 	}
 
 	return false
 }
 
-// SetAutoDeleteInterval gets a reference to the given float32 and assigns it to the AutoDeleteInterval field.
-func (o *Box) SetAutoDeleteInterval(v float32) {
-	o.AutoDeleteInterval = &v
+// SetAutoDelete gets a reference to the given int32 and assigns it to the AutoDelete field.
+func (o *Box) SetAutoDelete(v int32) {
+	o.AutoDelete = &v
+}
+
+// GetAutoResume returns the AutoResume field value if set, zero value otherwise.
+func (o *Box) GetAutoResume() bool {
+	if o == nil || IsNil(o.AutoResume) {
+		var ret bool
+		return ret
+	}
+	return *o.AutoResume
+}
+
+// GetAutoResumeOk returns a tuple with the AutoResume field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *Box) GetAutoResumeOk() (*bool, bool) {
+	if o == nil || IsNil(o.AutoResume) {
+		return nil, false
+	}
+	return o.AutoResume, true
+}
+
+// HasAutoResume returns a boolean if a field has been set.
+func (o *Box) HasAutoResume() bool {
+	if o != nil && !IsNil(o.AutoResume) {
+		return true
+	}
+
+	return false
+}
+
+// SetAutoResume gets a reference to the given bool and assigns it to the AutoResume field.
+func (o *Box) SetAutoResume(v bool) {
+	o.AutoResume = &v
 }
 
 // GetVolumes returns the Volumes field value if set, zero value otherwise.
@@ -942,11 +976,14 @@ func (o Box) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Recoverable) {
 		toSerialize["recoverable"] = o.Recoverable
 	}
-	if !IsNil(o.AutoStopInterval) {
-		toSerialize["autoStopInterval"] = o.AutoStopInterval
+	if !IsNil(o.AutoPause) {
+		toSerialize["autoPause"] = o.AutoPause
 	}
-	if !IsNil(o.AutoDeleteInterval) {
-		toSerialize["autoDeleteInterval"] = o.AutoDeleteInterval
+	if !IsNil(o.AutoDelete) {
+		toSerialize["autoDelete"] = o.AutoDelete
+	}
+	if !IsNil(o.AutoResume) {
+		toSerialize["autoResume"] = o.AutoResume
 	}
 	if !IsNil(o.Volumes) {
 		toSerialize["volumes"] = o.Volumes
@@ -1042,8 +1079,9 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "desiredState")
 		delete(additionalProperties, "errorReason")
 		delete(additionalProperties, "recoverable")
-		delete(additionalProperties, "autoStopInterval")
-		delete(additionalProperties, "autoDeleteInterval")
+		delete(additionalProperties, "autoPause")
+		delete(additionalProperties, "autoDelete")
+		delete(additionalProperties, "autoResume")
 		delete(additionalProperties, "volumes")
 		delete(additionalProperties, "createdAt")
 		delete(additionalProperties, "updatedAt")

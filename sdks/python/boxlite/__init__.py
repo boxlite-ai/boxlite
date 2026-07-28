@@ -25,13 +25,14 @@ try:
         Execution,
         ExportOptions,
         HealthCheckOptions,
+        HealthState,
+        HealthStatus,
         ImageHandle,
         ImageInfo,
         ImagePullResult,
-        HealthState,
-        HealthStatus,
-        NetworkSpec,
         ImageRegistry,
+        NetworkHandle,
+        NetworkSpec,
         Options,
         RuntimeMetrics,
         Secret,
@@ -39,9 +40,11 @@ try:
         SnapshotHandle,
         SnapshotInfo,
         SnapshotOptions,
+        VolumeHandle,
+        VolumeInfo,
     )
 
-    __all__ = [
+    __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
         # Core Rust API
         "Options",
         "ImageRegistry",
@@ -51,6 +54,7 @@ try:
         "AccessToken",
         "Boxlite",
         "NetworkSpec",
+        "NetworkHandle",
         "Box",
         "Execution",
         "ExecStdout",
@@ -73,6 +77,8 @@ try:
         "SnapshotOptions",
         "CloneOptions",
         "ExportOptions",
+        "VolumeHandle",
+        "VolumeInfo",
     ]
     # Credential abstraction (ABC + virtual-registered native classes)
     from .credential import Credential  # noqa: F401
@@ -90,7 +96,7 @@ try:
     from .simplebox import SimpleBox  # noqa: F401
 
     __all__.extend(
-        [
+        [  # noqa: RUF022 - grouped by API area, not alphabetical
             # Python convenience wrappers
             "SimpleBox",
             "CodeBox",
@@ -138,7 +144,7 @@ except ImportError:
 try:
     from .orchestration import BoxGroup, BoxRuntime, ManagedBox  # noqa: F401
 
-    __all__.extend(["BoxRuntime", "ManagedBox", "BoxGroup"])
+    __all__.extend(["BoxGroup", "BoxRuntime", "ManagedBox"])
 except ImportError:
     pass
 
@@ -153,20 +159,22 @@ try:
         SyncExecStdout,
         SyncExecution,
         SyncImageHandle,
+        SyncNetworkHandle,
         SyncSimpleBox,
         SyncSkillBox,
     )
 
     __all__.extend(
         [
-            "SyncBoxlite",
             "SyncBox",
-            "SyncImageHandle",
-            "SyncExecution",
-            "SyncExecStdout",
-            "SyncExecStderr",
-            "SyncSimpleBox",
+            "SyncBoxlite",
             "SyncCodeBox",
+            "SyncExecStderr",
+            "SyncExecStdout",
+            "SyncExecution",
+            "SyncImageHandle",
+            "SyncNetworkHandle",
+            "SyncSimpleBox",
             "SyncSkillBox",
         ]
     )

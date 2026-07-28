@@ -3,6 +3,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
+use crate::experimental::ExperimentalFeatures;
 use crate::litebox::LiteBox;
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
@@ -11,6 +12,7 @@ use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::rt_impl::{LocalRuntime, RuntimeImpl};
 use crate::runtime::signal_handler::install_signal_handler;
 use crate::runtime::types::BoxInfo;
+use crate::runtime::volumes::VolumeBackend;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 #[cfg(feature = "rest")]
@@ -57,6 +59,10 @@ extern "C" fn shutdown_on_exit() {
 pub struct BoxliteRuntime {
     backend: Arc<dyn RuntimeBackend>,
     image_backend: Option<Arc<dyn ImageBackend>>,
+    /// Named-volume capability — an `Arc` view of the same backend (local or
+    /// REST), mirroring `image_backend` / `images()`. Surfaced via `volumes()`.
+    /// The concrete backend returns `Unsupported` until one is wired up.
+    volume_backend: Option<Arc<dyn VolumeBackend>>,
     /// Identity capability — `Some` only for backends with a notion of
     /// remote identity (currently REST; an `Arc` view of the same backend,
     /// not a second client). Surfaced via `auth()`, mirroring
@@ -82,13 +88,29 @@ impl BoxliteRuntime {
     /// - Image API initialization fails
     pub fn new(options: BoxliteOptions) -> BoxliteResult<Self> {
         let local = LocalRuntime(RuntimeImpl::new(options)?);
+        Ok(Self::from_local(local))
+    }
+
+    pub(crate) fn new_with_experimental_features(
+        options: BoxliteOptions,
+        features: ExperimentalFeatures,
+    ) -> BoxliteResult<Self> {
+        let local = LocalRuntime(RuntimeImpl::new_with_experimental_features(
+            options, features,
+        )?);
+        Ok(Self::from_local(local))
+    }
+
+    fn from_local(local: LocalRuntime) -> Self {
         let backend_arc = Arc::new(local);
         let image_backend = Arc::clone(&backend_arc) as Arc<dyn ImageBackend>;
-        Ok(Self {
+        let volume_backend = Arc::clone(&backend_arc) as Arc<dyn VolumeBackend>;
+        Self {
             backend: backend_arc,
             image_backend: Some(image_backend),
+            volume_backend: Some(volume_backend),
             auth_backend: None,
-        })
+        }
     }
 
     /// Create a REST-backed runtime connecting to a remote BoxLite API server.
@@ -112,9 +134,11 @@ impl BoxliteRuntime {
     pub fn rest(config: crate::rest::options::BoxliteRestOptions) -> BoxliteResult<Self> {
         let rest_runtime = Arc::new(RestRuntime::new(&config)?);
         let auth_backend = Arc::clone(&rest_runtime) as Arc<dyn crate::runtime::auth::AuthBackend>;
+        let volume_backend = Arc::clone(&rest_runtime) as Arc<dyn VolumeBackend>;
         Ok(Self {
             backend: rest_runtime,
             image_backend: None, // REST runtime doesn't support image operations
+            volume_backend: Some(volume_backend),
             auth_backend: Some(auth_backend),
         })
     }
@@ -269,6 +293,9 @@ impl BoxliteRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
+        // Reject incompatible option combinations at the create boundary (fail
+        // here, not at start), uniformly for the local and REST backends.
+        options.sanitize_common()?;
         self.backend.create(options, name).await
     }
 
@@ -282,6 +309,7 @@ impl BoxliteRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        options.sanitize_common()?;
         self.backend.get_or_create(options, name).await
     }
 
@@ -419,6 +447,43 @@ impl BoxliteRuntime {
         }
     }
 
+    // ========================================================================
+    // NAMED VOLUME OPERATIONS (via VolumeHandle)
+    // ========================================================================
+
+    /// Get a handle for named-volume operations (create, list, get, remove).
+    ///
+    /// Returns a [`VolumeHandle`](crate::runtime::VolumeHandle) over this
+    /// runtime's `<home>/volumes` tree, following the same accessor pattern as
+    /// `images()`.
+    ///
+    /// # Errors
+    ///
+    /// The handle's operations currently return `BoxliteError::Unsupported`
+    /// until a concrete volume backend is wired up.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use boxlite::runtime::BoxliteRuntime;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let runtime = BoxliteRuntime::with_defaults()?;
+    /// let volumes = runtime.volumes()?;
+    /// let info = volumes.create().await?;
+    /// println!("created volume {}", info.id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn volumes(&self) -> BoxliteResult<crate::runtime::VolumeHandle> {
+        match &self.volume_backend {
+            Some(backend) => Ok(crate::runtime::VolumeHandle::new(Arc::clone(backend))),
+            None => Err(BoxliteError::Unsupported(
+                "Named volume operations are not available on this runtime".to_string(),
+            )),
+        }
+    }
+
     /// Get a handle for identity operations (`whoami`).
     ///
     /// Returns an [`AuthHandle`](crate::AuthHandle) that resolves the calling
@@ -477,3 +542,44 @@ const _: () = {
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<BoxliteRuntime>;
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn local_runtime() -> (BoxliteRuntime, TempDir) {
+        let temp_dir = TempDir::new_in("/tmp").expect("temp dir");
+        let runtime = BoxliteRuntime::new(BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .expect("local runtime");
+        (runtime, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn create_rejects_detached_remove_on_stop() {
+        // Remove-on-stop (auto_delete>0) with detach=true is contradictory. The
+        // create boundary must reject it up front rather than deferring to start().
+        let (runtime, _dir) = local_runtime();
+        let opts = BoxOptions {
+            auto_delete: Some(1),
+            detach: true,
+            ..Default::default()
+        };
+        let err = runtime
+            .create(opts, None)
+            .await
+            .err()
+            .expect("detached remove-on-stop must be rejected at create");
+        assert!(
+            matches!(err, BoxliteError::Config(_)),
+            "expected a Config error, got: {err:?}"
+        );
+        assert!(
+            err.to_string().contains("remove-on-stop is incompatible"),
+            "unexpected message: {err}"
+        );
+    }
+}

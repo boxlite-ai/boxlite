@@ -136,7 +136,6 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		boxController.POST("/:boxId/destroy", controllers.Destroy)
 		boxController.POST("/:boxId/start", controllers.Start)
 		boxController.POST("/:boxId/stop", controllers.Stop)
-		boxController.POST("/:boxId/resize", controllers.Resize)
 		boxController.POST("/:boxId/recover", controllers.Recover)
 		boxController.POST("/:boxId/is-recoverable", controllers.IsRecoverable)
 		boxController.POST("/:boxId/network-settings", controllers.UpdateNetworkSettings)
@@ -158,6 +157,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		boxliteApi.PUT("/:boxId/files", controllers.BoxliteFileUpload)
 		boxliteApi.GET("/:boxId/files", controllers.BoxliteFileDownload)
 		boxliteApi.GET("/:boxId/metrics", controllers.BoxliteMetrics)
+		boxliteApi.Handle(http.MethodConnect, "/:boxId/network/tunnel", controllers.BoxliteNetworkTunnel(boxControllerLogger))
 	}
 
 	a.httpServer = &http.Server{

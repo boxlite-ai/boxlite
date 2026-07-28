@@ -8,10 +8,14 @@ These tests exercise the new runtime-oriented API that lives on the
 
 from __future__ import annotations
 
+import logging
 import time
 
-import boxlite
 import pytest
+
+import boxlite
+
+logger = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.integration
 
@@ -76,12 +80,12 @@ def runtime(shared_sync_runtime):
         for box in list(harness._boxes):
             try:
                 box.stop()
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001 - teardown must clean up remaining boxes even if one fails
+                logger.debug(f"Error stopping box {box.id}: {e}")
             try:
                 harness.remove(box.id)
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001 - teardown must clean up remaining boxes even if one fails
+                logger.debug(f"Error removing box {box.id}: {e}")
 
 
 class TestBoxManagement:

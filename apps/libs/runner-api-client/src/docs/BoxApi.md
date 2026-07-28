@@ -5,13 +5,10 @@ All URIs are relative to *http://localhost*
 |Method | HTTP request | Description|
 |------------- | ------------- | -------------|
 |[**create**](#create) | **POST** /boxes | Create a box|
-|[**createBackup**](#createbackup) | **POST** /boxes/{boxId}/backup | Create box backup|
 |[**destroy**](#destroy) | **POST** /boxes/{boxId}/destroy | Destroy box|
-|[**getNetworkSettings**](#getnetworksettings) | **GET** /boxes/{boxId}/network-settings | Get box network settings|
 |[**info**](#info) | **GET** /boxes/{boxId} | Get box info|
 |[**isRecoverable**](#isrecoverable) | **POST** /boxes/{boxId}/is-recoverable | Check if box error is recoverable|
 |[**recover**](#recover) | **POST** /boxes/{boxId}/recover | Recover box from error state|
-|[**resize**](#resize) | **POST** /boxes/{boxId}/resize | Resize box|
 |[**start**](#start) | **POST** /boxes/{boxId}/start | Start box|
 |[**stop**](#stop) | **POST** /boxes/{boxId}/stop | Stop box|
 |[**updateNetworkSettings**](#updatenetworksettings) | **POST** /boxes/{boxId}/network-settings | Update box network settings|
@@ -72,67 +69,6 @@ const { status, data } = await apiInstance.create(
 |**500** | Internal Server Error |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **createBackup**
-> string createBackup(box)
-
-Create box backup
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration,
-    CreateBackupDTO
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxId: string; //Box ID (default to undefined)
-let box: CreateBackupDTO; //Create backup
-
-const { status, data } = await apiInstance.createBackup(
-    boxId,
-    box
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **box** | **CreateBackupDTO**| Create backup | |
-| **boxId** | [**string**] | Box ID | defaults to undefined|
-
-
-### Return type
-
-**string**
-
-### Authorization
-
-[Bearer](../README.md#Bearer)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**201** | Backup started |  -  |
-|**400** | Bad Request |  -  |
-|**401** | Unauthorized |  -  |
-|**404** | Not Found |  -  |
-|**409** | Conflict |  -  |
-|**500** | Internal Server Error |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
 # **destroy**
 > string destroy()
 
@@ -181,62 +117,6 @@ const { status, data } = await apiInstance.destroy(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | Box destroyed |  -  |
-|**400** | Bad Request |  -  |
-|**401** | Unauthorized |  -  |
-|**404** | Not Found |  -  |
-|**409** | Conflict |  -  |
-|**500** | Internal Server Error |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **getNetworkSettings**
-> UpdateNetworkSettingsDTO getNetworkSettings()
-
-Get box network settings
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxId: string; //Box ID (default to undefined)
-
-const { status, data } = await apiInstance.getNetworkSettings(
-    boxId
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] | Box ID | defaults to undefined|
-
-
-### Return type
-
-**UpdateNetworkSettingsDTO**
-
-### Authorization
-
-[Bearer](../README.md#Bearer)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Network settings |  -  |
 |**400** | Bad Request |  -  |
 |**401** | Unauthorized |  -  |
 |**404** | Not Found |  -  |
@@ -409,66 +289,6 @@ const { status, data } = await apiInstance.recover(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | Box recovered |  -  |
-|**400** | Bad Request |  -  |
-|**401** | Unauthorized |  -  |
-|**404** | Not Found |  -  |
-|**409** | Conflict |  -  |
-|**500** | Internal Server Error |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **resize**
-> string resize(box)
-
-Resize box
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration,
-    ResizeBoxDTO
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxId: string; //Box ID (default to undefined)
-let box: ResizeBoxDTO; //Resize box
-
-const { status, data } = await apiInstance.resize(
-    boxId,
-    box
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **box** | **ResizeBoxDTO**| Resize box | |
-| **boxId** | [**string**] | Box ID | defaults to undefined|
-
-
-### Return type
-
-**string**
-
-### Authorization
-
-[Bearer](../README.md#Bearer)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Box resized |  -  |
 |**400** | Bad Request |  -  |
 |**401** | Unauthorized |  -  |
 |**404** | Not Found |  -  |
@@ -658,4 +478,3 @@ const { status, data } = await apiInstance.updateNetworkSettings(
 |**500** | Internal Server Error |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-

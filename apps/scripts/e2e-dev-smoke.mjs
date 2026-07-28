@@ -69,10 +69,10 @@ await check('OpenAPI exposes public Box ID and keeps internal UUID separate', ()
   assert(!box.properties?.id, 'Box schema should not expose the internal UUID as id')
 })
 
-await check('OpenAPI keeps autostop/autodelete but removes autoarchive endpoints', () => {
+await check('OpenAPI removes autostop/autodelete/autoarchive endpoints', () => {
   const paths = normalizedPaths(openapi)
-  assert(paths.has('/sandbox/{sandboxIdOrName}/autostop/{interval}'), 'autostop endpoint is missing')
-  assert(paths.has('/sandbox/{sandboxIdOrName}/autodelete/{interval}'), 'autodelete endpoint is missing')
+  assert(!paths.has('/sandbox/{sandboxIdOrName}/autostop/{interval}'), 'autostop endpoint is still present')
+  assert(!paths.has('/sandbox/{sandboxIdOrName}/autodelete/{interval}'), 'autodelete endpoint is still present')
   assert(!paths.has('/sandbox/{sandboxIdOrName}/autoarchive/{interval}'), 'autoarchive endpoint is still present')
   assert(!paths.has('/sandbox/{sandboxIdOrName}/archive'), 'archive endpoint is still present')
 })
@@ -137,8 +137,8 @@ async function runBoxIdFlow() {
         labels: {
           'boxlite.io/e2e': 'box-id',
         },
-        autoStopInterval: 5,
-        autoDeleteInterval: 60,
+        autoPauseInterval: 300,
+        autoDeleteInterval: 3600,
       }),
     })
 

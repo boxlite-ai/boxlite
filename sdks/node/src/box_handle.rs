@@ -8,6 +8,7 @@ use crate::copy::{JsCopyOptions, into_copy_options};
 use crate::exec::JsExecution;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsBoxMetrics;
+use crate::network::JsNetworkHandle;
 use crate::snapshot_options::{JsCloneOptions, JsExportOptions};
 use crate::snapshots::JsSnapshotHandle;
 use crate::util::map_err;
@@ -88,7 +89,7 @@ impl JsBox {
         }
 
         if let Some(secs) = timeout_secs {
-            cmd = cmd.timeout(std::time::Duration::from_secs_f64(secs));
+            cmd = cmd.timeout_seconds(secs).map_err(map_err)?;
         }
 
         if let Some(dir) = working_dir {
@@ -106,6 +107,14 @@ impl JsBox {
     #[napi(getter)]
     pub fn snapshot(&self) -> JsSnapshotHandle {
         JsSnapshotHandle {
+            handle: Arc::clone(&self.handle),
+        }
+    }
+
+    /// Get the network handle for this box.
+    #[napi(getter)]
+    pub fn network(&self) -> JsNetworkHandle {
+        JsNetworkHandle {
             handle: Arc::clone(&self.handle),
         }
     }

@@ -24,8 +24,6 @@ import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError
 // @ts-ignore
 import type { BoxInfoResponse } from '../models';
 // @ts-ignore
-import type { CreateBackupDTO } from '../models';
-// @ts-ignore
 import type { CreateBoxDTO } from '../models';
 // @ts-ignore
 import type { ErrorResponse } from '../models';
@@ -35,8 +33,6 @@ import type { IsRecoverableDTO } from '../models';
 import type { IsRecoverableResponse } from '../models';
 // @ts-ignore
 import type { RecoverBoxDTO } from '../models';
-// @ts-ignore
-import type { ResizeBoxDTO } from '../models';
 // @ts-ignore
 import type { StartBoxResponse } from '../models';
 // @ts-ignore
@@ -87,48 +83,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
             };
         },
         /**
-         * Create box backup
-         * @summary Create box backup
-         * @param {string} boxId Box ID
-         * @param {CreateBackupDTO} box Create backup
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        createBackup: async (boxId: string, box: CreateBackupDTO, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('createBackup', 'boxId', boxId)
-            // verify required parameter 'box' is not null or undefined
-            assertParamExists('createBackup', 'box', box)
-            const localVarPath = `/boxes/{boxId}/backup`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication Bearer required
-            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(box, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
          * Destroy box
          * @summary Destroy box
          * @param {string} boxId Box ID
@@ -148,43 +102,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
             }
 
             const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication Bearer required
-            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * Get box network settings
-         * @summary Get box network settings
-         * @param {string} boxId Box ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getNetworkSettings: async (boxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('getNetworkSettings', 'boxId', boxId)
-            const localVarPath = `/boxes/{boxId}/network-settings`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
             const localVarHeaderParameter = {} as any;
             const localVarQueryParameter = {} as any;
 
@@ -317,48 +234,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
             localVarRequestOptions.data = serializeDataIfNeeded(recovery, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * Resize box
-         * @summary Resize box
-         * @param {string} boxId Box ID
-         * @param {ResizeBoxDTO} box Resize box
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        resize: async (boxId: string, box: ResizeBoxDTO, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('resize', 'boxId', boxId)
-            // verify required parameter 'box' is not null or undefined
-            assertParamExists('resize', 'box', box)
-            const localVarPath = `/boxes/{boxId}/resize`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication Bearer required
-            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(box, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -515,20 +390,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Create box backup
-         * @summary Create box backup
-         * @param {string} boxId Box ID
-         * @param {CreateBackupDTO} box Create backup
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async createBackup(boxId: string, box: CreateBackupDTO, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<string>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.createBackup(boxId, box, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.createBackup']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
          * Destroy box
          * @summary Destroy box
          * @param {string} boxId Box ID
@@ -539,19 +400,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.destroy(boxId, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['BoxApi.destroy']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * Get box network settings
-         * @summary Get box network settings
-         * @param {string} boxId Box ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async getNetworkSettings(boxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<UpdateNetworkSettingsDTO>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getNetworkSettings(boxId, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.getNetworkSettings']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -593,20 +441,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.recover(boxId, recovery, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['BoxApi.recover']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * Resize box
-         * @summary Resize box
-         * @param {string} boxId Box ID
-         * @param {ResizeBoxDTO} box Resize box
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async resize(boxId: string, box: ResizeBoxDTO, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<string>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.resize(boxId, box, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.resize']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -672,17 +506,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
             return localVarFp.create(box, options).then((request) => request(axios, basePath));
         },
         /**
-         * Create box backup
-         * @summary Create box backup
-         * @param {string} boxId Box ID
-         * @param {CreateBackupDTO} box Create backup
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        createBackup(boxId: string, box: CreateBackupDTO, options?: RawAxiosRequestConfig): AxiosPromise<string> {
-            return localVarFp.createBackup(boxId, box, options).then((request) => request(axios, basePath));
-        },
-        /**
          * Destroy box
          * @summary Destroy box
          * @param {string} boxId Box ID
@@ -691,16 +514,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          */
         destroy(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<string> {
             return localVarFp.destroy(boxId, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * Get box network settings
-         * @summary Get box network settings
-         * @param {string} boxId Box ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getNetworkSettings(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<UpdateNetworkSettingsDTO> {
-            return localVarFp.getNetworkSettings(boxId, options).then((request) => request(axios, basePath));
         },
         /**
          * Get box info
@@ -733,17 +546,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          */
         recover(boxId: string, recovery: RecoverBoxDTO, options?: RawAxiosRequestConfig): AxiosPromise<string> {
             return localVarFp.recover(boxId, recovery, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * Resize box
-         * @summary Resize box
-         * @param {string} boxId Box ID
-         * @param {ResizeBoxDTO} box Resize box
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        resize(boxId: string, box: ResizeBoxDTO, options?: RawAxiosRequestConfig): AxiosPromise<string> {
-            return localVarFp.resize(boxId, box, options).then((request) => request(axios, basePath));
         },
         /**
          * Start box
@@ -798,18 +600,6 @@ export class BoxApi extends BaseAPI {
     }
 
     /**
-     * Create box backup
-     * @summary Create box backup
-     * @param {string} boxId Box ID
-     * @param {CreateBackupDTO} box Create backup
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public createBackup(boxId: string, box: CreateBackupDTO, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).createBackup(boxId, box, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
      * Destroy box
      * @summary Destroy box
      * @param {string} boxId Box ID
@@ -818,17 +608,6 @@ export class BoxApi extends BaseAPI {
      */
     public destroy(boxId: string, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).destroy(boxId, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * Get box network settings
-     * @summary Get box network settings
-     * @param {string} boxId Box ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public getNetworkSettings(boxId: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).getNetworkSettings(boxId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -864,18 +643,6 @@ export class BoxApi extends BaseAPI {
      */
     public recover(boxId: string, recovery: RecoverBoxDTO, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).recover(boxId, recovery, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * Resize box
-     * @summary Resize box
-     * @param {string} boxId Box ID
-     * @param {ResizeBoxDTO} box Resize box
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public resize(boxId: string, box: ResizeBoxDTO, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).resize(boxId, box, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -915,4 +682,3 @@ export class BoxApi extends BaseAPI {
         return BoxApiFp(this.configuration).updateNetworkSettings(boxId, box, options).then((request) => request(this.axios, this.basePath));
     }
 }
-

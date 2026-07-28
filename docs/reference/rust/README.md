@@ -575,19 +575,22 @@ let options = BoxOptions {
 
 ### AdvancedBoxOptions
 
-Advanced options for expert users. Most users can ignore this — defaults prioritize compatibility.
+Advanced options for expert users. Most users can ignore this — defaults enable
+the isolation protections supported by the host platform.
 
 ```rust
 pub struct AdvancedBoxOptions {
     pub security: SecurityOptions,
     pub isolate_mounts: bool,
+    pub health_check: Option<HealthCheckOptions>,
 }
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `security` | `SecurityOptions` | Compatibility defaults (jailer `true` on macOS; `false` on Linux/others) | Security isolation options (jailer, seccomp, namespaces) |
+| `security` | `SecurityOptions` | `SecurityOptions::default()` (fully enabled profile; jailer enabled) | Security isolation options (jailer, seccomp, namespaces) |
 | `isolate_mounts` | `bool` | `false` | Enable bind mount isolation (requires CAP_SYS_ADMIN on Linux) |
+| `health_check` | `Option<HealthCheckOptions>` | `None` | Optional guest-agent health monitoring |
 
 ### RootfsSpec
 

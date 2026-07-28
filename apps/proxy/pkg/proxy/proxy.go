@@ -37,16 +37,26 @@ type RunnerInfo struct {
 const BOX_AUTH_KEY_HEADER = "X-BoxLite-Preview-Token"
 const BOX_AUTH_KEY_QUERY_PARAM = "BOXLITE_BOX_AUTH_KEY"
 const BOX_AUTH_COOKIE_NAME = "boxlite-box-auth-"
-const SKIP_LAST_ACTIVITY_UPDATE_HEADER = "X-BoxLite-Skip-Last-Activity-Update"
 const ACTIVITY_POLL_STOP_KEY = "boxlite-activity-poll-stop"
 const TERMINAL_PORT = "22222"
 
-// stopActivityPoll retrieves and calls the activity poll stop function from the gin context.
-// This ensures the polling goroutine is stopped when the request (including WebSocket) finishes.
+type activityPollController struct {
+	done chan struct{}
+	once sync.Once
+}
+
+func newActivityPollController() *activityPollController {
+	return &activityPollController{done: make(chan struct{})}
+}
+
+func (c *activityPollController) stop() {
+	c.once.Do(func() { close(c.done) })
+}
+
 func stopActivityPoll(ctx *gin.Context) {
-	if stopFn, exists := ctx.Get(ACTIVITY_POLL_STOP_KEY); exists {
-		if fn, ok := stopFn.(func()); ok {
-			fn()
+	if value, exists := ctx.Get(ACTIVITY_POLL_STOP_KEY); exists {
+		if controller, ok := value.(*activityPollController); ok {
+			controller.stop()
 		}
 	}
 }
@@ -62,6 +72,7 @@ type Proxy struct {
 	boxPublicCache             common_cache.ICache[bool]
 	boxAuthKeyValidCache       common_cache.ICache[bool]
 	boxLastActivityUpdateCache common_cache.ICache[bool]
+	guestPortTransport         *http.Transport
 }
 
 func StartProxy(ctx context.Context, config *config.Config) error {
@@ -76,6 +87,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 	}
 
 	proxy.apiclient = config.ApiClient
+	proxy.guestPortTransport = proxy.newGuestPortTransport()
 
 	if config.Redis != nil {
 		var err error
@@ -112,6 +124,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 	router := gin.New()
 	router.Use(func(ctx *gin.Context) {
 		shutdownWg.Add(1)
+		ctx.Set(ACTIVITY_POLL_STOP_KEY, newActivityPollController())
 
 		cleanupOnce := sync.Once{}
 		cleanup := func() {
@@ -193,8 +206,9 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 	})
 
 	httpServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", config.ProxyPort),
-		Handler: router,
+		Addr:              fmt.Sprintf(":%d", config.ProxyPort),
+		Handler:           connectAwareHandler(http.HandlerFunc(proxy.handleTunnelConnect), router, shutdownWg),
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	listener, err := net.Listen("tcp", httpServer.Addr)
@@ -249,4 +263,27 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 
 		return <-errChan
 	}
+}
+
+func (p *Proxy) newGuestPortTransport() *http.Transport {
+	return &http.Transport{
+		ForceAttemptHTTP2:     false,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: 5 * time.Minute,
+		DialContext:           p.dialGuestPort,
+	}
+}
+
+func connectAwareHandler(connectHandler, next http.Handler, shutdownWg *sync.WaitGroup) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodConnect {
+			shutdownWg.Add(1)
+			defer shutdownWg.Done()
+			connectHandler.ServeHTTP(writer, request)
+			return
+		}
+		next.ServeHTTP(writer, request)
+	})
 }

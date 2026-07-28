@@ -219,7 +219,7 @@ impl SharedResources {
                     .create(
                         BoxOptions {
                             rootfs: RootfsSpec::Image("alpine:latest".into()),
-                            auto_remove: false,
+                            auto_delete: Some(0),
                             ..Default::default()
                         },
                         None,

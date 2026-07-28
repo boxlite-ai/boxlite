@@ -4,13 +4,13 @@ SyncExecution - Synchronous wrapper for Execution.
 Mirrors the native Execution API exactly, but with synchronous methods.
 """
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ._boxlite import SyncBoxlite
     from ..boxlite import Execution
+    from ._boxlite import SyncBoxlite
 
-__all__ = ["SyncExecution", "SyncExecStdin", "SyncExecStdout", "SyncExecStderr"]
+__all__ = ["SyncExecStderr", "SyncExecStdin", "SyncExecStdout", "SyncExecution"]
 
 
 class SyncExecStdin:
@@ -184,7 +184,7 @@ class SyncExecution:
         """Get the execution ID."""
         return self._execution.id
 
-    def stdin(self) -> Optional[SyncExecStdin]:
+    def stdin(self) -> SyncExecStdin | None:
         """
         Get synchronous stdin writer.
 
@@ -202,7 +202,7 @@ class SyncExecution:
             return None
         return SyncExecStdin(self._ctx, async_stdin)
 
-    def stdout(self) -> Optional[SyncExecStdout]:
+    def stdout(self) -> SyncExecStdout | None:
         """
         Get synchronous stdout iterator.
 
@@ -220,7 +220,7 @@ class SyncExecution:
             return None
         return SyncExecStdout(self._ctx, async_stdout)
 
-    def stderr(self) -> Optional[SyncExecStderr]:
+    def stderr(self) -> SyncExecStderr | None:
         """
         Get synchronous stderr iterator.
 

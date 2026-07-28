@@ -219,13 +219,13 @@ impl NetworkBackendStats {
     }
 }
 
-/// The transport backing a [`BoxTunnel`] — a small, closed set (one variant per
+/// The transport backing a [`BoxInternalTunnel`] — a small, closed set (one variant per
 /// transport). Only the local gvproxy unix socket exists today; a cloud WS/TLS
 /// variant lands with the cloud data plane. Keeping the concrete type (rather than
 /// erasing to `Box<dyn>`) is deliberate: the local variant can hand its raw OS fd
 /// to an SDK with no unsafe downcast, and split lock-free. Mirrors pingora's
 /// `enum RawStream` and tungstenite's `MaybeTlsStream`.
-enum TunnelStream {
+pub(crate) enum TunnelStream {
     /// A raw unix-socket pipe to a same-host backend (gvproxy `/tunnel`).
     Local(UnixStream),
 }
@@ -238,14 +238,13 @@ enum TunnelStream {
 /// it for concurrent read+write. The transport is swappable behind [`TunnelStream`]
 /// so the same type carries a local unix pipe now and a cloud stream later without
 /// touching [`NetworkBackend::tunnel`]'s signature. `peer_addr()` is the guest
-/// target; [`into_fd`](Self::into_fd) recovers the tunnel's owned OS fd — the
-/// transport-agnostic handle an SDK wraps as a native socket.
-pub struct BoxTunnel {
+/// target.
+pub struct BoxInternalTunnel {
     stream: TunnelStream,
     peer: SocketAddr,
 }
 
-impl BoxTunnel {
+impl BoxInternalTunnel {
     /// Wrap a same-host unix-socket tunnel already connected to `peer`.
     pub fn from_local(stream: UnixStream, peer: SocketAddr) -> Self {
         Self {
@@ -259,28 +258,29 @@ impl BoxTunnel {
         self.peer
     }
 
-    /// Recover the tunnel's owned OS file descriptor — the transport-agnostic
-    /// handle an SDK wraps as a native socket (the glue does `.into_raw_fd()`,
-    /// then e.g. Python `socket.socket(fileno=fd)`). `None` for a transport with
-    /// no single host fd (a cloud stream), where callers fall back to a
-    /// local-listener bridge. This is the FFI-handoff shape libtailscale uses.
-    pub fn into_fd(self) -> Option<OwnedFd> {
+    /// Recover the transport's owned OS fd — the fd *is* the tunnel, so the
+    /// consumer holds the real socket with no bridge in between.
+    ///
+    /// tokio → std deregisters the socket from the reactor before the fd
+    /// changes hands.
+    pub(crate) fn into_owned_fd(self) -> BoxliteResult<OwnedFd> {
         match self.stream {
-            // tokio → std deregisters from the reactor; the std socket owns the fd.
-            TunnelStream::Local(stream) => stream.into_std().ok().map(OwnedFd::from),
+            TunnelStream::Local(stream) => stream.into_std().map(OwnedFd::from).map_err(|error| {
+                BoxliteError::Network(format!("detach tunnel socket for handoff: {error}"))
+            }),
         }
     }
 }
 
-impl std::fmt::Debug for BoxTunnel {
+impl std::fmt::Debug for BoxInternalTunnel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BoxTunnel")
+        f.debug_struct("BoxInternalTunnel")
             .field("peer", &self.peer)
             .finish_non_exhaustive()
     }
 }
 
-impl AsyncRead for BoxTunnel {
+impl AsyncRead for BoxInternalTunnel {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -292,7 +292,7 @@ impl AsyncRead for BoxTunnel {
     }
 }
 
-impl AsyncWrite for BoxTunnel {
+impl AsyncWrite for BoxInternalTunnel {
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -405,9 +405,9 @@ pub trait NetworkBackend: Send + Sync + std::fmt::Debug {
     }
 
     /// Open a raw byte tunnel to the guest `target` (the data plane, as opposed
-    /// to the control methods above). Returns a [`BoxTunnel`] the caller
+    /// to the control methods above). Returns a [`BoxInternalTunnel`] the caller
     /// reads/writes directly. Backends without a tunnel inherit `Unsupported`.
-    async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+    async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxInternalTunnel> {
         Err(control_unsupported("tunnel"))
     }
 }
@@ -662,12 +662,12 @@ mod tests {
     async fn box_tunnel_pipes_bytes_and_carries_peer() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        // A BoxTunnel over a real unix socketpair: bytes must cross its AsyncRead/
+        // A BoxInternalTunnel over a real unix socketpair: bytes must cross its AsyncRead/
         // AsyncWrite dispatch in both directions, the peer is carried out-of-band,
         // and the concrete local stream stays recoverable (the SDK fd-bridge relies on it).
         let (near, mut far) = UnixStream::pair().unwrap();
         let peer: SocketAddr = "192.168.127.2:8080".parse().unwrap();
-        let mut tunnel = BoxTunnel::from_local(near, peer);
+        let mut tunnel = BoxInternalTunnel::from_local(near, peer);
 
         assert_eq!(tunnel.peer_addr(), peer);
 
@@ -684,6 +684,5 @@ mod tests {
         assert_eq!(&back, b"pong");
 
         // the owned OS fd is recoverable with no unsafe downcast (SDK handoff)
-        assert!(tunnel.into_fd().is_some());
     }
 }

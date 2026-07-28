@@ -10,7 +10,7 @@ use boxlite_shared::{
     QuiesceResponse, ShutdownRequest, ShutdownResponse, ThawRequest, ThawResponse,
 };
 use tonic::{Request, Response, Status};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 #[tonic::async_trait]
 impl GuestService for GuestServer {
@@ -92,10 +92,16 @@ impl GuestService for GuestServer {
     ) -> Result<Response<ShutdownResponse>, Status> {
         info!("Received shutdown request - graceful shutdown starting");
 
+        // Host owns this teardown — tell the reaper's init-exit action to
+        // stand down (it would otherwise race us with its own VM power-off).
+        self.shutting_down
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
         // Step 1: Gracefully shutdown all running executions
-        const EXEC_SHUTDOWN_TIMEOUT_MS: u64 = 1000;
         info!("Stopping running executions...");
-        self.registry.shutdown_all(EXEC_SHUTDOWN_TIMEOUT_MS).await;
+        self.registry
+            .shutdown_all(crate::service::exec::registry::SHUTDOWN_TIMEOUT_MS)
+            .await;
 
         // Step 2: Gracefully shutdown all containers
         const CONTAINER_SHUTDOWN_TIMEOUT_MS: u64 = 2000;
@@ -109,6 +115,39 @@ impl GuestService for GuestServer {
             }
         }
         drop(containers);
+
+        // Step 2b: write each init's exit record before answering the host.
+        //
+        // Killing init above gets it reaped and its exit slot filled. The
+        // reaper's action writes this record too, but on its own task, with
+        // nothing here to wait for it — so this RPC writes the record itself.
+        // Both writers derive it from the same level-triggered slot, so the
+        // bytes agree whichever runs first; what this write adds is ordering:
+        // the record is on disk before the RPC returns and the host reads the
+        // exit file (its `stop()` reports that code as the box's exit status —
+        // docker leaves ExitCode 137 after a `docker stop`).
+        let init_exits: Vec<_> = self.init_exits.lock().await.drain().collect();
+        for (container_id, exit_slot) in init_exits {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(CONTAINER_SHUTDOWN_TIMEOUT_MS),
+                exit_slot.get(),
+            )
+            .await
+            {
+                Ok(status) => {
+                    let record = boxlite_shared::layout::ExitRecord {
+                        exit_code: status.shell_code(),
+                    };
+                    let exit_file = self.layout.shared().container(&container_id).exit_file();
+                    if let Err(e) = record.write(&exit_file) {
+                        warn!(container_id = %container_id, error = %e, "failed to write exit file");
+                    }
+                }
+                Err(_) => {
+                    warn!(container_id = %container_id, "init exit not observed in time; no exit record written")
+                }
+            }
+        }
 
         // Step 3: Sync all filesystems to ensure data is flushed to disk.
         // This is critical for COW disks to be in consistent state on restart.

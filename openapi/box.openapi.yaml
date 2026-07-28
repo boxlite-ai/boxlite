@@ -20,7 +20,8 @@ info:
   description: |
     HTTP API for BoxLite boxes — hardware-isolated VMs for secure code
     execution. Exposes box lifecycle management, command execution, file
-    transfer, and image management as a multi-tenant service.
+    transfer, service tunnels, and image management as a multi-tenant
+    service.
 
     ## Design Principles
 
@@ -123,6 +124,8 @@ tags:
     description: Command execution and streaming
   - name: Files
     description: File upload and download
+  - name: Network
+    description: Box networking and service access
   - name: Metrics
     description: Runtime and per-box metrics
   - name: Images
@@ -333,7 +336,7 @@ paths:
       summary: Stop a box (terminate VM)
       description: |
         Gracefully stops the VM. The box transitions to `stopped` status.
-        If `auto_remove` was set on creation, the box is also deleted.
+        AutoDelete may later delete the stopped box according to its configured interval.
       tags: [Boxes]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -539,7 +542,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Box"
         "400":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/BadRequestError"
 
   # -------------------------------------------------------------------------
   # Execution
@@ -815,6 +818,52 @@ paths:
               schema:
                 type: string
                 format: binary
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  # -------------------------------------------------------------------------
+  # Network
+  # -------------------------------------------------------------------------
+  /{prefix}/boxes/{box_id}/network/tunnel:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: prepareTunnel
+      summary: Prepare a box service tunnel
+      description: |
+        Returns the public URI for a TCP service inside the box.
+        Safe to repeat: the server may provision tunnel routing on
+        first call and returns the current descriptor thereafter.
+
+        HTTP services are reachable directly at the URI. For a raw
+        TCP byte stream to the service port, clients connect to the
+        URI and issue an HTTP/1.1 `CONNECT` for its authority; the
+        host upgrades each accepted `CONNECT` into one connection to
+        the in-box service. `CONNECT` is a transport handshake on the
+        URI's host, not an operation of this API.
+      tags: [Network]
+      parameters:
+        - name: port
+          in: query
+          required: true
+          description: TCP port the service listens on inside the box
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 65535
+          example: 3000
+      responses:
+        "200":
+          description: Service tunnel descriptor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TunnelDescriptor"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
@@ -1187,10 +1236,10 @@ components:
               type: string
               description: Default security preset
               example: standard
-            auto_remove:
-              type: boolean
-              description: Default auto-remove on stop
-              example: true
+            auto_delete:
+              type: integer
+              description: Default AutoDelete interval in seconds; 0 disables AutoDelete
+              example: 0
         overrides:
           type: object
           description: Server-enforced overrides that clients cannot change
@@ -1492,6 +1541,20 @@ components:
           additionalProperties:
             type: string
           description: User-defined key-value labels
+        auto_pause:
+          type: integer
+          minimum: 0
+          default: 900
+          description: Idle time in seconds before AutoPause; 0 disables AutoPause
+        auto_delete:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Time in seconds after a successful stop before AutoDelete; 0 disables AutoDelete
+        auto_resume:
+          type: boolean
+          default: true
+          description: Whether the box automatically resumes when accessed after AutoPause
 
     BoxStatus:
       type: string
@@ -1589,14 +1652,24 @@ components:
           description: |
             Secret placeholder rules for outbound HTTP(S) requests.
             Matching requests replace `placeholder` with `value` on the host side.
-        auto_remove:
-          type: boolean
-          description: Automatically remove box when stopped
-          default: true
         detach:
           type: boolean
           description: Box survives parent process exit
           default: false
+        auto_pause:
+          type: integer
+          minimum: 0
+          default: 900
+          description: Idle time in seconds before AutoPause; 0 disables AutoPause
+        auto_delete:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Time in seconds after a successful stop before AutoDelete; 0 disables AutoDelete
+        auto_resume:
+          type: boolean
+          default: true
+          description: Whether the box automatically resumes when accessed after AutoPause
         security:
           $ref: "#/components/schemas/SecurityPreset"
 
@@ -1882,6 +1955,22 @@ components:
           minimum: 1
           description: Terminal height in rows
           example: 40
+
+    # =======================================================================
+    # Network
+    # =======================================================================
+    TunnelDescriptor:
+      type: object
+      description: Public descriptor for a box service tunnel.
+      required: [uri]
+      properties:
+        uri:
+          type: string
+          format: uri
+          description: |
+            Public URI for the box service. Clients MUST treat the
+            value as opaque — its shape is deployment-defined.
+          example: "https://3000-01hjk4tnrpqsxyz8wm6ncvt9r5.proxy.example.test"
 
     # =======================================================================
     # Metrics

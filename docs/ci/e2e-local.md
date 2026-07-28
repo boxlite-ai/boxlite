@@ -11,8 +11,8 @@ real microVMs through libkrun — only run on hardware that allows nested virtua
 workflow keeps a single **persistent** EC2 instance for this: it is started before a run,
 runs the tests, then is **stopped** (never terminated) so its build and image caches survive
 on the EBS volume. Because there is exactly one instance, only one e2e run executes at a
-time — up to 100 queued runs wait while the in-progress run continues; newer runs stay
-queued instead of replacing an earlier pending run.
+time — the in-progress run continues, the newest pending run waits, and intermediate
+pending runs are superseded by GitHub.
 
 ## How it runs
 
@@ -36,11 +36,15 @@ flowchart LR
 
 ### Triggers
 
-- Push to `main` touching runtime or E2E code (`src/boxlite/**`, `src/shared/**`,
-  `src/cli/**`, `src/guest/**`, `sdks/**`, `apps/**`, `make/**`, `scripts/setup/**`,
-  `scripts/test/e2e/**`, any `Cargo.toml`, `Cargo.lock`, `Makefile`, or the workflow file).
-- A pull request touching the same runtime/E2E paths and labeled `e2e-local` — the label is
-  the cost gate, and only maintainers can add it.
+- Push to `main` touching runtime, application, or E2E orchestration code (`src/boxlite`,
+  `src/shared`, `src/cli`, `src/guest`, `apps/**`, `make/**`, `scripts/setup/**`,
+  `scripts/test/e2e/**`, `sdks/**`, `Makefile`, any `Cargo.toml`, `Cargo.lock`, or the
+  workflow file itself).
+- A pull request labeled `e2e-local` — the label is the cost gate, and only maintainers can
+  add it. The trigger is `pull_request_target`, so fork PRs get the credentials a plain
+  `pull_request` run would be denied. Same-repo PRs re-run on every push while labeled; a
+  fork PR runs only the head commit that was labeled — after new pushes, remove and re-add
+  the label to approve the new code.
 - Manual `workflow_dispatch`, with an optional `debug` input that opens an SSH session if the
   tests fail.
 
@@ -113,6 +117,7 @@ gh workflow run e2e-local.yml
 | `e2e-tests` fails on low disk | `target/` build artifacts filled the volume | the job evicts caches at 80% use and refuses below 20 GB free; if it still fails, free space on the instance manually |
 | A run can't find the instance, or targets the wrong one | `EC2_E2E_INSTANCE_ID` is stale | it self-heals via the `Name=boxlite-e2e` tag; clear the variable to force rediscovery |
 | A pull request doesn't trigger the workflow | the `e2e-local` label is missing | a maintainer adds the label (it is the cost gate) |
+| A labeled fork PR doesn't re-run after a push | fork approval is per-commit | remove and re-add the `e2e-local` label to approve the new head |
 
 For an interactive session, dispatch the workflow with `debug: true`; on failure it opens a
 tmate SSH session and leaves the instance running (it auto-stops after 30 minutes idle).

@@ -224,14 +224,4 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
     this.logger.debug(`Created UPDATE_BOX_NETWORK_SETTINGS job for box ${boxId} on runner ${this.runner.id}`)
   }
-
-  async resizeBox(boxId: string, cpu?: number, memory?: number, disk?: number): Promise<void> {
-    await this.jobService.createJob(null, JobType.RESIZE_BOX, this.runner.id, ResourceType.BOX, boxId, {
-      cpu,
-      memory,
-      disk,
-    })
-
-    this.logger.debug(`Created RESIZE_BOX job for box ${boxId} on runner ${this.runner.id}`)
-  }
 }

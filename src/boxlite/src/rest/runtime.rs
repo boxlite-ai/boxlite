@@ -12,8 +12,13 @@ use crate::{BoxInfo, LiteBox};
 use super::client::ApiClient;
 use super::litebox::RestBox;
 use super::options::BoxliteRestOptions;
-use super::types::{BoxResponse, CreateBoxRequest, ListBoxesResponse, RuntimeMetricsResponse};
+use super::types::{
+    BoxResponse, CreateBoxRequest, CreateVolumeRequest, ListBoxesResponse, ListVolumesResponse,
+    RuntimeMetricsResponse, VolumeResponse,
+};
 use crate::runtime::auth::{AuthBackend, Principal};
+use crate::runtime::volumes::VolumeBackend;
+use crate::volumes::VolumeInfo;
 
 pub(crate) struct RestRuntime {
     client: ApiClient,
@@ -33,15 +38,65 @@ impl AuthBackend for RestRuntime {
     }
 }
 
+#[async_trait::async_trait]
+impl VolumeBackend for RestRuntime {
+    async fn create_volume(&self) -> BoxliteResult<VolumeInfo> {
+        let resp: VolumeResponse = self
+            .client
+            .post("/volumes", &CreateVolumeRequest {})
+            .await?;
+        Ok(resp.to_volume_info())
+    }
+
+    async fn list_volumes(&self) -> BoxliteResult<Vec<VolumeInfo>> {
+        let resp: ListVolumesResponse = self.client.get("/volumes").await?;
+        Ok(resp.volumes.iter().map(|v| v.to_volume_info()).collect())
+    }
+
+    async fn get_volume(&self, id: &str) -> BoxliteResult<VolumeInfo> {
+        let path = format!("/volumes/{}", id);
+        let resp: VolumeResponse = self.client.get(&path).await?;
+        Ok(resp.to_volume_info())
+    }
+
+    async fn remove_volume(&self, id: &str, force: bool) -> BoxliteResult<()> {
+        let path = format!("/volumes/{}", id);
+        if force {
+            self.client
+                .delete_with_query(&path, &[("force", "true")])
+                .await
+        } else {
+            self.client.delete(&path).await
+        }
+    }
+}
+
 fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
     let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = rest_box.clone();
+    let network_backend: Arc<dyn crate::runtime::backend::BoxNetworkBackend> = rest_box.clone();
     let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> = rest_box;
-    LiteBox::new(box_backend, snapshot_backend)
+    LiteBox::new(box_backend, network_backend, snapshot_backend)
 }
 
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
+        if options.advanced.kernel.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "custom kernels are only supported by the local runtime".to_string(),
+            ));
+        }
+
+        // Validate only the caller's requested policy. An unset auto_pause means
+        // "no auto-pause", so it must not borrow the server's default here —
+        // otherwise a plain remove-on-stop box (`--rm` → auto_delete=1) is
+        // wrongly rejected by the ordering check before the request is even sent.
+        crate::runtime::types::BoxLifecyclePolicy {
+            auto_pause: options.auto_pause.unwrap_or(0),
+            auto_delete: options.auto_delete.unwrap_or(0),
+            auto_resume: options.auto_resume.unwrap_or(true),
+        }
+        .validate()?;
         let req = CreateBoxRequest::from_options(&options, name);
         let resp: BoxResponse = self.client.post("/boxes", &req).await?;
         let info = resp.to_box_info()?;
@@ -195,5 +250,56 @@ mod tests {
 
         // Should fail trying to reach the server for capability check
         assert!(result.is_err(), "Expected error when server is unreachable");
+    }
+
+    #[tokio::test]
+    async fn create_allows_remove_on_stop_without_autopause() {
+        // `run --rm` maps to auto_delete=1 with no auto_pause. The client must
+        // validate only the caller's requested policy — not the server's auto_pause
+        // default — so a remove-on-stop box is not rejected before the request is
+        // sent. With the server unreachable, a passing validation surfaces as a
+        // connection error, never the lifecycle-ordering error.
+        let options = BoxliteRestOptions::new("http://localhost:1"); // unreachable port
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+
+        let opts = BoxOptions {
+            auto_delete: Some(1),
+            ..Default::default()
+        };
+        let err = RuntimeBackend::create(&runtime, opts, None)
+            .await
+            .err()
+            .expect("unreachable server must yield an error");
+
+        assert!(
+            !err.to_string()
+                .contains("auto_delete must be greater than auto_pause"),
+            "remove-on-stop without auto_pause must pass client validation; got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_custom_kernel_for_rest_runtime() {
+        let temp = tempfile::tempdir().unwrap();
+        let kernel = temp.path().join("vmlinux");
+        std::fs::write(&kernel, b"custom kernel").unwrap();
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let opts = BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                kernel: Some(crate::experimental::custom_kernel::KernelOptions::new(
+                    kernel,
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, opts, None)
+            .await
+            .err()
+            .expect("REST runtime must reject a host-local custom kernel path");
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
     }
 }

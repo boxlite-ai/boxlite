@@ -32,6 +32,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite info`](#boxlite-info)
   - [`boxlite logs`](#boxlite-logs)
   - [`boxlite stats`](#boxlite-stats)
+  - [`boxlite network tunnel`](#boxlite-network-tunnel)
   - [`boxlite serve`](#boxlite-serve)
   - [`boxlite completion`](#boxlite-completion)
 - [Shared Flag Groups](#shared-flag-groups)
@@ -236,7 +237,14 @@ Credential:      API key (from BOXLITE_API_KEY env var)
 - `boxlite run [OPTIONS] IMAGE [COMMAND...]`
 - `boxlite run [OPTIONS] --rootfs PATH [COMMAND...]`
 
-Create a box from an image or prepared rootfs and run a command. If `COMMAND` is omitted, the box runs `sh`.
+Create a box from an image (or a prepared rootfs via `--rootfs`) and run a
+command, with docker's semantics: `COMMAND` replaces the image's `CMD`, the
+image's `ENTRYPOINT` is prepended, and the result **is** the container's init
+(PID 1). Omit it and the image's own default runs.
+
+The box's lifetime is that command's lifetime. When it exits, the box stops and
+takes the command's exit code; `boxlite ps` shows it stopped and
+`boxlite inspect -f '{{.State.ExitCode}}'` gives the code.
 
 **Options:** Uses [`ProcessFlags`](#processflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags), plus:
 
@@ -291,10 +299,19 @@ boxlite exec -e DEBUG=1 -w /app mybox -- pytest tests/
 
 **Synopsis:**
 
-- `boxlite create [OPTIONS] IMAGE`
-- `boxlite create [OPTIONS] --rootfs PATH`
+- `boxlite create [OPTIONS] IMAGE [COMMAND...]`
+- `boxlite create [OPTIONS] --rootfs PATH [COMMAND...]`
 
-Create a box from an image or prepared rootfs without running a command. Prints the new box's ID to stdout.
+Create a box without starting it. Prints the new box's ID to stdout.
+
+`COMMAND` is stored, not run — it becomes the box's main command (the container's
+init) when the box is next started, exactly as it would under `run`. Omit it and
+the image's own default is used.
+
+A box created **with** a command is a job: `exec` and `cp` will not start it
+implicitly, because starting it runs that command. Start it deliberately with
+`boxlite start`. A box created **without** one boots the image's default, and
+`exec` still starts it on demand.
 
 **Options:**
 
@@ -529,6 +546,15 @@ Display resource usage statistics for a box.
 
 ---
 
+### `boxlite network tunnel`
+
+**Synopsis:** `boxlite network tunnel BOX PORT`
+
+Print the public URL for a box service port. Requires a remote REST profile
+(`--url` or `--profile`); local boxes have no public ingress.
+
+---
+
 ### `boxlite serve`
 
 **Synopsis:** `boxlite serve [OPTIONS]`
@@ -595,6 +621,7 @@ Used by `run` and `create` (defined at `src/cli/src/cli.rs:287-310`).
 |------|------|-------------|
 | `--cpus N` | u32 | Number of CPUs (capped at 255; values above 255 log a warning) |
 | `--memory MiB` | u32 | Memory limit in mebibytes |
+| `--disk-size GB` | u64 | Sparse root filesystem disk size in gigabytes |
 
 ### `PublishFlags`
 

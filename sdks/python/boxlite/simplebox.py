@@ -7,7 +7,7 @@ Provides common functionality for all specialized boxes (CodeBox, BrowserBox, et
 import asyncio
 import logging
 from enum import IntEnum
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from .exec import ExecResult
 
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("boxlite.simplebox")
 
-__all__ = ["SimpleBox"]
+__all__ = ["BoxTunnel", "NetworkHandle", "SimpleBox"]
 
 
 class StreamType(IntEnum):
@@ -24,6 +24,37 @@ class StreamType(IntEnum):
 
     STDOUT = 1
     STDERR = 2
+
+
+class BoxTunnel:
+    """Prepared async tunnel handle for a box service port."""
+
+    def __init__(self, tunnel) -> None:
+        self._tunnel = tunnel
+
+    async def connect(self):
+        """Consume the tunnel and return its bidirectional byte stream."""
+        return await self._tunnel.connect()
+
+    def endpoint(self) -> str | int:
+        """Return the cloud URI or borrowed local file descriptor."""
+        return self._tunnel.endpoint()
+
+
+class NetworkHandle:
+    """Network operations for a ``SimpleBox``."""
+
+    def __init__(self, box: "SimpleBox") -> None:
+        self._owner = box
+
+    async def tunnel(self, port: int) -> BoxTunnel:
+        """Establish and return a tunnel handle for a port inside the box."""
+        if not self._owner._started:
+            raise RuntimeError(
+                "Box not started. Use 'async with SimpleBox(...) as box:' "
+                "or call 'await box.start()' first."
+            )
+        return BoxTunnel(await self._owner._create_tunnel(port))
 
 
 class SimpleBox:
@@ -42,12 +73,12 @@ class SimpleBox:
 
     def __init__(
         self,
-        image: Optional[str] = None,
-        rootfs_path: Optional[str] = None,
-        memory_mib: Optional[int] = None,
-        cpus: Optional[int] = None,
+        image: str | None = None,
+        rootfs_path: str | None = None,
+        memory_mib: int | None = None,
+        cpus: int | None = None,
         runtime: Optional["Boxlite"] = None,
-        name: Optional[str] = None,
+        name: str | None = None,
         auto_remove: bool = True,
         reuse_existing: bool = False,
         **kwargs,
@@ -102,7 +133,16 @@ class SimpleBox:
         self._reuse_existing = reuse_existing
         self._box = None
         self._started = False
-        self._created: Optional[bool] = None
+        self._created: bool | None = None
+        self._network = NetworkHandle(self)
+
+    async def _create_tunnel(self, port: int):
+        """Establish a native tunnel handle for a service port."""
+        if self._box is None:
+            raise RuntimeError("Box not created")
+        if not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ValueError("port must be an integer between 1 and 65535")
+        return await self._box.network.tunnel(port)
 
     async def __aenter__(self):
         """Async context manager entry - creates or reuses an existing box.
@@ -165,21 +205,28 @@ class SimpleBox:
         return self._box.info()
 
     @property
-    def created(self) -> Optional[bool]:
+    def created(self) -> bool | None:
         """Whether this box was newly created (True) or an existing box was reused (False).
 
         Returns None if the box hasn't been started yet.
         """
         return self._created
 
+    @property
+    def network(self) -> NetworkHandle:
+        """Get the box-scoped network handle."""
+        if not hasattr(self, "_network"):
+            self._network = NetworkHandle(self)
+        return self._network
+
     async def exec(
         self,
         cmd: str,
         *args: str,
-        env: Optional[dict[str, str]] = None,
-        user: Optional[str] = None,
-        timeout: Optional[float] = None,
-        cwd: Optional[str] = None,
+        env: dict[str, str] | None = None,
+        user: str | None = None,
+        timeout: float | None = None,
+        cwd: str | None = None,
     ) -> ExecResult:
         """
         Execute a command in the box and return the result.
@@ -227,13 +274,13 @@ class SimpleBox:
         # Get streams from Rust execution
         try:
             stdout = execution.stdout()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - native binding call; fall back to no stdout stream
             logger.error(f"take stdout err: {e}")
             stdout = None
 
         try:
             stderr = execution.stderr()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - native binding call; fall back to no stderr stream
             logger.error(f"take stderr err: {e}")
             stderr = None
 
@@ -253,7 +300,7 @@ class SimpleBox:
                         stdout_lines.append(line.decode("utf-8", errors="replace"))
                     else:
                         stdout_lines.append(line)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - stream collection must not crash exec(); partial output is acceptable
                 logger.error(f"collecting stdout err: {e}")
 
         async def collect_stderr():
@@ -266,7 +313,7 @@ class SimpleBox:
                         stderr_lines.append(line.decode("utf-8", errors="replace"))
                     else:
                         stderr_lines.append(line)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - stream collection must not crash exec(); partial output is acceptable
                 logger.error(f"collecting stderr err: {e}")
 
         await asyncio.gather(collect_stdout(), collect_stderr())
@@ -279,7 +326,7 @@ class SimpleBox:
             exec_result = await execution.wait()
             exit_code = exec_result.exit_code
             error_message = exec_result.error_message
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - native binding call; report failure via exit_code instead of raising
             logger.error(f"failed to wait execution: {e}")
             exit_code = -1
 
@@ -291,6 +338,10 @@ class SimpleBox:
             stderr=stderr,
             error_message=error_message,
         )
+
+    async def tunnel(self, port: int) -> BoxTunnel:
+        """Establish and return a tunnel handle for a port inside this box."""
+        return await self.network.tunnel(port)
 
     async def metrics(self):
         """Get box metrics (CPU, memory usage)."""

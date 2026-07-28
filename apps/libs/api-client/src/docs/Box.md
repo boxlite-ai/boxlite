@@ -24,8 +24,9 @@ Name | Type | Description | Notes
 **desiredState** | [**BoxDesiredState**](BoxDesiredState.md) | The desired state of the box | [optional] [default to undefined]
 **errorReason** | **string** | The error reason of the box | [optional] [default to undefined]
 **recoverable** | **boolean** | Whether the box error is recoverable. | [optional] [default to undefined]
-**autoStopInterval** | **number** | Auto-stop interval in minutes (0 means disabled) | [optional] [default to undefined]
-**autoDeleteInterval** | **number** | Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping) | [optional] [default to undefined]
+**autoPause** | **number** | Auto-pause interval in seconds (0 means disabled) | [optional] [default to undefined]
+**autoDelete** | **number** | Auto-delete interval in seconds (0 means disabled) | [optional] [default to undefined]
+**autoResume** | **boolean** | Whether the box should be automatically resumed on proxy access | [optional] [default to undefined]
 **volumes** | [**Array&lt;BoxVolume&gt;**](BoxVolume.md) | Array of volumes attached to the box | [optional] [default to undefined]
 **createdAt** | **string** | The creation timestamp of the box | [optional] [default to undefined]
 **updatedAt** | **string** | The last update timestamp of the box | [optional] [default to undefined]
@@ -59,8 +60,9 @@ const instance: Box = {
     desiredState,
     errorReason,
     recoverable,
-    autoStopInterval,
-    autoDeleteInterval,
+    autoPause,
+    autoDelete,
+    autoResume,
     volumes,
     createdAt,
     updatedAt,

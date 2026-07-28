@@ -19,7 +19,6 @@ All URIs are relative to *http://localhost:3000*
 |[**listBoxesPaginated**](#listboxespaginated) | **GET** /box/paginated | List all boxes paginated|
 |[**recoverBox**](#recoverbox) | **POST** /box/{boxIdOrName}/recover | Recover box from error state|
 |[**replaceLabels**](#replacelabels) | **PUT** /box/{boxIdOrName}/labels | Replace box labels|
-|[**resizeBox**](#resizebox) | **POST** /box/{boxIdOrName}/resize | Resize box resources|
 |[**revokeSshAccess**](#revokesshaccess) | **DELETE** /box/{boxIdOrName}/ssh-access | Revoke SSH access for box|
 |[**setAutoDeleteInterval**](#setautodeleteinterval) | **POST** /box/{boxIdOrName}/autodelete/{interval} | Set box auto-delete interval|
 |[**setAutostopInterval**](#setautostopinterval) | **POST** /box/{boxIdOrName}/autostop/{interval} | Set box auto-stop interval|
@@ -954,63 +953,6 @@ const { status, data } = await apiInstance.replaceLabels(
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
-# **resizeBox**
-> Box resizeBox(resizeBox)
-
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration,
-    ResizeBox
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxIdOrName: string; //ID or name of the box (default to undefined)
-let resizeBox: ResizeBox; //
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.resizeBox(
-    boxIdOrName,
-    resizeBox,
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **resizeBox** | **ResizeBox**|  | |
-| **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**Box**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: application/json
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Box has been resized |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
 # **revokeSshAccess**
 > Box revokeSshAccess()
 
@@ -1083,7 +1025,7 @@ const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
 let boxIdOrName: string; //ID or name of the box (default to undefined)
-let interval: number; //Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping) (default to undefined)
+let interval: number; //Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete. (default to undefined)
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.setAutoDeleteInterval(
@@ -1098,7 +1040,7 @@ const { status, data } = await apiInstance.setAutoDeleteInterval(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **interval** | [**number**] | Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping) | defaults to undefined|
+| **interval** | [**number**] | Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete. | defaults to undefined|
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 
@@ -1139,7 +1081,7 @@ const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
 let boxIdOrName: string; //ID or name of the box (default to undefined)
-let interval: number; //Auto-stop interval in minutes (0 to disable) (default to undefined)
+let interval: number; //Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-pause interval. (default to undefined)
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.setAutostopInterval(
@@ -1154,7 +1096,7 @@ const { status, data } = await apiInstance.setAutostopInterval(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **interval** | [**number**] | Auto-stop interval in minutes (0 to disable) | defaults to undefined|
+| **interval** | [**number**] | Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-pause interval. | defaults to undefined|
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 

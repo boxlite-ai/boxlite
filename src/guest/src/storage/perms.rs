@@ -35,12 +35,17 @@ impl OwnershipFixer {
 
         let start = std::time::Instant::now();
 
-        // Use chown -R for efficiency (much faster than walking in Rust)
-        let output = Command::new("chown")
-            .args(["-R", &owner])
-            .arg(path)
-            .output()
-            .map_err(|e| BoxliteError::Storage(format!("Failed to run chown: {}", e)))?;
+        // Use chown -R for efficiency (much faster than walking in Rust).
+        // Fence the reaper across spawn-and-wait (see reap_fence): output()
+        // self-waits and would otherwise race waitpid(-1) into ECHILD.
+        let output = {
+            let _fence = crate::reaper::reap_fence();
+            Command::new("chown")
+                .args(["-R", &owner])
+                .arg(path)
+                .output()
+        }
+        .map_err(|e| BoxliteError::Storage(format!("Failed to run chown: {}", e)))?;
 
         let duration = start.elapsed();
 

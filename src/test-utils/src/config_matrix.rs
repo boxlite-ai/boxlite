@@ -80,7 +80,7 @@ pub struct BoxConfig {
 /// - `jailer_disabled` — jailer off (development mode)
 /// - `small_memory` — 256 MiB memory
 /// - `large_disk` — 4 GB disk
-/// - `auto_remove_false` — keep box after stop
+/// - `auto_delete_zero` — keep box after stop
 /// - `detach_mode` — detached box
 /// - `max_security` — maximum security preset
 pub fn default_configs() -> Vec<BoxConfig> {
@@ -89,7 +89,6 @@ pub fn default_configs() -> Vec<BoxConfig> {
             name: "default",
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
                 ..Default::default()
             },
             skip_on: SkipCondition::default(),
@@ -98,7 +97,7 @@ pub fn default_configs() -> Vec<BoxConfig> {
             name: "jailer_enabled",
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
+                auto_delete: Some(0),
                 advanced: AdvancedBoxOptions {
                     security: SecurityOptions::enabled(),
                     ..Default::default()
@@ -111,7 +110,7 @@ pub fn default_configs() -> Vec<BoxConfig> {
             name: "jailer_disabled",
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
+                auto_delete: Some(0),
                 advanced: AdvancedBoxOptions {
                     security: SecurityOptions::disabled(),
                     ..Default::default()
@@ -125,7 +124,7 @@ pub fn default_configs() -> Vec<BoxConfig> {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 memory_mib: Some(256),
-                auto_remove: false,
+                auto_delete: Some(0),
                 ..Default::default()
             },
             skip_on: SkipCondition::default(),
@@ -135,16 +134,16 @@ pub fn default_configs() -> Vec<BoxConfig> {
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 disk_size_gb: Some(4),
-                auto_remove: false,
+                auto_delete: Some(0),
                 ..Default::default()
             },
             skip_on: SkipCondition::default(),
         },
         BoxConfig {
-            name: "auto_remove_false",
+            name: "auto_delete_zero",
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
+                auto_delete: Some(0),
                 ..Default::default()
             },
             skip_on: SkipCondition::default(),
@@ -153,7 +152,7 @@ pub fn default_configs() -> Vec<BoxConfig> {
             name: "detach_mode",
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
+                auto_delete: Some(0),
                 detach: true,
                 ..Default::default()
             },
@@ -163,7 +162,7 @@ pub fn default_configs() -> Vec<BoxConfig> {
             name: "max_security",
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
+                auto_delete: Some(0),
                 advanced: AdvancedBoxOptions {
                     security: SecurityOptions::enabled(),
                     ..Default::default()

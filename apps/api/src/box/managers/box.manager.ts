@@ -13,6 +13,7 @@ import { JobConflictError } from '../errors/job-conflict.error'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { RunnerService } from '../services/runner.service'
+import { BoxActivityService } from '../services/box-activity.service'
 
 import { RedisLockProvider, LockCode } from '../common/redis-lock.provider'
 
@@ -50,6 +51,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
   constructor(
     private readonly boxRepository: BoxRepository,
     private readonly runnerService: RunnerService,
+    private readonly boxActivityService: BoxActivityService,
     private readonly redisLockProvider: RedisLockProvider,
     private readonly boxStartAction: BoxStartAction,
     private readonly boxStopAction: BoxStopAction,
@@ -68,10 +70,9 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
   @TrackJobExecution()
   @WithInstrumentation()
   @LogExecution('auto-stop-check')
-  @WithInstrumentation()
   async autostopCheck(): Promise<void> {
     const lockKey = 'auto-stop-check-worker-selected'
-    //  lock the sync to only run one instance at a time
+    // lock the sync to only run one instance at a time
     if (!(await this.redisLockProvider.lock(lockKey, 60))) {
       return
     }
@@ -84,7 +85,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
         readyRunners.map(async (runner) => {
           const boxes = await this.boxRepository
             .createQueryBuilder('box')
-            .innerJoin('box_last_activity', 'activity', 'activity."boxId" = box.id')
+            .leftJoin('box_last_activity', 'activity', 'activity."boxId" = box.id')
             .where('box."runnerId" = :runnerId', { runnerId: runner.id })
             .andWhere('box."organizationId" != :warmPoolOrg', {
               warmPoolOrg: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
@@ -94,8 +95,11 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
               desiredState: BoxDesiredState.STARTED,
             })
             .andWhere('box.pending != true')
-            .andWhere('box."autoStopInterval" != 0')
-            .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * box."autoStopInterval"')
+            .andWhere('box."autoPause" != 0')
+            .andWhere(
+              'COALESCE(activity."lastActivityAt", box."updatedAt") < NOW() - INTERVAL \'1 second\' * box."autoPause"',
+            )
+            .orderBy('COALESCE(activity."lastActivityAt", box."updatedAt")', 'ASC')
             .limit(100)
             .getMany()
 
@@ -107,24 +111,31 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
                 return
               }
 
-              let updateData: Partial<Box> = {}
-
-              //  if auto-delete interval is 0, delete the box immediately
-              if (box.autoDeleteInterval === 0) {
-                updateData = Box.getSoftDeleteUpdate(box)
-              } else {
-                updateData.pending = true
-                updateData.desiredState = BoxDesiredState.STOPPED
-              }
-
-              this.logger.log(
-                `Auto-stopping box ${box.id}: autoStopInterval=${box.autoStopInterval}min, autoDeleteInterval=${box.autoDeleteInterval}`,
-              )
-
               try {
+                // Activity is buffered in Redis before the periodic DB flush.
+                // Recheck after taking the state lock so a recent Exec/Files
+                // call cannot be paused based on a stale SQL timestamp.
+                const lastActivityAt = await this.boxActivityService.getLastActivityAt(box.id)
+                if (lastActivityAt && Date.now() - lastActivityAt.getTime() < box.autoPause * 1000) {
+                  return
+                }
+
+                const updateData: Partial<Box> = {
+                  pending: true,
+                  desiredState: BoxDesiredState.STOPPED,
+                }
+
+                this.logger.log(
+                  `Auto-pausing box ${box.id}: autoPause=${box.autoPause}s, autoDelete=${box.autoDelete}s`,
+                )
                 await this.boxRepository.updateWhere(box.id, {
                   updateData,
-                  whereCondition: { pending: false, state: box.state },
+                  whereCondition: {
+                    pending: false,
+                    state: box.state,
+                    desiredState: BoxDesiredState.STARTED,
+                    autoPause: box.autoPause,
+                  },
                 })
 
                 this.syncInstanceState(box.id).catch(this.logger.error)
@@ -148,7 +159,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
   @WithInstrumentation()
   async autoDeleteCheck(): Promise<void> {
     const lockKey = 'auto-delete-check-worker-selected'
-    //  lock the sync to only run one instance at a time
+    // lock the sync to only run one instance at a time
     if (!(await this.redisLockProvider.lock(lockKey, 60))) {
       return
     }
@@ -161,7 +172,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
         readyRunners.map(async (runner) => {
           const boxes = await this.boxRepository
             .createQueryBuilder('box')
-            .innerJoin('box_last_activity', 'activity', 'activity."boxId" = box.id')
+            .innerJoin('box.lastActivityAt', 'activity')
             .where('box."runnerId" = :runnerId', { runnerId: runner.id })
             .andWhere('box."organizationId" != :warmPoolOrg', {
               warmPoolOrg: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
@@ -171,8 +182,9 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
               desiredState: BoxDesiredState.STOPPED,
             })
             .andWhere('box.pending != true')
-            .andWhere('box."autoDeleteInterval" >= 0')
-            .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * box."autoDeleteInterval"')
+            .andWhere('box."autoDelete" > 0')
+            .andWhere('activity."lastActivityAt" IS NOT NULL')
+            .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 second\' * box."autoDelete"')
             .orderBy('activity."lastActivityAt"', 'ASC')
             .limit(100)
             .getMany()
@@ -185,13 +197,18 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
                 return
               }
 
-              this.logger.log(`Auto-deleting box ${box.id}: autoDeleteInterval=${box.autoDeleteInterval}min`)
+              this.logger.log(`Auto-deleting box ${box.id}: autoDelete=${box.autoDelete}s`)
 
               try {
                 const updateData = Box.getSoftDeleteUpdate(box)
                 await this.boxRepository.updateWhere(box.id, {
                   updateData,
-                  whereCondition: { pending: false, state: box.state },
+                  whereCondition: {
+                    pending: false,
+                    state: box.state,
+                    desiredState: BoxDesiredState.STOPPED,
+                    autoDelete: box.autoDelete,
+                  },
                 })
 
                 this.syncInstanceState(box.id).catch(this.logger.error)

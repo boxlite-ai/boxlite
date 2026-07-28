@@ -102,7 +102,6 @@ model_rate_limit_entry.go
 model_regenerate_api_key_response.go
 model_region.go
 model_region_type.go
-model_resize_box.go
 model_runner.go
 model_runner_box_observation.go
 model_runner_full.go

@@ -12,11 +12,13 @@ mod exec;
 mod images;
 mod info;
 mod metrics;
+mod network;
 mod options;
 mod runtime;
 mod snapshot_options;
 mod snapshots;
 mod util;
+mod volumes;
 
 // Re-export all public types
 pub use advanced_options::JsSecurityOptions;
@@ -26,6 +28,7 @@ pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecutio
 pub use images::{JsImageHandle, JsImageInfo, JsImagePullResult};
 pub use info::{JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus};
 pub use metrics::{JsBoxMetrics, JsRuntimeMetrics};
+pub use network::{JsBoxConnection, JsBoxTunnel, JsNetworkHandle};
 pub use options::{
     ApiKeyCredential, JsAccessToken, JsBoxOptions, JsEnvVar, JsHealthCheckOptions, JsImageRegistry,
     JsImageRegistryAuth, JsNetworkSpec, JsOptions, JsPortSpec, JsSecret, JsVolumeSpec,
@@ -33,3 +36,4 @@ pub use options::{
 pub use runtime::JsBoxlite; // re-export for dist bundling
 pub use snapshot_options::{JsCloneOptions, JsExportOptions, JsSnapshotOptions};
 pub use snapshots::{JsSnapshotHandle, JsSnapshotInfo};
+pub use volumes::{JsVolumeHandle, JsVolumeInfo};

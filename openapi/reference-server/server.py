@@ -139,7 +139,9 @@ class CreateBoxRequest(BaseModel):
     ports: Optional[list[dict]] = None
     network: Optional[NetworkSpec] = None
     secrets: Optional[list[SecretSpec]] = None
-    auto_remove: Optional[bool] = True
+    auto_pause: Optional[int] = Field(default=None, ge=0)
+    auto_delete: Optional[int] = Field(default=None, ge=0)
+    auto_resume: Optional[bool] = None
     detach: Optional[bool] = False
     security: Optional[str] = None
 
@@ -378,8 +380,12 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
             )
             for secret in req.secrets
         ]
-    if req.auto_remove is not None:
-        kwargs["auto_remove"] = req.auto_remove
+    if req.auto_pause is not None:
+        kwargs["auto_pause"] = req.auto_pause
+    if req.auto_delete is not None:
+        kwargs["auto_delete"] = req.auto_delete
+    if req.auto_resume is not None:
+        kwargs["auto_resume"] = req.auto_resume
     if req.detach is not None:
         kwargs["detach"] = req.detach
     if req.volumes:
@@ -533,7 +539,7 @@ async def get_config():
             "memory_mib": 512,
             "disk_size_gb": 10,
             "security_preset": "standard",
-            "auto_remove": True,
+            "auto_delete": 0,
         },
         "overrides": {},
         "capabilities": {

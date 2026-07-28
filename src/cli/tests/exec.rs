@@ -356,3 +356,21 @@ fn test_exec_detach_with_tty_allowed() {
 
     cleanup(&ctx, &box_id);
 }
+
+/// A tenant that kills itself with SIGTERM must surface as 128+15 = 143 — the
+/// guest reaper's Signaled delivery path, end to end through the CLI.
+#[test]
+fn test_exec_self_terminate_maps_to_143() {
+    let mut ctx = common::boxlite();
+
+    ctx.cmd.args(["run", "-d", "alpine:latest", "sleep", "300"]);
+    let output = ctx.cmd.assert().success().get_output().clone();
+    let box_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    ctx.new_cmd()
+        .args(["exec", &box_id, "--", "sh", "-c", "kill -TERM $$"])
+        .assert()
+        .code(143);
+
+    cleanup(&ctx, &box_id);
+}

@@ -2,6 +2,10 @@
 //! This module contains all CLI-related code including the main CLI structure,
 //! subcommands, and flag definitions.
 
+use boxlite::experimental::custom_kernel::{KernelFormat, KernelOptions, configure};
+use boxlite::experimental::{
+    EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
+};
 use boxlite::runtime::options::{NetworkConfig, NetworkMode, PortProtocol, PortSpec, VolumeSpec};
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime, ImageRegistry,
@@ -10,7 +14,7 @@ use boxlite::{
 use clap::{Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::shells::{Bash, Fish, Zsh};
 use std::io::{IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Helper to parse CLI environment variables and apply them to BoxOptions
 pub fn apply_env_vars(env: &[String], opts: &mut BoxOptions) {
@@ -53,6 +57,7 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 #[non_exhaustive]
 pub enum Commands {
+    /// Run a command in a new box
     Run(crate::commands::run::RunArgs),
     /// Execute a command in a running box
     Exec(crate::commands::exec::ExecArgs),
@@ -96,11 +101,17 @@ pub enum Commands {
     /// Display resource usage statistics for a box
     Stats(crate::commands::stats::StatsArgs),
 
+    /// Manage box networking
+    Network(crate::commands::network::NetworkArgs),
+
     /// Start a long-running REST API server
     Serve(crate::commands::serve::ServeArgs),
 
     /// Authenticate with a remote BoxLite server
     Auth(crate::commands::auth::AuthArgs),
+
+    /// Manage named local volumes
+    Volume(crate::commands::volume::VolumeArgs),
 
     /// Generate shell completion script (hidden from help)
     #[command(hide = true)]
@@ -125,10 +136,59 @@ pub struct CompletionArgs {
 
 /// Writes a completion script for the given shell to `out`.
 pub fn generate_completion(shell: &Shell, cmd: &mut Command, name: &str, out: &mut dyn Write) {
+    // clap_complete's AOT generators enumerate hidden arguments. Generate
+    // from a projection of the affected commands so RC flags remain
+    // parseable without becoming a discovery surface.
+    let mut cmd = completion_projection(cmd);
     match shell {
-        Shell::Bash => clap_complete::generate(Bash, cmd, name, out),
-        Shell::Zsh => clap_complete::generate(Zsh, cmd, name, out),
-        Shell::Fish => clap_complete::generate(Fish, cmd, name, out),
+        Shell::Bash => clap_complete::generate(Bash, &mut cmd, name, out),
+        Shell::Zsh => clap_complete::generate(Zsh, &mut cmd, name, out),
+        Shell::Fish => clap_complete::generate(Fish, &mut cmd, name, out),
+    }
+}
+
+fn completion_projection(cmd: &Command) -> Command {
+    cmd.clone()
+        .mut_subcommand("run", without_hidden_arguments)
+        .mut_subcommand("create", without_hidden_arguments)
+}
+
+fn without_hidden_arguments(command: Command) -> Command {
+    let name = match command.get_name() {
+        "run" => "run",
+        "create" => "create",
+        other => panic!("completion projection is not defined for {other}"),
+    };
+    let about = command.get_about().cloned();
+    let long_about = command.get_long_about().cloned();
+    let display_order = command.get_display_order();
+    let visible_arguments = command
+        .get_arguments()
+        .filter(|argument| !argument.is_hide_set())
+        .cloned()
+        .collect::<Vec<_>>();
+    let subcommands = command.get_subcommands().cloned().collect::<Vec<_>>();
+
+    let mut projected = Command::new(name)
+        .display_order(display_order)
+        .args(visible_arguments)
+        .subcommands(subcommands);
+    if let Some(about) = about {
+        projected = projected.about(about);
+    }
+    if let Some(long_about) = long_about {
+        projected = projected.long_about(long_about);
+    }
+    projected
+}
+
+pub(crate) fn experimental_features_from_env() -> boxlite::BoxliteResult<ExperimentalFeatures> {
+    match std::env::var(EXPERIMENTAL_FEATURES_ENV) {
+        Ok(value) => ExperimentalFeatures::parse(&value),
+        Err(std::env::VarError::NotPresent) => Ok(ExperimentalFeatures::default()),
+        Err(std::env::VarError::NotUnicode(_)) => Err(boxlite::BoxliteError::Config(format!(
+            "{EXPERIMENTAL_FEATURES_ENV} must contain valid UTF-8"
+        ))),
     }
 }
 
@@ -179,6 +239,9 @@ pub struct GlobalFlags {
     /// `/v1/boxes/...`).
     #[arg(long = "path-prefix", global = true, env = "BOXLITE_REST_PATH_PREFIX")]
     pub path_prefix: Option<String>,
+
+    #[arg(skip)]
+    pub(crate) experimental_features: ExperimentalFeatures,
 }
 
 impl GlobalFlags {
@@ -192,6 +255,10 @@ impl GlobalFlags {
             .filter(|s| !s.is_empty())
             .unwrap_or(crate::credentials::DEFAULT_PROFILE)
             .to_string()
+    }
+
+    pub fn experimental_features(&self) -> &ExperimentalFeatures {
+        &self.experimental_features
     }
 
     /// Resolve runtime options from config file and CLI overrides (--home, --registry).
@@ -223,7 +290,10 @@ impl GlobalFlags {
         &self,
         options: BoxliteOptions,
     ) -> anyhow::Result<BoxliteRuntime> {
-        BoxliteRuntime::new(options).map_err(Into::into)
+        RuntimeBuilder::new(options)
+            .with_features(self.experimental_features.clone())
+            .build()
+            .map_err(Into::into)
     }
 
     pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
@@ -328,8 +398,9 @@ pub struct ProcessFlags {
     pub user: Option<String>,
 
     /// Override the image entrypoint with a single executable, mirroring
-    /// `docker run --entrypoint`. Sets the container's configured entrypoint;
-    /// any trailing command is still exec'd as the foreground process.
+    /// `docker run --entrypoint`. Any trailing COMMAND replaces the image's
+    /// CMD and is appended to it, and the result runs as the container's
+    /// init.
     #[arg(long = "entrypoint", value_name = "EXEC")]
     pub entrypoint: Option<String>,
 }
@@ -350,6 +421,12 @@ impl ProcessFlags {
         if let Some(ref exec) = self.entrypoint {
             opts.entrypoint = Some(vec![exec.clone()]);
         }
+        if let Some(ref user) = self.user {
+            opts.user = Some(user.clone());
+        }
+        // `-t` is a property of the container's init, which COMMAND now is, so
+        // it has to be decided here at create time rather than at attach.
+        opts.tty = self.tty;
         Ok(())
     }
 
@@ -428,6 +505,92 @@ impl ResourceFlags {
         if let Some(gb) = self.disk_size_gb {
             opts.disk_size_gb = Some(gb);
         }
+    }
+}
+
+// ============================================================================
+// KERNEL FLAGS
+// ============================================================================
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum KernelFormatArg {
+    Auto,
+    Raw,
+    Elf,
+    PeGz,
+    ImageBz2,
+    ImageGz,
+    ImageZstd,
+}
+
+impl From<KernelFormatArg> for KernelFormat {
+    fn from(format: KernelFormatArg) -> Self {
+        match format {
+            KernelFormatArg::Auto => Self::Auto,
+            KernelFormatArg::Raw => Self::Raw,
+            KernelFormatArg::Elf => Self::Elf,
+            KernelFormatArg::PeGz => Self::PeGz,
+            KernelFormatArg::ImageBz2 => Self::ImageBz2,
+            KernelFormatArg::ImageGz => Self::ImageGz,
+            KernelFormatArg::ImageZstd => Self::ImageZstd,
+        }
+    }
+}
+
+// Direct Linux boot options. Companion flags are valid only with `--kernel`.
+#[derive(Args, Debug, Clone, Default)]
+pub struct KernelFlags {
+    /// Boot with this Linux kernel image instead of BoxLite's bundled kernel.
+    #[arg(long, value_name = "PATH", hide = true)]
+    pub kernel: Option<PathBuf>,
+
+    /// Kernel image format. Auto-detected by default.
+    #[arg(
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        requires = "kernel",
+        hide = true
+    )]
+    pub kernel_format: Option<KernelFormatArg>,
+
+    /// Initial ramdisk to load with the custom kernel.
+    #[arg(long, value_name = "PATH", requires = "kernel", hide = true)]
+    pub initramfs: Option<PathBuf>,
+
+    /// Replace libkrun's default Linux kernel command line.
+    #[arg(
+        long = "kernel-args",
+        value_name = "ARGS",
+        requires = "kernel",
+        hide = true
+    )]
+    pub kernel_args: Option<String>,
+}
+
+impl KernelFlags {
+    pub fn require_enabled(&self, features: &ExperimentalFeatures) -> boxlite::BoxliteResult<()> {
+        if self.kernel.is_none() {
+            return Ok(());
+        }
+
+        features.require(ExperimentalFeature::CustomKernel)
+    }
+
+    pub fn apply_to(&self, opts: &mut BoxOptions) {
+        let Some(path) = &self.kernel else {
+            return;
+        };
+        configure(
+            opts,
+            KernelOptions {
+                path: path.clone(),
+                format: self.kernel_format.map(Into::into).unwrap_or_default(),
+                initramfs: self.initramfs.clone(),
+                command_line: self.kernel_args.clone(),
+            },
+        );
     }
 }
 
@@ -706,6 +869,11 @@ impl VolumeFlags {
         for s in self.volume.iter() {
             let spec = parse_volume_spec(s)?;
             let host_path = match spec.host_path {
+                // TODO(#942): when the host side of a `-v <src>:<guest>` spec is a
+                // bare name (not a path) that matches a named volume, resolve it
+                // to the volume's mountpoint here (via the volume backend) and
+                // bind that payload dir instead of treating the name as a literal
+                // host path.
                 Some(host) => {
                     let mut path = host;
                     if std::path::Path::new(&path).is_relative() && !is_windows_absolute_path(&path)
@@ -766,7 +934,9 @@ pub struct ManagementFlags {
 impl ManagementFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
         opts.detach = self.detach;
-        opts.auto_remove = self.rm;
+        // `--rm` is the CLI spelling of "delete when stopped"; the CLI
+        // default (like `docker run`) is to keep the box.
+        opts.auto_delete = Some(if self.rm { 1 } else { 0 });
         if let Some(ref preset) = self.security {
             // Bubble the typo'd-preset error all the way back to the
             // CLI exit so the operator sees the offending value.
@@ -780,7 +950,9 @@ impl ManagementFlags {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
@@ -839,6 +1011,7 @@ mod tests {
             url: None,
             profile: None,
             path_prefix: None,
+            experimental_features: ExperimentalFeatures::default(),
         };
 
         let options = flags.resolve_runtime_options().unwrap();
@@ -866,6 +1039,7 @@ mod tests {
             url: url.map(str::to_string),
             profile: profile.map(str::to_string),
             path_prefix: path_prefix.map(str::to_string),
+            experimental_features: ExperimentalFeatures::default(),
         }
     }
 
@@ -990,6 +1164,120 @@ mod tests {
         assert_eq!(opts.disk_size_gb, None);
     }
 
+    #[test]
+    fn custom_kernel_flags_are_applied_as_one_boot_configuration() {
+        let flags = KernelFlags {
+            kernel: Some(PathBuf::from("/tmp/vmlinux")),
+            kernel_format: Some(KernelFormatArg::Elf),
+            initramfs: Some(PathBuf::from("/tmp/initramfs.img")),
+            kernel_args: Some("console=ttyS0 panic=-1".to_string()),
+        };
+
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+
+        let kernel = opts.advanced.kernel.expect("custom kernel configuration");
+        assert_eq!(kernel.path, PathBuf::from("/tmp/vmlinux"));
+        assert_eq!(kernel.format, KernelFormat::Elf);
+        assert_eq!(kernel.initramfs, Some(PathBuf::from("/tmp/initramfs.img")));
+        assert_eq!(
+            kernel.command_line.as_deref(),
+            Some("console=ttyS0 panic=-1")
+        );
+    }
+
+    #[test]
+    fn custom_kernel_gate_uses_explicit_feature_state() {
+        let flags = KernelFlags {
+            kernel: Some(PathBuf::from("/tmp/vmlinux")),
+            ..Default::default()
+        };
+
+        let error = flags
+            .require_enabled(&ExperimentalFeatures::default())
+            .expect_err("custom kernel must be disabled by default");
+        assert!(
+            error
+                .to_string()
+                .contains("ExperimentalFeature::CustomKernel")
+        );
+
+        let enabled = ExperimentalFeatures::parse("custom-kernel").unwrap();
+        flags.require_enabled(&enabled).unwrap();
+    }
+
+    #[test]
+    fn custom_kernel_flags_are_hidden_from_help() {
+        for command in ["run", "create"] {
+            let error = Cli::try_parse_from(["boxlite", command, "--help"]).unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+
+            let help = error.to_string();
+            for rc_flag in [
+                "--kernel",
+                "--kernel-format",
+                "--initramfs",
+                "--kernel-args",
+            ] {
+                assert!(
+                    !help.contains(rc_flag),
+                    "{rc_flag} leaked into {command} help:\n{help}"
+                );
+            }
+            assert!(
+                !help.contains("\nAdvanced boot options:\n"),
+                "empty advanced boot section leaked into {command} help:\n{help}"
+            );
+        }
+    }
+
+    #[test]
+    fn custom_kernel_flags_are_hidden_from_completions() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let mut output = Vec::new();
+            generate_completion(&shell, &mut Cli::command(), "boxlite", &mut output);
+            let completion = String::from_utf8(output).unwrap();
+
+            for name in ["kernel", "kernel-format", "initramfs", "kernel-args"] {
+                let rc_flag = match shell {
+                    Shell::Fish => format!("-l {name}"),
+                    Shell::Bash | Shell::Zsh => format!("--{name}"),
+                };
+                assert!(
+                    !completion.contains(&rc_flag),
+                    "{rc_flag} leaked into {shell:?} completion"
+                );
+            }
+            for name in ["rootfs", "cpus", "network"] {
+                let stable_flag = match shell {
+                    Shell::Fish => format!("-l {name}"),
+                    Shell::Bash | Shell::Zsh => format!("--{name}"),
+                };
+                assert!(
+                    completion.contains(&stable_flag),
+                    "{stable_flag} missing from {shell:?} completion"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kernel_companion_flags_require_kernel() {
+        let error = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "--initramfs",
+            "/tmp/initramfs.img",
+            "alpine",
+        ])
+        .unwrap_err();
+
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
     fn network_flags(network: Option<&str>, allow_net: &[&str]) -> NetworkFlags {
         NetworkFlags {
             network: network.map(str::to_string),
@@ -1084,6 +1372,23 @@ mod tests {
             .expect("entrypoint apply");
 
         assert_eq!(opts.entrypoint, Some(vec!["/bin/bash".to_string()]));
+    }
+
+    /// `-t` has to reach `BoxOptions.tty`, because the terminal now belongs to
+    /// the *container's* init rather than to an exec: nothing downstream can
+    /// add it later. When this mapping was missing, `run -it` still parsed,
+    /// still put the local terminal in raw mode, and still ran — just against a
+    /// process on pipes, with no prompt and no job control.
+    #[test]
+    fn test_process_flags_tty_reaches_box_options() {
+        let mut opts = BoxOptions::default();
+        assert!(!opts.tty, "a box is not a terminal by default");
+
+        let mut flags = process_flags_with_entrypoint(None);
+        flags.tty = true;
+        flags.apply_to(&mut opts).expect("tty apply");
+
+        assert!(opts.tty, "-t must make the main command a terminal");
     }
 
     #[test]
@@ -1320,8 +1625,39 @@ mod tests {
 
     // ─── auth subcommand parse tests ───────────────────────────────────────
 
-    use crate::commands::auth::AuthCommand;
+    use crate::commands::{auth::AuthCommand, network::NetworkCommand};
     use clap::Parser;
+
+    // ─── tunnel parse tests ────────────────────────────────────────────────
+
+    #[test]
+    fn network_tunnel_parses_box_and_port() {
+        Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "3000"]).expect("parse");
+    }
+
+    #[test]
+    fn network_tunnel_preserves_box_and_port() {
+        let cli =
+            Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "3000"]).expect("parse");
+        let Commands::Network(args) = cli.command else {
+            panic!("expected Commands::Network");
+        };
+        let NetworkCommand::Tunnel(args) = args.command;
+        assert_eq!(args.target, "mybox");
+        assert_eq!(args.port, 3000);
+    }
+
+    #[test]
+    fn tunnel_is_not_a_top_level_command() {
+        let result = Cli::try_parse_from(["boxlite", "tunnel", "mybox", "3000"]);
+        assert!(result.is_err(), "tunnel must be nested under network");
+    }
+
+    #[test]
+    fn network_tunnel_rejects_port_zero_at_parse() {
+        let result = Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "0"]);
+        assert!(result.is_err(), "port 0 must be rejected by the parser");
+    }
 
     #[test]
     fn auth_login_parses_with_no_flags() {
@@ -1348,6 +1684,70 @@ mod tests {
             panic!("expected Commands::Auth");
         };
         assert!(matches!(args.command, AuthCommand::Status));
+    }
+
+    // ─── volume subcommand parse tests ─────────────────────────────────────
+
+    use crate::commands::volume::VolumeCommand;
+
+    #[test]
+    fn volume_create_takes_no_args() {
+        // `create` takes no arguments — the id is server-assigned and printed.
+        let cli = Cli::try_parse_from(["boxlite", "volume", "create"]).expect("parse");
+        let Commands::Volume(args) = cli.command else {
+            panic!("expected Commands::Volume");
+        };
+        assert!(matches!(args.command, VolumeCommand::Create(_)));
+        // A positional argument must be rejected.
+        assert!(Cli::try_parse_from(["boxlite", "volume", "create", "data"]).is_err());
+    }
+
+    #[test]
+    fn volume_ls_list_alias_parses() {
+        // The `list` visible alias must resolve to the same Ls variant.
+        for verb in ["ls", "list"] {
+            let cli = Cli::try_parse_from(["boxlite", "volume", verb]).expect("parse");
+            let Commands::Volume(args) = cli.command else {
+                panic!("expected Commands::Volume for {verb}");
+            };
+            assert!(
+                matches!(args.command, VolumeCommand::Ls(_)),
+                "{verb} should map to Ls"
+            );
+        }
+    }
+
+    #[test]
+    fn volume_get_inspect_alias_parses() {
+        for verb in ["get", "inspect"] {
+            let cli = Cli::try_parse_from(["boxlite", "volume", verb, "vol-123"]).expect("parse");
+            let Commands::Volume(args) = cli.command else {
+                panic!("expected Commands::Volume for {verb}");
+            };
+            let VolumeCommand::Get(get) = args.command else {
+                panic!("{verb} should map to Get");
+            };
+            assert_eq!(get.id, "vol-123");
+        }
+    }
+
+    #[test]
+    fn volume_rm_takes_multiple_ids_and_force() {
+        let cli = Cli::try_parse_from(["boxlite", "volume", "rm", "-f", "a", "b"]).expect("parse");
+        let Commands::Volume(args) = cli.command else {
+            panic!("expected Commands::Volume");
+        };
+        let VolumeCommand::Rm(rm) = args.command else {
+            panic!("expected VolumeCommand::Rm");
+        };
+        assert!(rm.force);
+        assert_eq!(rm.ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn volume_rm_requires_an_id() {
+        // `num_args = 1..` + required means a bare `volume rm` must error.
+        assert!(Cli::try_parse_from(["boxlite", "volume", "rm"]).is_err());
     }
 
     #[test]

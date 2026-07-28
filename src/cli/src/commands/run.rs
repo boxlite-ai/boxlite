@@ -1,10 +1,9 @@
 use crate::cli::{
-    GlobalFlags, ManagementFlags, NetworkFlags, ProcessFlags, PublishFlags, ResourceFlags,
-    VolumeFlags,
+    GlobalFlags, KernelFlags, ManagementFlags, NetworkFlags, ProcessFlags, PublishFlags,
+    ResourceFlags, VolumeFlags,
 };
 use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
-use boxlite::BoxCommand;
 use boxlite::{BoxOptions, BoxliteRuntime, LiteBox, RootfsSpec};
 use clap::Args;
 use std::io::{self, IsTerminal};
@@ -36,6 +35,9 @@ pub struct RunArgs {
     /// Image and command, or command only when --rootfs is set
     #[arg(index = 1, trailing_var_arg = true, value_name = "IMAGE|COMMAND")]
     pub args: Vec<String>,
+
+    #[command(flatten, next_help_heading = "Advanced boot options")]
+    pub boot: KernelFlags,
 }
 
 /// Entry point.
@@ -47,6 +49,7 @@ pub struct RunArgs {
 /// runs `shutdown_sync()` and stops the box's shim on every return path.
 /// `std::process::exit` would bypass that Drop chain and leak the shim (#622).
 pub async fn execute(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<i32> {
+    args.boot.require_enabled(global.experimental_features())?;
     let (rootfs, command_args) = args.rootfs_and_command()?;
     let command_args = command_args.to_vec();
     let mut runner = BoxRunner::new(args, global)?;
@@ -71,17 +74,25 @@ impl BoxRunner {
         // Validate flags and environment
         self.validate_flags()?;
 
-        let litebox = self.create_box(rootfs).await?;
+        // COMMAND becomes the container's init (docker semantics — it replaces
+        // the image CMD via options.cmd in create_box), so there is nothing to
+        // spawn here: attach to the init session instead.
+        let litebox = self.create_box(rootfs, &command_args).await?;
 
-        // Start execution
-        let cmd = self.prepare_command(&command_args);
-        let mut execution = litebox.exec(cmd).await?;
-
-        // Detach mode: Print ID and exit
+        // Detach mode: start it and get out of the way. Nobody is reading the
+        // output, so there is nothing to be attached for.
         if self.args.management.detach {
+            litebox.start().await?;
             println!("{}", litebox.id());
             return Ok(0);
         }
+
+        // Foreground: attach *before* the command runs, then start it. Starting
+        // first races it — `run alpine echo hi` can finish before the attach
+        // lands, and its output and exit code die with the VM. Attaching only
+        // creates the container; `start()` runs its init.
+        let mut execution = litebox.attach(None).await?;
+        litebox.start().await?;
 
         // --tty implies --interactive when stdin is a terminal
         // (validate_flags already ensures stdin is a terminal when --tty is set)
@@ -107,9 +118,14 @@ impl BoxRunner {
         Ok(to_shell_exit_code(exit_code))
     }
 
-    async fn create_box(&self, rootfs: RootfsSpec) -> anyhow::Result<LiteBox> {
+    async fn create_box(
+        &self,
+        rootfs: RootfsSpec,
+        command_args: &[String],
+    ) -> anyhow::Result<LiteBox> {
         let mut options = BoxOptions::default();
         self.args.resource.apply_to(&mut options);
+        self.args.boot.apply_to(&mut options);
         self.args.management.apply_to(&mut options)?;
         self.args.publish.apply_to(&mut options)?;
         self.args
@@ -118,9 +134,17 @@ impl BoxRunner {
         self.args.network.apply_to(&mut options)?;
         self.args.process.apply_to(&mut options)?;
 
-        // Runtime requires detached boxes to have manual lifecycle control (auto_remove=false)
+        // Detached boxes keep manual lifecycle control: detach silently
+        // overrides --rm (historical CLI behavior).
         if self.args.management.detach {
-            options.auto_remove = false;
+            options.auto_delete = Some(0);
+        }
+
+        // Docker semantics: the user COMMAND replaces the image CMD (the image
+        // ENTRYPOINT is preserved and prepended) and the result runs as the
+        // container's init. No COMMAND → the image default runs.
+        if !command_args.is_empty() {
+            options.cmd = Some(command_args.to_vec());
         }
 
         options.rootfs = rootfs;
@@ -131,13 +155,6 @@ impl BoxRunner {
             .await?;
 
         Ok(litebox)
-    }
-
-    fn prepare_command(&self, command_args: &[String]) -> BoxCommand {
-        let (program, args) = parse_command_args(command_args);
-        BoxCommand::new(program)
-            .args(args)
-            .tty(self.args.process.tty)
     }
 
     fn validate_flags(&self) -> anyhow::Result<()> {
@@ -171,34 +188,11 @@ fn resolve_rootfs_and_command<'a>(
     Ok((RootfsSpec::Image(image.clone()), command))
 }
 
-fn parse_command_args(input: &[String]) -> (&str, &[String]) {
-    if input.is_empty() {
-        ("sh", &[])
-    } else {
-        (&input[0], &input[1..])
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli::{Cli, Commands};
     use clap::Parser;
-
-    #[test]
-    fn test_parse_command_args_defaults() {
-        let empty: Vec<String> = vec![];
-        assert_eq!(parse_command_args(&empty), ("sh", &[] as &[String]));
-    }
-
-    #[test]
-    fn test_parse_command_args_explicit() {
-        let input = vec!["echo".to_string(), "hello".to_string()];
-        assert_eq!(
-            parse_command_args(&input),
-            ("echo", &["hello".to_string()] as &[String])
-        );
-    }
 
     #[test]
     fn run_rootfs_flag_sets_rootfs_path_and_uses_trailing_command() {
@@ -220,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn run_rootfs_without_command_defaults_to_shell() {
+    fn run_rootfs_without_command_leaves_command_empty() {
         let cli = Cli::try_parse_from(["boxlite", "run", "--rootfs", "/tmp/rootfs"])
             .expect("run --rootfs should parse");
         let Commands::Run(args) = cli.command else {
@@ -235,7 +229,9 @@ mod tests {
             RootfsSpec::RootfsPath(path) => assert_eq!(path, "/tmp/rootfs"),
             other => panic!("expected RootfsPath, got {other:?}"),
         }
-        assert_eq!(parse_command_args(command), ("sh", &[] as &[String]));
+        // No COMMAND → empty; the image/rootfs default init runs (docker
+        // semantics), rather than the CLI forcing a shell.
+        assert!(command.is_empty());
     }
 
     #[test]

@@ -1,12 +1,13 @@
 //! Runtime backend trait — internal abstraction for local vs REST execution.
 
+use std::net::SocketAddr;
 use std::path::Path;
 
 use async_trait::async_trait;
 
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
-use crate::litebox::{BoxCommand, Execution, LiteBox};
+use crate::litebox::{BoxCommand, BoxTunnel, Execution, LiteBox};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
     BoxArchive, BoxOptions, CloneOptions, ExportOptions, SnapshotOptions,
@@ -78,17 +79,25 @@ pub(crate) trait BoxBackend: Send + Sync {
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution>;
 
-    /// Reattach to an already-running execution by id. The returned
-    /// `Execution` carries fresh stdin/stdout/stderr/result channels
-    /// wired to a new WebSocket; the caller discards any prior handle
-    /// for the same id. Returns `BoxliteError::SessionReaped` if the
-    /// server reports the session is no longer attachable.
+    /// Attach to a session in the box.
     ///
-    /// Default impl returns `Unsupported` — backends that don't model
-    /// long-lived attachable sessions (local in-process) don't need it.
-    async fn attach(&self, _execution_id: &str) -> BoxliteResult<Execution> {
+    /// - `None` — the box's main command session (docker semantics: `run`'s
+    ///   COMMAND is the container init, registered under execution_id = container
+    ///   id, which the caller cannot name — hence `None`). The unqualified verb
+    ///   mirrors the ecosystem convention (`ContainerAttach`, `podman attach`,
+    ///   CRI `Attach`).
+    /// - `Some(id)` — reattach to an already-running exec session (docker's
+    ///   `ContainerExecAttach`): a fresh `Execution` on a new stream, so the
+    ///   caller discards any prior handle for the same id. Returns
+    ///   `BoxliteError::SessionReaped` if the server reports it no longer
+    ///   attachable.
+    ///
+    /// Default is `Unsupported`; a backend implements the arms it models. A local
+    /// in-process backend has no long-lived reattachable exec sessions, so it
+    /// supports `None` only.
+    async fn attach(&self, _execution_id: Option<&str>) -> BoxliteResult<Execution> {
         Err(BoxliteError::Unsupported(
-            "this backend does not support reattaching to existing executions".into(),
+            "this backend does not support attaching to sessions".into(),
         ))
     }
 
@@ -124,6 +133,16 @@ pub(crate) trait BoxBackend: Send + Sync {
     ) -> BoxliteResult<Vec<LiteBox>>;
 
     async fn export_box(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive>;
+}
+
+/// Backend abstraction for box network operations.
+///
+/// Kept separate from `BoxBackend` so lifecycle/exec/file operations do not own
+/// network data-plane capabilities directly.
+#[async_trait]
+pub(crate) trait BoxNetworkBackend: Send + Sync {
+    /// Establish a one-shot tunnel and return its prepared endpoint and connection.
+    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
 }
 
 /// Backend abstraction for snapshot lifecycle operations on a box.

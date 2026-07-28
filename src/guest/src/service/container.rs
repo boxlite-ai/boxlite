@@ -7,8 +7,9 @@ use std::path::Path;
 
 use crate::service::server::GuestServer;
 use boxlite_shared::{
-    container_init_response, rootfs_init, Container as ContainerService, ContainerInitError,
-    ContainerInitRequest, ContainerInitResponse, ContainerInitSuccess, Filesystem, RootfsInit,
+    container_init_response, container_start_response, rootfs_init, Container as ContainerService,
+    ContainerInitError, ContainerInitRequest, ContainerInitResponse, ContainerInitSuccess,
+    ContainerStartRequest, ContainerStartResponse, ContainerStartSuccess, Filesystem, RootfsInit,
 };
 use nix::mount::{mount, MsFlags};
 use tonic::{Request, Response, Status};
@@ -101,6 +102,20 @@ impl ContainerService for GuestServer {
             return Ok(Response::new(ContainerInitResponse {
                 result: Some(container_init_response::Result::Error(ContainerInitError {
                     reason: "Missing container_id in Init request".to_string(),
+                })),
+            }));
+        }
+
+        // Session id to register the init process under, assigned by the host
+        // (= container_id). The guest does not derive it: whoever names the
+        // session owns the convention, and that is the side that later attaches
+        // to it.
+        let init_execution_id = init_req.execution_id.clone();
+        if init_execution_id.is_empty() {
+            error!("Missing execution_id in Init request");
+            return Ok(Response::new(ContainerInitResponse {
+                result: Some(container_init_response::Result::Error(ContainerInitError {
+                    reason: "Missing execution_id in Init request".to_string(),
                 })),
             }));
         }
@@ -245,9 +260,27 @@ impl ContainerService for GuestServer {
             "Container configuration"
         );
 
-        // Start container using OCI bundle rootfs
-        // Container init process uses pipe-based stdio to stay alive indefinitely.
-        // boxlite-guest holds the write-end of stdin pipe open, so init blocks on read() forever.
+        // A new container run starts here, so drop the exit file the
+        // previous run left behind. The file is per-run state: a box that is
+        // stopped and started again must not inherit the exit its last init
+        // died with, or the guard in Exec would refuse every exec against the
+        // freshly running container ("container is not running: init exited").
+        let exit_file = self.layout.shared().container(&container_id).exit_file();
+        if let Err(e) = std::fs::remove_file(&exit_file) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                error!("Failed to clear stale exit file: {}", e);
+                return Ok(Response::new(ContainerInitResponse {
+                    result: Some(container_init_response::Result::Error(ContainerInitError {
+                        reason: format!("Failed to clear stale exit file: {}", e),
+                    })),
+                }));
+            }
+        }
+
+        // Start container using OCI bundle rootfs. Init is the box's main
+        // command (docker semantics) and may exit on its own; its stdio is
+        // pipe-based so the session registered below can stream it, and the
+        // guest holds the stdin write-end until a client attaches.
         debug!(
             container_id = %container_id,
             entrypoint = ?config.entrypoint,
@@ -261,33 +294,161 @@ impl ContainerService for GuestServer {
             &config.workdir,
             &config.user,
             user_mounts,
+            config.tty,
         ) {
             Ok(mut container) => {
-                debug!(container_id = %container_id, "Container started, checking if init process is running");
-                // Verify container init process is running
-                if !container.is_running() {
-                    // Gather diagnostic information (includes init stdout/stderr)
-                    let diagnostics = container.diagnose_exit();
-
-                    error!(
-                        "Container init process exited immediately after start. Diagnostics: {}",
-                        diagnostics
-                    );
-
-                    return Ok(Response::new(ContainerInitResponse {
-                        result: Some(container_init_response::Result::Error(ContainerInitError {
-                            reason: format!(
-                                "Container init process exited immediately. {}",
-                                diagnostics
-                            ),
-                        })),
-                    }));
-                }
+                // Init is created, not yet running — Init never runs it; the
+                // host calls Container.Start for that. That its pid and stdio
+                // exist already is what lets the session below be registered
+                // against it, and a client attach to it, before it runs.
+                debug!(container_id = %container_id, "Container created");
 
                 info!(
                     container_id = %container_id,
                     "✅ Container started successfully and ready for exec"
                 );
+
+                // Expose init as an attachable exec session under the
+                // host-assigned execution_id: the host's `run` attaches to it
+                // exactly like any exec (Attach/SendInput/Wait RPCs).
+                //
+                // Failing to register is fatal, not a warning. Without the
+                // session there is nothing to attach to and no exit action, so
+                // the box would sit Running behind a main command nobody can
+                // see or reap — precisely the bug this whole path exists to
+                // kill. A container we cannot address is not a started
+                // container.
+                let init_exit = match container.take_init_exec_handle() {
+                    Ok(Some(handle)) => {
+                        // Claim init's exit slot and register the follow-up the
+                        // reaper fires on delivery (docker semantics: the box
+                        // stops when init exits). Init is created but not yet
+                        // started here — it blocks on libcontainer's exec fifo —
+                        // so it cannot have exited, and `now` is a sound cutoff:
+                        // any slot already under this pid is a recycled-pid
+                        // leftover.
+                        let registry = self.registry.clone();
+                        let shutting_down = self.shutting_down.clone();
+                        let exit_file = self.layout.shared().container(&container_id).exit_file();
+                        let cid = container_id.clone();
+                        let action: crate::reaper::ExitAction = Box::new(move |status| {
+                            // The reaper only fires this; the long work runs on
+                            // its own task.
+                            tokio::spawn(async move {
+                                let exit_code = status.shell_code();
+                                info!(container_id = %cid, ?status, exit_code, "container init exited");
+
+                                // Crosses the virtiofs shared dir to the host,
+                                // which reads it to surface the box's exit
+                                // status. The Shutdown RPC writes the same
+                                // record from the same slot, so a host-driven
+                                // stop does not depend on this task's timing.
+                                let record = boxlite_shared::layout::ExitRecord { exit_code };
+                                if let Err(e) = record.write(&exit_file) {
+                                    warn!(container_id = %cid, error = %e, "failed to write exit file");
+                                }
+
+                                if shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                                    return; // host-driven stop owns VM teardown
+                                }
+
+                                // Drain the execs still running beside init,
+                                // flush disks, then power off. The shim sees the
+                                // VM exit and the host marks the box stopped.
+                                registry
+                                    .shutdown_all(
+                                        crate::service::exec::registry::SHUTDOWN_TIMEOUT_MS,
+                                    )
+                                    .await;
+                                unsafe { nix::libc::sync() };
+
+                                // A best-effort flush window for whatever output
+                                // is still in flight to the host — and nothing
+                                // more than that.
+                                //
+                                // It is not load-bearing, and that claim now
+                                // survives inspection, which it did not before:
+                                //
+                                // - The client is *already attached* when the
+                                //   main command runs. The host creates the
+                                //   container, attaches, and only then calls
+                                //   Container.Start (docker's create → attach →
+                                //   start). So no client can miss the session by
+                                //   being late — the race this window used to be
+                                //   papering over is gone by construction, not
+                                //   by timing.
+                                // - The exit code is durable. Power-off can
+                                //   still cut the in-flight Wait, and the host
+                                //   then has no code — but it reads the real one
+                                //   back from the exit file written above
+                                //   (`BoxImpl::exit_code_from_file_when_portal_has_none`).
+                                //
+                                // What is left is trailing stdout, whose
+                                // delivery has no event to await: the protocol
+                                // carries no ack, so the guest can never know
+                                // the host received the last bytes. A bounded
+                                // window is the only thing available, and it is
+                                // spent on output, not on truth.
+                                const RESPONSE_FLUSH_MS: u64 = 500;
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    RESPONSE_FLUSH_MS,
+                                ))
+                                .await;
+                                info!(container_id = %cid, "powering off VM (init exited)");
+                                // RESTART, not POWER_OFF. The x86_64 microVM
+                                // kernel has no pm_power_off backend (no
+                                // ACPI), so POWER_OFF degrades to "System
+                                // halted" with the VM left running forever —
+                                // the box never stops. RESTART is the one
+                                // command every backend turns into a VMM
+                                // process exit: the kernel's reboot=k path
+                                // ends in an i8042 CPU reset on x86, and a
+                                // PSCI SYSTEM_RESET on aarch64, both trapped
+                                // as a shutdown. It is also exactly what the
+                                // VMM's own bundled init issues when its
+                                // workload exits.
+                                unsafe {
+                                    nix::libc::reboot(nix::libc::LINUX_REBOOT_CMD_RESTART);
+                                }
+                            });
+                        });
+                        let exit = crate::reaper::REAPER
+                            .get()
+                            .expect("reaper installed at startup")
+                            .on_exit(handle.pid(), std::time::Instant::now(), action)
+                            .await;
+                        let state = crate::service::exec::state::ExecutionState::new_init_session(
+                            handle,
+                            exit.clone(),
+                        );
+                        self.registry
+                            .register(init_execution_id.clone(), state)
+                            .await;
+                        exit
+                    }
+                    Ok(None) => {
+                        error!(container_id = %container_id, "init has no pid or its stdio was already taken");
+                        return Ok(Response::new(ContainerInitResponse {
+                            result: Some(container_init_response::Result::Error(
+                                ContainerInitError {
+                                    reason: "Container started but its init process could not be \
+                                             exposed as a session (no pid or stdio)"
+                                        .to_string(),
+                                },
+                            )),
+                        }));
+                    }
+                    Err(e) => {
+                        error!(container_id = %container_id, error = %e, "failed to build init session");
+                        return Ok(Response::new(ContainerInitResponse {
+                            result: Some(container_init_response::Result::Error(
+                                ContainerInitError {
+                                    reason: format!("Failed to build the init session: {}", e),
+                                },
+                            )),
+                        }));
+                    }
+                };
 
                 // Store container in registry
                 self.containers.lock().await.insert(
@@ -295,6 +456,18 @@ impl ContainerService for GuestServer {
                     std::sync::Arc::new(tokio::sync::Mutex::new(container)),
                 );
 
+                // The Shutdown RPC reads this slot to write the exit record
+                // itself before answering the host — the reaper's action may
+                // still be running on its own task when that RPC returns.
+                self.init_exits
+                    .lock()
+                    .await
+                    .insert(container_id.clone(), init_exit);
+
+                // Everything that must exist *before* the main command runs now
+                // does — the session is registered and the exit action is armed —
+                // and init has *not* run. The host calls Container.Start to run it,
+                // after attaching if it wants to.
                 Ok(Response::new(ContainerInitResponse {
                     result: Some(container_init_response::Result::Success(
                         ContainerInitSuccess { container_id },
@@ -302,13 +475,69 @@ impl ContainerService for GuestServer {
                 }))
             }
             Err(e) => {
-                error!("Failed to start container: {}", e);
+                error!("Failed to create container: {}", e);
                 Ok(Response::new(ContainerInitResponse {
                     result: Some(container_init_response::Result::Error(ContainerInitError {
-                        reason: format!("Failed to start container: {}", e),
+                        reason: format!("Failed to create container: {}", e),
                     })),
                 }))
             }
         }
+    }
+
+    async fn start(
+        &self,
+        request: Request<ContainerStartRequest>,
+    ) -> Result<Response<ContainerStartResponse>, Status> {
+        let container_id = request.into_inner().container_id;
+        if container_id.is_empty() {
+            return Err(Status::invalid_argument(
+                "Missing container_id in Start request",
+            ));
+        }
+
+        match self.run_container_init(&container_id).await {
+            Ok(()) => Ok(Response::new(ContainerStartResponse {
+                result: Some(container_start_response::Result::Success(
+                    ContainerStartSuccess { container_id },
+                )),
+            })),
+            Err(reason) => Ok(Response::new(ContainerStartResponse {
+                result: Some(container_start_response::Result::Error(
+                    ContainerInitError { reason },
+                )),
+            })),
+        }
+    }
+}
+
+impl GuestServer {
+    /// Run a created container's init process. Reached only via the
+    /// `Container.Start` RPC — `Container.Init` creates the container and stops.
+    ///
+    /// It deliberately does **not** check that init survived the start. Under
+    /// docker semantics init *is* the user's command, and a command that finishes
+    /// immediately is the most ordinary thing in the world — `run alpine true`.
+    /// The old check called that a failure, and only passed because reading
+    /// procfs usually beat init's `execvp`; it was a bet, of exactly the kind the
+    /// attach-before-start ordering exists to remove. A genuinely broken command
+    /// still surfaces, and more precisely than before: the exit action records
+    /// its code (127 for not-found, 126 for not-executable), the box stops with
+    /// it, and the client that is already attached sees whatever it printed.
+    async fn run_container_init(&self, container_id: &str) -> Result<(), String> {
+        let containers = self.containers.lock().await;
+        let Some(container_arc) = containers.get(container_id).cloned() else {
+            return Err(format!("No such container: {}", container_id));
+        };
+        drop(containers);
+
+        let container = container_arc.lock().await;
+        if let Err(e) = container.run_init() {
+            error!(container_id = %container_id, error = %e, "Failed to start container");
+            return Err(format!("Failed to start container: {}", e));
+        }
+
+        info!(container_id = %container_id, "✅ Container started successfully and ready for exec");
+        Ok(())
     }
 }

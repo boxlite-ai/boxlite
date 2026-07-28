@@ -27,6 +27,51 @@ export interface ImageHandle {
   list(): Promise<ImageInfo[]>;
 }
 
+/** Metadata for a named volume returned by the native runtime. */
+export interface VolumeInfo {
+  /** Server-assigned volume id used by get and remove operations. */
+  id: string;
+  /** Creation timestamp formatted as an RFC 3339 string. */
+  createdAt: string;
+  /** Volume size in bytes when the backend can report it. */
+  sizeBytes?: number;
+}
+
+/** Runtime-scoped handle for named-volume operations. */
+export interface VolumeHandle {
+  /**
+   * Creates a new named volume.
+   *
+   * @returns Metadata for the created volume.
+   * @throws A native BoxLite error when the backend does not support volumes or
+   * the volume cannot be created.
+   */
+  create(): Promise<VolumeInfo>;
+  /**
+   * Lists named volumes visible to this runtime.
+   *
+   * @returns Volume metadata entries in backend-defined order.
+   * @throws A native BoxLite error when the backend does not support volumes.
+   */
+  list(): Promise<VolumeInfo[]>;
+  /**
+   * Gets metadata for a volume by id.
+   *
+   * @param id Server-assigned volume id.
+   * @returns Metadata for the requested volume.
+   * @throws A native BoxLite error when the id is unknown or volumes are unsupported.
+   */
+  get(id: string): Promise<VolumeInfo>;
+  /**
+   * Removes a volume by id.
+   *
+   * @param id Server-assigned volume id.
+   * @param force Treat a missing volume as success when supported by the backend.
+   * @throws A native BoxLite error when removal fails or volumes are unsupported.
+   */
+  remove(id: string, force?: boolean | null): Promise<void>;
+}
+
 export interface JsEnvVar {
   key: string;
   value: string;
@@ -87,8 +132,19 @@ export interface JsBoxOptions {
   volumes?: JsVolumeSpec[];
   network?: JsNetworkSpec;
   ports?: JsPortSpec[];
+  /**
+   * @deprecated Use autoDelete. Preserved for embedded remove-on-stop
+   * compatibility; an explicit autoDelete value takes precedence. Remote
+   * runtimes preserve server lifecycle defaults when autoDelete is omitted.
+   */
   autoRemove?: boolean;
   detach?: boolean;
+  /** Idle time in seconds before AutoPause; 0 disables AutoPause. */
+  autoPause?: number;
+  /** Time in seconds after stop before AutoDelete; 0 disables AutoDelete. */
+  autoDelete?: number;
+  /** Whether access automatically resumes an auto-paused box. */
+  autoResume?: boolean;
   entrypoint?: string[];
   cmd?: string[];
   user?: string;
@@ -170,6 +226,9 @@ export interface JsBoxInfo {
   image: string;
   cpus: number;
   memoryMib: number;
+  autoPause: number;
+  autoDelete: number;
+  autoResume: boolean;
   healthStatus: JsHealthStatus;
 }
 
@@ -254,6 +313,26 @@ export interface JsSnapshotHandle {
   restore(name: string): Promise<void>;
 }
 
+export interface JsNetworkHandle {
+  /** Establish a tunnel to a service port inside the box. */
+  tunnel(port: number): Promise<NativeBoxTunnel>;
+}
+
+/** Internal contract implemented by the native N-API tunnel binding. */
+export interface NativeBoxTunnel {
+  /** Return the public endpoint for this tunnel. */
+  endpoint(): string | number;
+  /** Consume the tunnel and return its bidirectional byte stream. */
+  connect(): Promise<NativeBoxConnection>;
+}
+
+export interface NativeBoxConnection {
+  read(maxBytes: number): Promise<Buffer>;
+  write(data: Buffer): Promise<number>;
+  shutdownWrite(): Promise<void>;
+  close(): Promise<void>;
+}
+
 export type JsCloneOptions = Record<string, never>;
 
 export type JsExportOptions = Record<string, never>;
@@ -272,6 +351,7 @@ export interface JsBox {
     workingDir?: string | null,
   ): Promise<JsExecution>;
   readonly snapshot: JsSnapshotHandle;
+  readonly network: JsNetworkHandle;
   cloneBox(
     options?: JsCloneOptions | null,
     name?: string | null,
@@ -309,6 +389,7 @@ export interface JsBoxlite {
   get(idOrName: string): Promise<JsBox | null>;
   metrics(): Promise<JsRuntimeMetrics>;
   readonly images: ImageHandle;
+  readonly volumes: VolumeHandle;
   remove(idOrName: string, force?: boolean | null): Promise<void>;
   close(): void;
   shutdown(timeout?: number | null): Promise<void>;
@@ -325,6 +406,9 @@ export interface JsBoxliteConstructor {
 
 export interface NativeModule {
   JsBoxlite: JsBoxliteConstructor;
+  JsBoxTunnel: {
+    readonly prototype: NativeBoxTunnel & { connect?: () => Promise<unknown> };
+  };
   ApiKeyCredential: ApiKeyCredentialConstructor;
   JsBoxliteRestOptions: NativeBoxliteRestOptionsConstructor;
   [key: string]: unknown;

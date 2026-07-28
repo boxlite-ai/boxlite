@@ -47,16 +47,24 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
         } => {
             let handle = require_box(&rt, &box_name).await?;
             let was_running = handle.info().status == boxlite::BoxStatus::Running;
-            if !was_running {
-                handle.start().await?;
-            }
-            handle
-                .copy_into(&host, &box_path, opts)
-                .await
-                .map_err(anyhow::Error::from)?;
-            if !was_running {
-                handle.stop().await?;
-            }
+
+            // No explicit start(): copy_into boots the box itself when that is
+            // safe, and refuses when it is not. Starting it here would walk
+            // straight past that guard and, for a box whose init is the user's
+            // own command, run their workload a second time just to fetch a file.
+            let copied = handle.copy_into(&host, &box_path, opts).await;
+
+            // copy_into boots a stopped box before copying, so a copy that fails
+            // partway (a missing path, say) leaves it running. Restore the box to
+            // the state we found it in on both paths, surfacing the copy error
+            // first so a cleanup failure can't mask it.
+            let stopped = if was_running {
+                Ok(())
+            } else {
+                handle.stop().await
+            };
+            copied.map_err(anyhow::Error::from)?;
+            stopped?;
             Ok(())
         }
         Direction::BoxToHost {
@@ -66,16 +74,23 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
         } => {
             let handle = require_box(&rt, &box_name).await?;
             let was_running = handle.info().status == boxlite::BoxStatus::Running;
-            if !was_running {
-                handle.start().await?;
-            }
-            handle
-                .copy_out(&box_path, &host, opts)
-                .await
-                .map_err(anyhow::Error::from)?;
-            if !was_running {
-                handle.stop().await?;
-            }
+
+            // Same as above: let copy_out decide whether booting is safe. This
+            // is the path that would otherwise turn
+            //   boxlite run --name job alpine sh -c 'send-payment'
+            //   boxlite cp job:/receipt .
+            // into a second payment.
+            let copied = handle.copy_out(&box_path, &host, opts).await;
+
+            // Same restore-on-failure as HostToBox: copy_out can boot a stopped
+            // box, and a partial failure must not leave it running.
+            let stopped = if was_running {
+                Ok(())
+            } else {
+                handle.stop().await
+            };
+            copied.map_err(anyhow::Error::from)?;
+            stopped?;
             Ok(())
         }
     }

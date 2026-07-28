@@ -204,12 +204,27 @@ pub fn remap_mount(
 /// writes uid_map/gid_map and opens the namespace fd. The child is
 /// killed immediately after — only the namespace fd survives.
 fn create_userns(uid_mappings: &[IdMapping], gid_mappings: &[IdMapping]) -> io::Result<OwnedFd> {
+    // Hold the reap fence for this child's entire lifetime — before the fork
+    // until after we reap it. Taking it later is too late: on the failure path
+    // the child has already `_exit()`ed by the time we look at it, so the guest
+    // reaper's `waitpid(-1)` could sweep the zombie and free the pid, leaving
+    // our `kill`/`waitpid` aimed at whatever process inherits that number next
+    // — which for a recycled tenant pid means swallowing its exit and stranding
+    // the waiter. See `reaper::reap_fence`. The hold spans the pipe read and
+    // the /proc writes below, delaying the sweep for their duration: a child
+    // that dies without writing yields EOF, since we drop our own write end
+    // first, but one that hangs before writing would stall exit delivery for
+    // the whole guest — acceptable only because it does nothing but unshare
+    // and write.
+    let _fence = crate::reaper::reap_fence();
+
     // Pipe for child→parent synchronization
     let (read_fd, write_fd) = nix::unistd::pipe()?;
 
-    // SAFETY: fork() is safe here because we're in a single-threaded context
-    // (guest agent calls this during volume setup, before container start).
-    // The child does minimal work: unshare + write + pause.
+    // SAFETY: the guest is multi-threaded, so the child may only touch
+    // async-signal-safe state between fork and _exit — it does: close (the
+    // dropped pipe ends), unshare, write, pause, _exit. No allocation, no
+    // logging, no lock.
     let child = unsafe { libc::fork() };
     if child < 0 {
         return Err(io::Error::last_os_error());
@@ -238,8 +253,7 @@ fn create_userns(uid_mappings: &[IdMapping], gid_mappings: &[IdMapping]) -> io::
     drop(read_fd);
 
     if buf[0] != b'R' {
-        unsafe { libc::kill(child, libc::SIGKILL) };
-        unsafe { libc::waitpid(child, std::ptr::null_mut(), 0) };
+        kill_and_reap(child);
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "child failed to create user namespace",
@@ -263,10 +277,20 @@ fn create_userns(uid_mappings: &[IdMapping], gid_mappings: &[IdMapping]) -> io::
     })();
 
     // Always clean up the child
-    unsafe { libc::kill(child, libc::SIGKILL) };
-    unsafe { libc::waitpid(child, std::ptr::null_mut(), 0) };
+    kill_and_reap(child);
 
     result
+}
+
+/// SIGKILL the userns helper child and reap it ourselves.
+///
+/// The caller must already hold `reaper::reap_fence()` across the child's whole
+/// lifetime — see `create_userns`. Do not take the fence here: it would arrive
+/// after the child can already have been swept, and re-entering the read side
+/// while a writer waits risks deadlock.
+fn kill_and_reap(child: libc::pid_t) {
+    unsafe { libc::kill(child, libc::SIGKILL) };
+    unsafe { libc::waitpid(child, std::ptr::null_mut(), 0) };
 }
 
 fn write_proc_file(pid: i32, name: &str, content: &str) -> io::Result<()> {

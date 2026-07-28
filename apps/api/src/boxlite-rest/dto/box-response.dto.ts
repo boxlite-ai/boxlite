@@ -69,6 +69,24 @@ export class BoxResponseDto {
     example: { 'boxlite.io/public': 'true' },
   })
   labels: Record<string, string>
+
+  @ApiProperty({
+    description: 'Idle time in seconds before AutoPause; 0 disables AutoPause',
+    example: 900,
+  })
+  auto_pause: number
+
+  @ApiProperty({
+    description: 'Stopped time in seconds before AutoDelete; 0 disables AutoDelete',
+    example: 604800,
+  })
+  auto_delete: number
+
+  @ApiProperty({
+    description: 'Whether the box should be automatically resumed on proxy access',
+    example: true,
+  })
+  auto_resume: boolean
 }
 
 @ApiSchema({ name: 'ListBoxesResponse' })

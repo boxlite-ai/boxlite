@@ -334,8 +334,4 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
     await this.boxApiClient.recover(box.id, recoverBoxDTO)
   }
-
-  async resizeBox(boxId: string, cpu?: number, memory?: number, disk?: number): Promise<void> {
-    await this.boxApiClient.resize(boxId, { cpu, memory, disk })
-  }
 }

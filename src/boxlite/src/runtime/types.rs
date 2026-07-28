@@ -10,6 +10,10 @@ use std::hash::Hash;
 
 pub use crate::litebox::{BoxState, BoxStatus, HealthStatus};
 use crate::runtime::id::BoxID;
+/// Re-exported here so the CLI can reach volume metadata the same way it
+/// reaches [`ImageInfo`] (`boxlite::runtime::types::VolumeInfo`). The type
+/// itself lives with the store in [`crate::volumes`].
+pub use crate::volumes::VolumeInfo;
 
 // ============================================================================
 // RESOURCE LIMIT TYPES (C-NEWTYPE: Semantic newtypes for distinct concepts)
@@ -280,6 +284,28 @@ impl AsRef<str> for ContainerID {
     }
 }
 
+/// Second-based lifecycle policy for an existing box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoxLifecyclePolicy {
+    /// Idle time before AutoPause; `0` disables AutoPause.
+    pub auto_pause: u32,
+    /// Stopped time before AutoDelete; `0` disables AutoDelete.
+    pub auto_delete: u32,
+    /// Whether the box should automatically resume when accessed after AutoPause.
+    pub auto_resume: bool,
+}
+
+impl BoxLifecyclePolicy {
+    pub fn validate(&self) -> boxlite_shared::errors::BoxliteResult<()> {
+        if self.auto_delete > 0 && self.auto_delete <= self.auto_pause {
+            return Err(boxlite_shared::errors::BoxliteError::Config(
+                "auto_delete must be greater than auto_pause".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Public metadata about a box (returned by list operations).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxInfo {
@@ -313,8 +339,21 @@ pub struct BoxInfo {
     /// User-defined labels for filtering and organization.
     pub labels: HashMap<String, String>,
 
+    /// Idle time in seconds before AutoPause. `0` disables AutoPause.
+    pub auto_pause: u32,
+
+    /// Time in seconds after a successful stop before AutoDelete. `0` disables it.
+    pub auto_delete: u32,
+
+    /// Whether the box should automatically resume when accessed after AutoPause.
+    pub auto_resume: bool,
+
     /// Health status.
     pub health_status: HealthStatus,
+
+    /// Exit code of the container's init process, when the box stopped
+    /// because its main command exited (docker semantics).
+    pub exit_code: Option<i32>,
 }
 
 impl BoxInfo {
@@ -337,7 +376,13 @@ impl BoxInfo {
             cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
             labels: HashMap::new(),
+            // Local runtimes do not sweep lifecycle deadlines, but metadata keeps
+            // the configured values so callers can inspect the effective policy.
+            auto_pause: config.options.auto_pause.unwrap_or(0),
+            auto_delete: config.options.effective_auto_delete(),
+            auto_resume: config.options.auto_resume.unwrap_or(true),
             health_status: state.health_status,
+            exit_code: state.exit_code,
         }
     }
 }
@@ -352,6 +397,9 @@ impl PartialEq for BoxInfo {
             && self.cpus == other.cpus
             && self.memory_mib == other.memory_mib
             && self.labels == other.labels
+            && self.auto_pause == other.auto_pause
+            && self.auto_delete == other.auto_delete
+            && self.auto_resume == other.auto_resume
             && self.health_status == other.health_status
     }
 }
@@ -374,6 +422,9 @@ pub struct BoxStateInfo {
 
     /// Process ID of the VMM subprocess (None if not running).
     pub pid: Option<u32>,
+
+    /// Init exit code, when the box stopped because its command exited.
+    pub exit_code: Option<i32>,
 }
 
 impl BoxStateInfo {
@@ -383,6 +434,7 @@ impl BoxStateInfo {
             status: state.status,
             running: state.status.is_running(),
             pid: state.pid,
+            exit_code: state.exit_code,
         }
     }
 }
@@ -395,6 +447,7 @@ impl From<&BoxInfo> for BoxStateInfo {
             status: info.status,
             running: info.status.is_running(),
             pid: info.pid,
+            exit_code: info.exit_code,
         }
     }
 }
@@ -442,6 +495,45 @@ mod tests {
     use crate::runtime::options::{BoxOptions, RootfsSpec};
     use std::path::PathBuf;
 
+    #[test]
+    fn lifecycle_policy_enforces_public_sentinels_and_ordering() {
+        assert!(
+            BoxLifecyclePolicy {
+                auto_pause: 0,
+                auto_delete: 0,
+                auto_resume: true,
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            BoxLifecyclePolicy {
+                auto_pause: 900,
+                auto_delete: 0,
+                auto_resume: true,
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            BoxLifecyclePolicy {
+                auto_pause: 900,
+                auto_delete: 900,
+                auto_resume: true,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            BoxLifecyclePolicy {
+                auto_pause: 900,
+                auto_delete: 901,
+                auto_resume: true,
+            }
+            .validate()
+            .is_ok()
+        );
+    }
     #[test]
     fn test_config_state_to_info() {
         let now = Utc::now();

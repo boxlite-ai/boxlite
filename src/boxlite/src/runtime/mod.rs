@@ -10,6 +10,7 @@ pub(crate) mod lock;
 pub mod options;
 pub(crate) mod signal_handler;
 pub mod types;
+pub mod volumes;
 
 mod core;
 #[cfg(feature = "embedded-runtime")]
@@ -21,3 +22,4 @@ pub use auth::{AuthHandle, Principal};
 pub use core::BoxliteRuntime;
 pub use images::ImageHandle;
 pub(crate) use rt_impl::SharedRuntimeImpl;
+pub use volumes::VolumeHandle;

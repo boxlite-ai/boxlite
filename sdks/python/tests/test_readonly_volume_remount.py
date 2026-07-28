@@ -66,7 +66,7 @@ class TestReadonlyVolumeRemountBypass:
         try:
             # The share is exposed read-only to the guest.
             _, mounts = _sh(sandbox, "cat /proc/mounts | grep sensitive")
-            assert " ro," in mounts, "volume not mounted read-only: %r" % (mounts,)
+            assert " ro," in mounts, f"volume not mounted read-only: {mounts!r}"
 
             # A direct write is rejected (client-side MS_RDONLY active).
             write_exit, _ = _sh(
@@ -84,11 +84,9 @@ class TestReadonlyVolumeRemountBypass:
 
             # The mount must still be read-only after the remount attempt.
             _, after = _sh(sandbox, "cat /proc/mounts | grep sensitive")
-            assert " ro," in after, "volume became writable after remount: %r" % (
-                after,
-            )
-            assert " rw," not in after, "volume became writable after remount: %r" % (
-                after,
+            assert " ro," in after, f"volume became writable after remount: {after!r}"
+            assert " rw," not in after, (
+                f"volume became writable after remount: {after!r}"
             )
 
             # A post-attack write must still fail, and the guest-visible
@@ -104,7 +102,7 @@ class TestReadonlyVolumeRemountBypass:
             assert write2_exit != 0, "write after remount bypass should still fail"
 
             _, guest_view = _sh(sandbox, "cat " + GUEST_MOUNT + "/read_only.txt")
-            assert guest_view == ORIGINAL, "guest modified the file: %r" % (guest_view,)
+            assert guest_view == ORIGINAL, f"guest modified the file: {guest_view!r}"
 
             # HOST VERIFICATION - the advisory's own exploit oracle: if the
             # host file now reads ATTACK_PAYLOAD the sandbox was escaped.
@@ -112,7 +110,7 @@ class TestReadonlyVolumeRemountBypass:
                 host_content = f.read()
             assert host_content == ORIGINAL, (
                 "read-only volume bypass: host file was modified from inside "
-                "the sandbox (got %r)" % (host_content,)
+                f"the sandbox (got {host_content!r})"
             )
         finally:
             sandbox.stop()

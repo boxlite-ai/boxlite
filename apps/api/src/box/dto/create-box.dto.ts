@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray } from 'class-validator'
+import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, IsInt, Min } from 'class-validator'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxVolume } from './box.dto'
@@ -20,8 +20,9 @@ export class CreateBoxDto {
   name?: string
 
   @ApiPropertyOptional({
-    description: 'The image to use for the box',
-    example: 'boxlite/base',
+    description:
+      'Image to boot the box from: a supported image name (e.g. "base") or its full OCI ref. Omit for the default.',
+    example: 'base',
   })
   @IsOptional()
   @IsString()
@@ -57,7 +58,8 @@ export class CreateBoxDto {
 
   @ApiPropertyOptional({
     description: 'Whether the box http preview is publicly accessible',
-    example: false,
+    default: true,
+    example: true,
   })
   @IsOptional()
   @IsBoolean()
@@ -133,23 +135,32 @@ export class CreateBoxDto {
   disk?: number
 
   @ApiPropertyOptional({
-    description: 'Auto-stop interval in minutes (0 means disabled)',
-    example: 30,
+    description: 'Auto-pause interval in seconds (0 means disabled)',
+    example: 900,
     type: 'integer',
   })
   @IsOptional()
-  @IsNumber()
-  autoStopInterval?: number
+  @IsInt()
+  @Min(0)
+  autoPause?: number
 
   @ApiPropertyOptional({
-    description:
-      'Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)',
-    example: 30,
+    description: 'Auto-delete interval in seconds (0 means disabled)',
+    example: 604800,
     type: 'integer',
   })
   @IsOptional()
-  @IsNumber()
-  autoDeleteInterval?: number
+  @IsInt()
+  @Min(0)
+  autoDelete?: number
+
+  @ApiPropertyOptional({
+    description: 'Whether the box should be automatically resumed on proxy access',
+    example: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  autoResume?: boolean
 
   @ApiPropertyOptional({
     description: 'Array of volumes to attach to the box',

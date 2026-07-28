@@ -104,6 +104,53 @@ impl ExecutionInterface {
         })
     }
 
+    /// Attach to an already-registered execution session by id, without
+    /// spawning anything — wires the same stdin/attach/wait streams as
+    /// [`Self::exec`] against an existing session (e.g. the container's
+    /// init process, registered by the guest under execution_id =
+    /// container_id).
+    pub async fn attach_existing(
+        &mut self,
+        execution_id: &str,
+        shutdown_token: CancellationToken,
+    ) -> BoxliteResult<ExecComponents> {
+        let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (result_tx, result_rx) = mpsc::unbounded_channel();
+
+        let execution_id = execution_id.to_string();
+        tracing::debug!(execution_id = %execution_id, "attaching to existing session");
+
+        ExecProtocol::spawn_stdin(
+            self.client.clone(),
+            execution_id.clone(),
+            stdin_rx,
+            shutdown_token.clone(),
+        );
+        ExecProtocol::spawn_attach(
+            self.client.clone(),
+            execution_id.clone(),
+            stdout_tx,
+            stderr_tx,
+            shutdown_token.clone(),
+        );
+        ExecProtocol::spawn_wait(
+            self.client.clone(),
+            execution_id.clone(),
+            result_tx,
+            shutdown_token,
+        );
+
+        Ok(ExecComponents {
+            execution_id,
+            stdin_tx,
+            stdout_rx,
+            stderr_rx,
+            result_rx,
+        })
+    }
+
     /// Wait for execution to complete.
     #[allow(dead_code)] // API method for future use
     pub async fn wait(&mut self, execution_id: &str) -> BoxliteResult<ExecResult> {

@@ -7,9 +7,9 @@ runtime so they don't depend on stale hard-coded IPs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import ipaddress
 import socket
+from dataclasses import dataclass
 
 import pytest
 

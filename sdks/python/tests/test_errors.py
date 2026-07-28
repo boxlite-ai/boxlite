@@ -5,7 +5,8 @@ Tests the error hierarchy and exception behavior.
 """
 
 import pytest
-from boxlite.errors import BoxliteError, ExecError, TimeoutError, ParseError
+
+from boxlite.errors import BoxliteError, ExecError, ParseError, TimeoutError
 
 
 class TestBoxliteError:
@@ -150,7 +151,7 @@ class TestErrorExports:
 
     def test_errors_from_errors_module(self):
         """Test that errors can be imported from errors module."""
-        from boxlite.errors import BoxliteError, ExecError, TimeoutError, ParseError
+        from boxlite.errors import BoxliteError, ExecError, ParseError, TimeoutError
 
         assert BoxliteError is not None
         assert ExecError is not None

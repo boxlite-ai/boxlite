@@ -123,6 +123,18 @@ pub struct JsBoxInfo {
     /// Allocated memory in MiB
     pub memory_mib: u32,
 
+    /// Idle time in seconds before AutoPause; 0 disables it.
+    #[napi(js_name = "autoPause")]
+    pub auto_pause: u32,
+
+    /// Stopped time in seconds before AutoDelete; 0 disables it.
+    #[napi(js_name = "autoDelete")]
+    pub auto_delete: u32,
+
+    /// Whether the box automatically resumes when accessed after AutoPause.
+    #[napi(js_name = "autoResume")]
+    pub auto_resume: bool,
+
     /// Health status
     pub health_status: JsHealthStatus,
 }
@@ -145,6 +157,9 @@ impl From<BoxInfo> for JsBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
+            auto_pause: info.auto_pause,
+            auto_delete: info.auto_delete,
+            auto_resume: info.auto_resume,
             health_status,
         }
     }

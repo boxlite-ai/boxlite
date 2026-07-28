@@ -30,6 +30,7 @@ Requires Python 3.10 or later.
 
 ```python
 import boxlite
+
 print(boxlite.__version__)  # Prints installed package version
 ```
 
@@ -54,12 +55,14 @@ ls -l /dev/kvm                    # Should exist and be accessible
 import asyncio
 import boxlite
 
+
 async def main():
     # Create a box and run a command
     async with boxlite.SimpleBox(image="python:slim") as box:
         result = await box.exec("python", "-c", "print('Hello from BoxLite!')")
         print(result.stdout)
         # Output: Hello from BoxLite!
+
 
 asyncio.run(main())
 ```
@@ -69,6 +72,7 @@ asyncio.run(main())
 ```python
 import asyncio
 import boxlite
+
 
 async def main():
     # Execute untrusted Python code safely
@@ -82,6 +86,7 @@ print(response.text)
         # CodeBox automatically installs packages
         result = await codebox.run(code)
         print(result)
+
 
 asyncio.run(main())
 ```
@@ -124,15 +129,17 @@ runtime = boxlite.Boxlite.default()
 runtime = boxlite.Boxlite(boxlite.Options(home_dir="/custom/path"))
 
 # Custom registry host with basic auth
-runtime = boxlite.Boxlite(boxlite.Options(
-    image_registries=[
-        boxlite.ImageRegistry(
-            host="registry.example.com",
-            username="user",
-            password="password",
-        )
-    ]
-))
+runtime = boxlite.Boxlite(
+    boxlite.Options(
+        image_registries=[
+            boxlite.ImageRegistry(
+                host="registry.example.com",
+                username="user",
+                password="password",
+            )
+        ]
+    )
+)
 
 # Create a box
 box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
@@ -167,10 +174,12 @@ implementation of the `Credential` ABC.
 ```python
 from boxlite import Boxlite, BoxliteRestOptions, ApiKeyCredential
 
-rt = Boxlite.rest(BoxliteRestOptions(
-    url="http://localhost:8100",
-    credential=ApiKeyCredential("your-api-key"),
-))
+rt = Boxlite.rest(
+    BoxliteRestOptions(
+        url="http://localhost:8100",
+        credential=ApiKeyCredential("your-api-key"),
+    )
+)
 boxes = await rt.list_info()
 
 # Env discovery — returns None when BOXLITE_API_KEY is unset:
@@ -195,11 +204,13 @@ id; another deployment may use a workspace name, a region+team
 pair, or any other multi-segment value such as `us-east/team-42`.
 
 ```python
-rt = Boxlite.rest(BoxliteRestOptions(
-    url="https://api.boxlite.ai/api",
-    credential=ApiKeyCredential("blk_live_…"),
-    path_prefix="acme",   # → requests hit /v1/acme/boxes
-))
+rt = Boxlite.rest(
+    BoxliteRestOptions(
+        url="https://api.boxlite.ai/api",
+        credential=ApiKeyCredential("blk_live_…"),
+        path_prefix="acme",  # → requests hit /v1/acme/boxes
+    )
+)
 ```
 
 When `path_prefix` is unset or empty, the client builds URLs
@@ -581,7 +592,7 @@ boxlite.BoxOptions(image="123456.dkr.ecr.us-east-1.amazonaws.com/repo:tag")
 
 ```python
 boxlite.BoxOptions(
-    cpus=4,           # 4 CPU cores
+    cpus=4,  # 4 CPU cores
     memory_mib=2048,  # 2 GB RAM
 )
 ```
@@ -605,7 +616,6 @@ boxlite.BoxOptions(
     volumes=[
         # Read-only mount
         ("/host/config", "/etc/app/config", "ro"),
-
         # Read-write mount
         ("/host/data", "/mnt/data", "rw"),
     ]
@@ -617,10 +627,10 @@ boxlite.BoxOptions(
 ```python
 boxlite.BoxOptions(
     ports=[
-        (8080, 80, "tcp"),      # HTTP
-        (8443, 443, "tcp"),     # HTTPS
-        (5432, 5432, "tcp"),    # PostgreSQL
-        (53, 53, "udp"),        # DNS
+        (8080, 80, "tcp"),  # HTTP
+        (8443, 443, "tcp"),  # HTTPS
+        (5432, 5432, "tcp"),  # PostgreSQL
+        (53, 53, "udp"),  # DNS
     ]
 )
 ```
@@ -784,6 +794,7 @@ from boxlite import BoxliteError, ExecError, TimeoutError, ParseError
 ```python
 import boxlite
 
+
 async def safe_execution():
     try:
         async with boxlite.SimpleBox(image="python:slim") as box:
@@ -852,8 +863,8 @@ sudo usermod -aG kvm $USER
 ```python
 # Increase resource limits
 boxlite.BoxOptions(
-    cpus=4,          # More CPUs
-    memory_mib=4096, # More memory
+    cpus=4,  # More CPUs
+    memory_mib=4096,  # More memory
 )
 
 # Check metrics

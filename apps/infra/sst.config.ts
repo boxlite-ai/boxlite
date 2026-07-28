@@ -470,11 +470,12 @@ export default $config({
         STRIPE_SECRET_KEY: stripeSecretKey.value,
         STRIPE_WEBHOOK_SECRET: stripeWebhookSecret.value,
         STRIPE_WEBHOOK_SECRET_PREVIOUS: stripePreviousWebhookSecret.value,
-        // Box base images: only the three digest-pinned *_IMAGE refs below are live — the
-        // API gates box creation to that curated set (apps/api curated-images.constant.ts)
-        // and the runner pulls them straight from ghcr.io with its GHCR_TOKEN. IMAGE_TAG and
-        // the SOURCE_REGISTRY_* block are inert Daytona-port residue (no consumer — see
-        // apps/api configuration.ts), kept only as reserved names for a future registry path.
+        // Box base images: the three *_IMAGE refs below are the built-in curated set the API
+        // gates box creation to (apps/api curated-images.constant.ts); the runner pulls them
+        // straight from ghcr.io with its GHCR_TOKEN. BOXLITE_SYSTEM_IMAGES appends more images
+        // (comma-separated `name=ref`) without a code deploy — empty means built-ins only.
+        // IMAGE_TAG and the SOURCE_REGISTRY_* block are inert Daytona-port residue (no consumer
+        // — see apps/api configuration.ts), kept only as reserved names for a future registry path.
         BOXLITE_SYSTEM_IMAGE_TAG: envOr('BOXLITE_SYSTEM_IMAGE_TAG', '20260605-p0-r3'),
         BOXLITE_SYSTEM_BASE_IMAGE: envOr(
           'BOXLITE_SYSTEM_BASE_IMAGE',
@@ -488,6 +489,7 @@ export default $config({
           'BOXLITE_SYSTEM_NODE_IMAGE',
           'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3',
         ),
+        BOXLITE_SYSTEM_IMAGES: envOr('BOXLITE_SYSTEM_IMAGES', ''),
         ...(process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_URL && {
           BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME: envOr(
             'BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME',
@@ -692,20 +694,12 @@ export default $config({
           aliases: [`*.${proxyDomain}`],
           dns: cloudflareDns,
         },
-        rules: [{ listen: '443/https', forward: `${PORTS.PROXY}/http` }],
-        health: { [`${PORTS.PROXY}/http`]: httpHealth('/health') },
-      },
-      // Same reasoning as the Api LB: bump idle to 1h so dashboard iframe
-      // terminals (https://22222-<sbx>.proxy.<stack>/) survive idle pauses
-      // until the runner-side keepalive in handleWebSocketTerminal lands.
-      transform: {
-        loadBalancer: (lbArgs) => {
-          lbArgs.idleTimeout = 3600
-        },
+        rules: [{ listen: '443/tls', forward: `${PORTS.PROXY}/tcp` }],
+        health: { [`${PORTS.PROXY}/tcp`]: {} },
       },
       environment: {
         PROXY_PORT: String(PORTS.PROXY),
-        PROXY_PROTOCOL: envOr('PROXY_PROTOCOL', 'http'),
+        PROXY_PROTOCOL: envOr('PROXY_PROTOCOL', 'https'),
         PROXY_API_KEY: envOr('PROXY_API_KEY', proxyApiKey.result),
         // api-client-go appends paths like "/config" directly → include /api suffix
         BOXLITE_API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,

@@ -10,9 +10,12 @@ import { createProxyMiddleware, type RequestHandler } from 'http-proxy-middlewar
 import { ApiKeyService } from '../api-key/api-key.service'
 import { JwtStrategy } from '../auth/jwt.strategy'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
+import { OrganizationService } from '../organization/services/organization.service'
+import { Organization } from '../organization/entities/organization.entity'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import type { Runner } from '../box/entities/runner.entity'
+import { BoxAutoResumeService } from './box-auto-resume.service'
 
 type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunner?: Runner
@@ -43,8 +46,10 @@ export class BoxliteWsProxyService {
   constructor(
     private readonly apiKeyService: ApiKeyService,
     private readonly organizationUserService: OrganizationUserService,
+    private readonly organizationService: OrganizationService,
     private readonly boxService: BoxService,
     private readonly runnerService: RunnerService,
+    private readonly autoResume: BoxAutoResumeService,
     // Exported by AuthModule (already imported here). Resolves to `undefined`
     // when `skipConnections` is set, so the JWT path guards on it.
     @Inject(JwtStrategy) private readonly jwtStrategy: JwtStrategy | undefined,
@@ -109,10 +114,13 @@ export class BoxliteWsProxyService {
     }
 
     try {
-      const box = await this.boxService.findOneByIdOrName(match.boxId, auth.organizationId)
+      const box = await this.boxService.findOneByIdOrName(match.boxId, auth.organization.id)
       if (!box?.runnerId) {
         this.respondAndClose(socket, 404, 'Not Found')
         return
+      }
+      if (box.autoResume) {
+        await this.autoResume.ensureReady(box.id, auth.organization)
       }
       // Mirror legacy toolbox path — opening a WS attach is user activity,
       // so the autostop cron does not reap a session that's still connected.
@@ -162,7 +170,7 @@ export class BoxliteWsProxyService {
    * ApiKeyStrategy / OrganizationAccessGuard. Upgrade frequency is low; if
    * upgrade latency becomes a concern, add caching as a follow-up.
    */
-  private async authenticate(req: IncomingMessage, urlTenant?: string): Promise<{ organizationId: string } | null> {
+  private async authenticate(req: IncomingMessage, urlTenant?: string): Promise<{ organization: Organization } | null> {
     try {
       const header = req.headers['authorization']
       const headerValue = Array.isArray(header) ? header[0] : header
@@ -178,7 +186,8 @@ export class BoxliteWsProxyService {
         if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null
         const membership = await this.organizationUserService.findOne(apiKey.organizationId, apiKey.userId)
         if (!membership) return null
-        return { organizationId: apiKey.organizationId }
+        const organization = await this.organizationService.findOne(apiKey.organizationId)
+        return organization ? { organization } : null
       }
 
       // 2. JWT (OIDC) — org comes from the URL tenant; membership required.
@@ -193,7 +202,8 @@ export class BoxliteWsProxyService {
 
       const membership = await this.organizationUserService.findOne(urlTenant, userId)
       if (!membership) return null
-      return { organizationId: urlTenant }
+      const organization = await this.organizationService.findOne(urlTenant)
+      return organization ? { organization } : null
     } catch {
       // Any failure (invalid JWT signature, a DB error, …) → 401. This single
       // guard is why authenticate never throws — `upgrade` calls it before its

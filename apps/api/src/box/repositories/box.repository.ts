@@ -221,18 +221,7 @@ export class BoxRepository extends BaseRepository<Box> {
   }
 
   /**
-   * Conditionally flip a STOPPED box to desiredState=STARTED for the proxy
-   * auto-start hint (exec / files / metrics). A single conditional UPDATE — no
-   * SELECT FOR UPDATE — guarded by a short lock_timeout so that a row held by a
-   * concurrent start/stop/sync (updateWhere's pessimistic_write lock) aborts
-   * this statement at the DB level instead of pinning the connection. This sits
-   * in front of every proxy request; an unbounded lock wait here would let one
-   * contended row stall the pool.
-   *
-   * Returns the updated box on success, or `null` when nothing changed: the
-   * WHERE filter matched no row (already started, pending, destroy-intent, or
-   * race lost) or the lock_timeout fired (row being started/stopped right now).
-   *
+   * Conditionally transitions a stable stopped Box into a start intent.
    * @throws DB errors other than lock-timeout (not wrapped) — caller decides
    *   whether to swallow.
    */

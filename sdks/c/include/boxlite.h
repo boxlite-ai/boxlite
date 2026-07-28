@@ -64,6 +64,12 @@ typedef enum BoxliteErrorCode {
   SessionReaped = 21,
 } BoxliteErrorCode;
 
+// The kind of endpoint exposed by a box tunnel.
+typedef enum BoxliteEndpointType {
+  BoxliteEndpointTypeUri = 0,
+  BoxliteEndpointTypeFileDescriptor = 1,
+} BoxliteEndpointType;
+
 // Transport protocol for a port forwarding rule.
 typedef enum BoxlitePortProtocol {
   BoxlitePortProtocolTcp = 0,
@@ -85,8 +91,14 @@ typedef struct AdvancedBoxOptionsHandle AdvancedBoxOptionsHandle;
 // async lifecycle ops.
 typedef struct BoxHandle BoxHandle;
 
+// Opaque handle for network operations on a box.
+typedef struct BoxNetworkHandle BoxNetworkHandle;
+
 // Opaque handle for Runner API (auto-manages runtime)
 typedef struct BoxRunner BoxRunner;
+
+// Opaque handle for a one-shot box service tunnel.
+typedef struct BoxTunnelHandle BoxTunnelHandle;
 
 // Opaque credential handle. Wraps a core `Arc<dyn Credential>` so the
 // concrete credential kind (today only `ApiKeyCredential`) is hidden
@@ -109,6 +121,14 @@ typedef struct RestOptionsHandle RestOptionsHandle;
 // Opaque handle to a BoxliteRuntime instance with its Tokio runtime and the
 // per-runtime event queue used by the post-and-drain callback API.
 typedef struct RuntimeHandle RuntimeHandle;
+
+// Opaque handle to runtime named-volume operations.
+//
+// The handle owns a cloneable core volume handle plus the runtime liveness,
+// Tokio runtime, and event queue needed to submit asynchronous work. C callers
+// receive this as an opaque `CBoxliteVolumeHandle` and must release it with
+// `boxlite_volume_free`.
+typedef struct VolumeHandle VolumeHandle;
 
 typedef struct AdvancedBoxOptionsHandle CAdvancedBoxOptions;
 
@@ -253,6 +273,9 @@ typedef struct CBoxInfo {
   int pid;
   int cpus;
   int memory_mib;
+  uint32_t auto_pause;
+  uint32_t auto_delete;
+  int auto_resume;
   int64_t created_at;
 } CBoxInfo;
 
@@ -296,6 +319,10 @@ typedef struct CRuntimeMetrics {
 // Runtime metrics completion.
 typedef void (*CRuntimeMetricsCb)(struct CRuntimeMetrics*, CBoxliteError*, void*);
 
+typedef struct BoxNetworkHandle CBoxNetworkHandle;
+
+typedef struct BoxTunnelHandle CBoxTunnelHandle;
+
 typedef struct CredentialHandle CBoxliteCredential;
 
 typedef struct RestOptionsHandle CBoxliteRestOptions;
@@ -310,8 +337,53 @@ typedef struct BoxliteImageRegistry {
   const char *bearer_token;
 } BoxliteImageRegistry;
 
+typedef struct VolumeHandle CBoxliteVolumeHandle;
+
 // Runtime shutdown completion.
 typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
+
+// C ABI representation of volume metadata.
+//
+// `id` and `created_at` are non-null, heap-owned C strings. A standalone value
+// is transferred to the callback and must be released exactly once with
+// `boxlite_free_volume_info`. List entries remain owned by their enclosing
+// [`CVolumeInfoList`] and must not be freed individually. `size_bytes` is
+// meaningful only when `has_size` is non-zero.
+typedef struct CVolumeInfo {
+  char *id;
+  char *created_at;
+  uint64_t size_bytes;
+  int has_size;
+} CVolumeInfo;
+
+// Volume create completion.
+//
+// On success the callback takes ownership of the non-null metadata pointer and
+// must release it with `boxlite_free_volume_info`. On failure the pointer is
+// null. The error pointer is borrowed for callback dispatch only.
+typedef void (*CBoxVolumeCreateCb)(struct CVolumeInfo*, CBoxliteError*, void*);
+
+// C ABI representation of a volume metadata list.
+//
+// `items` points to `count` contiguous [`CVolumeInfo`] entries and may be null
+// only when `count` is zero. The callback recipient owns the list, its array,
+// and all entry strings and must release them together with
+// `boxlite_free_volume_info_list`.
+typedef struct CVolumeInfoList {
+  struct CVolumeInfo *items;
+  int count;
+} CVolumeInfoList;
+
+// Volume list completion. A successful callback owns the list and must release
+// it with `boxlite_free_volume_info_list`; the error pointer is callback-scoped.
+typedef void (*CBoxVolumeListCb)(struct CVolumeInfoList*, CBoxliteError*, void*);
+
+// Volume get completion with the same ownership contract as volume create.
+typedef void (*CBoxVolumeGetCb)(struct CVolumeInfo*, CBoxliteError*, void*);
+
+// Volume remove completion. The error pointer is borrowed for callback dispatch
+// only and no result allocation is produced.
+typedef void (*CBoxVolumeRemoveCb)(CBoxliteError*, void*);
 
 #ifdef __cplusplus
 extern "C" {
@@ -527,6 +599,29 @@ enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
                                               void *user_data,
                                               CBoxliteError *out_error);
 
+enum BoxliteErrorCode boxlite_box_network(CBoxHandle *handle,
+                                          CBoxNetworkHandle **out_network,
+                                          CBoxliteError *out_error);
+
+void boxlite_network_free(CBoxNetworkHandle *network);
+
+enum BoxliteErrorCode boxlite_network_tunnel(CBoxNetworkHandle *network,
+                                             uint16_t port,
+                                             CBoxTunnelHandle **out_tunnel,
+                                             CBoxliteError *out_error);
+
+void boxlite_tunnel_free(CBoxTunnelHandle *tunnel);
+
+enum BoxliteErrorCode boxlite_tunnel_endpoint(CBoxTunnelHandle *tunnel,
+                                              enum BoxliteEndpointType *out_type,
+                                              char **out_uri,
+                                              int32_t *out_fd,
+                                              CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_tunnel_connect(CBoxTunnelHandle *tunnel,
+                                             int32_t *out_fd,
+                                             CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_options_new(const char *image,
                                           CBoxliteOptions **out_opts,
                                           CBoxliteError *out_error);
@@ -577,7 +672,14 @@ void boxlite_options_add_secret(CBoxliteOptions *opts,
                                 const char *const *hosts,
                                 int hosts_count);
 
+// Deprecated: use `boxlite_options_set_auto_delete_interval`.
 void boxlite_options_set_auto_remove(CBoxliteOptions *opts, int val);
+
+void boxlite_options_set_auto_pause_interval(CBoxliteOptions *opts, uint32_t seconds);
+
+void boxlite_options_set_auto_delete_interval(CBoxliteOptions *opts, uint32_t seconds);
+
+void boxlite_options_set_auto_resume_enabled(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
 
@@ -698,6 +800,21 @@ enum BoxliteErrorCode boxlite_runtime_images(CBoxliteRuntime *runtime,
                                              CBoxliteImageHandle **out_handle,
                                              CBoxliteError *out_error);
 
+// Create a runtime-scoped named-volume handle.
+//
+// On success ownership of `*out_handle` transfers to the caller, which must
+// release it with `boxlite_volume_free`. The handle may submit operations from
+// multiple threads; callbacks run only while the parent runtime is drained.
+// `out_error` may be null and otherwise receives synchronous failures.
+//
+// # Safety
+//
+// `runtime` must be a live runtime pointer and `out_handle` must be non-null
+// and writable. The returned handle must not be used after it is freed.
+enum BoxliteErrorCode boxlite_runtime_volumes(CBoxliteRuntime *runtime,
+                                              CBoxliteVolumeHandle **out_handle,
+                                              CBoxliteError *out_error);
+
 // Async + callback variant of runtime shutdown.
 //
 // Spawns a Tokio task that calls `BoxliteRuntime::shutdown` and posts a
@@ -723,6 +840,91 @@ void boxlite_runtime_free(CBoxliteRuntime *runtime);
 int boxlite_runtime_drain(CBoxliteRuntime *runtime, int timeout_ms, CBoxliteError *out_error);
 
 void boxlite_free_string(char *s);
+
+// Queue asynchronous volume creation.
+//
+// `Ok` means queueing succeeded. The callback runs later on the thread calling
+// `boxlite_runtime_drain`; successful metadata ownership transfers to it.
+// Calls may be submitted concurrently. `user_data` is passed through unchanged
+// and must remain usable by the caller until callback dispatch.
+//
+// # Safety
+//
+// `handle` and `cb` must be non-null. `out_error` may be null; otherwise it must
+// be writable and receives synchronous queueing failures only. The handle must
+// remain valid until this function returns. A successful callback must release
+// its metadata with `boxlite_free_volume_info`; the error pointer is borrowed.
+enum BoxliteErrorCode boxlite_volume_create(CBoxliteVolumeHandle *handle,
+                                            CBoxVolumeCreateCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
+
+// Queue asynchronous volume listing with the same dispatch, concurrency, and
+// `user_data` contract as [`boxlite_volume_create`].
+//
+// # Safety
+//
+// `handle` and `cb` must be non-null; `out_error` may be null. A successful
+// callback owns its list and must call `boxlite_free_volume_info_list`.
+enum BoxliteErrorCode boxlite_volume_list(CBoxliteVolumeHandle *handle,
+                                          CBoxVolumeListCb cb,
+                                          void *user_data,
+                                          CBoxliteError *out_error);
+
+// Queue asynchronous lookup of a volume by id with the same dispatch,
+// concurrency, and `user_data` contract as [`boxlite_volume_create`].
+//
+// # Safety
+//
+// `handle`, `id`, and `cb` must be non-null. `id` must contain UTF-8 and only
+// needs to remain valid for this call. `out_error` may be null. A successful
+// callback owns its metadata and must call `boxlite_free_volume_info`.
+enum BoxliteErrorCode boxlite_volume_get(CBoxliteVolumeHandle *handle,
+                                         const char *id,
+                                         CBoxVolumeGetCb cb,
+                                         void *user_data,
+                                         CBoxliteError *out_error);
+
+// Queue asynchronous removal of a volume by id with the same dispatch,
+// concurrency, and `user_data` contract as [`boxlite_volume_create`]. A
+// non-zero `force` requests success when the volume is absent.
+//
+// # Safety
+//
+// `handle`, `id`, and `cb` must be non-null. `id` must contain UTF-8 and only
+// needs to remain valid for this call. `out_error` may be null. Callback
+// arguments are borrowed for dispatch and require no result deallocation.
+enum BoxliteErrorCode boxlite_volume_remove(CBoxliteVolumeHandle *handle,
+                                            const char *id,
+                                            int force,
+                                            CBoxVolumeRemoveCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
+
+// Free a volume handle returned by `boxlite_runtime_volumes`.
+//
+// # Safety
+//
+// `handle` must be null or a pointer previously returned by
+// `boxlite_runtime_volumes` that has not already been freed. Callers must not
+// use the handle after this function returns.
+void boxlite_volume_free(CBoxliteVolumeHandle *handle);
+
+// Free a standalone `CVolumeInfo` and its owned strings.
+//
+// # Safety
+//
+// `info` must be null or a pointer allocated by this module that has not
+// already been freed.
+void boxlite_free_volume_info(struct CVolumeInfo *info);
+
+// Free a `CVolumeInfoList`, all entries, and their owned strings.
+//
+// # Safety
+//
+// `list` must be null or a pointer allocated by this module that has not
+// already been freed.
+void boxlite_free_volume_info_list(struct CVolumeInfoList *list);
 
 #ifdef __cplusplus
 }  // extern "C"

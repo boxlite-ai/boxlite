@@ -597,20 +597,31 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
 }
 
 // ============================================================================
-// AUTO_REMOVE TESTS
+// AUTO_DELETE TESTS
 // ============================================================================
 
 #[tokio::test]
-async fn auto_remove_default_is_true() {
-    let options = BoxOptions::default();
+async fn auto_delete_default_removes_box_on_stop() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let mut options = common::alpine_opts();
+    options.auto_delete = None;
+    let handle = runtime.create(options, None).await.unwrap();
+    let box_id = handle.id().clone();
+
+    handle.stop().await.unwrap();
+
     assert!(
-        options.auto_remove,
-        "auto_remove should default to true (like Docker --rm)"
+        !runtime.exists(box_id.as_str()).await.unwrap(),
+        "Box should be auto-removed when auto_delete is unset"
     );
 }
-
 #[tokio::test]
-async fn auto_remove_true_removes_box_on_stop() {
+async fn auto_delete_removes_box_on_stop() {
     let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -632,12 +643,12 @@ async fn auto_remove_true_removes_box_on_stop() {
     // Box should no longer exist
     assert!(
         !runtime.exists(box_id.as_str()).await.unwrap(),
-        "Box should be auto-removed when auto_remove=true"
+        "Box should be auto-removed when auto_delete>0"
     );
 }
 
 #[tokio::test]
-async fn auto_remove_false_preserves_box_on_stop() {
+async fn auto_delete_zero_preserves_box_on_stop() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -650,13 +661,13 @@ async fn auto_remove_false_preserves_box_on_stop() {
     // Start first so stop() transitions to Stopped.
     handle.start().await.unwrap();
 
-    // Stop should NOT auto-remove
+    // Stop should preserve the box
     handle.stop().await.unwrap();
 
     // Box should still exist
     assert!(
         runtime.exists(box_id.as_str()).await.unwrap(),
-        "Box should be preserved when auto_remove=false"
+        "Box should be preserved when auto_delete=0"
     );
 
     // Status should be Stopped

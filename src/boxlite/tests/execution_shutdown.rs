@@ -1084,7 +1084,7 @@ async fn create_concurrent_box(runtime: &BoxliteRuntime) -> Arc<LiteBox> {
             BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 cpus: Some(2),
-                auto_remove: false,
+                auto_delete: Some(0),
                 ..Default::default()
             },
             None,

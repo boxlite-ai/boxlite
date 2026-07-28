@@ -45,10 +45,6 @@ func (b *runtimeFenceBackend) Destroy(context.Context, string) error {
 	return nil
 }
 
-func (b *runtimeFenceBackend) Resize(context.Context, string, dto.ResizeBoxDTO) error {
-	return nil
-}
-
 func (b *runtimeFenceBackend) RecoverBox(context.Context, string, dto.RecoverBoxDTO) error {
 	return nil
 }

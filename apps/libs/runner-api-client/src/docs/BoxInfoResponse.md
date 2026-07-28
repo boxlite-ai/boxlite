@@ -5,9 +5,6 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**backupError** | **string** |  | [optional] [default to undefined]
-**backupSnapshot** | **string** |  | [optional] [default to undefined]
-**backupState** | [**EnumsBackupState**](EnumsBackupState.md) |  | [optional] [default to undefined]
 **daemonVersion** | **string** |  | [optional] [default to undefined]
 **state** | [**EnumsBoxState**](EnumsBoxState.md) |  | [optional] [default to undefined]
 
@@ -17,9 +14,6 @@ Name | Type | Description | Notes
 import { BoxInfoResponse } from './api';
 
 const instance: BoxInfoResponse = {
-    backupError,
-    backupSnapshot,
-    backupState,
     daemonVersion,
     state,
 };

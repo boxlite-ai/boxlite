@@ -4,11 +4,11 @@
 //! Separated from container.rs to group by lifecycle phase (Prepare → Execute).
 
 use super::spec;
+use super::zygote;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::container::Container as LibContainer;
-use libcontainer::syscall::syscall::SyscallType;
 use std::fs;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 // ====================
@@ -104,6 +104,7 @@ pub(crate) fn create_oci_bundle(
     gid: u32,
     bundle_root: &Path,
     user_mounts: &[spec::UserMount],
+    tty: bool,
 ) -> BoxliteResult<PathBuf> {
     let bundle_path = bundle_root.join(container_id);
 
@@ -133,6 +134,7 @@ pub(crate) fn create_oci_bundle(
         gid,
         &bundle_path,
         user_mounts,
+        tty,
     )?;
     let config_path = bundle_path.join("config.json");
 
@@ -158,69 +160,69 @@ pub(crate) fn create_oci_bundle(
 // Execution Functions (Execute Phase)
 // ====================
 
-/// Create container using libcontainer (does not start it)
-///
-/// Uses default stdio (inherited from parent process).
-/// For custom stdio, use `create_container_with_stdio`.
-#[allow(dead_code)]
-pub(crate) fn create_container(
-    container_id: &str,
-    state_root: &Path,
-    bundle_path: &Path,
-) -> BoxliteResult<()> {
-    ContainerBuilder::new(container_id.to_string(), SyscallType::default())
-        .with_root_path(state_root)
-        .map_err(|e| BoxliteError::Internal(format!("Failed to set container root path: {}", e)))?
-        .validate_id()
-        .map_err(|e| BoxliteError::Internal(format!("Invalid container ID: {}", e)))?
-        .as_init(bundle_path)
-        .with_systemd(false)
-        .with_detach(true)
-        .build()
-        .map_err(|e| {
-            BoxliteError::Internal(format!(
-                "Failed to create container {} at bundle {}: {}",
-                container_id,
-                bundle_path.display(),
-                e
-            ))
-        })?;
+/// How the container's init process gets its stdio.
+pub(crate) enum InitIoSetup {
+    /// Pipes controlled by boxlite-guest, which keep interactive entrypoints
+    /// (like `/bin/sh`) alive by holding stdin open.
+    Pipes(super::stdio::InitStdioFds),
 
-    tracing::info!(container_id, "Created OCI container");
-    Ok(())
+    /// libcontainer allocates a PTY for init (OCI `process.terminal`, docker
+    /// `run -t`) and hands the master back over this console socket. Init gets
+    /// the replica as all three of its fds — so no stdio fds are passed here.
+    Console(String),
 }
 
-/// Create container with custom stdio file descriptors.
+/// Create container with custom stdio, via the zygote.
 ///
-/// This allows the init process to use pipes controlled by boxlite-guest,
-/// keeping interactive entrypoints (like /bin/sh) alive by holding stdin open.
+/// The build — libcontainer's clone3 dance, main → intermediate → init — runs
+/// in the zygote's single-threaded context, like every tenant build: clone3
+/// from the multi-threaded guest can inherit a locked musl `__malloc_lock`
+/// and hang forever, and libcontainer's own wait for its intermediate would
+/// race the guest reaper's `waitpid(-1)` sweep. In the zygote neither exists.
+///
+/// Blocking IPC, deliberately not offloaded: the callers are the synchronous
+/// box-start path, which previously blocked right here for the in-place build
+/// — same latency, now spent waiting instead of forking. At box start no
+/// execs exist yet, so serializing on the zygote socket costs nothing.
 ///
 /// # Arguments
 ///
 /// * `container_id` - Unique container identifier
 /// * `state_root` - Directory for libcontainer state
 /// * `bundle_path` - OCI bundle directory with config.json
-/// * `stdio_fds` - Custom stdio file descriptors for init process
+/// * `io` - How init's stdio is wired (pipes, or a PTY via console socket)
 pub(crate) fn create_container_with_stdio(
     container_id: &str,
     state_root: &Path,
     bundle_path: &Path,
-    stdio_fds: super::stdio::InitStdioFds,
+    io: InitIoSetup,
 ) -> BoxliteResult<()> {
-    // Note: with_stdin/stdout/stderr must be called before as_init()
-    // because they're methods on ContainerBuilder, not InitContainerBuilder
-    ContainerBuilder::new(container_id.to_string(), SyscallType::default())
-        .with_root_path(state_root)
-        .map_err(|e| BoxliteError::Internal(format!("Failed to set container root path: {}", e)))?
-        .validate_id()
-        .map_err(|e| BoxliteError::Internal(format!("Invalid container ID: {}", e)))?
-        .with_stdin(stdio_fds.stdin)
-        .with_stdout(stdio_fds.stdout)
-        .with_stderr(stdio_fds.stderr)
-        .as_init(bundle_path)
-        .with_systemd(false)
-        .with_detach(true)
-        .build()
+    let (console_socket, init_fds) = match io {
+        InitIoSetup::Pipes(fds) => (None, Some(fds)),
+        InitIoSetup::Console(socket_path) => (Some(socket_path), None),
+    };
+    let spec = zygote::InitBuildSpec {
+        container_id: container_id.to_string(),
+        state_root: state_root.to_path_buf(),
+        bundle_path: bundle_path.to_path_buf(),
+        console_socket,
+    };
+
+    // init_fds must live until sendmsg duplicates them via SCM_RIGHTS, then
+    // drop to close the guest's copies — init's ends belong to the zygote and
+    // to init now, and a lingering write-end here would rob init's readers of
+    // EOF.
+    let raw_fds = init_fds.as_ref().map(|fds| {
+        [
+            fds.stdin.as_raw_fd(),
+            fds.stdout.as_raw_fd(),
+            fds.stderr.as_raw_fd(),
+        ]
+    });
+    let init_pid = zygote::ZYGOTE
+        .get()
+        .expect("zygote not started")
+        .build_init(spec, raw_fds)
         .map_err(|e| {
             BoxliteError::Internal(format!(
                 "Failed to create container {} at bundle {}: {}",
@@ -229,8 +231,13 @@ pub(crate) fn create_container_with_stdio(
                 e
             ))
         })?;
+    drop(init_fds);
 
-    tracing::info!(container_id, "Created OCI container with custom stdio");
+    tracing::info!(
+        container_id,
+        init_pid = init_pid.as_raw(),
+        "Created OCI container with custom stdio via zygote"
+    );
     Ok(())
 }
 

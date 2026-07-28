@@ -51,6 +51,9 @@ struct InspectStatePresenter {
     running: bool,
     #[serde(rename = "Pid")]
     pid: u32,
+    /// Init exit code; 0 when unknown or still running (docker-compatible).
+    #[serde(rename = "ExitCode")]
+    exit_code: i32,
 }
 
 impl From<&BoxInfo> for InspectPresenter {
@@ -66,6 +69,7 @@ impl From<&BoxInfo> for InspectPresenter {
                 status: state.status.as_str().to_string(),
                 running: state.running,
                 pid: state.pid.unwrap_or(0),
+                exit_code: state.exit_code.unwrap_or(0),
             },
             cpus: info.cpus,
             memory: info.memory_mib as u64 * 1024 * 1024,

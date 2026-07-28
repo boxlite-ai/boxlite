@@ -328,16 +328,35 @@ pub struct BoxOptions {
     pub volumes: Vec<VolumeSpec>,
     pub network: NetworkSpec,
     pub ports: Vec<PortSpec>,
-    /// Automatically remove box when stopped.
+    /// Automatically remove the box when stopped.
     ///
-    /// When true (default), the box is removed from the database and its
-    /// files are deleted when `stop()` is called. This is similar to
-    /// Docker's `--rm` flag.
-    ///
-    /// When false, the box is preserved after stop and can be restarted
-    /// with `runtime.get(box_id)`.
+    /// Deprecated: use [`BoxOptions::auto_delete`]. When `auto_delete` is set,
+    /// it takes precedence over this field. REST runtimes do not transmit this
+    /// legacy field and preserve the remote server's lifecycle defaults.
+    #[deprecated(note = "use auto_delete instead")]
     #[serde(default = "default_auto_remove")]
     pub auto_remove: bool,
+
+    /// Idle time in seconds before AutoPause. `Some(0)` disables AutoPause.
+    /// Only REST runtimes implement AutoPause; local runtimes return
+    /// `Unsupported`.
+    #[serde(default)]
+    pub auto_pause: Option<u32>,
+
+    /// Time in seconds after a successful stop before AutoDelete.
+    ///
+    /// - `Some(0)`: keep the box after stop.
+    /// - `Some(n>0)`: REST runtimes delete after `n` seconds; local runtimes
+    ///   remove immediately on stop because they have no sweeper.
+    /// - `None` (default): local runtimes fall back to deprecated `auto_remove`;
+    ///   REST runtimes preserve the remote server's AutoDelete default.
+    #[serde(default)]
+    pub auto_delete: Option<u32>,
+
+    /// Whether the box should automatically resume when accessed after AutoPause.
+    /// `None` lets the runtime/server pick its default (typically `true`).
+    #[serde(default)]
+    pub auto_resume: Option<bool>,
 
     /// Whether the box should outlive the process that created it.
     ///
@@ -385,6 +404,16 @@ pub struct BoxOptions {
     /// If None, uses the image's USER directive (defaults to root).
     #[serde(default)]
     pub user: Option<String>,
+
+    /// Run the box's main command on a PTY rather than pipes (docker `run -t`).
+    ///
+    /// This is a property of the *box*, not of an attach: the main command is
+    /// the container's init, so whether it gets a terminal is decided when the
+    /// container is created and cannot be changed by a later client. The
+    /// terminal's size is not fixed here — the attaching client sets it, since
+    /// a box outlives any one client.
+    #[serde(default)]
+    pub tty: bool,
 
     /// Secrets for MITM proxy injection into outbound HTTP(S) requests.
     ///
@@ -478,6 +507,7 @@ fn default_detach() -> bool {
     false
 }
 
+#[allow(deprecated)]
 impl Default for BoxOptions {
     fn default() -> Self {
         Self {
@@ -491,32 +521,46 @@ impl Default for BoxOptions {
             network: NetworkSpec::default(),
             ports: Vec::new(),
             auto_remove: default_auto_remove(),
+            auto_pause: None,
+            auto_delete: None,
+            auto_resume: None,
             detach: default_detach(),
             advanced: AdvancedBoxOptions::default(),
             entrypoint: None,
             cmd: None,
             user: None,
+            tty: false,
             secrets: Vec::new(),
         }
     }
 }
 
 impl BoxOptions {
+    /// Resolve the modern and deprecated deletion inputs to one policy.
+    #[allow(deprecated)]
+    pub(crate) fn effective_auto_delete(&self) -> u32 {
+        self.auto_delete
+            .unwrap_or_else(|| u32::from(self.auto_remove))
+    }
+
+    /// Whether the box is removed when it stops.
+    ///
+    /// Explicit `auto_delete` takes precedence over deprecated `auto_remove`.
+    pub(crate) fn removes_on_stop(&self) -> bool {
+        self.effective_auto_delete() > 0
+    }
+
     /// Sanitize and validate options.
     ///
     /// Validates option combinations:
-    /// - `auto_remove=true` with `detach=true` is invalid (detached boxes need manual lifecycle control)
+    /// - effective remove-on-stop (`auto_delete>0`, or deprecated `auto_remove`)
+    ///   with `detach=true` is invalid
     /// - `advanced.isolate_mounts=true` is only supported on Linux
-    pub fn sanitize(&self) -> BoxliteResult<()> {
-        // Validate auto_remove + detach combination
-        // A detached box that auto-removes doesn't make practical sense:
-        // - detach=true: box survives parent exit
-        // - auto_remove=true: box removed on stop
-        // This combination is confusing - detached boxes should have manual lifecycle control
-        if self.auto_remove && self.detach {
+    pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
+        if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::Config(
-                "auto_remove=true is incompatible with detach=true. \
-                 Detached boxes should use auto_remove=false for manual lifecycle control."
+                "remove-on-stop is incompatible with detach=true. Detached boxes should use \
+                 auto_delete=0 (or deprecated auto_remove=false) for manual lifecycle control."
                     .to_string(),
             ));
         }
@@ -526,6 +570,26 @@ impl BoxOptions {
             return Err(boxlite_shared::errors::BoxliteError::Unsupported(
                 "isolate_mounts is only supported on Linux".to_string(),
             ));
+        }
+
+        Ok(())
+    }
+
+    /// Validate a persisted box without requiring ingestion sources to remain.
+    pub(crate) fn sanitize_persisted(&self) -> BoxliteResult<()> {
+        self.sanitize_common()?;
+
+        if let Some(kernel) = &self.advanced.kernel {
+            kernel.sanitize_persisted()?;
+        }
+        Ok(())
+    }
+
+    pub fn sanitize(&self) -> BoxliteResult<()> {
+        self.sanitize_common()?;
+
+        if let Some(kernel) = &self.advanced.kernel {
+            kernel.sanitize()?;
         }
         Ok(())
     }
@@ -713,13 +777,143 @@ pub struct CloneOptions {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
     use crate::runtime::advanced_options::{SecurityOptions, SecurityOptionsBuilder};
 
     #[test]
+    #[allow(deprecated)]
     fn test_box_options_defaults() {
         let opts = BoxOptions::default();
-        assert!(opts.auto_remove, "auto_remove should default to true");
+        assert!(opts.removes_on_stop());
+        assert!(
+            opts.auto_remove,
+            "auto_remove should keep its legacy default"
+        );
         assert!(!opts.detach, "detach should default to false");
+    }
+
+    #[test]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    fn custom_kernel_configuration_roundtrips() {
+        let temp = tempfile::tempdir().unwrap();
+        let kernel = temp.path().join("vmlinux");
+        let initramfs = temp.path().join("initramfs.img");
+        #[cfg(target_arch = "x86_64")]
+        std::fs::write(&kernel, b"\x7fELFcustom kernel").unwrap();
+        #[cfg(target_arch = "aarch64")]
+        std::fs::write(&kernel, b"arm64-header\x1f\x8b\x08custom kernel").unwrap();
+        std::fs::write(&initramfs, b"custom initramfs").unwrap();
+
+        #[cfg(target_arch = "x86_64")]
+        let format = KernelFormat::Elf;
+        #[cfg(target_arch = "aarch64")]
+        let format = KernelFormat::PeGz;
+
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                kernel: Some(
+                    KernelOptions::new(&kernel)
+                        .with_format(format)
+                        .with_initramfs(&initramfs)
+                        .with_command_line("console=ttyS0 panic=-1"),
+                ),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        opts.sanitize().unwrap();
+        let json = serde_json::to_string(&opts).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value.get("kernel").is_none());
+        assert!(value["advanced"]["kernel"].is_object());
+        let restored: BoxOptions = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.advanced.kernel, opts.advanced.kernel);
+    }
+
+    #[test]
+    fn custom_kernel_must_be_a_file() {
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                kernel: Some(KernelOptions::new("/definitely/missing/vmlinux")),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = opts.sanitize().unwrap_err().to_string();
+        assert!(error.contains("custom kernel"), "unexpected error: {error}");
+        assert!(error.contains("regular file"), "unexpected error: {error}");
+    }
+
+    #[test]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    fn persisted_custom_kernel_boot_assets_do_not_require_original_source() {
+        #[cfg(target_arch = "x86_64")]
+        let format = KernelFormat::Elf;
+        #[cfg(target_arch = "aarch64")]
+        let format = KernelFormat::PeGz;
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                kernel: Some(
+                    KernelOptions::new("/source/removed/after-create")
+                        .with_format(format)
+                        .with_command_line("console=ttyS0"),
+                ),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        opts.sanitize_persisted().unwrap();
+        assert!(opts.sanitize().is_err());
+    }
+
+    #[test]
+    fn custom_initramfs_must_be_a_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let kernel = temp.path().join("vmlinux");
+        std::fs::write(&kernel, b"\x7fELFcustom kernel").unwrap();
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                kernel: Some(
+                    KernelOptions::new(&kernel)
+                        .with_format(KernelFormat::Elf)
+                        .with_initramfs(temp.path().join("missing-initramfs")),
+                ),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = opts.sanitize().unwrap_err().to_string();
+        assert!(error.contains("initramfs"), "unexpected error: {error}");
+        assert!(error.contains("regular file"), "unexpected error: {error}");
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn explicit_auto_delete_takes_precedence_over_auto_remove() {
+        let keep = BoxOptions {
+            auto_remove: true,
+            auto_delete: Some(0),
+            ..Default::default()
+        };
+        assert!(!keep.removes_on_stop());
+
+        let remove = BoxOptions {
+            auto_remove: false,
+            auto_delete: Some(60),
+            ..Default::default()
+        };
+        assert!(remove.removes_on_stop());
+
+        let legacy_keep = BoxOptions {
+            auto_remove: false,
+            auto_delete: None,
+            ..Default::default()
+        };
+        assert!(!legacy_keep.removes_on_stop());
     }
 
     #[test]
@@ -734,10 +928,8 @@ mod tests {
             "ports": []
         }"#;
         let opts: BoxOptions = serde_json::from_str(json).unwrap();
-        assert!(
-            opts.auto_remove,
-            "auto_remove should default to true via serde"
-        );
+        assert_eq!(opts.auto_delete, None);
+        assert!(opts.removes_on_stop());
         assert!(!opts.detach, "detach should default to false via serde");
     }
 
@@ -749,21 +941,18 @@ mod tests {
             "volumes": [],
             "network": {"Enabled": {"allow_net": []}},
             "ports": [],
-            "auto_remove": false,
+            "auto_delete": 0,
             "detach": true
         }"#;
         let opts: BoxOptions = serde_json::from_str(json).unwrap();
-        assert!(
-            !opts.auto_remove,
-            "explicit auto_remove=false should be respected"
-        );
+        assert_eq!(opts.auto_delete, Some(0));
         assert!(opts.detach, "explicit detach=true should be respected");
     }
 
     #[test]
     fn test_box_options_roundtrip() {
         let opts = BoxOptions {
-            auto_remove: false,
+            auto_delete: Some(0),
             detach: true,
             ..Default::default()
         };
@@ -771,7 +960,7 @@ mod tests {
         let json = serde_json::to_string(&opts).unwrap();
         let opts2: BoxOptions = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(opts.auto_remove, opts2.auto_remove);
+        assert_eq!(opts.auto_delete, opts2.auto_delete);
         assert_eq!(opts.detach, opts2.detach);
     }
 
@@ -829,50 +1018,36 @@ mod tests {
     }
 
     #[test]
-    fn test_sanitize_auto_remove_detach_incompatible() {
-        // auto_remove=true + detach=true is invalid
+    fn test_sanitize_remove_on_stop_detach_incompatible() {
         let opts = BoxOptions {
-            auto_remove: true,
+            auto_delete: Some(1),
             detach: true,
             ..Default::default()
         };
-        let result = opts.sanitize();
-        assert!(
-            result.is_err(),
-            "auto_remove=true + detach=true should fail"
-        );
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("incompatible"),
-            "Error should mention incompatibility"
-        );
+        let err_msg = opts.sanitize().unwrap_err().to_string();
+        assert!(err_msg.contains("incompatible"));
     }
 
     #[test]
     fn test_sanitize_valid_combinations() {
-        // auto_remove=true, detach=false (default) - valid
-        let opts1 = BoxOptions {
-            auto_remove: true,
-            detach: false,
+        let remove = BoxOptions {
+            auto_delete: Some(1),
             ..Default::default()
         };
-        assert!(opts1.sanitize().is_ok());
+        assert!(remove.sanitize().is_ok());
 
-        // auto_remove=false, detach=true - valid
-        let opts2 = BoxOptions {
-            auto_remove: false,
+        let keep_detached = BoxOptions {
+            auto_delete: Some(0),
             detach: true,
             ..Default::default()
         };
-        assert!(opts2.sanitize().is_ok());
+        assert!(keep_detached.sanitize().is_ok());
 
-        // auto_remove=false, detach=false - valid
-        let opts3 = BoxOptions {
-            auto_remove: false,
-            detach: false,
+        let keep_attached = BoxOptions {
+            auto_delete: Some(0),
             ..Default::default()
         };
-        assert!(opts3.sanitize().is_ok());
+        assert!(keep_attached.sanitize().is_ok());
     }
 
     // ========================================================================

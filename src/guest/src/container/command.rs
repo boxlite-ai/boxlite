@@ -474,7 +474,11 @@ impl SpawnedPty {
 ///
 /// In PTY mode, stderr is merged into stdout at the PTY level - there is only
 /// ONE reader from the PTY master to avoid race conditions.
-fn create_pty_child(pid: Pid, pty_master: OwnedFd, config: PtyConfig) -> BoxliteResult<ExecHandle> {
+pub(crate) fn create_pty_child(
+    pid: Pid,
+    pty_master: OwnedFd,
+    config: PtyConfig,
+) -> BoxliteResult<ExecHandle> {
     set_pty_window_size(&pty_master, &config)?;
     let (stdin, stdout) = reconcile_pty_fds(&pty_master)?;
 
