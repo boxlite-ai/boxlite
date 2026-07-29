@@ -117,6 +117,6 @@ Quota enforcement answers "may this run now"; metering records what actually ran
 
 Every box lifecycle transition opens or closes a usage period capturing the box's cpu, gpu, memory, disk, region and class over a time span. A stopped box keeps an open period charging disk only. Open periods are closed and reopened daily so no single period spans more than a day, and closed periods are moved to an archive table to keep the active one small.
 
-Metered dimensions are cpu, gpu, memory and disk. Prices, free tiers and commercial terms depend on the deployment and are not defined here.
+Metered dimensions are cpu, gpu, memory and disk. Prices, free tiers and commercial terms depend on the deployment and are not defined here. For how periods are opened, bounded and archived, and how quota reservations work, see [Usage Metering and Quota Design](../architecture/usage-metering-design.md).
 
 Where the deployment configures a collector endpoint, organizations that opt into telemetry additionally get their usage and ceilings exported once a minute as `boxlite.box.used_*` and `boxlite.box.total_*` OTLP gauges, tagged with the organization id.

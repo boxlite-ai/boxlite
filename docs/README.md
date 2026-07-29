@@ -12,6 +12,7 @@
 ## Architecture
 
 - [AutoPause / AutoResume / AutoDelete 设计](./architecture/auto-pause-resume-design.md)
+- [Usage Metering and Quota Design](./architecture/usage-metering-design.md) — usage periods, reservation-based quota
 
 ## CI / Infrastructure
 
