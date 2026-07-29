@@ -440,6 +440,45 @@ impl LibFixup {
         run_command(&mut cmd, &format!("fix install name for {}", lib_name));
     }
 
+    /// Gives a library that does not already depend on libc a `DT_NEEDED`
+    /// entry for it.
+    ///
+    /// libkrunfw is a kernel blob linked `-nostdlib`, so it declares no
+    /// dependencies at all. A `+crt-static` shim cannot dlopen such a library
+    /// on aarch64: glibc's static-dlopen path resolves `_dl_var_init` through
+    /// the loaded object's own scope, and with no dependency chain `ld.so` —
+    /// the only place that symbol exists — is never reached. The load then
+    /// fails as `undefined symbol: _dl_var_init`, naming the library, which
+    /// does not reference it. Depending on libc pulls `ld.so` into scope.
+    ///
+    /// Libraries that already link libc are left alone, so this only ever
+    /// touches one that would otherwise be unloadable from a static binary.
+    ///
+    /// Gated on a glibc host: `libc.so.6` is glibc's soname, and build scripts
+    /// compile for the host, so a musl host would otherwise be stamped with a
+    /// dependency it cannot resolve.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn ensure_libc_dependency(lib_path: &Path) {
+        const LIBC: &str = "libc.so.6";
+        let lib_path_str = lib_path.to_str().expect("Invalid library path");
+
+        let needed = Command::new("patchelf")
+            .args(["--print-needed", lib_path_str])
+            .output()
+            .unwrap_or_else(|e| panic!("Failed to read DT_NEEDED of {}: {}", lib_path_str, e));
+        if String::from_utf8_lossy(&needed.stdout)
+            .lines()
+            .any(|entry| entry.trim() == LIBC)
+        {
+            return;
+        }
+
+        let mut cmd = Command::new("patchelf");
+        cmd.args(["--add-needed", LIBC, lib_path_str]);
+        run_command(&mut cmd, &format!("add {} dependency", LIBC));
+        println!("cargo:warning=Added {} dependency to {}", LIBC, lib_path_str);
+    }
+
     /// Extract SONAME from versioned library filename.
     /// e.g., libkrunfw.so.4.9.0 -> Some("libkrunfw.so.4")
     #[cfg(target_os = "linux")]
@@ -488,12 +527,16 @@ impl LibFixup {
                                 .map_err(|e| format!("Failed to rename file: {}", e))?;
                             println!("cargo:warning=Renamed {} to {}", filename, soname);
                             Self::fix_install_name(&soname, &new_path);
+                            #[cfg(target_env = "gnu")]
+                            Self::ensure_libc_dependency(&new_path);
                             continue;
                         }
                     }
                 }
 
                 Self::fix_install_name(&filename, &path);
+                #[cfg(all(target_os = "linux", target_env = "gnu"))]
+                Self::ensure_libc_dependency(&path);
 
                 // macOS: re-sign after modifying
                 #[cfg(target_os = "macos")]

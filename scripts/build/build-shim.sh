@@ -85,6 +85,9 @@ build_shim_binary() {
 
     if [ "$OS" = "linux" ]; then
         # Go c-archive crashes with musl TLS; use glibc + crt-static instead.
+        # crt-static only works because libkrun-sys gives libkrunfw a libc
+        # DT_NEEDED (LibFixup::ensure_libc_dependency); without it a static
+        # binary cannot dlopen it on aarch64.
         # relocation-model=static avoids static-pie which is incompatible with Go c-archive relocations.
         # --target is required so RUSTFLAGS (crt-static, relocation-model) don't leak into
         # proc-macro compilation — proc-macros are dylibs and can't use crt-static.
