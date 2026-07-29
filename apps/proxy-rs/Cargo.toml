@@ -83,7 +83,36 @@ hmac = "0.12"
 sha2 = "0.10"
 rand = "0.9"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "registry"] }
+tracing-opentelemetry = "0.33"
+opentelemetry = "0.32"
+opentelemetry_sdk = "0.32"
+opentelemetry-otlp = { version = "0.32", default-features = false, features = [
+    "trace",
+    "logs",
+    "http-proto",
+    # Blocking client, not the async one: opentelemetry_sdk 0.32 runs batch
+    # processors on dedicated OS threads with no Tokio reactor, and the async
+    # reqwest exporter panics there. The blocking client carries its own.
+    "reqwest-blocking-client",
+] }
+# opentelemetry-otlp 0.32 depends on reqwest 0.13 with default features off, so
+# its HTTP client ships with no TLS and an https:// collector fails at connect.
+# This entry exists only to turn TLS on for that copy: 0.13 is a different crate
+# from the 0.12 the rest of this code uses, so features do not unify between
+# them. "no-provider" reuses the ring provider installed at startup rather than
+# pulling in aws-lc-rs, which reqwest's own "rustls" feature would do.
+#
+# telemetry.rs hands the exporters a client built from this entry, so the two
+# majors are a compile-time constraint: if opentelemetry-otlp moves to a major
+# this no longer unifies with, the build fails rather than silently losing TLS.
+# tests/otlp_tls.rs additionally catches the features being dropped.
+otlp-tls = { package = "reqwest", version = "0.13", default-features = false, features = [
+    "rustls-no-provider",
+    "blocking",
+] }
+opentelemetry-semantic-conventions = "0.32"
+opentelemetry-appender-tracing = "0.32"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

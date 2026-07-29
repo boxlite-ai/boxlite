@@ -64,18 +64,44 @@ pub struct RedisConfig {
     pub tls: bool,
 }
 
+/// Loads `.env`, `.env.local`, and `.env.production` from the working directory,
+/// each overriding the last and all overriding already-exported variables, as
+/// the Go proxy did.
+///
+/// Separate from [`Config::from_env`] and idempotent because telemetry reads the
+/// environment before the rest of the configuration is parsed; both need the
+/// files already applied.
+///
+/// Returns a description of every file that existed but could not be read, for
+/// the caller to log. They are returned rather than logged because this runs
+/// before there is a subscriber to log to — the level it would be logged at
+/// comes from the very files being read — and memoised alongside the load so a
+/// later caller still sees them.
+pub fn load_env_files() -> Vec<String> {
+    static PROBLEMS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+    PROBLEMS
+        .get_or_init(|| {
+            let mut problems = Vec::new();
+            for file in [".env", ".env.local", ".env.production"] {
+                match dotenvy::from_filename_override(file) {
+                    Ok(_) => {}
+                    // Absent is the normal case, not a problem.
+                    Err(err) if err.not_found() => {}
+                    Err(err) => problems.push(format!("{file}: {err}")),
+                }
+            }
+            problems
+        })
+        .clone()
+}
+
 impl Config {
     /// Reads and validates the environment. `.env` files are loaded first, and
     /// override already-exported variables, matching the Go proxy's behaviour so
     /// local `.env` files keep working unchanged.
     pub fn from_env() -> Result<Self, ConfigError> {
-        for file in [".env", ".env.local", ".env.production"] {
-            match dotenvy::from_filename_override(file) {
-                Ok(_) => tracing::debug!(file, "loaded env file"),
-                Err(err) if err.not_found() => {}
-                Err(err) => tracing::warn!(file, error = %err, "failed to load env file"),
-            }
-        }
+        let _ = load_env_files();
 
         let enable_tls = optional_bool("ENABLE_TLS")?.unwrap_or(false);
 

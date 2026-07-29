@@ -25,6 +25,8 @@ use std::time::Duration;
 use http::header::{HeaderName, HeaderValue};
 use http::{HeaderMap, Method, Request, Response, StatusCode};
 
+use tracing::Instrument;
+
 use crate::api::ApiClient;
 use crate::body::{self, Body};
 use crate::cache::{Cache, RedisPool};
@@ -112,7 +114,7 @@ impl Proxy {
     /// becomes an error response rather than a dropped connection.
     pub async fn handle<B>(
         self: &Arc<Self>,
-        mut request: Request<B>,
+        request: Request<B>,
         remote_addr: SocketAddr,
     ) -> Response<Body>
     where
@@ -120,9 +122,47 @@ impl Proxy {
         B::Error: Into<crate::body::BoxError>,
     {
         let request_host = request_host(&request);
+
+        // One span for every request the proxy answers, including the ones it
+        // answers by itself, following OTel HTTP server semantic conventions.
+        //
+        // `server.address` is the base domain, not the hostname the client sent:
+        // a preview hostname's leading label is a box reference that may be a
+        // signed token, and a token in a span is a credential shipped to the
+        // telemetry backend. The query string is left out for the same reason —
+        // it can carry `BOXLITE_BOX_AUTH_KEY`. `boxlite.box_id` is filled in
+        // later, once a token has been resolved to an actual box.
+        let span = tracing::info_span!(
+            "http.server.request",
+            "http.request.method" = %request.method(),
+            "url.path" = %request.uri().path(),
+            "server.address" = %telemetry_host(&request_host),
+            "http.response.status_code" = tracing::field::Empty,
+            "boxlite.box_id" = tracing::field::Empty,
+        );
+
+        let response = self
+            .respond(request, &request_host, remote_addr)
+            .instrument(span.clone())
+            .await;
+        span.record("http.response.status_code", response.status().as_u16());
+
+        response
+    }
+
+    async fn respond<B>(
+        self: &Arc<Self>,
+        mut request: Request<B>,
+        request_host: &str,
+        remote_addr: SocketAddr,
+    ) -> Response<Body>
+    where
+        B: hyper::body::Body<Data = bytes::Bytes> + Send + Sync + 'static,
+        B::Error: Into<crate::body::BoxError>,
+    {
         // Evaluated once, before the opt-out header is dropped, so the decision
         // and the headers it produces cannot disagree.
-        let cors = cors::evaluate(&request, &request_host);
+        let cors = cors::evaluate(&request, request_host);
         request.headers_mut().remove(cors::DISABLE_HEADER);
 
         // A preflight is answered here; forwarding it would make every box
@@ -141,10 +181,11 @@ impl Proxy {
         let method = request.method().clone();
         let path = request.uri().path().to_string();
 
-        let mut response = match self.route(request, &request_host, remote_addr).await {
+        let mut response = match self.route(request, request_host, remote_addr).await {
             Ok(response) => response,
             Err(err) => err.into_response(&path, &method),
         };
+
         if let Some(cors_headers) = cors_headers {
             response::merge_headers(&mut response, cors_headers);
         }
@@ -243,6 +284,10 @@ impl Proxy {
                 Authentication::Login(redirect) => return Ok(redirect),
             }
         }
+
+        // Safe to attach now: this is a real box ID, not the signed token the
+        // hostname may have carried.
+        tracing::Span::current().record("boxlite.box_id", box_id.as_str());
 
         // Started before forwarding so a request that never returns (a terminal,
         // a stream) still keeps the box alive.
@@ -396,6 +441,25 @@ pub fn request_host<B>(request: &Request<B>) -> String {
         .unwrap_or_default()
 }
 
+/// The part of a hostname that is safe to put in telemetry.
+///
+/// A preview hostname is `<port>-<boxId | signedToken>.<baseHost>`, and that
+/// middle label can be a credential — anyone holding the URL can reach the box.
+/// Only the base host is reported; the box is identified by `boxlite.box_id`
+/// once it has actually been resolved.
+///
+/// The `Host` header is client-controlled and need not parse. A value that
+/// cannot be reduced to a base host is passed through only when it contains no
+/// dash, and replaced with a constant otherwise — every credential-bearing form
+/// has a dash, so that is enough to disqualify it.
+fn telemetry_host(request_host: &str) -> String {
+    match host::parse_host(request_host) {
+        Ok(preview) => preview.base_host,
+        Err(_) if !request_host.contains('-') => request_host.to_string(),
+        Err(_) => "unparsed".to_string(),
+    }
+}
+
 /// The address the request came from, preferring what the load balancer reports.
 fn client_ip(headers: &HeaderMap, remote_addr: SocketAddr) -> Option<String> {
     headers
@@ -423,6 +487,32 @@ mod tests {
             ".3000-box.proxy.test"
         );
         assert_eq!(cookie_domain_for("proxy.test"), ".proxy.test");
+    }
+
+    #[test]
+    fn telemetry_host_never_carries_the_box_reference() {
+        // A signed preview token as the leading label must not survive into a span.
+        assert_eq!(
+            telemetry_host("3999-s3cr3t-s1gn3d-t0k3n.proxy.boxlite.ai"),
+            "proxy.boxlite.ai"
+        );
+        assert_eq!(
+            telemetry_host("3000-d-416243644566313233343536.proxy.test:443"),
+            "proxy.test:443"
+        );
+        // Not a preview hostname: nothing to strip.
+        assert_eq!(telemetry_host("proxy.test"), "proxy.test");
+    }
+
+    /// The `Host` header is whatever the client typed, so a value that merely
+    /// *looks* like a preview host must not be passed through either.
+    #[test]
+    fn telemetry_host_drops_unparsable_hosts_that_could_carry_a_token() {
+        // No dot, so `parse_host` rejects it — but the token is right there.
+        assert_eq!(telemetry_host("3999-s3cr3t-s1gn3d-t0k3n"), "unparsed");
+        // Non-numeric port label: also rejected, also token-shaped.
+        assert_eq!(telemetry_host("abc-s3cr3t-t0k3n.proxy.test"), "unparsed");
+        assert_eq!(telemetry_host(""), "");
     }
 
     #[test]

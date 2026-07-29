@@ -44,7 +44,35 @@ Endpoints served by the proxy itself, on the base host: `GET /health`,
 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_TLS` | | Share caches across replicas. Per-process caching without them. |
 | `PREVIEW_WARNING_ENABLED` | | Show the interstitial to browsers on first visit. |
 | `SHUTDOWN_TIMEOUT_SEC` | | How long to drain before forcing exit. Default 1 hour. |
-| `RUST_LOG` | | Log filter. Default `info`. |
+| `LOG_LEVEL` / `RUST_LOG` | | Console verbosity. Default `info`; `RUST_LOG` wins when both are set. |
+
+## Telemetry
+
+Console logging is always on, with colour only when stdout is a terminal.
+OTLP export is opt-in and uses the same variables as `apps/runner`:
+
+| Variable | Meaning |
+| --- | --- |
+| `OTEL_TRACING_ENABLED` | Export one span per request (`http.server.request`). |
+| `OTEL_LOGGING_ENABLED` | Export log records. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector base URL. **Nothing is exported without it**, whatever the switches say. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | `k=v,k=v` sent with every export — an auth token, for example. |
+| `ENVIRONMENT` | Reported as `deployment.environment.name`. |
+
+Spans carry `http.request.method`, `url.path`, `server.address`, and
+`http.response.status_code`, plus `boxlite.box_id` once a request has resolved
+to a box.
+
+Two things are deliberately left out, because a preview URL is itself a
+credential: `server.address` is the **base** domain rather than the hostname the
+client sent (whose leading label can be a signed token), and the query string is
+never recorded (it can carry `BOXLITE_BOX_AUTH_KEY`).
+
+> **The `OtelCollector` service cannot receive this.** All three of its pipelines
+> export only to `boxlite_exporter`, which requires a `box-auth-token` header and
+> routes to *that tenant's* endpoint; telemetry without the header is dropped as
+> a permanent error. Point `OTEL_EXPORTER_OTLP_ENDPOINT` at a platform sink, not
+> at `OtelCollector`.
 
 `.env`, `.env.local`, and `.env.production` are loaded from the working
 directory and override exported variables, in that order.

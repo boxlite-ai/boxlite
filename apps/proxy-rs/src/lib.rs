@@ -17,6 +17,7 @@ pub mod response;
 pub mod retry;
 pub mod server;
 pub mod signed_cookie;
+pub mod telemetry;
 
 #[cfg(test)]
 mod test_support;
@@ -28,11 +29,19 @@ use proxy::Proxy;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
+/// Installs the process-wide rustls provider. Idempotent, and safe to call from
+/// anywhere that might be the first to need TLS.
+///
+/// Everything here — the runner client, the tunnel dialler, the OTLP exporter —
+/// uses rustls without a bundled provider, so exactly one has to be chosen once,
+/// before the first client is built.
+pub fn install_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 /// Starts the proxy and serves until shutdown.
 pub async fn run() -> Result<(), Error> {
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .map_err(|_| "failed to install the rustls crypto provider")?;
+    install_crypto_provider();
 
     let mut config = Config::from_env()?;
     tracing::info!(
