@@ -10,7 +10,6 @@ Name | Type | Description | Notes
 **totalDiskQuota** | **number** | Total disk in GB an organization may occupy | [optional] [default to undefined]
 **totalGpuQuota** | **number** | Total GPUs an organization may have running at once | [optional] [default to undefined]
 **maxConcurrentBoxes** | **number** | Maximum number of concurrently running boxes | [optional] [default to undefined]
-**maxVolumes** | **number** | Maximum number of volumes occupying storage | [optional] [default to undefined]
 
 ## Example
 
@@ -23,7 +22,6 @@ const instance: AdminUpdateOrganizationQuota = {
     totalDiskQuota,
     totalGpuQuota,
     maxConcurrentBoxes,
-    maxVolumes,
 };
 ```
 

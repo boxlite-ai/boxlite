@@ -35,9 +35,5 @@ export interface AdminUpdateOrganizationQuota {
      * Maximum number of concurrently running boxes
      */
     'maxConcurrentBoxes'?: number;
-    /**
-     * Maximum number of volumes occupying storage
-     */
-    'maxVolumes'?: number;
 }
 

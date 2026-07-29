@@ -30,8 +30,6 @@ type AdminUpdateOrganizationQuota struct {
 	TotalGpuQuota *float32 `json:"totalGpuQuota,omitempty"`
 	// Maximum number of concurrently running boxes
 	MaxConcurrentBoxes *float32 `json:"maxConcurrentBoxes,omitempty"`
-	// Maximum number of volumes occupying storage
-	MaxVolumes *float32 `json:"maxVolumes,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -214,38 +212,6 @@ func (o *AdminUpdateOrganizationQuota) SetMaxConcurrentBoxes(v float32) {
 	o.MaxConcurrentBoxes = &v
 }
 
-// GetMaxVolumes returns the MaxVolumes field value if set, zero value otherwise.
-func (o *AdminUpdateOrganizationQuota) GetMaxVolumes() float32 {
-	if o == nil || IsNil(o.MaxVolumes) {
-		var ret float32
-		return ret
-	}
-	return *o.MaxVolumes
-}
-
-// GetMaxVolumesOk returns a tuple with the MaxVolumes field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *AdminUpdateOrganizationQuota) GetMaxVolumesOk() (*float32, bool) {
-	if o == nil || IsNil(o.MaxVolumes) {
-		return nil, false
-	}
-	return o.MaxVolumes, true
-}
-
-// HasMaxVolumes returns a boolean if a field has been set.
-func (o *AdminUpdateOrganizationQuota) HasMaxVolumes() bool {
-	if o != nil && !IsNil(o.MaxVolumes) {
-		return true
-	}
-
-	return false
-}
-
-// SetMaxVolumes gets a reference to the given float32 and assigns it to the MaxVolumes field.
-func (o *AdminUpdateOrganizationQuota) SetMaxVolumes(v float32) {
-	o.MaxVolumes = &v
-}
-
 func (o AdminUpdateOrganizationQuota) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -270,9 +236,6 @@ func (o AdminUpdateOrganizationQuota) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.MaxConcurrentBoxes) {
 		toSerialize["maxConcurrentBoxes"] = o.MaxConcurrentBoxes
-	}
-	if !IsNil(o.MaxVolumes) {
-		toSerialize["maxVolumes"] = o.MaxVolumes
 	}
 
 	for key, value := range o.AdditionalProperties {
@@ -301,7 +264,6 @@ func (o *AdminUpdateOrganizationQuota) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "totalDiskQuota")
 		delete(additionalProperties, "totalGpuQuota")
 		delete(additionalProperties, "maxConcurrentBoxes")
-		delete(additionalProperties, "maxVolumes")
 		o.AdditionalProperties = additionalProperties
 	}
 

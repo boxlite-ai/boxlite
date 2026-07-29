@@ -41,10 +41,6 @@ type OrganizationUsageOverview struct {
 	CurrentBoxUsage float32 `json:"currentBoxUsage"`
 	// Maximum number of concurrently running boxes
 	MaxConcurrentBoxes float32 `json:"maxConcurrentBoxes"`
-	// Volumes currently occupying storage
-	CurrentVolumeUsage float32 `json:"currentVolumeUsage"`
-	// Maximum number of volumes that may occupy storage
-	MaxVolumes float32 `json:"maxVolumes"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -54,7 +50,7 @@ type _OrganizationUsageOverview OrganizationUsageOverview
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrganizationUsageOverview(currentCpuUsage float32, totalCpuQuota float32, currentMemoryUsage float32, totalMemoryQuota float32, currentDiskUsage float32, totalDiskQuota float32, currentGpuUsage float32, totalGpuQuota float32, currentBoxUsage float32, maxConcurrentBoxes float32, currentVolumeUsage float32, maxVolumes float32) *OrganizationUsageOverview {
+func NewOrganizationUsageOverview(currentCpuUsage float32, totalCpuQuota float32, currentMemoryUsage float32, totalMemoryQuota float32, currentDiskUsage float32, totalDiskQuota float32, currentGpuUsage float32, totalGpuQuota float32, currentBoxUsage float32, maxConcurrentBoxes float32) *OrganizationUsageOverview {
 	this := OrganizationUsageOverview{}
 	this.CurrentCpuUsage = currentCpuUsage
 	this.TotalCpuQuota = totalCpuQuota
@@ -66,8 +62,6 @@ func NewOrganizationUsageOverview(currentCpuUsage float32, totalCpuQuota float32
 	this.TotalGpuQuota = totalGpuQuota
 	this.CurrentBoxUsage = currentBoxUsage
 	this.MaxConcurrentBoxes = maxConcurrentBoxes
-	this.CurrentVolumeUsage = currentVolumeUsage
-	this.MaxVolumes = maxVolumes
 	return &this
 }
 
@@ -319,54 +313,6 @@ func (o *OrganizationUsageOverview) SetMaxConcurrentBoxes(v float32) {
 	o.MaxConcurrentBoxes = v
 }
 
-// GetCurrentVolumeUsage returns the CurrentVolumeUsage field value
-func (o *OrganizationUsageOverview) GetCurrentVolumeUsage() float32 {
-	if o == nil {
-		var ret float32
-		return ret
-	}
-
-	return o.CurrentVolumeUsage
-}
-
-// GetCurrentVolumeUsageOk returns a tuple with the CurrentVolumeUsage field value
-// and a boolean to check if the value has been set.
-func (o *OrganizationUsageOverview) GetCurrentVolumeUsageOk() (*float32, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.CurrentVolumeUsage, true
-}
-
-// SetCurrentVolumeUsage sets field value
-func (o *OrganizationUsageOverview) SetCurrentVolumeUsage(v float32) {
-	o.CurrentVolumeUsage = v
-}
-
-// GetMaxVolumes returns the MaxVolumes field value
-func (o *OrganizationUsageOverview) GetMaxVolumes() float32 {
-	if o == nil {
-		var ret float32
-		return ret
-	}
-
-	return o.MaxVolumes
-}
-
-// GetMaxVolumesOk returns a tuple with the MaxVolumes field value
-// and a boolean to check if the value has been set.
-func (o *OrganizationUsageOverview) GetMaxVolumesOk() (*float32, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.MaxVolumes, true
-}
-
-// SetMaxVolumes sets field value
-func (o *OrganizationUsageOverview) SetMaxVolumes(v float32) {
-	o.MaxVolumes = v
-}
-
 func (o OrganizationUsageOverview) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -387,8 +333,6 @@ func (o OrganizationUsageOverview) ToMap() (map[string]interface{}, error) {
 	toSerialize["totalGpuQuota"] = o.TotalGpuQuota
 	toSerialize["currentBoxUsage"] = o.CurrentBoxUsage
 	toSerialize["maxConcurrentBoxes"] = o.MaxConcurrentBoxes
-	toSerialize["currentVolumeUsage"] = o.CurrentVolumeUsage
-	toSerialize["maxVolumes"] = o.MaxVolumes
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -412,8 +356,6 @@ func (o *OrganizationUsageOverview) UnmarshalJSON(data []byte) (err error) {
 		"totalGpuQuota",
 		"currentBoxUsage",
 		"maxConcurrentBoxes",
-		"currentVolumeUsage",
-		"maxVolumes",
 	}
 
 	allProperties := make(map[string]interface{})
@@ -453,8 +395,6 @@ func (o *OrganizationUsageOverview) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "totalGpuQuota")
 		delete(additionalProperties, "currentBoxUsage")
 		delete(additionalProperties, "maxConcurrentBoxes")
-		delete(additionalProperties, "currentVolumeUsage")
-		delete(additionalProperties, "maxVolumes")
 		o.AdditionalProperties = additionalProperties
 	}
 

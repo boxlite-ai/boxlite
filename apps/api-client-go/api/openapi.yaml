@@ -5811,8 +5811,6 @@ components:
         totalGpuQuota: 0
         currentBoxUsage: 3
         maxConcurrentBoxes: 50
-        currentVolumeUsage: 4
-        maxVolumes: 100
       properties:
         currentCpuUsage:
           description: vCPU currently consumed by running boxes
@@ -5854,23 +5852,13 @@ components:
           description: Maximum number of concurrently running boxes
           example: 50
           type: number
-        currentVolumeUsage:
-          description: Volumes currently occupying storage
-          example: 4
-          type: number
-        maxVolumes:
-          description: Maximum number of volumes that may occupy storage
-          example: 100
-          type: number
       required:
       - currentBoxUsage
       - currentCpuUsage
       - currentDiskUsage
       - currentGpuUsage
       - currentMemoryUsage
-      - currentVolumeUsage
       - maxConcurrentBoxes
-      - maxVolumes
       - totalCpuQuota
       - totalDiskQuota
       - totalGpuQuota
@@ -7952,7 +7940,6 @@ components:
         totalDiskQuota: 512
         totalGpuQuota: 0
         maxConcurrentBoxes: 50
-        maxVolumes: 100
         customized: true
       properties:
         totalCpuQuota:
@@ -7976,10 +7963,6 @@ components:
           description: Maximum number of concurrently running boxes
           example: 50
           type: number
-        maxVolumes:
-          description: Maximum number of volumes occupying storage
-          example: 100
-          type: number
         customized:
           description: False when the organization has no quota row and is running
             on the built-in defaults
@@ -7988,7 +7971,6 @@ components:
       required:
       - customized
       - maxConcurrentBoxes
-      - maxVolumes
       - totalCpuQuota
       - totalDiskQuota
       - totalGpuQuota
@@ -8001,7 +7983,6 @@ components:
         totalDiskQuota: 512
         totalGpuQuota: 0
         maxConcurrentBoxes: 50
-        maxVolumes: 100
       properties:
         totalCpuQuota:
           description: Total vCPU an organization may have running at once
@@ -8022,10 +8003,6 @@ components:
         maxConcurrentBoxes:
           description: Maximum number of concurrently running boxes
           example: 50
-          type: number
-        maxVolumes:
-          description: Maximum number of volumes occupying storage
-          example: 100
           type: number
       type: object
     AdminOverviewBoxes:

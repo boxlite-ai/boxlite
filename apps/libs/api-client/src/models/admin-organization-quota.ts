@@ -36,10 +36,6 @@ export interface AdminOrganizationQuota {
      */
     'maxConcurrentBoxes': number;
     /**
-     * Maximum number of volumes occupying storage
-     */
-    'maxVolumes': number;
-    /**
      * False when the organization has no quota row and is running on the built-in defaults
      */
     'customized': boolean;

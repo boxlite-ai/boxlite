@@ -15,8 +15,6 @@ Name | Type | Description | Notes
 **totalGpuQuota** | **number** | Total GPUs the organization may consume; 0 denies GPU boxes | [default to undefined]
 **currentBoxUsage** | **number** | Boxes currently running | [default to undefined]
 **maxConcurrentBoxes** | **number** | Maximum number of concurrently running boxes | [default to undefined]
-**currentVolumeUsage** | **number** | Volumes currently occupying storage | [default to undefined]
-**maxVolumes** | **number** | Maximum number of volumes that may occupy storage | [default to undefined]
 
 ## Example
 
@@ -34,8 +32,6 @@ const instance: OrganizationUsageOverview = {
     totalGpuQuota,
     currentBoxUsage,
     maxConcurrentBoxes,
-    currentVolumeUsage,
-    maxVolumes,
 };
 ```
 

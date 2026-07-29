@@ -62,7 +62,6 @@ export class AdminOrganizationController {
         totalDiskQuota: req.body?.totalDiskQuota,
         totalGpuQuota: req.body?.totalGpuQuota,
         maxConcurrentBoxes: req.body?.maxConcurrentBoxes,
-        maxVolumes: req.body?.maxVolumes,
       }),
     },
   })

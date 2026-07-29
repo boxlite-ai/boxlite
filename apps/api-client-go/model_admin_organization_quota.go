@@ -31,8 +31,6 @@ type AdminOrganizationQuota struct {
 	TotalGpuQuota float32 `json:"totalGpuQuota"`
 	// Maximum number of concurrently running boxes
 	MaxConcurrentBoxes float32 `json:"maxConcurrentBoxes"`
-	// Maximum number of volumes occupying storage
-	MaxVolumes float32 `json:"maxVolumes"`
 	// False when the organization has no quota row and is running on the built-in defaults
 	Customized bool `json:"customized"`
 	AdditionalProperties map[string]interface{}
@@ -44,14 +42,13 @@ type _AdminOrganizationQuota AdminOrganizationQuota
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewAdminOrganizationQuota(totalCpuQuota float32, totalMemoryQuota float32, totalDiskQuota float32, totalGpuQuota float32, maxConcurrentBoxes float32, maxVolumes float32, customized bool) *AdminOrganizationQuota {
+func NewAdminOrganizationQuota(totalCpuQuota float32, totalMemoryQuota float32, totalDiskQuota float32, totalGpuQuota float32, maxConcurrentBoxes float32, customized bool) *AdminOrganizationQuota {
 	this := AdminOrganizationQuota{}
 	this.TotalCpuQuota = totalCpuQuota
 	this.TotalMemoryQuota = totalMemoryQuota
 	this.TotalDiskQuota = totalDiskQuota
 	this.TotalGpuQuota = totalGpuQuota
 	this.MaxConcurrentBoxes = maxConcurrentBoxes
-	this.MaxVolumes = maxVolumes
 	this.Customized = customized
 	return &this
 }
@@ -184,30 +181,6 @@ func (o *AdminOrganizationQuota) SetMaxConcurrentBoxes(v float32) {
 	o.MaxConcurrentBoxes = v
 }
 
-// GetMaxVolumes returns the MaxVolumes field value
-func (o *AdminOrganizationQuota) GetMaxVolumes() float32 {
-	if o == nil {
-		var ret float32
-		return ret
-	}
-
-	return o.MaxVolumes
-}
-
-// GetMaxVolumesOk returns a tuple with the MaxVolumes field value
-// and a boolean to check if the value has been set.
-func (o *AdminOrganizationQuota) GetMaxVolumesOk() (*float32, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.MaxVolumes, true
-}
-
-// SetMaxVolumes sets field value
-func (o *AdminOrganizationQuota) SetMaxVolumes(v float32) {
-	o.MaxVolumes = v
-}
-
 // GetCustomized returns the Customized field value
 func (o *AdminOrganizationQuota) GetCustomized() bool {
 	if o == nil {
@@ -247,7 +220,6 @@ func (o AdminOrganizationQuota) ToMap() (map[string]interface{}, error) {
 	toSerialize["totalDiskQuota"] = o.TotalDiskQuota
 	toSerialize["totalGpuQuota"] = o.TotalGpuQuota
 	toSerialize["maxConcurrentBoxes"] = o.MaxConcurrentBoxes
-	toSerialize["maxVolumes"] = o.MaxVolumes
 	toSerialize["customized"] = o.Customized
 
 	for key, value := range o.AdditionalProperties {
@@ -267,7 +239,6 @@ func (o *AdminOrganizationQuota) UnmarshalJSON(data []byte) (err error) {
 		"totalDiskQuota",
 		"totalGpuQuota",
 		"maxConcurrentBoxes",
-		"maxVolumes",
 		"customized",
 	}
 
@@ -303,7 +274,6 @@ func (o *AdminOrganizationQuota) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "totalDiskQuota")
 		delete(additionalProperties, "totalGpuQuota")
 		delete(additionalProperties, "maxConcurrentBoxes")
-		delete(additionalProperties, "maxVolumes")
 		delete(additionalProperties, "customized")
 		o.AdditionalProperties = additionalProperties
 	}

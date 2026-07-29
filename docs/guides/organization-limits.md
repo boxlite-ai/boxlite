@@ -4,7 +4,7 @@ The BoxLite cloud REST runtime meters what an organization consumes and refuses 
 
 | Layer | Scope | Enforced when |
 |---|---|---|
-| [Organization quota](#organization-quota) | Summed across the whole organization | Creating or starting a box; creating a volume |
+| [Organization quota](#organization-quota) | Summed across the whole organization | Creating or starting a box |
 | [Per-box limits](#per-box-limits) | A single box | Creating a box |
 | [Rate limits](#rate-limits) | API requests | Every request |
 
@@ -20,8 +20,7 @@ The BoxLite cloud REST runtime meters what an organization consumes and refuses 
   "currentMemoryUsage": 48, "totalMemoryQuota": 256,
   "currentDiskUsage": 300,  "totalDiskQuota": 512,
   "currentGpuUsage": 0,     "totalGpuQuota": 0,
-  "currentBoxUsage": 3,     "maxConcurrentBoxes": 50,
-  "currentVolumeUsage": 4,  "maxVolumes": 100
+  "currentBoxUsage": 3,     "maxConcurrentBoxes": 50
 }
 ```
 
@@ -29,7 +28,7 @@ The `current*` figures include reservations held for boxes that are still being 
 
 ## Organization quota
 
-Six ceilings apply to the organization as a whole. Unlike upstream Daytona there is no per-region or per-box-class breakdown — one row covers every region.
+Five ceilings apply to the organization as a whole. Unlike upstream Daytona there is no per-region or per-box-class breakdown — one row covers every region.
 
 | Ceiling | Default | Unit | Meaning |
 |---|---:|---|---|
@@ -38,7 +37,8 @@ Six ceilings apply to the organization as a whole. Unlike upstream Daytona there
 | `totalDiskQuota` | `512` | GB | Summed across boxes occupying disk |
 | `totalGpuQuota` | `0` | GPU | `0` refuses GPU boxes outright |
 | `maxConcurrentBoxes` | `50` | boxes | Boxes consuming compute at once |
-| `maxVolumes` | `100` | volumes | Volumes occupying object storage |
+
+Volumes are not capped.
 
 A ceiling of `0` denies that dimension entirely — a 2 vCPU box does not fit in a 0 vCPU quota. An organization with no quota row uses the defaults above; it is never treated as "no access".
 
@@ -51,7 +51,7 @@ GET   /admin/organizations/{organizationId}/quota
 PATCH /admin/organizations/{organizationId}/quota
 ```
 
-`PATCH` is partial — send only the ceilings you are changing and the rest keep their current values. For an organization still on the built-in defaults the patch is layered onto those defaults and a row is created. Changes take effect on the next box or volume create; nothing is cached.
+`PATCH` is partial — send only the ceilings you are changing and the rest keep their current values. For an organization still on the built-in defaults the patch is layered onto those defaults and a row is created. Changes take effect on the next box create; nothing is cached.
 
 The `customized` field on the response distinguishes an organization whose quota was explicitly set from one that merely happens to match the defaults.
 
@@ -68,13 +68,6 @@ A box charges compute (vCPU, memory, GPU, and one slot against `maxConcurrentBox
 | `destroying`, `destroyed`, `error` | ❌ | ❌ |
 
 Stopping a box therefore frees its compute and its concurrency slot but keeps charging disk — archiving moves the disk to cold storage and frees that too. This is the same accounting [AutoPause](./auto-pause-resume.md) relies on.
-
-A volume counts against `maxVolumes` for as long as it occupies storage:
-
-| Volume state | Counts |
-|---|:--:|
-| `pending_create`, `creating`, `ready`, `pending_delete`, `deleting` | ✅ |
-| `deleted`, `error` | ❌ |
 
 ## Per-box limits
 

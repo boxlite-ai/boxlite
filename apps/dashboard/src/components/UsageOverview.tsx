@@ -15,10 +15,10 @@ import { Skeleton } from './ui/skeleton'
  *
  * Upstream renders one of these per (region, sandbox class) and takes a
  * `RegionUsageOverview`. BoxLite quotas are a single org-wide row, so this takes
- * the flat overview and shows all six ceilings — including the two upstream has
- * no concept of, concurrent boxes and volumes. Omitting them would show four of
- * six limits and read as "you have headroom" when a box create is about to be
- * refused for exceeding the box count.
+ * the flat overview and shows all five ceilings — including concurrent boxes,
+ * which upstream has no concept of. Omitting it would show four of five limits
+ * and read as "you have headroom" when a box create is about to be refused for
+ * exceeding the box count.
  */
 export function UsageOverview({
   usageOverview,
@@ -69,14 +69,6 @@ export function UsageOverview({
         }
       >
         <QuotaLine current={usageOverview.currentBoxUsage} total={usageOverview.maxConcurrentBoxes} />
-      </ResourceUsageItem>
-      <ResourceUsageItem
-        label="Volumes"
-        value={
-          <UsageValue current={usageOverview.currentVolumeUsage} total={usageOverview.maxVolumes} unit="volumes" />
-        }
-      >
-        <QuotaLine current={usageOverview.currentVolumeUsage} total={usageOverview.maxVolumes} />
       </ResourceUsageItem>
     </div>
   )

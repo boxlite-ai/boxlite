@@ -4,7 +4,7 @@
  */
 
 import { BadRequestException } from '@nestjs/common'
-import { assertWithinOrgQuota, assertWithinVolumeQuota, OrgQuotaLimits, OrgResourceUsage } from './org-quota'
+import { assertWithinOrgQuota, OrgQuotaLimits, OrgResourceUsage } from './org-quota'
 
 const limits: OrgQuotaLimits = {
   totalCpuQuota: 10,
@@ -12,7 +12,6 @@ const limits: OrgQuotaLimits = {
   totalDiskQuota: 30,
   totalGpuQuota: 0,
   maxConcurrentBoxes: 10,
-  maxVolumes: 3,
 }
 
 const usage = (over: Partial<OrgResourceUsage> = {}): OrgResourceUsage => ({
@@ -63,7 +62,6 @@ describe('assertWithinOrgQuota', () => {
       totalDiskQuota: 0,
       totalGpuQuota: 0,
       maxConcurrentBoxes: 0,
-      maxVolumes: 0,
     }
     expect(() => assertWithinOrgQuota(zero, usage({ cpu: 2 }), 0)).toThrow(BadRequestException)
     expect(() => assertWithinOrgQuota(zero, usage({ count: 1 }), 0)).toThrow(/concurrent box limit/)
@@ -75,24 +73,5 @@ describe('assertWithinOrgQuota', () => {
     expect(() => assertWithinOrgQuota(limits, usage({ cpu: 99, memory: 99, disk: 99, count: 99 }), 0)).toThrow(
       /CPU .*memory .*disk .*concurrent/s,
     )
-  })
-
-  it('ignores the volume ceiling — volumes are metered separately', () => {
-    expect(() => assertWithinOrgQuota({ ...limits, maxVolumes: 0 }, usage({ cpu: 1 }), 0)).not.toThrow()
-  })
-})
-
-describe('assertWithinVolumeQuota', () => {
-  it('allows a create that lands exactly on the ceiling', () => {
-    expect(() => assertWithinVolumeQuota(limits, 2)).not.toThrow()
-  })
-
-  it('rejects the create that would exceed the ceiling', () => {
-    expect(() => assertWithinVolumeQuota(limits, 3)).toThrow(BadRequestException)
-    expect(() => assertWithinVolumeQuota(limits, 3)).toThrow(/volume limit exceeded \(max 3\)/)
-  })
-
-  it('treats a ceiling of 0 as deny-all', () => {
-    expect(() => assertWithinVolumeQuota({ ...limits, maxVolumes: 0 }, 0)).toThrow(/volume limit exceeded/)
   })
 })

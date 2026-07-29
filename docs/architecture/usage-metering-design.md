@@ -105,9 +105,7 @@ Start passes `excludeBoxId` so the box's existing contribution is subtracted bef
 
 Realization holds `box:{boxId}:quota-usage-update`. Cache updates only mutate a current key that already exists; otherwise the next re-sum picks the change up anyway.
 
-### Volumes
-
-Volumes are metered by counting live rows, not by summing a resource across states, so they share none of the machinery above. Enforcement serializes `count → assert → insert` under `org:{orgId}:volume-quota` instead of maintaining a sixth reservation counter — volumes are created rarely enough that a short lock is cheaper than the extra key namespace.
+Volumes are outside this model entirely: they are not metered and not capped. Counting live rows shares none of the machinery above, so adding a ceiling for them would need its own enforcement path rather than a sixth reservation counter.
 
 ## Failure Semantics
 

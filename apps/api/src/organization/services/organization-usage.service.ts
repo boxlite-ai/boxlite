@@ -8,9 +8,8 @@ import { OnEvent } from '@nestjs/event-emitter'
 import { InjectRepository } from '@nestjs/typeorm'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
-import { In, Repository } from 'typeorm'
+import { Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
-import { Volume } from '../../box/entities/volume.entity'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { BoxEvents } from '../../box/constants/box-events.constants'
 import { BoxCreatedEvent } from '../../box/events/box-create.event'
@@ -19,7 +18,6 @@ import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { Organization } from '../entities/organization.entity'
 import { OrganizationQuota } from '../entities/organization-quota.entity'
 import { BOX_STATES_CONSUMING_COMPUTE, BOX_STATES_CONSUMING_DISK } from '../constants/box-consuming-states.constant'
-import { VOLUME_STATES_CONSUMING_STORAGE } from '../constants/volume-consuming-states.constant'
 import { OrganizationUsageOverviewDto } from '../dto/organization-usage-overview.dto'
 import { assertWithinOrgQuota, DEFAULT_ORG_QUOTA, OrgQuotaLimits, OrgResourceUsage } from './org-quota'
 import { boxUsageContribution, stateTransitionDelta } from './box-usage'
@@ -69,7 +67,6 @@ export class OrganizationUsageService {
     @InjectRedis() private readonly redis: Redis,
     @InjectRepository(Box) private readonly boxRepository: Repository<Box>,
     @InjectRepository(OrganizationQuota) private readonly quotaRepository: Repository<OrganizationQuota>,
-    @InjectRepository(Volume) private readonly volumeRepository: Repository<Volume>,
     private readonly redisLockProvider: RedisLockProvider,
   ) {}
 
@@ -92,7 +89,7 @@ export class OrganizationUsageService {
    * Upserts: an organization still on the built-in defaults has no row, so the
    * patch is layered onto DEFAULT_ORG_QUOTA and inserted. Limits are read fresh on
    * every enforcement (`getQuotaLimits` does not cache), so a change takes effect
-   * on the next box or volume create with no invalidation step.
+   * on the next box create with no invalidation step.
    */
   async updateQuotaLimits(organizationId: string, patch: Partial<OrgQuotaLimits>): Promise<OrgQuotaLimits> {
     const current = await this.getQuotaLimits(organizationId)
@@ -115,7 +112,6 @@ export class OrganizationUsageService {
   async getUsageOverview(organizationId: string): Promise<OrganizationUsageOverviewDto> {
     const limits = await this.getQuotaLimits(organizationId)
     const boxUsage = await this.getBoxUsageOverview(organizationId)
-    const currentVolumeUsage = await this.countLiveVolumes(organizationId)
 
     return {
       currentCpuUsage: boxUsage.cpu + boxUsage.pendingCpu,
@@ -128,20 +124,7 @@ export class OrganizationUsageService {
       totalGpuQuota: limits.totalGpuQuota,
       currentBoxUsage: boxUsage.count + boxUsage.pendingCount,
       maxConcurrentBoxes: limits.maxConcurrentBoxes,
-      currentVolumeUsage,
-      maxVolumes: limits.maxVolumes,
     }
-  }
-
-  /** Volumes still occupying storage — the same set VolumeService counts when it
-   * enforces the volume ceiling, so the overview and the check cannot disagree. */
-  private async countLiveVolumes(organizationId: string): Promise<number> {
-    return this.volumeRepository.count({
-      where: {
-        organizationId,
-        state: In(VOLUME_STATES_CONSUMING_STORAGE),
-      },
-    })
   }
 
   /**

@@ -46,10 +46,4 @@ export class OrganizationUsageOverviewDto {
 
   @ApiProperty({ description: 'Maximum number of concurrently running boxes', example: 50 })
   maxConcurrentBoxes: number
-
-  @ApiProperty({ description: 'Volumes currently occupying storage', example: 4 })
-  currentVolumeUsage: number
-
-  @ApiProperty({ description: 'Maximum number of volumes that may occupy storage', example: 100 })
-  maxVolumes: number
 }

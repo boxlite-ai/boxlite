@@ -14,7 +14,6 @@ export interface OrgQuotaLimits {
   totalDiskQuota: number
   totalGpuQuota: number
   maxConcurrentBoxes: number
-  maxVolumes: number
 }
 
 /** Applied when an organization has no OrganizationQuota row. Must stay in sync
@@ -25,7 +24,6 @@ export const DEFAULT_ORG_QUOTA: OrgQuotaLimits = {
   totalDiskQuota: 512,
   totalGpuQuota: 0,
   maxConcurrentBoxes: 50,
-  maxVolumes: 100,
 }
 
 /** A snapshot of what an organization already consumes, in the same units as the
@@ -72,20 +70,5 @@ export function assertWithinOrgQuota(limits: OrgQuotaLimits, usage: OrgResourceU
 
   if (violations.length > 0) {
     throw new BadRequestException(`Organization quota exceeded: ${violations.join('; ')}`)
-  }
-}
-
-/**
- * Reject a volume create that would push the organization past its volume ceiling.
- * `liveVolumes` is the count of volumes already consuming storage, so the volume
- * being created is the (liveVolumes + 1)-th.
- *
- * Separate from {@link assertWithinOrgQuota} because volumes are metered by count
- * of live rows, not by summing a resource across box states — there is no shared
- * comparison to fold them into.
- */
-export function assertWithinVolumeQuota(limits: OrgQuotaLimits, liveVolumes: number): void {
-  if (liveVolumes + 1 > limits.maxVolumes) {
-    throw new BadRequestException(`Organization quota exceeded: volume limit exceeded (max ${limits.maxVolumes})`)
   }
 }

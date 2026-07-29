@@ -60,17 +60,19 @@ describe('AdminOrganizationController quota', () => {
 
       expect(quota.totalCpuQuota).toBe(128)
       expect(quota.totalMemoryQuota).toBe(DEFAULT_ORG_QUOTA.totalMemoryQuota)
-      expect(quota.maxVolumes).toBe(DEFAULT_ORG_QUOTA.maxVolumes)
+      expect(quota.maxConcurrentBoxes).toBe(DEFAULT_ORG_QUOTA.maxConcurrentBoxes)
       expect(quota.customized).toBe(true)
     })
 
+    // 0 is falsy: the controller must forward it to the service and back out through
+    // the response untouched, rather than dropping it as "nothing to change".
     it('can set a ceiling to zero', async () => {
       const { controller, organizationUsageService } = makeController()
 
-      const quota = await controller.updateQuota(ORG_ID, { maxVolumes: 0 })
+      const quota = await controller.updateQuota(ORG_ID, { maxConcurrentBoxes: 0 })
 
-      expect(organizationUsageService.updateQuotaLimits).toHaveBeenCalledWith(ORG_ID, { maxVolumes: 0 })
-      expect(quota.maxVolumes).toBe(0)
+      expect(organizationUsageService.updateQuotaLimits).toHaveBeenCalledWith(ORG_ID, { maxConcurrentBoxes: 0 })
+      expect(quota.maxConcurrentBoxes).toBe(0)
     })
 
     it('404s for an unknown organization rather than writing an orphan quota row', async () => {

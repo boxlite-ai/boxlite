@@ -26,7 +26,6 @@ describeIfRedis('OrganizationUsageService (integration, real Redis)', () => {
   let qb: { getRawOne: jest.Mock } & Record<string, jest.Mock>
   let boxRepository: any
   let quotaRepository: any
-  let volumeRepository: any
 
   const setDbUsage = (u: Partial<{ cpu: number; memory: number; disk: number; gpu: number; count: number }>) =>
     qb.getRawOne.mockResolvedValue({
@@ -59,14 +58,7 @@ describeIfRedis('OrganizationUsageService (integration, real Redis)', () => {
     } as any
     boxRepository = { createQueryBuilder: jest.fn().mockReturnValue(qb), findOne: jest.fn().mockResolvedValue(null) }
     quotaRepository = { findOne: jest.fn().mockResolvedValue({ ...QUOTA }) }
-    volumeRepository = { count: jest.fn().mockResolvedValue(0) }
-    service = new OrganizationUsageService(
-      redis,
-      boxRepository,
-      quotaRepository,
-      volumeRepository,
-      new RedisLockProvider(redis),
-    )
+    service = new OrganizationUsageService(redis, boxRepository, quotaRepository, new RedisLockProvider(redis))
   })
 
   it('admits a create within quota and returns the reservation', async () => {

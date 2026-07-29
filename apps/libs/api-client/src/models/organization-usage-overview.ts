@@ -55,13 +55,5 @@ export interface OrganizationUsageOverview {
      * Maximum number of concurrently running boxes
      */
     'maxConcurrentBoxes': number;
-    /**
-     * Volumes currently occupying storage
-     */
-    'currentVolumeUsage': number;
-    /**
-     * Maximum number of volumes that may occupy storage
-     */
-    'maxVolumes': number;
 }
 

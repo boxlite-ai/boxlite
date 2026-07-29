@@ -24,9 +24,6 @@ export class AdminOrganizationQuotaDto implements OrgQuotaLimits {
   @ApiProperty({ description: 'Maximum number of concurrently running boxes', example: 50 })
   maxConcurrentBoxes: number
 
-  @ApiProperty({ description: 'Maximum number of volumes occupying storage', example: 100 })
-  maxVolumes: number
-
   @ApiProperty({
     description: 'False when the organization has no quota row and is running on the built-in defaults',
     example: true,
@@ -70,10 +67,4 @@ export class AdminUpdateOrganizationQuotaDto {
   @Min(0)
   @IsOptional()
   maxConcurrentBoxes?: number
-
-  @ApiPropertyOptional({ description: 'Maximum number of volumes occupying storage', example: 100 })
-  @IsInt()
-  @Min(0)
-  @IsOptional()
-  maxVolumes?: number
 }
