@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -26,17 +27,29 @@ import (
 )
 
 type ExecutorConfig struct {
-	Backend   backend.BoxBackend
-	Collector *metrics.Collector
-	Logger    *slog.Logger
+	Backend     backend.BoxBackend
+	Collector   *metrics.Collector
+	Logger      *slog.Logger
+	RunnerEpoch string
+	Generations RuntimeGenerationRegistry
+}
+
+type RuntimeGenerationRegistry interface {
+	Generation(boxID string) int64
+	PrepareStart(boxID string, generation int64) (bool, error)
+	PrepareStop(boxID string, generation, previousGeneration int64) (bool, error)
+	MarkStopped(boxID string, generation int64) error
 }
 
 // Executor handles job execution
 type Executor struct {
-	log       *slog.Logger
-	client    *apiclient.APIClient
-	backend   backend.BoxBackend
-	collector *metrics.Collector
+	log           *slog.Logger
+	client        *apiclient.APIClient
+	backend       backend.BoxBackend
+	collector     *metrics.Collector
+	runnerEpoch   string
+	generations   RuntimeGenerationRegistry
+	resourceLocks sync.Map
 }
 
 // NewExecutor creates a new job executor
@@ -45,12 +58,20 @@ func NewExecutor(cfg *ExecutorConfig) (*Executor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API client: %w", err)
 	}
+	if cfg.RunnerEpoch == "" {
+		return nil, fmt.Errorf("runner epoch is required for executor")
+	}
+	if cfg.Generations == nil {
+		return nil, fmt.Errorf("runtime generation registry is required for executor")
+	}
 
 	return &Executor{
-		log:       cfg.Logger.With(slog.String("component", "executor")),
-		client:    apiClient,
-		backend:   cfg.Backend,
-		collector: cfg.Collector,
+		log:         cfg.Logger.With(slog.String("component", "executor")),
+		client:      apiClient,
+		backend:     cfg.Backend,
+		collector:   cfg.Collector,
+		runnerEpoch: cfg.RunnerEpoch,
+		generations: cfg.Generations,
 	}, nil
 }
 
@@ -106,6 +127,10 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 
 // executeJob dispatches to the appropriate handler based on job type
 func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, error) {
+	resourceLock := e.resourceLock(job.GetResourceId())
+	resourceLock.Lock()
+	defer resourceLock.Unlock()
+
 	// Create a span for the job execution
 	tracer := otel.Tracer("runner")
 	ctx, span := tracer.Start(ctx, fmt.Sprintf("execute_%s", job.GetType()),
@@ -135,6 +160,8 @@ func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, err
 		resultMetadata, err = e.startBox(ctx, job)
 	case apiclient.JOBTYPE_STOP_BOX:
 		resultMetadata, err = e.stopBox(ctx, job)
+	case apiclient.JOBTYPE_STOP_ORPHAN_RUNTIME:
+		resultMetadata, err = e.stopOrphanRuntime(ctx, job)
 	case apiclient.JOBTYPE_DESTROY_BOX:
 		resultMetadata, err = e.destroyBox(ctx, job)
 	case apiclient.JOBTYPE_RESIZE_BOX:
@@ -155,6 +182,11 @@ func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, err
 	}
 
 	return resultMetadata, err
+}
+
+func (e *Executor) resourceLock(resourceID string) *sync.Mutex {
+	lock, _ := e.resourceLocks.LoadOrStore(resourceID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 // updateJobStatus reports job completion status to the API
@@ -194,7 +226,10 @@ func (e *Executor) updateJobStatus(ctx context.Context, jobID string, status api
 		utils.DEFAULT_BASE_DELAY,
 		utils.DEFAULT_MAX_DELAY,
 		func() error {
-			req := e.client.JobsAPI.UpdateJobStatus(ctx, jobID).UpdateJobStatus(*updateStatus)
+			req := e.client.JobsAPI.
+				UpdateJobStatus(ctx, jobID).
+				XBoxLiteRunnerEpoch(e.runnerEpoch).
+				UpdateJobStatus(*updateStatus)
 			_, httpResp, err := req.Execute()
 			if err != nil && httpResp != nil && httpResp.StatusCode >= http.StatusBadRequest && httpResp.StatusCode < http.StatusInternalServerError {
 				return &utils.NonRetryableError{Err: fmt.Errorf("HTTP %d: %w", httpResp.StatusCode, err)}

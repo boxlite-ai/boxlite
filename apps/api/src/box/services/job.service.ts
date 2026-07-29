@@ -17,6 +17,9 @@ import { Cron, CronExpression } from '@nestjs/schedule'
 import { JobStateHandlerService } from './job-state-handler.service'
 import { propagation, context as otelContext } from '@opentelemetry/api'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
+import { Box } from '../entities/box.entity'
+import { Runner } from '../entities/runner.entity'
+import { advancesBoxRuntimeGeneration, isBoxLifecycleJobType } from '../constants/box-lifecycle-job-types.constant'
 
 const REDIS_BLOCKING_COMMAND_TIMEOUT_BUFFER_MS = 3_000
 
@@ -55,13 +58,8 @@ export class JobService {
     resourceId: string,
     payload?: string | Record<string, any>,
   ): Promise<Job> {
-    // Use provided manager if available, otherwise use default repository
-    const repo = manager ? manager.getRepository(Job) : this.jobRepository
-
     // Capture current OpenTelemetry trace context for distributed tracing
     const traceContext = this.captureTraceContext()
-
-    const encodedPayload = typeof payload === 'string' ? payload : payload ? JSON.stringify(payload) : undefined
 
     try {
       const job = new Job({
@@ -70,11 +68,50 @@ export class JobService {
         resourceType,
         resourceId,
         status: JobStatus.PENDING,
-        payload: encodedPayload,
+        payload: null,
         traceContext,
       })
 
-      await repo.insert(job)
+      const persist = async (entityManager: EntityManager) => {
+        let runtimeGeneration: number | null = null
+        let previousRuntimeGeneration: number | null = null
+        if (resourceType === ResourceType.BOX && advancesBoxRuntimeGeneration(type)) {
+          const boxRepository = entityManager.getRepository(Box)
+          const box = await boxRepository
+            .createQueryBuilder('box')
+            .setLock('pessimistic_write')
+            .where('box.id = :resourceId', { resourceId })
+            .getOne()
+          if (!box) {
+            throw new NotFoundException(`Box with ID ${resourceId} not found for runtime job`)
+          }
+          previousRuntimeGeneration = box.runtimeGeneration
+          runtimeGeneration = box.runtimeGeneration + 1
+          await boxRepository.update(
+            { id: resourceId },
+            {
+              runtimeGeneration,
+              runtimeAuthorized: false,
+            },
+          )
+        }
+
+        job.payload = this.encodePayload(payload, runtimeGeneration, previousRuntimeGeneration)
+        await entityManager.getRepository(Job).insert(job)
+
+        if (resourceType === ResourceType.BOX && isBoxLifecycleJobType(type)) {
+          const result = await entityManager.update(Box, { id: resourceId }, { lifecycleJobId: job.id })
+          if (result.affected !== 1) {
+            throw new NotFoundException(`Box with ID ${resourceId} not found for lifecycle job`)
+          }
+        }
+      }
+
+      if (manager) {
+        await persist(manager)
+      } else {
+        await this.jobRepository.manager.transaction(persist)
+      }
 
       // Log with context-specific info
       const contextInfo = resourceId ? `${resourceType} ${resourceId}` : 'N/A'
@@ -101,6 +138,29 @@ export class JobService {
     }
   }
 
+  private encodePayload(
+    payload: string | Record<string, any> | undefined,
+    runtimeGeneration: number | null,
+    previousRuntimeGeneration: number | null,
+  ): string | null {
+    if (runtimeGeneration === null) {
+      return typeof payload === 'string' ? payload : payload ? JSON.stringify(payload) : null
+    }
+
+    let payloadObject: Record<string, any> = {}
+    if (typeof payload === 'string') {
+      const decoded = JSON.parse(payload)
+      if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+        throw new Error('Runtime job payload must be a JSON object')
+      }
+      payloadObject = decoded
+    } else if (payload) {
+      payloadObject = payload
+    }
+
+    return JSON.stringify({ ...payloadObject, runtimeGeneration, previousRuntimeGeneration })
+  }
+
   private async notifyRunner(runnerId: string, jobId: string): Promise<void> {
     try {
       await this.redis.lpush(this.getRunnerQueueKey(runnerId), jobId)
@@ -115,7 +175,18 @@ export class JobService {
     return this.jobRepository.findOneBy({ id: jobId })
   }
 
-  async pollJobs(runnerId: string, limit = 10, timeoutSeconds = 30, abortSignal?: AbortSignal): Promise<JobDto[]> {
+  async findOneForRunner(jobId: string, runnerId: string, runnerEpoch?: string): Promise<Job | null> {
+    await this.assertCurrentRunnerEpoch(this.jobRepository.manager, runnerId, runnerEpoch)
+    return this.jobRepository.findOneBy({ id: jobId, runnerId })
+  }
+
+  async pollJobs(
+    runnerId: string,
+    limit = 10,
+    timeoutSeconds = 30,
+    abortSignal?: AbortSignal,
+    runnerEpoch?: string,
+  ): Promise<JobDto[]> {
     const queueKey = this.getRunnerQueueKey(runnerId)
     const maxTimeout = Math.min(timeoutSeconds, 60) // Max 60 seconds
 
@@ -127,7 +198,7 @@ export class JobService {
 
     // STEP 1: Atomically claim pending jobs from database
     // This prevents duplicates by updating status to IN_PROGRESS
-    let claimedJobs = await this.claimPendingJobs(runnerId, limit)
+    let claimedJobs = await this.claimPendingJobs(runnerId, limit, runnerEpoch)
 
     if (claimedJobs.length > 0) {
       // Clear any stale job IDs from Redis queue
@@ -191,7 +262,7 @@ export class JobService {
         }
 
         // Atomically claim jobs from database
-        claimedJobs = await this.claimPendingJobs(runnerId, limit)
+        claimedJobs = await this.claimPendingJobs(runnerId, limit, runnerEpoch)
 
         if (claimedJobs.length > 0) {
           this.logger.debug(`Claimed ${claimedJobs.length} jobs after Redis notification for runner ${runnerId}`)
@@ -220,7 +291,7 @@ export class JobService {
 
     // STEP 3: Final fallback - check database again
     // This handles race conditions and Redis failures
-    claimedJobs = await this.claimPendingJobs(runnerId, limit)
+    claimedJobs = await this.claimPendingJobs(runnerId, limit, runnerEpoch)
 
     if (claimedJobs.length > 0) {
       this.logger.debug(`Claimed ${claimedJobs.length} pending jobs in fallback for runner ${runnerId}`)
@@ -234,45 +305,87 @@ export class JobService {
     status: JobStatus,
     errorMessage?: string,
     resultMetadata?: string,
+    execution?: { runnerId: string; runnerEpoch: string },
   ): Promise<Job> {
-    const job = await this.findOne(jobId)
-    if (!job) {
-      throw new NotFoundException(`Job with ID ${jobId} not found`)
-    }
+    const updatedJob = await this.jobRepository.manager.transaction(async (entityManager) => {
+      if (execution) {
+        await this.assertCurrentRunnerEpoch(entityManager, execution.runnerId, execution.runnerEpoch)
+      }
+      const job = await entityManager.findOne(Job, {
+        where: { id: jobId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!job) {
+        throw new NotFoundException(`Job with ID ${jobId} not found`)
+      }
+      if (execution && (job.runnerId !== execution.runnerId || job.executionEpoch !== execution.runnerEpoch)) {
+        throw new ConflictException(`Job ${jobId} is not owned by the current runner epoch`)
+      }
 
-    if (!this.isValidStatusTransition(job.status, status)) {
-      throw new ConflictException(`Invalid job status transition from ${job.status} to ${status} for job ${jobId}`)
-    }
+      if (!this.isValidStatusTransition(job.status, status)) {
+        throw new ConflictException(`Invalid job status transition from ${job.status} to ${status} for job ${jobId}`)
+      }
 
-    job.status = status
-    if (errorMessage) {
-      job.errorMessage = errorMessage
-    }
+      if (job.status === status) {
+        return job
+      }
 
-    if (status === JobStatus.IN_PROGRESS && !job.startedAt) {
-      job.startedAt = new Date()
-    }
+      const transitionAt = await this.databaseNow(entityManager)
+      job.status = status
+      if (errorMessage) {
+        job.errorMessage = errorMessage
+      }
 
-    if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
-      job.completedAt = new Date()
-    }
+      if (status === JobStatus.IN_PROGRESS && !job.startedAt) {
+        job.startedAt = transitionAt
+      }
 
-    if (resultMetadata) {
-      job.resultMetadata = resultMetadata
-    }
+      if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
+        job.completedAt = transitionAt
+      }
 
-    const updatedJob = await this.jobRepository.save(job)
+      if (resultMetadata) {
+        job.resultMetadata = resultMetadata
+      }
+
+      return entityManager.save(Job, job)
+    })
     this.logger.debug(`Updated job ${jobId} status to ${status}`)
 
     // Handle job completion for v2 runners - update box, artifact, or backup state.
     if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
-      // Fire and forget - don't block the response
-      this.jobStateHandlerService.handleJobCompletion(updatedJob).catch((error) => {
-        this.logger.error(`Error handling job completion for job ${jobId}:`, error)
-      })
+      // A terminal status is only acknowledged after the corresponding resource
+      // state (and, for Boxes, its usage period) has been synchronized. The same
+      // terminal status is a valid retry, so a runner can safely resend it.
+      await this.jobStateHandlerService.handleJobCompletion(updatedJob)
     }
 
     return updatedJob
+  }
+
+  /**
+   * Retries terminal Box jobs whose status was committed but whose Box/usage
+   * transaction did not finish (for example, because the API process exited).
+   * A successful handler clears Box.lifecycleJobId in that same transaction.
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'reconcile-terminal-box-jobs', waitForCompletion: true })
+  async reconcileTerminalBoxJobs(): Promise<void> {
+    const jobs = await this.jobRepository
+      .createQueryBuilder('job')
+      .innerJoin(Box, 'box', 'box."lifecycleJobId" = job.id')
+      .where('job.status IN (:...statuses)', { statuses: [JobStatus.COMPLETED, JobStatus.FAILED] })
+      .andWhere('job."resourceType" = :resourceType', { resourceType: ResourceType.BOX })
+      .orderBy('job.completedAt', 'ASC')
+      .take(100)
+      .getMany()
+
+    for (const job of jobs) {
+      try {
+        await this.jobStateHandlerService.handleJobCompletion(job)
+      } catch (error) {
+        this.logger.error(`Error reconciling terminal Box job ${job.id}: ${error.message}`, error.stack)
+      }
+    }
   }
 
   async findPendingJobsForRunner(runnerId: string, limit = 10): Promise<Job[]> {
@@ -288,11 +401,21 @@ export class JobService {
     })
   }
 
-  async findJobsForRunner(runnerId: string, status?: JobStatus, page = 1, limit = 100): Promise<PaginatedList<JobDto>> {
-    const whereCondition: { runnerId: string; status?: JobStatus } = { runnerId }
+  async findJobsForRunner(
+    runnerId: string,
+    status?: JobStatus,
+    page = 1,
+    limit = 100,
+    runnerEpoch?: string,
+  ): Promise<PaginatedList<JobDto>> {
+    const currentRunnerEpoch = await this.assertCurrentRunnerEpoch(this.jobRepository.manager, runnerId, runnerEpoch)
+    const whereCondition: { runnerId: string; status?: JobStatus; executionEpoch?: string } = { runnerId }
 
     if (status) {
       whereCondition.status = status
+    }
+    if (status === JobStatus.IN_PROGRESS) {
+      whereCondition.executionEpoch = currentRunnerEpoch
     }
 
     const [jobs, total] = await this.jobRepository.findAndCount({
@@ -393,7 +516,7 @@ export class JobService {
 
   /**
    * Cron job to check for stale jobs and mark them as failed
-   * Runs every minute to find jobs that have been IN_PROGRESS for too long
+   * Runs every minute to find jobs that have remained PENDING or IN_PROGRESS for too long
    * Different job types can have different timeout thresholds (see JOB_STALE_TIMEOUT_MINUTES)
    */
   @Cron(CronExpression.EVERY_MINUTE)
@@ -414,7 +537,7 @@ export class JobService {
 
         const staleJobs = await this.jobRepository.find({
           where: {
-            status: JobStatus.IN_PROGRESS,
+            status: In([JobStatus.PENDING, JobStatus.IN_PROGRESS]),
             type: In(jobTypes),
             updatedAt: LessThan(threshold),
           },
@@ -429,11 +552,16 @@ export class JobService {
 
         for (const job of staleJobs) {
           try {
-            await this.updateJobStatus(
+            const failed = await this.failJobIfStillStale(
               job.id,
-              JobStatus.FAILED,
+              threshold,
               `Job timed out - no update received for ${timeoutMinutes} minutes`,
             )
+
+            if (!failed) {
+              this.logger.debug(`Skipped stale snapshot for job ${job.id}; the job was updated after the scan`)
+              continue
+            }
 
             this.logger.warn(
               `Marked job ${job.id} (type: ${job.type}, resource: ${job.resourceType} ${job.resourceId}) as failed due to timeout`,
@@ -448,51 +576,88 @@ export class JobService {
     }
   }
 
+  private async failJobIfStillStale(jobId: string, threshold: Date, errorMessage: string): Promise<boolean> {
+    const result = await this.jobRepository
+      .createQueryBuilder()
+      .update(Job)
+      .set({
+        status: JobStatus.FAILED,
+        errorMessage,
+        completedAt: () => 'clock_timestamp()',
+      })
+      .where('id = :jobId', { jobId })
+      .andWhere('status IN (:...statuses)', { statuses: [JobStatus.PENDING, JobStatus.IN_PROGRESS] })
+      .andWhere('"updatedAt" < :threshold', { threshold })
+      .returning('*')
+      .execute()
+
+    if (result.affected !== 1 || result.raw.length !== 1) {
+      return false
+    }
+
+    const updatedJob = await this.jobRepository.findOneByOrFail({ id: jobId })
+    await this.jobStateHandlerService.handleJobCompletion(updatedJob)
+    return true
+  }
+
   /**
    * Atomically claim pending jobs by updating their status to IN_PROGRESS
    * This prevents duplicate processing of the same job
    */
-  private async claimPendingJobs(runnerId: string, limit: number): Promise<JobDto[]> {
-    // Find pending jobs
-    const jobs = await this.jobRepository.find({
-      where: {
-        runnerId,
-        status: JobStatus.PENDING,
-      },
-      order: {
-        createdAt: 'ASC',
-      },
-      take: limit,
-    })
+  private async claimPendingJobs(runnerId: string, limit: number, runnerEpoch?: string): Promise<JobDto[]> {
+    return this.jobRepository.manager.transaction(async (entityManager) => {
+      const currentRunnerEpoch = await this.assertCurrentRunnerEpoch(entityManager, runnerId, runnerEpoch)
+      const jobs = await entityManager.find(Job, {
+        where: {
+          runnerId,
+          status: JobStatus.PENDING,
+        },
+        order: {
+          createdAt: 'ASC',
+        },
+        take: limit,
+        lock: { mode: 'pessimistic_write', onLocked: 'skip_locked' },
+      })
 
-    if (jobs.length === 0) {
-      return []
-    }
+      if (jobs.length === 0) {
+        return []
+      }
 
-    // Update jobs to IN_PROGRESS
-    const now = new Date()
-    const claimedJobs: JobDto[] = []
-
-    for (const job of jobs) {
-      try {
+      const now = await this.databaseNow(entityManager)
+      for (const job of jobs) {
         job.status = JobStatus.IN_PROGRESS
         job.startedAt = now
         job.updatedAt = now
-
-        // save() with @VersionColumn will automatically check version and throw OptimisticLockVersionMismatchError if changed
-        const savedJob = await this.jobRepository.save(job)
-
-        claimedJobs.push(new JobDto(savedJob))
-      } catch (error) {
-        // If optimistic lock fails, job was already claimed by another runner - skip it
-        this.logger.debug(`Job ${job.id} already claimed by another runner (version mismatch)`)
+        job.executionEpoch = currentRunnerEpoch
       }
-    }
 
-    if (claimedJobs.length > 0) {
-      this.logger.debug(`Claimed ${claimedJobs.length} existing pending jobs for runner ${runnerId}`)
-    }
+      const savedJobs = await entityManager.save(Job, jobs)
+      this.logger.debug(`Claimed ${savedJobs.length} existing pending jobs for runner ${runnerId}`)
 
-    return claimedJobs
+      return savedJobs.map((job) => new JobDto(job))
+    })
+  }
+
+  private async assertCurrentRunnerEpoch(
+    entityManager: EntityManager,
+    runnerId: string,
+    runnerEpoch?: string,
+  ): Promise<string> {
+    if (!runnerEpoch) {
+      throw new ConflictException('Runner epoch header is required')
+    }
+    const runner = await entityManager.findOne(Runner, {
+      where: { id: runnerId },
+      lock: entityManager.queryRunner ? { mode: 'pessimistic_read' } : undefined,
+    })
+    if (!runner || runner.runtimeEpoch !== runnerEpoch) {
+      throw new ConflictException(`Runner epoch ${runnerEpoch} is no longer current`)
+    }
+    return runnerEpoch
+  }
+
+  private async databaseNow(entityManager: EntityManager): Promise<Date> {
+    const [row] = await entityManager.query(`SELECT clock_timestamp() AS "now"`)
+    return new Date(row.now)
   }
 }

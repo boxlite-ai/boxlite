@@ -5,6 +5,7 @@
  */
 
 export enum JobType {
+  STOP_ORPHAN_RUNTIME = 'STOP_ORPHAN_RUNTIME',
   CREATE_BOX = 'CREATE_BOX',
   START_BOX = 'START_BOX',
   STOP_BOX = 'STOP_BOX',

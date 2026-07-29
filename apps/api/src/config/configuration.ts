@@ -272,6 +272,12 @@ const configuration = {
       enabled: process.env.LOG_REQUESTS_ENABLED === 'true',
     },
   },
+  runtime: {
+    // How long a runner's claim on a Box runtime stays valid without a
+    // fresh observation. Past this the reconciler treats the runtime as
+    // gone rather than assuming it is still there.
+    leaseSeconds: parseInt(process.env.BOXLITE_RUNTIME_LEASE_SECONDS || '60', 10),
+  },
   defaultRegion: {
     id: process.env.DEFAULT_REGION_ID || 'us',
     name: process.env.DEFAULT_REGION_NAME || 'us',

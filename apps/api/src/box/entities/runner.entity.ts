@@ -16,6 +16,23 @@ export class Runner {
   @PrimaryGeneratedColumn('uuid')
   id: string
 
+  @Column({ type: 'uuid', nullable: true })
+  runtimeEpoch: string | null
+
+  @Column({
+    type: 'bigint',
+    default: 0,
+    transformer: { to: (value: number) => value, from: (value: string) => Number(value) },
+  })
+  runtimeIncarnation = 0
+
+  @Column({
+    type: 'bigint',
+    default: 0,
+    transformer: { to: (value: number) => value, from: (value: string) => Number(value) },
+  })
+  runtimeSequence = 0
+
   @Column({
     nullable: true,
   })

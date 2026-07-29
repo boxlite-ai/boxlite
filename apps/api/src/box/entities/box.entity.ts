@@ -36,6 +36,7 @@ import {
 @Index('box_pending_idx', ['id'], {
   where: `"pending" = true`,
 })
+@Index('box_lifecycle_job_idx', ['lifecycleJobId'], { where: `"lifecycleJobId" IS NOT NULL` })
 @Index('idx_box_authtoken', ['authToken'])
 @Index('box_image_idx', ['image'])
 @Index('box_labels_gin_full_idx', { synchronize: false })
@@ -163,6 +164,22 @@ export class Box {
   @Column({ default: false, type: 'boolean' })
   pending: boolean | undefined = false
 
+  @Column({ type: 'uuid', nullable: true })
+  lifecycleJobId: string | null = null
+
+  @Column({
+    type: 'bigint',
+    default: 0,
+    transformer: { to: (value: number) => value, from: (value: string) => Number(value) },
+  })
+  runtimeGeneration = 0
+
+  @Column({ type: 'boolean', default: false })
+  runtimeAuthorized = false
+
+  @Column({ type: 'boolean', default: false })
+  runtimeUnavailable = false
+
   @Column({ type: 'character varying' })
   authToken = nanoid(32).toLowerCase()
 
@@ -272,6 +289,8 @@ export class Box {
 
     if (this.state === BoxState.DESTROYED || this.state === BoxState.ARCHIVED) {
       changes.runnerId = null
+      changes.runtimeAuthorized = false
+      changes.runtimeUnavailable = false
     }
 
     return changes

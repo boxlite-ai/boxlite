@@ -21,6 +21,14 @@ var _ MappedNullable = &RunnerHealthcheck{}
 
 // RunnerHealthcheck struct for RunnerHealthcheck
 type RunnerHealthcheck struct {
+	// Unique epoch generated when the runner process starts
+	RunnerEpoch string `json:"runnerEpoch"`
+	// Monotonically increasing process incarnation persisted by the runner
+	RunnerIncarnation int64 `json:"runnerIncarnation"`
+	// Monotonically increasing healthcheck sequence within the runner epoch
+	Sequence int64 `json:"sequence"`
+	// Complete local box inventory. Omitted when inventory collection fails; an empty array is a successful empty snapshot.
+	Boxes []RunnerBoxObservation `json:"boxes,omitempty"`
 	// Runner metrics
 	Metrics *RunnerHealthMetrics `json:"metrics,omitempty"`
 	// Health status of individual services on the runner
@@ -42,8 +50,11 @@ type _RunnerHealthcheck RunnerHealthcheck
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewRunnerHealthcheck(appVersion string) *RunnerHealthcheck {
+func NewRunnerHealthcheck(runnerEpoch string, runnerIncarnation int64, sequence int64, appVersion string) *RunnerHealthcheck {
 	this := RunnerHealthcheck{}
+	this.RunnerEpoch = runnerEpoch
+	this.RunnerIncarnation = runnerIncarnation
+	this.Sequence = sequence
 	this.AppVersion = appVersion
 	return &this
 }
@@ -54,6 +65,110 @@ func NewRunnerHealthcheck(appVersion string) *RunnerHealthcheck {
 func NewRunnerHealthcheckWithDefaults() *RunnerHealthcheck {
 	this := RunnerHealthcheck{}
 	return &this
+}
+
+// GetRunnerEpoch returns the RunnerEpoch field value
+func (o *RunnerHealthcheck) GetRunnerEpoch() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.RunnerEpoch
+}
+
+// GetRunnerEpochOk returns a tuple with the RunnerEpoch field value
+// and a boolean to check if the value has been set.
+func (o *RunnerHealthcheck) GetRunnerEpochOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.RunnerEpoch, true
+}
+
+// SetRunnerEpoch sets field value
+func (o *RunnerHealthcheck) SetRunnerEpoch(v string) {
+	o.RunnerEpoch = v
+}
+
+// GetRunnerIncarnation returns the RunnerIncarnation field value
+func (o *RunnerHealthcheck) GetRunnerIncarnation() int64 {
+	if o == nil {
+		var ret int64
+		return ret
+	}
+
+	return o.RunnerIncarnation
+}
+
+// GetRunnerIncarnationOk returns a tuple with the RunnerIncarnation field value
+// and a boolean to check if the value has been set.
+func (o *RunnerHealthcheck) GetRunnerIncarnationOk() (*int64, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.RunnerIncarnation, true
+}
+
+// SetRunnerIncarnation sets field value
+func (o *RunnerHealthcheck) SetRunnerIncarnation(v int64) {
+	o.RunnerIncarnation = v
+}
+
+// GetSequence returns the Sequence field value
+func (o *RunnerHealthcheck) GetSequence() int64 {
+	if o == nil {
+		var ret int64
+		return ret
+	}
+
+	return o.Sequence
+}
+
+// GetSequenceOk returns a tuple with the Sequence field value
+// and a boolean to check if the value has been set.
+func (o *RunnerHealthcheck) GetSequenceOk() (*int64, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.Sequence, true
+}
+
+// SetSequence sets field value
+func (o *RunnerHealthcheck) SetSequence(v int64) {
+	o.Sequence = v
+}
+
+// GetBoxes returns the Boxes field value if set, zero value otherwise.
+func (o *RunnerHealthcheck) GetBoxes() []RunnerBoxObservation {
+	if o == nil || IsNil(o.Boxes) {
+		var ret []RunnerBoxObservation
+		return ret
+	}
+	return o.Boxes
+}
+
+// GetBoxesOk returns a tuple with the Boxes field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *RunnerHealthcheck) GetBoxesOk() ([]RunnerBoxObservation, bool) {
+	if o == nil || IsNil(o.Boxes) {
+		return nil, false
+	}
+	return o.Boxes, true
+}
+
+// HasBoxes returns a boolean if a field has been set.
+func (o *RunnerHealthcheck) HasBoxes() bool {
+	if o != nil && !IsNil(o.Boxes) {
+		return true
+	}
+
+	return false
+}
+
+// SetBoxes gets a reference to the given []RunnerBoxObservation and assigns it to the Boxes field.
+func (o *RunnerHealthcheck) SetBoxes(v []RunnerBoxObservation) {
+	o.Boxes = v
 }
 
 // GetMetrics returns the Metrics field value if set, zero value otherwise.
@@ -250,6 +365,12 @@ func (o RunnerHealthcheck) MarshalJSON() ([]byte, error) {
 
 func (o RunnerHealthcheck) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	toSerialize["runnerEpoch"] = o.RunnerEpoch
+	toSerialize["runnerIncarnation"] = o.RunnerIncarnation
+	toSerialize["sequence"] = o.Sequence
+	if !IsNil(o.Boxes) {
+		toSerialize["boxes"] = o.Boxes
+	}
 	if !IsNil(o.Metrics) {
 		toSerialize["metrics"] = o.Metrics
 	}
@@ -279,6 +400,9 @@ func (o *RunnerHealthcheck) UnmarshalJSON(data []byte) (err error) {
 	// by unmarshalling the object into a generic map with string keys and checking
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
+		"runnerEpoch",
+		"runnerIncarnation",
+		"sequence",
 		"appVersion",
 	}
 
@@ -309,6 +433,10 @@ func (o *RunnerHealthcheck) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "runnerEpoch")
+		delete(additionalProperties, "runnerIncarnation")
+		delete(additionalProperties, "sequence")
+		delete(additionalProperties, "boxes")
 		delete(additionalProperties, "metrics")
 		delete(additionalProperties, "serviceHealth")
 		delete(additionalProperties, "domain")

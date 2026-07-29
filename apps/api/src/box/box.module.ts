@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { BoxRuntimeLease } from './entities/box-runtime-lease.entity'
+import { RunnerRuntimeEpoch } from './entities/runner-runtime-epoch.entity'
+import { BoxRuntimeCleanup } from './entities/box-runtime-cleanup.entity'
+import { RuntimeLeaseService } from './services/runtime-lease.service'
+import { RuntimeOrphanCleanupService } from './services/runtime-orphan-cleanup.service'
+import { RUNTIME_USAGE_SINK } from './services/runtime-usage-sink'
+import { UsageMeteringModule } from '../usage/metering/usage-metering.module'
+import { UsagePeriodWriter } from '../usage/metering/usage-period-writer'
 import { Module } from '@nestjs/common'
 import { DataSource } from 'typeorm'
 import { BoxController } from './controllers/box.controller'
@@ -52,6 +60,7 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
 
 @Module({
   imports: [
+    UsageMeteringModule,
     UserModule,
     OrganizationModule,
     RegionModule,
@@ -59,6 +68,11 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
   providers: [
+    RuntimeLeaseService,
+    RuntimeOrphanCleanupService,
+    // Metering is now the sink: the reconciler's observations become usage
+    // periods instead of being dropped.
+    { provide: RUNTIME_USAGE_SINK, useExisting: UsagePeriodWriter },
     BoxService,
     BoxManager,
     BoxWarmPoolService,
