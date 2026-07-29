@@ -78,6 +78,9 @@ runner path against a separate Docker stack. The direct-SDK capability this stac
 relies on — read-write host volumes + host port mapping — is pinned by
 `sdks/python/tests/test_volume_port_persistence.py`.
 
+For fault injection against a live stack — killing the API mid-transition to see
+what the box usage ledger does about it — see [`scripts/README.md`](./scripts/README.md).
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -96,7 +99,7 @@ relies on — read-write host volumes + host port mapping — is pinned by
 
 ## Layout
 
-Everything is the `compose` package + four root files (no `scripts/`, no `configs/`):
+Everything is the `compose` package + four root files (no `configs/`):
 
 ```text
 apps/infra-local/
@@ -104,6 +107,7 @@ apps/infra-local/
 ├── README.md
 ├── pyproject.toml
 ├── api.env           # API .env template (copied to apps/api/.env on first `up`)
+├── scripts/          # fault-injection + audit tooling (see scripts/README.md)
 └── compose/
     ├── __main__.py   # the `python -m compose` CLI (up/down/status/logs/restart/reset/nuke)
     ├── config.py     # InfraConfig (single source of truth)
