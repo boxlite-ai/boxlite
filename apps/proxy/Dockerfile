@@ -22,19 +22,19 @@ COPY apps/nx.json ./
 # Go dependency layer (cached unless go.mod/go.sum change)
 COPY apps/go.work apps/go.work.sum ./
 COPY apps/proxy/go.mod apps/proxy/go.sum proxy/
-COPY apps/common-go/go.mod apps/common-go/go.sum common-go/
-COPY apps/api-client-go/go.mod apps/api-client-go/go.sum api-client-go/
-RUN head -1 go.work > go.work.tmp && printf '\nuse (\n\t./proxy\n\t./common-go\n\t./api-client-go\n)\n' >> go.work.tmp && mv go.work.tmp go.work
+COPY apps/libs/common-go/go.mod apps/libs/common-go/go.sum libs/common-go/
+COPY apps/libs/api-client-go/go.mod apps/libs/api-client-go/go.sum libs/api-client-go/
+RUN head -1 go.work > go.work.tmp && printf '\nuse (\n\t./proxy\n\t./libs/common-go\n\t./libs/api-client-go\n)\n' >> go.work.tmp && mv go.work.tmp go.work
 
 ENV NX_DAEMON=false
 ENV GOWORK=/boxlite/apps/go.work
 
-RUN go -C proxy mod download && go -C common-go mod download && go -C api-client-go mod download
+RUN go -C proxy mod download && go -C libs/common-go mod download && go -C libs/api-client-go mod download
 
 # Go source
 COPY apps/proxy/ proxy/
-COPY apps/common-go/ common-go/
-COPY apps/api-client-go/ api-client-go/
+COPY apps/libs/common-go/ libs/common-go/
+COPY apps/libs/api-client-go/ libs/api-client-go/
 
 ARG VERSION=0.0.1
 RUN --mount=type=cache,target=/root/.cache/go-build \

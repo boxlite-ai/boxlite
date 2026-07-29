@@ -106,4 +106,4 @@ require (
 	gotest.tools/v3 v3.5.1 // indirect
 )
 
-replace github.com/boxlite-ai/boxlite/libs/api-client-go => ../api-client-go
+replace github.com/boxlite-ai/boxlite/libs/api-client-go => ../libs/api-client-go

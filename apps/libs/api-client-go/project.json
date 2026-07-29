@@ -32,8 +32,8 @@
       "options": {
         "commands": [
           "rm -f {projectRoot}/*.go",
-          "yarn run openapi-generator-cli generate --git-repo-id=boxlite/libs/api-client-go --git-user-id=boxlite-ai -i dist/apps/api/openapi.json -g go -t hack/go-client/openapi-templates --additional-properties=disallowAdditionalPropertiesIfNotPresent=false,packageName=apiclient,moduleVersion=$DEFAULT_PACKAGE_VERSION,generateInterfaces=true,enumClassPrefix=true,structPrefix=true,enumUnknownDefaultCase=true -o api-client-go",
-          "node hack/go-client/postprocess.mjs api-client-go apiclient api-client-go"
+          "yarn run openapi-generator-cli generate --git-repo-id=boxlite/libs/api-client-go --git-user-id=boxlite-ai -i dist/apps/api/openapi.json -g go -t hack/go-client/openapi-templates --additional-properties=disallowAdditionalPropertiesIfNotPresent=false,packageName=apiclient,moduleVersion=$DEFAULT_PACKAGE_VERSION,generateInterfaces=true,enumClassPrefix=true,structPrefix=true,enumUnknownDefaultCase=true -o libs/api-client-go",
+          "node hack/go-client/postprocess.mjs libs/api-client-go apiclient api-client-go"
         ],
         "parallel": false
       },
@@ -52,16 +52,15 @@
       "executor": "nx:run-commands",
       "cache": true,
       "inputs": [
-        "{workspaceRoot}/libs/sdk-go/go.mod",
+        "{workspaceRoot}/otel-collector/exporter/go.mod",
         { "env": "VERSION" },
         { "dependentTasksOutputFiles": "**/*", "transitive": true }
       ],
-      "outputs": ["{workspaceRoot}/libs/sdk-go/go.mod", "{projectRoot}/VERSION"],
+      "outputs": ["{workspaceRoot}/otel-collector/exporter/go.mod", "{projectRoot}/VERSION"],
       "options": {
         "cwd": "{workspaceRoot}",
         "commands": [
-          "cd libs/sdk-go && go mod edit -require=github.com/boxlite-ai/boxlite/libs/api-client-go@$VERSION",
-          "cd apps/otel-collector/exporter && go mod edit -require=github.com/boxlite-ai/boxlite/libs/api-client-go@$VERSION",
+          "cd otel-collector/exporter && go mod edit -require=github.com/boxlite-ai/boxlite/libs/api-client-go@$VERSION",
           "echo \"$VERSION\" > libs/api-client-go/VERSION"
         ],
         "parallel": false

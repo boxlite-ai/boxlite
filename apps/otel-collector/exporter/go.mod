@@ -60,4 +60,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/boxlite-ai/boxlite/libs/api-client-go => ../../api-client-go
+replace github.com/boxlite-ai/boxlite/libs/api-client-go => ../../libs/api-client-go

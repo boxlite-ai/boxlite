@@ -22,18 +22,18 @@ COPY apps/nx.json ./
 # Go dependency layer (cached unless go.mod/go.sum change)
 COPY apps/go.work apps/go.work.sum apps/
 COPY apps/runner/go.mod apps/runner/go.sum apps/runner/
-COPY apps/common-go/go.mod apps/common-go/go.sum apps/common-go/
-COPY apps/api-client-go/go.mod apps/api-client-go/go.sum apps/api-client-go/
+COPY apps/libs/common-go/go.mod apps/libs/common-go/go.sum apps/libs/common-go/
+COPY apps/libs/api-client-go/go.mod apps/libs/api-client-go/go.sum apps/libs/api-client-go/
 COPY sdks/go/go.mod sdks/go/
 
 # Rewrite go.work to include only needed modules
-RUN head -1 apps/go.work > apps/go.work.tmp && printf '\nuse (\n\t./runner\n\t./common-go\n\t./api-client-go\n\t../sdks/go\n)\n' >> apps/go.work.tmp && mv apps/go.work.tmp apps/go.work
+RUN head -1 apps/go.work > apps/go.work.tmp && printf '\nuse (\n\t./runner\n\t./libs/common-go\n\t./libs/api-client-go\n\t../sdks/go\n)\n' >> apps/go.work.tmp && mv apps/go.work.tmp apps/go.work
 
 ENV NX_DAEMON=false
 
 RUN go -C apps/runner mod download \
-  && go -C apps/common-go mod download \
-  && go -C apps/api-client-go mod download
+  && go -C apps/libs/common-go mod download \
+  && go -C apps/libs/api-client-go mod download
 
 # BoxLite static library and headers
 COPY sdks/go/ sdks/go/
@@ -45,8 +45,8 @@ COPY ${LIBBOXLITE_PATH} sdks/go/libboxlite.a
 
 # Go source
 COPY apps/runner/ apps/runner/
-COPY apps/common-go/ apps/common-go/
-COPY apps/api-client-go/ apps/api-client-go/
+COPY apps/libs/common-go/ apps/libs/common-go/
+COPY apps/libs/api-client-go/ apps/libs/api-client-go/
 
 ARG VERSION=0.0.1
 RUN --mount=type=cache,target=/root/.cache/go-build \

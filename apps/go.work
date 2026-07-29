@@ -2,8 +2,8 @@ go 1.25.4
 
 use (
 	../sdks/go
-	./api-client-go
-	./common-go
+	./libs/api-client-go
+	./libs/common-go
 	./otel-collector/exporter
 	./proxy
 	./runner

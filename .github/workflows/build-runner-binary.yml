@@ -68,13 +68,13 @@ jobs:
 
       - name: Rewrite go.work for minimal modules
         run: |
-          printf 'go 1.25.4\n\nuse (\n\t./runner\n\t./common-go\n\t./api-client-go\n\t../sdks/go\n)\n' > apps/go.work
+          printf 'go 1.25.4\n\nuse (\n\t./runner\n\t./libs/common-go\n\t./libs/api-client-go\n\t../sdks/go\n)\n' > apps/go.work
 
       - name: Download Go dependencies
         run: |
           go -C apps/runner mod download
-          go -C apps/common-go mod download
-          go -C apps/api-client-go mod download
+          go -C apps/libs/common-go mod download
+          go -C apps/libs/api-client-go mod download
 
       - name: Build runner
         env:
