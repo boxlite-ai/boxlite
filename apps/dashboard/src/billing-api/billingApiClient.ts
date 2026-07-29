@@ -24,10 +24,8 @@ export class BillingApiClient {
   constructor(apiUrl: string, accessToken: string) {
     this.axiosInstance = axios.create({
       baseURL: apiUrl,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
     })
+    this.setAccessToken(accessToken)
 
     this.axiosInstance.interceptors.response.use(
       (response) => {
@@ -39,6 +37,10 @@ export class BillingApiClient {
         throw BoxliteError.fromString(String(errorMessage))
       },
     )
+  }
+
+  public setAccessToken(accessToken: string): void {
+    this.axiosInstance.defaults.headers.common.Authorization = `Bearer ${accessToken}`
   }
 
   public async getOrganizationUsage(organizationId: string): Promise<OrganizationUsage> {

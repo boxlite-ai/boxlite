@@ -181,11 +181,15 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   const primaryItems = useMemo<NavItem[]>(
     () => [
       { label: 'Boxes', path: RoutePath.BOXES },
+      { label: 'Usage', path: RoutePath.BILLING_SPENDING },
       { label: 'Billing', path: RoutePath.BILLING },
       ...(canViewAdmin ? [{ label: 'Admin', path: RoutePath.ADMIN }] : []),
     ],
     [canViewAdmin],
   )
+  const activePrimaryPath = primaryItems
+    .filter((item) => pathname === item.path || pathname.startsWith(`${item.path}/`))
+    .sort((left, right) => right.path.length - left.path.length)[0]?.path
 
   const openOnboardingGuide = useCallback(() => {
     const event = new Event(ONBOARDING_OPEN_EVENT, { cancelable: true })
@@ -264,7 +268,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
 
       {/* primary nav */}
       {primaryItems.map((item) => {
-        const active = pathname.startsWith(item.path)
+        const active = item.path === activePrimaryPath
         return (
           <Link key={item.label} to={item.path} className={navCellClass(active, 'hidden md:inline-flex')}>
             {item.label}

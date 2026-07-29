@@ -20,13 +20,14 @@ const SKELETON_ROWS = 10
 interface BoxUsageTableProps {
   data: ModelsBoxUsage[] | undefined
   isLoading: boolean
+  isRated?: boolean
 }
 
 type SortField = 'totalPrice' | 'totalCPUSeconds' | 'totalRAMGBSeconds' | 'totalDiskGBSeconds'
 type SortDirection = 'asc' | 'desc'
 
-export const BoxUsageTable: React.FC<BoxUsageTableProps> = ({ data, isLoading }) => {
-  const [sortField, setSortField] = useState<SortField>('totalPrice')
+export const BoxUsageTable: React.FC<BoxUsageTableProps> = ({ data, isLoading, isRated = true }) => {
+  const [sortField, setSortField] = useState<SortField>(isRated ? 'totalPrice' : 'totalCPUSeconds')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const [pageIndex, setPageIndex] = useState(0)
   const [pageSize, setPageSize] = useState(25)
@@ -76,12 +77,14 @@ export const BoxUsageTable: React.FC<BoxUsageTableProps> = ({ data, isLoading })
         <TableHeader>
           <TableRow>
             <TableHead>Box ID</TableHead>
-            <SortableTableHead
-              field="totalPrice"
-              label="Total Price"
-              onSort={handleSort}
-              getSortDirection={getSortDirection}
-            />
+            {isRated && (
+              <SortableTableHead
+                field="totalPrice"
+                label="Total Price"
+                onSort={handleSort}
+                getSortDirection={getSortDirection}
+              />
+            )}
             <SortableTableHead
               field="totalCPUSeconds"
               label="CPU (seconds)"
@@ -109,9 +112,11 @@ export const BoxUsageTable: React.FC<BoxUsageTableProps> = ({ data, isLoading })
                   <TableCell>
                     <Skeleton className="h-4 w-[200px]" />
                   </TableCell>
-                  <TableCell className="text-right">
-                    <Skeleton className="h-4 w-12 ml-auto" />
-                  </TableCell>
+                  {isRated && (
+                    <TableCell className="text-right">
+                      <Skeleton className="h-4 w-12 ml-auto" />
+                    </TableCell>
+                  )}
                   <TableCell className="text-right">
                     <Skeleton className="h-4 w-16 ml-auto" />
                   </TableCell>
@@ -131,7 +136,9 @@ export const BoxUsageTable: React.FC<BoxUsageTableProps> = ({ data, isLoading })
                       {box.boxId && <CopyButton value={box.boxId} tooltipText="Copy box ID" size="icon-xs" autoHide />}
                     </div>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">${(box.totalPrice ?? 0).toFixed(2)}</TableCell>
+                  {isRated && (
+                    <TableCell className="text-right tabular-nums">${(box.totalPrice ?? 0).toFixed(2)}</TableCell>
+                  )}
                   <TableCell className="text-right tabular-nums">{(box.totalCPUSeconds ?? 0).toFixed(1)}</TableCell>
                   <TableCell className="text-right tabular-nums">{(box.totalRAMGBSeconds ?? 0).toFixed(1)}</TableCell>
                   <TableCell className="text-right tabular-nums">{(box.totalDiskGBSeconds ?? 0).toFixed(1)}</TableCell>

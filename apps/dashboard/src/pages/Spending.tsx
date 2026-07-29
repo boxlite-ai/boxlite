@@ -15,15 +15,14 @@ import { Card, CardHeader, CardTitle } from '@/components/ui/card'
 import { DateRangePicker, QuickRangesConfig } from '@/components/ui/date-range-picker'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Separator } from '@/components/ui/separator'
-import { FeatureFlags } from '@/enums/FeatureFlags'
 import { useAggregatedUsage, useBoxesUsage } from '@/hooks/queries/useAnalyticsUsage'
 import { useOrganizationUsageQuery } from '@/hooks/queries/useOrganizationUsageQuery'
 import { usePastOrganizationUsageQuery } from '@/hooks/queries/usePastOrganizationUsageQuery'
+import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { addDays, differenceInCalendarDays, subDays } from 'date-fns'
 import { AlertCircle, BarChart3, RefreshCw } from '@/components/ui/icon'
-import { useFeatureFlagEnabled } from 'posthog-js/react'
 import { useCallback, useMemo, useState } from 'react'
 import { DateRange } from 'react-day-picker'
 
@@ -34,9 +33,11 @@ const analyticsQuickRanges: QuickRangesConfig = {
 
 const Spending = () => {
   const { selectedOrganization } = useSelectedOrganization()
+  const { analyticsUsageApi } = useApi()
   const config = useConfig()
-  const spendingEnabled = useFeatureFlagEnabled(FeatureFlags.BOX_SPENDING)
-  const analyticsAvailable = spendingEnabled && !!config.analyticsApiUrl
+  const analyticsAvailable = !!analyticsUsageApi
+  const isUsageRated = !!config.analyticsApiUrl
+  const billingAvailable = !!config.billingApiUrl
 
   const [analyticsDateRange, setAnalyticsDateRange] = useState<DateRange>(() => {
     const now = new Date()
@@ -159,7 +160,7 @@ const Spending = () => {
               </Empty>
             ) : (
               <>
-                <UsageSummary data={aggregatedUsage} isLoading={aggregatedLoading} />
+                <UsageSummary data={aggregatedUsage} isLoading={aggregatedLoading} isRated={isUsageRated} />
                 <Separator />
                 <AggregatedUsageChart data={aggregatedUsage} isLoading={aggregatedLoading} />
                 <Separator />
@@ -202,21 +203,23 @@ const Spending = () => {
                 </EmptyHeader>
               </Empty>
             ) : (
-              <BoxUsageTable data={boxesUsage} isLoading={boxesLoading} />
+              <BoxUsageTable data={boxesUsage} isLoading={boxesLoading} isRated={isUsageRated} />
             )}
           </Card>
         )}
 
-        <CostBreakdown
-          usageData={usageChartData}
-          showTotal
-          isLoading={currentUsageLoading || pastUsageLoading}
-          isError={currentUsageError || pastUsageError}
-          onRetry={() => {
-            if (currentUsageError) refetchCurrentUsage()
-            if (pastUsageError) refetchPastUsage()
-          }}
-        />
+        {billingAvailable && (
+          <CostBreakdown
+            usageData={usageChartData}
+            showTotal
+            isLoading={currentUsageLoading || pastUsageLoading}
+            isError={currentUsageError || pastUsageError}
+            onRetry={() => {
+              if (currentUsageError) refetchCurrentUsage()
+              if (pastUsageError) refetchPastUsage()
+            }}
+          />
+        )}
       </PageContent>
     </PageLayout>
   )

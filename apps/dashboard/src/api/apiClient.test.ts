@@ -25,6 +25,52 @@ async function makeClient(onUnauthorized: () => Promise<void> | void, status = 4
   return new ApiClient(config, 'tok', onUnauthorized)
 }
 
+type CapturedRequest = {
+  url?: string
+  baseURL?: string
+  authorization?: string
+}
+
+function getAuthorizationHeader(headers: unknown): string | undefined {
+  if (!headers || typeof headers !== 'object') {
+    return undefined
+  }
+
+  const headerBag = headers as {
+    get?: (name: string) => unknown
+    Authorization?: unknown
+    authorization?: unknown
+  }
+  const value = headerBag.get?.('Authorization') ?? headerBag.Authorization ?? headerBag.authorization
+  return typeof value === 'string' ? value : undefined
+}
+
+async function makeTokenRefreshClient(
+  requests: CapturedRequest[],
+  accessToken = 'stale-token',
+  analyticsApiUrl: string | null = 'http://analytics.test',
+) {
+  vi.resetModules()
+  const axios = (await import('axios')).default
+  axios.defaults.adapter = (async (request: { url?: string; baseURL?: string; headers?: unknown }) => {
+    requests.push({
+      url: request.url,
+      baseURL: request.baseURL,
+      authorization: getAuthorizationHeader(request.headers),
+    })
+    return { data: {}, status: 200, statusText: '', headers: {}, config: request }
+  }) as never
+  const { ApiClient } = await import('./apiClient')
+  return new ApiClient(
+    {
+      apiUrl: 'http://api.test/api',
+      billingApiUrl: 'http://billing.test',
+      analyticsApiUrl: analyticsApiUrl ?? undefined,
+    } as never,
+    accessToken,
+  )
+}
+
 describe('ApiClient 401 -> bounded re-login recovery', () => {
   beforeEach(() => {
     window.sessionStorage.clear()
@@ -61,5 +107,64 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     await expect(api.organizationsApi.listOrganizations()).rejects.toBeTruthy()
     // Marker cleared so a later genuine 401 still gets its one recovery attempt.
     expect(window.sessionStorage.getItem('boxlite.reauth-attempted')).toBeNull()
+  })
+})
+
+describe('ApiClient access-token refresh', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('uses the core API for built-in analytics when no external analytics URL is configured', async () => {
+    const requests: CapturedRequest[] = []
+    const api = await makeTokenRefreshClient(requests, 'access-token', null)
+
+    expect(api.analyticsUsageApi).not.toBeNull()
+    expect(api.analyticsTelemetryApi).toBeNull()
+    await api.analyticsUsageApi?.organizationOrganizationIdUsageAggregatedGet(
+      'org-1',
+      '2026-01-01T00:00:00Z',
+      '2026-01-02T00:00:00Z',
+    )
+
+    expect(requests).toEqual([
+      expect.objectContaining({
+        url: expect.stringMatching(/^http:\/\/api\.test\/api\/organization\/org-1\/usage\/aggregated\?/),
+        authorization: 'Bearer access-token',
+      }),
+    ])
+  })
+
+  it('uses a directly refreshed token for subsequent billing requests', async () => {
+    const requests: CapturedRequest[] = []
+    const api = await makeTokenRefreshClient(requests)
+
+    await api.billingApi.getOrganizationUsage('org-1')
+    api.billingApi.setAccessToken('billing-token')
+    await api.billingApi.getOrganizationUsage('org-1')
+
+    expect(requests.map(({ authorization }) => authorization)).toEqual(['Bearer stale-token', 'Bearer billing-token'])
+  })
+
+  it('propagates a refreshed token to core, billing, and analytics clients', async () => {
+    const requests: CapturedRequest[] = []
+    const api = await makeTokenRefreshClient(requests)
+
+    api.setAccessToken('refreshed-token')
+    await api.organizationsApi.listOrganizations()
+    await api.billingApi.getOrganizationUsage('org-1')
+    await api.analyticsUsageApi?.organizationOrganizationIdBoxBoxIdUsageGet(
+      'org-1',
+      'box-1',
+      '2026-01-01T00:00:00Z',
+      '2026-01-02T00:00:00Z',
+    )
+
+    expect(requests).toHaveLength(3)
+    expect(requests.map(({ authorization }) => authorization)).toEqual([
+      'Bearer refreshed-token',
+      'Bearer refreshed-token',
+      'Bearer refreshed-token',
+    ])
   })
 })

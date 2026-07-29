@@ -16,6 +16,10 @@ interface AggregatedUsageChartProps {
   isLoading: boolean
 }
 
+interface UsageSummaryProps extends AggregatedUsageChartProps {
+  isRated?: boolean
+}
+
 function formatSeconds(seconds: number): { value: number; suffix: string } {
   if (seconds < 60) return { value: Math.round(seconds * 10) / 10, suffix: ' s' }
   if (seconds < 3600) return { value: Math.round((seconds / 60) * 10) / 10, suffix: ' m' }
@@ -40,25 +44,32 @@ const SEGMENTS = [
   { key: 'disk' as const, label: 'Disk', color: 'bg-[hsl(var(--chart-3))]' },
 ]
 
-export const UsageSummary: React.FC<AggregatedUsageChartProps> = ({ data, isLoading }) => {
+export const UsageSummary: React.FC<UsageSummaryProps> = ({ data, isLoading, isRated = true }) => {
   const totalPrice = data?.totalPrice ?? 0
   const boxCount = data?.boxCount ?? 0
 
   return (
     <div className="flex gap-4 sm:gap-12 sm:flex-row flex-col p-4">
-      <div className="flex flex-col gap-1">
-        <div>Total Cost</div>
-        <div className="relative">
-          <div className={cn('text-2xl font-semibold', isLoading && 'invisible')}>
-            $
-            <NumberFlow
-              value={Math.round(totalPrice * 100) / 100}
-              format={{ minimumFractionDigits: 2, maximumFractionDigits: 2 }}
-            />
+      {isRated ? (
+        <div className="flex flex-col gap-1">
+          <div>Total Cost</div>
+          <div className="relative">
+            <div className={cn('text-2xl font-semibold', isLoading && 'invisible')}>
+              $
+              <NumberFlow
+                value={Math.round(totalPrice * 100) / 100}
+                format={{ minimumFractionDigits: 2, maximumFractionDigits: 2 }}
+              />
+            </div>
+            {isLoading && <Skeleton className="absolute inset-y-1 left-0 w-24" />}
           </div>
-          {isLoading && <Skeleton className="absolute inset-y-1 left-0 w-24" />}
         </div>
-      </div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          <div>Pricing</div>
+          <div className="text-2xl font-semibold">Not rated</div>
+        </div>
+      )}
       <div className="flex flex-col gap-1">
         <div>Boxes</div>
         <div className="relative">

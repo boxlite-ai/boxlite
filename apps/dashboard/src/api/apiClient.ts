@@ -67,6 +67,7 @@ function clearReauthAttempted(): void {
 
 export class ApiClient {
   private config: Configuration
+  private analyticsConfig: AnalyticsConfiguration | null
   private onUnauthorized?: () => Promise<void> | void
   private _boxApi: BoxApi
   private _userApi: UsersApi
@@ -138,9 +139,10 @@ export class ApiClient {
     this._runnersApi = new RunnersApi(this.config, undefined, axiosInstance)
     this._webhooksApi = new WebhooksApi(this.config, undefined, axiosInstance)
 
-    if (config.analyticsApiUrl) {
-      const analyticsConfig = new AnalyticsConfiguration({
-        basePath: config.analyticsApiUrl,
+    const analyticsApiUrl = config.analyticsApiUrl || config.apiUrl
+    if (analyticsApiUrl) {
+      this.analyticsConfig = new AnalyticsConfiguration({
+        basePath: analyticsApiUrl,
         accessToken: accessToken,
         baseOptions: {
           headers: {
@@ -148,9 +150,12 @@ export class ApiClient {
           },
         },
       })
-      this._analyticsUsageApi = new AnalyticsUsageApi(analyticsConfig, undefined, axiosInstance)
-      this._analyticsTelemetryApi = new AnalyticsTelemetryApi(analyticsConfig, undefined, axiosInstance)
+      this._analyticsUsageApi = new AnalyticsUsageApi(this.analyticsConfig, undefined, axiosInstance)
+      this._analyticsTelemetryApi = config.analyticsApiUrl
+        ? new AnalyticsTelemetryApi(this.analyticsConfig, undefined, axiosInstance)
+        : null
     } else {
+      this.analyticsConfig = null
       this._analyticsUsageApi = null
       this._analyticsTelemetryApi = null
     }
@@ -201,6 +206,18 @@ export class ApiClient {
 
   public setAccessToken(accessToken: string) {
     this.config.accessToken = accessToken
+    this._billingApi.setAccessToken(accessToken)
+
+    if (this.analyticsConfig) {
+      this.analyticsConfig.accessToken = accessToken
+      this.analyticsConfig.baseOptions = {
+        ...this.analyticsConfig.baseOptions,
+        headers: {
+          ...this.analyticsConfig.baseOptions?.headers,
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    }
   }
 
   public get boxApi() {

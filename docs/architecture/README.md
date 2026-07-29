@@ -2,6 +2,8 @@
 
 Related design: [AutoPause / AutoResume / AutoDelete](./auto-pause-resume-design.md)
 
+Cloud accounting design: [Usage accounting and billing boundary](./usage-billing.md)
+
 Container security design: [Linux capability API](./container-capabilities.md)
 
 ## Overview
