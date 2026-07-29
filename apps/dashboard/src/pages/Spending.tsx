@@ -16,7 +16,9 @@ import { DateRangePicker, QuickRangesConfig } from '@/components/ui/date-range-p
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Separator } from '@/components/ui/separator'
 import { FeatureFlags } from '@/enums/FeatureFlags'
-import { useAggregatedUsage, useBoxesUsage } from '@/hooks/queries/useAnalyticsUsage'
+import { UsageTimelineChart } from '@/components/spending/UsageTimelineChart'
+import { useAggregatedUsage, useBoxesUsage, useUsageChart } from '@/hooks/queries/useAnalyticsUsage'
+import { useOrganizationUsageOverviewQuery } from '@/hooks/queries/useOrganizationUsageOverviewQuery'
 import { useOrganizationUsageQuery } from '@/hooks/queries/useOrganizationUsageQuery'
 import { usePastOrganizationUsageQuery } from '@/hooks/queries/usePastOrganizationUsageQuery'
 import { useConfig } from '@/hooks/useConfig'
@@ -72,6 +74,9 @@ const Spending = () => {
     isError: boxesError,
     refetch: refetchBoxes,
   } = useBoxesUsage(analyticsParams)
+
+  const { data: usageChartPoints, isLoading: chartLoading } = useUsageChart(analyticsParams)
+  const { data: usageOverview } = useOrganizationUsageOverviewQuery({ organizationId: selectedOrganization?.id ?? '' })
   const {
     data: currentOrganizationUsage,
     isLoading: currentUsageLoading,
@@ -164,6 +169,13 @@ const Spending = () => {
                 <AggregatedUsageChart data={aggregatedUsage} isLoading={aggregatedLoading} />
                 <Separator />
                 <ResourceUsageBreakdown data={aggregatedUsage} />
+                <Separator />
+                <UsageTimelineChart
+                  data={usageChartPoints}
+                  isLoading={chartLoading}
+                  usageOverview={usageOverview}
+                  dateRange={{ from: analyticsParams.from, to: analyticsParams.to }}
+                />
               </>
             )}
             <Separator />

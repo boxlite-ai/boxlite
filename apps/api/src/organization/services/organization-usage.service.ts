@@ -8,8 +8,9 @@ import { OnEvent } from '@nestjs/event-emitter'
 import { InjectRepository } from '@nestjs/typeorm'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
-import { Repository } from 'typeorm'
+import { In, Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
+import { Volume } from '../../box/entities/volume.entity'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { BoxEvents } from '../../box/constants/box-events.constants'
 import { BoxCreatedEvent } from '../../box/events/box-create.event'
@@ -18,6 +19,8 @@ import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { Organization } from '../entities/organization.entity'
 import { OrganizationQuota } from '../entities/organization-quota.entity'
 import { BOX_STATES_CONSUMING_COMPUTE, BOX_STATES_CONSUMING_DISK } from '../constants/box-consuming-states.constant'
+import { VOLUME_STATES_CONSUMING_STORAGE } from '../constants/volume-consuming-states.constant'
+import { OrganizationUsageOverviewDto } from '../dto/organization-usage-overview.dto'
 import { assertWithinOrgQuota, DEFAULT_ORG_QUOTA, OrgQuotaLimits, OrgResourceUsage } from './org-quota'
 import { boxUsageContribution, stateTransitionDelta } from './box-usage'
 
@@ -66,6 +69,7 @@ export class OrganizationUsageService {
     @InjectRedis() private readonly redis: Redis,
     @InjectRepository(Box) private readonly boxRepository: Repository<Box>,
     @InjectRepository(OrganizationQuota) private readonly quotaRepository: Repository<OrganizationQuota>,
+    @InjectRepository(Volume) private readonly volumeRepository: Repository<Volume>,
     private readonly redisLockProvider: RedisLockProvider,
   ) {}
 
@@ -73,6 +77,71 @@ export class OrganizationUsageService {
   async getQuotaLimits(organizationId: string): Promise<OrgQuotaLimits> {
     const quota = await this.quotaRepository.findOne({ where: { organizationId } })
     return quota ?? DEFAULT_ORG_QUOTA
+  }
+
+  /** Whether the organization has its own quota row, as opposed to running on
+   * DEFAULT_ORG_QUOTA. Lets an operator tell "explicitly set to 64" apart from
+   * "never configured, happens to be 64". */
+  async hasCustomQuota(organizationId: string): Promise<boolean> {
+    return (await this.quotaRepository.countBy({ organizationId })) > 0
+  }
+
+  /**
+   * Apply an operator's partial quota change and return the resulting limits.
+   *
+   * Upserts: an organization still on the built-in defaults has no row, so the
+   * patch is layered onto DEFAULT_ORG_QUOTA and inserted. Limits are read fresh on
+   * every enforcement (`getQuotaLimits` does not cache), so a change takes effect
+   * on the next box or volume create with no invalidation step.
+   */
+  async updateQuotaLimits(organizationId: string, patch: Partial<OrgQuotaLimits>): Promise<OrgQuotaLimits> {
+    const current = await this.getQuotaLimits(organizationId)
+    const updated: OrgQuotaLimits = { ...current, ...patch }
+
+    await this.quotaRepository.save({ organizationId, ...updated })
+    this.logger.log(`Updated quota for organization ${organizationId}: ${JSON.stringify(patch)}`)
+
+    return updated
+  }
+
+  /**
+   * Everything an organization currently consumes, paired with the ceiling for each
+   * dimension — what the dashboard renders and what an operator compares a quota
+   * change against.
+   *
+   * Box figures include outstanding pending reservations, so this reports the same
+   * number the quota check enforces against rather than a lower, stale one.
+   */
+  async getUsageOverview(organizationId: string): Promise<OrganizationUsageOverviewDto> {
+    const limits = await this.getQuotaLimits(organizationId)
+    const boxUsage = await this.getBoxUsageOverview(organizationId)
+    const currentVolumeUsage = await this.countLiveVolumes(organizationId)
+
+    return {
+      currentCpuUsage: boxUsage.cpu + boxUsage.pendingCpu,
+      totalCpuQuota: limits.totalCpuQuota,
+      currentMemoryUsage: boxUsage.memory + boxUsage.pendingMemory,
+      totalMemoryQuota: limits.totalMemoryQuota,
+      currentDiskUsage: boxUsage.disk + boxUsage.pendingDisk,
+      totalDiskQuota: limits.totalDiskQuota,
+      currentGpuUsage: boxUsage.gpu + boxUsage.pendingGpu,
+      totalGpuQuota: limits.totalGpuQuota,
+      currentBoxUsage: boxUsage.count + boxUsage.pendingCount,
+      maxConcurrentBoxes: limits.maxConcurrentBoxes,
+      currentVolumeUsage,
+      maxVolumes: limits.maxVolumes,
+    }
+  }
+
+  /** Volumes still occupying storage — the same set VolumeService counts when it
+   * enforces the volume ceiling, so the overview and the check cannot disagree. */
+  private async countLiveVolumes(organizationId: string): Promise<number> {
+    return this.volumeRepository.count({
+      where: {
+        organizationId,
+        state: In(VOLUME_STATES_CONSUMING_STORAGE),
+      },
+    })
   }
 
   /**

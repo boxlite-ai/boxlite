@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { CurrentUsageCard } from '@/components/CurrentUsageCard'
 import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
 import { TierComparisonTable, TierComparisonTableSkeleton } from '@/components/TierComparisonTable'
 import { TierUpgradeCard } from '@/components/TierUpgradeCard'
@@ -72,24 +73,11 @@ export default function Limits() {
           </Card>
         ) : (
           <>
+            <CurrentUsageCard organizationTier={organizationTier} />
+
             <Card>
               <CardHeader className="p-4">
-                <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-                  <CardTitle className="flex justify-between gap-x-4 gap-y-2 flex-row flex-wrap items-center">
-                    <div className="flex items-center gap-2">
-                      Current Usage{' '}
-                      {organizationTier && (
-                        <Badge variant="outline" className="font-mono uppercase">
-                          Tier {organizationTier.tier}
-                        </Badge>
-                      )}
-                    </div>
-                  </CardTitle>
-                </div>
-                <CardDescription>
-                  Limits help us mitigate misuse and manage infrastructure resources. <br /> Ensuring fair and stable
-                  access to boxes and compute capacity across all users.
-                </CardDescription>
+                <CardTitle className="flex items-center mb-2">Limits</CardTitle>
               </CardHeader>
               <CardContent className="p-0 flex flex-col">
                 <RateLimits

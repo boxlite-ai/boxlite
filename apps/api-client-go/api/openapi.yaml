@@ -476,6 +476,34 @@ paths:
       summary: Get organization by ID
       tags:
       - organizations
+  /organizations/{organizationId}/usage:
+    get:
+      operationId: getOrganizationUsageOverview
+      parameters:
+      - description: Organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationUsageOverview"
+          description: Current usage overview
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get organization current usage overview
+      tags:
+      - organizations
   /organizations/{organizationId}/leave:
     post:
       operationId: leaveOrganization
@@ -3407,6 +3435,65 @@ paths:
       summary: Recover box from error state as an admin
       tags:
       - admin
+  /admin/organizations/{organizationId}/quota:
+    get:
+      operationId: adminGetOrganizationQuota
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationQuota"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get organization quota
+      tags:
+      - admin
+    patch:
+      operationId: adminUpdateOrganizationQuota
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminUpdateOrganizationQuota"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationQuota"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Update organization quota
+      tags:
+      - admin
   /admin/overview:
     get:
       operationId: adminGetOverview
@@ -5712,6 +5799,83 @@ components:
       required:
       - defaultRegionId
       type: object
+    OrganizationUsageOverview:
+      example:
+        currentCpuUsage: 12
+        totalCpuQuota: 64
+        currentMemoryUsage: 48
+        totalMemoryQuota: 256
+        currentDiskUsage: 300
+        totalDiskQuota: 512
+        currentGpuUsage: 0
+        totalGpuQuota: 0
+        currentBoxUsage: 3
+        maxConcurrentBoxes: 50
+        currentVolumeUsage: 4
+        maxVolumes: 100
+      properties:
+        currentCpuUsage:
+          description: vCPU currently consumed by running boxes
+          example: 12
+          type: number
+        totalCpuQuota:
+          description: Total vCPU the organization may consume
+          example: 64
+          type: number
+        currentMemoryUsage:
+          description: Memory in GB currently consumed by running boxes
+          example: 48
+          type: number
+        totalMemoryQuota:
+          description: Total memory in GB the organization may consume
+          example: 256
+          type: number
+        currentDiskUsage:
+          description: Disk in GB currently occupied by boxes
+          example: 300
+          type: number
+        totalDiskQuota:
+          description: Total disk in GB the organization may occupy
+          example: 512
+          type: number
+        currentGpuUsage:
+          description: GPUs currently consumed by running boxes
+          example: 0
+          type: number
+        totalGpuQuota:
+          description: Total GPUs the organization may consume; 0 denies GPU boxes
+          example: 0
+          type: number
+        currentBoxUsage:
+          description: Boxes currently running
+          example: 3
+          type: number
+        maxConcurrentBoxes:
+          description: Maximum number of concurrently running boxes
+          example: 50
+          type: number
+        currentVolumeUsage:
+          description: Volumes currently occupying storage
+          example: 4
+          type: number
+        maxVolumes:
+          description: Maximum number of volumes that may occupy storage
+          example: 100
+          type: number
+      required:
+      - currentBoxUsage
+      - currentCpuUsage
+      - currentDiskUsage
+      - currentGpuUsage
+      - currentMemoryUsage
+      - currentVolumeUsage
+      - maxConcurrentBoxes
+      - maxVolumes
+      - totalCpuQuota
+      - totalDiskQuota
+      - totalGpuQuota
+      - totalMemoryQuota
+      type: object
     OrganizationSuspension:
       example:
         reason: reason
@@ -6257,6 +6421,12 @@ components:
       - provider
       - userId
       type: object
+    GpuType:
+      description: The GPU type assigned to the box
+      enum:
+      - H100
+      - RTX-PRO-6000
+      type: string
     BoxState:
       description: The state of the box
       enum:
@@ -6323,6 +6493,7 @@ components:
         image: boxlite/base
         cpu: 2
         gpu: 0
+        gpuType: H100
         memory: 4
         disk: 10
         state: creating
@@ -6405,6 +6576,11 @@ components:
           description: The GPU quota for the box
           example: 0
           type: number
+        gpuType:
+          allOf:
+          - $ref: "#/components/schemas/GpuType"
+          description: The GPU type assigned to the box
+          example: H100
         memory:
           description: The memory quota for the box
           example: 4
@@ -6511,6 +6687,7 @@ components:
           image: boxlite/base
           cpu: 2
           gpu: 0
+          gpuType: H100
           memory: 4
           disk: 10
           state: creating
@@ -6548,6 +6725,7 @@ components:
           image: boxlite/base
           cpu: 2
           gpu: 0
+          gpuType: H100
           memory: 4
           disk: 10
           state: creating
@@ -7766,6 +7944,89 @@ components:
       - unschedulable
       - updatedAt
       - version
+      type: object
+    AdminOrganizationQuota:
+      example:
+        totalCpuQuota: 64
+        totalMemoryQuota: 256
+        totalDiskQuota: 512
+        totalGpuQuota: 0
+        maxConcurrentBoxes: 50
+        maxVolumes: 100
+        customized: true
+      properties:
+        totalCpuQuota:
+          description: Total vCPU an organization may have running at once
+          example: 64
+          type: number
+        totalMemoryQuota:
+          description: Total memory in GB an organization may have running at once
+          example: 256
+          type: number
+        totalDiskQuota:
+          description: Total disk in GB an organization may occupy
+          example: 512
+          type: number
+        totalGpuQuota:
+          description: Total GPUs an organization may have running at once; 0 denies
+            GPU boxes
+          example: 0
+          type: number
+        maxConcurrentBoxes:
+          description: Maximum number of concurrently running boxes
+          example: 50
+          type: number
+        maxVolumes:
+          description: Maximum number of volumes occupying storage
+          example: 100
+          type: number
+        customized:
+          description: False when the organization has no quota row and is running
+            on the built-in defaults
+          example: true
+          type: boolean
+      required:
+      - customized
+      - maxConcurrentBoxes
+      - maxVolumes
+      - totalCpuQuota
+      - totalDiskQuota
+      - totalGpuQuota
+      - totalMemoryQuota
+      type: object
+    AdminUpdateOrganizationQuota:
+      example:
+        totalCpuQuota: 64
+        totalMemoryQuota: 256
+        totalDiskQuota: 512
+        totalGpuQuota: 0
+        maxConcurrentBoxes: 50
+        maxVolumes: 100
+      properties:
+        totalCpuQuota:
+          description: Total vCPU an organization may have running at once
+          example: 64
+          type: number
+        totalMemoryQuota:
+          description: Total memory in GB an organization may have running at once
+          example: 256
+          type: number
+        totalDiskQuota:
+          description: Total disk in GB an organization may occupy
+          example: 512
+          type: number
+        totalGpuQuota:
+          description: Total GPUs an organization may have running at once
+          example: 0
+          type: number
+        maxConcurrentBoxes:
+          description: Maximum number of concurrently running boxes
+          example: 50
+          type: number
+        maxVolumes:
+          description: Maximum number of volumes occupying storage
+          example: 100
+          type: number
       type: object
     AdminOverviewBoxes:
       example:

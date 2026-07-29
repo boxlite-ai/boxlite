@@ -40,6 +40,7 @@ import { WarmPool } from '../entities/warm-pool.entity'
 import { BoxDto, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
+import { normalizeGpuType } from '../utils/gpu-type-normalizer.util'
 import { SshAccess } from '../entities/ssh-access.entity'
 import { SshAccessDto, SshAccessValidationDto } from '../dto/ssh-access.dto'
 import { VolumeService } from './volume.service'
@@ -149,6 +150,7 @@ export class BoxService {
     })
 
     box.runnerId = runner.id
+    box.gpuType = box.gpu > 0 ? normalizeGpuType(runner.gpuType) : null
     box.pending = true
 
     await this.boxRepository.insert(box)
@@ -257,6 +259,7 @@ export class BoxService {
       }
 
       box.runnerId = runner.id
+      box.gpuType = box.gpu > 0 ? normalizeGpuType(runner.gpuType) : null
       box.pending = true
 
       // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),

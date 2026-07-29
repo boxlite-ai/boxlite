@@ -7,12 +7,21 @@ import { useQuery } from '@tanstack/react-query'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { queryKeys } from '@/hooks/queries/queryKeys'
-import { ModelsAggregatedUsage, ModelsBoxUsage, ModelsUsagePeriod } from '@boxlite-ai/analytics-api-client'
+import {
+  ModelsAggregatedUsage,
+  ModelsBoxUsage,
+  ModelsUsageChartPoint,
+  ModelsUsagePeriod,
+} from '@boxlite-ai/analytics-api-client'
 
 export interface AnalyticsUsageParams {
   from: Date
   to: Date
   enabled?: boolean
+}
+
+export interface UsageChartParams extends AnalyticsUsageParams {
+  region?: string
 }
 
 export function useAggregatedUsage(params: AnalyticsUsageParams) {
@@ -51,6 +60,29 @@ export function useBoxesUsage(params: AnalyticsUsageParams) {
         selectedOrganization.id,
         params.from.toISOString(),
         params.to.toISOString(),
+      )
+      return response.data
+    },
+    enabled: !!selectedOrganization && !!api.analyticsUsageApi && params.enabled !== false,
+    staleTime: 10_000,
+  })
+}
+
+export function useUsageChart(params: UsageChartParams) {
+  const api = useApi()
+  const { selectedOrganization } = useSelectedOrganization()
+
+  return useQuery<ModelsUsageChartPoint[]>({
+    queryKey: queryKeys.analytics.usageChart(selectedOrganization?.id ?? '', params),
+    queryFn: async () => {
+      if (!selectedOrganization || !api.analyticsUsageApi) {
+        throw new Error('Missing required parameters')
+      }
+      const response = await api.analyticsUsageApi.organizationOrganizationIdUsageChartGet(
+        selectedOrganization.id,
+        params.from.toISOString(),
+        params.to.toISOString(),
+        params.region,
       )
       return response.data
     },

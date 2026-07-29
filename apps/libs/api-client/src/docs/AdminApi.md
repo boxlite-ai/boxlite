@@ -11,6 +11,7 @@ All URIs are relative to *http://localhost:3000*
 |[**adminGetObservabilityStatus**](#admingetobservabilitystatus) | **GET** /admin/observability/status | Get admin observability backend and layer status|
 |[**adminGetObservabilityTraceSpans**](#admingetobservabilitytracespans) | **GET** /admin/observability/traces/{traceId} | Get admin-scoped trace spans|
 |[**adminGetObservabilityTraces**](#admingetobservabilitytraces) | **GET** /admin/observability/traces | Get admin-scoped traces|
+|[**adminGetOrganizationQuota**](#admingetorganizationquota) | **GET** /admin/organizations/{organizationId}/quota | Get organization quota|
 |[**adminGetOverview**](#admingetoverview) | **GET** /admin/overview | Admin KPI summary|
 |[**adminGetRunnerById**](#admingetrunnerbyid) | **GET** /admin/runners/{id} | Get runner by ID|
 |[**adminInvestigateObservability**](#admininvestigateobservability) | **GET** /admin/observability/investigate | Investigate related observability and platform state from trace or resource identifiers|
@@ -20,6 +21,7 @@ All URIs are relative to *http://localhost:3000*
 |[**adminListRunnersOverview**](#adminlistrunnersoverview) | **GET** /admin/overview/runners | List all runners with full details|
 |[**adminListUsers**](#adminlistusers) | **GET** /admin/overview/users | List all users (cross-org)|
 |[**adminRecoverBox**](#adminrecoverbox) | **POST** /admin/box/{boxId}/recover | Recover box from error state as an admin|
+|[**adminUpdateOrganizationQuota**](#adminupdateorganizationquota) | **PATCH** /admin/organizations/{organizationId}/quota | Update organization quota|
 |[**adminUpdateRunnerScheduling**](#adminupdaterunnerscheduling) | **PATCH** /admin/runners/{id}/scheduling | Update runner scheduling status|
 
 # **adminCreateRunner**
@@ -555,6 +557,56 @@ const { status, data } = await apiInstance.adminGetObservabilityTraces(
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
+# **adminGetOrganizationQuota**
+> AdminOrganizationQuota adminGetOrganizationQuota()
+
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let organizationId: string; // (default to undefined)
+
+const { status, data } = await apiInstance.adminGetOrganizationQuota(
+    organizationId
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **organizationId** | [**string**] |  | defaults to undefined|
+
+
+### Return type
+
+**AdminOrganizationQuota**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
 # **adminGetOverview**
 > AdminOverview adminGetOverview()
 
@@ -1012,6 +1064,60 @@ const { status, data } = await apiInstance.adminRecoverBox(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | Recovery initiated |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **adminUpdateOrganizationQuota**
+> AdminOrganizationQuota adminUpdateOrganizationQuota(adminUpdateOrganizationQuota)
+
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration,
+    AdminUpdateOrganizationQuota
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let organizationId: string; // (default to undefined)
+let adminUpdateOrganizationQuota: AdminUpdateOrganizationQuota; //
+
+const { status, data } = await apiInstance.adminUpdateOrganizationQuota(
+    organizationId,
+    adminUpdateOrganizationQuota
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **adminUpdateOrganizationQuota** | **AdminUpdateOrganizationQuota**|  | |
+| **organizationId** | [**string**] |  | defaults to undefined|
+
+
+### Return type
+
+**AdminOrganizationQuota**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

@@ -93,6 +93,8 @@ export const queryKeys = {
     all: ['analytics'] as const,
     aggregatedUsage: (organizationId: string, params: object) =>
       [...queryKeys.analytics.all, organizationId, 'aggregated-usage', params] as const,
+    usageChart: (organizationId: string, params: object) =>
+      [...queryKeys.analytics.all, organizationId, 'usage-chart', params] as const,
     boxesUsage: (organizationId: string, params: object) =>
       [...queryKeys.analytics.all, organizationId, 'boxes-usage', params] as const,
     boxUsagePeriods: (organizationId: string, boxId: string, params: object) =>

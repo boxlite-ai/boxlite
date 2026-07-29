@@ -59,6 +59,13 @@ export class OrganizationQuota {
   })
   maxConcurrentBoxes: number
 
+  @Column({
+    type: 'int',
+    default: 100,
+    name: 'max_volumes',
+  })
+  maxVolumes: number
+
   @CreateDateColumn({
     type: 'timestamp with time zone',
   })

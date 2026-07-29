@@ -295,6 +295,8 @@ const configuration = {
   },
   otelCollector: {
     apiKey: process.env.OTEL_COLLECTOR_API_KEY,
+    // OTLP/HTTP base URL the org metrics exporter pushes to. Unset disables the export.
+    endpointUrl: process.env.OTEL_COLLECTOR_ENDPOINT_URL,
   },
   clickhouse: {
     url: process.env.CLICKHOUSE_READER_URL || process.env.CLICKHOUSE_URL,

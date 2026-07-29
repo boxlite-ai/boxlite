@@ -42,6 +42,8 @@ import type { OrganizationRole } from '../models';
 // @ts-ignore
 import type { OrganizationSuspension } from '../models';
 // @ts-ignore
+import type { OrganizationUsageOverview } from '../models';
+// @ts-ignore
 import type { OrganizationUser } from '../models';
 // @ts-ignore
 import type { OtelConfig } from '../models';
@@ -660,6 +662,46 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             assertParamExists('getOrganizationOtelConfigByBoxAuthToken', 'authToken', authToken)
             const localVarPath = `/organizations/otel-config/by-box-auth-token/{authToken}`
                 .replace('{authToken}', encodeURIComponent(String(authToken)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Get organization current usage overview
+         * @param {string} organizationId Organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        getOrganizationUsageOverview: async (organizationId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('getOrganizationUsageOverview', 'organizationId', organizationId)
+            const localVarPath = `/organizations/{organizationId}/usage`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1754,6 +1796,19 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Get organization current usage overview
+         * @param {string} organizationId Organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async getOrganizationUsageOverview(organizationId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<OrganizationUsageOverview>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getOrganizationUsageOverview(organizationId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.getOrganizationUsageOverview']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Get region by ID
          * @param {string} id Region ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -2193,6 +2248,16 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
         },
         /**
          * 
+         * @summary Get organization current usage overview
+         * @param {string} organizationId Organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        getOrganizationUsageOverview(organizationId: string, options?: RawAxiosRequestConfig): AxiosPromise<OrganizationUsageOverview> {
+            return localVarFp.getOrganizationUsageOverview(organizationId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Get region by ID
          * @param {string} id Region ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -2581,6 +2646,17 @@ export class OrganizationsApi extends BaseAPI {
      */
     public getOrganizationOtelConfigByBoxAuthToken(authToken: string, options?: RawAxiosRequestConfig) {
         return OrganizationsApiFp(this.configuration).getOrganizationOtelConfigByBoxAuthToken(authToken, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Get organization current usage overview
+     * @param {string} organizationId Organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public getOrganizationUsageOverview(organizationId: string, options?: RawAxiosRequestConfig) {
+        return OrganizationsApiFp(this.configuration).getOrganizationUsageOverview(organizationId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

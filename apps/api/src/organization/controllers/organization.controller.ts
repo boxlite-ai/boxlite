@@ -23,6 +23,8 @@ import { ApiOAuth2, ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiBe
 import { RequiredOrganizationMemberRole } from '../decorators/required-organization-member-role.decorator'
 import { CreateOrganizationDto } from '../dto/create-organization.dto'
 import { OrganizationDto } from '../dto/organization.dto'
+import { OrganizationUsageOverviewDto } from '../dto/organization-usage-overview.dto'
+import { OrganizationUsageService } from '../services/organization-usage.service'
 import { OrganizationInvitationDto } from '../dto/organization-invitation.dto'
 import { OrganizationMemberRole } from '../enums/organization-member-role.enum'
 import { OrganizationActionGuard } from '../guards/organization-action.guard'
@@ -64,6 +66,7 @@ export class OrganizationController {
     private readonly organizationInvitationService: OrganizationInvitationService,
     private readonly userService: UserService,
     private readonly configService: TypedConfigService,
+    private readonly organizationUsageService: OrganizationUsageService,
   ) {}
 
   @Get('/invitations')
@@ -324,6 +327,26 @@ export class OrganizationController {
     }
 
     return OrganizationDto.fromOrganization(organization)
+  }
+
+  @Get('/:organizationId/usage')
+  @ApiOperation({
+    summary: 'Get organization current usage overview',
+    operationId: 'getOrganizationUsageOverview',
+  })
+  @ApiParam({
+    name: 'organizationId',
+    description: 'Organization ID',
+    type: 'string',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Current usage overview',
+    type: OrganizationUsageOverviewDto,
+  })
+  @UseGuards(AuthGuard('jwt'), OrganizationActionGuard)
+  async getUsageOverview(@Param('organizationId') organizationId: string): Promise<OrganizationUsageOverviewDto> {
+    return this.organizationUsageService.getUsageOverview(organizationId)
   }
 
   @Delete('/:organizationId')

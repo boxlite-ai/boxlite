@@ -20,6 +20,7 @@ import { OrganizationRoleService } from './services/organization-role.service'
 import { OrganizationUserService } from './services/organization-user.service'
 import { OrganizationInvitationService } from './services/organization-invitation.service'
 import { OrganizationUsageService } from './services/organization-usage.service'
+import { OrgMetricsExporterService } from './services/org-metrics-exporter.service'
 import { UserModule } from '../user/user.module'
 import { Box } from '../box/entities/box.entity'
 import { Volume } from '../box/entities/volume.entity'
@@ -62,6 +63,7 @@ import { EncryptionModule } from '../encryption/encryption.module'
     OrganizationUserService,
     OrganizationInvitationService,
     OrganizationUsageService,
+    OrgMetricsExporterService,
     RedisLockProvider,
     BoxLookupCacheInvalidationService,
     {

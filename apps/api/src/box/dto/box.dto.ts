@@ -10,6 +10,7 @@ import { IsEnum, IsOptional } from 'class-validator'
 import { Box } from '../entities/box.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
+import { GpuType } from '../enums/gpu-type.enum'
 
 @ApiSchema({ name: 'BoxVolume' })
 export class BoxVolume {
@@ -118,6 +119,16 @@ export class BoxDto {
     example: 0,
   })
   gpu: number
+
+  @ApiPropertyOptional({
+    description: 'The GPU type assigned to the box',
+    enum: GpuType,
+    enumName: 'GpuType',
+    example: GpuType.H100,
+  })
+  @IsEnum(GpuType)
+  @IsOptional()
+  gpuType?: GpuType
 
   @ApiProperty({
     description: 'The memory quota for the box',
@@ -263,6 +274,7 @@ export class BoxDto {
       env: box.env,
       cpu: box.cpu,
       gpu: box.gpu,
+      gpuType: box.gpuType ?? undefined,
       memory: box.mem,
       disk: box.disk,
       public: box.public,

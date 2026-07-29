@@ -136,6 +136,19 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     return this.organizationRepository.findOne({ where: { id: box.organizationId } })
   }
 
+  /**
+   * Organizations that have opted into telemetry, i.e. carry a non-empty otel
+   * endpoint in their experimental config. Routing to each org's own destination is
+   * the collector's job — the API only reports which orgs want metrics.
+   */
+  async findOrganizationsWithOtelConfig(): Promise<Organization[]> {
+    return this.organizationRepository
+      .createQueryBuilder('organization')
+      .where(`organization."experimentalConfig" -> 'otel' ->> 'endpoint' IS NOT NULL`)
+      .andWhere(`organization."experimentalConfig" -> 'otel' ->> 'endpoint' != ''`)
+      .getMany()
+  }
+
   async findByBoxAuthToken(authToken: string): Promise<Organization | null> {
     const box = await this.boxRepository.findOne({
       where: { authToken },

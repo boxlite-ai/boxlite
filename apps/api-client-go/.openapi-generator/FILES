@@ -42,12 +42,14 @@ model_admin_observability_source_status.go
 model_admin_observability_status_dto.go
 model_admin_observability_timeline_event.go
 model_admin_observability_x_log.go
+model_admin_organization_quota.go
 model_admin_overview.go
 model_admin_overview_boxes.go
 model_admin_overview_cluster.go
 model_admin_overview_runners.go
 model_admin_runner.go
 model_admin_runner_item.go
+model_admin_update_organization_quota.go
 model_admin_user_item.go
 model_announcement.go
 model_api_key_list.go
@@ -71,6 +73,7 @@ model_create_runner.go
 model_create_runner_response.go
 model_create_user.go
 model_create_volume.go
+model_gpu_type.go
 model_health_controller_check_200_response.go
 model_health_controller_check_200_response_info_value.go
 model_job.go
@@ -86,6 +89,7 @@ model_organization_box_default_limited_network_egress.go
 model_organization_invitation.go
 model_organization_role.go
 model_organization_suspension.go
+model_organization_usage_overview.go
 model_organization_user.go
 model_otel_config.go
 model_paginated_audit_logs.go

@@ -4,6 +4,10 @@
 
 - [AutoPause、AutoResume 与 AutoDelete](./auto-pause-resume.md)
 
+## Limits and Usage
+
+- [Organization Limits and Usage](./organization-limits.md)
+
 ## Building from Source
 
 ### Prerequisites

@@ -81,6 +81,8 @@ The purpose of AutoPause is to stop compute resources when idle. Billing still u
 
 Running compute resources and persistent storage kept after Stop are different dimensions. Specific prices, free tiers, and billing rules depend on the deployment environment's billing page and commercial terms; this guide does not promise fixed pricing.
 
+A stopped box also stops counting against the organization's compute quota and concurrency limit while continuing to count against its disk quota. See [Organization Limits and Usage](./organization-limits.md) for the full state-by-state table.
+
 ## FAQ
 
 ### Why does accessing Metrics not automatically start the box?

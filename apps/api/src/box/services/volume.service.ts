@@ -21,6 +21,9 @@ import { TypedConfigService } from '../../config/typed-config.service'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { OrganizationUsageService } from '../../organization/services/organization-usage.service'
+import { assertWithinVolumeQuota } from '../../organization/services/org-quota'
+import { VOLUME_STATES_CONSUMING_STORAGE } from '../../organization/constants/volume-consuming-states.constant'
 
 @Injectable()
 export class VolumeService {
@@ -33,6 +36,7 @@ export class VolumeService {
     private readonly organizationService: OrganizationService,
     private readonly configService: TypedConfigService,
     private readonly redisLockProvider: RedisLockProvider,
+    private readonly organizationUsageService: OrganizationUsageService,
   ) {}
 
   async create(organization: Organization, createVolumeDto: CreateVolumeDto): Promise<Volume> {
@@ -66,9 +70,28 @@ export class VolumeService {
     volume.organizationId = organization.id
     volume.state = VolumeState.PENDING_CREATE
 
-    const savedVolume = await this.volumeRepository.save(volume)
-    this.logger.debug(`Created volume ${savedVolume.id} for organization ${organization.id}`)
-    return savedVolume
+    // Serialized per organization so two concurrent creates cannot both read the
+    // same under-quota count and then both insert. Volumes are created rarely
+    // enough that a short lock is cheaper than maintaining a pending-reservation
+    // counter the way box quotas do.
+    const quotaLockKey = `org:${organization.id}:volume-quota`
+    await this.redisLockProvider.waitForLock(quotaLockKey, 60)
+    try {
+      const limits = await this.organizationUsageService.getQuotaLimits(organization.id)
+      const liveVolumes = await this.volumeRepository.count({
+        where: {
+          organizationId: organization.id,
+          state: In(VOLUME_STATES_CONSUMING_STORAGE),
+        },
+      })
+      assertWithinVolumeQuota(limits, liveVolumes)
+
+      const savedVolume = await this.volumeRepository.save(volume)
+      this.logger.debug(`Created volume ${savedVolume.id} for organization ${organization.id}`)
+      return savedVolume
+    } finally {
+      await this.redisLockProvider.unlock(quotaLockKey)
+    }
   }
 
   async delete(volumeId: string): Promise<void> {

@@ -5,6 +5,7 @@
 ## Guides
 
 - [AutoPause、AutoResume 与 AutoDelete](./guides/auto-pause-resume.md)
+- [Organization Limits and Usage](./guides/organization-limits.md) — quotas, per-box limits, rate limits, metering
 
 ## Reference
 

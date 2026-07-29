@@ -32,11 +32,15 @@ import type { AdminObservabilityInvestigateResponse } from '../models';
 // @ts-ignore
 import type { AdminObservabilityStatusDto } from '../models';
 // @ts-ignore
+import type { AdminOrganizationQuota } from '../models';
+// @ts-ignore
 import type { AdminOverview } from '../models';
 // @ts-ignore
 import type { AdminRunner } from '../models';
 // @ts-ignore
 import type { AdminRunnerItem } from '../models';
+// @ts-ignore
+import type { AdminUpdateOrganizationQuota } from '../models';
 // @ts-ignore
 import type { AdminUserItem } from '../models';
 // @ts-ignore
@@ -668,6 +672,46 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary Get organization quota
+         * @param {string} organizationId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetOrganizationQuota: async (organizationId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('adminGetOrganizationQuota', 'organizationId', organizationId)
+            const localVarPath = `/admin/organizations/{organizationId}/quota`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Admin KPI summary
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1089,6 +1133,51 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary Update organization quota
+         * @param {string} organizationId 
+         * @param {AdminUpdateOrganizationQuota} adminUpdateOrganizationQuota 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminUpdateOrganizationQuota: async (organizationId: string, adminUpdateOrganizationQuota: AdminUpdateOrganizationQuota, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('adminUpdateOrganizationQuota', 'organizationId', organizationId)
+            // verify required parameter 'adminUpdateOrganizationQuota' is not null or undefined
+            assertParamExists('adminUpdateOrganizationQuota', 'adminUpdateOrganizationQuota', adminUpdateOrganizationQuota)
+            const localVarPath = `/admin/organizations/{organizationId}/quota`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'PATCH', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(adminUpdateOrganizationQuota, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Update runner scheduling status
          * @param {string} id 
          * @param {*} [options] Override http request option.
@@ -1290,6 +1379,19 @@ export const AdminApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Get organization quota
+         * @param {string} organizationId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetOrganizationQuota(organizationId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationQuota>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetOrganizationQuota(organizationId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetOrganizationQuota']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Admin KPI summary
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1413,6 +1515,20 @@ export const AdminApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.adminRecoverBox(boxId, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminRecoverBox']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Update organization quota
+         * @param {string} organizationId 
+         * @param {AdminUpdateOrganizationQuota} adminUpdateOrganizationQuota 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminUpdateOrganizationQuota(organizationId: string, adminUpdateOrganizationQuota: AdminUpdateOrganizationQuota, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationQuota>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminUpdateOrganizationQuota(organizationId, adminUpdateOrganizationQuota, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminUpdateOrganizationQuota']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1571,6 +1687,16 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
+         * @summary Get organization quota
+         * @param {string} organizationId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetOrganizationQuota(organizationId: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationQuota> {
+            return localVarFp.adminGetOrganizationQuota(organizationId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Admin KPI summary
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1668,6 +1794,17 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          */
         adminRecoverBox(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
             return localVarFp.adminRecoverBox(boxId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Update organization quota
+         * @param {string} organizationId 
+         * @param {AdminUpdateOrganizationQuota} adminUpdateOrganizationQuota 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminUpdateOrganizationQuota(organizationId: string, adminUpdateOrganizationQuota: AdminUpdateOrganizationQuota, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationQuota> {
+            return localVarFp.adminUpdateOrganizationQuota(organizationId, adminUpdateOrganizationQuota, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1827,6 +1964,17 @@ export class AdminApi extends BaseAPI {
 
     /**
      * 
+     * @summary Get organization quota
+     * @param {string} organizationId 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetOrganizationQuota(organizationId: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetOrganizationQuota(organizationId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Admin KPI summary
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -1932,6 +2080,18 @@ export class AdminApi extends BaseAPI {
      */
     public adminRecoverBox(boxId: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminRecoverBox(boxId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Update organization quota
+     * @param {string} organizationId 
+     * @param {AdminUpdateOrganizationQuota} adminUpdateOrganizationQuota 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminUpdateOrganizationQuota(organizationId: string, adminUpdateOrganizationQuota: AdminUpdateOrganizationQuota, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminUpdateOrganizationQuota(organizationId, adminUpdateOrganizationQuota, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
