@@ -181,6 +181,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   const primaryItems = useMemo<NavItem[]>(
     () => [
       { label: 'Boxes', path: RoutePath.BOXES },
+      { label: 'Limits', path: RoutePath.LIMITS },
       { label: 'Billing', path: RoutePath.BILLING },
       ...(canViewAdmin ? [{ label: 'Admin', path: RoutePath.ADMIN }] : []),
     ],

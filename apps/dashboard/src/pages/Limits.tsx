@@ -8,9 +8,8 @@ import { CurrentUsageCard } from '@/components/CurrentUsageCard'
 import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
 import { TierComparisonTable, TierComparisonTableSkeleton } from '@/components/TierComparisonTable'
 import { TierUpgradeCard } from '@/components/TierUpgradeCard'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { RoutePath } from '@/enums/RoutePath'
 import { useOwnerTierQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
 import { useTiersQuery } from '@/hooks/queries/useTiersQuery'
@@ -58,6 +57,11 @@ export default function Limits() {
       </PageHeader>
 
       <PageContent>
+        {/* Quota usage comes from the core API, so it renders even when the
+            billing queries below fail — a deployment without a billing API
+            would otherwise show nothing but an error card here. */}
+        <CurrentUsageCard organizationTier={organizationTier} />
+
         {isError ? (
           <Card>
             <CardHeader>
@@ -73,8 +77,6 @@ export default function Limits() {
           </Card>
         ) : (
           <>
-            <CurrentUsageCard organizationTier={organizationTier} />
-
             <Card>
               <CardHeader className="p-4">
                 <CardTitle className="flex items-center mb-2">Limits</CardTitle>

@@ -40,6 +40,8 @@ import Boxes from './pages/Boxes'
 const Keys = React.lazy(() => import('./pages/Keys'))
 const Billing = React.lazy(() => import('./pages/Billing'))
 const Admin = React.lazy(() => import('./pages/Admin'))
+const Limits = React.lazy(() => import('./pages/Limits'))
+const Spending = React.lazy(() => import('./pages/Spending'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
 const BoxDetails = React.lazy(() => import('./components/boxes').then((m) => ({ default: m.BoxDetails })))
@@ -53,8 +55,6 @@ import { BoxSessionProvider } from './providers/BoxSessionProvider'
 const HIDDEN_DASHBOARD_ROUTES = [
   RoutePath.IMAGES,
   RoutePath.VOLUMES,
-  RoutePath.LIMITS,
-  RoutePath.BILLING_SPENDING,
   RoutePath.BILLING_WALLET,
   RoutePath.MEMBERS,
   RoutePath.ROLES,
@@ -187,6 +187,8 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
         <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
         <Route path={getRouteSubPath(RoutePath.BILLING)} element={<Billing />} />
+        <Route path={getRouteSubPath(RoutePath.LIMITS)} element={<Limits />} />
+        <Route path={getRouteSubPath(RoutePath.BILLING_SPENDING)} element={<Spending />} />
         <Route path={getRouteSubPath(RoutePath.PRICING)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.ADMIN)} element={<Admin />} />
         {/* TODO(image-rewrite): legacy /dashboard/templates route removed with the templates page. */}
