@@ -26,10 +26,15 @@ struct OutputState {
     buffered_bytes: usize,
     oldest_sequence: u64,
     next_sequence: u64,
-    failure: Option<String>,
+    failure: Option<ReaderFailure>,
     attached: bool,
     stdout: StreamState,
     stderr: StreamState,
+}
+
+struct ReaderFailure {
+    sequence: u64,
+    message: String,
 }
 
 struct OutputEntry {
@@ -133,35 +138,37 @@ impl OutputManager {
                 let next = {
                     let state = manager.inner.lock().await;
 
-                    if let Some(failure) = &state.failure {
-                        Next::Error(Status::internal(failure.clone()))
+                    if next_sequence < state.oldest_sequence {
+                        next_sequence = state.oldest_sequence;
+                    }
+                    let failure = state
+                        .failure
+                        .as_ref()
+                        .filter(|failure| next_sequence >= failure.sequence);
+                    if let Some(failure) = failure {
+                        Next::Error(Status::internal(failure.message.clone()))
+                    } else if state.stdout.ready_to_end(next_sequence) && !stdout_end_sent {
+                        stdout_end_sent = true;
+                        Next::Item(end_output(OutputSource::Stdout, state.stdout.total_bytes))
+                    } else if state.stderr.ready_to_end(next_sequence) && !stderr_end_sent {
+                        stderr_end_sent = true;
+                        Next::Item(end_output(OutputSource::Stderr, state.stderr.total_bytes))
+                    } else if next_sequence < state.next_sequence {
+                        let index = (next_sequence - state.oldest_sequence) as usize;
+                        let output = state
+                            .entries
+                            .get(index)
+                            .expect("ring sequence must exist")
+                            .output
+                            .clone();
+                        next_sequence += 1;
+                        Next::Item(output)
+                    } else if (!state.stdout.enabled || stdout_end_sent)
+                        && (!state.stderr.enabled || stderr_end_sent)
+                    {
+                        Next::Done
                     } else {
-                        if next_sequence < state.oldest_sequence {
-                            next_sequence = state.oldest_sequence;
-                        }
-                        if state.stdout.ready_to_end(next_sequence) && !stdout_end_sent {
-                            stdout_end_sent = true;
-                            Next::Item(end_output(OutputSource::Stdout, state.stdout.total_bytes))
-                        } else if state.stderr.ready_to_end(next_sequence) && !stderr_end_sent {
-                            stderr_end_sent = true;
-                            Next::Item(end_output(OutputSource::Stderr, state.stderr.total_bytes))
-                        } else if next_sequence < state.next_sequence {
-                            let index = (next_sequence - state.oldest_sequence) as usize;
-                            let output = state
-                                .entries
-                                .get(index)
-                                .expect("ring sequence must exist")
-                                .output
-                                .clone();
-                            next_sequence += 1;
-                            Next::Item(output)
-                        } else if (!state.stdout.enabled || stdout_end_sent)
-                            && (!state.stderr.enabled || stderr_end_sent)
-                        {
-                            Next::Done
-                        } else {
-                            Next::Wait
-                        }
+                        Next::Wait
                     }
                 };
 
@@ -256,7 +263,10 @@ impl OutputManager {
         let mut state = self.inner.lock().await;
         let stream = state.stream_mut(source);
         stream.finished = true;
-        state.failure = Some(format!("failed to read {source:?}: {error}"));
+        state.failure = Some(ReaderFailure {
+            sequence: state.next_sequence,
+            message: format!("failed to read {source:?}: {error}"),
+        });
         drop(state);
         self.updated.send_replace(());
     }
@@ -406,8 +416,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reader_failure_is_reported_to_attach() {
+    async fn reader_failure_follows_buffered_output() {
         let manager = OutputManager::new(None, None);
+        manager
+            .push(OutputSource::Stdout, b"before failure".to_vec())
+            .await;
         manager
             .reader_failed(
                 OutputSource::Stdout,
@@ -416,6 +429,12 @@ mod tests {
             .await;
 
         let mut output = manager.attach().await.unwrap();
+        let first = output.next().await.unwrap().unwrap();
+        let Some(exec_output::Event::Stdout(first)) = first.event else {
+            panic!("buffered stdout must arrive before the reader failure");
+        };
+        assert_eq!(first.data, b"before failure");
+
         let error = output.next().await.unwrap().unwrap_err();
         assert_eq!(error.code(), tonic::Code::Internal);
         assert!(error.message().contains("simulated pipe failure"));
