@@ -15,11 +15,15 @@ type CreateBoxDTO struct {
 	StorageQuota int64             `json:"storageQuota" validate:"min=1"`
 	Env          map[string]string `json:"env,omitempty"`
 	Registry     *RegistryDTO      `json:"registry,omitempty"`
+	Entrypoint   []string          `json:"entrypoint,omitempty"`
 	// 以下字段描述主进程启动方式，由控制面持久化后透传给 Runner。
-	Entrypoint       []string          `json:"entrypoint,omitempty"`
-	Cmd              []string          `json:"cmd,omitempty"`
-	WorkingDir       *string           `json:"workingDir,omitempty"`
-	TTY              *bool             `json:"tty,omitempty"`
+	// 覆盖镜像中定义的 CMD，指定主进程的默认命令或参数。
+	Cmd []string `json:"cmd,omitempty"`
+	// 设置主进程在 Box 内的工作目录。
+	WorkingDir *string `json:"workingDir,omitempty"`
+	// 是否请求为主进程分配伪终端，用于交互式命令。
+	TTY *bool `json:"tty,omitempty"`
+	// 是否让 Box 在创建它的父进程退出后继续运行。
 	Detach           *bool             `json:"detach,omitempty"`
 	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
 	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
