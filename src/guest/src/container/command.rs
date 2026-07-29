@@ -547,7 +547,7 @@ pub(crate) fn create_pty_child(
     Ok(child)
 }
 
-fn terminate_process(pid: Pid) {
+pub(super) fn terminate_process(pid: Pid) {
     let _fence = crate::reaper::reap_fence();
     let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
     let _ = nix::sys::wait::waitpid(pid, None);

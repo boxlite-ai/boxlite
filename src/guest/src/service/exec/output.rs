@@ -1,6 +1,6 @@
 use crate::service::exec::exec_handle::{ExecStderr, ExecStdout};
 use async_stream::stream;
-use boxlite_shared::{exec_output, ExecOutput, OutputDropped, Stderr, Stdout};
+use boxlite_shared::{exec_output, ExecOutput, Stderr, Stdout};
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -23,16 +23,14 @@ struct OutputState {
     buffered_bytes: usize,
     oldest_sequence: u64,
     next_sequence: u64,
-    pending_dropped: DroppedBytes,
-    open_readers: usize,
     attached: bool,
-    attachment_next_sequence: Option<u64>,
+    stdout: StreamState,
+    stderr: StreamState,
 }
 
 struct OutputEntry {
     sequence: u64,
     output: ExecOutput,
-    source: OutputSource,
     byte_len: usize,
 }
 
@@ -42,29 +40,17 @@ enum OutputSource {
     Stderr,
 }
 
-#[derive(Default)]
-struct DroppedBytes {
-    stdout: u64,
-    stderr: u64,
-}
-
-impl DroppedBytes {
-    fn record(&mut self, source: OutputSource, byte_len: usize) {
-        let byte_len = byte_len as u64;
-        match source {
-            OutputSource::Stdout => self.stdout += byte_len,
-            OutputSource::Stderr => self.stderr += byte_len,
-        }
-    }
-
-    fn take(&mut self) -> Self {
-        std::mem::take(self)
-    }
+struct StreamState {
+    enabled: bool,
+    finished: bool,
+    total_bytes: u64,
+    last_sequence: Option<u64>,
 }
 
 impl OutputManager {
     pub(crate) fn new(stdout: Option<ExecStdout>, stderr: Option<ExecStderr>) -> Self {
-        let open_readers = usize::from(stdout.is_some()) + usize::from(stderr.is_some());
+        let stdout_enabled = stdout.is_some();
+        let stderr_enabled = stderr.is_some();
         let (updated, _) = watch::channel(());
         let manager = Self {
             inner: Arc::new(Mutex::new(OutputState {
@@ -72,10 +58,19 @@ impl OutputManager {
                 buffered_bytes: 0,
                 oldest_sequence: 0,
                 next_sequence: 0,
-                pending_dropped: DroppedBytes::default(),
-                open_readers,
                 attached: false,
-                attachment_next_sequence: None,
+                stdout: StreamState {
+                    enabled: stdout_enabled,
+                    finished: !stdout_enabled,
+                    total_bytes: 0,
+                    last_sequence: None,
+                },
+                stderr: StreamState {
+                    enabled: stderr_enabled,
+                    finished: !stderr_enabled,
+                    total_bytes: 0,
+                    last_sequence: None,
+                },
             })),
             updated,
         };
@@ -97,12 +92,13 @@ impl OutputManager {
                 return Err(Status::already_exists("Already attached"));
             }
             state.attached = true;
-            state.attachment_next_sequence = Some(0);
         }
 
         let manager = self.clone();
         let output = stream! {
             let mut next_sequence = 0;
+            let mut stdout_end_sent = false;
+            let mut stderr_end_sent = false;
             let mut updates = manager.updated.subscribe();
 
             loop {
@@ -113,12 +109,18 @@ impl OutputManager {
                 }
 
                 let next = {
-                    let mut state = manager.inner.lock().await;
+                    let state = manager.inner.lock().await;
 
                     if next_sequence < state.oldest_sequence {
                         next_sequence = state.oldest_sequence;
-                        state.attachment_next_sequence = Some(next_sequence);
-                        Next::Item(dropped_output(state.pending_dropped.take()))
+                    }
+
+                    if state.stdout.ready_to_end(next_sequence) && !stdout_end_sent {
+                        stdout_end_sent = true;
+                        Next::Item(end_output(OutputSource::Stdout, state.stdout.total_bytes))
+                    } else if state.stderr.ready_to_end(next_sequence) && !stderr_end_sent {
+                        stderr_end_sent = true;
+                        Next::Item(end_output(OutputSource::Stderr, state.stderr.total_bytes))
                     } else if next_sequence < state.next_sequence {
                         let index = (next_sequence - state.oldest_sequence) as usize;
                         let output = state
@@ -128,9 +130,10 @@ impl OutputManager {
                             .output
                             .clone();
                         next_sequence += 1;
-                        state.attachment_next_sequence = Some(next_sequence);
                         Next::Item(output)
-                    } else if state.open_readers == 0 {
+                    } else if (!state.stdout.enabled || stdout_end_sent)
+                        && (!state.stderr.enabled || stderr_end_sent)
+                    {
                         Next::Done
                     } else {
                         Next::Wait
@@ -173,38 +176,28 @@ impl OutputManager {
         while let Some(data) = stream.next().await {
             self.push(source, data).await;
         }
-        self.reader_finished().await;
+        self.reader_finished(source).await;
     }
 
     async fn push(&self, source: OutputSource, data: Vec<u8>) {
         let byte_len = data.len();
-        let output = match source {
-            OutputSource::Stdout => ExecOutput {
-                event: Some(exec_output::Event::Stdout(Stdout { data })),
-            },
-            OutputSource::Stderr => ExecOutput {
-                event: Some(exec_output::Event::Stderr(Stderr { data })),
-            },
-        };
 
         let mut state = self.inner.lock().await;
         let sequence = state.next_sequence;
         state.next_sequence += 1;
+        let stream = state.stream_mut(source);
+        stream.enabled = true;
+        let offset = stream.total_bytes;
+        stream.total_bytes += byte_len as u64;
+        stream.last_sequence = Some(sequence);
+        let output = data_output(source, data, offset);
 
         while state.buffered_bytes + byte_len > BUFFER_CAPACITY_BYTES {
             let Some(removed) = state.entries.pop_front() else {
-                if state.entry_is_unread(sequence) {
-                    state.pending_dropped.record(source, byte_len);
-                }
                 state.oldest_sequence = state.next_sequence;
                 break;
             };
             state.buffered_bytes -= removed.byte_len;
-            if state.entry_is_unread(removed.sequence) {
-                state
-                    .pending_dropped
-                    .record(removed.source, removed.byte_len);
-            }
             state.oldest_sequence = removed.sequence + 1;
         }
 
@@ -213,7 +206,6 @@ impl OutputManager {
             state.entries.push_back(OutputEntry {
                 sequence,
                 output,
-                source,
                 byte_len,
             });
         }
@@ -221,28 +213,63 @@ impl OutputManager {
         self.updated.send_replace(());
     }
 
-    async fn reader_finished(&self) {
+    async fn reader_finished(&self, source: OutputSource) {
         let mut state = self.inner.lock().await;
-        state.open_readers -= 1;
+        state.stream_mut(source).finished = true;
         drop(state);
         self.updated.send_replace(());
     }
 }
 
 impl OutputState {
-    fn entry_is_unread(&self, sequence: u64) -> bool {
-        self.attachment_next_sequence
-            .is_none_or(|next_sequence| sequence >= next_sequence)
+    fn stream_mut(&mut self, source: OutputSource) -> &mut StreamState {
+        match source {
+            OutputSource::Stdout => &mut self.stdout,
+            OutputSource::Stderr => &mut self.stderr,
+        }
     }
 }
 
-fn dropped_output(dropped: DroppedBytes) -> ExecOutput {
-    ExecOutput {
-        event: Some(exec_output::Event::Dropped(OutputDropped {
-            stdout_bytes: dropped.stdout,
-            stderr_bytes: dropped.stderr,
-        })),
+impl StreamState {
+    fn ready_to_end(&self, next_sequence: u64) -> bool {
+        self.enabled
+            && self.finished
+            && self
+                .last_sequence
+                .is_none_or(|last_sequence| next_sequence > last_sequence)
     }
+}
+
+fn data_output(source: OutputSource, data: Vec<u8>, offset: u64) -> ExecOutput {
+    let event = match source {
+        OutputSource::Stdout => exec_output::Event::Stdout(Stdout {
+            data,
+            offset: Some(offset),
+            total_bytes: None,
+        }),
+        OutputSource::Stderr => exec_output::Event::Stderr(Stderr {
+            data,
+            offset: Some(offset),
+            total_bytes: None,
+        }),
+    };
+    ExecOutput { event: Some(event) }
+}
+
+fn end_output(source: OutputSource, total_bytes: u64) -> ExecOutput {
+    let event = match source {
+        OutputSource::Stdout => exec_output::Event::Stdout(Stdout {
+            data: Vec::new(),
+            offset: Some(total_bytes),
+            total_bytes: Some(total_bytes),
+        }),
+        OutputSource::Stderr => exec_output::Event::Stderr(Stderr {
+            data: Vec::new(),
+            offset: Some(total_bytes),
+            total_bytes: Some(total_bytes),
+        }),
+    };
+    ExecOutput { event: Some(event) }
 }
 
 #[cfg(test)]
@@ -250,27 +277,90 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn dropped_counts_only_entries_the_attachment_has_not_received() {
+    async fn completed_stream_emits_total_bytes_after_replayed_data() {
         let manager = OutputManager::new(None, None);
         manager
             .push(OutputSource::Stdout, b"already sent".to_vec())
             .await;
 
         let mut output = manager.attach().await.unwrap();
-        assert!(matches!(
-            output.next().await.unwrap().unwrap().event,
-            Some(exec_output::Event::Stdout(_))
-        ));
-
-        for _ in 0..=BUFFER_CAPACITY_BYTES / 1024 {
-            manager.push(OutputSource::Stderr, vec![0; 1024]).await;
-        }
-
-        let dropped = output.next().await.unwrap().unwrap();
-        let Some(exec_output::Event::Dropped(dropped)) = dropped.event else {
-            panic!("the unread stderr must be reported as dropped");
+        let first = output.next().await.unwrap().unwrap();
+        let Some(exec_output::Event::Stdout(first)) = first.event else {
+            panic!("the replayed stdout data must be sent first");
         };
-        assert_eq!(dropped.stdout_bytes, 0);
-        assert!(dropped.stderr_bytes > 0);
+        assert_eq!(first.data, b"already sent");
+        assert_eq!(first.offset, Some(0));
+        assert_eq!(first.total_bytes, None);
+
+        let end = output.next().await.unwrap().unwrap();
+        let Some(exec_output::Event::Stdout(end)) = end.event else {
+            panic!("the stdout end frame must follow its replayed data");
+        };
+        assert!(end.data.is_empty());
+        assert_eq!(end.offset, Some(b"already sent".len() as u64));
+        assert_eq!(end.total_bytes, Some(b"already sent".len() as u64));
+    }
+
+    #[tokio::test]
+    async fn closed_stdout_emits_its_end_before_stderr_closes() {
+        let (stdout_read, stdout_write) = nix::unistd::pipe().unwrap();
+        let (stderr_read, stderr_write) = nix::unistd::pipe().unwrap();
+        let manager = OutputManager::new(
+            Some(ExecStdout::new(stdout_read).unwrap()),
+            Some(ExecStderr::new(stderr_read).unwrap()),
+        );
+
+        nix::unistd::write(&stdout_write, b"out").unwrap();
+        drop(stdout_write);
+
+        let mut output = manager.attach().await.unwrap();
+        let first = tokio::time::timeout(std::time::Duration::from_secs(1), output.next())
+            .await
+            .expect("stdout data must arrive")
+            .unwrap()
+            .unwrap();
+        let Some(exec_output::Event::Stdout(first)) = first.event else {
+            panic!("the first event must be stdout data");
+        };
+        assert_eq!(first.data, b"out");
+
+        let end = tokio::time::timeout(std::time::Duration::from_secs(1), output.next())
+            .await
+            .expect("stdout end must not wait for stderr EOF")
+            .unwrap()
+            .unwrap();
+        let Some(exec_output::Event::Stdout(end)) = end.event else {
+            panic!("stdout must emit its own end frame");
+        };
+        assert_eq!(end.total_bytes, Some(3));
+
+        drop(stderr_write);
+    }
+
+    #[tokio::test]
+    async fn end_frames_survive_when_all_data_is_evicted() {
+        let manager = OutputManager::new(None, None);
+        manager.push(OutputSource::Stdout, b"lost".to_vec()).await;
+        manager
+            .push(OutputSource::Stderr, vec![0; BUFFER_CAPACITY_BYTES + 1])
+            .await;
+
+        let mut output = manager.attach().await.unwrap();
+        let stdout_end = output.next().await.unwrap().unwrap();
+        let Some(exec_output::Event::Stdout(stdout_end)) = stdout_end.event else {
+            panic!("stdout end frame must survive its evicted data");
+        };
+        assert!(stdout_end.data.is_empty());
+        assert_eq!(stdout_end.total_bytes, Some(4));
+
+        let stderr_end = output.next().await.unwrap().unwrap();
+        let Some(exec_output::Event::Stderr(stderr_end)) = stderr_end.event else {
+            panic!("stderr end frame must survive its evicted data");
+        };
+        assert!(stderr_end.data.is_empty());
+        assert_eq!(
+            stderr_end.total_bytes,
+            Some((BUFFER_CAPACITY_BYTES + 1) as u64)
+        );
     }
 }

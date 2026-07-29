@@ -126,7 +126,7 @@ async fn main_command_exits_after_large_output_without_attach() {
 }
 
 #[tokio::test]
-async fn late_attach_reports_output_dropped() {
+async fn late_attach_reports_output_gap() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
@@ -159,7 +159,7 @@ async fn late_attach_reports_output_dropped() {
     let mut stderr = execution.stderr().expect("stderr stream");
     let dropped = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while let Some(chunk) = stderr.next().await {
-            if chunk.contains("[boxlite] output dropped") {
+            if chunk.contains("[boxlite] stdout output dropped") {
                 return Some(chunk);
             }
         }
@@ -174,8 +174,8 @@ async fn late_attach_reports_output_dropped() {
 
     let dropped = dropped.expect("late attach must report overwritten output");
     assert!(
-        dropped.contains("stdout:") && dropped.contains("stderr: 0 bytes"),
-        "stdout-only loss must preserve the stderr decoder: {dropped:?}"
+        dropped.contains("stdout output dropped"),
+        "late attach must report the stdout gap: {dropped:?}"
     );
 }
 
