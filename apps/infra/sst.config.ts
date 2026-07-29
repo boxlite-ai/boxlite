@@ -673,7 +673,7 @@ export default $config({
     const proxyDomain = `proxy.${stackDomain}`
     new sst.aws.Service('Proxy', {
       cluster,
-      image: { context: '../..', dockerfile: 'apps/proxy/Dockerfile', cache: false },
+      image: { context: '../..', dockerfile: 'apps/proxy-rs/Dockerfile', cache: false },
       loadBalancer: {
         domain: {
           name: proxyDomain,

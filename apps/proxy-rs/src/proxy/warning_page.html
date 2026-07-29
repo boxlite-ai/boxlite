@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BoxLite Preview - Warning</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+        background: #0a0a0a;
+        color: #ffffff;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .header {
+        padding: 1rem 2rem;
+        border-bottom: 1px solid #1a1a1a;
+        background: #000;
+      }
+
+      .logo {
+        display: flex;
+        align-items: center;
+        font-size: 1.5rem;
+        font-weight: 600;
+        color: #fff;
+      }
+
+      .logo::before {
+        content: '⚡';
+        margin-right: 0.5rem;
+        font-size: 1.8rem;
+      }
+
+      .container {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem;
+      }
+
+      .warning-card {
+        background: #1a1a1a;
+        border: 1px solid #333;
+        border-radius: 12px;
+        padding: 3rem 2.5rem;
+        max-width: 600px;
+
+        text-align: center;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+      }
+
+      .warning-icon {
+        font-size: 4rem;
+        margin-bottom: 1.5rem;
+        color: #ffa500;
+      }
+
+      .warning-title {
+        font-size: 2rem;
+        font-weight: 700;
+        margin-bottom: 1rem;
+        color: #fff;
+      }
+
+      .warning-subtitle {
+        font-size: 1.1rem;
+
+        margin-bottom: 2rem;
+        line-height: 1.5;
+      }
+
+      .warning-text {
+        font-size: 0.95rem;
+        color: #ccc;
+        line-height: 1.6;
+        margin-bottom: 2.5rem;
+        text-align: left;
+        background: #0f0f0f;
+        padding: 1.5rem;
+        border-radius: 8px;
+        border: 1px solid #2a2a2a;
+      }
+
+      .warning-text strong {
+        color: #ffa500;
+      }
+
+      .button-container {
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+
+      .btn {
+        padding: 0.875rem 2rem;
+        border: none;
+        border-radius: 8px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        min-width: 160px;
+        justify-content: center;
+      }
+
+      .btn-primary {
+        background: #0066ff;
+        color: white;
+      }
+
+      .footer {
+        padding: 1rem 2rem;
+        text-align: center;
+        font-size: 0.85rem;
+        color: #666;
+        border-top: 1px solid #1a1a1a;
+      }
+
+      a {
+        color: #ffffff;
+      }
+
+      @media (max-width: 768px) {
+        .container {
+          padding: 1rem;
+        }
+
+        .warning-card {
+          padding: 2rem 1.5rem;
+        }
+
+        .warning-title {
+          font-size: 1.5rem;
+        }
+
+        .button-container {
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="warning-card">
+        <div class="warning-icon">⚠️</div>
+        <h1 class="warning-title">Preview URL Warning</h1>
+        <p class="warning-subtitle">You are about to visit <strong>{{PREVIEW_URL}}</strong></p>
+
+        <div class="warning-text">
+          • This website is served through <a href="https://boxlite.ai" target="_blank">boxlite.ai</a><br />
+          • Content and functionality may change without notice<br />
+          • You should only visit this website if you trust whoever sent the link to<br />
+          • Be careful about disclosing personal or financial information like passwords, phone numbers, or credit cards<br />
+          • To get rid of this warning for your organization, visit our docs: <a href="https://boxlite.ai/docs/en/preview-and-authentication" target="_blank">https://boxlite.ai/docs/en/preview-and-authentication</a>
+        </div>
+
+        <form action="{{ACCEPT_URL}}" method="POST" style="margin: 0">
+          <div class="button-container">
+            <button type="submit" class="btn btn-primary">I Understand, Continue</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="footer">Powered by BoxLite - Secure and Elastic Infrastructure for AI-Generated Code</div>
+  </body>
+</html>

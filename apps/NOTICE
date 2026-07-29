@@ -16,7 +16,11 @@ License map:
 - AGPL-3.0 components include apps/api, apps/dashboard, apps/infra,
   apps/otel-collector,
   apps/proxy, apps/runner, apps/snapshot-manager, and apps/ssh-gateway.
-- Apache-2.0 components include apps/common-go and generated SDK/client
-  packages that contain Apache-2.0 LICENSE files.
+- Apache-2.0 components include apps/common-go, apps/proxy-rs, and generated
+  SDK/client packages that contain Apache-2.0 LICENSE files.
+
+apps/proxy-rs is a BoxLite-authored Rust implementation of the preview proxy
+and is the deployed one; the AGPL-3.0 apps/proxy it replaces is retained only
+as a rollback path and is scheduled for removal.
 
 Full license texts are available in apps/LICENSES/.

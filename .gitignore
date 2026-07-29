@@ -138,6 +138,8 @@ entitlements.plist
 # Local config
 CLAUDE.local.md
 Cargo.lock
+# Deployed services pin their dependencies: the image build uses --locked.
+!/apps/proxy-rs/Cargo.lock
 *.dylib.dSYM/
 
 # Apps workspace
