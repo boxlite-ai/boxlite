@@ -98,7 +98,7 @@ const terminalHTML = `<!DOCTYPE html>
 <title>Terminal</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
 <style>
-html,body{margin:0;padding:0;height:100%;background:#1e1e1e;overflow:hidden}
+html,body{margin:0;padding:0;height:100%;background:#0c0e12;overflow:hidden}
 #terminal{height:100%;width:100%}
 </style>
 </head>
@@ -107,7 +107,15 @@ html,body{margin:0;padding:0;height:100%;background:#1e1e1e;overflow:hidden}
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
 <script>
-var term=new Terminal({cursorBlink:true,theme:{background:'#1e1e1e'}});
+// Palette derived from the dashboard's dark design tokens (src/index.css):
+// bg=--code-background, cyan=--brand, green=--success, yellow=--warning,
+// red=--destructive, brightBlack=--muted-foreground. Keep it in sync with the
+// dashboard so the box terminal matches the rest of the console.
+var term=new Terminal({cursorBlink:true,theme:{
+  background:'#0c0e12',foreground:'#e6e9f0',cursor:'#00b0f0',cursorAccent:'#0c0e12',selectionBackground:'rgba(0,176,240,0.30)',
+  black:'#2b303b',red:'#e05548',green:'#5cd67e',yellow:'#e0b442',blue:'#4799eb',magenta:'#be7cde',cyan:'#00b0f0',white:'#c7cad1',
+  brightBlack:'#8c919b',brightRed:'#ee6f63',brightGreen:'#81e49d',brightYellow:'#eec663',brightBlue:'#77c2f8',brightMagenta:'#d8a0ee',brightCyan:'#3dcbff',brightWhite:'#ffffff'
+}});
 var fitAddon=new FitAddon.FitAddon();
 term.loadAddon(fitAddon);
 term.open(document.getElementById('terminal'));

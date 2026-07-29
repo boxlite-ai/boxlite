@@ -14,10 +14,11 @@ package shellutil
 // boxlite.Client.StartExecution when the caller wants an interactive shell
 // session and the user has NOT supplied a specific command.
 //
-// Strategy: a POSIX `/bin/sh -c` launcher cd's to the user's home and
-// execs the best available shell as a login shell:
+// Strategy: a POSIX `/bin/sh -c` launcher cd's to the user's home, exports a
+// usable TERM, and execs the best available shell as a login shell:
 //
 //	cd "${HOME:-/root}" 2>/dev/null || cd /;
+//	export TERM="${TERM:-xterm-256color}";
 //	exec $(command -v bash || command -v ash || command -v sh) -l
 //
 // Why this shape:
@@ -36,9 +37,23 @@ package shellutil
 //     bash where it exists while falling through cleanly on minimal images.
 //   - `exec` replaces the launcher sh in-place — no extra PID hangs around
 //     and the chosen shell becomes pid 1 of the SSH/terminal session.
-//   - `-l` makes it a *login* shell: /etc/profile and ~/.profile are
-//     sourced, PATH is populated. Pairs with the cd above to match what
-//     `ssh user@host` users expect when they land at a prompt.
+//   - `-l` makes it a *login* shell: /etc/profile, /etc/profile.d/*, and the
+//     user's ~/.profile/~/.bashrc are sourced, PATH is populated. Pairs with
+//     the cd above to match what `ssh user@host` users expect when they land
+//     at a prompt.
+//   - `export TERM="${TERM:-xterm-256color}"` gives color-aware programs a
+//     terminal type to key off. The box VM ships no TERM, so without it
+//     git/less/prompts render monochrome even though the client (xterm.js
+//     or the SSH terminal) can display color. The `:-` fallback preserves a
+//     real SSH client's own TERM when one is already present.
+//
+// The launcher deliberately sets *only* TERM — the color enabler that every
+// image needs — and never injects a prompt. Color-aware tools (git, ls, pip)
+// light up from TERM alone; the shell prompt stays whatever the image ships.
+// This matches how sandbox peers treat the prompt: E2B, Modal, and Daytona
+// set TERM at exec time and leave the prompt to the image (none force a
+// branded prompt). It keeps arbitrary user images untouched and avoids
+// overriding a prompt a user configured in their own image.
 //
 // This follows the kubectl exec convention for unknown container images
 // (see https://kubernetes.io/docs/reference/kubectl/generated/kubectl_exec/),
@@ -52,6 +67,7 @@ package shellutil
 func DefaultInteractiveShell() (command string, args []string) {
 	return "/bin/sh", []string{"-c",
 		`cd "${HOME:-/root}" 2>/dev/null || cd /; ` +
+			`export TERM="${TERM:-xterm-256color}"; ` +
 			`exec $(command -v bash || command -v ash || command -v sh) -l`,
 	}
 }

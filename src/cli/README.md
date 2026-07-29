@@ -401,7 +401,17 @@ Run a command in a running box.
 **Example:**
 
 ```bash
-boxlite exec -it mybox /bin/sh
+boxlite exec -it mybox -- /bin/sh
+```
+
+An interactive (`-it`) session sets `TERM=xterm-256color`, so color-aware tools
+(git, `ls`, shell prompts) render in color. To opt out — plain, "retro" output —
+pass your own `TERM`. You can also pass the [`NO_COLOR`](https://no-color.org)
+hint for tools that honor it:
+
+```bash
+boxlite exec -it mybox -e TERM=dumb -- /bin/sh  # disable color for terminal-capability checks
+boxlite exec -it mybox -e NO_COLOR=1 -- /bin/sh # hint for tools that honor NO_COLOR
 ```
 
 ### `boxlite list` (alias: `ls`, `ps`)
