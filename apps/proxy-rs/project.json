@@ -1,0 +1,62 @@
+{
+  "name": "proxy-rs",
+  "$schema": "../../runner_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "proxy-rs/src",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo build --release --locked",
+        "cwd": "{projectRoot}"
+      },
+      "configurations": {
+        "production": {}
+      },
+      "inputs": ["default", "^default", { "env": "VERSION" }],
+      "outputs": ["{projectRoot}/target/release/boxlite-proxy"]
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo run",
+        "cwd": "{projectRoot}"
+      },
+      "configurations": {
+        "development": {},
+        "production": {}
+      }
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo test --locked",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo clippy --all-targets --locked -- -D warnings",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "check-version-env": {},
+    "docker": {
+      "options": {
+        "target": "proxy",
+        "context": "..",
+        "file": "apps/proxy-rs/Dockerfile"
+      }
+    },
+    "push-manifest": {}
+  }
+}
