@@ -118,7 +118,7 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 			standardForward(r, destAddr)
 			return
 		case tcpRouteInspect:
-			inspectAndForward(r, destAddr, destPort, filter, ca, secretMatcher)
+			inspectAndForward(r, destIP, destAddr, destPort, filter, ca, secretMatcher)
 			return
 		default:
 			// No matching rule: block
@@ -164,7 +164,7 @@ func standardForward(r *tcp.ForwarderRequest, destAddr string) {
 // inspectAndForward: Accept → Peek SNI/Host → check allowlist → Dial → relay.
 // The flow is reversed from upstream because we need to read from the guest
 // before deciding whether to connect to the upstream server.
-func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16, filter *TCPFilter, ca *BoxCA, secretMatcher *SecretHostMatcher) {
+func inspectAndForward(r *tcp.ForwarderRequest, destIP net.IP, destAddr string, destPort uint16, filter *TCPFilter, ca *BoxCA, secretMatcher *SecretHostMatcher) {
 	// Step 1: Accept TCP from guest first (reversed from upstream)
 	var wq waiter.Queue
 	ep, tcpErr := r.CreateEndpoint(&wq)
@@ -200,12 +200,17 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16
 		return
 	}
 
-	// Step 4: Check allowlist (skip if no allowlist — secrets-only mode allows all traffic)
-	if filter != nil && (hostname == "" || !filter.MatchesHostname(hostname)) {
+	// Step 4: Check allowlist (skip if no allowlist — secrets-only mode allows all
+	// traffic). The decision binds the guest-supplied SNI/Host to the real
+	// destination IP: a matching SNI is not sufficient if the connection is
+	// actually dialing an IP that is not a real address for that host. This blocks
+	// the bypass where a guest sends e.g. `--servername api.openai.com` while
+	// connecting to an attacker-controlled IP.
+	if filter != nil && !filter.AllowsConnection(hostname, destIP) {
 		logrus.WithFields(logrus.Fields{
 			"dst":      destAddr,
 			"hostname": hostname,
-		}).Info("allowNet TCP: blocked (hostname not in allowlist)")
+		}).Info("allowNet TCP: blocked (SNI/Host not allowed for destination IP)")
 		guestConn.Close()
 		return
 	}
@@ -213,7 +218,7 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16
 	logrus.WithFields(logrus.Fields{
 		"dst":      destAddr,
 		"hostname": hostname,
-	}).Debug("allowNet TCP: allowed by hostname")
+	}).Debug("allowNet TCP: allowed (SNI bound to destination IP)")
 
 	// Step 5: Dial upstream
 	outbound, err := net.Dial("tcp", destAddr)

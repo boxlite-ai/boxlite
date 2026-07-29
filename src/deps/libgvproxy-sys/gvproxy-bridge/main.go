@@ -237,6 +237,24 @@ func buildDNSZones(config GvproxyConfig) []types.Zone {
 	return dnsZones
 }
 
+// resolvedHostIPsFromZones extracts the concrete IPv4 A-record addresses that the
+// allow_net DNS sinkhole resolved for exact hostnames. These are exactly the IPs
+// the guest receives for allowed hosts, and are used to bind the TCP
+// SNI-inspection path to a real destination IP (see TCPFilter.AllowsConnection).
+func resolvedHostIPsFromZones(zones []types.Zone) []net.IP {
+	var ips []net.IP
+	for _, zone := range zones {
+		for _, record := range zone.Records {
+			ip4 := record.IP.To4()
+			if ip4 == nil || ip4.Equal(net.IPv4zero) {
+				continue
+			}
+			ips = append(ips, ip4)
+		}
+	}
+	return ips
+}
+
 func buildTapConfig(config GvproxyConfig, protocol types.Protocol) *types.Configuration {
 	nat := make(map[string]string)
 	gatewayVirtualIPs := []string{config.GatewayIP}
@@ -431,7 +449,12 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		if len(config.AllowNet) > 0 || instance.secretMatcher != nil {
 			var tcpFilter *TCPFilter
 			if len(config.AllowNet) > 0 {
-				tcpFilter = NewTCPFilter(config.AllowNet, config.GatewayIP, config.GuestIP, config.HostIP)
+				// Bind the SNI-inspection path to the exact IPs the allow_net DNS
+				// sinkhole resolved for allowed hosts — i.e. the addresses the guest
+				// itself receives — so a matching SNI to an attacker-controlled IP is
+				// rejected (audit finding #1).
+				tcpFilter = NewTCPFilter(config.AllowNet, config.GatewayIP, config.GuestIP, config.HostIP).
+					WithResolvedHostIPs(resolvedHostIPsFromZones(tapConfig.DNS))
 			}
 			if err := OverrideTCPHandler(vn, tapConfig, tapConfig.Ec2MetadataAccess, tcpFilter, instance.ca, instance.secretMatcher); err != nil {
 				logrus.WithError(err).Error("TCP: failed to override handler")

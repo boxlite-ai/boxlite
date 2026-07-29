@@ -139,3 +139,42 @@ func assertFalse(t *testing.T, v bool, msg string) {
 		t.Errorf("expected false: %s", msg)
 	}
 }
+
+// TestTCPFilter_AllowsConnection_BindsSNItoIP is the audit #1 regression: a
+// guest-supplied SNI that matches the allowlist must NOT permit dialing an
+// arbitrary IP. The destination IP has to be a real address for the host —
+// either a sinkhole-resolved IP (exact host) or a connect-time-resolved IP
+// (wildcard subdomain).
+func TestTCPFilter_AllowsConnection_BindsSNItoIP(t *testing.T) {
+	f := NewTCPFilter([]string{"api.openai.com", "*.example.com"}, "192.168.127.1").
+		WithResolvedHostIPs([]net.IP{net.ParseIP("203.0.113.10")}). // sinkhole-resolved api.openai.com
+		WithResolver(func(h string) ([]net.IP, error) {
+			if h == "sub.example.com" {
+				return []net.IP{net.ParseIP("198.51.100.5")}, nil
+			}
+			return nil, nil
+		})
+
+	attacker := net.ParseIP("203.0.113.9")
+	realOpenAI := net.ParseIP("203.0.113.10")
+	realSub := net.ParseIP("198.51.100.5")
+
+	// exact host
+	assertTrue(t, f.AllowsConnection("api.openai.com", realOpenAI), "exact host to its resolved IP")
+	assertTrue(t, f.AllowsConnection("api.openai.com.", realOpenAI), "trailing-dot SNI normalized")
+	assertFalse(t, f.AllowsConnection("api.openai.com", attacker), "#1: allowed SNI to attacker IP must be blocked")
+
+	// wildcard host (subdomains not pre-resolved → connect-time bind)
+	assertTrue(t, f.AllowsConnection("sub.example.com", realSub), "wildcard host to live-resolved IP")
+	assertFalse(t, f.AllowsConnection("sub.example.com", attacker), "wildcard host to attacker IP must be blocked")
+
+	// SNI not in allowlist
+	assertFalse(t, f.AllowsConnection("evil.com", realOpenAI), "unlisted SNI blocked even toward an allowed IP")
+
+	// internal/gateway IP still allowed for an allowed SNI
+	assertTrue(t, f.AllowsConnection("api.openai.com", net.ParseIP("192.168.127.1")), "internal IP allowed")
+
+	// nil filter = no filtering
+	var nilFilter *TCPFilter
+	assertTrue(t, nilFilter.AllowsConnection("anything", attacker), "nil filter allows all")
+}
