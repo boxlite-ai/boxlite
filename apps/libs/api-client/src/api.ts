@@ -27,6 +27,7 @@ export * from './api/organizations-api';
 export * from './api/preview-api';
 export * from './api/regions-api';
 export * from './api/runners-api';
+export * from './api/usage-api';
 export * from './api/users-api';
 export * from './api/volumes-api';
 export * from './api/webhooks-api';

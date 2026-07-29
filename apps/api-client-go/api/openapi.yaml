@@ -5018,6 +5018,212 @@ paths:
       summary: Get box metrics
       tags:
       - box
+  /organization/{organizationId}/box/{boxId}/usage:
+    get:
+      description: Retrieve usage periods for a specific box within a time range
+      operationId: UsageController_getBoxUsagePeriods
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Inclusive range start as an RFC3339 timestamp
+        explode: true
+        in: query
+        name: from
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Exclusive range end as an RFC3339 timestamp
+        explode: true
+        in: query
+        name: to
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/UsagePeriod"
+                type: array
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get box usage periods
+      tags:
+      - usage
+  /organization/{organizationId}/usage/aggregated:
+    get:
+      description: Retrieve aggregated usage for an organization within a time range
+      operationId: UsageController_getAggregatedUsage
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Inclusive range start as an RFC3339 timestamp
+        explode: true
+        in: query
+        name: from
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Exclusive range end as an RFC3339 timestamp
+        explode: true
+        in: query
+        name: to
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AggregatedUsage"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get aggregated usage
+      tags:
+      - usage
+  /organization/{organizationId}/usage/box:
+    get:
+      description: Retrieve per-box usage for an organization within a time range
+      operationId: UsageController_getBoxUsage
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Inclusive range start as an RFC3339 timestamp
+        explode: true
+        in: query
+        name: from
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Exclusive range end as an RFC3339 timestamp
+        explode: true
+        in: query
+        name: to
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/BoxUsage"
+                type: array
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get per-box usage
+      tags:
+      - usage
+  /organization/{organizationId}/usage/chart:
+    get:
+      description: Retrieve UTC-day usage chart points for an organization within
+        a time range
+      operationId: UsageController_getUsageChart
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Inclusive range start as an RFC3339 timestamp
+        explode: true
+        in: query
+        name: from
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Exclusive range end as an RFC3339 timestamp
+        explode: true
+        in: query
+        name: to
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Only include usage recorded in this region
+        explode: true
+        in: query
+        name: region
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/UsageChartPoint"
+                type: array
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get usage chart data
+      tags:
+      - usage
 components:
   schemas:
     Announcement:
@@ -9844,6 +10050,165 @@ components:
       - secret
       - sessionToken
       - storageUrl
+      type: object
+    UsagePeriod:
+      example:
+        cpu: 0.8008281904610115
+        diskGB: 6.027456183070403
+        endAt: 2000-01-23T04:56:07.000+00:00
+        gpu: 1.4658129805029452
+        price: 5.962133916683182
+        ramGB: 5.637376656633329
+        startAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        cpu:
+          type: number
+        diskGB:
+          type: number
+        endAt:
+          format: date-time
+          type: string
+        gpu:
+          type: number
+        price:
+          description: Always 0 for the self-hosted raw ledger. Monetary rating belongs
+            to the external billing service.
+          type: number
+        ramGB:
+          type: number
+        startAt:
+          format: date-time
+          type: string
+      required:
+      - cpu
+      - diskGB
+      - endAt
+      - gpu
+      - price
+      - ramGB
+      - startAt
+      type: object
+    AggregatedUsage:
+      example:
+        boxCount: 0.8008281904610115
+        firstStart: 2000-01-23T04:56:07.000+00:00
+        lastEnd: 2000-01-23T04:56:07.000+00:00
+        totalCPUSeconds: 6.027456183070403
+        totalDiskGBSeconds: 1.4658129805029452
+        totalGPUSeconds: 5.962133916683182
+        totalPrice: 5.637376656633329
+        totalRAMGBSeconds: 2.3021358869347655
+      properties:
+        boxCount:
+          type: number
+        firstStart:
+          format: date-time
+          type: string
+        lastEnd:
+          format: date-time
+          type: string
+        totalCPUSeconds:
+          type: number
+        totalDiskGBSeconds:
+          type: number
+        totalGPUSeconds:
+          type: number
+        totalPrice:
+          description: Always 0 for the self-hosted raw ledger. Monetary rating belongs
+            to the external billing service.
+          type: number
+        totalRAMGBSeconds:
+          type: number
+      required:
+      - boxCount
+      - totalCPUSeconds
+      - totalDiskGBSeconds
+      - totalGPUSeconds
+      - totalPrice
+      - totalRAMGBSeconds
+      type: object
+    BoxUsage:
+      example:
+        boxId: boxId
+        firstStart: 2000-01-23T04:56:07.000+00:00
+        lastEnd: 2000-01-23T04:56:07.000+00:00
+        totalCPUSeconds: 0.8008281904610115
+        totalDiskGBSeconds: 6.027456183070403
+        totalGPUSeconds: 1.4658129805029452
+        totalPrice: 5.962133916683182
+        totalRAMGBSeconds: 5.637376656633329
+      properties:
+        boxId:
+          type: string
+        firstStart:
+          format: date-time
+          type: string
+        lastEnd:
+          format: date-time
+          type: string
+        totalCPUSeconds:
+          type: number
+        totalDiskGBSeconds:
+          type: number
+        totalGPUSeconds:
+          type: number
+        totalPrice:
+          description: Always 0 for the self-hosted raw ledger. Monetary rating belongs
+            to the external billing service.
+          type: number
+        totalRAMGBSeconds:
+          type: number
+      required:
+      - boxId
+      - totalCPUSeconds
+      - totalDiskGBSeconds
+      - totalGPUSeconds
+      - totalPrice
+      - totalRAMGBSeconds
+      type: object
+    UsageChartPoint:
+      example:
+        cpu: 0.8008281904610115
+        cpuPrice: 6.027456183070403
+        diskGB: 1.4658129805029452
+        diskPrice: 5.962133916683182
+        ramGB: 5.637376656633329
+        ramPrice: 2.3021358869347655
+        time: 2000-01-23T04:56:07.000+00:00
+      properties:
+        cpu:
+          description: Average allocated CPUs in this UTC-day bucket
+          type: number
+        cpuPrice:
+          description: Always 0 for the self-hosted raw ledger. Monetary rating belongs
+            to the external billing service.
+          type: number
+        diskGB:
+          description: Average allocated disk GB in this UTC-day bucket
+          type: number
+        diskPrice:
+          description: Always 0 for the self-hosted raw ledger. Monetary rating belongs
+            to the external billing service.
+          type: number
+        ramGB:
+          description: Average allocated RAM GB in this UTC-day bucket
+          type: number
+        ramPrice:
+          description: Always 0 for the self-hosted raw ledger. Monetary rating belongs
+            to the external billing service.
+          type: number
+        time:
+          description: "Start of the UTC-day bucket, clipped to the requested range"
+          format: date-time
+          type: string
+      required:
+      - cpu
+      - cpuPrice
+      - diskGB
+      - diskPrice
+      - ramGB
+      - ramPrice
+      - time
       type: object
     WebhookController_getStatus_200_response:
       example:

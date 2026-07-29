@@ -15,6 +15,7 @@ api/organizations-api.ts
 api/preview-api.ts
 api/regions-api.ts
 api/runners-api.ts
+api/usage-api.ts
 api/users-api.ts
 api/volumes-api.ts
 api/webhooks-api.ts
@@ -51,6 +52,7 @@ docs/AdminOverviewRunners.md
 docs/AdminRunner.md
 docs/AdminRunnerItem.md
 docs/AdminUserItem.md
+docs/AggregatedUsage.md
 docs/Announcement.md
 docs/ApiKeyList.md
 docs/ApiKeyResponse.md
@@ -64,6 +66,7 @@ docs/BoxClass.md
 docs/BoxDesiredState.md
 docs/BoxLabels.md
 docs/BoxState.md
+docs/BoxUsage.md
 docs/BoxVolume.md
 docs/BoxliteConfiguration.md
 docs/ConfigApi.md
@@ -138,6 +141,9 @@ docs/UpdateOrganizationMemberAccess.md
 docs/UpdateOrganizationName.md
 docs/UpdateOrganizationRole.md
 docs/UpdateRegion.md
+docs/UsageApi.md
+docs/UsageChartPoint.md
+docs/UsagePeriod.md
 docs/User.md
 docs/UserPublicKey.md
 docs/UsersApi.md
@@ -180,6 +186,7 @@ models/admin-overview.ts
 models/admin-runner-item.ts
 models/admin-runner.ts
 models/admin-user-item.ts
+models/aggregated-usage.ts
 models/announcement.ts
 models/api-key-list.ts
 models/api-key-response.ts
@@ -188,6 +195,7 @@ models/box-class.ts
 models/box-desired-state.ts
 models/box-labels.ts
 models/box-state.ts
+models/box-usage.ts
 models/box-volume.ts
 models/box.ts
 models/boxlite-configuration.ts
@@ -256,6 +264,8 @@ models/update-organization-member-access.ts
 models/update-organization-name.ts
 models/update-organization-role.ts
 models/update-region.ts
+models/usage-chart-point.ts
+models/usage-period.ts
 models/user-public-key.ts
 models/user.ts
 models/volume-dto.ts
