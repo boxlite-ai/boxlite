@@ -20,6 +20,19 @@ branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || echo '?')"
 head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo '?')"
 findings=()
 
+file_mtime_epoch() {
+  local path="$1" mtime
+  if mtime="$(stat -c '%Y' "$path" 2>/dev/null)" && [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$mtime"
+    return
+  fi
+  if mtime="$(stat -f '%m' "$path" 2>/dev/null)" && [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$mtime"
+    return
+  fi
+  printf '0'
+}
+
 hash_stdin() {
   shasum -a 256 | awk '{print $1}'
 }
@@ -113,7 +126,7 @@ valid_push_audit_context() {
   ctx_command_hash="$(jq -r '.command_hash // ""' "$push_context_meta_file" 2>/dev/null || echo '')"
   ctx_pushed_diff_hash="$(jq -r '.pushed_diff_hash // ""' "$push_context_meta_file" 2>/dev/null || echo '')"
   actual_diff_hash="$(hash_file "$push_context_diff_file")"
-  ctx_mtime="$(stat -f '%m' "$push_context_meta_file" 2>/dev/null || stat -c '%Y' "$push_context_meta_file" 2>/dev/null || echo 0)"
+  ctx_mtime="$(file_mtime_epoch "$push_context_meta_file")"
   now_epoch="$(date +%s)"
   age=$(( now_epoch - ctx_mtime ))
 

@@ -70,6 +70,19 @@ branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || echo '?')"
 head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo '?')"
 max_age_seconds=600
 
+file_mtime_epoch() {
+  local path="$1" mtime
+  if mtime="$(stat -c '%Y' "$path" 2>/dev/null)" && [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$mtime"
+    return
+  fi
+  if mtime="$(stat -f '%m' "$path" 2>/dev/null)" && [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$mtime"
+    return
+  fi
+  printf '0'
+}
+
 hash_stdin() {
   shasum -a 256 | awk '{print $1}'
 }
@@ -140,7 +153,7 @@ valid_handoff_command_hash() {
   handoff_kind="$(jq -r '.command_kind // ""' "$handoff_file" 2>/dev/null || echo '')"
   handoff_diff_hash="$(jq -r '.diff_hash // ""' "$handoff_file" 2>/dev/null || echo '')"
   handoff_command_hash="$(jq -r '.command_hash // ""' "$handoff_file" 2>/dev/null || echo '')"
-  handoff_mtime="$(stat -f '%m' "$handoff_file" 2>/dev/null || stat -c '%Y' "$handoff_file" 2>/dev/null || echo 0)"
+  handoff_mtime="$(file_mtime_epoch "$handoff_file")"
   now_epoch="$(date +%s)"
   handoff_age=$(( now_epoch - handoff_mtime ))
 
@@ -199,9 +212,8 @@ ${invoke_instruction}"
 Retry the push through the git-level pre-push gate so it can produce the exact ref-update audit command."
   fi
 
-  # File mtime as freshness signal: portable across BSD (stat -f %m) and GNU
-  # (stat -c %Y) without parsing self-reported timestamps.
-  audit_mtime="$(stat -f '%m' "$audit_file" 2>/dev/null || stat -c '%Y' "$audit_file" 2>/dev/null || echo 0)"
+  # Keep failed platform probes from contaminating the successful command's output.
+  audit_mtime="$(file_mtime_epoch "$audit_file")"
   now_epoch="$(date +%s)"
   age=$(( now_epoch - audit_mtime ))
 

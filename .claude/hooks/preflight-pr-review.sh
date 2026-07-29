@@ -67,6 +67,19 @@ head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo '?')"
 marker_file="$project_dir/.claude/.pr-reviewed.json"
 max_age_seconds=600
 
+file_mtime_epoch() {
+  local path="$1" mtime
+  if mtime="$(stat -c '%Y' "$path" 2>/dev/null)" && [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$mtime"
+    return
+  fi
+  if mtime="$(stat -f '%m' "$path" 2>/dev/null)" && [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$mtime"
+    return
+  fi
+  printf '0'
+}
+
 deny() {
   jq -nc --arg r "$1" '{
     hookSpecificOutput: {
@@ -183,7 +196,7 @@ marker_branch="$(jq -r '.branch // ""' "$marker_file" 2>/dev/null || echo '')"
 marker_head="$(jq -r '.head // ""' "$marker_file" 2>/dev/null || echo '')"
 marker_message="$(jq -r '.message // ""' "$marker_file" 2>/dev/null || echo '')"
 
-marker_mtime="$(stat -f '%m' "$marker_file" 2>/dev/null || stat -c '%Y' "$marker_file" 2>/dev/null || echo 0)"
+marker_mtime="$(file_mtime_epoch "$marker_file")"
 now_epoch="$(date +%s)"
 age=$(( now_epoch - marker_mtime ))
 

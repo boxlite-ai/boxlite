@@ -89,6 +89,19 @@
 # Tests: bash .claude/hooks/preflight-verdict-check.test.sh
 set -uo pipefail
 
+file_mtime_epoch() {
+  local path="$1" mtime
+  if mtime="$(stat -c '%Y' "$path" 2>/dev/null)" && [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$mtime"
+    return
+  fi
+  if mtime="$(stat -f '%m' "$path" 2>/dev/null)" && [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$mtime"
+    return
+  fi
+  printf '0'
+}
+
 payload="$(cat)"
 transcript_path="$(printf '%s' "$payload" | jq -r '.transcript_path // ""' 2>/dev/null || echo '')"
 
@@ -301,8 +314,8 @@ if [[ -r "$verdict_file" ]]; then
   v_tree="$(jq -r '.tree_hash // ""'   "$verdict_file" 2>/dev/null || echo '')"
   v_verdict="$(jq -r '.verdict // ""'  "$verdict_file" 2>/dev/null || echo '')"
 
-  # mtime as freshness signal — portable across BSD (stat -f %m) and GNU (stat -c %Y).
-  v_mtime="$(stat -f '%m' "$verdict_file" 2>/dev/null || stat -c '%Y' "$verdict_file" 2>/dev/null || echo 0)"
+  # Keep failed platform probes from contaminating the successful command's output.
+  v_mtime="$(file_mtime_epoch "$verdict_file")"
   now_epoch="$(date +%s)"
   age=$(( now_epoch - v_mtime ))
 

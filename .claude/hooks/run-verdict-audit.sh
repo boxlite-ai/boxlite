@@ -21,6 +21,19 @@
 # Exit codes: 0 dossier written · 1 audit ran but no dossier · 2 no runner available.
 set -uo pipefail
 
+file_mtime_epoch() {
+  local path="$1" mtime
+  if mtime="$(stat -c '%Y' "$path" 2>/dev/null)" && [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$mtime"
+    return
+  fi
+  if mtime="$(stat -f '%m' "$path" 2>/dev/null)" && [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$mtime"
+    return
+  fi
+  printf '0'
+}
+
 transcript_path="${1:-}"
 if [[ -z "$transcript_path" ]]; then
   echo "usage: run-verdict-audit.sh <transcript_path>" >&2
@@ -43,7 +56,7 @@ turn that asserts nothing verifiable is a PASS. Follow your procedure and write 
 dossier to ${verdict_file}. transcript_path: ${transcript_path}"
 
 # The audit must be attributable to a fresh run, not a leftover dossier.
-before_mtime="$(stat -f '%m' "$verdict_file" 2>/dev/null || stat -c '%Y' "$verdict_file" 2>/dev/null || echo 0)"
+before_mtime="$(file_mtime_epoch "$verdict_file")"
 
 if [[ -n "${VERDICT_AUDITOR_CMD:-}" ]]; then
   printf '%s' "$audit_prompt" | bash -c "$VERDICT_AUDITOR_CMD" || true
@@ -69,7 +82,7 @@ EOF
   exit 2
 fi
 
-after_mtime="$(stat -f '%m' "$verdict_file" 2>/dev/null || stat -c '%Y' "$verdict_file" 2>/dev/null || echo 0)"
+after_mtime="$(file_mtime_epoch "$verdict_file")"
 if [[ -r "$verdict_file" && "$after_mtime" != "$before_mtime" ]] \
    && jq -e '.verdict and .branch and .tree_hash' "$verdict_file" >/dev/null 2>&1; then
   echo "audit complete: $(jq -r '.verdict' "$verdict_file") → $verdict_file"
