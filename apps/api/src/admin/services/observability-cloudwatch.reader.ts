@@ -227,7 +227,7 @@ export class AdminCloudWatchLogReader {
 
   private inferLayer(logGroupName: string): string {
     if (logGroupName.includes('/Api')) return 'api'
-    if (logGroupName.includes('/SshGateway') || logGroupName.includes('/Proxy')) return 'runner'
+    if (logGroupName.includes('/Proxy')) return 'runner'
     if (logGroupName.includes('/OtelCollector')) return 'ec2_host'
     return ''
   }

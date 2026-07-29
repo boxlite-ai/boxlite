@@ -55,13 +55,6 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
       return null
     }
 
-    const sshGatewayApiKey = this.configService.get('sshGateway.apiKey')
-    if (sshGatewayApiKey && sshGatewayApiKey === token) {
-      return {
-        role: 'ssh-gateway',
-      }
-    }
-
     const proxyApiKey = this.configService.get('proxy.apiKey')
     if (proxyApiKey && proxyApiKey === token) {
       return {
@@ -162,19 +155,6 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
       }
     } catch (error) {
       this.logger.debug('Error checking region proxy API key:', error)
-    }
-
-    try {
-      const region = await this.regionService.findOneBySshGatewayApiKey(token)
-      if (region) {
-        this.logger.debug(`Region SSH gateway API key found for region: ${region.id}`)
-        return {
-          role: 'region-ssh-gateway',
-          regionId: region.id,
-        }
-      }
-    } catch (error) {
-      this.logger.debug('Error checking region SSH gateway API key:', error)
     }
 
     return null

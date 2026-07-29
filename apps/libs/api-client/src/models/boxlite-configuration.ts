@@ -80,14 +80,6 @@ export interface BoxliteConfiguration {
      */
     'analyticsApiUrl'?: string;
     /**
-     * SSH Gateway command
-     */
-    'sshGatewayCommand'?: string;
-    /**
-     * Base64 encoded SSH Gateway public key
-     */
-    'sshGatewayPublicKey'?: string;
-    /**
      * Rate limit configuration
      */
     'rateLimit'?: RateLimitConfig;

@@ -49,7 +49,7 @@ export class Migration1741087887225 implements MigrationInterface {
       `CREATE TABLE "webhook_initialization" ("organizationId" character varying NOT NULL, "svixApplicationId" character varying, "lastError" text, "retryCount" integer NOT NULL DEFAULT '0', "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "webhook_initialization_organizationId_pk" PRIMARY KEY ("organizationId"))`,
     )
     await queryRunner.query(
-      `CREATE TABLE "region" ("id" character varying NOT NULL, "name" character varying NOT NULL, "organizationId" uuid, "regionType" "public"."region_regiontype_enum" NOT NULL, "enforceQuotas" boolean NOT NULL DEFAULT true, "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "proxyUrl" character varying, "toolboxProxyUrl" character varying, "proxyApiKeyHash" character varying, "sshGatewayUrl" character varying, "sshGatewayApiKeyHash" character varying, CONSTRAINT "region_not_custom" CHECK ("organizationId" IS NOT NULL OR "regionType" != 'custom'), CONSTRAINT "region_not_shared" CHECK ("organizationId" IS NULL OR "regionType" != 'shared'), CONSTRAINT "region_id_pk" PRIMARY KEY ("id"))`,
+      `CREATE TABLE "region" ("id" character varying NOT NULL, "name" character varying NOT NULL, "organizationId" uuid, "regionType" "public"."region_regiontype_enum" NOT NULL, "enforceQuotas" boolean NOT NULL DEFAULT true, "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "proxyUrl" character varying, "toolboxProxyUrl" character varying, "proxyApiKeyHash" character varying, CONSTRAINT "region_not_custom" CHECK ("organizationId" IS NOT NULL OR "regionType" != 'custom'), CONSTRAINT "region_not_shared" CHECK ("organizationId" IS NULL OR "regionType" != 'shared'), CONSTRAINT "region_id_pk" PRIMARY KEY ("id"))`,
     )
     await queryRunner.query(
       `CREATE TABLE "organization" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "name" character varying NOT NULL, "createdBy" character varying NOT NULL, "telemetryEnabled" boolean NOT NULL DEFAULT true, "defaultRegionId" character varying, "max_cpu_per_box" integer NOT NULL DEFAULT '4', "max_memory_per_box" integer NOT NULL DEFAULT '8', "max_disk_per_box" integer NOT NULL DEFAULT '10', "authenticated_rate_limit" integer, "box_create_rate_limit" integer, "box_lifecycle_rate_limit" integer, "authenticated_rate_limit_ttl_seconds" integer, "box_create_rate_limit_ttl_seconds" integer, "box_lifecycle_rate_limit_ttl_seconds" integer, "suspended" boolean NOT NULL DEFAULT false, "suspendedAt" TIMESTAMP WITH TIME ZONE, "suspensionReason" character varying, "suspensionCleanupGracePeriodHours" integer NOT NULL DEFAULT '24', "suspendedUntil" TIMESTAMP WITH TIME ZONE, "template_deactivation_timeout_minutes" integer NOT NULL DEFAULT '20160', "boxLimitedNetworkEgress" boolean NOT NULL DEFAULT false, "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "experimentalConfig" jsonb, CONSTRAINT "organization_id_pk" PRIMARY KEY ("id"))`,
@@ -76,9 +76,6 @@ export class Migration1741087887225 implements MigrationInterface {
       `CREATE TABLE "box_last_activity" ("boxId" character varying NOT NULL, "lastActivityAt" TIMESTAMP WITH TIME ZONE, CONSTRAINT "box_last_activity_boxId_pk" PRIMARY KEY ("boxId"), CONSTRAINT "box_last_activity_boxId_fk" FOREIGN KEY ("boxId") REFERENCES "box"("id") ON DELETE CASCADE ON UPDATE NO ACTION)`,
     )
     await queryRunner.query(
-      `CREATE TABLE "ssh_access" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "boxId" character varying NOT NULL, "token" text NOT NULL, "expiresAt" TIMESTAMP NOT NULL, "createdAt" TIMESTAMP NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "ssh_access_id_pk" PRIMARY KEY ("id"), CONSTRAINT "ssh_access_boxId_fk" FOREIGN KEY ("boxId") REFERENCES "box"("id") ON DELETE CASCADE ON UPDATE NO ACTION)`,
-    )
-    await queryRunner.query(
       `CREATE TABLE "runner" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "domain" character varying, "apiUrl" character varying, "proxyUrl" character varying, "apiKey" character varying NOT NULL, "cpu" double precision NOT NULL DEFAULT '0', "memoryGiB" double precision NOT NULL DEFAULT '0', "diskGiB" double precision NOT NULL DEFAULT '0', "gpu" integer, "gpuType" character varying, "class" "public"."runner_class_enum" NOT NULL DEFAULT 'small', "currentCpuLoadAverage" double precision NOT NULL DEFAULT '0', "currentCpuUsagePercentage" double precision NOT NULL DEFAULT '0', "currentMemoryUsagePercentage" double precision NOT NULL DEFAULT '0', "currentDiskUsagePercentage" double precision NOT NULL DEFAULT '0', "currentAllocatedCpu" double precision NOT NULL DEFAULT '0', "currentAllocatedMemoryGiB" double precision NOT NULL DEFAULT '0', "currentAllocatedDiskGiB" double precision NOT NULL DEFAULT '0', "currentStartedBoxes" integer NOT NULL DEFAULT '0', "availabilityScore" integer NOT NULL DEFAULT '0', "region" character varying NOT NULL, "name" character varying NOT NULL, "state" "public"."runner_state_enum" NOT NULL DEFAULT 'initializing', "appVersion" character varying DEFAULT 'v0.0.0-dev', "apiVersion" character varying NOT NULL DEFAULT '0', "lastChecked" TIMESTAMP WITH TIME ZONE, "unschedulable" boolean NOT NULL DEFAULT false, "draining" boolean NOT NULL DEFAULT false, "serviceHealth" jsonb, "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "runner_region_name_unique" UNIQUE ("region", "name"), CONSTRAINT "runner_id_pk" PRIMARY KEY ("id"))`,
     )
     await queryRunner.query(
@@ -97,9 +94,6 @@ export class Migration1741087887225 implements MigrationInterface {
     await queryRunner.query(`CREATE INDEX "api_key_org_user_idx" ON "api_key" ("organizationId", "userId")`)
     await queryRunner.query(
       `CREATE INDEX "idx_region_custom" ON "region" ("organizationId") WHERE "regionType" = 'custom'`,
-    )
-    await queryRunner.query(
-      `CREATE UNIQUE INDEX "region_sshGatewayApiKeyHash_unique" ON "region" ("sshGatewayApiKeyHash") WHERE "sshGatewayApiKeyHash" IS NOT NULL`,
     )
     await queryRunner.query(
       `CREATE UNIQUE INDEX "region_proxyApiKeyHash_unique" ON "region" ("proxyApiKeyHash") WHERE "proxyApiKeyHash" IS NOT NULL`,
@@ -186,7 +180,6 @@ export class Migration1741087887225 implements MigrationInterface {
     await queryRunner.query(`DROP TABLE "runner"`)
     await queryRunner.query(`DROP TYPE "public"."runner_state_enum"`)
     await queryRunner.query(`DROP TYPE "public"."runner_class_enum"`)
-    await queryRunner.query(`DROP TABLE "ssh_access"`)
     await queryRunner.query(`DROP TABLE "box_last_activity"`)
     await queryRunner.query(`DROP INDEX "public"."idx_box_volumes_gin"`)
     await queryRunner.query(`DROP INDEX "public"."box_labels_gin_full_idx"`)
@@ -223,7 +216,6 @@ export class Migration1741087887225 implements MigrationInterface {
     await queryRunner.query(`DROP INDEX "public"."region_organizationId_name_unique"`)
     await queryRunner.query(`DROP INDEX "public"."region_organizationId_null_name_unique"`)
     await queryRunner.query(`DROP INDEX "public"."region_proxyApiKeyHash_unique"`)
-    await queryRunner.query(`DROP INDEX "public"."region_sshGatewayApiKeyHash_unique"`)
     await queryRunner.query(`DROP INDEX "public"."idx_region_custom"`)
     await queryRunner.query(`DROP TABLE "region"`)
     await queryRunner.query(`DROP TYPE "public"."region_regiontype_enum"`)

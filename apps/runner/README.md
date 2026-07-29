@@ -30,7 +30,6 @@ the request path), see [`docs/architecture/README.md`](../../docs/architecture/R
   - **Per-box metrics** — CPU / memory / net / exec counters
   - **Runner info** — host CPU / memory / disk + service health
   - **Toolbox proxy** — browser xterm.js over WebSocket
-  - **SSH gateway** — public-key SSH on a separate TCP port
 - The background services spawned at startup — box state sync,
   metrics collector, v2 job poller, v2 healthcheck.
 - The complete REST surface (one consolidated table).
@@ -64,7 +63,6 @@ If you want the formal API schema, see
 │    • api.ApiServer            HTTP/WS listener on :3003                  │
 │    • BoxSyncService       every 10s, reconcile local→remote state    │
 │    • metrics.Collector        rolling CPU + allocation snapshots         │
-│    • sshgateway.Service       SSH listener (if SSH_GATEWAY_ENABLE=true)  │
 │    • v2.poller / executor     long-poll API for jobs (if ApiVersion==2)  │
 │    • v2.healthcheck           push health+metrics (if ApiVersion==2)     │
 │                                                                          │
@@ -125,7 +123,6 @@ the in-process TTL caches under `pkg/cache/`.
      authoritative**, the API is the replica being corrected.
    - `metrics.Collector.Start` — periodic CPU and allocation sampling
      for the `/info` and `/metrics` endpoints (see _Metrics_).
-   - `sshgateway.Service.Start` — only if `SSH_GATEWAY_ENABLE=true`.
    - `healthcheck.Service.Start` and `poller.Service.Start` — only if
      `BOXLITE_API_VERSION=2`. These push health and pull jobs from the
      control plane.
@@ -453,19 +450,6 @@ dashboard terminal preview only:
 This is a convenience surface for the dashboard, not the supported
 programmatic stdio channel — use `/attach` for that.
 
-### 8. SSH gateway
-
-When `SSH_GATEWAY_ENABLE=true`, the runner also listens on a configurable
-TCP port (`pkg/sshgateway/config.go::GetSSHGatewayPort`). Clients
-authenticate with a single shared public key configured on the runner
-(`GetSSHPublicKey`), and the **SSH username is interpreted as the
-box ID**. Once authenticated, the handler starts a command in the box via
-`r.Boxlite.StartExecution(...)` and wires the SSH channel to that
-execution's stdin/stdout/stderr.
-
-Do not expose the gateway port directly to untrusted clients without
-auditing this path.
-
 ---
 
 ## Background services
@@ -594,8 +578,6 @@ BOXLITE_HOME_DIR=/var/lib/boxlite \
 Optional features are toggled by env vars:
 
 - `BOXLITE_API_VERSION=2` — spawn the long-poll + healthcheck loops.
-- `SSH_GATEWAY_ENABLE=true` — listen for SSH connections on the
-  configured port.
 - `BOXLITE_MAX_SESSION_LIFETIME`, `BOXLITE_RECONNECT_GRACE`,
   `BOXLITE_SHUTDOWN_GRACE` — exec reaping timers.
 
@@ -655,7 +637,6 @@ scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
   - [`pkg/runner/v2/poller/poller.go`](pkg/runner/v2/poller/poller.go)
   - [`pkg/runner/v2/executor/executor.go`](pkg/runner/v2/executor/executor.go)
   - [`pkg/runner/v2/healthcheck/healthcheck.go`](pkg/runner/v2/healthcheck/healthcheck.go)
-  - [`pkg/sshgateway/service.go`](pkg/sshgateway/service.go)
 
 - **Client side (Rust SDK)**:
   - [`src/boxlite/src/rest/litebox.rs::attach_ws_pump`](../../src/boxlite/src/rest/litebox.rs) — bidirectional WS pump

@@ -12,7 +12,6 @@ Name | Type | Description | Notes
 **createdAt** | **string** | Creation timestamp | [default to undefined]
 **updatedAt** | **string** | Last update timestamp | [default to undefined]
 **proxyUrl** | **string** | Proxy URL for the region | [optional] [default to undefined]
-**sshGatewayUrl** | **string** | SSH Gateway URL for the region | [optional] [default to undefined]
 
 ## Example
 
@@ -27,7 +26,6 @@ const instance: Region = {
     createdAt,
     updatedAt,
     proxyUrl,
-    sshGatewayUrl,
 };
 ```
 

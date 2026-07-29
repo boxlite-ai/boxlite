@@ -7,7 +7,6 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **name** | **string** | Region name | [default to undefined]
 **proxyUrl** | **string** | Proxy URL for the region | [optional] [default to undefined]
-**sshGatewayUrl** | **string** | SSH Gateway URL for the region | [optional] [default to undefined]
 
 ## Example
 
@@ -17,7 +16,6 @@ import { CreateRegion } from './api';
 const instance: CreateRegion = {
     name,
     proxyUrl,
-    sshGatewayUrl,
 };
 ```
 

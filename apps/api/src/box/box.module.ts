@@ -30,7 +30,6 @@ import { RunnerAdapterFactory } from './runner-adapter/runnerAdapter'
 import { BoxStartAction } from './managers/box-actions/box-start.action'
 import { BoxStopAction } from './managers/box-actions/box-stop.action'
 import { BoxDestroyAction } from './managers/box-actions/box-destroy.action'
-import { SshAccess } from './entities/ssh-access.entity'
 import { BoxRepository } from './repositories/box.repository'
 import { RegionModule } from '../region/region.module'
 import { Region } from '../region/entities/region.entity'
@@ -44,7 +43,6 @@ import { RunnerAccessGuard } from './guards/runner-access.guard'
 import { RegionRunnerAccessGuard } from './guards/region-runner-access.guard'
 import { RegionBoxAccessGuard } from './guards/region-box-access.guard'
 import { ProxyGuard } from './guards/proxy.guard'
-import { SshGatewayGuard } from './guards/ssh-gateway.guard'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { BoxLastActivity } from './entities/box-last-activity.entity'
 import { BoxActivityService } from './services/box-activity.service'
@@ -55,7 +53,7 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     UserModule,
     OrganizationModule,
     RegionModule,
-    TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, SshAccess, Region, Job, BoxLastActivity]),
+    TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, Region, Job, BoxLastActivity]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
   providers: [
@@ -82,7 +80,6 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     RegionRunnerAccessGuard,
     RegionBoxAccessGuard,
     ProxyGuard,
-    SshGatewayGuard,
     {
       provide: BoxRepository,
       inject: [DataSource, EventEmitter2, BoxLookupCacheInvalidationService],

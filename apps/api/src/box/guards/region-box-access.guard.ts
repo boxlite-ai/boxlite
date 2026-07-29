@@ -7,10 +7,6 @@ import { Injectable, CanActivate, ExecutionContext, NotFoundException, Forbidden
 import { BoxService } from '../services/box.service'
 import { BaseAuthContext } from '../../common/interfaces/auth-context.interface'
 import { isRegionProxyContext, RegionProxyContext } from '../../common/interfaces/region-proxy.interface'
-import {
-  isRegionSSHGatewayContext,
-  RegionSSHGatewayContext,
-} from '../../common/interfaces/region-ssh-gateway.interface'
 
 @Injectable()
 export class RegionBoxAccessGuard implements CanActivate {
@@ -22,12 +18,12 @@ export class RegionBoxAccessGuard implements CanActivate {
 
     const authContext: BaseAuthContext = request.user
 
-    if (!isRegionProxyContext(authContext) && !isRegionSSHGatewayContext(authContext)) {
+    if (!isRegionProxyContext(authContext)) {
       return false
     }
 
     try {
-      const regionContext = authContext as RegionProxyContext | RegionSSHGatewayContext
+      const regionContext = authContext as RegionProxyContext
       const boxRegionId = await this.boxService.getRegionId(boxId)
       if (boxRegionId !== regionContext.regionId) {
         throw new ForbiddenException(`Box region ID does not match region ${regionContext.role} region ID`)

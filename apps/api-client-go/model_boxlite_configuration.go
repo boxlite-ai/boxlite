@@ -47,10 +47,6 @@ type BoxliteConfiguration struct {
 	BillingApiUrl *string `json:"billingApiUrl,omitempty"`
 	// Analytics API URL
 	AnalyticsApiUrl *string `json:"analyticsApiUrl,omitempty"`
-	// SSH Gateway command
-	SshGatewayCommand *string `json:"sshGatewayCommand,omitempty"`
-	// Base64 encoded SSH Gateway public key
-	SshGatewayPublicKey *string `json:"sshGatewayPublicKey,omitempty"`
 	// Rate limit configuration
 	RateLimit *RateLimitConfig `json:"rateLimit,omitempty"`
 	AdditionalProperties map[string]interface{}
@@ -428,70 +424,6 @@ func (o *BoxliteConfiguration) SetAnalyticsApiUrl(v string) {
 	o.AnalyticsApiUrl = &v
 }
 
-// GetSshGatewayCommand returns the SshGatewayCommand field value if set, zero value otherwise.
-func (o *BoxliteConfiguration) GetSshGatewayCommand() string {
-	if o == nil || IsNil(o.SshGatewayCommand) {
-		var ret string
-		return ret
-	}
-	return *o.SshGatewayCommand
-}
-
-// GetSshGatewayCommandOk returns a tuple with the SshGatewayCommand field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *BoxliteConfiguration) GetSshGatewayCommandOk() (*string, bool) {
-	if o == nil || IsNil(o.SshGatewayCommand) {
-		return nil, false
-	}
-	return o.SshGatewayCommand, true
-}
-
-// HasSshGatewayCommand returns a boolean if a field has been set.
-func (o *BoxliteConfiguration) HasSshGatewayCommand() bool {
-	if o != nil && !IsNil(o.SshGatewayCommand) {
-		return true
-	}
-
-	return false
-}
-
-// SetSshGatewayCommand gets a reference to the given string and assigns it to the SshGatewayCommand field.
-func (o *BoxliteConfiguration) SetSshGatewayCommand(v string) {
-	o.SshGatewayCommand = &v
-}
-
-// GetSshGatewayPublicKey returns the SshGatewayPublicKey field value if set, zero value otherwise.
-func (o *BoxliteConfiguration) GetSshGatewayPublicKey() string {
-	if o == nil || IsNil(o.SshGatewayPublicKey) {
-		var ret string
-		return ret
-	}
-	return *o.SshGatewayPublicKey
-}
-
-// GetSshGatewayPublicKeyOk returns a tuple with the SshGatewayPublicKey field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *BoxliteConfiguration) GetSshGatewayPublicKeyOk() (*string, bool) {
-	if o == nil || IsNil(o.SshGatewayPublicKey) {
-		return nil, false
-	}
-	return o.SshGatewayPublicKey, true
-}
-
-// HasSshGatewayPublicKey returns a boolean if a field has been set.
-func (o *BoxliteConfiguration) HasSshGatewayPublicKey() bool {
-	if o != nil && !IsNil(o.SshGatewayPublicKey) {
-		return true
-	}
-
-	return false
-}
-
-// SetSshGatewayPublicKey gets a reference to the given string and assigns it to the SshGatewayPublicKey field.
-func (o *BoxliteConfiguration) SetSshGatewayPublicKey(v string) {
-	o.SshGatewayPublicKey = &v
-}
-
 // GetRateLimit returns the RateLimit field value if set, zero value otherwise.
 func (o *BoxliteConfiguration) GetRateLimit() RateLimitConfig {
 	if o == nil || IsNil(o.RateLimit) {
@@ -554,12 +486,6 @@ func (o BoxliteConfiguration) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.AnalyticsApiUrl) {
 		toSerialize["analyticsApiUrl"] = o.AnalyticsApiUrl
-	}
-	if !IsNil(o.SshGatewayCommand) {
-		toSerialize["sshGatewayCommand"] = o.SshGatewayCommand
-	}
-	if !IsNil(o.SshGatewayPublicKey) {
-		toSerialize["sshGatewayPublicKey"] = o.SshGatewayPublicKey
 	}
 	if !IsNil(o.RateLimit) {
 		toSerialize["rateLimit"] = o.RateLimit
@@ -628,8 +554,6 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "environment")
 		delete(additionalProperties, "billingApiUrl")
 		delete(additionalProperties, "analyticsApiUrl")
-		delete(additionalProperties, "sshGatewayCommand")
-		delete(additionalProperties, "sshGatewayPublicKey")
 		delete(additionalProperties, "rateLimit")
 		o.AdditionalProperties = additionalProperties
 	}

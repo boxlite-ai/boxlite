@@ -50,7 +50,7 @@ Postgres + Redis + Node are kept around — they're cheap to leave and
 likely shared with other things on the host.
 
 Bootstrap stores the random `ADMIN_API_KEY`, `ENCRYPTION_KEY`, and
-runner / proxy / SSH-gateway tokens in `/etc/boxlite-secrets.env`
+runner / proxy tokens in `/etc/boxlite-secrets.env`
 (mode 600, owned by the bootstrap user). It's read back on every
 re-run, so the API env file can be regenerated whenever a PR adds a
 new variable without losing access to data encrypted under the old

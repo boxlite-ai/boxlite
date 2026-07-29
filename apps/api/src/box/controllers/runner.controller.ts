@@ -29,7 +29,6 @@ import { RunnerDto } from '../dto/runner.dto'
 import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
-import { SshGatewayGuard } from '../guards/ssh-gateway.guard'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { OrGuard } from '../../auth/or.guard'
 import { RunnerAuthGuard } from '../../auth/runner-auth.guard'
@@ -139,7 +138,7 @@ export class RunnerController {
     status: 200,
     type: RunnerFullDto,
   })
-  @UseGuards(OrGuard([SystemActionGuard, ProxyGuard, SshGatewayGuard, RegionBoxAccessGuard]))
+  @UseGuards(OrGuard([SystemActionGuard, ProxyGuard, RegionBoxAccessGuard]))
   @RequiredApiRole([SystemRole.ADMIN])
   async getRunnerByBoxId(@Param('boxId') boxId: string): Promise<RunnerFullDto> {
     const runner = await this.runnerService.findByBoxId(boxId)
@@ -189,7 +188,7 @@ export class RunnerController {
     description: 'Runner ID',
     type: String,
   })
-  @UseGuards(OrGuard([SystemActionGuard, ProxyGuard, SshGatewayGuard, RegionRunnerAccessGuard]))
+  @UseGuards(OrGuard([SystemActionGuard, ProxyGuard, RegionRunnerAccessGuard]))
   @RequiredApiRole([SystemRole.ADMIN])
   async getRunnerByIdFull(@Param('id', ParseUUIDPipe) id: string): Promise<RunnerFullDto> {
     const runner = await this.runnerService.findOneOrFail(id)

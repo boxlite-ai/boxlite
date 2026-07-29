@@ -224,22 +224,6 @@ export class ConfigurationDto {
   analyticsApiUrl?: string
 
   @ApiPropertyOptional({
-    description: 'SSH Gateway command',
-    example: 'ssh -p 2222 {{TOKEN}}@localhost',
-  })
-  @IsOptional()
-  @IsString()
-  sshGatewayCommand?: string
-
-  @ApiPropertyOptional({
-    description: 'Base64 encoded SSH Gateway public key',
-    example: 'ssh-gateway-public-key',
-  })
-  @IsOptional()
-  @IsString()
-  sshGatewayPublicKey?: string
-
-  @ApiPropertyOptional({
     description: 'Rate limit configuration',
     type: RateLimitConfig,
   })
@@ -270,9 +254,6 @@ export class ConfigurationDto {
     this.dashboardUrl = configService.getOrThrow('dashboardUrl')
     this.maintananceMode = configService.getOrThrow('maintananceMode')
     this.environment = configService.getOrThrow('environment')
-
-    this.sshGatewayCommand = configService.get('sshGateway.command')
-    this.sshGatewayPublicKey = configService.get('sshGateway.publicKey')
 
     if (configService.get('billingApiUrl')) {
       this.billingApiUrl = configService.get('billingApiUrl')

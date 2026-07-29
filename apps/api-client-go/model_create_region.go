@@ -25,8 +25,6 @@ type CreateRegion struct {
 	Name string `json:"name"`
 	// Proxy URL for the region
 	ProxyUrl NullableString `json:"proxyUrl,omitempty"`
-	// SSH Gateway URL for the region
-	SshGatewayUrl NullableString `json:"sshGatewayUrl,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -116,48 +114,6 @@ func (o *CreateRegion) UnsetProxyUrl() {
 	o.ProxyUrl.Unset()
 }
 
-// GetSshGatewayUrl returns the SshGatewayUrl field value if set, zero value otherwise (both if not set or set to explicit null).
-func (o *CreateRegion) GetSshGatewayUrl() string {
-	if o == nil || IsNil(o.SshGatewayUrl.Get()) {
-		var ret string
-		return ret
-	}
-	return *o.SshGatewayUrl.Get()
-}
-
-// GetSshGatewayUrlOk returns a tuple with the SshGatewayUrl field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-// NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *CreateRegion) GetSshGatewayUrlOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return o.SshGatewayUrl.Get(), o.SshGatewayUrl.IsSet()
-}
-
-// HasSshGatewayUrl returns a boolean if a field has been set.
-func (o *CreateRegion) HasSshGatewayUrl() bool {
-	if o != nil && o.SshGatewayUrl.IsSet() {
-		return true
-	}
-
-	return false
-}
-
-// SetSshGatewayUrl gets a reference to the given NullableString and assigns it to the SshGatewayUrl field.
-func (o *CreateRegion) SetSshGatewayUrl(v string) {
-	o.SshGatewayUrl.Set(&v)
-}
-// SetSshGatewayUrlNil sets the value for SshGatewayUrl to be an explicit nil
-func (o *CreateRegion) SetSshGatewayUrlNil() {
-	o.SshGatewayUrl.Set(nil)
-}
-
-// UnsetSshGatewayUrl ensures that no value is present for SshGatewayUrl, not even an explicit nil
-func (o *CreateRegion) UnsetSshGatewayUrl() {
-	o.SshGatewayUrl.Unset()
-}
-
 func (o CreateRegion) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -171,9 +127,6 @@ func (o CreateRegion) ToMap() (map[string]interface{}, error) {
 	toSerialize["name"] = o.Name
 	if o.ProxyUrl.IsSet() {
 		toSerialize["proxyUrl"] = o.ProxyUrl.Get()
-	}
-	if o.SshGatewayUrl.IsSet() {
-		toSerialize["sshGatewayUrl"] = o.SshGatewayUrl.Get()
 	}
 
 	for key, value := range o.AdditionalProperties {
@@ -220,7 +173,6 @@ func (o *CreateRegion) UnmarshalJSON(data []byte) (err error) {
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "proxyUrl")
-		delete(additionalProperties, "sshGatewayUrl")
 		o.AdditionalProperties = additionalProperties
 	}
 

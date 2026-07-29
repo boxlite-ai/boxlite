@@ -60,14 +60,6 @@ export class RegionDto {
   })
   proxyUrl?: string | null
 
-  @ApiProperty({
-    description: 'SSH Gateway URL for the region',
-    example: 'http://ssh-gateway.example.com',
-    nullable: true,
-    required: false,
-  })
-  sshGatewayUrl?: string | null
-
   static fromRegion(region: Region): RegionDto {
     return {
       id: region.id,
@@ -77,7 +69,6 @@ export class RegionDto {
       createdAt: region.createdAt?.toISOString(),
       updatedAt: region.updatedAt?.toISOString(),
       proxyUrl: region.proxyUrl,
-      sshGatewayUrl: region.sshGatewayUrl,
     }
   }
 }

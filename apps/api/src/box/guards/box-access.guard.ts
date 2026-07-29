@@ -10,12 +10,7 @@ import { OrganizationAuthContext, BaseAuthContext } from '../../common/interface
 import { isRunnerContext, RunnerContext } from '../../common/interfaces/runner-context.interface'
 import { SystemRole } from '../../user/enums/system-role.enum'
 import { isProxyContext } from '../../common/interfaces/proxy-context.interface'
-import { isSshGatewayContext } from '../../common/interfaces/ssh-gateway-context.interface'
 import { isRegionProxyContext, RegionProxyContext } from '../../common/interfaces/region-proxy.interface'
-import {
-  isRegionSSHGatewayContext,
-  RegionSSHGatewayContext,
-} from '../../common/interfaces/region-ssh-gateway.interface'
 
 @Injectable()
 export class BoxAccessGuard implements CanActivate {
@@ -41,10 +36,9 @@ export class BoxAccessGuard implements CanActivate {
           }
           break
         }
-        case isRegionProxyContext(authContext):
-        case isRegionSSHGatewayContext(authContext): {
-          // For region proxy/ssh gateway authentication, verify that the runner's region ID matches the region ID
-          const regionContext = authContext as RegionProxyContext | RegionSSHGatewayContext
+        case isRegionProxyContext(authContext): {
+          // For region proxy authentication, verify that the runner's region ID matches the region ID
+          const regionContext = authContext as RegionProxyContext
           const boxRegionId = await this.boxService.getRegionId(boxIdOrName)
           if (boxRegionId !== regionContext.regionId) {
             throw new ForbiddenException(`Box region ID does not match region ${regionContext.role} region ID`)
@@ -52,7 +46,6 @@ export class BoxAccessGuard implements CanActivate {
           break
         }
         case isProxyContext(authContext):
-        case isSshGatewayContext(authContext):
           return true
         default: {
           // For user/organization authentication, check organization access

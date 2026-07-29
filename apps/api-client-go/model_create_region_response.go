@@ -25,8 +25,6 @@ type CreateRegionResponse struct {
 	Id string `json:"id"`
 	// Proxy API key for the region
 	ProxyApiKey NullableString `json:"proxyApiKey,omitempty"`
-	// SSH Gateway API key for the region
-	SshGatewayApiKey NullableString `json:"sshGatewayApiKey,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -116,48 +114,6 @@ func (o *CreateRegionResponse) UnsetProxyApiKey() {
 	o.ProxyApiKey.Unset()
 }
 
-// GetSshGatewayApiKey returns the SshGatewayApiKey field value if set, zero value otherwise (both if not set or set to explicit null).
-func (o *CreateRegionResponse) GetSshGatewayApiKey() string {
-	if o == nil || IsNil(o.SshGatewayApiKey.Get()) {
-		var ret string
-		return ret
-	}
-	return *o.SshGatewayApiKey.Get()
-}
-
-// GetSshGatewayApiKeyOk returns a tuple with the SshGatewayApiKey field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-// NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *CreateRegionResponse) GetSshGatewayApiKeyOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return o.SshGatewayApiKey.Get(), o.SshGatewayApiKey.IsSet()
-}
-
-// HasSshGatewayApiKey returns a boolean if a field has been set.
-func (o *CreateRegionResponse) HasSshGatewayApiKey() bool {
-	if o != nil && o.SshGatewayApiKey.IsSet() {
-		return true
-	}
-
-	return false
-}
-
-// SetSshGatewayApiKey gets a reference to the given NullableString and assigns it to the SshGatewayApiKey field.
-func (o *CreateRegionResponse) SetSshGatewayApiKey(v string) {
-	o.SshGatewayApiKey.Set(&v)
-}
-// SetSshGatewayApiKeyNil sets the value for SshGatewayApiKey to be an explicit nil
-func (o *CreateRegionResponse) SetSshGatewayApiKeyNil() {
-	o.SshGatewayApiKey.Set(nil)
-}
-
-// UnsetSshGatewayApiKey ensures that no value is present for SshGatewayApiKey, not even an explicit nil
-func (o *CreateRegionResponse) UnsetSshGatewayApiKey() {
-	o.SshGatewayApiKey.Unset()
-}
-
 func (o CreateRegionResponse) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -171,9 +127,6 @@ func (o CreateRegionResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["id"] = o.Id
 	if o.ProxyApiKey.IsSet() {
 		toSerialize["proxyApiKey"] = o.ProxyApiKey.Get()
-	}
-	if o.SshGatewayApiKey.IsSet() {
-		toSerialize["sshGatewayApiKey"] = o.SshGatewayApiKey.Get()
 	}
 
 	for key, value := range o.AdditionalProperties {
@@ -220,7 +173,6 @@ func (o *CreateRegionResponse) UnmarshalJSON(data []byte) (err error) {
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "id")
 		delete(additionalProperties, "proxyApiKey")
-		delete(additionalProperties, "sshGatewayApiKey")
 		o.AdditionalProperties = additionalProperties
 	}
 

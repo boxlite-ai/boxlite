@@ -28,7 +28,6 @@ All URIs are relative to *http://localhost:3000*
 |[**listOrganizationRoles**](#listorganizationroles) | **GET** /organizations/{organizationId}/roles | List organization roles|
 |[**listOrganizations**](#listorganizations) | **GET** /organizations | List organizations|
 |[**regenerateProxyApiKey**](#regenerateproxyapikey) | **POST** /regions/{id}/regenerate-proxy-api-key | Regenerate proxy API key for a region|
-|[**regenerateSshGatewayApiKey**](#regeneratesshgatewayapikey) | **POST** /regions/{id}/regenerate-ssh-gateway-api-key | Regenerate SSH gateway API key for a region|
 |[**setOrganizationDefaultRegion**](#setorganizationdefaultregion) | **PATCH** /organizations/{organizationId}/default-region | Set default region for organization|
 |[**suspendOrganization**](#suspendorganization) | **POST** /organizations/{organizationId}/suspend | Suspend organization|
 |[**unsuspendOrganization**](#unsuspendorganization) | **POST** /organizations/{organizationId}/unsuspend | Unsuspend organization|
@@ -1247,59 +1246,6 @@ const { status, data } = await apiInstance.regenerateProxyApiKey(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | The proxy API key has been successfully regenerated. |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **regenerateSshGatewayApiKey**
-> RegenerateApiKeyResponse regenerateSshGatewayApiKey()
-
-
-### Example
-
-```typescript
-import {
-    OrganizationsApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new OrganizationsApi(configuration);
-
-let id: string; //Region ID (default to undefined)
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.regenerateSshGatewayApiKey(
-    id,
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] | Region ID | defaults to undefined|
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**RegenerateApiKeyResponse**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | The SSH gateway API key has been successfully regenerated. |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

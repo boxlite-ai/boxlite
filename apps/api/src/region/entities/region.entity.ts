@@ -31,10 +31,6 @@ import { RegionType } from '../enums/region-type.enum'
   unique: true,
   where: '"proxyApiKeyHash" IS NOT NULL',
 })
-@Index('region_sshGatewayApiKeyHash_unique', ['sshGatewayApiKeyHash'], {
-  unique: true,
-  where: '"sshGatewayApiKeyHash" IS NOT NULL',
-})
 @Index('idx_region_custom', ['organizationId'], {
   where: '"regionType" = \'custom\'',
 })
@@ -84,12 +80,6 @@ export class Region {
   @Column({ nullable: true })
   proxyApiKeyHash: string | null
 
-  @Column({ nullable: true })
-  sshGatewayUrl: string | null
-
-  @Column({ nullable: true })
-  sshGatewayApiKeyHash: string | null
-
   constructor(params: {
     name: string
     enforceQuotas: boolean
@@ -98,9 +88,7 @@ export class Region {
     organizationId?: string | null
     proxyUrl?: string | null
     toolboxProxyUrl?: string | null
-    sshGatewayUrl?: string | null
     proxyApiKeyHash?: string | null
-    sshGatewayApiKeyHash?: string | null
   }) {
     this.name = params.name
     this.enforceQuotas = params.enforceQuotas
@@ -117,9 +105,7 @@ export class Region {
 
     this.proxyUrl = params.proxyUrl ?? null
     this.toolboxProxyUrl = params.toolboxProxyUrl ?? params.proxyUrl ?? null
-    this.sshGatewayUrl = params.sshGatewayUrl ?? null
     this.proxyApiKeyHash = params.proxyApiKeyHash ?? null
-    this.sshGatewayApiKeyHash = params.sshGatewayApiKeyHash ?? null
   }
 
   @BeforeInsert()

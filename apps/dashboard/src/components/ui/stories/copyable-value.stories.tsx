@@ -23,14 +23,14 @@ const meta: Meta<typeof CopyableValue> = {
 export default meta
 type Story = StoryObj<typeof CopyableValue>
 
-const sshCommand = 'ssh -p 2222 drbDvBTdVD8g38GJ2bdTw66ys94CAXaZ@ssh.dev.boxlite.ai'
+const longCommand = 'boxlite exec --box drbDvBTdVD8g38GJ2bdTw66ys94CAXaZ -- python -m http.server 8080'
 const apiKey = 'bxl_live_1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
 export const LongCommand: Story = {
   args: {
-    displayValue: sshCommand,
-    copyValue: sshCommand,
-    copyLabel: 'SSH command',
+    displayValue: longCommand,
+    copyValue: longCommand,
+    copyLabel: 'command',
     onCopy: () => {},
   },
 }

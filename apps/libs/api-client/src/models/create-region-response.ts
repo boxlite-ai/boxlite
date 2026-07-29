@@ -23,9 +23,5 @@ export interface CreateRegionResponse {
      * Proxy API key for the region
      */
     'proxyApiKey'?: string | null;
-    /**
-     * SSH Gateway API key for the region
-     */
-    'sshGatewayApiKey'?: string | null;
 }
 

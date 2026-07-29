@@ -12,5 +12,4 @@ export class CreateRegionInternalDto {
   enforceQuotas: boolean
   regionType: RegionType
   proxyUrl?: string | null
-  sshGatewayUrl?: string | null
 }

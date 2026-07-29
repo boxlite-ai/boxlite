@@ -95,6 +95,10 @@ export class UserService {
     })
   }
 
+  /**
+   * @deprecated The generated keys are no longer consumed by anything.
+   * Scheduled for removal in a future release.
+   */
   async regenerateKeyPair(id: string): Promise<User> {
     const user = await this.userRepository.findOneBy({ id: id })
     const keyPair = await this.generatePrivateKey()
@@ -102,6 +106,10 @@ export class UserService {
     return this.userRepository.save(user)
   }
 
+  /**
+   * @deprecated Feeds only the deprecated {@link User.keyPair} column.
+   * Scheduled for removal in a future release.
+   */
   private generatePrivateKey(): Promise<UserSSHKeyPair> {
     const comment = 'boxlite'
 

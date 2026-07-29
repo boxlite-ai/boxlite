@@ -216,34 +216,4 @@ export class OrganizationRegionController {
   async updateRegion(@Param('id') id: string, @Body() updateRegionDto: UpdateRegionDto): Promise<void> {
     return await this.regionService.update(id, updateRegionDto)
   }
-
-  @Post(':id/regenerate-ssh-gateway-api-key')
-  @HttpCode(200)
-  @UseInterceptors(ContentTypeInterceptor)
-  @ApiOperation({
-    summary: 'Regenerate SSH gateway API key for a region',
-    operationId: 'regenerateSshGatewayApiKey',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'The SSH gateway API key has been successfully regenerated.',
-    type: RegenerateApiKeyResponseDto,
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'Region ID',
-    type: String,
-  })
-  @Audit({
-    action: AuditAction.REGENERATE_SSH_GATEWAY_API_KEY,
-    targetType: AuditTarget.REGION,
-    targetIdFromRequest: (req) => req.params.id,
-  })
-  @UseGuards(RegionAccessGuard)
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_REGIONS])
-  @RequireFlagsEnabled({ flags: [{ flagKey: FeatureFlags.ORGANIZATION_INFRASTRUCTURE, defaultValue: false }] })
-  async regenerateSshGatewayApiKey(@Param('id') id: string): Promise<RegenerateApiKeyResponseDto> {
-    const apiKey = await this.regionService.regenerateSshGatewayApiKey(id)
-    return new RegenerateApiKeyResponseDto(apiKey)
-  }
 }

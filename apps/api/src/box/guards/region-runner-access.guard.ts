@@ -15,10 +15,6 @@ import {
 import { RunnerService } from '../services/runner.service'
 import { BaseAuthContext } from '../../common/interfaces/auth-context.interface'
 import { isRegionProxyContext, RegionProxyContext } from '../../common/interfaces/region-proxy.interface'
-import {
-  isRegionSSHGatewayContext,
-  RegionSSHGatewayContext,
-} from '../../common/interfaces/region-ssh-gateway.interface'
 
 @Injectable()
 export class RegionRunnerAccessGuard implements CanActivate {
@@ -32,12 +28,12 @@ export class RegionRunnerAccessGuard implements CanActivate {
 
     const authContext: BaseAuthContext = request.user
 
-    if (!isRegionProxyContext(authContext) && !isRegionSSHGatewayContext(authContext)) {
+    if (!isRegionProxyContext(authContext)) {
       return false
     }
 
     try {
-      const regionContext = authContext as RegionProxyContext | RegionSSHGatewayContext
+      const regionContext = authContext as RegionProxyContext
       const runner = await this.runnerService.findOneOrFail(runnerId)
       if (regionContext.regionId !== runner.region) {
         throw new ForbiddenException('Region ID does not match runner region ID')

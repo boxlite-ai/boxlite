@@ -15,12 +15,4 @@ export class UpdateRegionDto {
     required: false,
   })
   proxyUrl?: string
-
-  @ApiProperty({
-    description: 'SSH Gateway URL for the region',
-    example: 'ssh://ssh-gateway.example.com',
-    nullable: true,
-    required: false,
-  })
-  sshGatewayUrl?: string
 }

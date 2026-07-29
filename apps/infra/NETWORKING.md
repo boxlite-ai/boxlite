@@ -29,8 +29,8 @@ patterns. Defined in [`sst.config.ts`](./sst.config.ts) §2 PLATFORM + §10 RUNN
 ```
 
 - **Public subnets:** internet-facing ALBs, the per-AZ NAT, and the EC2 runner.
-- **Private subnets:** Fargate service tasks (Api, Proxy, SshGateway, Otel,
-  Jaeger, MailDev, PgAdmin), Postgres, Redis. No public IPs.
+- **Private subnets:** Fargate service tasks (Api, Proxy, Otel, Jaeger,
+  MailDev, PgAdmin), Postgres, Redis. No public IPs.
 
 ## Traffic flows
 

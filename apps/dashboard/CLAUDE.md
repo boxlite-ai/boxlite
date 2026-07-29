@@ -65,7 +65,7 @@ If it decides **how it looks**, rebuild it.
 ## Functional contract surface (domains the UI must keep wiring up)
 
 Boxes (core: `useBoxes`, `useBoxQuery`, `useTerminalSessionQuery`; create/start/stop/delete/
-recover/ssh mutations) · API Keys · Organizations · Billing/Wallet/Invoices/Tiers (via
+recover mutations) · API Keys · Organizations · Billing/Wallet/Invoices/Tiers (via
 `BillingApiClient`, owner-scoped helpers in `billingQueries.ts`) · Volumes · Audit · Regions ·
 Runners · Webhooks (Svix) · Analytics/Usage (needs `config.analyticsApiUrl`) · Users.
 
@@ -75,7 +75,7 @@ Only **9 pages are active**; 13 are redirected to `/boxes` via `HIDDEN_DASHBOARD
 `App.tsx` (Images, Volumes, Limits, BillingSpending, BillingWallet, Members, Roles, AuditLogs,
 Regions, Runners, Experimental, Webhooks, WebhookEndpointDetails). Their hooks/components still
 exist. Active: Landing · Dashboard (shell/nav) · **Boxes** (list + detail + fullscreen terminal +
-lifecycle + SSH + onboarding — the core) · Keys · Billing · Admin · OrganizationSettings ·
+lifecycle + onboarding — the core) · Keys · Billing · Admin · OrganizationSettings ·
 EmailVerify · Logout.
 
 ## Recommended rebuild path

@@ -27,7 +27,6 @@ import { getMaskedToken } from '@/lib/utils'
 const DEFAULT_FORM_DATA = {
   name: '',
   proxyUrl: '',
-  sshGatewayUrl: '',
 }
 
 interface CreateRegionDialogProps {
@@ -46,7 +45,6 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
 
   const [createdRegion, setCreatedRegion] = useState<CreateRegionResponse | null>(null)
   const [isProxyApiKeyRevealed, setIsProxyApiKeyRevealed] = useState(false)
-  const [isSshGatewayApiKeyRevealed, setIsSshGatewayApiKeyRevealed] = useState(false)
 
   const [formData, setFormData] = useState(DEFAULT_FORM_DATA)
 
@@ -56,12 +54,11 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
       const createRegionData: CreateRegion = {
         name: formData.name,
         proxyUrl: formData.proxyUrl.trim() || null,
-        sshGatewayUrl: formData.sshGatewayUrl.trim() || null,
       }
 
       const region = await onCreateRegion(createRegionData)
       if (region) {
-        if (!region.proxyApiKey && !region.sshGatewayApiKey) {
+        if (!region.proxyApiKey) {
           setOpen(false)
           setCreatedRegion(null)
         } else {
@@ -97,7 +94,6 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
           setCreatedRegion(null)
           setFormData(DEFAULT_FORM_DATA)
           setIsProxyApiKeyRevealed(false)
-          setIsSshGatewayApiKeyRevealed(false)
         }
       }}
     >
@@ -114,13 +110,13 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
           <DialogDescription>
             {!createdRegion
               ? 'Add a new region for grouping runners and boxes.'
-              : createdRegion.proxyApiKey || createdRegion.sshGatewayApiKey
+              : createdRegion.proxyApiKey
                 ? "Save these credentials securely. You won't be able to see them again."
                 : ''}
           </DialogDescription>
         </DialogHeader>
 
-        {createdRegion && (createdRegion.proxyApiKey || createdRegion.sshGatewayApiKey) ? (
+        {createdRegion && createdRegion.proxyApiKey ? (
           <div className="space-y-6">
             {createdRegion.proxyApiKey && (
               <div className="space-y-3">
@@ -135,26 +131,6 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
                   valueProps={{
                     onMouseEnter: () => setIsProxyApiKeyRevealed(true),
                     onMouseLeave: () => setIsProxyApiKeyRevealed(false),
-                  }}
-                />
-              </div>
-            )}
-
-            {createdRegion.sshGatewayApiKey && (
-              <div className="space-y-3">
-                <Label htmlFor="ssh-gateway-api-key">SSH Gateway API Key</Label>
-                <CopyableValue
-                  displayValue={
-                    isSshGatewayApiKeyRevealed
-                      ? createdRegion.sshGatewayApiKey
-                      : getMaskedToken(createdRegion.sshGatewayApiKey)
-                  }
-                  copyValue={createdRegion.sshGatewayApiKey}
-                  copyLabel="SSH gateway API key"
-                  onCopy={copyToClipboard}
-                  valueProps={{
-                    onMouseEnter: () => setIsSshGatewayApiKeyRevealed(true),
-                    onMouseLeave: () => setIsSshGatewayApiKeyRevealed(false),
                   }}
                 />
               </div>
@@ -196,21 +172,6 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
               />
               <p className="text-sm text-muted-foreground mt-1 pl-1">
                 (Optional) URL of the custom proxy for this region
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              <Label htmlFor="ssh-gateway-url">SSH gateway URL</Label>
-              <Input
-                id="ssh-gateway-url"
-                value={formData.sshGatewayUrl}
-                onChange={(e) => {
-                  setFormData((prev) => ({ ...prev, sshGatewayUrl: e.target.value }))
-                }}
-                placeholder="https://ssh-gateway.example.com"
-              />
-              <p className="text-sm text-muted-foreground mt-1 pl-1">
-                (Optional) URL of the custom SSH gateway for this region
               </p>
             </div>
           </form>

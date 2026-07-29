@@ -111,10 +111,13 @@ type UsersAPI interface {
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param id
 	@return UsersAPIRegenerateKeyPairRequest
+
+	Deprecated
 	*/
 	RegenerateKeyPair(ctx context.Context, id string) UsersAPIRegenerateKeyPairRequest
 
 	// RegenerateKeyPairExecute executes the request
+	// Deprecated
 	RegenerateKeyPairExecute(r UsersAPIRegenerateKeyPairRequest) (*http.Response, error)
 
 	/*
@@ -822,6 +825,8 @@ RegenerateKeyPair Regenerate user key pair
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param id
  @return UsersAPIRegenerateKeyPairRequest
+
+Deprecated
 */
 func (a *UsersAPIService) RegenerateKeyPair(ctx context.Context, id string) UsersAPIRegenerateKeyPairRequest {
 	return UsersAPIRegenerateKeyPairRequest{
@@ -832,6 +837,7 @@ func (a *UsersAPIService) RegenerateKeyPair(ctx context.Context, id string) User
 }
 
 // Execute executes the request
+// Deprecated
 func (a *UsersAPIService) RegenerateKeyPairExecute(r UsersAPIRegenerateKeyPairRequest) (*http.Response, error) {
 	var (
 		localVarHTTPMethod   = http.MethodPost

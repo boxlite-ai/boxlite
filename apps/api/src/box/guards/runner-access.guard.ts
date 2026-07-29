@@ -18,9 +18,7 @@ import { BaseAuthContext, OrganizationAuthContext } from '../../common/interface
 import { SystemRole } from '../../user/enums/system-role.enum'
 import { RegionType } from '../../region/enums/region-type.enum'
 import { isRegionProxyContext } from '../../common/interfaces/region-proxy.interface'
-import { isRegionSSHGatewayContext } from '../../common/interfaces/region-ssh-gateway.interface'
 import { isProxyContext } from '../../common/interfaces/proxy-context.interface'
-import { isSshGatewayContext } from '../../common/interfaces/ssh-gateway-context.interface'
 
 @Injectable()
 export class RunnerAccessGuard implements CanActivate {
@@ -42,13 +40,11 @@ export class RunnerAccessGuard implements CanActivate {
       const runner = await this.runnerService.findOneOrFail(runnerId)
 
       switch (true) {
-        case isRegionProxyContext(authContext):
-        case isRegionSSHGatewayContext(authContext): {
+        case isRegionProxyContext(authContext): {
           // Use RunnerRegionAccessGuard to check access instead
           return false
         }
         case isProxyContext(authContext):
-        case isSshGatewayContext(authContext):
           return true
         default: {
           const orgAuthContext = authContext as OrganizationAuthContext

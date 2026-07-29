@@ -302,6 +302,7 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
          * @summary Regenerate user key pair
          * @param {string} id 
          * @param {*} [options] Override http request option.
+         * @deprecated
          * @throws {RequiredError}
          */
         regenerateKeyPair: async (id: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
@@ -480,6 +481,7 @@ export const UsersApiFp = function(configuration?: Configuration) {
          * @summary Regenerate user key pair
          * @param {string} id 
          * @param {*} [options] Override http request option.
+         * @deprecated
          * @throws {RequiredError}
          */
         async regenerateKeyPair(id: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
@@ -582,6 +584,7 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
          * @summary Regenerate user key pair
          * @param {string} id 
          * @param {*} [options] Override http request option.
+         * @deprecated
          * @throws {RequiredError}
          */
         regenerateKeyPair(id: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
@@ -683,6 +686,7 @@ export class UsersApi extends BaseAPI {
      * @summary Regenerate user key pair
      * @param {string} id 
      * @param {*} [options] Override http request option.
+     * @deprecated
      * @throws {RequiredError}
      */
     public regenerateKeyPair(id: string, options?: RawAxiosRequestConfig) {

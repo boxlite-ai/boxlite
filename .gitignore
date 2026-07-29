@@ -164,14 +164,11 @@ Cargo.lock
 /apps/infra/sst-env.d.ts
 /apps/infra/.env*
 !/apps/infra/.env.example
-/apps/snapshot-manager/data/
 /apps/runner/pkg/daemon/static/*
 !/apps/runner/pkg/daemon/static/.gitkeep
 /apps/daemon/daemon
 /apps/proxy/proxy
 /apps/runner/runner
-/apps/snapshot-manager/snapshot-manager
-/apps/ssh-gateway/ssh-gateway
 /apps/otel-collector/exporter/exporter
 /apps/libs/computer-use/test-computer-use
 /apps/libs/computer-use/boxlite-computer-use
@@ -179,6 +176,7 @@ Cargo.lock
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 .claude/.last-audit.json
+.claude/.last-audit-handoff.json
 .claude/.last-verdict.json
 .claude/.pr-reviewed.json
 .claude/.verdict-last-uuid

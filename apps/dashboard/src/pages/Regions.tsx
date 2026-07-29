@@ -61,7 +61,6 @@ const Regions: React.FC = () => {
 
   // Regenerate API Key state
   const [showRegenerateProxyApiKeyDialog, setShowRegenerateProxyApiKeyDialog] = useState(false)
-  const [showRegenerateSshGatewayApiKeyDialog, setShowRegenerateSshGatewayApiKeyDialog] = useState(false)
   const [regeneratedApiKey, setRegeneratedApiKey] = useState<string | null>(null)
   const [regionForRegenerate, setRegionForRegenerate] = useState<Region | null>(null)
   const [isApiKeyRevealed, setIsApiKeyRevealed] = useState(false)
@@ -126,12 +125,6 @@ const Regions: React.FC = () => {
     setShowRegenerateProxyApiKeyDialog(true)
   }
 
-  const handleRegenerateSshGatewayApiKey = async (region: Region) => {
-    setRegionForRegenerate(region)
-    setRegeneratedApiKey(null)
-    setShowRegenerateSshGatewayApiKeyDialog(true)
-  }
-
   const handleOpenRegionDetails = (region: Region) => {
     setSelectedRegion(region)
     setShowRegionDetails(true)
@@ -175,30 +168,6 @@ const Regions: React.FC = () => {
     } catch (error) {
       handleApiError(error, 'Failed to regenerate proxy API key')
       setShowRegenerateProxyApiKeyDialog(false)
-      setRegionForRegenerate(null)
-    } finally {
-      setRegionIsLoading((prev) => ({ ...prev, [regionForRegenerate.id]: false }))
-    }
-  }
-
-  const confirmRegenerateSshGatewayApiKey = async () => {
-    if (!regionForRegenerate || !selectedOrganization) {
-      return
-    }
-
-    setRegionIsLoading((prev) => ({ ...prev, [regionForRegenerate.id]: true }))
-
-    try {
-      const response = await organizationsApi.regenerateSshGatewayApiKey(
-        regionForRegenerate.id,
-        selectedOrganization.id,
-      )
-      setRegeneratedApiKey(response.data.apiKey)
-      setShowRegenerateSshGatewayApiKeyDialog(true)
-      toast.success('SSH Gateway API key regenerated successfully')
-    } catch (error) {
-      handleApiError(error, 'Failed to regenerate SSH Gateway API key')
-      setShowRegenerateSshGatewayApiKeyDialog(false)
       setRegionForRegenerate(null)
     } finally {
       setRegionIsLoading((prev) => ({ ...prev, [regionForRegenerate.id]: false }))
@@ -260,7 +229,6 @@ const Regions: React.FC = () => {
         }}
         onUpdate={handleOpenUpdateDialog}
         onRegenerateProxyApiKey={handleRegenerateProxyApiKey}
-        onRegenerateSshGatewayApiKey={handleRegenerateSshGatewayApiKey}
       />
 
       {regionToUpdate && (
@@ -370,78 +338,6 @@ const Regions: React.FC = () => {
               <AlertDialogAction
                 onClick={() => {
                   setShowRegenerateProxyApiKeyDialog(false)
-                  setRegionForRegenerate(null)
-                  setRegeneratedApiKey(null)
-                  setIsApiKeyRevealed(false)
-                }}
-                className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
-              >
-                Close
-              </AlertDialogAction>
-            )}
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Regenerate SSH Gateway API Key Dialog */}
-      <AlertDialog
-        open={showRegenerateSshGatewayApiKeyDialog}
-        onOpenChange={(isOpen) => {
-          setShowRegenerateSshGatewayApiKeyDialog(isOpen)
-          if (!isOpen) {
-            setRegionForRegenerate(null)
-            setRegeneratedApiKey(null)
-            setIsApiKeyRevealed(false)
-          }
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {regeneratedApiKey ? 'SSH Gateway API Key Regenerated' : 'Regenerate SSH Gateway API Key'}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {regeneratedApiKey ? (
-                'The new API key has been generated. Copy it now as it will not be shown again.'
-              ) : (
-                <>
-                  <strong>Warning:</strong> This will immediately invalidate the current SSH gateway API key. The SSH
-                  gateway will need to be redeployed with the new API key.
-                </>
-              )}
-              {regeneratedApiKey && (
-                <div className="space-y-4 mt-4">
-                  <CopyableValue
-                    displayValue={isApiKeyRevealed ? regeneratedApiKey : getMaskedToken(regeneratedApiKey)}
-                    copyValue={regeneratedApiKey}
-                    copyLabel="SSH gateway API key"
-                    onCopy={copyToClipboard}
-                    valueProps={{
-                      onMouseEnter: () => setIsApiKeyRevealed(true),
-                      onMouseLeave: () => setIsApiKeyRevealed(false),
-                    }}
-                  />
-                </div>
-              )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-
-          <AlertDialogFooter>
-            {!regeneratedApiKey ? (
-              <>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={confirmRegenerateSshGatewayApiKey}
-                  disabled={!regionForRegenerate || regionIsLoading[regionForRegenerate?.id || '']}
-                  className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                >
-                  {regionForRegenerate && regionIsLoading[regionForRegenerate.id] ? 'Regenerating...' : 'Regenerate'}
-                </AlertDialogAction>
-              </>
-            ) : (
-              <AlertDialogAction
-                onClick={() => {
-                  setShowRegenerateSshGatewayApiKeyDialog(false)
                   setRegionForRegenerate(null)
                   setRegeneratedApiKey(null)
                   setIsApiKeyRevealed(false)

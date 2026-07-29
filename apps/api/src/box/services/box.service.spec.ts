@@ -37,7 +37,6 @@ function makeService() {
   const service = new BoxService(
     boxRepository, // boxRepository
     noop, // runnerRepository
-    noop, // sshAccessRepository
     noop, // runnerService
     noop, // volumeService
     noop, // configService
@@ -79,7 +78,6 @@ function makePreviewUrlService() {
   const service = new BoxService(
     noop, // boxRepository
     noop, // runnerRepository
-    noop, // sshAccessRepository
     noop, // runnerService
     noop, // volumeService
     configService, // configService
@@ -253,7 +251,6 @@ function makeNetworkTunnelService() {
   const regionService = { findOne: jest.fn().mockResolvedValue(null) } as any
   const noop = {} as any
   const service = new BoxService(
-    noop,
     noop,
     noop,
     noop,

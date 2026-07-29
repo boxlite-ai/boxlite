@@ -38,7 +38,6 @@ function createStrategy() {
   }
   const regionService = {
     findOneByProxyApiKey: jest.fn().mockResolvedValue(null),
-    findOneBySshGatewayApiKey: jest.fn().mockResolvedValue(null),
   }
 
   return {
@@ -69,7 +68,6 @@ describe('ApiKeyStrategy', () => {
 
     await expect(strategy.validate('unknown-api-key')).resolves.toBeNull()
 
-    expect(mocks.configService.get).toHaveBeenCalledWith('sshGateway.apiKey')
     expect(mocks.configService.get).toHaveBeenCalledWith('proxy.apiKey')
     expect(mocks.configService.getOrThrow).not.toHaveBeenCalled()
     expect(mocks.apiKeyService.getApiKeyByValue).toHaveBeenCalledWith('unknown-api-key')

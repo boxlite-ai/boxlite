@@ -9,9 +9,9 @@ import { crc32 } from 'node:zlib'
 
 /**
  * Key class segment. `live`/`test` = user dashboard keys (Stripe-style
- * environment split); `svc` = internal machine keys (runner / proxy /
- * ssh-gateway). Cosmetic — for humans, masked display, and secret scanners;
- * never consulted during authentication.
+ * environment split); `svc` = internal machine keys (runner / proxy).
+ * Cosmetic — for humans, masked display, and secret scanners; never
+ * consulted during authentication.
  */
 export type ApiKeyClass = 'live' | 'test' | 'svc'
 

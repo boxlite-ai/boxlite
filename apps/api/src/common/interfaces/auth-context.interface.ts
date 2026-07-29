@@ -10,9 +10,7 @@ import { Organization } from '../../organization/entities/organization.entity'
 import { SystemRole } from '../../user/enums/system-role.enum'
 import { ProxyContext } from './proxy-context.interface'
 import { RunnerContext } from './runner-context.interface'
-import { SshGatewayContext } from './ssh-gateway-context.interface'
 import { RegionProxyContext } from './region-proxy.interface'
-import { RegionSSHGatewayContext } from './region-ssh-gateway.interface'
 import { OtelCollectorContext } from './otel-collector-context.interface'
 import { HealthCheckContext } from './health-check-context.interface'
 
@@ -20,15 +18,7 @@ export interface BaseAuthContext {
   role: ApiRole
 }
 
-export type ApiRole =
-  | SystemRole
-  | 'proxy'
-  | 'runner'
-  | 'ssh-gateway'
-  | 'region-proxy'
-  | 'region-ssh-gateway'
-  | 'otel-collector'
-  | 'health-check'
+export type ApiRole = SystemRole | 'proxy' | 'runner' | 'region-proxy' | 'otel-collector' | 'health-check'
 
 export interface AuthContext extends BaseAuthContext {
   userId: string
@@ -57,8 +47,6 @@ export type AuthContextType =
   | OrganizationAuthContext
   | ProxyContext
   | RunnerContext
-  | SshGatewayContext
   | RegionProxyContext
-  | RegionSSHGatewayContext
   | OtelCollectorContext
   | HealthCheckContext

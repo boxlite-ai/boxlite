@@ -26,7 +26,6 @@ import (
 	"github.com/boxlite-ai/runner/pkg/runner/v2/healthcheck"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/poller"
 	"github.com/boxlite-ai/runner/pkg/services"
-	"github.com/boxlite-ai/runner/pkg/sshgateway"
 	"github.com/boxlite-ai/runner/pkg/telemetry/filters"
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
@@ -137,19 +136,6 @@ func run() int {
 		Interval: 10 * time.Second,
 	})
 	boxSyncService.StartSyncProcess(ctx)
-
-	// Initialize SSH Gateway if enabled
-	if sshgateway.IsSSHGatewayEnabled() {
-		sshGatewayService := sshgateway.NewService(logger, boxliteClient)
-		go func() {
-			logger.Info("Starting SSH Gateway")
-			if err := sshGatewayService.Start(ctx); err != nil {
-				logger.Error("SSH Gateway error", "error", err)
-			}
-		}()
-	} else {
-		logger.Info("Gateway disabled - set SSH_GATEWAY_ENABLE=true to enable")
-	}
 
 	metricsCollector := metrics.NewCollector(metrics.CollectorConfig{
 		Logger:                             logger,

@@ -18,8 +18,6 @@ Name | Type | Description | Notes
 **environment** | **string** | Current environment | [default to undefined]
 **billingApiUrl** | **string** | Billing API URL | [optional] [default to undefined]
 **analyticsApiUrl** | **string** | Analytics API URL | [optional] [default to undefined]
-**sshGatewayCommand** | **string** | SSH Gateway command | [optional] [default to undefined]
-**sshGatewayPublicKey** | **string** | Base64 encoded SSH Gateway public key | [optional] [default to undefined]
 **rateLimit** | [**RateLimitConfig**](RateLimitConfig.md) | Rate limit configuration | [optional] [default to undefined]
 
 ## Example
@@ -41,8 +39,6 @@ const instance: BoxliteConfiguration = {
     environment,
     billingApiUrl,
     analyticsApiUrl,
-    sshGatewayCommand,
-    sshGatewayPublicKey,
     rateLimit,
 };
 ```

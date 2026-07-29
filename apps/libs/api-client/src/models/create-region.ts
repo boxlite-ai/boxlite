@@ -23,9 +23,5 @@ export interface CreateRegion {
      * Proxy URL for the region
      */
     'proxyUrl'?: string | null;
-    /**
-     * SSH Gateway URL for the region
-     */
-    'sshGatewayUrl'?: string | null;
 }
 

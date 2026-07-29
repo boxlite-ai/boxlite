@@ -1258,42 +1258,6 @@ paths:
       summary: Regenerate proxy API key for a region
       tags:
       - organizations
-  /regions/{id}/regenerate-ssh-gateway-api-key:
-    post:
-      operationId: regenerateSshGatewayApiKey
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Region ID
-        explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RegenerateApiKeyResponse"
-          description: The SSH gateway API key has been successfully regenerated.
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Regenerate SSH gateway API key for a region
-      tags:
-      - organizations
   /users/me:
     get:
       operationId: getAuthenticatedUser
@@ -1353,6 +1317,7 @@ paths:
       - users
   /users/{id}/regenerate-key-pair:
     post:
+      deprecated: true
       operationId: regenerateKeyPair
       parameters:
       - explode: false
@@ -2343,130 +2308,6 @@ paths:
         - profile
         - email
       summary: Expire signed preview URL for a box port
-      tags:
-      - box
-  /box/{boxIdOrName}/ssh-access:
-    delete:
-      operationId: revokeSshAccess
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: "SSH access token to revoke. If not provided, all SSH access\
-          \ for the box will be revoked."
-        explode: true
-        in: query
-        name: token
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-          description: SSH access has been revoked
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Revoke SSH access for box
-      tags:
-      - box
-    post:
-      operationId: createSshAccess
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: "Expiration time in minutes (default: 60)"
-        explode: true
-        in: query
-        name: expiresInMinutes
-        required: false
-        schema:
-          type: number
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SshAccessDto"
-          description: SSH access has been created
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Create SSH access for box
-      tags:
-      - box
-  /box/ssh-access/validate:
-    get:
-      operationId: validateSshAccess
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: SSH access token to validate
-        explode: true
-        in: query
-        name: token
-        required: true
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SshAccessValidationDto"
-          description: SSH access validation result
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Validate SSH access for box
       tags:
       - box
   /box/{boxId}/toolbox-proxy-url:
@@ -5119,8 +4960,6 @@ components:
         environment: production
         billingApiUrl: https://billing.example.com
         analyticsApiUrl: https://analytics.example.com
-        sshGatewayCommand: "ssh -p 2222 {{TOKEN}}@localhost"
-        sshGatewayPublicKey: ssh-gateway-public-key
         rateLimit: ""
       properties:
         version:
@@ -5179,14 +5018,6 @@ components:
         analyticsApiUrl:
           description: Analytics API URL
           example: https://analytics.example.com
-          type: string
-        sshGatewayCommand:
-          description: SSH Gateway command
-          example: "ssh -p 2222 {{TOKEN}}@localhost"
-          type: string
-        sshGatewayPublicKey:
-          description: Base64 encoded SSH Gateway public key
-          example: ssh-gateway-public-key
           type: string
         rateLimit:
           allOf:
@@ -6026,7 +5857,6 @@ components:
         createdAt: 2023-01-01T00:00:00.000Z
         updatedAt: 2023-01-01T00:00:00.000Z
         proxyUrl: https://proxy.example.com
-        sshGatewayUrl: http://ssh-gateway.example.com
       properties:
         id:
           description: Region ID
@@ -6059,11 +5889,6 @@ components:
           example: https://proxy.example.com
           nullable: true
           type: string
-        sshGatewayUrl:
-          description: SSH Gateway URL for the region
-          example: http://ssh-gateway.example.com
-          nullable: true
-          type: string
       required:
       - createdAt
       - id
@@ -6075,7 +5900,6 @@ components:
       example:
         name: us-east-1
         proxyUrl: https://proxy.example.com
-        sshGatewayUrl: ssh://ssh-gateway.example.com
       properties:
         name:
           description: Region name
@@ -6086,11 +5910,6 @@ components:
           example: https://proxy.example.com
           nullable: true
           type: string
-        sshGatewayUrl:
-          description: SSH Gateway URL for the region
-          example: ssh://ssh-gateway.example.com
-          nullable: true
-          type: string
       required:
       - name
       type: object
@@ -6098,7 +5917,6 @@ components:
       example:
         id: region_12345
         proxyApiKey: proxy-api-key-xyz
-        sshGatewayApiKey: ssh-gateway-api-key-abc
       properties:
         id:
           description: ID of the created region
@@ -6107,11 +5925,6 @@ components:
         proxyApiKey:
           description: Proxy API key for the region
           example: proxy-api-key-xyz
-          nullable: true
-          type: string
-        sshGatewayApiKey:
-          description: SSH Gateway API key for the region
-          example: ssh-gateway-api-key-abc
           nullable: true
           type: string
       required:
@@ -6131,16 +5944,10 @@ components:
     UpdateRegion:
       example:
         proxyUrl: https://proxy.example.com
-        sshGatewayUrl: ssh://ssh-gateway.example.com
       properties:
         proxyUrl:
           description: Proxy URL for the region
           example: https://proxy.example.com
-          nullable: true
-          type: string
-        sshGatewayUrl:
-          description: SSH Gateway URL for the region
-          example: ssh://ssh-gateway.example.com
           nullable: true
           type: string
       type: object
@@ -6693,73 +6500,6 @@ components:
       - port
       - token
       - url
-      type: object
-    SshAccessDto:
-      example:
-        id: 123e4567-e89b-12d3-a456-426614174000
-        boxId: 123e4567-e89b-12d3-a456-426614174000
-        token: abc123def456ghi789jkl012mno345pqr678stu901vwx234yz
-        expiresAt: 2025-01-01T12:00:00Z
-        createdAt: 2025-01-01T11:00:00Z
-        updatedAt: 2025-01-01T11:00:00Z
-        sshCommand: ssh -p 2222 token@localhost
-      properties:
-        id:
-          description: Unique identifier for the SSH access
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-        boxId:
-          description: ID of the box this SSH access is for
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-        token:
-          description: SSH access token
-          example: abc123def456ghi789jkl012mno345pqr678stu901vwx234yz
-          type: string
-        expiresAt:
-          description: When the SSH access expires
-          example: 2025-01-01T12:00:00Z
-          format: date-time
-          type: string
-        createdAt:
-          description: When the SSH access was created
-          example: 2025-01-01T11:00:00Z
-          format: date-time
-          type: string
-        updatedAt:
-          description: When the SSH access was last updated
-          example: 2025-01-01T11:00:00Z
-          format: date-time
-          type: string
-        sshCommand:
-          description: SSH command to connect to the box
-          example: ssh -p 2222 token@localhost
-          type: string
-      required:
-      - boxId
-      - createdAt
-      - expiresAt
-      - id
-      - sshCommand
-      - token
-      - updatedAt
-      type: object
-    SshAccessValidationDto:
-      example:
-        valid: true
-        boxId: 123e4567-e89b-12d3-a456-426614174000
-      properties:
-        valid:
-          description: Whether the SSH access token is valid
-          example: true
-          type: boolean
-        boxId:
-          description: ID of the box this SSH access is for
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-      required:
-      - boxId
-      - valid
       type: object
     ToolboxProxyUrl:
       example:

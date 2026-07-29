@@ -15,10 +15,6 @@ export function isStoppable(box: Box): boolean {
   return box.state === BoxState.STARTED
 }
 
-export function isSshAccessible(box: Box): boolean {
-  return box.state === BoxState.STARTED
-}
-
 export function isRecoverable(box: Box): boolean {
   return box.state === BoxState.ERROR && box.recoverable === true
 }

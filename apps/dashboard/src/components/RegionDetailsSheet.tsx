@@ -22,7 +22,6 @@ interface RegionDetailsSheetProps {
   onDelete: (region: Region) => void
   onUpdate: (region: Region) => void
   onRegenerateProxyApiKey: (region: Region) => void
-  onRegenerateSshGatewayApiKey: (region: Region) => void
 }
 
 const RegionDetailsSheet: React.FC<RegionDetailsSheetProps> = ({
@@ -35,7 +34,6 @@ const RegionDetailsSheet: React.FC<RegionDetailsSheetProps> = ({
   onDelete,
   onUpdate,
   onRegenerateProxyApiKey,
-  onRegenerateSshGatewayApiKey,
 }) => {
   if (!region) return null
 
@@ -129,25 +127,10 @@ const RegionDetailsSheet: React.FC<RegionDetailsSheetProps> = ({
                   )}
                 </div>
               </div>
-              <div>
-                <h4 className="text-sm text-muted-foreground">SSH Gateway URL</h4>
-                <div className="mt-1 flex items-center gap-2">
-                  <p className="text-sm font-medium truncate">{region.sshGatewayUrl || '-'}</p>
-                  {region.sshGatewayUrl && (
-                    <button
-                      onClick={() => copyToClipboard(region.sshGatewayUrl || '')}
-                      className="text-muted-foreground hover:text-foreground transition-colors"
-                      aria-label="Copy SSH Gateway URL"
-                    >
-                      <Copy className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-              </div>
             </div>
           </div>
 
-          {isCustomRegion && writePermitted && (region.proxyUrl || region.sshGatewayUrl) && (
+          {isCustomRegion && writePermitted && region.proxyUrl && (
             <div>
               <h3 className="text-lg font-medium">Credentials</h3>
               <div className="mt-3 space-y-3">
@@ -160,17 +143,6 @@ const RegionDetailsSheet: React.FC<RegionDetailsSheetProps> = ({
                   >
                     <Info className="w-4 h-4 mr-2" />
                     Regenerate Proxy API Key
-                  </Button>
-                )}
-                {region.sshGatewayUrl && (
-                  <Button
-                    variant="outline"
-                    onClick={() => onRegenerateSshGatewayApiKey(region)}
-                    disabled={isLoading}
-                    className="w-full justify-start"
-                  >
-                    <Info className="w-4 h-4 mr-2" />
-                    Regenerate SSH Gateway API Key
                   </Button>
                 )}
               </div>

@@ -24,14 +24,6 @@ export class CreateRegionDto {
     required: false,
   })
   proxyUrl?: string
-
-  @ApiProperty({
-    description: 'SSH Gateway URL for the region',
-    example: 'ssh://ssh-gateway.example.com',
-    nullable: true,
-    required: false,
-  })
-  sshGatewayUrl?: string
 }
 
 @ApiSchema({ name: 'CreateRegionResponse' })
@@ -52,17 +44,8 @@ export class CreateRegionResponseDto {
   })
   proxyApiKey?: string
 
-  @ApiProperty({
-    description: 'SSH Gateway API key for the region',
-    example: 'ssh-gateway-api-key-abc',
-    nullable: true,
-    required: false,
-  })
-  sshGatewayApiKey?: string
-
-  constructor(params: { id: string; proxyApiKey?: string; sshGatewayApiKey?: string }) {
+  constructor(params: { id: string; proxyApiKey?: string }) {
     this.id = params.id
     this.proxyApiKey = params.proxyApiKey
-    this.sshGatewayApiKey = params.sshGatewayApiKey
   }
 }

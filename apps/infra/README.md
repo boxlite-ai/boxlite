@@ -36,7 +36,7 @@ aws ssm put-parameter --region ap-southeast-1 --type SecureString \
 npm run deploy -- --stage dev   # the wrapper loads the Cloudflare creds, then runs sst deploy
 ```
 
-App secrets (SSH keys, Auth0 Management API, Svix, PostHog) are optional and set
+App secrets (Auth0 Management API, Svix, PostHog) are optional and set
 per-stage in the SST secret store — see [Secrets & credentials](#secrets--credentials).
 
 First deploy: 10–15 minutes. Output prints service URLs + CloudFront domain.
@@ -52,7 +52,7 @@ single laptop's `.env`:
 
 | What | Where | Set with |
 |---|---|---|
-| **App secrets** — SSH host/private keys, Auth0 Management API id + secret, `SVIX_AUTH_TOKEN`, `POSTHOG_API_KEY`, `OIDC_CLIENT_ID` | SST secret store (encrypted in SST state, per stage) | `sst secret set <NAME> "<value>" --stage <stage>` |
+| **App secrets** — Auth0 Management API id + secret, `SVIX_AUTH_TOKEN`, `POSTHOG_API_KEY`, `OIDC_CLIENT_ID` | SST secret store (encrypted in SST state, per stage) | `sst secret set <NAME> "<value>" --stage <stage>` |
 | **Cloudflare provider creds** — `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID` | AWS SSM (`SecureString`, per stage) | `aws ssm put-parameter --type SecureString --name /boxlite/<stage>/cloudflare-…` |
 | **Non-secret config** — `STACK_DOMAIN`, `OIDC_ISSUER_BASE_URL`, `OIDC_AUDIENCE`, toggles | local `.env` (gitignored) | edit `.env` |
 
@@ -114,7 +114,7 @@ applied per runner.
 
 ## Public hostnames
 
-Five public DNS names, four different fronting layers:
+Four public DNS names, three different fronting layers:
 
 | Hostname                       | Fronted by             | Purpose                                                           |
 |--------------------------------|------------------------|-------------------------------------------------------------------|
@@ -122,7 +122,6 @@ Five public DNS names, four different fronting layers:
 | `api.<STACK_DOMAIN>`           | Api ALB (direct)       | REST API, WebSocket `/attach`, build-log streaming, file transfer |
 | `proxy.<STACK_DOMAIN>`         | Proxy ALB (direct)     | Port-preview wildcard `<port>-<boxId>.proxy.<domain>`         |
 | `*.proxy.<STACK_DOMAIN>`       | Proxy ALB (direct)     | Wildcard alias of the above (per-box preview hosts)           |
-| `ssh.<STACK_DOMAIN>`           | SshGateway NLB (TCP)   | `ssh -p 2222 <token>@ssh.<STACK_DOMAIN>` to a box             |
 
 **Why `/api/*` bypasses CloudFront.** CloudFront imposes a non-configurable
 10-minute idle cap on WebSocket connections — even with WS Ping frames and
@@ -135,13 +134,6 @@ CF-fronted. The dashboard's bundled JS picks up
 `DASHBOARD_BASE_API_URL=https://api.<STACK_DOMAIN>` at container start (see
 `apps/api/src/main.ts::replaceInDirectory`) so all its `/api/*` fetches go
 direct to the Api ALB.
-
-**Why SSH has its own friendly subdomain.** The SshGateway NLB has an
-auto-generated AWS DNS name (`SshGatewayLoadB-…elb.amazonaws.com`) that's
-noisy to copy/paste. `ssh.<STACK_DOMAIN>` is a Cloudflare CNAME (DNS-only,
-gray cloud — Cloudflare can't proxy raw TCP) pointing at the NLB. The CNAME
-is created from `sst.config.ts` via `cloudflareDns.createAlias("SshGateway", …)`
-so it tracks the NLB DNS name automatically across recreations.
 
 **SDK base URL.** Long-lived SDK sessions (`exec`, `attach`) should target
 `https://api.<STACK_DOMAIN>` directly, not `https://<STACK_DOMAIN>/api`. The
@@ -229,7 +221,6 @@ For Auth0 specifically:
 | **Dashboard SPA**   | Browser UI (static assets via CDN)   | `https://<STACK_DOMAIN>` (CloudFront)        |
 | **Api**             | REST API + WebSocket `/attach`       | `https://api.<STACK_DOMAIN>` (public ALB)    |
 | **Proxy**           | `<port>-<id>.proxy.<domain>` previews | `https://*.proxy.<STACK_DOMAIN>` (public ALB) |
-| **SshGateway**      | `ssh <token>@ssh.<domain>:2222`      | `ssh.<STACK_DOMAIN>:2222` (public NLB, raw TCP) |
 | **Jaeger**          | Trace viewer (no auth)               | internal ALB (set `JAEGER_PUBLIC=true` to expose) |
 | **OtelCollector**   | OTLP ingest + health                 | internal ALB (in-VPC emitters only)          |
 | **PgAdmin**         | Postgres admin UI                    | internal ALB (set `PGADMIN_PUBLIC=true` to expose) |
@@ -333,9 +324,6 @@ follows that. Not yet implemented.
   Browser ───▶ Proxy ALB ───▶ box port (toolbox + user-app previews)
                 proxy.<STACK_DOMAIN> + *.proxy.<STACK_DOMAIN>
                 idle_timeout=1h
-
-  ssh client ▶ SshGateway NLB ──▶ ssh-gateway ──▶ runner ──▶ box
-                ssh.<STACK_DOMAIN>:2222  (raw TCP, no TLS termination)
 
                           ┌───────┬────────┬────────┐
                           │  RDS  │ Redis  │   S3   │  Api → DB/Redis (linked);

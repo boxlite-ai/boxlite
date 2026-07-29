@@ -40,8 +40,6 @@ import { WarmPool } from '../entities/warm-pool.entity'
 import { BoxDto, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
-import { SshAccess } from '../entities/ssh-access.entity'
-import { SshAccessDto, SshAccessValidationDto } from '../dto/ssh-access.dto'
 import { VolumeService } from './volume.service'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import {
@@ -99,8 +97,6 @@ export class BoxService {
     private readonly boxRepository: BoxRepository,
     @InjectRepository(Runner)
     private readonly runnerRepository: Repository<Runner>,
-    @InjectRepository(SshAccess)
-    private readonly sshAccessRepository: Repository<SshAccess>,
     private readonly runnerService: RunnerService,
     private readonly volumeService: VolumeService,
     private readonly configService: TypedConfigService,
@@ -1419,76 +1415,6 @@ export class BoxService {
     }
 
     return volumes
-  }
-
-  async createSshAccess(boxIdOrName: string, expiresInMinutes = 60, organizationId?: string): Promise<SshAccessDto> {
-    //  check if box exists
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    // Revoke any existing SSH access for this box
-    await this.revokeSshAccess(box.id)
-
-    const sshAccess = new SshAccess()
-    sshAccess.boxId = box.id
-    // Generate a safe token that can't doesn't have _ or - to avoid CLI issues
-    sshAccess.token = customNanoid(urlAlphabet.replace('_', '').replace('-', ''))(32)
-    sshAccess.expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000)
-
-    await this.sshAccessRepository.save(sshAccess)
-
-    const region = await this.regionService.findOne(box.region, true)
-    if (region && region.sshGatewayUrl) {
-      return SshAccessDto.fromSshAccess(sshAccess, region.sshGatewayUrl)
-    }
-
-    return SshAccessDto.fromSshAccess(sshAccess, this.configService.getOrThrow('sshGateway.url'))
-  }
-
-  async revokeSshAccess(boxIdOrName: string, token?: string, organizationId?: string): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    if (token) {
-      // Revoke specific SSH access by token
-      await this.sshAccessRepository.delete({ boxId: box.id, token })
-    } else {
-      // Revoke all SSH access for the box
-      await this.sshAccessRepository.delete({ boxId: box.id })
-    }
-
-    return box
-  }
-
-  async validateSshAccess(token: string): Promise<SshAccessValidationDto> {
-    const sshAccess = await this.sshAccessRepository.findOne({
-      where: {
-        token,
-      },
-      relations: ['box'],
-    })
-
-    if (!sshAccess) {
-      return { valid: false, boxId: null }
-    }
-
-    // Check if token is expired
-    const isExpired = sshAccess.expiresAt < new Date()
-    if (isExpired) {
-      return { valid: false, boxId: null }
-    }
-
-    // Get runner information if box exists
-    if (sshAccess.box && sshAccess.box.runnerId) {
-      const runner = await this.runnerService.findOne(sshAccess.box.runnerId)
-
-      if (runner) {
-        return {
-          valid: true,
-          boxId: sshAccess.box.id,
-        }
-      }
-    }
-
-    return { valid: true, boxId: sshAccess.box.id }
   }
 }
 

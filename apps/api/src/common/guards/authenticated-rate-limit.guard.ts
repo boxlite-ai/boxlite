@@ -156,8 +156,8 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
   }
 
   private isSystemRole(user: RateLimitAuthContext | undefined): boolean {
-    // Skip rate limiting for M2M system roles (proxy, runner, ssh-gateway)
-    return user?.role === 'ssh-gateway' || user?.role === 'proxy' || user?.role === 'runner'
+    // Skip rate limiting for M2M system roles (proxy, runner)
+    return user?.role === 'proxy' || user?.role === 'runner'
   }
 
   private async getCachedOrganizationRateLimits(organizationId: string): Promise<{

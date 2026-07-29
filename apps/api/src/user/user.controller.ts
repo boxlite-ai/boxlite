@@ -108,10 +108,15 @@ export class UserController {
     return this.userService.findAll()
   }
 
+  /**
+   * @deprecated The generated keys are no longer consumed by anything.
+   * Scheduled for removal in a future release.
+   */
   @Post('/:id/regenerate-key-pair')
   @ApiOperation({
     summary: 'Regenerate user key pair',
     operationId: 'regenerateKeyPair',
+    deprecated: true,
   })
   @RequiredSystemRole(SystemRole.ADMIN)
   @Audit({

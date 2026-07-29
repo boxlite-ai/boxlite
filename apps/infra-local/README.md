@@ -84,7 +84,7 @@ relies on — read-write host volumes + host port mapping — is pinned by
 |---|---|---|
 | Dashboard `Unauthorized` / `401` right after login | dex box clock drifted behind the host after the Mac slept → tokens are born expired | `make restart COMPONENTS=dex` + clear browser storage |
 | Box `pulling` stuck for minutes | registry box's process hung (TCP still listens) | `make restart COMPONENTS=registry` |
-| All API calls `401` | `SSH_GATEWAY_API_KEY` / `PROXY_API_KEY` empty in `apps/api/.env` | set them non-empty |
+| All API calls `401` | `PROXY_API_KEY` empty in `apps/api/.env` | set it non-empty |
 | Runner: `Another BoxliteRuntime is already using directory` | a stale runner holds `.apps-local/boxlite-runner/.lock` | `lsof` the lock, kill the stale PID |
 | Any L1 box misbehaving | its stateful in-box process is wedged | `make restart COMPONENTS=<box>` |
 | "Create Box" from the UI is incomplete | image resolution is mid-rewrite upstream + the picker is PostHog flag-gated | known limitation; use `POST /api/box` directly |

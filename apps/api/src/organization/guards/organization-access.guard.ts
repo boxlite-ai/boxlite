@@ -41,11 +41,9 @@ export class OrganizationAccessGuard implements CanActivate {
     )
 
     if (
-      authContext.role !== 'ssh-gateway' &&
       authContext.role !== 'runner' &&
       authContext.role !== 'proxy' &&
       authContext.role !== 'region-proxy' &&
-      authContext.role !== 'region-ssh-gateway' &&
       !organizationIdParam &&
       !authContext.organizationId
     ) {
@@ -57,8 +55,7 @@ export class OrganizationAccessGuard implements CanActivate {
       organizationIdParam &&
       authContext.apiKey &&
       authContext.apiKey.organizationId !== organizationIdParam &&
-      authContext.role !== SystemRole.ADMIN &&
-      authContext.role !== 'ssh-gateway'
+      authContext.role !== SystemRole.ADMIN
     ) {
       this.logger.warn(
         `Organization ID mismatch in the request context. Expected: ${organizationIdParam}, Actual: ${authContext.apiKey.organizationId}`,

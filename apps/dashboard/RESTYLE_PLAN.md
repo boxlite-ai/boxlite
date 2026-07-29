@@ -35,8 +35,8 @@ Design source (visual/interaction spec only, NOT importable code — DCLogic pro
 |---|---|---|
 | Login.dc | LandingPage.tsx | react-oidc-context `signinRedirect` |
 | Nav.dc | Dashboard.tsx shell | ThemeContext, useAuth (sign out), useSelectedOrganization (+ org switcher), quickstart flag |
-| Boxes page.dc | Boxes.tsx + BoxTable + CreateBoxDialog | useBoxes, useCreateBoxMutation, useStart/Stop/DeleteBoxMutation, useCreateSshAccessMutation; stat cards → analytics usage (graceful-degrade if `analyticsApiUrl` unset) |
-| Box detail.dc | components/boxes/* (BoxDetails, BoxTerminalTab) | useBoxQuery (transition poll), start/stop/delete/recover, useTerminalSessionQuery, SSH mutations. NOTE: new design shows only spec panel + shell terminal, so the old logs/metrics/traces/spending tabs (BoxContentTabs) are NOT rendered anymore — their components/hooks still exist and can be re-added if wanted. |
+| Boxes page.dc | Boxes.tsx + BoxTable + CreateBoxDialog | useBoxes, useCreateBoxMutation, useStart/Stop/DeleteBoxMutation; stat cards → analytics usage (graceful-degrade if `analyticsApiUrl` unset) |
+| Box detail.dc | components/boxes/* (BoxDetails, BoxTerminalTab) | useBoxQuery (transition poll), start/stop/delete/recover, useTerminalSessionQuery. NOTE: new design shows only spec panel + shell terminal, so the old logs/metrics/traces/spending tabs (BoxContentTabs) are NOT rendered anymore — their components/hooks still exist and can be re-added if wanted. |
 | API keys.dc | Keys.tsx + ApiKeyTable + CreateApiKeyDialog | useApiKeysQuery, useCreateApiKeyMutation, useRevokeApiKeyMutation |
 | Quickstart.dc | Onboarding / OnboardingGuideDialog | useCreateApiKeyMutation (run-step is decorative) |
 | Billing.dc (empty) | Billing.tsx | none (static) |
@@ -70,9 +70,9 @@ Design source (visual/interaction spec only, NOT importable code — DCLogic pro
   signup confirm). Every action calls OIDC signinRedirect — no new auth API.
 - ✅ **P3 done & verified** (Box detail): `components/boxes/BoxDetails.tsx` render rewritten to
   `Box detail.dc.html` (breadcrumb · identity strip with status badge + image chip + start/stop/recover/
-  ssh/more/refresh · left spec readout GENERAL/RESOURCES/LIFECYCLE/TIMESTAMPS with dotted leaders · right
+  more/refresh · left spec readout GENERAL/RESOURCES/LIFECYCLE/TIMESTAMPS with dotted leaders · right
   SHELL panel embedding the real BoxTerminalTab). All hooks/handlers (useBoxQuery poll, ws sync,
-  start/stop/recover/delete, SSH dialogs, onboarding) preserved. Verified via Playwright.
+  start/stop/recover/delete, onboarding) preserved. Verified via Playwright.
 - ✅ **P5 done & verified** (Quickstart): `components/OnboardingGuideDialog.tsx` rebuilt as the
   `Quickstart.dc.html` 3-step wizard (stage rail · step1 real key creation via apiKeyApi.createApiKey ·
   step2 language tabs + install cmd · step3 run animation · "Box is live." confetti finale). Marks
@@ -100,7 +100,7 @@ Verification screenshots saved at repo root (p0–p7 *.png).
   button, dialog, table, input, badge, tabs, dropdown-menu, card, tooltip, sonner, etc.
 - **P1 — Shell.** Dashboard.tsx sidebar → top Nav (theme switch, sign out, Guide, **org switcher**).
   Preserve Outlet, routing, and the full provider nesting order.
-- **P2 — Boxes (core).** Fleet list + stat cards + New Box modal + inline start/stop/ssh/delete.
+- **P2 — Boxes (core).** Fleet list + stat cards + New Box modal + inline start/stop/delete.
 - **P3 — Box detail.** Spec readout + real terminal panel (useTerminalSessionQuery + existing
   BoxTerminal*) + lifecycle. (Design = spec + shell only; logs/metrics/traces/spending tabs dropped from the UI.)
 - **P4 — API Keys.** Table + create modal + one-time key reveal.

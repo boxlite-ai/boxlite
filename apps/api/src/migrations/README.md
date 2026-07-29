@@ -8,6 +8,21 @@ Because BoxLite has not launched yet, the historical migration chain has been sq
 the root baseline `1741087887225-migration.ts`. Fresh databases should run this single baseline first.
 Future schema changes should use the expand-and-contract workflow below.
 
+### Deprecated objects in pre-existing databases
+
+The SSH gateway was removed by editing the baseline rather than by adding a contract migration,
+so databases created _before_ that edit still carry objects no entity maps any more:
+
+| Object                                             | Status                                                                     |
+| -------------------------------------------------- | -------------------------------------------------------------------------- |
+| table `ssh_access`                                 | **deprecated** — orphaned, to be dropped in a future post-deploy migration |
+| `region.sshGatewayUrl`                             | **deprecated** — same                                                      |
+| `region.sshGatewayApiKeyHash` (+ its unique index) | **deprecated** — same                                                      |
+
+Fresh databases never create them. They are inert — nothing reads or writes them — but a
+post-deploy `DROP` migration should retire them once every deployed environment is past the
+removal. Use `IF EXISTS`, since fresh databases will not have them.
+
 ## Overview
 
 The expand and contract pattern splits database changes into two phases:

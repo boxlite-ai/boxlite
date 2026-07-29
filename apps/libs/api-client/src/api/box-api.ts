@@ -38,10 +38,6 @@ import type { PortPreviewUrl } from '../models';
 // @ts-ignore
 import type { SignedPortPreviewUrl } from '../models';
 // @ts-ignore
-import type { SshAccessDto } from '../models';
-// @ts-ignore
-import type { SshAccessValidationDto } from '../models';
-// @ts-ignore
 import type { ToolboxProxyUrl } from '../models';
 // @ts-ignore
 import type { TraceSpan } from '../models';
@@ -52,55 +48,6 @@ import type { UpdateBoxStateDto } from '../models';
  */
 export const BoxApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
-        /**
-         * 
-         * @summary Create SSH access for box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [expiresInMinutes] Expiration time in minutes (default: 60)
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        createSshAccess: async (boxIdOrName: string, xBoxLiteOrganizationID?: string, expiresInMinutes?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('createSshAccess', 'boxIdOrName', boxIdOrName)
-            const localVarPath = `/box/{boxIdOrName}/ssh-access`
-                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            if (expiresInMinutes !== undefined) {
-                localVarQueryParameter['expiresInMinutes'] = expiresInMinutes;
-            }
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
         /**
          * 
          * @summary Expire signed preview URL for a box port
@@ -949,55 +896,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
         },
         /**
          * 
-         * @summary Revoke SSH access for box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {string} [token] SSH access token to revoke. If not provided, all SSH access for the box will be revoked.
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        revokeSshAccess: async (boxIdOrName: string, xBoxLiteOrganizationID?: string, token?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('revokeSshAccess', 'boxIdOrName', boxIdOrName)
-            const localVarPath = `/box/{boxIdOrName}/ssh-access`
-                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'DELETE', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            if (token !== undefined) {
-                localVarQueryParameter['token'] = token;
-            }
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
          * @summary Set box auto-delete interval
          * @param {string} boxIdOrName ID or name of the box
          * @param {number} interval Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete.
@@ -1231,53 +1129,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
                 options: localVarRequestOptions,
             };
         },
-        /**
-         * 
-         * @summary Validate SSH access for box
-         * @param {string} token SSH access token to validate
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        validateSshAccess: async (token: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'token' is not null or undefined
-            assertParamExists('validateSshAccess', 'token', token)
-            const localVarPath = `/box/ssh-access/validate`;
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            if (token !== undefined) {
-                localVarQueryParameter['token'] = token;
-            }
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
     }
 };
 
@@ -1287,21 +1138,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
 export const BoxApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = BoxApiAxiosParamCreator(configuration)
     return {
-        /**
-         * 
-         * @summary Create SSH access for box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [expiresInMinutes] Expiration time in minutes (default: 60)
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async createSshAccess(boxIdOrName: string, xBoxLiteOrganizationID?: string, expiresInMinutes?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SshAccessDto>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.createSshAccess(boxIdOrName, xBoxLiteOrganizationID, expiresInMinutes, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.createSshAccess']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
         /**
          * 
          * @summary Expire signed preview URL for a box port
@@ -1541,21 +1377,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
-         * @summary Revoke SSH access for box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {string} [token] SSH access token to revoke. If not provided, all SSH access for the box will be revoked.
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async revokeSshAccess(boxIdOrName: string, xBoxLiteOrganizationID?: string, token?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Box>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.revokeSshAccess(boxIdOrName, xBoxLiteOrganizationID, token, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.revokeSshAccess']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
          * @summary Set box auto-delete interval
          * @param {string} boxIdOrName ID or name of the box
          * @param {number} interval Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete.
@@ -1628,20 +1449,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
             const localVarOperationServerBasePath = operationServerMap['BoxApi.updatePublicStatus']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
-        /**
-         * 
-         * @summary Validate SSH access for box
-         * @param {string} token SSH access token to validate
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async validateSshAccess(token: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SshAccessValidationDto>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.validateSshAccess(token, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.validateSshAccess']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
     }
 };
 
@@ -1651,18 +1458,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
 export const BoxApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = BoxApiFp(configuration)
     return {
-        /**
-         * 
-         * @summary Create SSH access for box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [expiresInMinutes] Expiration time in minutes (default: 60)
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        createSshAccess(boxIdOrName: string, xBoxLiteOrganizationID?: string, expiresInMinutes?: number, options?: RawAxiosRequestConfig): AxiosPromise<SshAccessDto> {
-            return localVarFp.createSshAccess(boxIdOrName, xBoxLiteOrganizationID, expiresInMinutes, options).then((request) => request(axios, basePath));
-        },
         /**
          * 
          * @summary Expire signed preview URL for a box port
@@ -1860,18 +1655,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
         },
         /**
          * 
-         * @summary Revoke SSH access for box
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {string} [token] SSH access token to revoke. If not provided, all SSH access for the box will be revoked.
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        revokeSshAccess(boxIdOrName: string, xBoxLiteOrganizationID?: string, token?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
-            return localVarFp.revokeSshAccess(boxIdOrName, xBoxLiteOrganizationID, token, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
          * @summary Set box auto-delete interval
          * @param {string} boxIdOrName ID or name of the box
          * @param {number} interval Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete.
@@ -1929,17 +1712,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
         updatePublicStatus(boxIdOrName: string, isPublic: boolean, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
             return localVarFp.updatePublicStatus(boxIdOrName, isPublic, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
-        /**
-         * 
-         * @summary Validate SSH access for box
-         * @param {string} token SSH access token to validate
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        validateSshAccess(token: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<SshAccessValidationDto> {
-            return localVarFp.validateSshAccess(token, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
     };
 };
 
@@ -1947,19 +1719,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
  * BoxApi - object-oriented interface
  */
 export class BoxApi extends BaseAPI {
-    /**
-     * 
-     * @summary Create SSH access for box
-     * @param {string} boxIdOrName ID or name of the box
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {number} [expiresInMinutes] Expiration time in minutes (default: 60)
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public createSshAccess(boxIdOrName: string, xBoxLiteOrganizationID?: string, expiresInMinutes?: number, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).createSshAccess(boxIdOrName, xBoxLiteOrganizationID, expiresInMinutes, options).then((request) => request(this.axios, this.basePath));
-    }
-
     /**
      * 
      * @summary Expire signed preview URL for a box port
@@ -2171,19 +1930,6 @@ export class BoxApi extends BaseAPI {
 
     /**
      * 
-     * @summary Revoke SSH access for box
-     * @param {string} boxIdOrName ID or name of the box
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {string} [token] SSH access token to revoke. If not provided, all SSH access for the box will be revoked.
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public revokeSshAccess(boxIdOrName: string, xBoxLiteOrganizationID?: string, token?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).revokeSshAccess(boxIdOrName, xBoxLiteOrganizationID, token, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
      * @summary Set box auto-delete interval
      * @param {string} boxIdOrName ID or name of the box
      * @param {number} interval Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete.
@@ -2244,18 +1990,6 @@ export class BoxApi extends BaseAPI {
      */
     public updatePublicStatus(boxIdOrName: string, isPublic: boolean, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).updatePublicStatus(boxIdOrName, isPublic, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Validate SSH access for box
-     * @param {string} token SSH access token to validate
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public validateSshAccess(token: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).validateSshAccess(token, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
 

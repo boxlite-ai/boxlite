@@ -12,7 +12,7 @@
 // Inside `run()`, resources are created in deploy order:
 //
 //   1. secrets (auto-generated)     6. API
-//   2. platform (VPC/DB/Redis/S3)   7. edge services (Proxy, SshGateway)
+//   2. platform (VPC/DB/Redis/S3)   7. edge services (Proxy)
 //   3. IAM                          8. admin UIs (PgAdmin/MailDev)
 //   4. auth (external OIDC)         9. CDN (CloudFront)
 //   5. observability               10. runner (EC2 + nested KVM)
@@ -24,7 +24,6 @@ const REGION = 'ap-southeast-1'
 const PORTS = {
   API: 3000,
   PROXY: 4000,
-  SSH_GATEWAY: 2222,
   RUNNER: 3003,
   JAEGER_UI: 16686,
   OTLP_HTTP: 4318,
@@ -152,7 +151,6 @@ export default $config({
     const encryptionKey = randomKey('EncryptionKey', 64)
     const encryptionSalt = randomKey('EncryptionSalt', 32)
     const proxyApiKey = randomKey('ProxyApiKey')
-    const sshGatewayApiKey = randomKey('SshGatewayApiKey')
     const adminApiKey = randomKey('AdminApiKey')
     const defaultRunnerApiKey = randomKey('DefaultRunnerApiKey')
     const pgAdminPassword = randomKey('PgAdminPassword', 24)
@@ -161,8 +159,8 @@ export default $config({
     // `sst secret load <dotenv>`); stored encrypted in SST state and shared
     // per-stage by anyone with deploy access. Names match the env keys so a
     // dotenv `sst secret load` maps 1:1. Optional ones carry an empty-string
-    // placeholder, so "unset" reads as '' — the same "empty = off" contract the
-    // SSH keys already relied on. NB: the Cloudflare provider creds can't live
+    // placeholder, so "unset" reads as '' — an "empty = off" contract.
+    // NB: the Cloudflare provider creds can't live
     // here (the provider initializes in app() before run() exists); they're
     // injected from SSM by scripts/sst-with-cloudflare.mjs.
     const oidcClientId = new sst.Secret('OIDC_CLIENT_ID', 'boxlite')
@@ -170,8 +168,6 @@ export default $config({
     const oidcMgmtClientSecret = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_SECRET')
     const posthogApiKey = new sst.Secret('POSTHOG_API_KEY', '')
     const svixAuthToken = new sst.Secret('SVIX_AUTH_TOKEN', '')
-    const sshPrivateKey = new sst.Secret('SSH_PRIVATE_KEY_B64', '')
-    const sshHostKey = new sst.Secret('SSH_HOST_KEY_B64', '')
 
     // ─── 2. PLATFORM ─────────────────────────────────────────────────────────
     // Network model + rationale (subnets / NAT / egress-only public IP, AWS citations): ./NETWORKING.md
@@ -549,11 +545,6 @@ export default $config({
         PROXY_API_KEY: envOr('PROXY_API_KEY', proxyApiKey.result),
         PROXY_TEMPLATE_URL: envOr('PROXY_TEMPLATE_URL', `https://proxy.${stackDomain}`),
 
-        // SSH Gateway — friendly hostname `ssh.<stackDomain>` is provisioned
-        // as a Cloudflare CNAME pointing at the SshGateway NLB further below.
-        SSH_GATEWAY_URL: envOr('SSH_GATEWAY_URL', `ssh://ssh.${stackDomain}:${PORTS.SSH_GATEWAY}`),
-        SSH_GATEWAY_API_KEY: envOr('SSH_GATEWAY_API_KEY', sshGatewayApiKey.result),
-
         // Admin
         ADMIN_API_KEY: envOr('ADMIN_API_KEY', adminApiKey.result),
 
@@ -695,35 +686,6 @@ export default $config({
       },
     })
 
-    // SSH Gateway: `ssh <box>@ssh.<stackDomain>:2222` proxies to the box.
-    // The NLB has no domain field (TCP listeners don't take ACM certs); instead we
-    // attach a Cloudflare CNAME directly via cloudflareDns.createAlias below so users
-    // get a stable, memorable hostname instead of the auto-generated NLB DNS name.
-    const sshGateway = new sst.aws.Service('SshGateway', {
-      cluster,
-      image: { context: '../..', dockerfile: 'apps/ssh-gateway/Dockerfile', cache: false },
-      loadBalancer: { rules: [{ listen: `${PORTS.SSH_GATEWAY}/tcp`, forward: `${PORTS.SSH_GATEWAY}/tcp` }] },
-      environment: {
-        // api-client-go composes paths like "/box/ssh-access/validate" directly.
-        // The Nest control plane is globally mounted under /api, so the gateway
-        // must use the API base path rather than the raw ALB root.
-        API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
-        API_KEY: envOr('SSH_GATEWAY_API_KEY', sshGatewayApiKey.result), // NB: not SSH_GATEWAY_API_KEY
-        SSH_PRIVATE_KEY: sshPrivateKey.value,
-        SSH_HOST_KEY: sshHostKey.value,
-      },
-    })
-
-    cloudflareDns.createAlias(
-      'SshGateway',
-      {
-        name: `ssh.${stackDomain}`,
-        aliasName: sshGateway.nodes.loadBalancer.dnsName,
-        aliasZone: sshGateway.nodes.loadBalancer.zoneId,
-      },
-      {},
-    )
-
     // ─── 8. ADMIN UIs ────────────────────────────────────────────────────────
     // pgAdmin security gate. pgAdmin is a
     // Postgres admin console one hop from RDS. Knobs are overridable via env;
@@ -832,8 +794,8 @@ export default $config({
     // Dedicated runner security group (least-privilege, explicit in IaC).
     // Without it the runner falls back to the VPC's shared default SG, which
     // allows ALL ports from the whole VPC CIDR. The runner multiplexes its
-    // control-plane API, box proxy, and (when enabled) ssh-gateway onto a single
-    // port (API_PORT = PORTS.RUNNER); box ports are served INSIDE the runner and
+    // control-plane API and box proxy onto a single port (API_PORT =
+    // PORTS.RUNNER); box ports are served INSIDE the runner and
     // never bound on the host NIC. So one inbound port — reachable only from
     // inside the VPC — is the complete surface. Combined with the public-subnet
     // placement (the runner egresses via the Internet Gateway, not the NAT that
@@ -848,7 +810,7 @@ export default $config({
           fromPort: PORTS.RUNNER,
           toPort: PORTS.RUNNER,
           cidrBlocks: [vpc.nodes.vpc.cidrBlock],
-          description: 'control-plane API + box proxy + ssh-gateway (multiplexed on the runner API port)',
+          description: 'control-plane API + box proxy (multiplexed on the runner API port)',
         },
       ],
       egress: [

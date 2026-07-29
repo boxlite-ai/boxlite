@@ -75,9 +75,6 @@ export class RegionService {
       const proxyApiKey = createRegionDto.proxyUrl
         ? generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
         : undefined
-      const sshGatewayApiKey = createRegionDto.sshGatewayUrl
-        ? generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
-        : undefined
 
       const region = new Region({
         name: createRegionDto.name,
@@ -86,9 +83,7 @@ export class RegionService {
         id: createRegionDto.id,
         organizationId,
         proxyUrl: createRegionDto.proxyUrl,
-        sshGatewayUrl: createRegionDto.sshGatewayUrl,
         proxyApiKeyHash: proxyApiKey ? generateApiKeyHash(proxyApiKey) : null,
-        sshGatewayApiKeyHash: sshGatewayApiKey ? generateApiKeyHash(sshGatewayApiKey) : null,
       })
 
       await this.dataSource.transaction(async (em) => {
@@ -99,7 +94,6 @@ export class RegionService {
       return new CreateRegionResponseDto({
         id: region.id,
         proxyApiKey,
-        sshGatewayApiKey,
       })
     } catch (error) {
       if (error.code === '23505') {
@@ -145,16 +139,6 @@ export class RegionService {
   async findOneByProxyApiKey(proxyApiKey: string): Promise<Region | null> {
     return await this.regionRepository.findOne({
       where: { proxyApiKeyHash: generateApiKeyHash(proxyApiKey) },
-    })
-  }
-
-  /**
-   * @param sshGatewayApiKey - The SSH gateway API key.
-   * @returns The region if found, or null otherwise.
-   */
-  async findOneBySshGatewayApiKey(sshGatewayApiKey: string): Promise<Region | null> {
-    return await this.regionRepository.findOne({
-      where: { sshGatewayApiKeyHash: generateApiKeyHash(sshGatewayApiKey) },
     })
   }
 
@@ -275,10 +259,6 @@ export class RegionService {
         region.toolboxProxyUrl = updateRegion.proxyUrl ?? null
       }
 
-      if (updateRegion.sshGatewayUrl !== undefined) {
-        region.sshGatewayUrl = updateRegion.sshGatewayUrl ?? null
-      }
-
       await em.save(region)
     })
 
@@ -308,31 +288,6 @@ export class RegionService {
 
     const newApiKey = generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
     region.proxyApiKeyHash = generateApiKeyHash(newApiKey)
-
-    await this.regionRepository.save(region)
-
-    return newApiKey
-  }
-
-  /**
-   * @param regionId - The ID of the region.
-   * @throws {NotFoundException} If the region is not found.
-   * @throws {BadRequestException} If the region does not have an SSH gateway URL configured.
-   * @returns The newly generated SSH gateway API key.
-   */
-  async regenerateSshGatewayApiKey(regionId: string): Promise<string> {
-    const region = await this.findOne(regionId)
-
-    if (!region) {
-      throw new NotFoundException('Region not found')
-    }
-
-    if (!region.sshGatewayUrl) {
-      throw new BadRequestException('Region does not have an SSH gateway URL configured')
-    }
-
-    const newApiKey = generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
-    region.sshGatewayApiKeyHash = generateApiKeyHash(newApiKey)
 
     await this.regionRepository.save(region)
 
