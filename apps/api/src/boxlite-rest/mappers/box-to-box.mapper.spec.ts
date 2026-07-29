@@ -19,6 +19,34 @@ describe('BoxLite lifecycle policy mapper', () => {
     expect(mapped.autoResume).toBe(false)
   })
 
+  it('maps foreground launch settings into the persisted control-plane DTO', () => {
+    const mapped = createBoxToCreateBox({
+      image: 'sandbaseai-hermes',
+      entrypoint: ['/bin/sh'],
+      cmd: ['-lc', 'echo foreground-ok; exit 7'],
+      working_dir: '/workspace',
+      tty: true,
+      detach: false,
+      auto_delete: 1,
+    })
+
+    expect(mapped.launchConfig).toEqual({
+      entrypoint: ['/bin/sh'],
+      cmd: ['-lc', 'echo foreground-ok; exit 7'],
+      workingDir: '/workspace',
+      tty: true,
+      detach: false,
+      foreground: true,
+      autoDeleteAfterExit: true,
+    })
+  })
+
+  it('does not persist an empty launch config for ordinary creates', () => {
+    const mapped = createBoxToCreateBox({ image: 'alpine:3.23' })
+
+    expect(mapped.launchConfig).toBeUndefined()
+  })
+
   it('returns the effective second-based policy', () => {
     const response = boxToBoxResponse({
       id: 'box-1',

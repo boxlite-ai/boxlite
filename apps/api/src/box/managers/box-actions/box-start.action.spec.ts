@@ -168,9 +168,62 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
 
     const result = await (action as BoxAction).run(box, lockCode)
 
-    expect(createBox).toHaveBeenCalledWith(box, expect.any(Object))
+    expect(createBox).toHaveBeenCalledWith(box, expect.any(Object), false)
     expect(result).toBe(SYNC_AGAIN)
     expect(updatedFields.some((u) => u.state === BoxState.CREATING)).toBe(true)
+  })
+
+  it('creates a foreground box without starting it on a v0 runner', async () => {
+    const runnerId = 'runner-boot-foreground'
+
+    const box = new Box('region-1', 'foreground-box')
+    box.runnerId = runnerId
+    box.image = 'boxlite/base'
+    box.state = BoxState.UNKNOWN
+    box.desiredState = BoxDesiredState.STARTED
+    box.pending = true
+    box.launchConfig = {
+      cmd: ['-lc', 'echo foreground-ok; exit 7'],
+      detach: false,
+      foreground: true,
+      autoDeleteAfterExit: true,
+    }
+
+    const runner = { id: runnerId, state: RunnerState.READY, apiVersion: '0' } as Runner
+    const runnerService = { findOneOrFail: jest.fn(async () => runner) }
+
+    const createBox = jest.fn(async () => undefined)
+    const runnerAdapterFactory = { create: jest.fn(async () => ({ createBox }) as any) }
+
+    const lockCode = new LockCode('lock-boot-foreground')
+    const updatedFields: Partial<Box>[] = []
+    const boxRepository = {
+      update: jest.fn(async (_id: string, opts: { updateData: Partial<Box> }) => {
+        updatedFields.push(opts.updateData)
+        return box
+      }),
+    }
+    const redisLockProvider = { getCode: jest.fn(async () => lockCode) }
+    const organizationService = { findOne: jest.fn(async () => ({ boxMetadata: {} })) }
+
+    const action = new BoxStartAction(
+      runnerService as any,
+      runnerAdapterFactory as any,
+      boxRepository as any,
+      organizationService as any,
+      {} as any,
+      redisLockProvider as any,
+      {} as any,
+    )
+
+    const result = await (action as BoxAction).run(box, lockCode)
+
+    expect(createBox).toHaveBeenCalledWith(box, expect.any(Object), true)
+    expect(result).not.toBe(SYNC_AGAIN)
+    expect(updatedFields).toContainEqual({
+      state: BoxState.STOPPED,
+      desiredState: BoxDesiredState.STOPPED,
+    })
   })
 
   it('moves an unknown box with no image to ERROR without calling createBox', async () => {
