@@ -151,7 +151,7 @@ export class BoxRepository extends BaseRepository<Box> {
   ): Promise<Box> {
     const { updateData, whereCondition } = params
 
-    return this.manager.transaction(async (entityManager) => {
+    const { box, previousBox } = await this.manager.transaction(async (entityManager) => {
       const whereClause = {
         ...whereCondition,
         id,
@@ -181,11 +181,16 @@ export class BoxRepository extends BaseRepository<Box> {
         await this.upsertLastActivity(entityManager, id, box.updatedAt)
       }
 
-      this.emitUpdateEvents(box, previousBox)
-      this.invalidateLookupCacheOnUpdate(box, previousBox)
-
-      return box
+      return { box, previousBox }
     })
+
+    // Emitted only once the write is durable, matching update(). Listeners act on
+    // their own connections — a usage period opened for a transition that then
+    // rolled back would be a phantom charge nothing reverses.
+    this.emitUpdateEvents(box, previousBox)
+    this.invalidateLookupCacheOnUpdate(box, previousBox)
+
+    return box
   }
 
   /**
