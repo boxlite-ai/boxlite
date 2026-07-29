@@ -511,14 +511,14 @@ fn streamlocal_launch(container_id: &str, socket_path: String) -> InternalHelper
 }
 
 struct PreparedStreamlocalOutput {
-    output: mpsc::Receiver<ExecOutput>,
+    output: mpsc::Receiver<Result<ExecOutput, tonic::Status>>,
     buffered_stdout: Vec<u8>,
 }
 
 enum OutputPumpStart {
     Attach,
     AwaitActivation {
-        output: mpsc::Receiver<ExecOutput>,
+        output: mpsc::Receiver<Result<ExecOutput, tonic::Status>>,
         buffered_stdout: Vec<u8>,
         activate_rx: oneshot::Receiver<()>,
     },
@@ -559,9 +559,15 @@ async fn await_streamlocal_ready(
         let mut parser = StreamlocalReadyParser::default();
 
         loop {
-            let message = output.recv().await.ok_or_else(|| {
-                BridgeError::Exec("streamlocal helper exited before readiness".into())
-            })?;
+            let message = output
+                .recv()
+                .await
+                .ok_or_else(|| {
+                    BridgeError::Exec("streamlocal helper exited before readiness".into())
+                })?
+                .map_err(|error| {
+                    BridgeError::Exec(format!("streamlocal output failed: {error}"))
+                })?;
             match message.event {
                 Some(boxlite_shared::exec_output::Event::Stdout(stdout)) => {
                     if let Some(buffered_stdout) = parser.push_stdout(&stdout.data)? {
@@ -655,6 +661,8 @@ fn spawn_output_pump(
             let _ = session_handle.data(channel_id, buffered_stdout).await;
         }
 
+        let mut stdout_offset = 0;
+        let mut stderr_offset = 0;
         loop {
             tokio::select! {
                 // A resolved oneshot receiver must not be polled again by the
@@ -664,15 +672,58 @@ fn spawn_output_pump(
                 _ = &mut cancel_rx => return,
                 message = output.recv() => {
                     match message {
-                        Some(message) => match message.event {
+                        Some(Ok(message)) => match message.event {
                             Some(boxlite_shared::exec_output::Event::Stdout(stdout)) => {
-                                let _ = session_handle.data(channel_id, stdout.data).await;
+                                if let Some(lost_bytes) = output_gap(
+                                    &mut stdout_offset,
+                                    stdout.offset,
+                                    stdout.data.len(),
+                                    stdout.total_bytes,
+                                ) {
+                                    let _ = session_handle
+                                        .data(
+                                            channel_id,
+                                            output_gap_message("stdout", lost_bytes),
+                                        )
+                                        .await;
+                                }
+                                if !stdout.data.is_empty() {
+                                    let _ = session_handle.data(channel_id, stdout.data).await;
+                                }
                             }
                             Some(boxlite_shared::exec_output::Event::Stderr(stderr)) => {
-                                let _ = session_handle.extended_data(channel_id, 1, stderr.data).await;
+                                if let Some(lost_bytes) = output_gap(
+                                    &mut stderr_offset,
+                                    stderr.offset,
+                                    stderr.data.len(),
+                                    stderr.total_bytes,
+                                ) {
+                                    let _ = session_handle
+                                        .extended_data(
+                                            channel_id,
+                                            1,
+                                            output_gap_message("stderr", lost_bytes),
+                                        )
+                                        .await;
+                                }
+                                if !stderr.data.is_empty() {
+                                    let _ = session_handle.extended_data(channel_id, 1, stderr.data).await;
+                                }
                             }
                             None => {}
                         },
+                        Some(Err(error)) => {
+                            warn!(%error, %execution_id, "SSH output stream failed");
+                            terminate_process_group(server.clone(), execution_id.clone()).await;
+                            finish_channel(
+                                &session_handle,
+                                channel_id,
+                                completion,
+                                ExitNotification::Status(INDETERMINATE_EXIT_STATUS),
+                            )
+                            .await;
+                            return;
+                        }
                         None => break,
                     }
                 }
@@ -700,6 +751,46 @@ fn spawn_output_pump(
 
         finish_channel(&session_handle, channel_id, completion, notification).await;
     })
+}
+
+fn output_gap(
+    expected_offset: &mut u64,
+    offset: Option<u64>,
+    data_len: usize,
+    total_bytes: Option<u64>,
+) -> Option<u64> {
+    if let Some(total_bytes) = total_bytes {
+        if offset != Some(total_bytes) || total_bytes < *expected_offset {
+            warn!(
+                ?offset,
+                total_bytes, expected_offset, "invalid SSH execution output end frame"
+            );
+            return None;
+        }
+        let lost_bytes = total_bytes - *expected_offset;
+        *expected_offset = total_bytes;
+        return (lost_bytes > 0).then_some(lost_bytes);
+    }
+
+    let Some(offset) = offset else {
+        *expected_offset += data_len as u64;
+        return None;
+    };
+    if offset < *expected_offset {
+        warn!(
+            offset,
+            expected_offset, "SSH execution output chunk moved backwards"
+        );
+        return None;
+    }
+
+    let lost_bytes = offset - *expected_offset;
+    *expected_offset = offset + data_len as u64;
+    (lost_bytes > 0).then_some(lost_bytes)
+}
+
+fn output_gap_message(source: &str, lost_bytes: u64) -> Vec<u8> {
+    format!("[boxlite] {source} output dropped {lost_bytes} bytes\r\n").into_bytes()
 }
 
 /// Keep one lifecycle owner for every SSH-created execution.
@@ -1044,6 +1135,17 @@ mod tests {
     fn forwarding_completion_is_distinct_from_session_exit_notification() {
         assert!(ChannelCompletion::Session.sends_exit_notification());
         assert!(!ChannelCompletion::Forwarding.sends_exit_notification());
+    }
+
+    #[test]
+    fn output_gap_detects_mid_stream_and_terminal_loss() {
+        let mut offset = 0;
+        assert_eq!(output_gap(&mut offset, Some(0), 3, None), None);
+        assert_eq!(offset, 3);
+        assert_eq!(output_gap(&mut offset, Some(5), 2, None), Some(2));
+        assert_eq!(offset, 7);
+        assert_eq!(output_gap(&mut offset, Some(10), 0, Some(10)), Some(3));
+        assert_eq!(offset, 10);
     }
 
     #[test]

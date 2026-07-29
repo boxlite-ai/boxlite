@@ -75,20 +75,30 @@ fn set_nonblocking(fd: &OwnedFd) -> BoxliteResult<()> {
 }
 
 fn read_fd(fd: &OwnedFd, buffer: &mut [u8]) -> io::Result<usize> {
-    nix::unistd::read(fd.as_raw_fd(), buffer).map_err(Into::into)
+    loop {
+        match nix::unistd::read(fd.as_raw_fd(), buffer) {
+            Err(nix::errno::Errno::EINTR) => continue,
+            result => return result.map_err(Into::into),
+        }
+    }
 }
 
 fn write_fd(fd: &OwnedFd, buffer: &[u8]) -> io::Result<usize> {
-    nix::unistd::write(fd, buffer).map_err(Into::into)
+    loop {
+        match nix::unistd::write(fd, buffer) {
+            Err(nix::errno::Errno::EINTR) => continue,
+            result => return result.map_err(Into::into),
+        }
+    }
 }
 
 // Shared output stream implementation
 struct OutputStream {
-    inner: Pin<Box<dyn Stream<Item = Vec<u8>> + Send>>,
+    inner: Pin<Box<dyn Stream<Item = io::Result<Vec<u8>>> + Send>>,
 }
 
 impl OutputStream {
-    fn new(fd: OwnedFd) -> BoxliteResult<Self> {
+    fn new(fd: OwnedFd, pty_eio_is_eof: bool) -> BoxliteResult<Self> {
         use async_stream::stream;
 
         let reader = async_fd(fd, "output")?;
@@ -98,8 +108,12 @@ impl OutputStream {
             loop {
                 match reader.async_io(Interest::READABLE, |fd| read_fd(fd, &mut buf)).await {
                     Ok(0) => break,  // EOF
-                    Ok(n) => yield buf[..n].to_vec(),
-                    Err(_) => break,
+                    Ok(n) => yield Ok(buf[..n].to_vec()),
+                    Err(error) if pty_eio_is_eof && error.raw_os_error() == Some(nix::libc::EIO) => break,
+                    Err(error) => {
+                        yield Err(error);
+                        break;
+                    }
                 }
             }
         };
@@ -111,7 +125,7 @@ impl OutputStream {
 }
 
 impl Stream for OutputStream {
-    type Item = Vec<u8>;
+    type Item = io::Result<Vec<u8>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.as_mut().poll_next(cx)
@@ -129,13 +143,19 @@ impl ExecStdout {
     /// Create from file descriptor
     pub fn new(fd: OwnedFd) -> BoxliteResult<Self> {
         Ok(Self {
-            inner: OutputStream::new(fd)?,
+            inner: OutputStream::new(fd, false)?,
+        })
+    }
+
+    fn new_pty(fd: OwnedFd) -> BoxliteResult<Self> {
+        Ok(Self {
+            inner: OutputStream::new(fd, true)?,
         })
     }
 }
 
 impl Stream for ExecStdout {
-    type Item = Vec<u8>;
+    type Item = io::Result<Vec<u8>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.poll_next_unpin(cx)
@@ -153,13 +173,13 @@ impl ExecStderr {
     /// Create from file descriptor
     pub fn new(fd: OwnedFd) -> BoxliteResult<Self> {
         Ok(Self {
-            inner: OutputStream::new(fd)?,
+            inner: OutputStream::new(fd, false)?,
         })
     }
 }
 
 impl Stream for ExecStderr {
-    type Item = Vec<u8>;
+    type Item = io::Result<Vec<u8>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.poll_next_unpin(cx)
@@ -305,10 +325,15 @@ impl ExecHandle {
         stdout: OwnedFd,
         stderr: Option<OwnedFd>,
     ) -> BoxliteResult<Self> {
+        let stdout = if stderr.is_some() {
+            ExecStdout::new(stdout)?
+        } else {
+            ExecStdout::new_pty(stdout)?
+        };
         Ok(Self {
             pid,
             stdin: Some(ExecStdin::new(stdin)?),
-            stdout: Some(ExecStdout::new(stdout)?),
+            stdout: Some(stdout),
             // In PTY mode, stderr is None because stdout/stderr are merged
             // at the PTY level (single reader from PTY master)
             stderr: stderr.map(ExecStderr::new).transpose()?,

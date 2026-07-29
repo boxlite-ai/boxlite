@@ -409,32 +409,59 @@ impl ExecProtocol {
         match output.event {
             Some(exec_output::Event::Stdout(chunk)) => {
                 tracing::trace!(len = chunk.data.len(), "Received exec stdout");
-                if let Some(lost_bytes) =
-                    stdout.receive(chunk.offset, chunk.data, chunk.total_bytes)
-                {
-                    Self::report_gap(stderr, "stdout", lost_bytes);
-                }
+                Self::forward_output(
+                    stdout,
+                    "stdout",
+                    chunk.offset,
+                    chunk.data,
+                    chunk.total_bytes,
+                );
             }
             Some(exec_output::Event::Stderr(chunk)) => {
                 tracing::trace!(len = chunk.data.len(), "Received exec stderr");
-                if let Some(lost_bytes) =
-                    stderr.receive(chunk.offset, chunk.data, chunk.total_bytes)
-                {
-                    Self::report_gap(stderr, "stderr", lost_bytes);
-                }
+                Self::forward_output(
+                    stderr,
+                    "stderr",
+                    chunk.offset,
+                    chunk.data,
+                    chunk.total_bytes,
+                );
             }
             None => {}
         }
     }
 
-    fn report_gap(stderr: &mut OutputTracker, source: &str, lost_bytes: u64) {
+    fn forward_output(
+        output: &mut OutputTracker,
+        source: &str,
+        offset: Option<u64>,
+        data: Vec<u8>,
+        total_bytes: Option<u64>,
+    ) {
+        match output.receive(offset, data, total_bytes) {
+            ReceivedOutput::Data { data, lost_bytes } => {
+                if let Some(lost_bytes) = lost_bytes {
+                    Self::report_gap(output, source, lost_bytes);
+                }
+                output.stream.send_bytes(data);
+            }
+            ReceivedOutput::End { lost_bytes } => {
+                if let Some(lost_bytes) = lost_bytes {
+                    Self::report_gap(output, source, lost_bytes);
+                }
+            }
+            ReceivedOutput::Ignore => {}
+        }
+    }
+
+    fn report_gap(output: &mut OutputTracker, source: &str, lost_bytes: u64) {
         tracing::warn!(
             source,
             lost_bytes,
             "Guest output buffer dropped older output"
         );
-        let _ = stderr.stream.tx.send(format!(
-            "[boxlite] {source} output dropped {lost_bytes} bytes\n"
+        let _ = output.stream.tx.send(format!(
+            "[boxlite] {source} output dropped {lost_bytes} bytes\r\n"
         ));
     }
 
@@ -744,6 +771,17 @@ struct OutputTracker {
     stream: DecodedStream,
 }
 
+enum ReceivedOutput {
+    Data {
+        data: Vec<u8>,
+        lost_bytes: Option<u64>,
+    },
+    End {
+        lost_bytes: Option<u64>,
+    },
+    Ignore,
+}
+
 impl OutputTracker {
     fn new(tx: mpsc::UnboundedSender<String>) -> Self {
         Self {
@@ -757,15 +795,15 @@ impl OutputTracker {
         offset: Option<u64>,
         data: Vec<u8>,
         total_bytes: Option<u64>,
-    ) -> Option<u64> {
+    ) -> ReceivedOutput {
         if let Some(total_bytes) = total_bytes {
             let Some(offset) = offset else {
                 tracing::warn!(total_bytes, "Exec output end frame has no offset");
-                return None;
+                return ReceivedOutput::Ignore;
             };
             if !data.is_empty() || offset != total_bytes {
                 tracing::warn!(offset, total_bytes, "Invalid exec output end frame");
-                return None;
+                return ReceivedOutput::Ignore;
             }
             if total_bytes < self.expected_offset {
                 tracing::warn!(
@@ -773,19 +811,23 @@ impl OutputTracker {
                     total_bytes,
                     "Exec output end frame moved backwards"
                 );
-                return None;
+                return ReceivedOutput::Ignore;
             }
 
             let lost_bytes = total_bytes - self.expected_offset;
             self.expected_offset = total_bytes;
             self.stream.flush();
-            return (lost_bytes > 0).then_some(lost_bytes);
+            return ReceivedOutput::End {
+                lost_bytes: (lost_bytes > 0).then_some(lost_bytes),
+            };
         }
 
         let Some(offset) = offset else {
             self.expected_offset += data.len() as u64;
-            self.stream.send_bytes(data);
-            return None;
+            return ReceivedOutput::Data {
+                data,
+                lost_bytes: None,
+            };
         };
 
         if offset < self.expected_offset {
@@ -794,7 +836,7 @@ impl OutputTracker {
                 offset,
                 "Exec output chunk moved backwards"
             );
-            return None;
+            return ReceivedOutput::Ignore;
         }
 
         let lost_bytes = offset - self.expected_offset;
@@ -802,8 +844,10 @@ impl OutputTracker {
             self.stream.flush();
         }
         self.expected_offset = offset + data.len() as u64;
-        self.stream.send_bytes(data);
-        (lost_bytes > 0).then_some(lost_bytes)
+        ReceivedOutput::Data {
+            data,
+            lost_bytes: (lost_bytes > 0).then_some(lost_bytes),
+        }
     }
 
     fn flush(&mut self) {
@@ -1301,11 +1345,11 @@ mod tests {
             &mut stderr,
         );
 
-        assert_eq!(stdout_rx.try_recv().ok(), Some("after-gap".to_string()));
         assert_eq!(
-            stderr_rx.try_recv().ok(),
-            Some("[boxlite] stdout output dropped 1 bytes\n".to_string())
+            stdout_rx.try_recv().ok(),
+            Some("[boxlite] stdout output dropped 1 bytes\r\n".to_string())
         );
+        assert_eq!(stdout_rx.try_recv().ok(), Some("after-gap".to_string()));
         assert_eq!(stderr_rx.try_recv().ok(), Some("─".to_string()));
     }
 
@@ -1340,9 +1384,10 @@ mod tests {
 
         assert_eq!(stdout_rx.try_recv().ok(), Some("hello".to_string()));
         assert_eq!(
-            stderr_rx.try_recv().ok(),
-            Some("[boxlite] stdout output dropped 5 bytes\n".to_string())
+            stdout_rx.try_recv().ok(),
+            Some("[boxlite] stdout output dropped 5 bytes\r\n".to_string())
         );
+        assert!(stderr_rx.try_recv().is_err());
     }
 
     #[test]

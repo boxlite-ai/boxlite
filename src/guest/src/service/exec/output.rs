@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
 use tonic::Status;
+use tracing::error;
 
 const BUFFER_CAPACITY_BYTES: usize = 1024 * 1024;
 
@@ -25,6 +26,7 @@ struct OutputState {
     buffered_bytes: usize,
     oldest_sequence: u64,
     next_sequence: u64,
+    failure: Option<String>,
     attached: bool,
     stdout: StreamState,
     stderr: StreamState,
@@ -36,7 +38,7 @@ struct OutputEntry {
     byte_len: usize,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum OutputSource {
     Stdout,
     Stderr,
@@ -60,6 +62,7 @@ impl OutputManager {
                 buffered_bytes: 0,
                 oldest_sequence: 0,
                 next_sequence: 0,
+                failure: None,
                 attached: false,
                 stdout: StreamState {
                     enabled: stdout_enabled,
@@ -79,10 +82,10 @@ impl OutputManager {
         };
 
         if let Some(stdout) = stdout {
-            manager.spawn_stdout(stdout);
+            manager.spawn(stdout, OutputSource::Stdout);
         }
         if let Some(stderr) = stderr {
-            manager.spawn_stderr(stderr);
+            manager.spawn(stderr, OutputSource::Stderr);
         }
 
         manager
@@ -122,6 +125,7 @@ impl OutputManager {
             loop {
                 enum Next {
                     Item(ExecOutput),
+                    Error(Status),
                     Wait,
                     Done,
                 }
@@ -129,43 +133,46 @@ impl OutputManager {
                 let next = {
                     let state = manager.inner.lock().await;
 
-                    if next_sequence < state.oldest_sequence {
-                        next_sequence = state.oldest_sequence;
-                    }
-
-                    if state.stdout.ready_to_end(next_sequence) && !stdout_end_sent {
-                        stdout_end_sent = true;
-                        Next::Item(end_output(OutputSource::Stdout, state.stdout.total_bytes))
-                    } else if state.stderr.ready_to_end(next_sequence) && !stderr_end_sent {
-                        stderr_end_sent = true;
-                        Next::Item(end_output(OutputSource::Stderr, state.stderr.total_bytes))
-                    } else if next_sequence < state.next_sequence {
-                        let index = (next_sequence - state.oldest_sequence) as usize;
-                        let output = state
-                            .entries
-                            .get(index)
-                            .expect("ring sequence must exist")
-                            .output
-                            .clone();
-                        next_sequence += 1;
-                        Next::Item(output)
-                    } else if (!state.stdout.enabled || stdout_end_sent)
-                        && (!state.stderr.enabled || stderr_end_sent)
-                    {
-                        Next::Done
+                    if let Some(failure) = &state.failure {
+                        Next::Error(Status::internal(failure.clone()))
                     } else {
-                        Next::Wait
+                        if next_sequence < state.oldest_sequence {
+                            next_sequence = state.oldest_sequence;
+                        }
+                        if state.stdout.ready_to_end(next_sequence) && !stdout_end_sent {
+                            stdout_end_sent = true;
+                            Next::Item(end_output(OutputSource::Stdout, state.stdout.total_bytes))
+                        } else if state.stderr.ready_to_end(next_sequence) && !stderr_end_sent {
+                            stderr_end_sent = true;
+                            Next::Item(end_output(OutputSource::Stderr, state.stderr.total_bytes))
+                        } else if next_sequence < state.next_sequence {
+                            let index = (next_sequence - state.oldest_sequence) as usize;
+                            let output = state
+                                .entries
+                                .get(index)
+                                .expect("ring sequence must exist")
+                                .output
+                                .clone();
+                            next_sequence += 1;
+                            Next::Item(output)
+                        } else if (!state.stdout.enabled || stdout_end_sent)
+                            && (!state.stderr.enabled || stderr_end_sent)
+                        {
+                            Next::Done
+                        } else {
+                            Next::Wait
+                        }
                     }
                 };
 
                 match next {
                     Next::Item(item) => yield Ok(item),
-                    Next::Done => break,
-                    Next::Wait => {
-                        if updates.changed().await.is_err() {
-                            break;
-                        }
+                    Next::Error(status) => {
+                        yield Err(status);
+                        break;
                     }
+                    Next::Done => break,
+                    Next::Wait => updates.changed().await.expect("output manager must outlive attach stream"),
                 }
             }
         };
@@ -173,21 +180,13 @@ impl OutputManager {
         Ok(Box::pin(output))
     }
 
-    fn spawn_stdout(&self, stdout: ExecStdout) {
+    fn spawn<S>(&self, stream: S, source: OutputSource)
+    where
+        S: Stream<Item = std::io::Result<Vec<u8>>> + Send + Unpin + 'static,
+    {
         let manager = self.clone();
         let task = tokio::spawn(async move {
-            manager.drain(stdout, OutputSource::Stdout).await;
-        });
-        self.drain_tasks
-            .lock()
-            .expect("output drain task lock poisoned")
-            .push(task);
-    }
-
-    fn spawn_stderr(&self, stderr: ExecStderr) {
-        let manager = self.clone();
-        let task = tokio::spawn(async move {
-            manager.drain(stderr, OutputSource::Stderr).await;
+            manager.drain(stream, source).await;
         });
         self.drain_tasks
             .lock()
@@ -197,10 +196,17 @@ impl OutputManager {
 
     async fn drain<S>(&self, mut stream: S, source: OutputSource)
     where
-        S: Stream<Item = Vec<u8>> + Unpin,
+        S: Stream<Item = std::io::Result<Vec<u8>>> + Unpin,
     {
-        while let Some(data) = stream.next().await {
-            self.push(source, data).await;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(data) => self.push(source, data).await,
+                Err(error) => {
+                    error!(?source, %error, "execution output reader failed");
+                    self.reader_failed(source, error).await;
+                    return;
+                }
+            }
         }
         self.reader_finished(source).await;
     }
@@ -242,6 +248,15 @@ impl OutputManager {
     async fn reader_finished(&self, source: OutputSource) {
         let mut state = self.inner.lock().await;
         state.stream_mut(source).finished = true;
+        drop(state);
+        self.updated.send_replace(());
+    }
+
+    async fn reader_failed(&self, source: OutputSource, error: std::io::Error) {
+        let mut state = self.inner.lock().await;
+        let stream = state.stream_mut(source);
+        stream.finished = true;
+        state.failure = Some(format!("failed to read {source:?}: {error}"));
         drop(state);
         self.updated.send_replace(());
     }
@@ -388,5 +403,21 @@ mod tests {
             stderr_end.total_bytes,
             Some((BUFFER_CAPACITY_BYTES + 1) as u64)
         );
+    }
+
+    #[tokio::test]
+    async fn reader_failure_is_reported_to_attach() {
+        let manager = OutputManager::new(None, None);
+        manager
+            .reader_failed(
+                OutputSource::Stdout,
+                std::io::Error::other("simulated pipe failure"),
+            )
+            .await;
+
+        let mut output = manager.attach().await.unwrap();
+        let error = output.next().await.unwrap().unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Internal);
+        assert!(error.message().contains("simulated pipe failure"));
     }
 }

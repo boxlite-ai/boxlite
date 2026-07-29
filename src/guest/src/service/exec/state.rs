@@ -7,6 +7,7 @@ use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::{AbortHandle, JoinHandle};
+use tonic::Status;
 
 /// Abstraction for checking container init health.
 ///
@@ -272,8 +273,8 @@ impl ExecutionState {
     /// Attach to execution output.
     pub async fn attach(
         &self,
-        _exec_id: &str,
-    ) -> Result<mpsc::Receiver<ExecOutput>, ExecutionError> {
+        exec_id: &str,
+    ) -> Result<mpsc::Receiver<Result<ExecOutput, Status>>, ExecutionError> {
         let output = {
             let inner = self.inner.lock().await;
             if inner.released {
@@ -286,12 +287,14 @@ impl ExecutionState {
             .await
             .map_err(|_| ExecutionError::AlreadyAttached)?;
         let (tx, rx) = mpsc::channel(100);
+        let execution_id = exec_id.to_owned();
         let task = tokio::spawn(async move {
-            while let Some(Ok(message)) = output.next().await {
+            while let Some(message) = output.next().await {
                 if tx.send(message).await.is_err() {
                     break;
                 }
             }
+            tracing::info!(%execution_id, "execution output forwarding ended");
         });
 
         let mut inner = self.inner.lock().await;
