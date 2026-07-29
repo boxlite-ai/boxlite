@@ -68,11 +68,15 @@ credential: `server.address` is the **base** domain rather than the hostname the
 client sent (whose leading label can be a signed token), and the query string is
 never recorded (it can carry `BOXLITE_BOX_AUTH_KEY`).
 
-> **The `OtelCollector` service cannot receive this.** All three of its pipelines
-> export only to `boxlite_exporter`, which requires a `box-auth-token` header and
-> routes to *that tenant's* endpoint; telemetry without the header is dropped as
-> a permanent error. Point `OTEL_EXPORTER_OTLP_ENDPOINT` at a platform sink, not
-> at `OtelCollector`.
+> **Check where `OtelCollector` would put this before pointing at it.** Its
+> pipelines always include `boxlite_exporter`, which requires a `box-auth-token`
+> header and routes to *that tenant's* endpoint; telemetry without the header is
+> dropped as a permanent error. Whether anything else receives it depends on the
+> stage: `CLICKHOUSE_EXPORTER_ENABLED=true` makes `sst.config.ts` append the
+> `clickhouse` exporter to all three pipelines at deploy time, and that one
+> stores whatever it is given. So with ClickHouse enabled the collector is a
+> usable sink; with it disabled — the checked-in default — this telemetry is
+> discarded, and `OTEL_EXPORTER_OTLP_ENDPOINT` should point elsewhere.
 
 `.env`, `.env.local`, and `.env.production` are loaded from the working
 directory and override exported variables, in that order.
