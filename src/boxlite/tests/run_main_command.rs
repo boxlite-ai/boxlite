@@ -106,7 +106,7 @@ async fn main_command_exits_after_large_output_without_attach() {
     let completed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         handle.start().await.expect("start box");
         loop {
-            if handle.info().status == boxlite::BoxStatus::Stopped {
+            if handle.info().await.expect("get box info").status == boxlite::BoxStatus::Stopped {
                 return true;
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;

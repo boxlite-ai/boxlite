@@ -482,8 +482,8 @@ mod process_group_tests {
         assert!(checked_process_group_target(Pid::from_raw(0), Pid::from_raw(0)).is_err());
     }
 
-    #[test]
-    fn process_group_kill_reaches_a_background_descendant() {
+    #[tokio::test]
+    async fn process_group_kill_reaches_a_background_descendant() {
         let mut command = Command::new("/bin/sh");
         command
             .arg("-c")
@@ -520,7 +520,8 @@ mod process_group_tests {
         let (_stdin_peer, stdin) = nix::unistd::pipe().unwrap();
         let (stdout, _stdout_peer) = nix::unistd::pipe().unwrap();
         let (stderr, _stderr_peer) = nix::unistd::pipe().unwrap();
-        let handle = ExecHandle::new(leader, stdin, stdout, Some(stderr));
+        let handle = ExecHandle::new(leader, stdin, stdout, Some(stderr))
+            .expect("test pipe must register with Tokio");
 
         handle.kill_process_group(Signal::SIGTERM).unwrap();
         std::thread::sleep(Duration::from_millis(25));

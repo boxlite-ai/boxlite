@@ -444,18 +444,11 @@ message AttachRequest {
 }
 
 message ExecOutput {
-  // New guests mark each stream's end with an empty event carrying total_bytes.
+  // An empty stdout/stderr event with total_bytes marks that stream's end.
   oneof event {
     Stdout stdout = 1;
     Stderr stderr = 2;
-    OutputDropped dropped = 3 [deprecated = true];
   }
-}
-
-// Sent only by guests predating per-stream offsets.
-message OutputDropped {
-  uint64 stdout_bytes = 1;
-  uint64 stderr_bytes = 2;
 }
 
 message Stdout {

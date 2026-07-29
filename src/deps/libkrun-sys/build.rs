@@ -476,7 +476,10 @@ impl LibFixup {
         let mut cmd = Command::new("patchelf");
         cmd.args(["--add-needed", LIBC, lib_path_str]);
         run_command(&mut cmd, &format!("add {} dependency", LIBC));
-        println!("cargo:warning=Added {} dependency to {}", LIBC, lib_path_str);
+        println!(
+            "cargo:warning=Added {} dependency to {}",
+            LIBC, lib_path_str
+        );
     }
 
     /// Extract SONAME from versioned library filename.

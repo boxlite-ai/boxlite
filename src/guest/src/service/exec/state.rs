@@ -1,6 +1,5 @@
 use crate::service::exec::error::ExecutionError;
 use crate::service::exec::exec_handle::ExecHandle;
-<<<<<<< HEAD
 use crate::service::exec::output::OutputManager;
 use boxlite_shared::ExecOutput;
 use futures::{Stream, StreamExt as _};
@@ -288,11 +287,9 @@ impl ExecutionState {
             .map_err(|_| ExecutionError::AlreadyAttached)?;
         let (tx, rx) = mpsc::channel(100);
         let task = tokio::spawn(async move {
-            while let Some(message) = output.next().await {
-                match message {
-                    Ok(message) if tx.send(message).await.is_err() => break,
-                    Ok(_) => {}
-                    Err(_) => break,
+            while let Some(Ok(message)) = output.next().await {
+                if tx.send(message).await.is_err() {
+                    break;
                 }
             }
         });
@@ -314,20 +311,27 @@ impl ExecutionState {
     /// clone still exists. Forwarders are aborted because stdin may already have
     /// moved out of the handle into one of those tasks.
     pub(super) async fn release_resources(&self) -> bool {
-        let mut inner = self.inner.lock().await;
-        if inner.released {
-            return false;
-        }
-        inner.released = true;
+        let (output, input_tasks, output_tasks) = {
+            let mut inner = self.inner.lock().await;
+            if inner.released {
+                return false;
+            }
+            inner.released = true;
+            let output = inner.output.clone();
+            let input_tasks = std::mem::take(&mut inner.input_tasks);
+            let output_tasks = std::mem::take(&mut inner.output_tasks);
+            drop(inner.handle.take());
+            drop(inner.init_health.take());
+            (output, input_tasks, output_tasks)
+        };
 
-        for task in inner.input_tasks.drain(..) {
+        for task in input_tasks {
             task.abort();
         }
-        for task in inner.output_tasks.drain(..) {
+        for task in output_tasks {
             task.abort();
         }
-        drop(inner.handle.take());
-        drop(inner.init_health.take());
+        output.shutdown_drains().await;
         true
     }
 
@@ -410,7 +414,8 @@ mod release_tests {
             pty_controller.as_raw_fd(),
         ];
 
-        let mut handle = ExecHandle::new(Pid::from_raw(42_424), stdin, stdout, Some(stderr));
+        let mut handle = ExecHandle::new(Pid::from_raw(42_424), stdin, stdout, Some(stderr))
+            .expect("test pipe must register with Tokio");
         handle.set_pty(
             std::fs::File::from(pty_controller),
             PtyConfig {

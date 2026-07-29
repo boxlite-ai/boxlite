@@ -423,14 +423,6 @@ impl ExecProtocol {
                     Self::report_gap(stderr, "stderr", lost_bytes);
                 }
             }
-            Some(exec_output::Event::Dropped(dropped)) => {
-                Self::report_legacy_drop(
-                    stdout,
-                    stderr,
-                    dropped.stdout_bytes,
-                    dropped.stderr_bytes,
-                );
-            }
             None => {}
         }
     }
@@ -443,28 +435,6 @@ impl ExecProtocol {
         );
         let _ = stderr.stream.tx.send(format!(
             "[boxlite] {source} output dropped {lost_bytes} bytes\n"
-        ));
-    }
-
-    fn report_legacy_drop(
-        stdout: &mut OutputTracker,
-        stderr: &mut OutputTracker,
-        stdout_bytes: u64,
-        stderr_bytes: u64,
-    ) {
-        tracing::warn!(
-            stdout_bytes,
-            stderr_bytes,
-            "Legacy guest output buffer dropped older output"
-        );
-        if stdout_bytes > 0 {
-            stdout.flush();
-        }
-        if stderr_bytes > 0 {
-            stderr.flush();
-        }
-        let _ = stderr.stream.tx.send(format!(
-            "[boxlite] output dropped (stdout: {stdout_bytes} bytes, stderr: {stderr_bytes} bytes)\n"
         ));
     }
 
@@ -1335,51 +1305,6 @@ mod tests {
         assert_eq!(
             stderr_rx.try_recv().ok(),
             Some("[boxlite] stdout output dropped 1 bytes\n".to_string())
-        );
-        assert_eq!(stderr_rx.try_recv().ok(), Some("─".to_string()));
-    }
-
-    #[test]
-    fn legacy_drop_only_flushes_the_affected_utf8_decoder() {
-        use boxlite_shared::{OutputDropped, Stderr as StderrMsg, exec_output};
-
-        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
-        let mut stdout = OutputTracker::new(stdout_tx);
-        let mut stderr = OutputTracker::new(stderr_tx);
-
-        let output = |event| ExecOutput { event: Some(event) };
-        ExecProtocol::route_output(
-            output(exec_output::Event::Stderr(StderrMsg {
-                data: vec![0xE2],
-                offset: None,
-                total_bytes: None,
-            })),
-            &mut stdout,
-            &mut stderr,
-        );
-        ExecProtocol::route_output(
-            output(exec_output::Event::Dropped(OutputDropped {
-                stdout_bytes: 1,
-                stderr_bytes: 0,
-            })),
-            &mut stdout,
-            &mut stderr,
-        );
-        ExecProtocol::route_output(
-            output(exec_output::Event::Stderr(StderrMsg {
-                data: vec![0x94, 0x80],
-                offset: None,
-                total_bytes: None,
-            })),
-            &mut stdout,
-            &mut stderr,
-        );
-
-        assert!(stdout_rx.try_recv().is_err());
-        assert_eq!(
-            stderr_rx.try_recv().ok(),
-            Some("[boxlite] output dropped (stdout: 1 bytes, stderr: 0 bytes)\n".to_string())
         );
         assert_eq!(stderr_rx.try_recv().ok(), Some("─".to_string()));
     }

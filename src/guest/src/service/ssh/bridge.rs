@@ -885,7 +885,8 @@ mod tests {
         let (_stdin_peer, stdin) = pipe().unwrap();
         let (stdout, _stdout_peer) = pipe().unwrap();
         let (stderr, _stderr_peer) = pipe().unwrap();
-        let handle = ExecHandle::new(Pid::from_raw(pid), stdin, stdout, Some(stderr));
+        let handle = ExecHandle::new(Pid::from_raw(pid), stdin, stdout, Some(stderr))
+            .expect("test pipe must register with Tokio");
         let (exit, exit_tx) = ExitSlot::pending_for_test();
         let state = ExecutionState::new_for_test(handle, exit);
         registry.register(execution_id.into(), state).await;

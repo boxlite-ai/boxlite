@@ -136,7 +136,8 @@ mod release_tests {
         let (_stdin_peer, stdin) = pipe().unwrap();
         let (stdout, _stdout_peer) = pipe().unwrap();
         let (stderr, _stderr_peer) = pipe().unwrap();
-        let handle = ExecHandle::new(Pid::from_raw(pid), stdin, stdout, Some(stderr));
+        let handle = ExecHandle::new(Pid::from_raw(pid), stdin, stdout, Some(stderr))
+            .expect("test pipe must register with Tokio");
         let exit = ExitSlot::settled_for_test(ExitStatus::Code(7));
         if is_init {
             ExecutionState::new_init_session(handle, exit)

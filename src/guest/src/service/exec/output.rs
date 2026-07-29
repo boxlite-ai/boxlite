@@ -4,8 +4,9 @@ use boxlite_shared::{exec_output, ExecOutput, Stderr, Stdout};
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{watch, Mutex};
+use tokio::task::JoinHandle;
 use tonic::Status;
 
 const BUFFER_CAPACITY_BYTES: usize = 1024 * 1024;
@@ -16,6 +17,7 @@ pub(crate) type AttachStream = Pin<Box<dyn Stream<Item = Result<ExecOutput, Stat
 pub(crate) struct OutputManager {
     inner: Arc<Mutex<OutputState>>,
     updated: watch::Sender<()>,
+    drain_tasks: Arc<StdMutex<Vec<JoinHandle<()>>>>,
 }
 
 struct OutputState {
@@ -73,6 +75,7 @@ impl OutputManager {
                 },
             })),
             updated,
+            drain_tasks: Arc::new(StdMutex::new(Vec::new())),
         };
 
         if let Some(stdout) = stdout {
@@ -83,6 +86,21 @@ impl OutputManager {
         }
 
         manager
+    }
+
+    pub(crate) async fn shutdown_drains(&self) {
+        let tasks = std::mem::take(
+            &mut *self
+                .drain_tasks
+                .lock()
+                .expect("output drain task lock poisoned"),
+        );
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            let _ = task.await;
+        }
     }
 
     pub(crate) async fn attach(&self) -> Result<AttachStream, Status> {
@@ -157,16 +175,24 @@ impl OutputManager {
 
     fn spawn_stdout(&self, stdout: ExecStdout) {
         let manager = self.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             manager.drain(stdout, OutputSource::Stdout).await;
         });
+        self.drain_tasks
+            .lock()
+            .expect("output drain task lock poisoned")
+            .push(task);
     }
 
     fn spawn_stderr(&self, stderr: ExecStderr) {
         let manager = self.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             manager.drain(stderr, OutputSource::Stderr).await;
         });
+        self.drain_tasks
+            .lock()
+            .expect("output drain task lock poisoned")
+            .push(task);
     }
 
     async fn drain<S>(&self, mut stream: S, source: OutputSource)
