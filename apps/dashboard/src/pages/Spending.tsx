@@ -76,7 +76,12 @@ const Spending = () => {
   } = useBoxesUsage(analyticsParams)
 
   const { data: usageChartPoints, isLoading: chartLoading } = useUsageChart(analyticsParams)
-  const { data: usageOverview } = useOrganizationUsageOverviewQuery({ organizationId: selectedOrganization?.id ?? '' })
+  // Only feeds the timeline chart's quota reference lines, which live behind
+  // analyticsAvailable — without this the page fetches usage it cannot render.
+  const { data: usageOverview } = useOrganizationUsageOverviewQuery(
+    { organizationId: selectedOrganization?.id ?? '' },
+    { enabled: analyticsAvailable && !!selectedOrganization },
+  )
   const {
     data: currentOrganizationUsage,
     isLoading: currentUsageLoading,
