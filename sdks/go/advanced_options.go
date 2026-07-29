@@ -1,10 +1,8 @@
-// AdvancedBoxOptions groups the box-level advanced knobs (currently the
-// security toggle) under one handle, mirroring core `BoxOptions.advanced`.
+// AdvancedBoxOptions groups box-level capability and security knobs under one
+// handle, mirroring core `BoxOptions.advanced`.
 //
-// Build it via `NewAdvancedBoxOptions`, toggle the sandbox with
-// `SetSecurityEnabled`, and pass it to `runtime.Create(..., WithAdvancedOptions(adv))`.
-// Security is reached through this layer (never attached to the box directly),
-// matching the core `BoxOptions.advanced.security` model.
+// Build it via `NewAdvancedBoxOptions`, configure capabilities or security,
+// and pass it to `runtime.Create(..., WithAdvancedOptions(adv))`.
 //
 //	adv, _ := boxlite.NewAdvancedBoxOptions()
 //	defer adv.Close()
@@ -18,13 +16,24 @@ package boxlite
 */
 import "C"
 
-import "runtime"
+import (
+	"fmt"
+	"runtime"
+)
+
+// ContainerCapabilities is the requested Linux capability policy.
+// Capability names may be written with or without the CAP_ prefix.
+type ContainerCapabilities struct {
+	Add  []string
+	Drop []string
+}
 
 // AdvancedBoxOptions is the Go-side handle for a `CAdvancedBoxOptions`.
 // Construct via `NewAdvancedBoxOptions`; release via `Close` once it has
 // been attached to a box (or you no longer need it).
 type AdvancedBoxOptions struct {
-	handle *C.CAdvancedBoxOptions
+	handle       *C.CAdvancedBoxOptions
+	capabilities ContainerCapabilities
 }
 
 // NewAdvancedBoxOptions allocates an advanced-options handle initialized to
@@ -52,6 +61,41 @@ func (a *AdvancedBoxOptions) SetSecurityEnabled(enabled bool) {
 	C.boxlite_advanced_options_set_security_enabled(a.handle, boolToCInt(enabled))
 }
 
+// SetCapabilities replaces advanced.capabilities for subsequently created
+// boxes. The input slices are copied; callers may safely reuse or mutate them
+// after this method returns.
+func (a *AdvancedBoxOptions) SetCapabilities(capabilities ContainerCapabilities) error {
+	if a == nil || a.handle == nil {
+		return fmt.Errorf("boxlite: advanced options handle is closed")
+	}
+	if err := validateCapabilities("advanced.capabilities.add", capabilities.Add); err != nil {
+		return err
+	}
+	if err := validateCapabilities("advanced.capabilities.drop", capabilities.Drop); err != nil {
+		return err
+	}
+
+	add, addCount := toCStringArray(capabilities.Add)
+	addCode := C.boxlite_advanced_options_set_capabilities_add(a.handle, add, C.int(addCount))
+	freeCStringArray(add, addCount)
+	if addCode != C.Ok {
+		return fmt.Errorf("boxlite: invalid advanced.capabilities.add")
+	}
+
+	drop, dropCount := toCStringArray(capabilities.Drop)
+	dropCode := C.boxlite_advanced_options_set_capabilities_drop(a.handle, drop, C.int(dropCount))
+	freeCStringArray(drop, dropCount)
+	if dropCode != C.Ok {
+		return fmt.Errorf("boxlite: invalid advanced.capabilities.drop")
+	}
+
+	a.capabilities = ContainerCapabilities{
+		Add:  append([]string(nil), capabilities.Add...),
+		Drop: append([]string(nil), capabilities.Drop...),
+	}
+	return nil
+}
+
 // Close releases the underlying CAdvancedBoxOptions. Idempotent.
 func (a *AdvancedBoxOptions) Close() {
 	if a == nil || a.handle == nil {
@@ -59,5 +103,6 @@ func (a *AdvancedBoxOptions) Close() {
 	}
 	C.boxlite_advanced_options_free(a.handle)
 	a.handle = nil
+	a.capabilities = ContainerCapabilities{}
 	runtime.SetFinalizer(a, nil)
 }

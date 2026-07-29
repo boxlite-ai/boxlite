@@ -1,17 +1,18 @@
 //! C ABI for `boxlite::runtime::advanced_options::AdvancedBoxOptions`.
 //!
-//! Mirrors the core model: advanced knobs (security, mount isolation, health
-//! check) live under `BoxOptions.advanced`, never directly on the box. Build a
+//! Mirrors the core model: advanced knobs (capabilities, security, mount
+//! isolation, health check) live under `BoxOptions.advanced`, never directly on the box. Build a
 //! `CAdvancedBoxOptions` handle via `boxlite_advanced_options_new`, toggle the
 //! sandbox with `boxlite_advanced_options_set_security_enabled`, then apply it
 //! to a `CBoxliteOptions` via `boxlite_options_set_advanced`.
 
-use std::os::raw::c_int;
+use std::os::raw::{c_char, c_int};
 
 use boxlite::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
 
 use crate::CAdvancedBoxOptions;
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
+use crate::util::c_str_to_string;
 
 /// Opaque handle wrapping an `AdvancedBoxOptions`. Allocated via
 /// `boxlite_advanced_options_new`, freed via `boxlite_advanced_options_free`.
@@ -76,4 +77,91 @@ pub unsafe extern "C" fn boxlite_advanced_options_set_security_enabled(
             SecurityOptions::disabled()
         };
     }
+}
+
+/// Replace the capabilities added to BoxLite's Docker-compatible baseline.
+///
+/// A zero count clears the list. Negative counts, null handles, null arrays
+/// with a positive count, null elements, and invalid UTF-8 fail closed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_advanced_options_set_capabilities_add(
+    opts: *mut CAdvancedBoxOptions,
+    capabilities: *const *const c_char,
+    count: c_int,
+) -> BoxliteErrorCode {
+    set_capability_list(opts, capabilities, count, |options, values| {
+        options.capabilities.add = values;
+    })
+}
+
+/// Replace the capabilities removed from the container capability set.
+///
+/// A zero count clears the list. Negative counts, null handles, null arrays
+/// with a positive count, null elements, and invalid UTF-8 fail closed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_advanced_options_set_capabilities_drop(
+    opts: *mut CAdvancedBoxOptions,
+    capabilities: *const *const c_char,
+    count: c_int,
+) -> BoxliteErrorCode {
+    set_capability_list(opts, capabilities, count, |options, values| {
+        options.capabilities.drop = values;
+    })
+}
+
+const INVALID_CAPABILITY_INPUT: &str = "<invalid C capability input>";
+
+fn set_capability_list(
+    handle: *mut CAdvancedBoxOptions,
+    capabilities: *const *const c_char,
+    count: c_int,
+    assign: impl FnOnce(&mut AdvancedBoxOptions, Vec<String>),
+) -> BoxliteErrorCode {
+    let Some(handle) = (unsafe { handle.as_mut() }) else {
+        return BoxliteErrorCode::InvalidArgument;
+    };
+
+    match parse_capability_array(capabilities, count) {
+        Ok(values) => {
+            assign(&mut handle.options, values);
+            BoxliteErrorCode::Ok
+        }
+        Err(()) => {
+            // Keep the handle invalid if a caller ignores the return code. The
+            // subsequent BoxOptions::sanitize call then rejects the policy
+            // instead of silently falling back to the baseline.
+            assign(
+                &mut handle.options,
+                vec![INVALID_CAPABILITY_INPUT.to_string()],
+            );
+            BoxliteErrorCode::InvalidArgument
+        }
+    }
+}
+
+fn parse_capability_array(
+    capabilities: *const *const c_char,
+    count: c_int,
+) -> Result<Vec<String>, ()> {
+    if count < 0 {
+        return Err(());
+    }
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if capabilities.is_null() {
+        return Err(());
+    }
+
+    let mut values = Vec::with_capacity(count as usize);
+    unsafe {
+        for index in 0..count {
+            let capability = *capabilities.add(index as usize);
+            if capability.is_null() {
+                return Err(());
+            }
+            values.push(c_str_to_string(capability).map_err(|_| ())?);
+        }
+    }
+    Ok(values)
 }

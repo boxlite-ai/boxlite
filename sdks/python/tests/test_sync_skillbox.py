@@ -66,11 +66,10 @@ class TestSyncSkillBoxBasic:
             oauth_token=oauth_token,
             runtime=shared_sync_runtime,
         ) as box:
-            info = box.info()
             # Default image is node:20-alpine
-            assert "node" in info.image.lower()
+            assert "node" in box._box_opts.image.lower()
             # Default memory is 2048 MiB
-            assert info.memory_mib == 2048
+            assert box._box_opts.memory_mib == 2048
 
     def test_custom_name(self, shared_sync_runtime, oauth_token):
         """Test SyncSkillBox with custom name."""
@@ -80,8 +79,7 @@ class TestSyncSkillBoxBasic:
             oauth_token=oauth_token,
             runtime=shared_sync_runtime,
         ) as box:
-            info = box.info()
-            assert info.name == "test-sync-skillbox-custom-name"
+            assert box.name == "test-sync-skillbox-custom-name"
 
     def test_custom_memory(self, shared_sync_runtime, oauth_token):
         """Test SyncSkillBox with custom memory limit."""
@@ -92,8 +90,7 @@ class TestSyncSkillBoxBasic:
             oauth_token=oauth_token,
             runtime=shared_sync_runtime,
         ) as box:
-            info = box.info()
-            assert info.memory_mib == 1024
+            assert box._box_opts.memory_mib == 1024
 
 
 @pytest.mark.integration
@@ -210,7 +207,7 @@ class TestSyncSkillBoxExports:
         """Test that SyncSkillBox has expected public methods."""
         assert hasattr(SyncSkillBox, "call")
         assert hasattr(SyncSkillBox, "install_skill")
-        assert hasattr(SyncSkillBox, "info")
+        assert not hasattr(SyncSkillBox, "info")
         # exec is inherited from SyncSimpleBox
         from boxlite.sync_api import SyncSimpleBox
 

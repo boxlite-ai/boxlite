@@ -203,24 +203,59 @@ Demonstrates listing boxes, getting info, and ID prefix lookup.
 
 **Key operations:**
 ```c
-// List all boxes
-CBoxInfoList* list = NULL;
-boxlite_list_info(runtime, &list, &error);
-printf("Boxes: %d\n", list->count);
-boxlite_free_box_info_list(list);
+typedef struct {
+    int done;
+} InfoRequest;
 
-// Get specific box info
-CBoxInfo* info = NULL;
-boxlite_get_info(runtime, "01HJK4TN", &info, &error);  // ID prefix works
-boxlite_free_box_info(info);
+static void on_info(CBoxInfo* info, CBoxliteError* error, void* user_data) {
+    InfoRequest* request = user_data;
+    if (error->code == Ok) {
+        printf("%s\n", info->id);
+        boxlite_free_box_info(info);  // Callback owns a successful result.
+    }
+    request->done = 1;
+}
 
-// Get info from handle
-boxlite_box_info(box, &info, &error);
-boxlite_free_box_info(info);
+static void on_list(CBoxInfoList* list, CBoxliteError* error,
+                    void* user_data) {
+    InfoRequest* request = user_data;
+    if (error->code == Ok) {
+        printf("Boxes: %d\n", list->count);
+        boxlite_free_box_info_list(list);
+    }
+    request->done = 1;
+}
 
-// Runtime metrics
-CRuntimeMetrics metrics = {0};
-boxlite_runtime_metrics(runtime, &metrics, &error);
+static void drain_until_done(CBoxliteRuntime* runtime, InfoRequest* request) {
+    CBoxliteError error = {0};
+    while (!request->done) {
+        if (boxlite_runtime_drain(runtime, -1, &error) < 0) {
+            boxlite_error_free(&error);
+            return;
+        }
+    }
+}
+
+InfoRequest list_request = {0};
+if (boxlite_list_info(runtime, on_list, &list_request, &error) == Ok) {
+    drain_until_done(runtime, &list_request);
+} else {
+    boxlite_error_free(&error);
+}
+
+InfoRequest get_request = {0};
+if (boxlite_get_info(runtime, "01HJK4TN", on_info, &get_request, &error) == Ok) {
+    drain_until_done(runtime, &get_request);  // ID prefix works.
+} else {
+    boxlite_error_free(&error);
+}
+
+InfoRequest handle_request = {0};
+if (boxlite_box_info(box, on_info, &handle_request, &error) == Ok) {
+    drain_until_done(runtime, &handle_request);
+} else {
+    boxlite_error_free(&error);
+}
 ```
 
 ---

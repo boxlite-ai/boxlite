@@ -2,7 +2,7 @@
 SyncSimpleBox - Synchronous wrapper for SimpleBox.
 
 Provides a synchronous API for box operations.
-API mirrors async SimpleBox exactly.
+Async-only metadata retrieval is not exposed.
 """
 
 import asyncio
@@ -26,7 +26,7 @@ class SyncSimpleBox:
 
     Provides synchronous methods for executing commands in a BoxLite container.
     Uses SyncBox internally which handles async bridging via greenlet.
-    API mirrors async SimpleBox exactly.
+    ``SimpleBox.info()`` remains available only on the async API.
 
     Usage (standalone - recommended):
         with SyncSimpleBox(image="python:slim") as box:
@@ -147,10 +147,6 @@ class SyncSimpleBox:
         Returns None if the box hasn't been started yet.
         """
         return self._created
-
-    def info(self):
-        """Get box information."""
-        return self._box.info()
 
     def exec(
         self,

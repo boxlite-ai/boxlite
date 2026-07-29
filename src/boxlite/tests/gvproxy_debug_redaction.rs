@@ -12,7 +12,7 @@ fn gvproxy_config_debug_redacts_ca_pem_fields() {
     let key_sentinel = "----BEGIN PRIVATE KEY----TOPSECRETPKCS8";
     let cert_sentinel = "----BEGIN CERTIFICATE----TOPSECRETCERT";
 
-    let mut config = GvproxyConfig::new(PathBuf::from("/tmp/test-gvproxy.sock"), vec![]);
+    let mut config = GvproxyConfig::new(PathBuf::from("/tmp/test-gvproxy.sock"));
     config.ca_key_pem = Some(key_sentinel.to_string());
     config.ca_cert_pem = Some(cert_sentinel.to_string());
 

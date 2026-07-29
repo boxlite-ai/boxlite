@@ -16,3 +16,10 @@ async def test_simplebox_metrics(shared_runtime):
         metrics = await box.metrics()
         assert metrics is not None
         assert metrics.commands_executed_total >= 1
+
+
+async def test_simplebox_info_is_awaitable(shared_runtime):
+    """Async SimpleBox resolves box metadata through its native handle."""
+    async with boxlite.SimpleBox(image="alpine:latest", runtime=shared_runtime) as box:
+        info = await box.info()
+        assert info.id == box.id

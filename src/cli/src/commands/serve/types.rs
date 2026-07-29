@@ -39,6 +39,9 @@ pub(super) struct CreateBoxRequest {
     /// add one.
     #[serde(default)]
     pub tty: Option<bool>,
+    /// Expert-only container options.
+    #[serde(default)]
+    pub advanced: CreateBoxAdvancedOptions,
     #[serde(default)]
     pub network: Option<NetworkSpec>,
     #[serde(default)]
@@ -57,6 +60,19 @@ pub(super) struct CreateBoxRequest {
     // serde_json::from_str — there is no quiet fall-through. See
     // `build_box_options_rejects_client_supplied_security_*` tests
     // below for the wire-shape pin.
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct CreateBoxAdvancedOptions {
+    pub capabilities: ContainerCapabilitiesRequest,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct ContainerCapabilitiesRequest {
+    pub add: Vec<String>,
+    pub drop: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -161,6 +177,7 @@ pub(super) struct ServerConfig {
 
 #[derive(Serialize)]
 pub(super) struct ServerCapabilities {
+    pub linux_capabilities_enabled: bool,
     pub snapshots_enabled: bool,
     pub clone_enabled: bool,
     pub export_enabled: bool,

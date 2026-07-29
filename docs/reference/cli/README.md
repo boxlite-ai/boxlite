@@ -246,7 +246,7 @@ The box's lifetime is that command's lifetime. When it exits, the box stops and
 takes the command's exit code; `boxlite ps` shows it stopped and
 `boxlite inspect -f '{{.State.ExitCode}}'` gives the code.
 
-**Options:** Uses [`ProcessFlags`](#processflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags), plus:
+**Options:** Uses [`ProcessFlags`](#processflags) + [`CapabilityFlags`](#capabilityflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags), plus:
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -266,6 +266,7 @@ boxlite run -it --rm alpine:latest /bin/sh
 boxlite run -d --name web -p 8080:80 nginx:alpine
 boxlite run -v $(pwd):/work -w /work alpine:latest ls -la
 boxlite run --cpus 4 --memory 4096 python:slim python -c "print(2+2)"
+boxlite run --cap-add SYS_ADMIN --cap-drop NET_RAW alpine:latest sh
 boxlite run --rootfs /path/to/rootfs /bin/sh
 ```
 
@@ -321,7 +322,7 @@ implicitly, because starting it runs that command. Start it deliberately with
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
 | `--workdir PATH` | `-w` | Working directory inside the box |
 
-Also uses [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
+Also uses [`CapabilityFlags`](#capabilityflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
 
 > Note: `create` accepts `--env` and `--workdir` directly rather than via `ProcessFlags` (no `-i`/`-t`/`-u` here, since no command is being executed).
 
@@ -330,6 +331,7 @@ Also uses [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + 
 ```bash
 boxlite create --name mybox alpine:latest
 boxlite create -p 8080:80 -v /data:/app/data --name web nginx:alpine
+boxlite create --cap-drop ALL --cap-add NET_BIND_SERVICE --name web nginx:alpine
 boxlite create --rootfs /path/to/rootfs --name local-rootfs
 ```
 
@@ -613,6 +615,21 @@ Used by `run` and `exec` (defined at `src/cli/src/cli.rs:208-281`).
 
 `--tty` implies `--interactive` when stdin is a TTY. `--tty` without a TTY-attached stdin is a hard error.
 
+### `CapabilityFlags`
+
+Used by `run` and `create` to adjust the Linux capability set inherited by the
+container's init and every later `exec` process.
+
+| Flag | Description |
+|------|-------------|
+| `--cap-add CAPABILITY` | Add a capability; repeatable |
+| `--cap-drop CAPABILITY` | Drop a capability; repeatable |
+
+Names are case-insensitive and may include the `CAP_` prefix. `ALL` is
+supported. With neither flag, BoxLite keeps its Docker-compatible 14-capability
+baseline. `--cap-drop ALL --cap-add NET_BIND_SERVICE` creates a minimal set
+containing only `NET_BIND_SERVICE`.
+
 ### `ResourceFlags`
 
 Used by `run` and `create` (defined at `src/cli/src/cli.rs:287-310`).
@@ -625,13 +642,13 @@ Used by `run` and `create` (defined at `src/cli/src/cli.rs:287-310`).
 
 ### `PublishFlags`
 
-Used by `run` and `create` (defined at `src/cli/src/cli.rs:316-337`).
+Used by `run` and `create` (defined at `src/cli/src/cli.rs:489-559`).
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--publish PORT` | `-p` | Publish a box port to the host; repeatable (see [Port Publish Syntax](#port-publish-syntax)) |
 
-UDP is accepted syntactically but currently forwarded as TCP — a warning is printed on the first UDP mapping.
+TCP is the only supported publication protocol; UDP is rejected.
 
 ### `VolumeFlags`
 
@@ -680,20 +697,25 @@ The anonymous-volume base directory is resolved as: `--home`, else `$BOXLITE_HOM
 
 ## Port Publish Syntax
 
-`-p`/`--publish` accepts the grammar implemented at `src/cli/src/cli.rs:344-394`:
+`-p`/`--publish` accepts the grammar implemented at
+`src/cli/src/cli.rs:489-559`:
 
 ```
-PORT := [HOST_PORT ':'] BOX_PORT ['/' ('tcp' | 'udp')]
+PORT := [HOST_PORT ':'] BOX_PORT ['/tcp']
 ```
 
 | Form | Example | Behavior |
 |------|---------|----------|
-| `BOX_PORT` | `80` | Forward to the same port on the host |
+| `BOX_PORT` | `80` | Let the OS select an available host port and forward it to box port `80` |
 | `HOST_PORT:BOX_PORT` | `8080:80` | Forward host port `8080` to box port `80` |
-| `BOX_PORT/PROTO` | `5353/udp` | Specify protocol (default: `tcp`) |
 | `HOST_PORT:BOX_PORT/PROTO` | `8080:80/tcp` | Full form |
 
-Ports must be in `1..=65535`. Protocols are case-insensitive. UDP entries are accepted but currently forwarded as TCP (warning is printed once per UDP mapping).
+Ports must be in `1..=65535`. TCP is the only supported protocol; UDP is rejected.
+`-p` is explicit local publication and is rejected for remote REST runtimes.
+For a remote box, use `boxlite network tunnel BOX PORT` to obtain its public
+service URL. For SDK code that must run with either runtime, use the box network
+tunnel API; each tunnel handle represents one connection.
+Image `EXPOSE` declarations remain metadata and do not open host listeners.
 
 ---
 

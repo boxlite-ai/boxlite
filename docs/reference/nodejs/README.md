@@ -9,6 +9,7 @@ Complete API reference for the BoxLite Node.js/TypeScript SDK.
 
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
+- [Network Tunnels](#network-tunnels)
 - [Command Execution](#command-execution)
 - [Box Types](#box-types)
 - [Error Types](#error-types)
@@ -73,7 +74,7 @@ const box = await runtime.create({
 
 // List all boxes
 const boxes = await runtime.listInfo();
-boxes.forEach(info => console.log(`${info.id}: ${info.status}`));
+boxes.forEach(info => console.log(`${info.id}: ${info.state.status}`));
 ```
 
 ---
@@ -104,10 +105,25 @@ Configuration options for creating a box.
 | `env` | `JsEnvVar[]` | `[]` | Environment variables |
 | `volumes` | `JsVolumeSpec[]` | `[]` | Volume mounts |
 | `network` | `NetworkSpec` | `{ mode: "enabled" }` | Structured network configuration |
-| `ports` | `JsPortSpec[]` | `[]` | Port mappings |
+| `ports` | `JsPortSpec[]` | `[]` | Local TCP port mappings; omit `hostPort` for automatic allocation |
 | `secrets` | `Secret[]` | `[]` | Outbound HTTP(S) secret substitution rules |
+| `advanced` | `AdvancedBoxOptions` | `{}` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
 | `autoRemove` | `boolean` | `false` | Auto cleanup when stopped |
 | `detach` | `boolean` | `false` | Survive parent process exit |
+
+Capability policy is intentionally nested with the other expert-only options:
+
+```typescript
+const options = {
+  image: "alpine:latest",
+  advanced: {
+    capabilities: {
+      add: ["NET_BIND_SERVICE"],
+      drop: ["NET_RAW"],
+    },
+  },
+};
+```
 
 #### `NetworkSpec`
 
@@ -145,10 +161,15 @@ interface JsVolumeSpec {
 interface JsPortSpec {
   hostPort?: number;   // None = auto-assign
   guestPort: number;   // Port inside container
-  protocol?: string;   // "tcp" or "udp" (default: "tcp")
+  protocol?: string;   // "tcp" (UDP is rejected)
   hostIp?: string;     // Default: "0.0.0.0"
 }
 ```
+
+Port publication is available only with a local runtime. For code that should
+work with both local and remote runtimes, use `box.network.tunnel(port)`; each
+tunnel handle represents one connection.
+OCI `EXPOSE` declarations do not publish host ports.
 
 #### `Secret`
 
@@ -175,12 +196,13 @@ Handle to a running or stopped box.
 |----------|------|-------------|
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| null` | User-defined name |
+| `network` | `JsNetworkHandle` | Box-scoped tunnel operations |
 
 #### Methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `info()` | `() => JsBoxInfo` | Get box metadata (sync) |
+| `info()` | `() => Promise<JsBoxInfo>` | Get box metadata |
 | `exec()` | `(cmd, args?, env?, tty?) => Promise<JsExecution>` | Execute command |
 | `stop()` | `() => Promise<void>` | Stop the box |
 | `metrics()` | `() => Promise<JsBoxMetrics>` | Get resource metrics |
@@ -195,10 +217,59 @@ Metadata about a box.
 |-------|------|-------------|
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| undefined` | User-defined name |
-| `status` | `string` | Current status: `"Starting"`, `"Running"`, `"Stopped"`, etc. |
+| `state` | `JsBoxStateInfo` | Runtime state with `status`, `running`, and optional `pid` fields |
 | `createdAt` | `string` | Creation timestamp (ISO 8601) |
-| `lastUpdated` | `string` | Last state change (ISO 8601) |
-| `pid` | `number \| undefined` | Process ID (if running) |
+| `image` | `string` | OCI image reference or rootfs path |
+| `cpus` | `number` | Allocated CPU count |
+| `memoryMib` | `number` | Allocated memory in MiB |
+| `network` | `JsNetworkInfo \| null` | Current network configuration and resolved local publications |
+
+```typescript
+interface JsNetworkInfo {
+  mode: string;
+  allowNet: string[];
+  publishedPorts: JsPublishedPort[] | null;
+}
+
+interface JsPublishedPort {
+  guestPort: number;
+  hostIp: string;
+  hostPort: number;
+  protocol: string;
+}
+```
+
+`network === null` means network information is unavailable. Within
+`JsNetworkInfo`, `publishedPorts === null` means the current handle does not know
+the lifecycle's publications, `[]` means there are no active publications, and
+a populated array contains concrete active local bindings. `JsPortSpec` remains
+the request type; resolved output uses `JsPublishedPort` so every reported host
+port is concrete.
+
+`box.info()` always returns a promise. Local metadata reads report
+bindings captured when this handle started or reattached the box; REST metadata
+reads fetch the current server record. A newly loaded local running box has no
+live binding data yet, so box, get, or list info may report
+`publishedPorts === null` until an operation requiring live state reattaches it.
+
+---
+
+## Network Tunnels
+
+`JsBox` and `SimpleBox` expose the same `box.network` workflow.
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Prepare | `await box.network.tunnel(port)` | Return a `JsBoxTunnel` or `BoxTunnel` for one TCP connection |
+| Inspect | `tunnel.endpoint(): string \| number` | Return the remote URI or borrowed local file descriptor |
+| Connect | `await tunnel.connect()` | Consume the tunnel and return its bidirectional connection |
+| Read/write | `await connection.read(maxBytes)`, `await connection.write(data)` | Exchange bytes with the service |
+| Close | `await connection.close()` | Close the connection |
+
+Each tunnel handle carries exactly one connection. Call `tunnel()` again for
+each additional or concurrent connection. This differs from `ports`, which
+creates a persistent, local-only host listener that accepts repeated
+connections from ordinary host applications.
 
 ---
 
@@ -314,6 +385,12 @@ interface SimpleBoxOptions {
   network?: NetworkSpec;
   ports?: PortSpec[];     // Port mappings
   secrets?: Secret[];
+  advanced?: {
+    capabilities?: {
+      add?: string[];     // Add Linux capabilities
+      drop?: string[];    // Remove Linux capabilities
+    };
+  };
 }
 ```
 

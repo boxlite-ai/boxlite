@@ -16,53 +16,173 @@
 //!
 //! Each file has a single, clear responsibility.
 
+pub(in crate::service) mod error;
 #[cfg(target_os = "linux")]
 pub mod exec_handle;
 pub(in crate::service) mod executor;
 pub(in crate::service) mod registry;
 pub(in crate::service) mod state;
 mod timeout;
+pub(crate) mod tty;
 
 // Re-export trait so container module can implement it
 pub(crate) use state::InitHealthCheck;
 
+use crate::service::exec::error::ExecutionError;
 use crate::service::exec::executor::{ContainerExecutor, GuestExecutor};
+use crate::service::exec::state::{ExecutionExit, ExecutionState};
 use crate::service::server::GuestServer;
 use boxlite_shared::{
     constants::executor as executor_const, AttachRequest, ExecError, ExecOutput, ExecRequest,
     ExecResponse, ExecStdin, Execution, KillRequest, KillResponse, ResizeTtyRequest,
     ResizeTtyResponse, SendInputAck, WaitRequest, WaitResponse,
 };
-use futures::stream::Stream;
+use futures::stream::{Stream, StreamExt as _};
 use std::pin::Pin;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
+
+/// The execution core, addressed in native types.
+///
+/// This is the whole contract for driving a running execution, and it is
+/// transport-free on purpose: `impl Execution for GuestServer` below is one
+/// adapter over it, and the in-process SSH server is another. Neither is
+/// privileged, and neither can drift from the other, because the behaviour
+/// lives here rather than in either adapter.
+impl GuestServer {
+    async fn execution(&self, exec_id: &str) -> Result<ExecutionState, ExecutionError> {
+        self.registry
+            .get(exec_id)
+            .await
+            .ok_or_else(|| ExecutionError::NotFound(exec_id.to_string()))
+    }
+
+    /// Stream a running execution's stdout/stderr. One attach per execution.
+    pub(crate) async fn attach_execution(
+        &self,
+        exec_id: &str,
+    ) -> Result<mpsc::Receiver<ExecOutput>, ExecutionError> {
+        info!(execution_id = %exec_id, "attach request");
+        self.execution(exec_id).await?.attach(exec_id).await
+    }
+
+    /// Forward `first` and then everything `stream` yields to the execution's
+    /// stdin. The returned task completes when the stream ends or stdin closes.
+    pub(crate) async fn send_execution_input(
+        &self,
+        first: ExecStdin,
+        stream: impl Stream<Item = Result<ExecStdin, ExecutionError>> + Send + Unpin + 'static,
+    ) -> Result<JoinHandle<Result<(), ExecutionError>>, ExecutionError> {
+        if first.execution_id.is_empty() {
+            return Err(ExecutionError::InvalidArgument(
+                "execution_id is required".into(),
+            ));
+        }
+        let exec_id = first.execution_id.clone();
+        self.execution(&exec_id)
+            .await?
+            .send_input(first, stream)
+            .await
+    }
+
+    /// Wait for exit, already classified — see [`ExecutionState::wait_exit`].
+    pub(crate) async fn wait_execution(
+        &self,
+        exec_id: &str,
+    ) -> Result<ExecutionExit, ExecutionError> {
+        debug!(execution_id = %exec_id, "wait request");
+        Ok(self.execution(exec_id).await?.wait_exit(exec_id).await)
+    }
+
+    /// Signal the execution. `false` means the process had already exited.
+    pub(crate) async fn kill_execution(
+        &self,
+        exec_id: &str,
+        signal: i32,
+        process_group: bool,
+    ) -> Result<bool, ExecutionError> {
+        info!(execution_id = %exec_id, signal, process_group, "kill request");
+        // Resolve before parsing: signal 0 is the conventional liveness probe and
+        // is not a `Signal`, so parsing first would report an unknown execution
+        // as an invalid argument.
+        let state = self.execution(exec_id).await?;
+        let parsed = nix::sys::signal::Signal::try_from(signal)
+            .map_err(|_| ExecutionError::InvalidArgument(format!("signal number {signal}")))?;
+        let sent = state.kill(parsed, process_group).await;
+        if sent {
+            info!(execution_id = %exec_id, signal, "signal sent");
+        } else {
+            info!(execution_id = %exec_id, "failed to send signal");
+        }
+        Ok(sent)
+    }
+
+    /// Resize the execution's PTY.
+    ///
+    /// A device-level refusal — no handle, no PTY, failed ioctl — is an outcome
+    /// rather than an error, because that is what the wire contract reports
+    /// (`success: false` on an otherwise successful call). `Err` is reserved for
+    /// a caller mistake: an out-of-range dimension or an unknown execution.
+    pub(crate) async fn resize_execution_tty(
+        &self,
+        exec_id: &str,
+        rows: u32,
+        cols: u32,
+        x_pixels: u32,
+        y_pixels: u32,
+    ) -> Result<TtyResize, ExecutionError> {
+        // Unwrap the inner detail rather than the rendered `BoxliteError`: both
+        // types render an "invalid argument: " prefix, and nesting them stutters.
+        let dimension = |name, value| {
+            tty::dimension(name, value).map_err(|error| match error {
+                boxlite_shared::errors::BoxliteError::InvalidArgument(detail) => {
+                    ExecutionError::InvalidArgument(detail)
+                }
+                other => ExecutionError::InvalidArgument(other.to_string()),
+            })
+        };
+        let rows = dimension("rows", rows)?;
+        let cols = dimension("cols", cols)?;
+        let x_pixels = dimension("x_pixels", x_pixels)?;
+        let y_pixels = dimension("y_pixels", y_pixels)?;
+
+        info!(execution_id = %exec_id, rows, cols, "resize_tty request");
+        Ok(
+            match self
+                .execution(exec_id)
+                .await?
+                .resize_pty(rows, cols, x_pixels, y_pixels)
+                .await
+            {
+                Ok(()) => {
+                    info!(execution_id = %exec_id, rows, cols, "tty resized");
+                    TtyResize::Resized
+                }
+                Err(error) => {
+                    info!(execution_id = %exec_id, %error, "failed to resize tty");
+                    TtyResize::Rejected(error)
+                }
+            },
+        )
+    }
+}
+
+/// What a resize did, for callers that must distinguish "the terminal refused"
+/// from "you asked for something impossible".
+#[derive(Debug)]
+pub(crate) enum TtyResize {
+    Resized,
+    Rejected(ExecutionError),
+}
 
 #[tonic::async_trait]
 impl Execution for GuestServer {
     async fn exec(&self, request: Request<ExecRequest>) -> Result<Response<ExecResponse>, Status> {
         let req = request.into_inner();
-        let execution_id = req
-            .execution_id
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-        // Validate: execution doesn't already exist
-        if self.registry.exists(&execution_id).await {
-            return Ok(Response::new(error_response(
-                execution_id,
-                "execution_exists",
-                "Execution already exists",
-            )));
-        }
-
-        // Spawn execution
-        let result = spawn_execution(self, execution_id.clone(), req).await;
-        match result {
-            Ok(resp) => Ok(Response::new(resp)),
-            Err(err_resp) => Ok(Response::new(err_resp)),
-        }
+        Ok(Response::new(start_execution(self, req, None).await))
     }
 
     type AttachStream = Pin<Box<dyn Stream<Item = Result<ExecOutput, Status>> + Send + 'static>>;
@@ -71,22 +191,11 @@ impl Execution for GuestServer {
         &self,
         request: Request<AttachRequest>,
     ) -> Result<Response<Self::AttachStream>, Status> {
-        let exec_id = request.into_inner().execution_id;
-        info!(execution_id = %exec_id, "attach request");
-
-        // Get state from registry
-        let state = self
-            .registry
-            .get(&exec_id)
-            .await
-            .ok_or_else(|| Status::not_found(format!("Execution not found: {}", exec_id)))?;
-
-        // Call state directly
-        let rx = state.attach(&exec_id).await?;
-
-        Ok(Response::new(
-            Box::pin(ReceiverStream::new(rx)) as Self::AttachStream
-        ))
+        let rx = self
+            .attach_execution(&request.into_inner().execution_id)
+            .await?;
+        let stream = ReceiverStream::new(rx).map(Ok);
+        Ok(Response::new(Box::pin(stream) as Self::AttachStream))
     }
 
     async fn send_input(
@@ -95,139 +204,44 @@ impl Execution for GuestServer {
     ) -> Result<Response<SendInputAck>, Status> {
         let mut stream = request.into_inner();
 
-        // First message must carry execution_id
+        // First message must carry execution_id.
         let first = stream
             .message()
             .await?
             .ok_or_else(|| Status::invalid_argument("Empty stdin stream"))?;
 
-        let exec_id = first.execution_id.clone();
-        if exec_id.is_empty() {
-            return Err(Status::invalid_argument("execution_id is required"));
-        }
+        let rest = stream.map(|msg| msg.map_err(|status| ExecutionError::Input(Box::new(status))));
+        let task = self.send_execution_input(first, Box::pin(rest)).await?;
 
-        // Get state from registry
-        let state = self
-            .registry
-            .get(&exec_id)
-            .await
-            .ok_or_else(|| Status::not_found(format!("Execution not found: {}", exec_id)))?;
-
-        // Call state directly
-        let task = state.send_input(first, stream).await?;
-
-        // Wait for task to complete
         match task.await {
             Ok(Ok(())) => Ok(Response::new(SendInputAck {})),
-            Ok(Err(e)) => Err(e),
-            Err(e) => Err(Status::internal(format!("Stdin task panicked: {}", e))),
+            Ok(Err(error)) => Err(error.into()),
+            Err(error) => Err(Status::internal(format!("Stdin task panicked: {error}"))),
         }
     }
 
     async fn wait(&self, request: Request<WaitRequest>) -> Result<Response<WaitResponse>, Status> {
-        use exec_handle::ExitStatus;
-
-        let exec_id = request.into_inner().execution_id;
-        debug!(execution_id = %exec_id, "wait request");
-
-        // Get state from registry
-        let state = self
-            .registry
-            .get(&exec_id)
-            .await
-            .ok_or_else(|| Status::not_found(format!("Execution not found: {}", exec_id)))?;
-
-        // Wait for process to exit
-        let exit_status = state.wait_process().await;
-
-        let (exit_code, signal, error_message) = match exit_status {
-            ExitStatus::Code(code) => {
-                debug!(
-                    execution_id = %exec_id,
-                    exit_code = code,
-                    "Process exited with code"
-                );
-                (code, 0, String::new())
-            }
-            ExitStatus::Signal(sig) => {
-                let mut error_msg = String::new();
-                // When a process gets SIGKILL, check if container init died.
-                // PID namespace teardown sends SIGKILL to all processes when init exits.
-                if sig == nix::sys::signal::Signal::SIGKILL {
-                    if let Some(diagnosis) = state.check_container_death().await {
-                        warn!(
-                            execution_id = %exec_id,
-                            signal = sig as i32,
-                            diagnosis = %diagnosis,
-                            "Process killed by container init death (PID namespace teardown). \
-                             The container's init process exited, causing all exec'd processes \
-                             to receive SIGKILL."
-                        );
-                        error_msg = diagnosis;
-                    }
-                }
-                debug!(
-                    execution_id = %exec_id,
-                    signal = sig as i32,
-                    "Process exited due to signal"
-                );
-                (0, sig as i32, error_msg)
-            }
-        };
-
+        let exit = self
+            .wait_execution(&request.into_inner().execution_id)
+            .await?;
         Ok(Response::new(WaitResponse {
-            exit_code,
-            signal,
+            exit_code: exit.exit_code,
+            signal: exit.signal,
             timed_out: false,
             duration_ms: 0,
-            error_message,
+            error_message: exit.error_message,
         }))
     }
 
     async fn kill(&self, request: Request<KillRequest>) -> Result<Response<KillResponse>, Status> {
-        use nix::sys::signal::Signal;
-
         let req = request.into_inner();
-        info!(
-            execution_id = %req.execution_id,
-            signal = req.signal,
-            "kill request"
-        );
-
-        // Get state from registry
-        let state = self.registry.get(&req.execution_id).await.ok_or_else(|| {
-            Status::not_found(format!("Execution not found: {}", req.execution_id))
-        })?;
-
-        // Parse signal
-        let signal = Signal::try_from(req.signal).map_err(|_| {
-            Status::invalid_argument(format!("Invalid signal number: {}", req.signal))
-        })?;
-
-        // Send signal
-        match state.kill(signal).await {
-            true => {
-                info!(
-                    execution_id = %req.execution_id,
-                    signal = req.signal,
-                    "signal sent"
-                );
-                Ok(Response::new(KillResponse {
-                    success: true,
-                    error: None,
-                }))
-            }
-            false => {
-                info!(
-                    execution_id = %req.execution_id,
-                    "failed to send signal"
-                );
-                Ok(Response::new(KillResponse {
-                    success: false,
-                    error: Some("Failed to send signal".to_string()),
-                }))
-            }
-        }
+        let sent = self
+            .kill_execution(&req.execution_id, req.signal, req.process_group)
+            .await?;
+        Ok(Response::new(KillResponse {
+            success: sent,
+            error: (!sent).then(|| "Failed to send signal".to_string()),
+        }))
     }
 
     async fn resize_tty(
@@ -235,53 +249,54 @@ impl Execution for GuestServer {
         request: Request<ResizeTtyRequest>,
     ) -> Result<Response<ResizeTtyResponse>, Status> {
         let req = request.into_inner();
-
-        info!(
-            execution_id = %req.execution_id,
-            rows = req.rows,
-            cols = req.cols,
-            "resize_tty request"
-        );
-
-        // Get state from registry
-        let state = self.registry.get(&req.execution_id).await.ok_or_else(|| {
-            Status::not_found(format!("Execution not found: {}", req.execution_id))
-        })?;
-
-        // Call state directly
-        match state
-            .resize_pty(
-                req.rows as u16,
-                req.cols as u16,
-                req.x_pixels as u16,
-                req.y_pixels as u16,
+        let outcome = self
+            .resize_execution_tty(
+                &req.execution_id,
+                req.rows,
+                req.cols,
+                req.x_pixels,
+                req.y_pixels,
             )
-            .await
-        {
-            Ok(()) => {
-                info!(
-                    execution_id = %req.execution_id,
-                    rows = req.rows,
-                    cols = req.cols,
-                    "tty resized"
-                );
-                Ok(Response::new(ResizeTtyResponse {
-                    success: true,
-                    error: None,
-                }))
-            }
-            Err(e) => {
-                info!(
-                    execution_id = %req.execution_id,
-                    error = %e,
-                    "failed to resize tty"
-                );
-                Ok(Response::new(ResizeTtyResponse {
-                    success: false,
-                    error: Some(e.to_string()),
-                }))
-            }
-        }
+            .await?;
+        Ok(Response::new(match outcome {
+            TtyResize::Resized => ResizeTtyResponse {
+                success: true,
+                error: None,
+            },
+            TtyResize::Rejected(reason) => ResizeTtyResponse {
+                success: false,
+                error: Some(reason.to_string()),
+            },
+        }))
+    }
+}
+
+/// Start a typed workload selected by the in-process SSH server. This entry
+/// point is intentionally outside the public Execution RPC contract.
+pub(crate) async fn start_ssh_execution(
+    server: &GuestServer,
+    req: ExecRequest,
+    workload: crate::service::ssh::SshWorkload,
+) -> ExecResponse {
+    start_execution(server, req, Some(workload)).await
+}
+
+async fn start_execution(
+    server: &GuestServer,
+    req: ExecRequest,
+    ssh_workload: Option<crate::service::ssh::SshWorkload>,
+) -> ExecResponse {
+    let execution_id = req
+        .execution_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    if server.registry.exists(&execution_id).await {
+        return error_response(execution_id, "execution_exists", "Execution already exists");
+    }
+
+    match spawn_execution(server, execution_id, req, ssh_workload).await {
+        Ok(response) | Err(response) => response,
     }
 }
 
@@ -290,6 +305,7 @@ async fn spawn_execution(
     server: &GuestServer,
     execution_id: String,
     req: ExecRequest,
+    ssh_workload: Option<crate::service::ssh::SshWorkload>,
 ) -> Result<ExecResponse, ExecResponse> {
     let started_at_ms = now_ms();
 
@@ -300,7 +316,8 @@ async fn spawn_execution(
     let spawned_at = std::time::Instant::now();
 
     // Step 1: Spawn process using executor selected by BOXLITE_EXECUTOR env var
-    let (child, container_ref) = spawn_with_executor(server, &req, &execution_id).await?;
+    let (child, container_ref) =
+        spawn_with_executor(server, &req, &execution_id, ssh_workload).await?;
 
     let pid = child.pid().as_raw() as u32;
 
@@ -389,6 +406,7 @@ async fn spawn_with_executor(
     server: &GuestServer,
     req: &ExecRequest,
     execution_id: &str,
+    ssh_workload: Option<crate::service::ssh::SshWorkload>,
 ) -> Result<
     (
         exec_handle::ExecHandle,
@@ -402,6 +420,12 @@ async fn spawn_with_executor(
 
     match executor_value {
         Some(executor_const::GUEST) | None | Some("") => {
+            if ssh_workload.is_some() {
+                return Err(spawn_error(
+                    execution_id,
+                    "internal SSH workloads require a container executor".into(),
+                ));
+            }
             // Guest executor (explicit or default)
             debug!(execution_id = %execution_id, "Using GuestExecutor");
             let handle = GuestExecutor
@@ -471,7 +495,11 @@ async fn spawn_with_executor(
             };
             let executor = ContainerExecutor::new(container_arc);
             let container_ref = executor.container_ref();
-            let handle = match executor.spawn(req).await {
+            let spawn = match ssh_workload {
+                Some(workload) => executor.spawn_ssh_workload(req, workload).await,
+                None => executor.spawn(req).await,
+            };
+            let handle = match spawn {
                 Ok(h) => h,
                 Err(e) => {
                     // Check if container init died — provide actionable diagnostics

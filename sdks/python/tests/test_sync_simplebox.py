@@ -65,14 +65,12 @@ class TestSyncSimpleBox:
             result = box.exec("sh", "-c", "exit 42")
             assert result.exit_code == 42
 
-    def test_info(self, shared_sync_runtime):
-        """Can get box info."""
+    def test_has_no_sync_info(self, shared_sync_runtime):
+        """Box metadata is available only from the async API."""
         with SyncSimpleBox(
             image="alpine:latest", cpus=2, runtime=shared_sync_runtime
         ) as box:
-            info = box.info()
-            assert info.id == box.id
-            assert info.cpus == 2
+            assert not hasattr(box, "info")
 
     def test_metrics(self, shared_sync_runtime):
         """Can get box metrics."""

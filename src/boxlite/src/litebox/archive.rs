@@ -15,20 +15,49 @@ use crate::disk::constants::filenames as disk_filenames;
 /// Manifest filename inside the archive.
 pub(crate) const MANIFEST_FILENAME: &str = "manifest.json";
 
-/// Current archive format version.
+/// Archive format version for configurations a v3 importer reads correctly.
 pub(crate) const ARCHIVE_VERSION: u32 = 3;
 
+/// First archive version that carries a custom Linux capability policy.
+///
+/// A pre-capability importer accepts up to v3 and would silently drop
+/// `advanced.capabilities`, starting the box with wider privileges than the
+/// archive asked for. Stamping v4 makes that importer refuse the archive.
+pub(crate) const CAPABILITY_POLICY_ARCHIVE_VERSION: u32 = 4;
+
+/// First archive version whose `ports` carry publication semantics.
+///
+/// Up to v4 an importer reused the guest port for a null `host_port` and
+/// ignored `host_ip` and `protocol` entirely. It would read a v5 mapping under
+/// those rules and bind the wrong port, or bind every interface where the
+/// archive asked for one — so any archive that carries ports at all is stamped
+/// v5, and the importer canonicalizes anything below it.
+pub(crate) const PUBLISHED_PORTS_ARCHIVE_VERSION: u32 = 5;
+
 /// Maximum archive version this build can import.
-pub(crate) const MAX_SUPPORTED_VERSION: u32 = 3;
+pub(crate) const MAX_SUPPORTED_VERSION: u32 = PUBLISHED_PORTS_ARCHIVE_VERSION;
+
+/// Pick the archive format an exported box needs.
+pub(crate) fn archive_version_for_options(options: &crate::runtime::options::BoxOptions) -> u32 {
+    if !options.ports.is_empty() {
+        PUBLISHED_PORTS_ARCHIVE_VERSION
+    } else if options.advanced.capabilities.is_empty() {
+        ARCHIVE_VERSION
+    } else {
+        CAPABILITY_POLICY_ARCHIVE_VERSION
+    }
+}
 
 /// Archive manifest stored as `manifest.json` inside exported archives.
 ///
 /// v1: plain tar, no checksums
 /// v2: tar.zst with checksums
 /// v3: adds `box_options` for full configuration preservation
+/// v4: `box_options.advanced` carries a custom capability policy
+/// v5: `ports` carry publication semantics (automatic host port, bind IP)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArchiveManifest {
-    /// Archive format version (1, 2, or 3).
+    /// Archive format version (1 through 5).
     pub version: u32,
     /// Original box name (optional, may be renamed on import).
     pub box_name: Option<String>,
@@ -238,6 +267,88 @@ pub(crate) fn sha256_file(path: &Path) -> BoxliteResult<String> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// An export must not be readable by an importer that would drop part of
+    /// its configuration: capability policies are stamped v4, published ports
+    /// v5, ordinary boxes v3.
+    ///
+    /// The literals are the compatibility boundary itself — a pre-capability
+    /// importer accepts up to 3, a pre-publication one up to 4 — so pin them,
+    /// not just the branch.
+    #[test]
+    fn configuration_an_older_importer_would_drop_raises_the_archive_version() {
+        assert_eq!(ARCHIVE_VERSION, 3);
+        assert_eq!(CAPABILITY_POLICY_ARCHIVE_VERSION, 4);
+        assert_eq!(PUBLISHED_PORTS_ARCHIVE_VERSION, 5);
+
+        let ordinary = crate::runtime::options::BoxOptions::default();
+        assert_eq!(archive_version_for_options(&ordinary), ARCHIVE_VERSION);
+
+        let custom = crate::runtime::options::BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                capabilities: crate::runtime::advanced_options::ContainerCapabilities {
+                    drop: vec!["NET_RAW".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            archive_version_for_options(&custom),
+            CAPABILITY_POLICY_ARCHIVE_VERSION
+        );
+
+        // Every port field gained meaning in v5. A fixed mapping with a bind IP
+        // is the case a v3 stamp would lose silently: an older importer drops
+        // host_ip and publishes on every interface.
+        for ports in [
+            vec![crate::runtime::options::PortSpec {
+                host_port: None,
+                guest_port: 3000,
+                protocol: crate::runtime::options::PortProtocol::Tcp,
+                host_ip: None,
+            }],
+            vec![crate::runtime::options::PortSpec {
+                host_port: Some(18080),
+                guest_port: 80,
+                protocol: crate::runtime::options::PortProtocol::Tcp,
+                host_ip: Some("127.0.0.1".to_string()),
+            }],
+        ] {
+            let published = crate::runtime::options::BoxOptions {
+                ports,
+                ..Default::default()
+            };
+            assert_eq!(
+                archive_version_for_options(&published),
+                PUBLISHED_PORTS_ARCHIVE_VERSION
+            );
+        }
+    }
+
+    /// Regression: the export stamp and the importer's canonicalization window
+    /// have to agree. When they drift, a box exported by this build re-imports
+    /// through `normalize_legacy_ports`, which clears `host_ip` — turning a
+    /// loopback publication into one on every interface.
+    #[test]
+    fn this_builds_port_exports_are_never_canonicalized_on_import() {
+        let published = crate::runtime::options::BoxOptions {
+            ports: vec![crate::runtime::options::PortSpec {
+                host_port: Some(18080),
+                guest_port: 80,
+                protocol: crate::runtime::options::PortProtocol::Tcp,
+                host_ip: Some("127.0.0.1".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        assert!(
+            archive_version_for_options(&published) >= PUBLISHED_PORTS_ARCHIVE_VERSION,
+            "an export carrying ports must be stamped at or above the version \
+             below which the importer rewrites them"
+        );
+    }
 
     #[test]
     fn test_extract_zstd_archive_via_magic_bytes() {

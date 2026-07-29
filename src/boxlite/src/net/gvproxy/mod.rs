@@ -38,7 +38,7 @@ mod services;
 mod stats;
 
 // Re-export public API
-pub use config::{DnsRecord, DnsZone, GvproxyConfig, GvproxySecretConfig, PortMapping};
+pub use config::{DnsRecord, DnsZone, GvproxyConfig, GvproxySecretConfig};
 #[cfg(feature = "gvproxy")]
 pub use instance::GvproxyInstance;
 #[cfg(feature = "gvproxy")]

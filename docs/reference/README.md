@@ -182,6 +182,25 @@ Host-side secret substitution rules for outbound HTTP(S) requests.
 - The placeholder is also exposed as `BOXLITE_SECRET_<NAME>` inside the guest.
 - C SDK users configure secrets with `boxlite_options_add_secret()`.
 
+#### `advanced.capabilities`
+
+Linux capability overrides for the container's init and all later exec
+processes. Both lists default to empty, preserving BoxLite's Docker-compatible
+14-capability baseline.
+
+- Names are case-insensitive and accept either `NET_ADMIN` or `CAP_NET_ADMIN`.
+- `ALL` is supported in either list.
+- Without `ALL`, drops are applied to the baseline before explicit additions,
+  so the same specifically named capability in both lists remains enabled.
+- With `add=["ALL"]`, explicit drops win, matching Docker.
+- Use `drop=["ALL"]` with explicit additions to construct a minimal set.
+- Malformed names are rejected at the API boundary. A well-formed name that the
+  bundled guest runtime does not support is rejected during container initialization.
+- A remote client and the host both check support before creating a box; a
+  custom policy is rejected rather than ignored when either side is too old.
+- The resolved set is applied to OCI bounding, effective, and permitted sets.
+  Inheritable and ambient capabilities stay unset; they are not implied by `add`.
+
 #### `cpus: int`
 
 Number of CPU cores allocated to the box.
@@ -312,7 +331,8 @@ volumes=[
 
 Port forwarding as (host_port, guest_port, protocol) tuples.
 
-**Format:** `(host_port, guest_port, "tcp"|"udp")`
+**Format:** `(host_port, guest_port, "tcp")`, or a dictionary with
+`guest_port` and no `host_port` to request an automatic host port.
 
 **Default:** `[]` (no port forwarding)
 
@@ -322,16 +342,20 @@ ports=[
     (8080, 80, "tcp"),      # HTTP
     (8443, 443, "tcp"),     # HTTPS
     (5432, 5432, "tcp"),    # PostgreSQL
-    (53, 53, "udp"),        # DNS
     (3000, 8000, "tcp"),    # Custom mapping
+    {"guest_port": 3000},   # OS-selected host port
 ]
 ```
 
 **Notes:**
 - Uses gvproxy for NAT port mapping
 - Host port must be available (not in use)
-- Multiple boxes can forward to same host port (error if conflict)
-- Supports both TCP and UDP protocols
+- Fixed host ports must be unique and available
+- TCP is supported; UDP is rejected
+- Port publication is local-only and owns a listener that accepts repeated
+  connections. For portable local/remote SDK code, use
+  `box.network.tunnel(port)`; each tunnel handle represents one connection.
+- OCI `EXPOSE` is metadata and does not publish a host port.
 - Port mappings are only for host → box traffic. Use
   `host.boxlite.internal:<port>` for box → host loopback traffic.
 
@@ -576,7 +600,7 @@ Error: portal error: connection timeout
 
 **Solution:**
 - Enable debug logging: `RUST_LOG=debug`
-- Check if box is running: `box.info().status`
+- Check if box is running: `box.info().await?.status`
 - Restart box: `box.stop()` and recreate
 - Report issue with logs if persists
 
@@ -668,7 +692,7 @@ Error: box not found: 01JJNH8...
 ```
 
 **Solution:**
-- List all boxes: `runtime.list()`
+- List all boxes: `await runtime.list_info()`
 - Verify box ID is correct
 - Create new box if needed
 
@@ -705,8 +729,8 @@ Error: invalid state: cannot execute on stopped box
 ```
 
 **Solution:**
-- Check box status: `info = await box.info(); print(info.status)`
-- Restart box if stopped: `runtime.get(box_id)` (may auto-restart)
+- Check box status: `info = await box.info(); print(info.state.status)`
+- Restart box if stopped: `await runtime.get(box_id)` (may auto-restart)
 - Create new box if needed
 
 ### Error Handling Patterns

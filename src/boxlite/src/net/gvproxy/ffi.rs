@@ -148,7 +148,7 @@ mod tests {
     fn test_ffi_create_destroy() {
         use std::path::PathBuf;
         let socket_path = PathBuf::from("/tmp/test-gvproxy-ffi.sock");
-        let config = GvproxyConfig::new(socket_path, vec![(8080, 80), (8443, 443)]);
+        let config = GvproxyConfig::new(socket_path);
         let id = create_instance(&config).unwrap();
 
         // Destroy instance

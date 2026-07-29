@@ -26,7 +26,6 @@ use crate::volumes::{
 use async_trait::async_trait;
 use boxlite_shared::BoxTransport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub struct VmmSpawnTask;
@@ -237,7 +236,8 @@ async fn build_config(
 
     // The box's one network backend: it produces the wire spec now, and is
     // threaded on to LiveState (via the init ctx) for runtime control.
-    let network_backend = build_network_backend(container_image_config, options, layout, runtime);
+    warn_unpublished_exposed_ports(container_image_config, options);
+    let network_backend = build_network_backend(options, layout, runtime)?;
     let network_backend_spec = network_backend.as_ref().map(|backend| backend.spec());
 
     // Assemble VMM instance spec
@@ -246,6 +246,7 @@ async fn build_config(
         // Box identification and security
         box_id: box_id.to_string(),
         security: options.advanced.security.clone(),
+        nested_virtualization: options.advanced.nested_virtualization,
         // VM resources
         cpus: options.cpus,
         memory_mib: options.memory_mib,
@@ -346,48 +347,24 @@ fn build_guest_entrypoint(
     Ok(builder.build())
 }
 
-/// Create the box's **one** network backend by routing box-level policy (port
-/// mappings + allowlist) through the abstraction: assemble a
+/// Create the box's **one** network backend by routing box-level policy through
+/// the abstraction: assemble a
 /// [`NetworkBackendConfig`] and hand it to the factory. `None` when networking is
 /// disabled. The returned backend is used for both
 /// its wire spec (`spec()`) and, threaded on to `LiveState`, runtime control — no
 /// caller here names a concrete backend.
 fn build_network_backend(
-    container_image_config: &crate::images::ContainerImageConfig,
     options: &crate::runtime::options::BoxOptions,
     layout: &BoxFilesystemLayout,
     runtime: &SharedRuntimeImpl,
-) -> Option<Box<dyn NetworkBackend>> {
+) -> BoxliteResult<Option<Box<dyn NetworkBackend>>> {
     // Disabled = no network at all.
     let allow_net = match &options.network {
         crate::runtime::options::NetworkSpec::Enabled { allow_net } => allow_net.clone(),
-        crate::runtime::options::NetworkSpec::Disabled => return None,
+        crate::runtime::options::NetworkSpec::Disabled => return Ok(None),
     };
 
-    // Port mappings (box-level policy): image EXPOSE gets a default 1:1 mapping
-    // unless the user overrode that guest port; user `-p` mappings always apply.
-    let mut port_map: HashMap<u16, u16> = HashMap::new();
-    let user_guest_ports: HashSet<u16> = options.ports.iter().map(|p| p.guest_port).collect();
-    for port in container_image_config.tcp_ports() {
-        if !user_guest_ports.contains(&port) {
-            port_map.insert(port, port);
-        }
-    }
-    for port in &options.ports {
-        let host_port = port.host_port.unwrap_or(port.guest_port);
-        port_map.insert(host_port, port.guest_port);
-    }
-    let final_mappings: Vec<(u16, u16)> = port_map.into_iter().collect();
-
-    tracing::info!(
-        "Port mappings: {} (image: {}, user: {})",
-        final_mappings.len(),
-        container_image_config.exposed_ports.len(),
-        options.ports.len(),
-    );
-
     let config = NetworkBackendConfig {
-        port_mappings: final_mappings,
         socket_path: layout.net_backend_socket_path(),
         allow_net,
         secrets: options.secrets.clone(),
@@ -395,7 +372,44 @@ fn build_network_backend(
     };
 
     // Hand the config to the backend abstraction — the one backend for this box.
-    runtime.network_factory.create(&config)
+    Ok(runtime.network_factory.create(&config))
+}
+
+fn unpublished_exposed_tcp_ports(
+    image_config: &ContainerImageConfig,
+    options: &BoxOptions,
+) -> Vec<u16> {
+    if matches!(
+        options.network,
+        crate::runtime::options::NetworkSpec::Disabled
+    ) {
+        return Vec::new();
+    }
+
+    let published_guest_ports = options
+        .ports
+        .iter()
+        .map(|mapping| mapping.guest_port)
+        .collect::<std::collections::HashSet<_>>();
+    let mut unpublished_ports = image_config
+        .tcp_ports()
+        .into_iter()
+        .filter(|port| !published_guest_ports.contains(port))
+        .collect::<Vec<_>>();
+    unpublished_ports.sort_unstable();
+    unpublished_ports.dedup();
+    unpublished_ports
+}
+
+fn warn_unpublished_exposed_ports(image_config: &ContainerImageConfig, options: &BoxOptions) {
+    let guest_ports = unpublished_exposed_tcp_ports(image_config, options);
+    if !guest_ports.is_empty() {
+        tracing::warn!(
+            ?guest_ports,
+            "Image EXPOSE declarations are metadata only; publish these guest ports explicitly \
+             with BoxOptions.ports (CLI: -p GUEST_PORT) or use a network tunnel"
+        );
+    }
 }
 
 /// Spawn VM subprocess and return handler.
@@ -414,4 +428,46 @@ async fn spawn_vm(
     )?;
 
     controller.start(config).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::images::ContainerImageConfig;
+    use crate::runtime::options::{PortProtocol, PortSpec};
+
+    #[test]
+    fn reports_only_exposed_tcp_ports_without_explicit_publication() {
+        let image_config = ContainerImageConfig {
+            exposed_ports: vec![
+                "3000/tcp".to_string(),
+                "8080".to_string(),
+                "53/udp".to_string(),
+            ],
+            ..Default::default()
+        };
+        let options = BoxOptions {
+            ports: vec![PortSpec {
+                host_port: None,
+                guest_port: 8080,
+                protocol: PortProtocol::Tcp,
+                host_ip: None,
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            unpublished_exposed_tcp_ports(&image_config, &options),
+            vec![3000]
+        );
+
+        let disabled_options = BoxOptions {
+            network: crate::runtime::options::NetworkSpec::Disabled,
+            ..Default::default()
+        };
+        assert!(
+            unpublished_exposed_tcp_ports(&image_config, &disabled_options).is_empty(),
+            "disabled networking never created implicit EXPOSE listeners"
+        );
+    }
 }

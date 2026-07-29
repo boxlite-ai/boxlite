@@ -3,7 +3,8 @@ mod pid_file;
 pub mod process;
 
 pub use binary_finder::{RuntimeBinaryFinder, find_binary};
-pub use pid_file::{PidFileReader, PidFileWriter, PidRecord, ProcessIdentity};
+pub use pid_file::{PidFileReader, PidRecord, ProcessIdentity};
+pub(crate) use pid_file::{PidFileWriter, ShimPidRecord};
 
 use std::path::PathBuf;
 use std::process::Command;

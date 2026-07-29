@@ -90,7 +90,7 @@ pub enum BoxlitePortProtocol {
 
 /// Forward `host_port` on the host to `guest_port` inside the box.
 ///
-/// - `host_port`: 0 = use the same number as `guest_port`.
+/// - `host_port`: 0 = let the OS select an available host port.
 /// - `guest_port`: required, 1-65535.
 /// - `host_ip`: bind address; NULL or "" = all host interfaces.
 ///
@@ -190,7 +190,7 @@ pub unsafe extern "C" fn boxlite_options_set_detach(opts: *mut CBoxliteOptions, 
     options_set_detach(opts, val)
 }
 
-/// Apply a `CAdvancedBoxOptions` (security, mount isolation, health check) to a
+/// Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
 /// `CBoxliteOptions`. Clones the advanced configuration into the box options —
 /// the caller retains ownership of `advanced_opts` and is responsible for
 /// freeing it via `boxlite_advanced_options_free`.

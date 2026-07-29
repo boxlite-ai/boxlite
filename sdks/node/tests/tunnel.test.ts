@@ -9,7 +9,7 @@ vi.mock("../lib/native.js", () => ({
   }),
 }));
 
-describe("SimpleBox tunnels", () => {
+describe("SimpleBox", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -50,5 +50,25 @@ describe("SimpleBox tunnels", () => {
     expect(first).toBe(connection);
     await expect(tunnel.connect()).rejects.toThrow("already been consumed");
     expect(connect).toHaveBeenCalledTimes(2);
+  });
+
+  test("info resolves asynchronously", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const metadata = { id: "box-1" };
+    const info = vi.fn(async () => metadata);
+    const box = new SimpleBox({ image: "alpine:latest" }) as SimpleBox & {
+      _box: { info: typeof info };
+    };
+    box._box = { info };
+
+    await expect(box.info()).resolves.toBe(metadata);
+    expect(info).toHaveBeenCalledOnce();
+  });
+
+  test("info rejects asynchronously before box creation", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const box = new SimpleBox({ image: "alpine:latest" });
+
+    await expect(box.info()).rejects.toThrow("Box not yet created");
   });
 });

@@ -2,6 +2,7 @@ package boxlite
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"unsafe"
 )
@@ -270,6 +271,73 @@ func TestBoxOptions(t *testing.T) {
 	}
 }
 
+func TestAdvancedOptionsSetCapabilitiesDeepCopies(t *testing.T) {
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatalf("NewAdvancedBoxOptions: %v", err)
+	}
+	defer advanced.Close()
+
+	policy := ContainerCapabilities{
+		Add:  []string{"NET_ADMIN", "SYS_PTRACE"},
+		Drop: []string{"MKNOD", "NET_RAW"},
+	}
+	if err := advanced.SetCapabilities(policy); err != nil {
+		t.Fatalf("SetCapabilities: %v", err)
+	}
+	policy.Add[0] = "CHOWN"
+	policy.Drop[0] = "SETUID"
+
+	wantAdd := []string{"NET_ADMIN", "SYS_PTRACE"}
+	wantDrop := []string{"MKNOD", "NET_RAW"}
+	if !reflect.DeepEqual(advanced.capabilities.Add, wantAdd) {
+		t.Fatalf("advanced.capabilities.add: got %v, want %v", advanced.capabilities.Add, wantAdd)
+	}
+	if !reflect.DeepEqual(advanced.capabilities.Drop, wantDrop) {
+		t.Fatalf("advanced.capabilities.drop: got %v, want %v", advanced.capabilities.Drop, wantDrop)
+	}
+
+	cfg := &boxConfig{}
+	WithAdvancedOptions(advanced)(cfg)
+	if err := buildAndFreeCOptions("alpine:latest", cfg); err != nil {
+		t.Fatalf("nested capability options must apply cleanly: %v", err)
+	}
+}
+
+func TestSetCapabilitiesRejectsEmbeddedNUL(t *testing.T) {
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatalf("NewAdvancedBoxOptions: %v", err)
+	}
+	defer advanced.Close()
+
+	err = advanced.SetCapabilities(ContainerCapabilities{Add: []string{"SYS_ADMIN\x00garbage"}})
+	if err == nil {
+		t.Fatal("embedded NUL in a capability must not be truncated into a valid capability")
+	}
+}
+
+func TestSetCapabilitiesReturnsInvalidArgumentForMalformedNames(t *testing.T) {
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatalf("NewAdvancedBoxOptions: %v", err)
+	}
+	defer advanced.Close()
+
+	err = advanced.SetCapabilities(ContainerCapabilities{Add: []string{"NET-ADMIN"}})
+	if err == nil {
+		t.Fatal("malformed capability must be rejected")
+	}
+
+	var boxliteErr *Error
+	if !errors.As(err, &boxliteErr) {
+		t.Fatalf("expected *Error, got %T: %v", err, err)
+	}
+	if boxliteErr.Code != ErrInvalidArgument {
+		t.Fatalf("Code: got %d, want %d", boxliteErr.Code, ErrInvalidArgument)
+	}
+}
+
 func TestWithPortExplicitSpec(t *testing.T) {
 	cfg := &boxConfig{}
 	WithPort(PortSpec{
@@ -291,13 +359,27 @@ func TestWithPortExplicitSpec(t *testing.T) {
 	}
 }
 
+func TestPortSpecAcceptsHostIPAndAutomaticHostPort(t *testing.T) {
+	cPort, err := (PortSpec{
+		Host:     0,
+		Guest:    3000,
+		Protocol: PortProtocolTcp,
+		HostIP:   "127.0.0.1",
+	}).toCSpec()
+	if err != nil {
+		t.Fatalf("toCSpec: %v", err)
+	}
+	if cPort.host_port != 0 || cPort.host_ip != "127.0.0.1" {
+		t.Fatalf("c port: got host_port=%d host_ip=%q", cPort.host_port, cPort.host_ip)
+	}
+}
+
 func TestPortSpecRejectsInvalidValues(t *testing.T) {
 	tests := []struct {
 		name string
 		port PortSpec
 	}{
 		{"udp unsupported", PortSpec{Host: 5353, Guest: 53, Protocol: PortProtocolUdp}},
-		{"host ip unsupported", PortSpec{Host: 8080, Guest: 80, Protocol: PortProtocolTcp, HostIP: "127.0.0.1"}},
 		{"guest zero", PortSpec{Host: 8080, Guest: 0, Protocol: PortProtocolTcp}},
 		{"guest too high", PortSpec{Host: 8080, Guest: 65536, Protocol: PortProtocolTcp}},
 		{"host negative", PortSpec{Host: -1, Guest: 80, Protocol: PortProtocolTcp}},

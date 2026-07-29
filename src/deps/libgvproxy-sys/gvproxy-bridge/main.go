@@ -159,12 +159,6 @@ func gvproxy_set_log_callback(callback unsafe.Pointer) {
 	}
 }
 
-// PortMapping represents a single port forward configuration
-type PortMapping struct {
-	HostPort  uint16 `json:"host_port"`
-	GuestPort uint16 `json:"guest_port"`
-}
-
 // DNSRecord represents an exact A record within a local DNS zone.
 type DNSRecord struct {
 	Name string `json:"name"`
@@ -190,7 +184,6 @@ type GvproxyConfig struct {
 	HostIP           string         `json:"host_ip"`
 	GuestMac         string         `json:"guest_mac"`
 	MTU              uint16         `json:"mtu"`
-	PortMappings     []PortMapping  `json:"port_mappings"`
 	DNSZones         []DNSZone      `json:"dns_zones"`
 	DNSSearchDomains []string       `json:"dns_search_domains"`
 	Debug            bool           `json:"debug"`
@@ -279,16 +272,15 @@ var (
 	nextID      int64 = 1
 )
 
-//export gvproxy_create
-//
 // On failure (return -1), the underlying error message is written to `*errOut`
 // as a heap-allocated C string. Caller must free it via gvproxy_free_string.
 // `errOut` may be nil if the caller doesn't want the message.
+//
+//export gvproxy_create
 func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
-	// setErr surfaces the underlying error back to the FFI caller so the
-	// Rust runtime can include it in the user-visible BoxliteError message
-	// (e.g. "listen tcp 0.0.0.0:27380: bind: address already in use" instead
-	// of an opaque "gvproxy_create failed").
+	// setErr surfaces the underlying startup error back to the FFI caller so
+	// the Rust runtime can include it in the user-visible BoxliteError instead
+	// of reporting only an opaque "gvproxy_create failed".
 	setErr := func(err error) {
 		if errOut != nil {
 			*errOut = C.CString(err.Error())
@@ -337,18 +329,6 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 	if config.CaptureFile != nil && *config.CaptureFile != "" {
 		tapConfig.CaptureFile = *config.CaptureFile
 		logrus.WithField("capture_file", *config.CaptureFile).Info("Packet capture enabled")
-	}
-
-	// Add port forwards from config
-	// Format: "0.0.0.0:PORT" for TCP (default), or "udp:0.0.0.0:PORT" for UDP
-	// Do NOT use "tcp://" prefix - it causes "too many colons in address" error
-	// Forward to guest's DHCP IP, not localhost
-	// Containers bind to 0.0.0.0 inside the guest, accessible via guest IP
-	for _, pm := range config.PortMappings {
-		forwardKey := fmt.Sprintf("0.0.0.0:%d", pm.HostPort)
-		forwardVal := fmt.Sprintf("%s:%d", config.GuestIP, pm.GuestPort)
-		tapConfig.Forwards[forwardKey] = forwardVal
-		logrus.WithFields(logrus.Fields{"host": forwardKey, "guest": forwardVal}).Info("Added TCP port forward")
 	}
 
 	// Platform-specific socket creation
@@ -407,11 +387,9 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 	instances[id] = instance
 	instancesMu.Unlock()
 
-	// initErr surfaces synchronous failures from virtualnetwork.New (e.g.
-	// host-port EADDRINUSE) back to the FFI caller. Pre-fix, the bind error
-	// died in a logrus line inside the gvproxy goroutine and gvproxy_create
-	// returned a valid id; the failure only surfaced ~20s later as guest
-	// "DNS lookup … i/o timeout" from a broken netstack.
+	// initErr keeps gvproxy_create synchronous until the virtual network and
+	// optional ServicesMux control socket are ready, and surfaces startup
+	// failures to the FFI caller.
 	initErr := make(chan error, 1)
 
 	// Start runtime metrics monitoring goroutine
@@ -448,7 +426,6 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 			initErr <- err
 			return
 		}
-		initErr <- nil
 
 		// Override TCP handler with AllowNet filter and/or MITM secret substitution
 		if len(config.AllowNet) > 0 || instance.secretMatcher != nil {
@@ -479,6 +456,8 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 			l, lErr := net.Listen("unix", config.ControlSocketPath)
 			if lErr != nil {
 				logrus.WithFields(logrus.Fields{"error": lErr, "path": config.ControlSocketPath}).Error("Failed to bind gvproxy services socket")
+				initErr <- fmt.Errorf("failed to bind gvproxy services socket %q: %w", config.ControlSocketPath, lErr)
+				return
 			} else {
 				controlListener = l
 				logrus.WithField("path", config.ControlSocketPath).Info("Serving gvproxy ServicesMux")
@@ -489,6 +468,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 				}()
 			}
 		}
+		initErr <- nil
 
 		// Platform-specific packet handling
 		if runtime.GOOS == "darwin" {

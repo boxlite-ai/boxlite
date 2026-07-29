@@ -50,9 +50,9 @@ int main(void) {
 
   printf("1. Simple real-time output (ls /bin)\n");
   const char *const list_bin_args[] = {"/bin"};
-  BoxliteErrorCode code = execute_and_wait(
-      box, "/bin/ls", list_bin_args, 1, realtime_output, NULL, &exit_code,
-      &error);
+  BoxliteErrorCode code =
+      execute_and_wait(runtime, box, "/bin/ls", list_bin_args, 1,
+                       realtime_output, NULL, &exit_code, &error);
   if (code != Ok) {
     print_error("ls /bin", &error);
     boxlite_error_free(&error);
@@ -63,22 +63,22 @@ int main(void) {
   OutputStats stats = {0};
   const char *const recursive_args[] = {"-R", "/"};
   exit_code = 0;
-  code = execute_and_wait(box, "/bin/ls", recursive_args, 2, stats_callback,
-                          &stats, &exit_code, &error);
+  code = execute_and_wait(runtime, box, "/bin/ls", recursive_args, 2,
+                          stats_callback, &stats, &exit_code, &error);
   if (code != Ok) {
     print_error("ls -R /", &error);
     boxlite_error_free(&error);
   }
   printf("\nExit code: %d\n", exit_code);
-  printf("stdout chunks=%d stderr chunks=%d bytes=%zu\n\n",
-         stats.stdout_chunks, stats.stderr_chunks, stats.total_bytes);
+  printf("stdout chunks=%d stderr chunks=%d bytes=%zu\n\n", stats.stdout_chunks,
+         stats.stderr_chunks, stats.total_bytes);
 
   printf("3. Command with stdout and stderr\n");
   const char *const shell_args[] = {
       "-c", "echo 'This is stdout'; echo 'This is stderr' >&2"};
   exit_code = 0;
-  code = execute_and_wait(box, "/bin/sh", shell_args, 2, realtime_output, NULL,
-                          &exit_code, &error);
+  code = execute_and_wait(runtime, box, "/bin/sh", shell_args, 2,
+                          realtime_output, NULL, &exit_code, &error);
   if (code != Ok) {
     print_error("sh", &error);
     boxlite_error_free(&error);
@@ -86,7 +86,8 @@ int main(void) {
   printf("\nExit code: %d\n", exit_code);
 
   char *id = boxlite_box_id(box);
-  boxlite_remove(runtime, id, 1, &error);
+  example_remove_box(runtime, id, 1, &error);
+  boxlite_box_free(box);
   boxlite_free_string(id);
   boxlite_runtime_free(runtime);
 

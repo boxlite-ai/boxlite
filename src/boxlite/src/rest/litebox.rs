@@ -5,7 +5,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use parking_lot::RwLock;
 use reqwest::Method;
 use tokio::sync::mpsc;
 
@@ -32,23 +31,35 @@ use super::types::{
 
 /// REST-backed box handle.
 ///
-/// Holds a cached `BoxInfo` (updated on start/stop) and delegates
-/// all operations to the remote REST API.
+/// Holds immutable identity for synchronous accessors and delegates operations,
+/// including `info()`, to the remote REST API.
 pub(crate) struct RestBox {
     client: ApiClient,
-    cached_info: RwLock<BoxInfo>,
+    id: BoxID,
+    name: Option<String>,
 }
 
 impl RestBox {
     pub fn new(client: ApiClient, info: BoxInfo) -> Self {
         Self {
             client,
-            cached_info: RwLock::new(info),
+            id: info.id.clone(),
+            name: info.name.clone(),
         }
     }
 
     fn box_id_str(&self) -> String {
-        self.cached_info.read().id.to_string()
+        self.id.to_string()
+    }
+
+    fn validate_info(&self, info: BoxInfo) -> BoxliteResult<BoxInfo> {
+        if info.id != self.id {
+            return Err(BoxliteError::Internal(format!(
+                "REST response box_id {} does not match handle {}",
+                info.id, self.id
+            )));
+        }
+        Ok(info)
     }
 
     /// Wire an already-open attach WebSocket into an `Execution`.
@@ -98,34 +109,26 @@ impl RestBox {
 #[async_trait]
 impl BoxBackend for RestBox {
     fn id(&self) -> &BoxID {
-        // Safety: BoxID is immutable after construction. We leak a ref through
-        // the RwLock, which is fine because the id field never changes.
-        // This avoids cloning on every call.
-        unsafe {
-            let info = self.cached_info.data_ptr();
-            &(*info).id
-        }
+        &self.id
     }
 
     fn name(&self) -> Option<&str> {
-        // Same pattern as id() — name is immutable after construction.
-        unsafe {
-            let info = self.cached_info.data_ptr();
-            (*info).name.as_deref()
-        }
+        self.name.as_deref()
     }
 
-    fn info(&self) -> BoxInfo {
-        self.cached_info.read().clone()
+    async fn info(&self) -> BoxliteResult<BoxInfo> {
+        let box_id = self.box_id_str();
+        let path = format!("/boxes/{box_id}");
+        let response: BoxResponse = self.client.get(&path).await?;
+        let info = response.to_box_info()?;
+        self.validate_info(info)
     }
 
     async fn start(&self) -> BoxliteResult<()> {
         let box_id = self.box_id_str();
         let path = format!("/boxes/{}/start", box_id);
         let resp: BoxResponse = self.client.post_empty(&path).await?;
-        let new_info = resp.to_box_info()?;
-        let mut info = self.cached_info.write();
-        *info = new_info;
+        self.validate_info(resp.to_box_info()?)?;
         Ok(())
     }
 
@@ -261,9 +264,7 @@ impl BoxBackend for RestBox {
         let box_id = self.box_id_str();
         let path = format!("/boxes/{}/stop", box_id);
         let resp: BoxResponse = self.client.post_empty(&path).await?;
-        let new_info = resp.to_box_info()?;
-        let mut info = self.cached_info.write();
-        *info = new_info;
+        self.validate_info(resp.to_box_info()?)?;
         Ok(())
     }
 
@@ -1450,6 +1451,64 @@ mod tests {
                 let _ = stream.shutdown().await;
             }
         }
+    }
+
+    #[tokio::test]
+    async fn info_fetches_current_remote_metadata() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        let state_clone = state.clone();
+        let body = r#"{"box_id":"box1","name":null,"status":"stopped",
+                       "created_at":"2026-07-14T00:00:00Z",
+                       "updated_at":"2026-07-15T00:00:00Z",
+                       "pid":null,"image":"alpine:latest","cpus":1,"memory_mib":512}"#
+            .to_string();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, Some(body), |_ws, _state| async {}).await;
+        });
+        let rest_box = rest_box_for(port, "box1");
+
+        let info = rest_box.info().await.expect("fetch box info");
+
+        assert_eq!(info.status, crate::BoxStatus::Stopped);
+        assert_eq!(
+            state.lock().await.requested_paths,
+            vec!["/v1/boxes/box1".to_string()]
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn info_rejects_a_mismatched_remote_box_id() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        let state_clone = state.clone();
+        let body = r#"{"box_id":"box2","name":null,"status":"stopped",
+                       "created_at":"2026-07-14T00:00:00Z",
+                       "updated_at":"2026-07-15T00:00:00Z",
+                       "pid":null,"image":"alpine:latest","cpus":1,"memory_mib":512}"#
+            .to_string();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, Some(body), |_ws, _state| async {}).await;
+        });
+        let rest_box = rest_box_for(port, "box1");
+
+        let error = rest_box.info().await.expect_err("reject mismatched box id");
+
+        assert!(
+            error
+                .to_string()
+                .contains("box2 does not match handle box1")
+        );
+        assert_eq!(rest_box.id().as_str(), "box1");
+        assert_eq!(rest_box.box_id_str(), "box1");
+        assert_eq!(
+            state.lock().await.requested_paths,
+            vec!["/v1/boxes/box1".to_string()]
+        );
+        server.abort();
     }
 
     // ─── ws_clean_exit_emits_result ───────────────────────────────────────

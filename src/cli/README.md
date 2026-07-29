@@ -316,13 +316,18 @@ silently restarting it, because restarting would run the command a second time.
 | `--tty` | `-t` | Allocate a pseudo-TTY |
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
 | `--workdir PATH` | `-w` | Working directory in the box |
-| `--publish PORT` | `-p` | Publish box port to host (e.g. `8080:80`, `8080:80/tcp`) |
+| `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
 | `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, `boxPath` for anonymous) |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
+| `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
+| `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--name NAME` | | Name the box |
 | `--detach` | `-d` | Run in background, print box ID |
 | `--rm` | | Remove the box when it exits |
+
+`-p` is explicit local publication. Remote REST profiles reject it and direct
+the caller to `boxlite network tunnel`.
 
 **Examples:**
 
@@ -332,6 +337,7 @@ boxlite run -it --rm alpine:latest /bin/sh
 boxlite run -d --name openclaw -p 18789:18789 ghcr.io/openclaw/openclaw:main
 boxlite run -v /host/data:/app/data alpine:latest cat /app/data/hello.txt
 boxlite run --rootfs /path/to/rootfs /bin/sh
+boxlite run --cap-drop ALL --cap-add NET_BIND_SERVICE nginx:alpine
 ```
 
 ### `boxlite create`
@@ -355,12 +361,17 @@ default, and `exec` still starts it on demand.
 | `--name NAME` | | Name the box |
 | `--env KEY=VALUE` | `-e` | Environment variables |
 | `--workdir PATH` | `-w` | Working directory |
-| `--publish PORT` | `-p` | Publish box port to host (e.g. `8080:80`) |
+| `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
 | `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, or box path for anonymous) |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
+| `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
+| `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--detach` | `-d` | (create always “detaches”) |
 | `--rm` | | Auto-remove when stopped |
+
+`-p` is explicit local publication. Remote REST profiles reject it and direct
+the caller to `boxlite network tunnel`.
 
 **Examples:**
 
@@ -368,6 +379,7 @@ default, and `exec` still starts it on demand.
 boxlite create --name mybox alpine:latest
 boxlite create -p 18789:18789 -v /data:/app/data --name openclaw ghcr.io/openclaw/openclaw:main
 boxlite create --rootfs /path/to/rootfs --name local-rootfs
+boxlite create --cap-drop NET_RAW --name hardened alpine:latest
 boxlite start mybox
 boxlite start openclaw
 ```
@@ -463,7 +475,6 @@ boxlite inspect --latest -f yaml
 boxlite inspect box1 box2 -f json
 ```
 
-
 ### `boxlite images`
 
 List cached images.
@@ -496,7 +507,6 @@ Copy files or directories between host and box.
 boxlite cp ./local.txt mybox:/tmp/
 boxlite cp mybox:/app/out ./output
 ```
-
 
 ### `boxlite info`
 

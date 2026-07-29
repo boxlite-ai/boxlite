@@ -33,14 +33,24 @@ impl ContainerExecutor {
     pub fn container_ref(&self) -> Arc<Mutex<Container>> {
         self.container.clone()
     }
-}
 
-#[async_trait]
-impl Executor for ContainerExecutor {
-    async fn spawn(&self, req: &ExecRequest) -> BoxliteResult<ExecHandle> {
+    pub(crate) async fn spawn_ssh_workload(
+        &self,
+        req: &ExecRequest,
+        workload: crate::service::ssh::SshWorkload,
+    ) -> BoxliteResult<ExecHandle> {
+        self.spawn_request(req, Some(workload)).await
+    }
+
+    async fn spawn_request(
+        &self,
+        req: &ExecRequest,
+        ssh_workload: Option<crate::service::ssh::SshWorkload>,
+    ) -> BoxliteResult<ExecHandle> {
         use crate::container::SpawnResult;
 
         let start = std::time::Instant::now();
+        let pty_config = req.tty.as_ref().map(PtyConfig::try_from).transpose()?;
 
         // Phase 1 (mutex held): build command + zygote IPC.
         //
@@ -57,17 +67,16 @@ impl Executor for ContainerExecutor {
                 .args(&req.args)
                 .envs(req.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
 
+            if let Some(workload) = ssh_workload {
+                cmd = cmd.with_ssh_workload(workload);
+            }
+
             if !req.workdir.is_empty() {
                 cmd = cmd.current_dir(&req.workdir);
             }
 
-            if let Some(tty) = &req.tty {
-                cmd = cmd.with_pty(PtyConfig {
-                    rows: tty.rows as u16,
-                    cols: tty.cols as u16,
-                    x_pixels: tty.x_pixels as u16,
-                    y_pixels: tty.y_pixels as u16,
-                });
+            if let Some(tty) = pty_config {
+                cmd = cmd.with_pty(tty);
             }
 
             if let Some(ref user) = req.user {
@@ -97,6 +106,13 @@ impl Executor for ContainerExecutor {
     }
 }
 
+#[async_trait]
+impl Executor for ContainerExecutor {
+    async fn spawn(&self, req: &ExecRequest) -> BoxliteResult<ExecHandle> {
+        self.spawn_request(req, None).await
+    }
+}
+
 /// Executes commands directly on guest (no container).
 pub struct GuestExecutor;
 
@@ -104,12 +120,7 @@ pub struct GuestExecutor;
 impl Executor for GuestExecutor {
     async fn spawn(&self, req: &ExecRequest) -> BoxliteResult<ExecHandle> {
         if let Some(tty) = &req.tty {
-            let config = PtyConfig {
-                rows: tty.rows as u16,
-                cols: tty.cols as u16,
-                x_pixels: tty.x_pixels as u16,
-                y_pixels: tty.y_pixels as u16,
-            };
+            let config = PtyConfig::try_from(tty)?;
             spawn_with_pty(req, config)
         } else {
             spawn_with_pipes(req)
@@ -183,6 +194,7 @@ fn spawn_with_pty(req: &ExecRequest, config: PtyConfig) -> BoxliteResult<ExecHan
 
     let OpenptyResult { master, slave } = openpty(Some(&winsize), None)
         .map_err(|e| BoxliteError::Internal(format!("Failed to create PTY: {}", e)))?;
+    crate::service::exec::tty::apply_modes(&slave, &config.modes)?;
 
     // Get raw FD for use in pre_exec closure
     let slave_raw_fd = slave.as_raw_fd();

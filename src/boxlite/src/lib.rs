@@ -49,17 +49,20 @@ pub use litebox::{
 };
 pub use metrics::{BoxMetrics, RuntimeMetrics};
 pub use runtime::advanced_options::{
-    AdvancedBoxOptions, HealthCheckOptions, ResourceLimits, SecurityOptions,
+    AdvancedBoxOptions, ContainerCapabilities, HealthCheckOptions, ResourceLimits, SecurityOptions,
 };
 pub use runtime::options::{
     BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, ImageRegistry,
-    ImageRegistryAuth, NetworkSpec, RegistryTransport, RootfsSpec, Secret, SnapshotOptions,
+    ImageRegistryAuth, NetworkMode, NetworkSpec, PortProtocol, RegistryTransport, RootfsSpec,
+    Secret, SnapshotOptions,
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use runtime::id::{BaseDiskID, BaseDiskIDMint, BoxID, BoxIDMint};
 pub use runtime::types::ContainerID;
-pub use runtime::types::{BoxInfo, BoxLifecyclePolicy, BoxState, BoxStateInfo, BoxStatus};
+pub use runtime::types::{
+    BoxInfo, BoxLifecyclePolicy, BoxState, BoxStateInfo, BoxStatus, NetworkInfo, PublishedPort,
+};
 
 #[cfg(feature = "rest")]
 pub use rest::credential::{AccessToken, ApiKeyCredential, Credential};

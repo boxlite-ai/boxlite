@@ -128,14 +128,14 @@ async def main():
             print(f"  Archive: {archive_path}")
 
             # Source still running after export
-            print(f"  Source state: {source.info().state}")
+            print(f"  Source state: {(await source.info()).state}")
 
             # --- Step 3: Import on REST server ---
             print("\n=== Step 3: Import on REST Server ===")
             imported = await rest_rt.import_box(archive_path, name="migrated-box")
             print(f"  Imported on REST: {imported.id}")
 
-            imported_info = imported.info()
+            imported_info = await imported.info()
             print(f"  Name: {imported_info.name}")
             print(f"  State: {imported_info.state}")
 

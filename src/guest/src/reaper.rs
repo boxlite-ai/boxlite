@@ -105,6 +105,18 @@ impl ExitSlot {
             }
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn settled_for_test(status: ExitStatus) -> Self {
+        let (_tx, rx) = watch::channel(Some(status));
+        Self(rx)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_for_test() -> (Self, watch::Sender<Option<ExitStatus>>) {
+        let (tx, rx) = watch::channel(None);
+        (Self(rx), tx)
+    }
 }
 
 #[derive(Default)]

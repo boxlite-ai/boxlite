@@ -5,22 +5,26 @@
 //! ```text
 //! Filesystem ───────┐
 //!                   │
-//! BootAssets ───────┤
-//! ContainerRootfs ──┼──→ VmmSpawn ──→ GuestConnect ──→ GuestInit
-//! GuestRootfs ──────┘
+//! BootAssets ───────┤                              ┌─→ GuestInit
+//! ContainerRootfs ──┼──→ VmmSpawn ──→ GuestConnect ─┤
+//! GuestRootfs ──────┘                              └─→ PortPublish
 //!
 //! Starting (new box):
 //! - Stage 1 (sequential): [Filesystem]
 //! - Stage 2 (parallel):   [BootAssets, ContainerRootfs, GuestRootfs]
-//! - Stages 3-5 (sequential): [VmmSpawn], [GuestConnect], [GuestInit]
+//! - Stage 3 (sequential): [VmmSpawn]
+//! - Stage 4 (sequential): [GuestConnect]
+//! - Stage 5 (parallel):   [GuestInit, PortPublish]
 //!
 //! Stopped (restart):
 //! - Stage 1 (sequential): [Filesystem]
 //! - Stage 2 (parallel):   [BootAssets, ContainerRootfs, GuestRootfs]
-//! - Stages 3-5 (sequential): [VmmSpawn], [GuestConnect], [GuestInit]
+//! - Stage 3 (sequential): [VmmSpawn]
+//! - Stage 4 (sequential): [GuestConnect]
+//! - Stage 5 (parallel):   [GuestInit, PortPublish]
 //!
 //! Running (reattach):
-//! - Stages 1-2 (sequential): [VmmAttach], [GuestConnect]
+//! - Stages 1-3 (sequential): [VmmAttach], [GuestConnect], [PortPublish]
 //! ```
 
 mod boot_assets;
@@ -30,6 +34,7 @@ mod guest_connect;
 mod guest_entrypoint;
 mod guest_init;
 mod guest_rootfs;
+mod port_publish;
 mod vmm_attach;
 mod vmm_spawn;
 
@@ -57,5 +62,6 @@ pub use filesystem::FilesystemTask;
 pub use guest_connect::GuestConnectTask;
 pub use guest_init::GuestInitTask;
 pub use guest_rootfs::GuestRootfsTask;
+pub use port_publish::PortPublishTask;
 pub use vmm_attach::VmmAttachTask;
 pub use vmm_spawn::VmmSpawnTask;

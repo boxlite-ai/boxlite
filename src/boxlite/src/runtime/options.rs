@@ -5,6 +5,7 @@ use crate::runtime::layout::dirs as const_dirs;
 use boxlite_shared::errors::BoxliteResult;
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use crate::runtime::advanced_options::AdvancedBoxOptions;
@@ -322,11 +323,16 @@ pub struct BoxOptions {
     /// If set, the COW overlay will have this virtual size, allowing
     /// the container to write more data than the base image size.
     pub disk_size_gb: Option<u64>,
+
     pub working_dir: Option<String>,
     pub env: Vec<(String, String)>,
     pub rootfs: RootfsSpec,
     pub volumes: Vec<VolumeSpec>,
     pub network: NetworkSpec,
+    /// Explicit host publication for the local runtime.
+    ///
+    /// Remote runtimes reject port mappings; use a box network tunnel for
+    /// portable local/remote access to a guest service.
     pub ports: Vec<PortSpec>,
     /// Automatically remove the box when stopped.
     ///
@@ -371,7 +377,7 @@ pub struct BoxOptions {
     #[serde(default = "default_detach")]
     pub detach: bool,
 
-    /// Advanced options for expert users (security, mount isolation).
+    /// Advanced options for expert users (capabilities, security, mount isolation).
     ///
     /// Defaults are secure — most users can ignore this entirely.
     /// See [`AdvancedBoxOptions`] for details.
@@ -556,6 +562,7 @@ impl BoxOptions {
     /// - effective remove-on-stop (`auto_delete>0`, or deprecated `auto_remove`)
     ///   with `detach=true` is invalid
     /// - `advanced.isolate_mounts=true` is only supported on Linux
+    /// - `advanced.capabilities` contains well-formed Linux capability names
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::Config(
@@ -570,6 +577,18 @@ impl BoxOptions {
             return Err(boxlite_shared::errors::BoxliteError::Unsupported(
                 "isolate_mounts is only supported on Linux".to_string(),
             ));
+        }
+
+        self.advanced.capabilities.validate()?;
+
+        if matches!(self.network, NetworkSpec::Disabled) && !self.ports.is_empty() {
+            return Err(boxlite_shared::errors::BoxliteError::Config(
+                "ports require network.mode=\"enabled\"".to_string(),
+            ));
+        }
+
+        for port in &self.ports {
+            port.validate_publishable()?;
         }
 
         Ok(())
@@ -719,10 +738,12 @@ impl Default for NetworkSpec {
     }
 }
 
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PortProtocol {
     #[default]
+    #[serde(rename = "tcp", alias = "Tcp")]
     Tcp,
+    #[serde(rename = "udp", alias = "Udp")]
     Udp,
     // Sctp,
 }
@@ -731,14 +752,83 @@ fn default_protocol() -> PortProtocol {
     PortProtocol::Tcp
 }
 
-/// Port mapping specification (host -> guest).
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+/// Local host-to-guest port publication.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PortSpec {
-    pub host_port: Option<u16>, // None => same as guest_port
+    /// Host port to bind. `None` asks the OS to select an available port.
+    pub host_port: Option<u16>,
     pub guest_port: u16,
     #[serde(default = "default_protocol")]
     pub protocol: PortProtocol,
     pub host_ip: Option<String>, // Optional bind IP, defaults to 0.0.0.0/:: if None
+}
+
+impl PortSpec {
+    /// Check that this mapping can be published and return the host address to
+    /// bind. A zero port asks the OS to select one; `None` host_ip binds every
+    /// interface.
+    ///
+    /// This is the one place the publication rules live: option validation and
+    /// publication planning both go through it, so they can never disagree.
+    pub(crate) fn validate_publishable(&self) -> BoxliteResult<SocketAddr> {
+        if self.guest_port == 0 {
+            return Err(boxlite_shared::errors::BoxliteError::Config(
+                "guest port must be in range 1-65535".to_string(),
+            ));
+        }
+        if matches!(self.protocol, PortProtocol::Udp) {
+            return Err(boxlite_shared::errors::BoxliteError::Unsupported(
+                "UDP port forwarding is not implemented; use TCP".to_string(),
+            ));
+        }
+        let host_ip = match self.host_ip.as_deref() {
+            None => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            Some(host_ip) => host_ip.parse::<IpAddr>().map_err(|_| {
+                boxlite_shared::errors::BoxliteError::Config(format!(
+                    "invalid port host_ip {host_ip:?}; expected an IPv4 or IPv6 address"
+                ))
+            })?,
+        };
+        Ok(SocketAddr::new(host_ip, self.host_port.unwrap_or(0)))
+    }
+}
+
+/// Canonicalize mappings written before `host_port=None` meant automatic
+/// allocation. The old backend ignored protocol and bind IP, and duplicate
+/// host ports were resolved by the final entry inserted into its map.
+///
+/// Returns how many mappings the rewrite changed or dropped.
+pub(crate) fn normalize_legacy_ports(ports: &mut Vec<PortSpec>) -> usize {
+    let mut changed = 0;
+    let mut by_host_port = std::collections::BTreeMap::new();
+
+    for (index, mut port) in ports.drain(..).enumerate() {
+        let original = port.clone();
+        let host_port = port.host_port.unwrap_or(port.guest_port);
+        port.host_port = Some(host_port);
+        port.protocol = PortProtocol::Tcp;
+        port.host_ip = None;
+        if port != original {
+            changed += 1;
+        }
+
+        // The old backend keyed forwards by host port, so the last entry with a
+        // given host port is the one that was actually served.
+        if by_host_port.insert(host_port, (index, port)).is_some() {
+            changed += 1;
+        }
+    }
+
+    let mut normalized: Vec<_> = by_host_port.into_values().collect();
+    normalized.sort_by_key(|(index, _)| *index);
+    *ports = normalized.into_iter().map(|(_, port)| port).collect();
+    changed
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArchiveImportPolicy {
+    Trusted,
+    UntrustedRemote,
 }
 
 /// A portable box archive (`.boxlite` file).
@@ -748,17 +838,43 @@ pub struct PortSpec {
 #[derive(Debug, Clone)]
 pub struct BoxArchive {
     path: PathBuf,
+    import_policy: ArchiveImportPolicy,
 }
 
 impl BoxArchive {
-    /// Create a BoxArchive handle from an archive file path.
+    /// Create a trusted `BoxArchive` handle from an archive file path.
+    ///
+    /// This preserves all v3 archive configuration and is intended for local
+    /// import/export workflows where the caller owns both the archive and the
+    /// runtime.
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            import_policy: ArchiveImportPolicy::Trusted,
+        }
+    }
+
+    /// Create an archive handle for bytes received across an untrusted server
+    /// boundary.
+    ///
+    /// Remote import rejects host-only features and host filesystem paths, then
+    /// replaces archive-carried security settings with the runtime's secure
+    /// defaults. HTTP servers must use this constructor rather than
+    /// [`BoxArchive::new`].
+    pub fn from_untrusted_upload(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            import_policy: ArchiveImportPolicy::UntrustedRemote,
+        }
     }
 
     /// Path to the archive file.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(crate) fn import_policy(&self) -> ArchiveImportPolicy {
+        self.import_policy
     }
 }
 
@@ -778,7 +894,73 @@ pub struct CloneOptions {}
 mod tests {
     use super::*;
     use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
-    use crate::runtime::advanced_options::{SecurityOptions, SecurityOptionsBuilder};
+    use crate::runtime::advanced_options::{
+        ContainerCapabilities, SecurityOptions, SecurityOptionsBuilder,
+    };
+
+    #[test]
+    fn legacy_ports_keep_old_same_port_and_last_write_wins_semantics() {
+        let mut ports = vec![
+            PortSpec {
+                host_port: None,
+                guest_port: 3000,
+                protocol: PortProtocol::Tcp,
+                host_ip: Some("127.0.0.1".to_string()),
+            },
+            PortSpec {
+                host_port: Some(3000),
+                guest_port: 4000,
+                protocol: PortProtocol::Udp,
+                host_ip: None,
+            },
+        ];
+
+        let changed = normalize_legacy_ports(&mut ports);
+
+        assert_eq!(
+            ports,
+            vec![PortSpec {
+                host_port: Some(3000),
+                guest_port: 4000,
+                protocol: PortProtocol::Tcp,
+                host_ip: None,
+            }]
+        );
+        assert_eq!(
+            changed, 3,
+            "two rewritten mappings plus one dropped duplicate"
+        );
+    }
+
+    #[test]
+    fn already_canonical_ports_are_left_alone() {
+        let mut ports = vec![PortSpec {
+            host_port: Some(18080),
+            guest_port: 80,
+            protocol: PortProtocol::Tcp,
+            host_ip: None,
+        }];
+        let canonical = ports.clone();
+
+        assert_eq!(normalize_legacy_ports(&mut ports), 0);
+        assert_eq!(ports, canonical);
+    }
+
+    #[test]
+    fn port_protocol_serializes_lowercase_and_reads_legacy_names() {
+        assert_eq!(
+            serde_json::to_string(&PortProtocol::Tcp).unwrap(),
+            r#""tcp""#
+        );
+        assert_eq!(
+            serde_json::from_str::<PortProtocol>(r#""Tcp""#).unwrap(),
+            PortProtocol::Tcp
+        );
+        assert_eq!(
+            serde_json::from_str::<PortProtocol>(r#""Udp""#).unwrap(),
+            PortProtocol::Udp
+        );
+    }
 
     #[test]
     #[allow(deprecated)]
@@ -790,6 +972,129 @@ mod tests {
             "auto_remove should keep its legacy default"
         );
         assert!(!opts.detach, "detach should default to false");
+        assert!(
+            opts.advanced.capabilities.is_empty(),
+            "advanced capabilities should default to empty"
+        );
+    }
+
+    #[test]
+    fn box_options_capabilities_serde_roundtrip() {
+        let json = r#"{
+            "advanced": {
+                "capabilities": {
+                    "add": ["SYS_ADMIN", "CAP_NET_ADMIN"],
+                    "drop": ["NET_RAW"]
+                }
+            }
+        }"#;
+
+        let opts: BoxOptions = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            opts.advanced.capabilities.add,
+            ["SYS_ADMIN", "CAP_NET_ADMIN"]
+        );
+        assert_eq!(opts.advanced.capabilities.drop, ["NET_RAW"]);
+
+        let serialized = serde_json::to_string(&opts).unwrap();
+        let roundtripped: BoxOptions = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(
+            roundtripped.advanced.capabilities,
+            opts.advanced.capabilities
+        );
+    }
+
+    #[test]
+    fn box_options_sanitize_accepts_valid_capability_names() {
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                capabilities: ContainerCapabilities {
+                    add: vec!["sys_admin".into(), "CAP_NET_ADMIN".into()],
+                    drop: vec!["NET_RAW".into()],
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        opts.sanitize()
+            .expect("Docker-style capability names should be accepted");
+    }
+
+    #[test]
+    fn box_options_sanitize_accepts_future_capability_names() {
+        let opts = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                capabilities: ContainerCapabilities {
+                    add: vec!["FUTURE_KERNEL_FEATURE".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        opts.sanitize()
+            .expect("the guest runtime, not the host SDK, owns the supported capability list");
+    }
+
+    #[test]
+    fn box_options_sanitize_rejects_malformed_capability_names() {
+        for opts in [
+            BoxOptions {
+                advanced: AdvancedBoxOptions {
+                    capabilities: ContainerCapabilities {
+                        add: vec!["".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            BoxOptions {
+                advanced: AdvancedBoxOptions {
+                    capabilities: ContainerCapabilities {
+                        drop: vec!["NET-ADMIN".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            BoxOptions {
+                advanced: AdvancedBoxOptions {
+                    capabilities: ContainerCapabilities {
+                        add: vec!["123".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            BoxOptions {
+                advanced: AdvancedBoxOptions {
+                    capabilities: ContainerCapabilities {
+                        add: vec!["ß".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ] {
+            let err = opts
+                .sanitize()
+                .expect_err("malformed capability should be rejected");
+            assert_eq!(err.http().0, 400);
+            let err = err.to_string();
+            assert!(
+                err.contains("empty")
+                    || err.contains("NET-ADMIN")
+                    || err.contains("123")
+                    || err.contains("ß"),
+                "error should identify the malformed capability, got: {err}"
+            );
+        }
     }
 
     #[test]
@@ -949,6 +1254,22 @@ mod tests {
         assert!(opts.detach, "explicit detach=true should be respected");
     }
 
+    /// The opt-in is persisted with the box and rechecked on every start, so it
+    /// has to survive a manifest round-trip — and default to off when absent.
+    #[test]
+    fn nested_virtualization_option_roundtrips() {
+        let stored: BoxOptions =
+            serde_json::from_str(r#"{"advanced":{"nested_virtualization":true}}"#).unwrap();
+        assert!(stored.advanced.nested_virtualization);
+        assert_eq!(
+            serde_json::to_value(stored).unwrap()["advanced"]["nested_virtualization"],
+            serde_json::Value::Bool(true)
+        );
+
+        let legacy: BoxOptions = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.advanced.nested_virtualization);
+    }
+
     #[test]
     fn test_box_options_roundtrip() {
         let opts = BoxOptions {
@@ -1048,6 +1369,29 @@ mod tests {
             ..Default::default()
         };
         assert!(keep_attached.sanitize().is_ok());
+    }
+
+    #[test]
+    fn test_sanitize_allows_duplicate_automatic_ports() {
+        let duplicate = PortSpec {
+            host_port: None,
+            guest_port: 3000,
+            protocol: PortProtocol::Tcp,
+            host_ip: None,
+        };
+        let opts = BoxOptions {
+            ports: vec![
+                duplicate.clone(),
+                PortSpec {
+                    host_port: Some(0),
+                    host_ip: Some("0.0.0.0".to_string()),
+                    ..duplicate
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert!(opts.sanitize().is_ok());
     }
 
     // ========================================================================

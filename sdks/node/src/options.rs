@@ -10,7 +10,9 @@ use boxlite::runtime::options::{
 use napi::bindgen_prelude::Error;
 use napi_derive::napi;
 
-use crate::advanced_options::JsSecurityOptions;
+#[cfg(test)]
+use crate::advanced_options::JsContainerCapabilities;
+use crate::advanced_options::{JsAdvancedBoxOptions, JsSecurityOptions};
 
 /// Health check options for boxes.
 ///
@@ -229,6 +231,9 @@ pub struct JsBoxOptions {
     /// If None, uses the image's USER directive (defaults to root).
     pub user: Option<String>,
 
+    /// Expert-only options introduced after the original flat API.
+    pub advanced: Option<JsAdvancedBoxOptions>,
+
     /// Security isolation options for the box.
     pub security: Option<JsSecurityOptions>,
 
@@ -288,7 +293,7 @@ pub struct JsPortSpec {
     #[napi(js_name = "guestPort")]
     pub guest_port: u16,
 
-    /// Protocol ("tcp" or "udp", default: "tcp")
+    /// Protocol ("tcp"; UDP is rejected)
     pub protocol: Option<String>,
 
     /// Bind IP address (default: 0.0.0.0)
@@ -337,6 +342,22 @@ impl From<JsPortSpec> for PortSpec {
             guest_port: p.guest_port,
             protocol,
             host_ip: p.host_ip,
+        }
+    }
+}
+
+impl From<PortSpec> for JsPortSpec {
+    fn from(port: PortSpec) -> Self {
+        let protocol = match port.protocol {
+            PortProtocol::Tcp => "tcp",
+            PortProtocol::Udp => "udp",
+        };
+
+        Self {
+            host_port: port.host_port,
+            guest_port: port.guest_port,
+            protocol: Some(protocol.to_string()),
+            host_ip: port.host_ip,
         }
     }
 }
@@ -408,6 +429,11 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .unwrap_or_default();
 
         let health_check = js_opts.health_check.map(HealthCheckOptions::from);
+        let capabilities = js_opts
+            .advanced
+            .and_then(|advanced| advanced.capabilities)
+            .map(Into::into)
+            .unwrap_or_default();
         let secrets = js_opts
             .secrets
             .unwrap_or_default()
@@ -434,6 +460,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             ports,
             auto_remove,
             advanced: AdvancedBoxOptions {
+                capabilities,
                 security,
                 health_check,
                 ..Default::default()
@@ -733,6 +760,7 @@ mod tests {
             entrypoint: None,
             cmd: None,
             user: None,
+            advanced: None,
             security: None,
             health_check: None,
             secrets: None,
@@ -745,9 +773,28 @@ mod tests {
         assert!(!both.auto_remove);
         assert_eq!(both.auto_delete, Some(60));
 
+        let mut with_capabilities = js.clone();
+        with_capabilities.advanced = Some(JsAdvancedBoxOptions {
+            capabilities: Some(JsContainerCapabilities {
+                add: Some(vec!["NET_ADMIN".into(), "SYS_PTRACE".into()]),
+                drop: Some(vec!["MKNOD".into(), "NET_RAW".into()]),
+            }),
+        });
+        let with_capabilities = BoxOptions::try_from(with_capabilities).unwrap();
+        assert_eq!(
+            with_capabilities.advanced.capabilities.add,
+            ["NET_ADMIN", "SYS_PTRACE"]
+        );
+        assert_eq!(
+            with_capabilities.advanced.capabilities.drop,
+            ["MKNOD", "NET_RAW"]
+        );
+
         let opts = BoxOptions::try_from(js).unwrap();
         assert!(!opts.auto_remove);
         assert_eq!(opts.auto_delete, None);
+        assert!(opts.advanced.capabilities.add.is_empty());
+        assert!(opts.advanced.capabilities.drop.is_empty());
         match opts.network {
             NetworkSpec::Enabled { allow_net } => {
                 assert_eq!(allow_net, vec!["example.com", "*.openai.com"]);
@@ -777,6 +824,7 @@ mod tests {
             entrypoint: None,
             cmd: None,
             user: None,
+            advanced: None,
             security: None,
             health_check: None,
             secrets: Some(vec![JsSecret {

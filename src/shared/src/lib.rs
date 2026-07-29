@@ -26,6 +26,9 @@ pub use generated::container_server::{Container, ContainerServer};
 pub use generated::guest_client::GuestClient;
 pub use generated::guest_server::{Guest, GuestServer};
 
+// SSH control service
+pub use generated::ssh_server::{Ssh, SshServer};
+
 // Execution service
 pub use generated::execution_client::ExecutionClient;
 pub use generated::execution_server::{Execution, ExecutionServer};

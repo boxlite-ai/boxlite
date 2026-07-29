@@ -100,12 +100,11 @@ func (p PortProtocol) String() string {
 
 // PortSpec configures a host-to-guest port forwarding rule.
 //
-// Host is the host-side port number. Use 0 to forward from the same number as
-// Guest; explicit host ports must be in 1..65535. Guest is the guest-side port
+// Host is the host-side port number. Use 0 to let the OS select an available
+// port; explicit host ports must be in 1..65535. Guest is the guest-side port
 // number and must be in 1..65535. Protocol selects the transport protocol;
 // PortProtocolUnknown defaults to TCP. The boxlite runtime currently forwards
-// TCP only and binds all host interfaces, so PortProtocolUdp and a non-empty
-// HostIP are rejected when options are built.
+// TCP only. HostIP defaults to all host interfaces when empty.
 type PortSpec struct {
 	Host     int
 	Guest    int
@@ -137,10 +136,6 @@ func (p PortSpec) toCSpec() (cPortSpec, error) {
 	default:
 		return cPortSpec{}, fmt.Errorf("invalid port protocol %s", p.Protocol)
 	}
-	if p.HostIP != "" {
-		return cPortSpec{}, fmt.Errorf("host IP binding is not supported by the boxlite runtime yet")
-	}
-
 	return cPortSpec{
 		host_port:  p.Host,
 		guest_port: p.Guest,
@@ -256,9 +251,8 @@ func WithVolumeReadOnly(hostPath, containerPath string) BoxOption {
 
 // WithPort publishes a guest port on a host port.
 //
-// The boxlite runtime currently forwards TCP only on all host interfaces;
-// specs using PortProtocolUdp or a non-empty HostIP are rejected when options
-// are built, before crossing the FFI boundary.
+// The boxlite runtime currently forwards TCP only. Host 0 asks the OS to select
+// an available local port.
 func WithPort(spec PortSpec) BoxOption {
 	return func(c *boxConfig) {
 		c.ports = append(c.ports, spec)
@@ -343,14 +337,13 @@ func buildAndFreeCOptions(image string, cfg *boxConfig) error {
 	return nil
 }
 
-// WithAdvancedOptions attaches advanced box options (currently the security
-// toggle) to the box. Security is reached through this layer, mirroring the
-// core `BoxOptions.advanced.security` model.
+// WithAdvancedOptions attaches advanced capability and security options to the
+// box, mirroring the core `BoxOptions.advanced` model.
 //
-// Build the handle via NewAdvancedBoxOptions and toggle the sandbox with
-// SetSecurityEnabled. The caller retains ownership and must call `adv.Close()`
-// after the box has been created (or sooner, if discarded). If never called,
-// the box uses the defaults (the fully-isolated security profile).
+// Build the handle via NewAdvancedBoxOptions and configure it with
+// SetCapabilities and/or SetSecurityEnabled. The caller retains ownership and
+// must call `adv.Close()` after the box has been created (or sooner, if
+// discarded). If never called, the box uses the defaults.
 //
 //	adv, _ := boxlite.NewAdvancedBoxOptions()
 //	defer adv.Close()
@@ -503,7 +496,7 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		C.boxlite_options_set_detach(cOpts, boolToCInt(*cfg.detach))
 	}
 	if cfg.advanced != nil && cfg.advanced.handle != nil {
-		// Clone the caller-owned advanced options (security, …) onto the box.
+		// Clone the caller-owned advanced options onto the box.
 		// The Go-side handle stays caller-owned; the box has its own copy after
 		// set_advanced returns.
 		C.boxlite_options_set_advanced(cOpts, cfg.advanced.handle)
@@ -518,8 +511,34 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		C.boxlite_options_set_cmd(cOpts, cArgs, C.int(argc))
 		freeCStringArray(cArgs, argc)
 	}
-
 	return cOpts, nil
+}
+
+func validateCapabilities(option string, capabilities []string) error {
+	for _, capability := range capabilities {
+		normalized := strings.ToUpper(capability)
+		if normalized == "ALL" {
+			continue
+		}
+		name := strings.TrimPrefix(normalized, "CAP_")
+		if name == "" {
+			return &Error{
+				Code:    ErrInvalidArgument,
+				Message: fmt.Sprintf("empty Linux capability in %s", option),
+			}
+		}
+		for index, character := range []byte(name) {
+			isLetter := character >= 'A' && character <= 'Z'
+			isTail := isLetter || character >= '0' && character <= '9' || character == '_'
+			if index == 0 && !isLetter || index > 0 && !isTail {
+				return &Error{
+					Code:    ErrInvalidArgument,
+					Message: fmt.Sprintf("malformed Linux capability in %s: %q", option, capability),
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func boolToCInt(v bool) C.int {

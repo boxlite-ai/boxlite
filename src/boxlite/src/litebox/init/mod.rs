@@ -12,7 +12,8 @@
 //!      GuestRootfs      ─┘  (prepare guest, create COW disk)
 //!   3. VmmSpawn             (build config + spawn VM)
 //!   4. GuestConnect         (wait for guest ready)
-//!   5. GuestInit            (initialize container)
+//!   5. GuestInit       ─┬─   (initialize container)
+//!      PortPublish     ─┘    (publish host ports)
 //!
 //! Stopped (restart):
 //!   1. Filesystem           (load existing layout)
@@ -21,11 +22,13 @@
 //!      GuestRootfs      ─┘  (reuse existing COW disk)
 //!   3. VmmSpawn             (build config + spawn NEW VM)
 //!   4. GuestConnect         (wait for guest ready)
-//!   5. GuestInit            (re-initialize container in new VM)
+//!   5. GuestInit       ─┬─   (re-initialize container in new VM)
+//!      PortPublish     ─┘    (republish host ports)
 //!
 //! Running (reattach):
 //!   1. VmmAttach            (attach to running VM)
 //!   2. GuestConnect         (reconnect to guest)
+//!   3. PortPublish          (reconcile publication after a core crash)
 //! ```
 //!
 //! `CleanupGuard` provides RAII cleanup on failure.
@@ -47,6 +50,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+pub(crate) use tasks::PortPublishTask;
 use tasks::{
     BootAssetsTask, ContainerRootfsTask, FilesystemTask, GuestConnectTask, GuestInitTask,
     GuestRootfsTask, InitCtx, VmmAttachTask, VmmSpawnTask,
@@ -77,9 +81,8 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
             ]),
             // Phase 3: Build config and spawn VM
             Stage::sequential(vec![Box::new(VmmSpawnTask)]),
-            // Phase 4: Connect to guest and initialize container
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
-            Stage::sequential(vec![Box::new(GuestInitTask)]),
+            Stage::parallel(vec![Box::new(GuestInitTask), Box::new(PortPublishTask)]),
         ],
         // Stopped and Failed both run the restart pipeline. A Failed box
         // has its rootfs preserved (per BoxStatus::Failed doc) and is
@@ -96,13 +99,15 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
             Stage::sequential(vec![Box::new(VmmSpawnTask)]),
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
             // GuestInit must run - new VM process has fresh guest daemon
-            Stage::sequential(vec![Box::new(GuestInitTask)]),
+            Stage::parallel(vec![Box::new(GuestInitTask), Box::new(PortPublishTask)]),
         ],
         BoxStatus::Running => vec![
             // Reattach: vmm_attach gates on ProcessIdentity AND surfaces
-            // any crash via exit_file, then connect to guest.
+            // any crash via exit_file, then connect to guest and reconcile
+            // any publication interrupted by a prior core-process crash.
             Stage::sequential(vec![Box::new(VmmAttachTask)]),
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
+            Stage::sequential(vec![Box::new(PortPublishTask)]),
         ],
         other => {
             return Err(BoxliteError::InvalidState(format!(
@@ -285,12 +290,14 @@ impl BoxBuilder {
             // vmm_spawn (which also used it to produce the wire spec) or, on the
             // reattach path, by vmm_attach; both thread it here for runtime control.
             let network = ctx.network_backend.take();
+            let published_ports = ctx.published_ports.take();
 
             // Build LiveState
             let live_state = LiveState::new(
                 handler,
                 guest_session,
                 network,
+                published_ports,
                 metrics,
                 container_disk,
                 guest_disk,
@@ -354,7 +361,12 @@ mod plan_tests {
             ),
             (ExecutionMode::Sequential, vec!["vmm_spawn".to_string()]),
             (ExecutionMode::Sequential, vec!["guest_connect".to_string()]),
-            (ExecutionMode::Sequential, vec!["guest_init".to_string()]),
+            // Publication needs a live gvproxy, which the shim binds before
+            // it boots the VM; it has no reason to gate container init.
+            (
+                ExecutionMode::Parallel,
+                vec!["guest_init".to_string(), "port_publish".to_string()],
+            ),
         ]
     }
 
@@ -376,7 +388,9 @@ mod plan_tests {
             plan_shape(BoxStatus::Running),
             vec![
                 (ExecutionMode::Sequential, vec!["vmm_attach".to_string()]),
-                (ExecutionMode::Sequential, vec!["guest_connect".to_string()],),
+                (ExecutionMode::Sequential, vec!["guest_connect".to_string()]),
+                // Reattach has no guest_init to overlap with.
+                (ExecutionMode::Sequential, vec!["port_publish".to_string()]),
             ]
         );
     }
@@ -402,6 +416,28 @@ mod plan_tests {
         );
 
         let enabled = ExperimentalFeatures::parse("custom-kernel").unwrap();
+        validate_persisted_options(&enabled, &options).unwrap();
+    }
+
+    #[test]
+    fn persisted_nested_virtualization_uses_injected_feature_state() {
+        let options = crate::BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                nested_virtualization: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = validate_persisted_options(&ExperimentalFeatures::default(), &options)
+            .expect_err("persisted nested virtualization must be disabled by default");
+        assert!(
+            error
+                .to_string()
+                .contains("ExperimentalFeature::NestedVirtualization")
+        );
+
+        let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
         validate_persisted_options(&enabled, &options).unwrap();
     }
 }

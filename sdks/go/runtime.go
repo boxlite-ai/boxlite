@@ -191,6 +191,9 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 // The second return value, created, is true when a new box was created and
 // false when an existing box was adopted — letting callers skip one-time
 // initialization for an adopted box.
+// General options are ignored when adopting an existing box. The local
+// runtime additionally refuses to adopt one whose capability policy differs
+// from the requested one.
 //
 // On context cancellation it only frees the returned handle (like Get); it
 // never force-removes the box, because an adopted box may be one the caller did

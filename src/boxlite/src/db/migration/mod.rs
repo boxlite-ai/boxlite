@@ -10,6 +10,7 @@ mod v4_to_v5;
 mod v5_to_v6;
 mod v6_to_v7;
 mod v7_to_v8;
+mod v8_to_v9;
 
 use std::path::Path;
 
@@ -79,5 +80,6 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(v5_to_v6::ReplaceSnapshots),
         Box::new(v6_to_v7::MoveDisksAndAddBaseDisk),
         Box::new(v7_to_v8::RenameNetworkSpec),
+        Box::new(v8_to_v9::PreservePublishedPorts),
     ]
 }

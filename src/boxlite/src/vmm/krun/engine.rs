@@ -306,6 +306,9 @@ impl Vmm for Krun {
             )?;
 
             Self::set_kernel(&config, &ctx)?;
+            if config.nested_virtualization {
+                ctx.enable_nested_virtualization()?;
+            }
 
             // Configure net from connection info passed by parent process
             if let Some(connection) = &config.network_backend_endpoint {

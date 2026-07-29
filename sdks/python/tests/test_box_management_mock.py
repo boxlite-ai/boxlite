@@ -59,6 +59,12 @@ class TestExports:
 
         assert BoxStateInfo is not None
 
+    def test_network_info_types_importable(self):
+        from boxlite import NetworkInfo, PublishedPort
+
+        assert NetworkInfo is not None
+        assert PublishedPort is not None
+
     def test_all_contains_key_types(self):
         """Key management types are listed in __all__."""
         assert hasattr(boxlite, "__all__")
@@ -67,6 +73,8 @@ class TestExports:
             "Box",
             "BoxInfo",
             "BoxStateInfo",
+            "NetworkInfo",
+            "PublishedPort",
             "ImageHandle",
             "ImageInfo",
             "ImagePullResult",
@@ -102,8 +110,25 @@ class TestBoxInfoStructure:
     def test_has_memory_mib(self, box_info_cls):
         assert "memory_mib" in dir(box_info_cls)
 
+    def test_has_network(self, box_info_cls):
+        assert "network" in dir(box_info_cls)
+
     def test_has_repr(self, box_info_cls):
         assert hasattr(box_info_cls, "__repr__")
+
+
+class TestNetworkInfoStructure:
+    """Test that resolved publications use named Python objects."""
+
+    @pytest.mark.parametrize("field", ["mode", "allow_net", "published_ports"])
+    def test_network_info_fields(self, field):
+        assert field in dir(boxlite.NetworkInfo)
+
+    @pytest.mark.parametrize(
+        "field", ["guest_port", "host_ip", "host_port", "protocol"]
+    )
+    def test_published_port_fields(self, field):
+        assert field in dir(boxlite.PublishedPort)
 
 
 class TestBoxStateInfoStructure:
@@ -149,7 +174,7 @@ class TestBoxliteManagementMethods:
 
 
 class TestSyncBoxliteManagementMethods:
-    """Test that SyncBoxlite exposes the same management methods."""
+    """Test SyncBoxlite's sync-capable management methods."""
 
     @pytest.fixture()
     def cls(self):
@@ -160,10 +185,14 @@ class TestSyncBoxliteManagementMethods:
 
     @pytest.mark.parametrize(
         "method",
-        ["list_info", "get_info", "get", "remove", "create", "get_or_create", "images"],
+        ["get", "remove", "create", "get_or_create", "images"],
     )
     def test_method_exists(self, cls, method):
         assert hasattr(cls, method), f"SyncBoxlite missing method: {method}"
+
+    @pytest.mark.parametrize("method", ["list_info", "get_info"])
+    def test_async_metadata_method_is_absent(self, cls, method):
+        assert not hasattr(cls, method), f"SyncBoxlite unexpectedly exposes: {method}"
 
 
 class TestModuleMetadata:

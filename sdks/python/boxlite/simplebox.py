@@ -195,14 +195,14 @@ class SimpleBox:
             )
         return self._box.id
 
-    def info(self):
+    async def info(self):
         """Get box information."""
         if not self._started:
             raise RuntimeError(
                 "Box not started. Use 'async with SimpleBox(...) as box:' "
                 "or call 'await box.start()' first."
             )
-        return self._box.info()
+        return await self._box.info()
 
     @property
     def created(self) -> bool | None:

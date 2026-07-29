@@ -48,17 +48,15 @@ pub struct GvproxyInstance {
 }
 
 impl GvproxyInstance {
-    /// Create a new gvproxy instance with the given socket path and port mappings
+    /// Create a new gvproxy instance with the given socket path.
     ///
     /// This automatically initializes the logging bridge on first use.
     ///
     /// # Arguments
     ///
     /// * `socket_path` - Caller-provided Unix socket path (must be unique per box)
-    /// * `port_mappings` - List of (host_port, guest_port) tuples for port forwarding
     pub(crate) fn new(
         socket_path: PathBuf,
-        port_mappings: &[(u16, u16)],
         allow_net: Vec<String>,
         secrets: Vec<super::config::GvproxySecretConfig>,
         ca_cert_pem: Option<&str>,
@@ -70,11 +68,10 @@ impl GvproxyInstance {
         // Derive gvproxy's control socket as a sibling of the data socket, so the
         // path is never plumbed through neutral config/layout/socket types.
         let control_socket_path = super::control_socket_path(&socket_path);
-        let mut config =
-            super::config::GvproxyConfig::new(socket_path.clone(), port_mappings.to_vec())
-                .with_control_socket_path(control_socket_path)
-                .with_allow_net(allow_net)
-                .with_secrets(secrets);
+        let mut config = super::config::GvproxyConfig::new(socket_path.clone())
+            .with_control_socket_path(control_socket_path)
+            .with_allow_net(allow_net)
+            .with_secrets(secrets);
 
         if let (Some(cert), Some(key)) = (ca_cert_pem, ca_key_pem) {
             config = config.with_ca(cert.to_string(), key.to_string());
@@ -107,7 +104,6 @@ impl GvproxyInstance {
         let secrets = spec.secrets.iter().map(Into::into).collect();
         let instance = Self::new(
             spec.socket_path.clone(),
-            &spec.port_mappings,
             spec.allow_net.clone(),
             secrets,
             spec.ca_cert_pem.as_deref(),
@@ -222,15 +218,8 @@ mod tests {
     #[ignore] // Requires libgvproxy.dylib to be available
     fn test_gvproxy_create_destroy() {
         let socket_path = PathBuf::from("/tmp/test-gvproxy-instance.sock");
-        let instance = GvproxyInstance::new(
-            socket_path.clone(),
-            &[(8080, 80), (8443, 443)],
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-        )
-        .unwrap();
+        let instance =
+            GvproxyInstance::new(socket_path.clone(), Vec::new(), Vec::new(), None, None).unwrap();
 
         // Socket path matches what we provided
         assert_eq!(instance.socket_path(), socket_path);
@@ -244,24 +233,10 @@ mod tests {
         let path1 = PathBuf::from("/tmp/test-gvproxy-1.sock");
         let path2 = PathBuf::from("/tmp/test-gvproxy-2.sock");
 
-        let instance1 = GvproxyInstance::new(
-            path1.clone(),
-            &[(8080, 80)],
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-        )
-        .unwrap();
-        let instance2 = GvproxyInstance::new(
-            path2.clone(),
-            &[(9090, 90)],
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-        )
-        .unwrap();
+        let instance1 =
+            GvproxyInstance::new(path1.clone(), Vec::new(), Vec::new(), None, None).unwrap();
+        let instance2 =
+            GvproxyInstance::new(path2.clone(), Vec::new(), Vec::new(), None, None).unwrap();
 
         assert_ne!(instance1.id(), instance2.id());
         assert_ne!(instance1.socket_path(), instance2.socket_path());

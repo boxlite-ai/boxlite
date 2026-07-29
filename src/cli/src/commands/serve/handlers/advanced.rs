@@ -27,7 +27,10 @@ pub(in crate::commands::serve) async fn clone_box(
 
     match litebox.clone_box(CloneOptions::default(), req.name).await {
         Ok(cloned) => {
-            let info = cloned.info();
+            let info = match cloned.info().await {
+                Ok(info) => info,
+                Err(e) => return error_from_boxlite(&e),
+            };
             let cloned_id = info.id.to_string();
             let resp = box_info_to_response(&info);
             state
@@ -116,10 +119,13 @@ pub(in crate::commands::serve) async fn import_box(
         );
     }
 
-    let archive = BoxArchive::new(archive_path);
+    let archive = BoxArchive::from_untrusted_upload(archive_path);
     match state.runtime.import_box(archive, query.name).await {
         Ok(litebox) => {
-            let info = litebox.info();
+            let info = match litebox.info().await {
+                Ok(info) => info,
+                Err(e) => return error_from_boxlite(&e),
+            };
             let box_id = info.id.to_string();
             let resp = box_info_to_response(&info);
             state.boxes.write().await.insert(box_id, Arc::new(litebox));

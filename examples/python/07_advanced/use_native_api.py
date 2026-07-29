@@ -67,7 +67,7 @@ async def example_custom_runtime():
     print(f"✓ Box created with limits: {box.id}")
 
     # Get box info
-    info = box.info()
+    info = await box.info()
     print(f"✓ Box info:")
     print(f"  ID: {info.id}")
     print(f"  State: {info.state.status}")
@@ -244,7 +244,7 @@ async def example_list_and_info():
 
     # Get specific box info
     if boxes:
-        info = boxes[0].info()
+        info = await boxes[0].info()
         print(f"\n✓ Box info for {boxes[0].id}:")
         print(f"  State: {info.state.status}")
         print(f"  Image: {info.image}")
@@ -335,8 +335,6 @@ async def example_working_directory():
 
     await execution.wait()
 
-    # Get box info to see port mappings
-    info = box.info()
     print(f"✓ Box configuration verified")
 
     await box.stop()

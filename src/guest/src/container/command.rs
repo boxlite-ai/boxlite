@@ -3,6 +3,7 @@
 //! Provides a builder pattern for spawning processes inside containers,
 //! following the `std::process::Command` pattern.
 
+use super::capabilities::CapabilitySet;
 use super::zygote::{self, BuildSpec};
 use crate::service::exec::exec_handle::{ExecHandle, PtyConfig};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -57,6 +58,9 @@ pub struct ContainerCommand {
     /// Rootfs path for resolving user overrides from /etc/passwd.
     rootfs: Option<PathBuf>,
 
+    /// Resolved capability set inherited by every exec process.
+    capabilities: CapabilitySet,
+
     /// Working directory (None = use default "/")
     cwd: Option<String>,
 
@@ -65,6 +69,10 @@ pub struct ContainerCommand {
 
     /// PTY configuration (set via with_pty())
     pty_config: Option<PtyConfig>,
+
+    /// Trusted in-process workload selection. Public exec arguments never set
+    /// this field, even if argv[0] matches the internal placeholder.
+    ssh_workload: Option<crate::service::ssh::SshWorkload>,
 }
 
 impl ContainerCommand {
@@ -78,6 +86,7 @@ impl ContainerCommand {
         env: HashMap<String, String>,
         user: (u32, u32),
         rootfs: PathBuf,
+        capabilities: CapabilitySet,
     ) -> Self {
         Self {
             program: None,
@@ -86,9 +95,11 @@ impl ContainerCommand {
             user,
             user_override: None,
             rootfs: Some(rootfs),
+            capabilities,
             cwd: None,
             console_socket: None,
             pty_config: None,
+            ssh_workload: None,
             id,
             state_root,
         }
@@ -110,6 +121,14 @@ impl ContainerCommand {
     /// Resolved at spawn time from the container's /etc/passwd.
     pub fn with_user(mut self, user: String) -> Self {
         self.user_override = Some(user);
+        self
+    }
+
+    pub(crate) fn with_ssh_workload(mut self, workload: crate::service::ssh::SshWorkload) -> Self {
+        let (program, args) = workload.placeholder();
+        self.program = Some(program);
+        self.args = args;
+        self.ssh_workload = Some(workload);
         self
     }
 
@@ -360,6 +379,16 @@ impl ContainerCommand {
         let program = self.program.clone().unwrap_or_default();
         let mut container_args = vec![program.clone()];
         container_args.extend_from_slice(self.args.as_slice());
+        let ssh_workload = self.ssh_workload.clone();
+        if self.console_socket.is_some()
+            && ssh_workload
+                .as_ref()
+                .is_some_and(|workload| !workload.supports_pty())
+        {
+            return Err(BoxliteError::Config(
+                "this internal SSH workload does not support a PTY".into(),
+            ));
+        }
 
         let (uid, gid) = self.resolve_exec_user()?;
 
@@ -384,8 +413,10 @@ impl ContainerCommand {
             cwd: self.cwd.clone().unwrap_or_else(|| "/".to_string()).into(),
             env: self.env.clone(),
             args: container_args.clone(),
+            ssh_workload,
             uid,
             gid,
+            capabilities: self.capabilities.clone(),
         };
 
         // Blocking IPC to zygote — use spawn_blocking to not block tokio.
@@ -480,6 +511,7 @@ pub(crate) fn create_pty_child(
     config: PtyConfig,
 ) -> BoxliteResult<ExecHandle> {
     set_pty_window_size(&pty_master, &config)?;
+    crate::service::exec::tty::apply_modes(&pty_master, &config.modes)?;
     let (stdin, stdout) = reconcile_pty_fds(&pty_master)?;
 
     // PTY mode: stderr is None (merged into stdout)
@@ -560,6 +592,7 @@ mod tests {
             HashMap::new(),
             (0, 0),
             PathBuf::from("/tmp/rootfs"),
+            CapabilitySet::default(),
         )
     }
 
@@ -630,6 +663,7 @@ mod tests {
             cols: 80,
             x_pixels: 0,
             y_pixels: 0,
+            modes: Vec::new(),
         };
         let cmd = make_cmd().with_pty(config);
         let pty = cmd.pty_config.unwrap();
@@ -653,6 +687,27 @@ mod tests {
         assert_eq!(cmd.env.get("BAZ"), Some(&"qux".to_string()));
         assert_eq!(cmd.cwd, Some("/tmp".to_string()));
         assert_eq!(cmd.user_override, Some("nobody".to_string()));
+    }
+
+    #[test]
+    fn public_command_arguments_do_not_select_the_ssh_executor() {
+        let (program, args) = crate::service::ssh::SshWorkload::Sftp.placeholder();
+        let cmd = make_cmd().program(program).args(args);
+
+        assert_eq!(cmd.ssh_workload, None);
+    }
+
+    #[test]
+    fn trusted_ssh_workload_sets_typed_state_and_placeholder() {
+        let workload = crate::service::ssh::SshWorkload::DirectStreamlocal {
+            socket_path: "/run/service.sock".into(),
+        };
+        let (expected_program, expected_args) = workload.placeholder();
+        let cmd = make_cmd().with_ssh_workload(workload.clone());
+
+        assert_eq!(cmd.ssh_workload, Some(workload));
+        assert_eq!(cmd.program, Some(expected_program));
+        assert_eq!(cmd.args, expected_args);
     }
 
     // ========================================================================

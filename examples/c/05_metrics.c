@@ -9,9 +9,9 @@
 static void print_runtime_metrics(CBoxliteRuntime *runtime) {
   CBoxliteError error = {0};
   CRuntimeMetrics metrics = {0};
-  BoxliteErrorCode code = boxlite_runtime_metrics(runtime, &metrics, &error);
+  BoxliteErrorCode code =
+      example_get_runtime_metrics(runtime, &metrics, &error);
   if (code != Ok) {
-    print_error("runtime metrics", &error);
     boxlite_error_free(&error);
     return;
   }
@@ -21,12 +21,12 @@ static void print_runtime_metrics(CBoxliteRuntime *runtime) {
          metrics.total_exec_errors);
 }
 
-static void print_box_metrics(CBoxHandle *box) {
+static void print_box_metrics(CBoxliteRuntime *runtime, CBoxHandle *box) {
   CBoxliteError error = {0};
   CBoxMetrics metrics = {0};
-  BoxliteErrorCode code = boxlite_box_metrics(box, &metrics, &error);
+  BoxliteErrorCode code =
+      example_get_box_metrics(runtime, box, &metrics, &error);
   if (code != Ok) {
-    print_error("box metrics", &error);
     boxlite_error_free(&error);
     return;
   }
@@ -57,27 +57,28 @@ int main(void) {
   const char *const echo_args[] = {"test"};
   int exit_code = 0;
   for (int i = 0; i < 5; i++) {
-    execute_and_wait(box, "/bin/echo", echo_args, 1, NULL, NULL, &exit_code,
-                     &error);
+    execute_and_wait(runtime, box, "/bin/echo", echo_args, 1, NULL, NULL,
+                     &exit_code, &error);
   }
 
   printf("Runtime metrics after commands:\n");
   print_runtime_metrics(runtime);
   printf("\nBox metrics:\n");
-  print_box_metrics(box);
+  print_box_metrics(runtime, box);
 
   printf("\nMetric samples:\n");
   const char *const uname_args[] = {"-a"};
   for (int i = 0; i < 3; i++) {
-    execute_and_wait(box, "/bin/uname", uname_args, 1, NULL, NULL, &exit_code,
-                     &error);
+    execute_and_wait(runtime, box, "/bin/uname", uname_args, 1, NULL, NULL,
+                     &exit_code, &error);
     printf("sample %d: ", i + 1);
-    print_box_metrics(box);
+    print_box_metrics(runtime, box);
     sleep(1);
   }
 
   char *id = boxlite_box_id(box);
-  boxlite_remove(runtime, id, 1, &error);
+  example_remove_box(runtime, id, 1, &error);
+  boxlite_box_free(box);
   boxlite_free_string(id);
   boxlite_runtime_free(runtime);
 

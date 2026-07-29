@@ -229,11 +229,13 @@ BoxLite uses gvproxy for NAT networking by default. All boxes can:
 - Resolve DNS
 - Make outbound connections
 
-### Port Forwarding
+### Port Publication
 
-Map host ports to guest ports for incoming connections.
+Explicitly publish guest ports when ordinary host applications need a local TCP
+listener. The local runtime owns the listener for the lifetime of the running
+box and accepts repeated connections.
 
-**Basic Port Forwarding:**
+**Basic Port Publication:**
 
 ```python
 import boxlite
@@ -258,7 +260,7 @@ ports=[
     (8443, 443, "tcp"),     # HTTPS
     (5432, 5432, "tcp"),    # PostgreSQL
     (6379, 6379, "tcp"),    # Redis
-    (53, 53, "udp"),        # DNS (UDP)
+    {"guest_port": 3000},   # Automatic host port
 ]
 ```
 
@@ -268,6 +270,18 @@ ports=[
 # Map host port 3000 to guest port 8000
 ports=[(3000, 8000, "tcp")]
 ```
+
+Port publication is available only with the local runtime and supports TCP. It
+is appropriate for browsers, database clients, and other programs that expect a
+normal host address.
+
+For SDK code that must work with local and remote runtimes, use
+`box.network.tunnel(port)` and consume its byte stream with `connect()`. A tunnel
+handle represents one connection; request another handle for another connection.
+Remote CLI users can run `boxlite network tunnel BOX PORT` to obtain the public
+service URL.
+
+Image `EXPOSE` declarations are metadata only and never create host listeners.
 
 ### Testing Connectivity
 
@@ -333,7 +347,7 @@ box while networking is enabled.
 Monitor network usage:
 
 ```python
-box = runtime.create(boxlite.BoxOptions(image="alpine"))
+box = await runtime.create(boxlite.BoxOptions(image="alpine"))
 metrics = await box.metrics()
 
 print(f"Bytes sent: {metrics.network_bytes_sent}")
@@ -518,11 +532,11 @@ RUST_LOG=debug cargo run
 **Get Box Information:**
 
 ```python
-box = runtime.create(boxlite.BoxOptions(image="alpine"))
+box = await runtime.create(boxlite.BoxOptions(image="alpine"))
 info = await box.info()
 
 print(f"ID: {info.id}")
-print(f"Status: {info.status}")
+print(f"Status: {info.state.status}")
 print(f"Image: {info.image}")
 print(f"CPUs: {info.cpus}")
 print(f"Memory: {info.memory_mib} MiB")
@@ -543,9 +557,9 @@ print(f"Network received: {metrics.network_bytes_received}")
 **List All Boxes:**
 
 ```python
-boxes = runtime.list()
+boxes = await runtime.list_info()
 for info in boxes:
-    print(f"{info.id}: {info.status} ({info.image})")
+    print(f"{info.id}: {info.state.status} ({info.image})")
 ```
 
 ### Common Issues & Debug Steps
@@ -625,7 +639,7 @@ for info in boxes:
 
 3. Monitor runtime metrics:
    ```python
-   runtime_metrics = runtime.metrics()
+   runtime_metrics = await runtime.metrics()
    print(f"Active boxes: {runtime_metrics.active_boxes}")
    print(f"Total exec calls: {runtime_metrics.total_exec_calls}")
    ```
@@ -768,7 +782,7 @@ asyncio.run(main())
 **Concurrency Limits:**
 - Limited by host resources (CPU, memory)
 - Each box: minimum 128 MiB + overhead
-- Monitor with `runtime.metrics().active_boxes`
+- Monitor with `(await runtime.metrics()).active_boxes`
 
 **Best Practices:**
 - Use asyncio for concurrent execution

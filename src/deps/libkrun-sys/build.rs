@@ -9,26 +9,27 @@ use std::process::{Command, Stdio};
 
 // libkrunfw release configuration
 // Source: https://github.com/boxlite-ai/libkrunfw (fork with prebuilt releases)
-const LIBKRUNFW_VERSION: &str = "v5.3.0";
+const LIBKRUNFW_VERSION: &str = "v5.4.0";
 
 // macOS: Download prebuilt kernel.c, compile locally to .dylib
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const LIBKRUNFW_PREBUILT_URL: &str = "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.3.0/libkrunfw-prebuilt-aarch64.tgz";
+const LIBKRUNFW_PREBUILT_URL: &str =
+    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.4.0/libkrunfw-prebuilt-aarch64.tgz";
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const LIBKRUNFW_SHA256: &str = "12b9401d7735d1682450e4d025273c5016ec2237dcbfb76b2f0a152be6e606d6";
+const LIBKRUNFW_SHA256: &str = "1d1b848cee7053c3d26915f30312560343a4e382b5b4e83be1d6755939582de6";
 
 // Linux: Download pre-compiled .so directly (no build needed)
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const LIBKRUNFW_SO_URL: &str =
-    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.3.0/libkrunfw-x86_64.tgz";
+    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.4.0/libkrunfw-x86_64.tgz";
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const LIBKRUNFW_SHA256: &str = "0a7bb64a35a273b8501801dd69b75736a8c676aa21aa62fb5642842cda9dc91d";
+const LIBKRUNFW_SHA256: &str = "63df4e4cc99d6c876757fb2f374ce2fee00f3408a1133b2c44600ce0195286b5";
 
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const LIBKRUNFW_SO_URL: &str =
-    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.3.0/libkrunfw-aarch64.tgz";
+    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.4.0/libkrunfw-aarch64.tgz";
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-const LIBKRUNFW_SHA256: &str = "8b5b9211da5445d9301dafb2201431f4392ab96455512bce63a5cfbd33c49839";
+const LIBKRUNFW_SHA256: &str = "e52a05f83baf1e0f6d3e58b96837bcd8729820ecea74a55a1903bd47e0505c57";
 
 // Library directory name differs by platform
 #[cfg(target_os = "macos")]
@@ -74,7 +75,7 @@ struct Fetcher;
 
 impl Fetcher {
     /// Downloads, verifies, and extracts a tarball.
-    /// Skips download if tarball already exists at `tarball_path`.
+    /// Reuses an existing tarball only after verifying its checksum.
     pub fn fetch(
         url: &str,
         sha256: &str,
@@ -83,8 +84,8 @@ impl Fetcher {
     ) -> io::Result<()> {
         if !tarball_path.exists() {
             Self::download(url, tarball_path)?;
-            Self::verify_sha256(tarball_path, sha256)?;
         }
+        Self::verify_sha256(tarball_path, sha256)?;
         Self::extract_tarball(tarball_path, extract_dir)
     }
 
@@ -158,17 +159,22 @@ impl Fetcher {
     }
 }
 
+fn libkrunfw_cache_key() -> String {
+    format!("{LIBKRUNFW_VERSION}-{}", &LIBKRUNFW_SHA256[..12])
+}
+
 /// Downloads and extracts the prebuilt libkrunfw tarball (macOS).
 /// Returns the path to the extracted source directory containing kernel.c.
 #[cfg(target_os = "macos")]
 fn download_libkrunfw_prebuilt(out_dir: &Path) -> PathBuf {
-    let versioned_dir = format!("libkrunfw-src-{LIBKRUNFW_VERSION}");
-    let tarball_path = out_dir.join(format!("libkrunfw-prebuilt-{LIBKRUNFW_VERSION}.tar.gz"));
+    let cache_key = libkrunfw_cache_key();
+    let versioned_dir = format!("libkrunfw-src-{cache_key}");
+    let tarball_path = out_dir.join(format!("libkrunfw-prebuilt-{cache_key}.tar.gz"));
     let extract_dir = out_dir.join(&versioned_dir);
     let src_dir = extract_dir.join("libkrunfw");
 
     if src_dir.join("kernel.c").exists() {
-        println!("cargo:warning=Using cached libkrunfw source ({LIBKRUNFW_VERSION})");
+        println!("cargo:warning=Using cached libkrunfw source ({cache_key})");
         return src_dir;
     }
 
@@ -194,10 +200,11 @@ fn download_libkrunfw_prebuilt(out_dir: &Path) -> PathBuf {
 #[cfg(target_os = "linux")]
 fn download_libkrunfw_so(install_dir: &Path) {
     let lib_dir = install_dir.join(LIB_DIR);
+    let cache_key = libkrunfw_cache_key();
 
-    let version_marker = install_dir.join(format!(".version-{LIBKRUNFW_VERSION}"));
+    let version_marker = install_dir.join(format!(".version-{cache_key}"));
     if version_marker.exists() {
-        println!("cargo:warning=Using cached libkrunfw.so ({LIBKRUNFW_VERSION})");
+        println!("cargo:warning=Using cached libkrunfw.so ({cache_key})");
         return;
     }
 
@@ -209,7 +216,7 @@ fn download_libkrunfw_so(install_dir: &Path) {
     fs::create_dir_all(install_dir)
         .unwrap_or_else(|e| panic!("Failed to create install dir: {}", e));
 
-    let tarball_path = install_dir.join(format!("libkrunfw-{LIBKRUNFW_VERSION}.tgz"));
+    let tarball_path = install_dir.join(format!("libkrunfw-{cache_key}.tgz"));
 
     Fetcher::fetch(
         LIBKRUNFW_SO_URL,
@@ -219,7 +226,7 @@ fn download_libkrunfw_so(install_dir: &Path) {
     )
     .unwrap_or_else(|e| panic!("Failed to fetch libkrunfw: {}", e));
 
-    fs::write(&version_marker, LIBKRUNFW_VERSION)
+    fs::write(&version_marker, &cache_key)
         .unwrap_or_else(|e| panic!("Failed to write version marker: {}", e));
 
     println!(

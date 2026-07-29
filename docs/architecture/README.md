@@ -2,6 +2,8 @@
 
 Related design: [AutoPause / AutoResume / AutoDelete](./auto-pause-resume-design.md)
 
+Container security design: [Linux capability API](./container-capabilities.md)
+
 ## Overview
 
 BoxLite is an embeddable virtual machine runtime that follows the SQLite philosophy: a library that
@@ -126,6 +128,12 @@ verifies their checksums, and atomically publishes the generation before
 `VmmSpawn`. Restarting a stopped or failed Box reuses the published generation,
 so the caller-owned source files are only required when a generation must first
 be created. Reattaching to a running Box skips preparation.
+
+Nested virtualization is also an
+[RC feature](../experimental/nested-virtualization.md). Its opt-in is persisted
+with the box and rechecked on every local start. The VMM exposes virtualization
+extensions to the guest, then the guest agent grants only its `/dev/kvm` device
+to the OCI workload.
 
 ### ShimController
 
@@ -358,7 +366,8 @@ Box                    gvproxy                  Internet
 **Features:**
 
 - Full outbound internet access
-- Port forwarding (TCP/UDP)
+- Local port publication (TCP)
+- Local one-shot service tunnels
 - Built-in DHCP and DNS
 - Network metrics (bytes sent/received)
 
@@ -367,6 +376,16 @@ Box                    gvproxy                  Internet
 QEMU's user-mode networking stack.
 
 **Use case:** Environments where gvproxy isn't available.
+
+### Service Access Across Runtimes
+
+The box network tunnel API is portable across local and REST runtimes, but its
+transport is backend-specific. Local tunnels return a prepared gvproxy
+connection; REST tunnels connect through the remote service proxy and also
+carry its public URI. Each SDK tunnel handle represents one connection.
+
+Explicit host port publication is a separate local-runtime feature that owns a
+TCP listener and accepts repeated connections.
 
 ### Network Configuration
 

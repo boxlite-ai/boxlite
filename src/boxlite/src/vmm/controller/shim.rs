@@ -324,6 +324,7 @@ impl VmmController for ShimController {
             // Box identification and security (from ShimController)
             box_id: self.box_id.to_string(),
             security: self.options.advanced.security.clone(),
+            nested_virtualization: config.nested_virtualization,
             // VM configuration
             cpus: config.cpus,
             memory_mib: config.memory_mib,
@@ -372,7 +373,8 @@ impl VmmController for ShimController {
             &self.layout,
             self.box_id.as_str(),
             &self.options,
-        );
+        )
+        .with_nested_virtualization(config.nested_virtualization);
         let spawned = spawner.spawn(&config_json, config.detach)?;
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();

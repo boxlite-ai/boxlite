@@ -8,10 +8,13 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use crate::disk::constants::filenames as disk_filenames;
 use crate::litebox::LiteBox;
 use crate::litebox::archive::{
-    ArchiveManifest, MANIFEST_FILENAME, MAX_SUPPORTED_VERSION, extract_archive, move_file,
-    sha256_file,
+    ArchiveManifest, MANIFEST_FILENAME, MAX_SUPPORTED_VERSION, PUBLISHED_PORTS_ARCHIVE_VERSION,
+    extract_archive, move_file, sha256_file,
 };
-use crate::runtime::options::{BoxArchive, BoxOptions, RootfsSpec};
+use crate::runtime::advanced_options::SecurityOptions;
+use crate::runtime::options::{
+    ArchiveImportPolicy, BoxArchive, BoxOptions, RootfsSpec, normalize_legacy_ports,
+};
 use crate::runtime::rt_impl::RuntimeImpl;
 use crate::runtime::types::BoxStatus;
 
@@ -42,6 +45,8 @@ pub(crate) async fn import_box(
                 BoxliteError::Internal(format!("Import extraction task panicked: {}", e))
             })??;
 
+    let options = options_from_manifest(&manifest, archive.import_policy())?;
+
     // Phase 2: Validate disks and install into a staging directory (blocking I/O).
     // The staging dir lives inside temp_dir; provision_box will rename it.
     let staging_dir = temp_dir.path().join("staging");
@@ -50,12 +55,6 @@ pub(crate) async fn import_box(
     tokio::task::spawn_blocking(move || install_disks(&temp_path, &staging_clone))
         .await
         .map_err(|e| BoxliteError::Internal(format!("Import install task panicked: {}", e)))??;
-
-    // Use full BoxOptions from v3+ manifest, or reconstruct from image for v1/v2.
-    let options = manifest.box_options.unwrap_or_else(|| BoxOptions {
-        rootfs: RootfsSpec::Image(manifest.image),
-        ..Default::default()
-    });
 
     let litebox = runtime
         .provision_box(staging_dir, name, options, BoxStatus::Stopped)
@@ -68,6 +67,64 @@ pub(crate) async fn import_box(
     );
 
     Ok(litebox)
+}
+
+/// Read the persisted configuration, falling back to the v1/v2 image field.
+///
+/// An archive is untrusted input, so its options are validated here rather
+/// than after disks have been installed and box metadata persisted.
+fn options_from_manifest(
+    manifest: &ArchiveManifest,
+    policy: ArchiveImportPolicy,
+) -> BoxliteResult<BoxOptions> {
+    let mut options = manifest.box_options.clone().unwrap_or_else(|| BoxOptions {
+        rootfs: RootfsSpec::Image(manifest.image.clone()),
+        ..Default::default()
+    });
+    // Up to v4 an archive's ports carried no publication semantics: a null
+    // host port meant the guest port, and host_ip and protocol were ignored.
+    // Canonicalize before sanitize, so the rewritten mappings are validated.
+    if manifest.version < PUBLISHED_PORTS_ARCHIVE_VERSION {
+        let changed_mappings = normalize_legacy_ports(&mut options.ports);
+        if changed_mappings > 0 {
+            tracing::warn!(
+                archive_version = manifest.version,
+                changed_mappings,
+                "Canonicalized legacy archive port mappings"
+            );
+        }
+    }
+    options.sanitize().map_err(|error| {
+        BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
+    })?;
+
+    if policy == ArchiveImportPolicy::Trusted {
+        return Ok(options);
+    }
+
+    // An upload must not reach into the server's host or pick its own
+    // isolation, so refuse everything that would and impose server defaults.
+    if options.advanced.kernel.is_some() {
+        return Err(rejected_upload("custom kernels"));
+    }
+    if options.advanced.nested_virtualization {
+        return Err(rejected_upload("nested virtualization"));
+    }
+    if matches!(options.rootfs, RootfsSpec::RootfsPath(_)) {
+        return Err(rejected_upload("host rootfs paths"));
+    }
+    if !options.volumes.is_empty() {
+        return Err(rejected_upload("host volume mounts"));
+    }
+    options.advanced.security = SecurityOptions::default();
+
+    Ok(options)
+}
+
+fn rejected_upload(subject: &str) -> BoxliteError {
+    BoxliteError::Unsupported(format!(
+        "{subject} cannot be requested by an archive uploaded through a REST server"
+    ))
 }
 
 /// Extract archive, parse manifest, verify checksums.
@@ -185,6 +242,181 @@ pub(crate) fn validate_no_backing_references(disk_path: &Path) -> BoxliteResult<
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    fn v3_manifest(options: BoxOptions) -> ArchiveManifest {
+        ArchiveManifest {
+            version: 3,
+            box_name: None,
+            image: "alpine:latest".to_string(),
+            box_options: Some(options),
+            guest_disk_checksum: String::new(),
+            container_disk_checksum: String::new(),
+            exported_at: "2026-07-26T00:00:00Z".to_string(),
+        }
+    }
+
+    fn loopback_port() -> crate::runtime::options::PortSpec {
+        crate::runtime::options::PortSpec {
+            host_port: Some(18080),
+            guest_port: 80,
+            protocol: crate::runtime::options::PortProtocol::Tcp,
+            host_ip: Some("127.0.0.1".to_string()),
+        }
+    }
+
+    /// The importer's canonicalization window is the other half of the archive
+    /// version contract: below v5 a mapping predates publication semantics and
+    /// must be rewritten, at v5 it carries them and must be left exactly alone.
+    /// A window that swallowed v5 would clear `host_ip` and turn a loopback
+    /// publication into one on every interface.
+    #[test]
+    fn canonicalization_window_stops_at_the_published_ports_version() {
+        let options = BoxOptions {
+            ports: vec![loopback_port()],
+            ..Default::default()
+        };
+
+        let mut legacy = v3_manifest(options.clone());
+        legacy.version = PUBLISHED_PORTS_ARCHIVE_VERSION - 1;
+        let rewritten = options_from_manifest(&legacy, ArchiveImportPolicy::Trusted).unwrap();
+        assert_eq!(
+            rewritten.ports[0].host_ip, None,
+            "a pre-publication archive never meant its bind IP"
+        );
+
+        let mut current = v3_manifest(options.clone());
+        current.version = PUBLISHED_PORTS_ARCHIVE_VERSION;
+        let preserved = options_from_manifest(&current, ArchiveImportPolicy::Trusted).unwrap();
+        assert_eq!(
+            preserved.ports, options.ports,
+            "a v5 archive carries publication semantics and must survive import intact"
+        );
+    }
+
+    #[test]
+    fn untrusted_import_rejects_nested_virtualization() {
+        let options = BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                nested_virtualization: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("nested virtualization"));
+    }
+
+    #[test]
+    fn untrusted_import_rejects_custom_kernel() {
+        // A real file, so `sanitize()` passes and the upload policy — not path
+        // validation — is what rejects the archive.
+        let kernel = tempfile::NamedTempFile::new().unwrap();
+        let mut options = BoxOptions::default();
+        options.advanced.kernel = Some(crate::experimental::custom_kernel::KernelOptions::new(
+            kernel.path(),
+        ));
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("custom kernels"));
+    }
+
+    #[test]
+    fn untrusted_import_rejects_host_volumes() {
+        let mut options = BoxOptions::default();
+        options.volumes.push(crate::runtime::options::VolumeSpec {
+            host_path: "/".to_string(),
+            guest_path: "/host".to_string(),
+            read_only: false,
+        });
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .expect_err("untrusted archives must not select server host paths");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("host volume mounts"));
+    }
+
+    #[test]
+    fn untrusted_import_rejects_host_rootfs_paths() {
+        let options = BoxOptions {
+            rootfs: RootfsSpec::RootfsPath("/".to_string()),
+            ..Default::default()
+        };
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .expect_err("untrusted archives must not select a server rootfs path");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("host rootfs paths"));
+    }
+
+    #[test]
+    fn untrusted_import_replaces_archive_security_with_server_default() {
+        let mut options = BoxOptions::default();
+        options.advanced.security = SecurityOptions::disabled();
+
+        let resolved =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .unwrap();
+
+        assert_eq!(resolved.advanced.security, SecurityOptions::default());
+    }
+
+    #[test]
+    fn trusted_import_preserves_archive_configuration() {
+        let mut options = BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                nested_virtualization: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        options.advanced.security = SecurityOptions::disabled();
+
+        let resolved =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::Trusted).unwrap();
+
+        assert!(resolved.advanced.nested_virtualization);
+        assert_eq!(resolved.advanced.security, SecurityOptions::disabled());
+    }
+
+    #[test]
+    fn imported_capability_policy_is_validated_before_install() {
+        let manifest = ArchiveManifest {
+            version: 3,
+            box_name: Some("untrusted".into()),
+            image: "alpine:latest".into(),
+            box_options: Some(BoxOptions {
+                advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                    capabilities: crate::runtime::advanced_options::ContainerCapabilities {
+                        drop: vec!["NET-ADMIN".into()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            guest_disk_checksum: String::new(),
+            container_disk_checksum: String::new(),
+            exported_at: "2026-01-01T00:00:00Z".into(),
+        };
+
+        let error = options_from_manifest(&manifest, ArchiveImportPolicy::Trusted)
+            .expect_err("malformed archived capability policy must be rejected");
+        assert!(matches!(error, BoxliteError::InvalidArgument(_)));
+        assert!(error.to_string().contains("NET-ADMIN"));
+    }
 
     #[test]
     fn test_validate_no_backing_references_rejects_absolute() {

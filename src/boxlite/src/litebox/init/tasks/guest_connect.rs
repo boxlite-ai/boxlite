@@ -12,6 +12,7 @@ use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
 use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
 use crate::util::{ProcessExit, ProcessMonitor};
+use crate::vmm::exit_info::ExitErrorKind;
 use async_trait::async_trait;
 use boxlite_shared::BoxTransport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -238,7 +239,10 @@ async fn wait_for_guest_ready(
                 );
             }
 
-            Err(BoxliteError::Engine(report.user_message))
+            Err(match report.error_kind {
+                ExitErrorKind::Unsupported => BoxliteError::Unsupported(report.user_message),
+                ExitErrorKind::Engine => BoxliteError::Engine(report.user_message),
+            })
         }
     }
 }
@@ -425,8 +429,12 @@ mod tests {
         .await;
         let elapsed = start.elapsed();
 
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        let err = result.expect_err("dead shim must fail guest readiness");
+        assert!(
+            matches!(err, BoxliteError::Engine(_)),
+            "legacy shim failures must remain Engine errors, got: {err:?}"
+        );
+        let err = err.to_string();
         assert!(
             err.contains("test-box failed to start"),
             "Expected user-friendly error with box_id, got: {}",
@@ -439,6 +447,44 @@ mod tests {
             "Should detect dead process quickly, took {:?}",
             elapsed
         );
+    }
+
+    /// A typed shim error must retain its public error category after crossing
+    /// the exit-file boundary. The message is still enriched by CrashReport,
+    /// but callers must be able to distinguish an unsupported host capability
+    /// from a generic engine failure.
+    #[tokio::test]
+    async fn test_guest_ready_preserves_unsupported_shim_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("ready.sock");
+        let exit_file = dir.path().join("exit");
+        let console_log = dir.path().join("console.log");
+        let stderr_file = dir.path().join("shim.stderr");
+        let transport = BoxTransport::unix(socket_path);
+
+        std::fs::write(
+            &exit_file,
+            r#"{"type":"error","exit_code":1,"message":"nested virtualization is unavailable","error_kind":"unsupported"}"#,
+        )
+        .unwrap();
+
+        let result = wait_for_guest_ready(
+            &transport,
+            Some(999_999_999),
+            &exit_file,
+            &console_log,
+            &stderr_file,
+            "test-box",
+            Duration::from_secs(5),
+        )
+        .await;
+
+        match result {
+            Err(BoxliteError::Unsupported(message)) => {
+                assert!(message.contains("nested virtualization is unavailable"));
+            }
+            other => panic!("expected Unsupported from shim exit file, got: {other:?}"),
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────

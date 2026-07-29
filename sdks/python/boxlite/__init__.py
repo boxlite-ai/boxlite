@@ -10,6 +10,7 @@ import warnings
 try:
     from .boxlite import (
         AccessToken,
+        AdvancedBoxOptions,
         ApiKeyCredential,
         Box,
         BoxInfo,
@@ -19,6 +20,7 @@ try:
         BoxOptions,
         BoxStateInfo,
         CloneOptions,
+        ContainerCapabilities,
         CopyOptions,
         ExecStderr,
         ExecStdout,
@@ -32,8 +34,10 @@ try:
         ImagePullResult,
         ImageRegistry,
         NetworkHandle,
+        NetworkInfo,
         NetworkSpec,
         Options,
+        PublishedPort,
         RuntimeMetrics,
         Secret,
         SecurityOptions,
@@ -47,6 +51,8 @@ try:
     __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
         # Core Rust API
         "Options",
+        "AdvancedBoxOptions",
+        "ContainerCapabilities",
         "ImageRegistry",
         "BoxOptions",
         "BoxliteRestOptions",
@@ -55,6 +61,7 @@ try:
         "Boxlite",
         "NetworkSpec",
         "NetworkHandle",
+        "NetworkInfo",
         "Box",
         "Execution",
         "ExecStdout",
@@ -67,6 +74,7 @@ try:
         "HealthState",
         "HealthStatus",
         "RuntimeMetrics",
+        "PublishedPort",
         "BoxMetrics",
         "CopyOptions",
         "HealthCheckOptions",

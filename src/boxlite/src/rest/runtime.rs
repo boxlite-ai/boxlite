@@ -31,6 +31,18 @@ impl RestRuntime {
     }
 }
 
+fn validate_remote_box_options(options: &BoxOptions) -> BoxliteResult<()> {
+    if options.ports.is_empty() {
+        return Ok(());
+    }
+
+    Err(BoxliteError::Unsupported(
+        "Host port publication (-p/ports) is local-only for remote runtimes. \
+         Use box.network.tunnel(port) or `boxlite network tunnel BOX PORT` instead."
+            .to_string(),
+    ))
+}
+
 #[async_trait::async_trait]
 impl AuthBackend for RestRuntime {
     async fn whoami(&self) -> BoxliteResult<Principal> {
@@ -78,14 +90,29 @@ fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
     LiteBox::new(box_backend, network_backend, snapshot_backend)
 }
 
+/// Host-only RC options a REST server never accepts from a client: they
+/// configure the server's own hardware, not the box the caller asked for.
+fn reject_remote_experimental_options(options: &BoxOptions) -> BoxliteResult<()> {
+    if options.advanced.kernel.is_some() {
+        return Err(BoxliteError::Unsupported(
+            "custom kernels are only supported by the local runtime".to_string(),
+        ));
+    }
+
+    if options.advanced.nested_virtualization {
+        return Err(BoxliteError::Unsupported(
+            "nested virtualization is only supported by the local runtime".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
-        if options.advanced.kernel.is_some() {
-            return Err(BoxliteError::Unsupported(
-                "custom kernels are only supported by the local runtime".to_string(),
-            ));
-        }
+        validate_remote_box_options(&options)?;
+        reject_remote_experimental_options(&options)?;
 
         // Validate only the caller's requested policy. An unset auto_pause means
         // "no auto-pause", so it must not borrow the server's default here —
@@ -97,6 +124,13 @@ impl RuntimeBackend for RestRuntime {
             auto_resume: options.auto_resume.unwrap_or(true),
         }
         .validate()?;
+
+        // A server that does not advertise the capability policy would accept
+        // the request and drop the field, silently granting default privileges.
+        if !options.advanced.capabilities.is_empty() {
+            self.client.require_linux_capabilities_enabled().await?;
+        }
+
         let req = CreateBoxRequest::from_options(&options, name);
         let resp: BoxResponse = self.client.post("/boxes", &req).await?;
         let info = resp.to_box_info()?;
@@ -109,6 +143,9 @@ impl RuntimeBackend for RestRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        validate_remote_box_options(&options)?;
+        reject_remote_experimental_options(&options)?;
+
         // Try to get existing box by name first
         if let Some(ref box_name) = name
             && let Some(litebox) = self.get(box_name).await?
@@ -121,7 +158,7 @@ impl RuntimeBackend for RestRuntime {
     }
 
     async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
-        let path = format!("/boxes/{}", id_or_name);
+        let path = format!("/boxes/{id_or_name}");
         match self.client.get::<BoxResponse>(&path).await {
             Ok(resp) => {
                 let info = resp.to_box_info()?;
@@ -134,7 +171,7 @@ impl RuntimeBackend for RestRuntime {
     }
 
     async fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
-        let path = format!("/boxes/{}", id_or_name);
+        let path = format!("/boxes/{id_or_name}");
         match self.client.get::<BoxResponse>(&path).await {
             Ok(resp) => Ok(Some(resp.to_box_info()?)),
             Err(BoxliteError::NotFound(_)) => Ok(None),
@@ -144,7 +181,7 @@ impl RuntimeBackend for RestRuntime {
 
     async fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>> {
         let resp: ListBoxesResponse = self.client.get("/boxes").await?;
-        resp.boxes.iter().map(|b| b.to_box_info()).collect()
+        resp.boxes.iter().map(BoxResponse::to_box_info).collect()
     }
 
     async fn exists(&self, id_or_name: &str) -> BoxliteResult<bool> {
@@ -233,6 +270,73 @@ fn runtime_metrics_from_response(resp: &RuntimeMetricsResponse) -> RuntimeMetric
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::options::{PortProtocol, PortSpec};
+
+    #[test]
+    fn remote_runtime_rejects_host_port_publication_with_tunnel_guidance() {
+        let options = BoxOptions {
+            ports: vec![PortSpec {
+                host_port: None,
+                guest_port: 3000,
+                protocol: PortProtocol::Tcp,
+                host_ip: None,
+            }],
+            ..Default::default()
+        };
+
+        let err = validate_remote_box_options(&options).unwrap_err();
+        assert!(err.to_string().contains("-p/ports"));
+        assert!(err.to_string().contains("network.tunnel"));
+        assert!(err.to_string().contains("boxlite network tunnel"));
+    }
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    const BOX_RESPONSE: &str = r#"{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"named","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":2,"memory_mib":512,"labels":{}}"#;
+
+    fn capability_options() -> BoxOptions {
+        BoxOptions {
+            advanced: crate::AdvancedBoxOptions {
+                capabilities: crate::ContainerCapabilities {
+                    drop: vec!["NET_RAW".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    async fn json_server(bodies: Vec<&'static str>) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for body in bodies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(socket.read_u8().await.unwrap());
+                }
+                let request = String::from_utf8(headers).unwrap();
+                requests.push(request.lines().next().unwrap().to_string());
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            requests
+        });
+        (port, server)
+    }
 
     #[tokio::test]
     async fn test_import_box_requires_capability() {
@@ -279,6 +383,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn custom_capabilities_require_server_advertisement_before_create() {
+        // A server that does not advertise the feature would accept the create
+        // request and drop `advanced`, silently granting default privileges.
+        let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let error = match RuntimeBackend::create(&runtime, capability_options(), None).await {
+            Err(error) => error,
+            Ok(_) => panic!("an old server must not silently ignore a capability policy"),
+        };
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn advertised_capability_support_creates_on_the_shared_route() {
+        let (port, server) = json_server(vec![
+            r#"{"capabilities":{"linux_capabilities_enabled":true}}"#,
+            BOX_RESPONSE,
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        RuntimeBackend::create(&runtime, capability_options(), None)
+            .await
+            .expect("create with a capability policy");
+
+        assert_eq!(
+            server.await.unwrap(),
+            ["GET /v1/config HTTP/1.1", "POST /v1/boxes HTTP/1.1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn ordinary_create_does_not_probe_server_capabilities() {
+        let (port, server) = json_server(vec![BOX_RESPONSE]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        RuntimeBackend::create(&runtime, BoxOptions::default(), None)
+            .await
+            .expect("create without a capability policy");
+
+        assert_eq!(server.await.unwrap(), ["POST /v1/boxes HTTP/1.1"]);
+    }
+
+    /// Inspection reads the shared routes. Addressing a versioned variant here
+    /// would 404, and `get` maps NotFound to `Ok(None)` — so an existing box
+    /// would silently report as missing rather than failing loudly.
+    #[tokio::test]
+    async fn inspection_uses_the_shared_box_routes() {
+        let (port, server) = json_server(vec![BOX_RESPONSE, BOX_RESPONSE]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let found = RuntimeBackend::get(&runtime, "named").await.expect("get");
+        let info = RuntimeBackend::get_info(&runtime, "named")
+            .await
+            .expect("get_info");
+
+        assert!(found.is_some(), "an existing box must not read as missing");
+        assert!(info.is_some(), "an existing box must expose its info");
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "GET /v1/boxes/named HTTP/1.1",
+                "GET /v1/boxes/named HTTP/1.1"
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn create_rejects_custom_kernel_for_rest_runtime() {
         let temp = tempfile::tempdir().unwrap();
         let kernel = temp.path().join("vmlinux");
@@ -299,6 +478,76 @@ mod tests {
             .await
             .err()
             .expect("REST runtime must reject a host-local custom kernel path");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_nested_virtualization_in_rest_mode() {
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                nested_virtualization: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("REST nested virtualization must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_custom_kernel_for_rest_runtime() {
+        let temp = tempfile::tempdir().unwrap();
+        let kernel = temp.path().join("vmlinux");
+        std::fs::write(&kernel, b"custom kernel").unwrap();
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let opts = BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                kernel: Some(crate::experimental::custom_kernel::KernelOptions::new(
+                    kernel,
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::get_or_create(&runtime, opts, Some("custom".to_string()))
+            .await
+            .err()
+            .expect("REST runtime must reject a custom kernel before lookup");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_nested_virtualization_in_rest_mode() {
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                nested_virtualization: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error =
+            RuntimeBackend::get_or_create(&runtime, box_options, Some("nested".to_string()))
+                .await
+                .err()
+                .expect("REST nested virtualization must be rejected before network I/O");
+
         assert!(matches!(error, BoxliteError::Unsupported(_)));
         assert!(error.to_string().contains("local runtime"));
     }

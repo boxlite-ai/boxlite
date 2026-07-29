@@ -27,8 +27,12 @@ impl PyBox {
         self.handle.name().map(|s| s.to_string())
     }
 
-    fn info(&self) -> PyBoxInfo {
-        PyBoxInfo::from(self.handle.info())
+    fn info<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let info = handle.info().await.map_err(map_err)?;
+            Ok(PyBoxInfo::from(info))
+        })
     }
 
     /// Get the snapshot handle for snapshot operations.

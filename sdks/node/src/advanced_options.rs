@@ -1,4 +1,4 @@
-use boxlite::runtime::advanced_options::{ResourceLimits, SecurityOptions};
+use boxlite::runtime::advanced_options::{ContainerCapabilities, ResourceLimits, SecurityOptions};
 use napi_derive::napi;
 
 // ============================================================================
@@ -87,6 +87,34 @@ impl From<JsSecurityOptions> for SecurityOptions {
 
         opts
     }
+}
+
+/// Linux capability policy for the container process.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsContainerCapabilities {
+    /// Capabilities added to BoxLite's Docker-compatible baseline.
+    pub add: Option<Vec<String>>,
+
+    /// Capabilities removed from the resulting capability set.
+    pub drop: Option<Vec<String>>,
+}
+
+impl From<JsContainerCapabilities> for ContainerCapabilities {
+    fn from(capabilities: JsContainerCapabilities) -> Self {
+        Self {
+            add: capabilities.add.unwrap_or_default(),
+            drop: capabilities.drop.unwrap_or_default(),
+        }
+    }
+}
+
+/// Expert-only box options. Released top-level security and health-check
+/// fields remain on `JsBoxOptions`; new capability policy is nested here.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsAdvancedBoxOptions {
+    pub capabilities: Option<JsContainerCapabilities>,
 }
 
 #[cfg(test)]

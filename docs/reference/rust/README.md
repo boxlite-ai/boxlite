@@ -21,6 +21,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [BoxInfo](#boxinfo)
   - [BoxStatus](#boxstatus)
   - [BoxState](#boxstate)
+- [Network Tunnels](#network-tunnels)
 - [Command Execution](#command-execution)
   - [BoxCommand](#boxcommand)
   - [Execution](#execution)
@@ -191,7 +192,8 @@ pub struct LiteBox {
 |--------|-----------|-------------|
 | `id` | `fn id(&self) -> &BoxID` | Get box ID |
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
-| `info` | `fn info(&self) -> BoxInfo` | Get box info (no VM init) |
+| `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
+| `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
@@ -253,10 +255,39 @@ pub struct BoxInfo {
     /// Allocated memory in MiB
     pub memory_mib: u32,
 
+    /// Current network configuration and resolved local publications
+    pub network: Option<NetworkInfo>,
+
     /// User-defined labels
     pub labels: HashMap<String, String>,
 }
+
+pub struct NetworkInfo {
+    pub mode: NetworkMode,
+    pub allow_net: Vec<String>,
+    pub published_ports: Option<Vec<PublishedPort>>,
+}
+
+pub struct PublishedPort {
+    pub guest_port: u16,
+    pub host_ip: String,
+    pub host_port: u16,
+    pub protocol: PortProtocol,
+}
 ```
+
+`network: None` means network information is unavailable, such as metadata from
+an older or remote producer. Within `NetworkInfo`, `published_ports: None`
+means the current handle does not know the lifecycle's publications.
+`Some(vec![])` means there are no active publications, and a populated vector
+contains concrete active local bindings. `PortSpec` remains the request type;
+resolved output uses `PublishedPort` so every reported host port is concrete.
+
+`LiteBox::info()` has no synchronous snapshot variant. Local metadata reads report
+bindings captured when this handle started or reattached the box; REST metadata
+reads fetch the current server record. A newly loaded local running box has no
+live binding data yet, so `info()`, `get_info()`, or `list_info()` may report
+`published_ports: None` until an operation requiring live state reattaches it.
 
 ### BoxStatus
 
@@ -325,6 +356,22 @@ pub struct BoxState {
     pub lock_id: Option<LockId>,
 }
 ```
+
+---
+
+## Network Tunnels
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Get handle | `LiteBox::network(&self) -> NetworkHandle` | Get box-scoped network operations |
+| Prepare | `async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>` | Prepare one TCP connection |
+| Inspect | `BoxTunnel::endpoint(&self) -> BoxEndpoint` | Return `Uri` for remote or a borrowed `FileDescriptor` for local |
+| Connect | `BoxTunnel::connect(self) -> BoxliteResult<Box<dyn BoxConnection>>` | Consume the tunnel into its bidirectional byte stream |
+
+`BoxTunnel` represents exactly one connection; its consuming `connect(self)`
+enforces that at the type boundary. Request another tunnel for each additional
+or concurrent connection. This differs from `BoxOptions.ports`, which creates a
+persistent, local-only host listener that accepts repeated connections.
 
 ---
 
@@ -536,7 +583,7 @@ pub struct BoxOptions {
     /// Run independently of parent process (default: false)
     pub detach: bool,
 
-    /// Advanced options for expert users (security, mount isolation). Defaults are secure.
+    /// Advanced options for expert users (capabilities, security, mount isolation).
     pub advanced: AdvancedBoxOptions,
 }
 ```
@@ -544,6 +591,7 @@ pub struct BoxOptions {
 #### Example
 
 ```rust
+use boxlite::{AdvancedBoxOptions, ContainerCapabilities};
 use boxlite::runtime::options::{BoxOptions, RootfsSpec, VolumeSpec, PortSpec};
 
 let options = BoxOptions {
@@ -567,6 +615,13 @@ let options = BoxOptions {
             ..Default::default()
         },
     ],
+    advanced: AdvancedBoxOptions {
+        capabilities: ContainerCapabilities {
+            add: vec!["SYS_ADMIN".to_string()],
+            drop: vec!["NET_RAW".to_string()],
+        },
+        ..Default::default()
+    },
     auto_remove: false,  // Keep box after stop
     detach: true,        // Run independently
     ..Default::default()
@@ -580,6 +635,7 @@ the isolation protections supported by the host platform.
 
 ```rust
 pub struct AdvancedBoxOptions {
+    pub capabilities: ContainerCapabilities,
     pub security: SecurityOptions,
     pub isolate_mounts: bool,
     pub health_check: Option<HealthCheckOptions>,
@@ -588,6 +644,7 @@ pub struct AdvancedBoxOptions {
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `capabilities` | `ContainerCapabilities` | Empty add/drop lists | Linux capability delta policy for init and exec processes |
 | `security` | `SecurityOptions` | `SecurityOptions::default()` (fully enabled profile; jailer enabled) | Security isolation options (jailer, seccomp, namespaces) |
 | `isolate_mounts` | `bool` | `false` | Enable bind mount isolation (requires CAP_SYS_ADMIN on Linux) |
 | `health_check` | `Option<HealthCheckOptions>` | `None` | Optional guest-agent health monitoring |
@@ -669,7 +726,7 @@ pub struct PortSpec {
     /// Guest port to expose
     pub guest_port: u16,
 
-    /// Protocol (TCP/UDP)
+    /// Protocol (TCP; UDP is currently rejected)
     pub protocol: PortProtocol,
 
     /// Bind IP (None = 0.0.0.0)

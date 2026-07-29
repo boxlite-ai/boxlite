@@ -92,7 +92,7 @@ registry.
 |--------------|--------------------------|---------------------------------------------------------------|
 | `config`     | `handlers/config.rs`     | Capability discovery (snapshots, clone, export, import)       |
 | `me`         | `handlers/me.rs`         | Identity of the calling credential (`GET /v1/me`)             |
-| `boxes`      | `handlers/boxes.rs`      | Box CRUD: create, list, get, head, start, stop, remove        |
+| `boxes`      | `handlers/boxes.rs`      | Box CRUD and lifecycle                                        |
 | `executions` | `handlers/executions.rs` | Lifecycle: start, status, signal, kill, resize, attach        |
 | `files`      | `handlers/files.rs`      | Tar-based file upload / download into / from boxes            |
 | `metrics`    | `handlers/metrics.rs`    | Runtime-level and per-box metrics                             |

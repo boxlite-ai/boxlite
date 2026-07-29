@@ -1,6 +1,6 @@
 //! On-disk record of a running shim's identity (`shim.pid`).
 //!
-//! Three cohesive types:
+//! Three public types:
 //! * [`PidRecord`] — the on-disk format. Owns encode/decode and the
 //!   "capture current process" factory. All methods on it are
 //!   async-signal-safe except [`PidRecord::decode`], which allocates.
@@ -16,11 +16,15 @@
 //! ```text
 //! <pid>
 //! <start_time>           (optional; absent in legacy files)
+//! services-mux-v1        (optional; emitted by shims with runtime port control)
 //! ```
 //!
 //! Line 2 is the OS-reported process start-time fingerprint captured at
 //! spawn. Recovery compares it against the live PID's current
 //! start-time — a mismatch reliably detects PID reuse.
+//! Line 3 is deliberately backward compatible: older readers ignore it,
+//! while newer readers use it to distinguish a legacy shim's custom port
+//! listeners from ServicesMux-owned forwards.
 
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
@@ -31,13 +35,17 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 /// digits), start-time is u64 (≤20 digits), plus two newlines.
 pub const PID_RECORD_MAX_BYTES: usize = 48;
 
+const RUNTIME_PORT_CONTROL_CAPABILITY: &[u8] = b"services-mux-v1";
+const SHIM_PID_RECORD_MAX_BYTES: usize =
+    PID_RECORD_MAX_BYTES + RUNTIME_PORT_CONTROL_CAPABILITY.len() + 1;
+
 // ============================================================================
 // PID RECORD — the codec
 // ============================================================================
 
 /// On-disk identity of a shim process: its PID and (optionally) the
 /// start-time fingerprint captured at spawn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct PidRecord {
     pub pid: u32,
     /// Start-time fingerprint. `None` for legacy single-line files;
@@ -96,6 +104,84 @@ impl PidRecord {
     }
 }
 
+/// Internal shim lifecycle record: process identity plus capabilities written
+/// at the child pre-exec boundary.
+///
+/// Keeping the capability in `shim.pid` makes identity publication the commit
+/// point. Recovery can never observe a new live PID without also knowing which
+/// port-forwarding implementation that exact shim lifecycle owns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ShimPidRecord {
+    identity: PidRecord,
+    has_runtime_port_control: bool,
+}
+
+impl ShimPidRecord {
+    pub(crate) fn current() -> Self {
+        Self {
+            identity: PidRecord::current(),
+            has_runtime_port_control: true,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn legacy(identity: PidRecord) -> Self {
+        Self {
+            identity,
+            has_runtime_port_control: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_runtime_port_control(identity: PidRecord) -> Self {
+        Self {
+            identity,
+            has_runtime_port_control: true,
+        }
+    }
+
+    pub(crate) fn identity(&self) -> PidRecord {
+        self.identity
+    }
+
+    pub(crate) fn has_runtime_port_control(&self) -> bool {
+        self.has_runtime_port_control
+    }
+
+    fn decode(bytes: &[u8]) -> BoxliteResult<Self> {
+        let identity = PidRecord::decode(bytes)?;
+        let text = std::str::from_utf8(bytes)
+            .map_err(|e| BoxliteError::Storage(format!("PID file is not valid UTF-8: {e}")))?;
+        let has_runtime_port_control = text
+            .lines()
+            .nth(2)
+            .is_some_and(|line| line.trim() == "services-mux-v1");
+        Ok(Self {
+            identity,
+            has_runtime_port_control,
+        })
+    }
+
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        debug_assert!(buf.len() >= SHIM_PID_RECORD_MAX_BYTES);
+        let mut pos = self.identity.encode(buf);
+        if self.has_runtime_port_control {
+            // Capability is always line 3. Preserve the empty start-time line
+            // on platforms where the OS fingerprint is unavailable.
+            if self.identity.start_time.is_none() {
+                buf[pos] = b'\n';
+                pos += 1;
+            }
+            let end = pos + RUNTIME_PORT_CONTROL_CAPABILITY.len();
+            buf[pos..end].copy_from_slice(RUNTIME_PORT_CONTROL_CAPABILITY);
+            pos = end;
+            buf[pos] = b'\n';
+            pos += 1;
+        }
+        pos
+    }
+}
+
 // ============================================================================
 // PID FILE READER — parent-side I/O
 // ============================================================================
@@ -113,13 +199,32 @@ impl PidFileReader {
     }
 
     pub fn read(&self) -> BoxliteResult<PidRecord> {
+        Ok(self.read_shim()?.identity())
+    }
+
+    pub(crate) fn read_shim(&self) -> BoxliteResult<ShimPidRecord> {
         let bytes = std::fs::read(&self.path).map_err(|e| {
             BoxliteError::Storage(format!(
                 "Failed to read PID file {}: {e}",
                 self.path.display(),
             ))
         })?;
-        PidRecord::decode(&bytes)
+        ShimPidRecord::decode(&bytes)
+    }
+
+    /// Return the verified lifecycle together with the shim's capabilities.
+    /// This is the trust boundary for runtime operations that must not attach
+    /// to a recycled PID or attribute resources to the wrong VM lifecycle.
+    pub(crate) fn verified_shim(&self) -> Option<ShimPidRecord> {
+        let record = self.read_shim().ok()?;
+        let identity = record.identity();
+        let expected_start_time = identity.start_time?;
+        if !crate::util::is_process_alive(identity.pid)
+            || crate::util::process_start_time(identity.pid) != Some(expected_start_time)
+        {
+            return None;
+        }
+        Some(record)
     }
 
     /// Read the PID file and classify the recorded process against the
@@ -169,17 +274,20 @@ pub enum ProcessIdentity {
 ///
 /// Construct in the parent before fork via [`PidFileWriter::at`]; the
 /// returned handle owns a pre-allocated `CString` for the path. Capture
-/// the handle in a `pre_exec` closure and call [`PidFileWriter::write`]
+/// the handle in a `pre_exec` closure and call [`PidFileWriter::write_shim`]
 /// from the child — no further allocation is performed.
+///
+/// Internal: the record it writes is a [`ShimPidRecord`], whose capability
+/// line the runtime owns. Readers outside the crate use [`PidFileReader`].
 #[derive(Debug, Clone)]
-pub struct PidFileWriter {
+pub(crate) struct PidFileWriter {
     path: CString,
 }
 
 impl PidFileWriter {
     /// Validate the path and pre-allocate its `CString` form. Call from
     /// the parent before fork; fails if the path contains interior NUL.
-    pub fn at(path: &Path) -> BoxliteResult<Self> {
+    pub(crate) fn at(path: &Path) -> BoxliteResult<Self> {
         let cstr = CString::new(path.to_string_lossy().as_bytes()).map_err(|e| {
             BoxliteError::Storage(format!(
                 "PID file path {} contains interior NUL: {e}",
@@ -191,9 +299,13 @@ impl PidFileWriter {
 
     /// Write `record` to the file. Async-signal-safe: uses only
     /// `open`/`write`/`close` syscalls and a stack buffer.
-    pub fn write(&self, record: &PidRecord) -> Result<(), i32> {
-        let mut buf = [0u8; PID_RECORD_MAX_BYTES];
+    pub(crate) fn write_shim(&self, record: &ShimPidRecord) -> Result<(), i32> {
+        let mut buf = [0u8; SHIM_PID_RECORD_MAX_BYTES];
         let len = record.encode(&mut buf);
+        self.write_bytes(&buf[..len])
+    }
+
+    fn write_bytes(&self, bytes: &[u8]) -> Result<(), i32> {
         unsafe {
             let fd = libc::open(
                 self.path.as_ptr(),
@@ -203,9 +315,33 @@ impl PidFileWriter {
             if fd < 0 {
                 return Err(errno());
             }
-            let written = libc::write(fd, buf.as_ptr() as *const libc::c_void, len);
-            let write_errno = if written < 0 { Some(errno()) } else { None };
-            libc::close(fd);
+
+            let mut offset = 0;
+            let mut write_errno = None;
+            while offset < bytes.len() {
+                let written = libc::write(
+                    fd,
+                    bytes[offset..].as_ptr() as *const libc::c_void,
+                    bytes.len() - offset,
+                );
+                if written > 0 {
+                    offset += written as usize;
+                    continue;
+                }
+                if written < 0 {
+                    let error = errno();
+                    if error == libc::EINTR {
+                        continue;
+                    }
+                    write_errno = Some(error);
+                } else {
+                    write_errno = Some(libc::EIO);
+                }
+                break;
+            }
+            if libc::close(fd) < 0 && write_errno.is_none() {
+                write_errno = Some(errno());
+            }
             if let Some(e) = write_errno {
                 return Err(e);
             }
@@ -449,6 +585,46 @@ mod tests {
         assert!(r.start_time.is_some(), "start_time must be captured");
     }
 
+    #[test]
+    fn shim_record_round_trips_runtime_port_control() {
+        let record = ShimPidRecord::with_runtime_port_control(PidRecord {
+            pid: 12345,
+            start_time: Some(67890),
+        });
+        let mut buf = [0u8; SHIM_PID_RECORD_MAX_BYTES];
+        let len = record.encode(&mut buf);
+
+        assert_eq!(&buf[..len], b"12345\n67890\nservices-mux-v1\n");
+        assert_eq!(ShimPidRecord::decode(&buf[..len]).unwrap(), record);
+    }
+
+    #[test]
+    fn shim_record_without_start_time_round_trips_runtime_port_control() {
+        let record = ShimPidRecord::with_runtime_port_control(PidRecord {
+            pid: 7,
+            start_time: None,
+        });
+        let mut buf = [0u8; SHIM_PID_RECORD_MAX_BYTES];
+        let len = record.encode(&mut buf);
+
+        assert_eq!(&buf[..len], b"7\n\nservices-mux-v1\n");
+        assert_eq!(ShimPidRecord::decode(&buf[..len]).unwrap(), record);
+    }
+
+    #[test]
+    fn legacy_shim_record_has_no_runtime_port_control() {
+        let record = ShimPidRecord::decode(b"4321\n98765432\n").unwrap();
+
+        assert_eq!(
+            record.identity(),
+            PidRecord {
+                pid: 4321,
+                start_time: Some(98765432),
+            }
+        );
+        assert!(!record.has_runtime_port_control());
+    }
+
     // ---- PidFileReader ------------------------------------------------------
 
     #[test]
@@ -474,13 +650,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("shim.pid");
         let writer = PidFileWriter::at(&path).expect("at");
-        let record = PidRecord {
+        let record = ShimPidRecord::with_runtime_port_control(PidRecord {
             pid: 999,
             start_time: Some(424242),
-        };
-        writer.write(&record).expect("write");
+        });
+        writer.write_shim(&record).expect("write");
 
-        let read_back = PidFileReader::at(&path).read().expect("read");
+        let read_back = PidFileReader::at(&path).read_shim().expect("read");
         assert_eq!(read_back, record);
     }
 
@@ -490,21 +666,24 @@ mod tests {
         let path = dir.path().join("shim.pid");
         let writer = PidFileWriter::at(&path).expect("at");
         writer
-            .write(&PidRecord {
+            .write_shim(&ShimPidRecord::with_runtime_port_control(PidRecord {
                 pid: 111111,
                 start_time: Some(1),
-            })
+            }))
             .expect("first write");
+        // Shorter than the first record on every line, so a stale tail would
+        // survive without O_TRUNC.
         writer
-            .write(&PidRecord {
+            .write_shim(&ShimPidRecord::legacy(PidRecord {
                 pid: 22,
                 start_time: None,
-            })
+            }))
             .expect("second write");
 
-        let read_back = PidFileReader::at(&path).read().expect("read");
-        assert_eq!(read_back.pid, 22);
-        assert_eq!(read_back.start_time, None);
+        let read_back = PidFileReader::at(&path).read_shim().expect("read");
+        assert_eq!(read_back.identity().pid, 22);
+        assert_eq!(read_back.identity().start_time, None);
+        assert!(!read_back.has_runtime_port_control());
     }
 
     #[test]

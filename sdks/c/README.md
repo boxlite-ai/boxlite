@@ -13,6 +13,7 @@ C bindings for the BoxLite runtime, providing a stable C API for integrating Box
 - [API Overview](#api-overview)
   - [Simple API](#simple-api)
   - [Native API](#native-api)
+    - [Network Tunnels](#network-tunnels)
   - [Error Handling](#error-handling)
 - [Complete API Reference](#complete-api-reference)
 - [Examples](#examples)
@@ -217,6 +218,24 @@ int main() {
         return 1;
     }
     boxlite_options_set_network_enabled(opts);
+
+    CAdvancedBoxOptions* advanced = NULL;
+    if (boxlite_advanced_options_new(&advanced, &error) != Ok) {
+        boxlite_options_free(opts);
+        boxlite_runtime_free(runtime);
+        return 1;
+    }
+    const char* cap_add[] = {"NET_ADMIN"};
+    const char* cap_drop[] = {"NET_RAW"};
+    if (boxlite_advanced_options_set_capabilities_add(advanced, cap_add, 1) != Ok ||
+        boxlite_advanced_options_set_capabilities_drop(advanced, cap_drop, 1) != Ok) {
+        fprintf(stderr, "Invalid Linux capability list\n");
+        boxlite_advanced_options_free(advanced);
+        boxlite_options_free(opts);
+        return 1;
+    }
+    boxlite_options_set_advanced(opts, advanced);
+    boxlite_advanced_options_free(advanced);
 
     if (boxlite_create_box(runtime, opts, &box, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
@@ -473,13 +492,58 @@ if (boxlite_execute(box, &cmd, my_callback, NULL, &execution, &error) == Ok) {
 }
 ```
 
+#### Network Tunnels
+
+```c
+BoxliteErrorCode boxlite_box_network(
+    CBoxHandle* handle,
+    CBoxNetworkHandle** out_network,
+    CBoxliteError* out_error
+);
+void boxlite_network_free(CBoxNetworkHandle* network);
+
+BoxliteErrorCode boxlite_network_tunnel(
+    CBoxNetworkHandle* network,
+    uint16_t port,
+    CBoxTunnelHandle** out_tunnel,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_tunnel_endpoint(
+    CBoxTunnelHandle* tunnel,
+    BoxliteEndpointType* out_type,
+    char** out_uri,
+    int32_t* out_fd,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_tunnel_connect(
+    CBoxTunnelHandle* tunnel,
+    int32_t* out_fd,
+    CBoxliteError* out_error
+);
+void boxlite_tunnel_free(CBoxTunnelHandle* tunnel);
+```
+
+Each `CBoxTunnelHandle` owns exactly one connection.
+`boxlite_tunnel_connect()` consumes it and returns an owned file descriptor that
+the caller must close; a second call returns `InvalidState`. Release the tunnel
+handle with `boxlite_tunnel_free()` after connecting or when discarding an
+unconsumed tunnel.
+`boxlite_tunnel_endpoint()` returns either an allocated remote URI or a borrowed
+local descriptor. Free the URI with `boxlite_free_string()`, and keep the tunnel
+alive while using a borrowed descriptor.
+
+Create another tunnel handle for every additional or concurrent connection.
+This differs from `boxlite_options_add_port()`, which creates a persistent,
+local-only host listener that accepts repeated connections.
+
 #### Discovery & Introspection
 
 ```c
 // List all boxes
 BoxliteErrorCode boxlite_list_info(
     CBoxliteRuntime* runtime,
-    CBoxInfoList** out_list,
+    CBoxInfoListCb cb,
+    void* user_data,
     CBoxliteError* out_error
 );
 
@@ -487,14 +551,16 @@ BoxliteErrorCode boxlite_list_info(
 BoxliteErrorCode boxlite_get_info(
     CBoxliteRuntime* runtime,
     const char* id_or_name,
-    CBoxInfo** out_info,
+    CBoxInfoCb cb,
+    void* user_data,
     CBoxliteError* out_error
 );
 
 // Get box info from handle
 BoxliteErrorCode boxlite_box_info(
     CBoxHandle* handle,
-    CBoxInfo** out_info,
+    CBoxInfoCb cb,
+    void* user_data,
     CBoxliteError* out_error
 );
 
@@ -505,6 +571,20 @@ BoxliteErrorCode boxlite_box_metrics(
     CBoxliteError* out_error
 );
 ```
+
+`CBoxInfo.network` is an owned `CNetworkInfo*` and is `NULL` when network
+metadata is unavailable. `CNetworkInfo` exposes `mode`, the `allow_net` string
+array and count, and a nullable `CPublishedPortList*`. A `NULL`
+`published_ports` pointer means the current handle does not know the bindings,
+a non-`NULL` list with `count == 0` means there are no active publications, and
+a populated list contains typed `CPublishedPort` entries with `guest_port`,
+`host_ip`, `host_port`, and `protocol`.
+
+The network pointer and every nested array and string are borrowed from their
+enclosing `CBoxInfo`; do not free them separately. Info callbacks own their
+result and must call `boxlite_free_box_info()` or
+`boxlite_free_box_info_list()` to release the complete object graph. All info
+operations complete asynchronously through `boxlite_runtime_drain()`.
 
 ### Error Handling
 
@@ -825,6 +905,12 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
   ports are `uint16_t`, the new `BoxlitePortProtocol` enum and a nullable
   `host_ip` bind address were added, and the function returns
   `BoxliteErrorCode` instead of `void`.
+- `boxlite_box_info` intentionally breaks the C ABI: metadata lookup is now
+  asynchronous, so the `CBoxInfo **out_info` argument was replaced by a
+  `CBoxInfoCb` callback and `void *user_data`. `Ok` means the request was
+  queued; call `boxlite_runtime_drain()` to dispatch the callback. On success,
+  the callback owns the `CBoxInfo *` and must release it with
+  `boxlite_free_box_info()`.
 
 Before:
 ```c
@@ -834,6 +920,20 @@ boxlite_options_add_port(opts, 80, 8080);  /* guest, host */
 After:
 ```c
 boxlite_options_add_port(opts, 8080, 80, BoxlitePortProtocolTcp, NULL);  /* host, guest */
+```
+
+Before:
+```c
+CBoxInfo *info = NULL;
+boxlite_box_info(box, &info, &error);
+```
+
+After:
+```c
+boxlite_box_info(box, on_info, user_data, &error);
+while (!request_done) {
+    boxlite_runtime_drain(runtime, -1, &error);
+}
 ```
 
 ### From 0.1.x to 0.2.0

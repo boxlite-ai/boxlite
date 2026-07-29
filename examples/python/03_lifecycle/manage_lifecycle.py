@@ -49,7 +49,7 @@ async def test_stop_and_restart():
         await execution.wait()
 
         # Get box info before stop
-        info = box.info()
+        info = await box.info()
         print(f"\nBox state before stop: {info.state}")
 
         # Stop the box (VM shuts down, but rootfs preserved)
@@ -158,7 +158,7 @@ async def test_reattach_to_running():
         print("  Command executed successfully")
 
         # Get box info
-        info = box.info()
+        info = await box.info()
         print(f"\nBox state: {info.state}")
 
         # Get another handle to the same running box

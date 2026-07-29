@@ -182,6 +182,12 @@ const box = new SimpleBox({
     mode: 'enabled',
     allowNet: ['api.openai.com'],
   },
+  advanced: {
+    capabilities: {
+      add: ['NET_ADMIN'],
+      drop: ['NET_RAW'],
+    },
+  },
   env: { FOO: 'bar' },
   volumes: [
     { hostPath: '/tmp/data', guestPath: '/data', readOnly: false }
@@ -213,7 +219,12 @@ console.log(pwdResult.stdout); // "/tmp\n"
 // Get box info
 console.log(box.id);    // ULID
 console.log(box.name);  // Optional name
-console.log(box.info()); // Metadata
+const info = await box.info(); // Metadata
+// null means unknown to this handle; [] means no active publications.
+console.log(info.network?.publishedPorts);
+// Local info reads do not query the live network backend; REST info performs a GET.
+const refreshed = await runtime.getInfo(box.id);
+console.log(refreshed?.network?.publishedPorts);
 
 // Cleanup
 await box.stop();

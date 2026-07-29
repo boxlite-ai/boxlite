@@ -160,7 +160,7 @@ pub trait Jail: Send + Sync {
     /// Build a confined command, ready to spawn.
     ///
     /// Returns a `Command` with sandbox wrapping and pre_exec hook
-    /// (FD cleanup, rlimits, cgroup join, PID file).
+    /// (PID file, FD cleanup, rlimits, cgroup join).
     fn command(&self, binary: &Path, args: &[String]) -> Command;
 }
 
@@ -391,6 +391,8 @@ pub struct Jailer<S: Sandbox> {
     /// — `true` adds `setsid()` to the pre_exec chain, `false` sets the
     /// child's process group to itself at `Command` build time.
     pub(crate) detach: bool,
+    /// Caller-defined filesystem permissions required by the confined shim.
+    pub(crate) additional_path_access: Vec<PathAccess>,
 }
 
 impl<S: Sandbox> Jail for Jailer<S> {
@@ -478,7 +480,8 @@ impl<S: Sandbox> Jail for Jailer<S> {
             tracing::info!("Jailer disabled, running shim without sandbox isolation");
         }
 
-        // Pre-exec hook: FD preservation, FD cleanup, rlimits, PID file.
+        // Pre-exec hook: PID file, FD preservation, FD cleanup, rlimits. The
+        // PID file goes first on purpose — see `pre_exec`'s module docs.
         // Sandbox-specific pre_exec hooks (cgroup, Landlock) are already added
         // by sandbox.apply() above — Command supports multiple pre_exec closures.
         let resource_limits = self.security.resource_limits.clone();
@@ -534,7 +537,8 @@ impl<S: Sandbox> Jailer<S> {
     ///
     /// Delegates to [`build_path_access`] for granular filesystem rules.
     fn context(&self) -> SandboxContext<'_> {
-        let paths = build_path_access(&self.layout, &self.volumes);
+        let mut paths = build_path_access(&self.layout, &self.volumes);
+        paths.extend_from_slice(&self.additional_path_access);
         tracing::debug!(
             box_id = %self.box_id,
             path_count = paths.len(),

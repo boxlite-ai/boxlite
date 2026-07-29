@@ -13,13 +13,14 @@ path = "src/main.rs"
 
 [dependencies]
 boxlite-shared.workspace = true
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "io-util", "net", "fs", "time", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "io-util", "net", "fs", "time", "signal", "process"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+bytes = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-nix = { version = "0.29", features = ["mount", "process", "fs", "sched", "socket", "poll"] }
+nix = { version = "0.29", features = ["mount", "process", "fs", "sched", "socket", "poll", "user"] }
 async-trait = "0.1"
 uuid = { version = "1.10", features = ["v4"] }
 tonic = "0.12"
@@ -29,6 +30,8 @@ async-stream = "0.3"
 clap = { version = "4.5", features = ["derive"] }
 rayon = "1.10"
 tar = "0.4"
+russh = { version = "0.62.4", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-sftp = "2.3.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procfs = "0.18.0"

@@ -21,12 +21,14 @@ mod util;
 mod volumes;
 
 // Re-export all public types
-pub use advanced_options::JsSecurityOptions;
+pub use advanced_options::{JsAdvancedBoxOptions, JsContainerCapabilities, JsSecurityOptions};
 pub use box_handle::JsBox;
 pub use copy::JsCopyOptions;
 pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution};
 pub use images::{JsImageHandle, JsImageInfo, JsImagePullResult};
-pub use info::{JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus};
+pub use info::{
+    JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus, JsNetworkInfo, JsPublishedPort,
+};
 pub use metrics::{JsBoxMetrics, JsRuntimeMetrics};
 pub use network::{JsBoxConnection, JsBoxTunnel, JsNetworkHandle};
 pub use options::{

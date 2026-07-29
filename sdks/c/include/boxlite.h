@@ -64,17 +64,23 @@ typedef enum BoxliteErrorCode {
   SessionReaped = 21,
 } BoxliteErrorCode;
 
-// The kind of endpoint exposed by a box tunnel.
-typedef enum BoxliteEndpointType {
-  BoxliteEndpointTypeUri = 0,
-  BoxliteEndpointTypeFileDescriptor = 1,
-} BoxliteEndpointType;
+// Network mode exposed by [`CNetworkInfo`].
+typedef enum BoxliteNetworkMode {
+  BoxliteNetworkModeEnabled = 0,
+  BoxliteNetworkModeDisabled = 1,
+} BoxliteNetworkMode;
 
 // Transport protocol for a port forwarding rule.
 typedef enum BoxlitePortProtocol {
   BoxlitePortProtocolTcp = 0,
   BoxlitePortProtocolUdp = 1,
 } BoxlitePortProtocol;
+
+// The kind of endpoint exposed by a box tunnel.
+typedef enum BoxliteEndpointType {
+  BoxliteEndpointTypeUri = 0,
+  BoxliteEndpointTypeFileDescriptor = 1,
+} BoxliteEndpointType;
 
 typedef enum BoxliteRegistryTransport {
   BoxliteRegistryTransportHttps = 0,
@@ -264,6 +270,39 @@ typedef struct CImageInfoList {
 // Image list completion.
 typedef void (*CBoxImageListCb)(struct CImageInfoList*, CBoxliteError*, void*);
 
+// A concrete host listener published to a guest port.
+//
+// `host_ip` is owned by the enclosing [`CBoxInfo`].
+typedef struct CPublishedPort {
+  uint16_t guest_port;
+  char *host_ip;
+  uint16_t host_port;
+  enum BoxlitePortProtocol protocol;
+} CPublishedPort;
+
+// Owned list of concrete published ports.
+//
+// A non-null list with `count == 0` means publication metadata was resolved
+// and no listeners are active. The list is owned by its enclosing
+// [`CNetworkInfo`].
+typedef struct CPublishedPortList {
+  struct CPublishedPort *items;
+  int count;
+} CPublishedPortList;
+
+// Typed network metadata owned by an enclosing [`CBoxInfo`].
+//
+// `allow_net` points to `allow_net_count` owned strings. `published_ports`
+// is null when the current handle does not know the bindings, non-null and
+// empty when there are no active publications, and otherwise contains
+// concrete bindings.
+typedef struct CNetworkInfo {
+  enum BoxliteNetworkMode mode;
+  char **allow_net;
+  int allow_net_count;
+  struct CPublishedPortList *published_ports;
+} CNetworkInfo;
+
 typedef struct CBoxInfo {
   char *id;
   char *name;
@@ -277,9 +316,13 @@ typedef struct CBoxInfo {
   uint32_t auto_delete;
   int auto_resume;
   int64_t created_at;
+  // Owned typed network metadata; null when network metadata is unavailable.
+  struct CNetworkInfo *network;
 } CBoxInfo;
 
-// Box info completion.
+// Box info completion. On success the callback owns the non-null metadata and
+// must release it with `boxlite_free_box_info`. The error pointer is borrowed
+// for callback dispatch only; on failure the metadata pointer is null.
 typedef void (*CBoxInfoCb)(struct CBoxInfo*, CBoxliteError*, void*);
 
 typedef struct CBoxInfoList {
@@ -409,6 +452,22 @@ void boxlite_advanced_options_free(CAdvancedBoxOptions *opts);
 // switch off, every sub-protection off — for debugging or environments that
 // genuinely can't sandbox). Null `opts` is a no-op.
 void boxlite_advanced_options_set_security_enabled(CAdvancedBoxOptions *opts, int enabled);
+
+// Replace the capabilities added to BoxLite's Docker-compatible baseline.
+//
+// A zero count clears the list. Negative counts, null handles, null arrays
+// with a positive count, null elements, and invalid UTF-8 fail closed.
+enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_add(CAdvancedBoxOptions *opts,
+                                                                    const char *const *capabilities,
+                                                                    int count);
+
+// Replace the capabilities removed from the container capability set.
+//
+// A zero count clears the list. Negative counts, null handles, null arrays
+// with a positive count, null elements, and invalid UTF-8 fail closed.
+enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_drop(CAdvancedBoxOptions *opts,
+                                                                     const char *const *capabilities,
+                                                                     int count);
 
 enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
                                          CBoxliteOptions *opts,
@@ -571,7 +630,8 @@ void boxlite_free_image_info_list(struct CImageInfoList *list);
 void boxlite_free_image_pull_result(struct CImagePullResult *result);
 
 enum BoxliteErrorCode boxlite_box_info(CBoxHandle *handle,
-                                       struct CBoxInfo **out_info,
+                                       CBoxInfoCb cb,
+                                       void *user_data,
                                        CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_get_info(CBoxliteRuntime *runtime,
@@ -599,57 +659,49 @@ enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
                                               void *user_data,
                                               CBoxliteError *out_error);
 
-/**
- * Borrow the box's network capability into a new owned handle.
- *
- * On success, `*out_network` must be released with `boxlite_network_free`.
- * Returns `InvalidArgument` for null input/output pointers and writes details
- * to `out_error` when provided.
- */
+// Borrow the box's network capability into a new owned handle.
+//
+// On success, `*out_network` must be released with `boxlite_network_free`.
+// Returns `InvalidArgument` for null input/output pointers and writes details
+// to `out_error` when provided.
 enum BoxliteErrorCode boxlite_box_network(CBoxHandle *handle,
                                           CBoxNetworkHandle **out_network,
                                           CBoxliteError *out_error);
 
-/** Release a network handle. Accepts NULL and does not affect the box handle. */
+// Release a network handle. Accepts NULL and does not affect the box handle.
 void boxlite_network_free(CBoxNetworkHandle *network);
 
-/**
- * Prepare a one-shot tunnel to `port` in the box.
- *
- * On success, `*out_tunnel` owns a handle that must be released with
- * `boxlite_tunnel_free`. Returns `InvalidArgument` for a null network/output
- * pointer or port zero, with details written to `out_error` when provided.
- */
+// Prepare a one-shot tunnel to `port` in the box.
+//
+// On success, `*out_tunnel` owns a handle that must be released with
+// `boxlite_tunnel_free`. Returns `InvalidArgument` for a null network/output
+// pointer or port zero, with details written to `out_error` when provided.
 enum BoxliteErrorCode boxlite_network_tunnel(CBoxNetworkHandle *network,
                                              uint16_t port,
                                              CBoxTunnelHandle **out_tunnel,
                                              CBoxliteError *out_error);
 
-/** Release a tunnel handle and any unconsumed connection. Accepts NULL. */
+// Release a tunnel handle and any unconsumed connection. Accepts NULL.
 void boxlite_tunnel_free(CBoxTunnelHandle *tunnel);
 
-/**
- * Inspect a prepared tunnel without transferring ownership.
- *
- * `out_type` selects the valid output: URI returns an allocated `*out_uri`
- * that the caller must release with `boxlite_free_string`; FileDescriptor
- * returns a borrowed `*out_fd` valid only while the tunnel remains alive.
- * Unused outputs are initialized to NULL and -1. Errors are returned as a
- * `BoxliteErrorCode` and described through `out_error` when provided.
- */
+// Inspect a prepared tunnel without transferring ownership.
+//
+// `out_type` selects the valid output: URI returns an allocated `*out_uri`
+// that the caller must release with `boxlite_free_string`; FileDescriptor
+// returns a borrowed `*out_fd` valid only while the tunnel remains alive.
+// Unused outputs are initialized to NULL and -1. Errors are returned as a
+// `BoxliteErrorCode` and described through `out_error` when provided.
 enum BoxliteErrorCode boxlite_tunnel_endpoint(CBoxTunnelHandle *tunnel,
                                               enum BoxliteEndpointType *out_type,
                                               char **out_uri,
                                               int32_t *out_fd,
                                               CBoxliteError *out_error);
 
-/**
- * Consume a tunnel's single connection and return its owned file descriptor.
- *
- * On success, the caller owns `*out_fd` and must close it. A second call
- * returns `InvalidState`. On failure `*out_fd` remains -1 and `out_error`
- * receives details when provided.
- */
+// Consume a tunnel's single connection and return its owned file descriptor.
+//
+// On success, the caller owns `*out_fd` and must close it. A second call
+// returns `InvalidState`. On failure `*out_fd` remains -1 and `out_error`
+// receives details when provided.
 enum BoxliteErrorCode boxlite_tunnel_connect(CBoxTunnelHandle *tunnel,
                                              int32_t *out_fd,
                                              CBoxliteError *out_error);
@@ -679,7 +731,7 @@ void boxlite_options_add_volume(CBoxliteOptions *opts,
 
 // Forward `host_port` on the host to `guest_port` inside the box.
 //
-// - `host_port`: 0 = use the same number as `guest_port`.
+// - `host_port`: 0 = let the OS select an available host port.
 // - `guest_port`: required, 1-65535.
 // - `host_ip`: bind address; NULL or "" = all host interfaces.
 //
@@ -704,7 +756,7 @@ void boxlite_options_add_secret(CBoxliteOptions *opts,
                                 const char *const *hosts,
                                 int hosts_count);
 
-// Deprecated: use boxlite_options_set_auto_delete_interval.
+// Deprecated: use `boxlite_options_set_auto_delete_interval`.
 void boxlite_options_set_auto_remove(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_auto_pause_interval(CBoxliteOptions *opts, uint32_t seconds);
@@ -715,7 +767,7 @@ void boxlite_options_set_auto_resume_enabled(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
 
-// Apply a `CAdvancedBoxOptions` (security, mount isolation, health check) to a
+// Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
 // `CBoxliteOptions`. Clones the advanced configuration into the box options —
 // the caller retains ownership of `advanced_opts` and is responsible for
 // freeing it via `boxlite_advanced_options_free`.

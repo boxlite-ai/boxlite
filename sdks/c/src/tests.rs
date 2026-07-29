@@ -423,6 +423,160 @@ fn auto_remove_and_auto_delete_use_last_call_wins() {
     }
 }
 
+#[test]
+fn capability_lists_default_empty_and_preserve_custom_values() {
+    let image = CString::new("alpine:latest").expect("image cstring");
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut advanced: *mut CAdvancedBoxOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+    assert_eq!(
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts, &mut error) },
+        BoxliteErrorCode::Ok
+    );
+    assert_eq!(
+        unsafe { boxlite_advanced_options_new(&mut advanced, &mut error) },
+        BoxliteErrorCode::Ok
+    );
+
+    unsafe {
+        assert!((*advanced).options.capabilities.add.is_empty());
+        assert!((*advanced).options.capabilities.drop.is_empty());
+    }
+
+    let cap_add = [
+        CString::new("NET_ADMIN").unwrap(),
+        CString::new("SYS_PTRACE").unwrap(),
+    ];
+    let cap_add_ptrs: Vec<*const std::os::raw::c_char> =
+        cap_add.iter().map(|cap| cap.as_ptr()).collect();
+    let cap_drop = [
+        CString::new("MKNOD").unwrap(),
+        CString::new("NET_RAW").unwrap(),
+    ];
+    let cap_drop_ptrs: Vec<*const std::os::raw::c_char> =
+        cap_drop.iter().map(|cap| cap.as_ptr()).collect();
+
+    unsafe {
+        assert_eq!(
+            boxlite_advanced_options_set_capabilities_add(
+                advanced,
+                cap_add_ptrs.as_ptr(),
+                cap_add_ptrs.len() as c_int,
+            ),
+            BoxliteErrorCode::Ok
+        );
+        assert_eq!(
+            boxlite_advanced_options_set_capabilities_drop(
+                advanced,
+                cap_drop_ptrs.as_ptr(),
+                cap_drop_ptrs.len() as c_int
+            ),
+            BoxliteErrorCode::Ok
+        );
+        boxlite_options_set_advanced(opts, advanced);
+
+        assert_eq!(
+            (*opts).options.advanced.capabilities.add,
+            ["NET_ADMIN", "SYS_PTRACE"]
+        );
+        assert_eq!(
+            (*opts).options.advanced.capabilities.drop,
+            ["MKNOD", "NET_RAW"]
+        );
+        boxlite_advanced_options_free(advanced);
+        boxlite_options_free(opts);
+    }
+}
+
+#[test]
+fn null_capability_element_cannot_weaken_policy() {
+    let image = CString::new("alpine:latest").unwrap();
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut advanced: *mut CAdvancedBoxOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+    assert_eq!(
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts, &mut error) },
+        BoxliteErrorCode::Ok
+    );
+    assert_eq!(
+        unsafe { boxlite_advanced_options_new(&mut advanced, &mut error) },
+        BoxliteErrorCode::Ok
+    );
+
+    let malformed = [ptr::null()];
+    unsafe {
+        assert_eq!(
+            boxlite_advanced_options_set_capabilities_drop(advanced, malformed.as_ptr(), 1),
+            BoxliteErrorCode::InvalidArgument
+        );
+        boxlite_options_set_advanced(opts, advanced);
+        (*opts)
+            .options
+            .sanitize()
+            .expect_err("a null cap_drop element must fail closed");
+        boxlite_advanced_options_free(advanced);
+        boxlite_options_free(opts);
+    }
+}
+
+#[test]
+fn invalid_utf8_capability_cannot_weaken_policy() {
+    let image = CString::new("alpine:latest").unwrap();
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut advanced: *mut CAdvancedBoxOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+    assert_eq!(
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts, &mut error) },
+        BoxliteErrorCode::Ok
+    );
+    assert_eq!(
+        unsafe { boxlite_advanced_options_new(&mut advanced, &mut error) },
+        BoxliteErrorCode::Ok
+    );
+
+    let invalid_utf8 = [0xff_u8, 0];
+    let malformed = [invalid_utf8.as_ptr().cast::<std::os::raw::c_char>()];
+    unsafe {
+        assert_eq!(
+            boxlite_advanced_options_set_capabilities_add(advanced, malformed.as_ptr(), 1),
+            BoxliteErrorCode::InvalidArgument
+        );
+        boxlite_options_set_advanced(opts, advanced);
+        (*opts)
+            .options
+            .sanitize()
+            .expect_err("invalid UTF-8 in cap_add must fail closed");
+        boxlite_advanced_options_free(advanced);
+        boxlite_options_free(opts);
+    }
+}
+
+#[test]
+fn invalid_capability_count_and_null_array_fail_closed() {
+    let mut advanced: *mut CAdvancedBoxOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+    assert_eq!(
+        unsafe { boxlite_advanced_options_new(&mut advanced, &mut error) },
+        BoxliteErrorCode::Ok
+    );
+
+    unsafe {
+        assert_eq!(
+            boxlite_advanced_options_set_capabilities_add(advanced, ptr::null(), -1),
+            BoxliteErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            boxlite_advanced_options_set_capabilities_drop(advanced, ptr::null(), 1),
+            BoxliteErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            boxlite_advanced_options_set_capabilities_add(ptr::null_mut(), ptr::null(), 0),
+            BoxliteErrorCode::InvalidArgument
+        );
+        boxlite_advanced_options_free(advanced);
+    }
+}
+
 // Security is toggled through the advanced layer:
 // `boxlite_advanced_options_set_security_enabled` selects the enabled/disabled
 // profile on a `CAdvancedBoxOptions`, then `boxlite_options_set_advanced`

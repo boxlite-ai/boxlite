@@ -69,11 +69,10 @@ class TestSkillBoxBasic:
             oauth_token=oauth_token,
             runtime=shared_sync_runtime,
         ) as box:
-            info = box.info()
             # Default image is node:20-alpine
-            assert "node" in info.image.lower()
+            assert "node" in box._box_opts.image.lower()
             # Default memory is 2048 MiB
-            assert info.memory_mib == 2048
+            assert box._box_opts.memory_mib == 2048
 
     def test_custom_name(self, shared_sync_runtime, oauth_token):
         """Test SkillBox with custom name."""
@@ -83,8 +82,7 @@ class TestSkillBoxBasic:
             oauth_token=oauth_token,
             runtime=shared_sync_runtime,
         ) as box:
-            info = box.info()
-            assert info.name == "test-skillbox-custom-name"
+            assert box.name == "test-skillbox-custom-name"
 
     def test_custom_memory(self, shared_sync_runtime, oauth_token):
         """Test SkillBox with custom memory limit."""
@@ -95,8 +93,7 @@ class TestSkillBoxBasic:
             oauth_token=oauth_token,
             runtime=shared_sync_runtime,
         ) as box:
-            info = box.info()
-            assert info.memory_mib == 1024
+            assert box._box_opts.memory_mib == 1024
 
 
 @pytest.mark.integration

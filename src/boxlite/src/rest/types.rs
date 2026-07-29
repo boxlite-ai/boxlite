@@ -5,10 +5,12 @@
 
 use std::collections::HashMap;
 
+use boxlite_shared::errors::BoxliteError;
 use serde::{Deserialize, Serialize};
 
 use crate::litebox::BoxStatus;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
+use crate::runtime::advanced_options::ContainerCapabilities;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 
 // ============================================================================
@@ -75,6 +77,7 @@ pub(crate) struct ServerConfig {
 #[allow(dead_code)] // Constructed via serde::Deserialize
 #[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct ServerCapabilities {
+    pub linux_capabilities_enabled: Option<bool>,
     pub snapshots_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
@@ -121,6 +124,8 @@ pub(crate) struct CreateBoxRequest {
     /// alternative, is how this whole class of bug happens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tty: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advanced: Option<CreateBoxAdvancedOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_pause: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -177,6 +182,11 @@ impl CreateBoxRequest {
             secrets,
             detach: Some(options.detach),
             tty: options.tty.then_some(true),
+            advanced: (!options.advanced.capabilities.is_empty()).then(|| {
+                CreateBoxAdvancedOptions {
+                    capabilities: options.advanced.capabilities.clone(),
+                }
+            }),
             // The deprecated remove-on-stop flag was never applied by the cloud
             // control-plane mapper. Keep remote defaults unchanged and only send
             // the modern lifecycle fields when callers explicitly configure them.
@@ -185,6 +195,11 @@ impl CreateBoxRequest {
             auto_resume: options.auto_resume,
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CreateBoxAdvancedOptions {
+    pub capabilities: ContainerCapabilities,
 }
 
 #[derive(Debug, Serialize)]
@@ -257,7 +272,6 @@ pub(crate) struct BoxResponse {
 impl BoxResponse {
     pub fn to_box_info(&self) -> boxlite_shared::errors::BoxliteResult<crate::BoxInfo> {
         use crate::runtime::id::BoxID;
-        use boxlite_shared::errors::BoxliteError;
 
         let id = BoxID::parse(&self.box_id).ok_or_else(|| {
             BoxliteError::Internal(format!(
@@ -287,6 +301,10 @@ impl BoxResponse {
             image: self.image.clone(),
             cpus: self.cpus,
             memory_mib: self.memory_mib,
+            // The remote REST surface intentionally does not publish local
+            // host bindings. Missing network metadata is therefore distinct
+            // from a locally verified, resolved-empty publication list.
+            network: None,
             labels: self.labels.clone(),
             auto_pause: self.auto_pause,
             auto_delete: self.auto_delete,
@@ -549,6 +567,7 @@ fn parse_box_status(status: &str) -> BoxStatus {
         "stopping" => BoxStatus::Stopping,
         "stopped" => BoxStatus::Stopped,
         "paused" => BoxStatus::Paused,
+        "failed" => BoxStatus::Failed,
         _ => BoxStatus::Unknown,
     }
 }
@@ -584,6 +603,7 @@ mod tests {
                 placeholder: "<BOXLITE_SECRET:openai>".into(),
             }]),
             detach: None,
+            advanced: None,
             auto_pause: Some(900),
             auto_delete: Some(604800),
             auto_resume: None,
@@ -643,6 +663,35 @@ mod tests {
             req.secrets.as_ref().unwrap()[0].placeholder,
             "<BOXLITE_SECRET:openai>"
         );
+    }
+
+    #[test]
+    fn test_create_box_request_carries_container_capabilities() {
+        let opts = BoxOptions {
+            advanced: crate::AdvancedBoxOptions {
+                capabilities: ContainerCapabilities {
+                    add: vec!["SYS_ADMIN".into()],
+                    drop: vec!["CAP_NET_RAW".into()],
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let req = CreateBoxRequest::from_options(&opts, None);
+        let advanced = req.advanced.as_ref().expect("custom policy is serialized");
+        assert_eq!(advanced.capabilities.add, ["SYS_ADMIN"]);
+        assert_eq!(advanced.capabilities.drop, ["CAP_NET_RAW"]);
+
+        let json = serde_json::to_value(&req).expect("serialize create request");
+        assert_eq!(
+            json["advanced"]["capabilities"],
+            serde_json::json!({"add": ["SYS_ADMIN"], "drop": ["CAP_NET_RAW"]})
+        );
+
+        let defaults = CreateBoxRequest::from_options(&BoxOptions::default(), None);
+        let defaults_json = serde_json::to_value(defaults).expect("serialize defaults");
+        assert!(defaults_json.get("advanced").is_none());
     }
 
     #[test]
@@ -766,6 +815,7 @@ mod tests {
         assert_eq!(info.image, "python:3.11");
         assert_eq!(info.cpus, 2);
         assert_eq!(info.memory_mib, 512);
+        assert!(info.network.is_none());
         assert_eq!(info.auto_pause, 1800);
         assert_eq!(info.auto_delete, 604800);
     }
@@ -902,12 +952,14 @@ mod tests {
         let json = r#"{
             "capabilities": {
                 "snapshots_enabled": true,
+                "linux_capabilities_enabled": true,
                 "clone_enabled": false,
                 "export_enabled": true
             }
         }"#;
         let resp: ServerConfig = serde_json::from_str(json).unwrap();
         let caps = resp.capabilities.unwrap();
+        assert_eq!(caps.linux_capabilities_enabled, Some(true));
         assert_eq!(caps.snapshots_enabled, Some(true));
         assert_eq!(caps.clone_enabled, Some(false));
         assert_eq!(caps.export_enabled, Some(true));

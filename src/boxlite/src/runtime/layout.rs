@@ -37,6 +37,9 @@ pub mod dirs {
     /// Subdirectory for log files
     pub const LOGS_DIR: &str = "logs";
 
+    /// Shim process identity file.
+    pub const SHIM_PID_FILE: &str = "shim.pid";
+
     /// Subdirectory for disk images
     pub const DISKS_DIR: &str = "disks";
 
@@ -547,7 +550,7 @@ impl BoxFilesystemLayout {
     /// This is the single source of truth for the shim process PID.
     /// Database PID is a cache that can be reconstructed from this file.
     pub fn pid_file_path(&self) -> PathBuf {
-        self.box_dir.join("shim.pid")
+        self.box_dir.join(dirs::SHIM_PID_FILE)
     }
 
     /// Exit file path: ~/.boxlite/boxes/{box_id}/exit

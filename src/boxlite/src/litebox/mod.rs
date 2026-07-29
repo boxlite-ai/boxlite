@@ -13,6 +13,7 @@ mod init;
 pub(crate) mod local_snapshot;
 mod manager;
 mod network;
+pub(crate) mod ports;
 mod snapshot;
 pub(crate) mod snapshot_mgr;
 mod state;
@@ -85,9 +86,9 @@ impl LiteBox {
         self.name.as_deref()
     }
 
-    /// Get box info without triggering VM initialization.
-    pub fn info(&self) -> BoxInfo {
-        self.box_backend.info()
+    /// Get metadata for this box.
+    pub async fn info(&self) -> BoxliteResult<BoxInfo> {
+        self.box_backend.info().await
     }
 
     /// Start the box (initialize VM).

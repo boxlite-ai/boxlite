@@ -12,7 +12,7 @@
 //! for the VM's lifetime, so a core process that reconnects after detach can
 //! still change forwards.
 
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -35,6 +35,50 @@ use crate::net::{
 /// Upper bound on a single control exchange. A bound-but-unserved socket (the
 /// tiny window between `listen` and `serve` in the shim) must never hang a call.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Maximum number of kernel-selected ports tried for one automatic forward.
+const EXPOSE_AUTO_PORT_ATTEMPTS: usize = 5;
+
+const EXPOSE_PATH: &str = "/services/forwarder/expose";
+
+#[derive(Debug)]
+enum ExposeResponse {
+    Published,
+    BindConflict { status: u16, body: String },
+}
+
+enum HostPortReservation {
+    Tcp(TcpListener),
+    Udp(UdpSocket),
+}
+
+impl HostPortReservation {
+    fn bind(requested: SocketAddr, protocol: TransportProtocol) -> BoxliteResult<Self> {
+        match protocol {
+            TransportProtocol::Tcp => TcpListener::bind(requested).map(Self::Tcp),
+            TransportProtocol::Udp => UdpSocket::bind(requested).map(Self::Udp),
+            TransportProtocol::Unix | TransportProtocol::Npipe => {
+                return Err(BoxliteError::Unsupported(format!(
+                    "automatic host port allocation is not supported for {} forwards",
+                    protocol.as_str()
+                )));
+            }
+        }
+        .map_err(|error| {
+            BoxliteError::Network(format!(
+                "preselect {} host port for gvproxy expose {requested}: {error}",
+                protocol.as_str()
+            ))
+        })
+    }
+
+    fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        match self {
+            Self::Tcp(listener) => listener.local_addr(),
+            Self::Udp(socket) => socket.local_addr(),
+        }
+    }
+}
 
 /// gvproxy backend — the [`NetworkBackend`] the core constructs for a box from
 /// its [`NetworkBackendConfig`]. It produces the wire [`NetworkBackendSpec`] (via
@@ -141,6 +185,146 @@ impl GvproxyBackend {
             )))
         }
     }
+
+    /// Send one expose request while retaining enough of the raw response to
+    /// distinguish gvproxy's known bind-conflict replies from other failures.
+    async fn request_expose(
+        &self,
+        local: &str,
+        remote: &str,
+        protocol: TransportProtocol,
+    ) -> BoxliteResult<ExposeResponse> {
+        let body = serde_json::json!({
+            "local": local,
+            "remote": remote,
+            "protocol": protocol.as_str(),
+        });
+        let (status, response_body) = self
+            .request(Method::POST, EXPOSE_PATH, Some(body.to_string()))
+            .await?;
+
+        if (200..300).contains(&status) {
+            return Ok(ExposeResponse::Published);
+        }
+        if is_expose_bind_conflict(status, &response_body) {
+            return Ok(ExposeResponse::BindConflict {
+                status,
+                body: response_body,
+            });
+        }
+
+        Err(expose_response_error(status, &response_body))
+    }
+
+    async fn expose_fixed(
+        &self,
+        local: &str,
+        remote: &str,
+        protocol: TransportProtocol,
+    ) -> BoxliteResult<Forward> {
+        match self.request_expose(local, remote, protocol).await? {
+            ExposeResponse::Published => Ok(Forward {
+                local: local.to_string(),
+                remote: remote.to_string(),
+                protocol: protocol.as_str().to_string(),
+            }),
+            ExposeResponse::BindConflict { status, body } => Err(bind_conflict_error(
+                &format!("gvproxy {EXPOSE_PATH}"),
+                status,
+                &body,
+            )),
+        }
+    }
+
+    /// Publish a forward on an OS-selected host port, retrying the handoff race
+    /// a bounded number of times.
+    ///
+    /// The pinned gvproxy stores the literal `:0` address, `/expose` returns an
+    /// empty body, and `/all` reports `:0` instead of the selected port — so a
+    /// second automatic mapping collides on that same literal key. Preselecting
+    /// a concrete kernel port keeps mappings distinct and lets callers discover
+    /// the binding. The reservation has to be released before gvproxy binds,
+    /// which is why a known bind-conflict response is retried rather than
+    /// surfaced.
+    async fn expose_auto(
+        &self,
+        requested: SocketAddr,
+        remote: &str,
+        protocol: TransportProtocol,
+    ) -> BoxliteResult<Forward> {
+        // The first attempt also establishes the conflict to report if every
+        // retry loses the same race.
+        let mut conflict = match self.expose_preselected(requested, remote, protocol).await? {
+            Ok(forward) => return Ok(forward),
+            Err(conflict) => conflict,
+        };
+        for _ in 1..EXPOSE_AUTO_PORT_ATTEMPTS {
+            match self.expose_preselected(requested, remote, protocol).await? {
+                Ok(forward) => return Ok(forward),
+                Err(latest) => conflict = latest,
+            }
+        }
+
+        let (status, body) = conflict;
+        Err(bind_conflict_error(
+            &format!(
+                "gvproxy {EXPOSE_PATH} exhausted {EXPOSE_AUTO_PORT_ATTEMPTS} automatic \
+                 port attempts; last response"
+            ),
+            status,
+            &body,
+        ))
+    }
+
+    /// One automatic-allocation attempt: reserve a kernel-selected port, release
+    /// it, and ask gvproxy to bind that exact endpoint. `Err` carries gvproxy's
+    /// bind-conflict response, which is retryable; a real failure short-circuits.
+    async fn expose_preselected(
+        &self,
+        requested: SocketAddr,
+        remote: &str,
+        protocol: TransportProtocol,
+    ) -> BoxliteResult<Result<Forward, (u16, String)>> {
+        let reservation = HostPortReservation::bind(SocketAddr::new(requested.ip(), 0), protocol)?;
+        let resolved_local = reservation.local_addr().map_err(|error| {
+            BoxliteError::Network(format!(
+                "read preselected {} host port for gvproxy expose {requested}: {error}",
+                protocol.as_str()
+            ))
+        })?;
+        let resolved_local = resolved_local.to_string();
+        drop(reservation);
+
+        Ok(
+            match self
+                .request_expose(&resolved_local, remote, protocol)
+                .await?
+            {
+                ExposeResponse::Published => Ok(Forward {
+                    local: resolved_local,
+                    remote: remote.to_string(),
+                    protocol: protocol.as_str().to_string(),
+                }),
+                ExposeResponse::BindConflict { status, body } => Err((status, body)),
+            },
+        )
+    }
+}
+
+fn is_expose_bind_conflict(status: u16, body: &str) -> bool {
+    status == 500
+        && (body.trim() == "proxy already running" || body.contains("bind: address already in use"))
+}
+
+fn expose_response_error(status: u16, body: &str) -> BoxliteError {
+    BoxliteError::Network(format!(
+        "gvproxy {EXPOSE_PATH} returned {status}: {}",
+        body.trim()
+    ))
+}
+
+fn bind_conflict_error(context: &str, status: u16, body: &str) -> BoxliteError {
+    BoxliteError::AlreadyExists(format!("{context} returned {status}: {}", body.trim()))
 }
 
 #[async_trait]
@@ -152,7 +336,6 @@ impl NetworkBackend for GvproxyBackend {
     fn spec(&self) -> NetworkBackendSpec {
         let cfg = &self.config;
         let mut spec = NetworkBackendSpec {
-            port_mappings: cfg.port_mappings.clone(),
             socket_path: cfg.socket_path.clone(),
             allow_net: cfg.allow_net.clone(),
             secrets: cfg.secrets.clone(),
@@ -184,19 +367,25 @@ impl NetworkBackend for GvproxyBackend {
         local: &str,
         remote: &str,
         protocol: TransportProtocol,
-    ) -> BoxliteResult<()> {
-        let body = serde_json::json!({
-            "local": local,
-            "remote": remote,
-            "protocol": protocol.as_str(),
-        });
-        self.request_ok(
-            Method::POST,
-            "/services/forwarder/expose",
-            Some(body.to_string()),
-        )
-        .await?;
-        Ok(())
+    ) -> BoxliteResult<Forward> {
+        match protocol {
+            TransportProtocol::Tcp | TransportProtocol::Udp => {
+                let requested = local.parse::<SocketAddr>().map_err(|error| {
+                    BoxliteError::Config(format!(
+                        "invalid {} local endpoint {local:?}; expected IP:port: {error}",
+                        protocol.as_str().to_ascii_uppercase()
+                    ))
+                })?;
+                if requested.port() == 0 {
+                    self.expose_auto(requested, remote, protocol).await
+                } else {
+                    self.expose_fixed(local, remote, protocol).await
+                }
+            }
+            TransportProtocol::Unix | TransportProtocol::Npipe => {
+                self.expose_fixed(local, remote, protocol).await
+            }
+        }
     }
 
     async fn unexpose(&self, local: &str, protocol: TransportProtocol) -> BoxliteResult<()> {
@@ -400,14 +589,12 @@ mod tests {
         // `spec()` turns the held config into the wire spec. Without secrets it
         // copies the fields through and mints no CA (never touching `ca_dir`).
         let config = NetworkBackendConfig {
-            port_mappings: vec![(8080, 80), (2222, 22)],
             socket_path: PathBuf::from("/tmp/bl-box/net.sock"),
             allow_net: vec!["example.com".to_string()],
             secrets: Vec::new(),
             ca_dir: PathBuf::from("/tmp/bl-box/does-not-exist"),
         };
         let spec = GvproxyBackend::from_config(&config).spec();
-        assert_eq!(spec.port_mappings, config.port_mappings);
         assert_eq!(spec.socket_path, config.socket_path);
         assert_eq!(spec.allow_net, config.allow_net);
         assert!(spec.ca_cert_pem.is_none());
@@ -478,7 +665,6 @@ mod tests {
     ) -> (GvproxyBackend, std::path::PathBuf, NetworkBackendConfig) {
         let net_sock = dir.path().join("net.sock");
         let config = NetworkBackendConfig {
-            port_mappings: Vec::new(),
             socket_path: net_sock.clone(),
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -496,7 +682,6 @@ mod tests {
         status: u16,
         body: impl Into<String>,
     ) -> tokio::task::JoinHandle<CapturedRequest> {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::UnixListener;
 
         let body = body.into();
@@ -504,38 +689,69 @@ mod tests {
         let listener = UnixListener::bind(ctl).unwrap();
         tokio::spawn(async move {
             let (mut conn, _) = listener.accept().await.unwrap();
-            let mut headers = Vec::new();
-            let mut byte = [0u8; 1];
-            while !headers.ends_with(b"\r\n\r\n") {
-                conn.read_exact(&mut byte).await.unwrap();
-                headers.push(byte[0]);
-            }
-
-            let headers_text = String::from_utf8_lossy(&headers);
-            let content_len = headers_text
-                .lines()
-                .find_map(|line| {
-                    let (name, value) = line.split_once(':')?;
-                    name.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse::<usize>().unwrap())
-                })
-                .unwrap_or(0);
-            let mut request_body = vec![0u8; content_len];
-            if content_len > 0 {
-                conn.read_exact(&mut request_body).await.unwrap();
-            }
-
-            let response = format!(
-                "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            conn.write_all(response.as_bytes()).await.unwrap();
-
-            CapturedRequest {
-                request_line: headers_text.lines().next().unwrap().to_string(),
-                body: String::from_utf8_lossy(&request_body).into_owned(),
-            }
+            let request = read_captured_request(&mut conn).await;
+            write_services_response(&mut conn, status, &body).await;
+            request
         })
+    }
+
+    fn spawn_services_responses(
+        ctl: &std::path::Path,
+        responses: Vec<(u16, String)>,
+    ) -> tokio::task::JoinHandle<Vec<CapturedRequest>> {
+        use tokio::net::UnixListener;
+
+        let _ = std::fs::remove_file(ctl);
+        let listener = UnixListener::bind(ctl).unwrap();
+        tokio::spawn(async move {
+            let mut requests = Vec::with_capacity(responses.len());
+            for (status, body) in responses {
+                let (mut conn, _) = listener.accept().await.unwrap();
+                requests.push(read_captured_request(&mut conn).await);
+                write_services_response(&mut conn, status, &body).await;
+            }
+            requests
+        })
+    }
+
+    async fn read_captured_request(conn: &mut tokio::net::UnixStream) -> CapturedRequest {
+        use tokio::io::AsyncReadExt;
+
+        let mut headers = Vec::new();
+        let mut byte = [0u8; 1];
+        while !headers.ends_with(b"\r\n\r\n") {
+            conn.read_exact(&mut byte).await.unwrap();
+            headers.push(byte[0]);
+        }
+
+        let headers_text = String::from_utf8_lossy(&headers);
+        let content_len = headers_text
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+            .unwrap_or(0);
+        let mut request_body = vec![0u8; content_len];
+        if content_len > 0 {
+            conn.read_exact(&mut request_body).await.unwrap();
+        }
+
+        CapturedRequest {
+            request_line: headers_text.lines().next().unwrap().to_string(),
+            body: String::from_utf8_lossy(&request_body).into_owned(),
+        }
+    }
+
+    async fn write_services_response(conn: &mut tokio::net::UnixStream, status: u16, body: &str) {
+        use tokio::io::AsyncWriteExt;
+
+        let response = format!(
+            "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        conn.write_all(response.as_bytes()).await.unwrap();
     }
 
     fn json_body(req: &CapturedRequest) -> Value {
@@ -548,7 +764,6 @@ mod tests {
         // and threads the PEMs (and the secrets) onto the wire spec.
         let ca_dir = tempfile::tempdir().unwrap();
         let config = NetworkBackendConfig {
-            port_mappings: Vec::new(),
             socket_path: PathBuf::from("/tmp/bl-box/net.sock"),
             allow_net: Vec::new(),
             secrets: vec![test_secret()],
@@ -580,7 +795,6 @@ mod tests {
         let ca_dir = dir.path().join("ca-dir-is-a-file");
         std::fs::write(&ca_dir, "not a directory").unwrap();
         let config = NetworkBackendConfig {
-            port_mappings: Vec::new(),
             socket_path: PathBuf::from("/tmp/bl-box/net.sock"),
             allow_net: Vec::new(),
             secrets: vec![test_secret()],
@@ -629,7 +843,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn expose_posts_forwarder_payload_to_services_socket() {
+    async fn expose_fixed_posts_once_and_returns_concrete_forward() {
         let dir = tempfile::Builder::new()
             .prefix("bl-svctest-")
             .tempdir_in("/tmp")
@@ -637,7 +851,7 @@ mod tests {
         let (backend, ctl, _) = test_backend(&dir);
         let server = spawn_services_response(&ctl, 204, "");
 
-        backend
+        let forward = backend
             .expose(
                 "127.0.0.1:18080",
                 "192.168.127.2:80",
@@ -652,6 +866,311 @@ mod tests {
         assert_eq!(body["local"], "127.0.0.1:18080");
         assert_eq!(body["remote"], "192.168.127.2:80");
         assert_eq!(body["protocol"], "udp");
+        assert_eq!(
+            forward,
+            Forward {
+                local: "127.0.0.1:18080".to_string(),
+                remote: "192.168.127.2:80".to_string(),
+                protocol: "udp".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn expose_auto_posts_concrete_local_endpoint() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let server = spawn_services_response(&ctl, 204, "");
+
+        backend
+            .expose("127.0.0.1:0", "192.168.127.2:80", TransportProtocol::Tcp)
+            .await
+            .unwrap();
+
+        let request = server.await.unwrap();
+        let posted_local = json_body(&request)["local"]
+            .as_str()
+            .unwrap()
+            .parse::<SocketAddr>()
+            .unwrap();
+        assert_ne!(
+            posted_local.port(),
+            0,
+            "gvproxy must receive the concrete host port, not the unresolved :0 request"
+        );
+    }
+
+    #[tokio::test]
+    async fn expose_auto_returns_nonzero_port_after_releasing_reservation() {
+        use tokio::net::UnixListener;
+
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let listener = UnixListener::bind(&ctl).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let request = read_captured_request(&mut conn).await;
+            let local: SocketAddr = json_body(&request)["local"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            let reservation_was_released = TcpListener::bind(local).is_ok();
+            write_services_response(&mut conn, 204, "").await;
+            (request, reservation_was_released)
+        });
+
+        let forward = backend
+            .expose("127.0.0.1:0", "192.168.127.2:80", TransportProtocol::Tcp)
+            .await
+            .unwrap();
+
+        let (request, reservation_was_released) = server.await.unwrap();
+        let posted_local: SocketAddr = json_body(&request)["local"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_ne!(posted_local.port(), 0);
+        assert_eq!(forward.local, posted_local.to_string());
+        assert_eq!(forward.remote, "192.168.127.2:80");
+        assert_eq!(forward.protocol, "tcp");
+        assert!(
+            reservation_was_released,
+            "gvproxy must be able to bind the selected port while handling the request"
+        );
+    }
+
+    #[tokio::test]
+    async fn expose_protocol_contract_rejects_tcp_local_without_ip() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, _, _) = test_backend(&dir);
+
+        let error = backend
+            .expose(":0", "192.168.127.2:80", TransportProtocol::Tcp)
+            .await
+            .unwrap_err();
+
+        let BoxliteError::Config(message) = error else {
+            panic!("expected Config, got {error:?}");
+        };
+        assert!(message.contains("invalid TCP local endpoint"));
+        assert!(message.contains("expected IP:port"));
+    }
+
+    /// A released TCP reservation would leave a UDP port free too, so the
+    /// end-to-end UDP test cannot prove the reservation used the right
+    /// transport. Check the socket family directly.
+    #[test]
+    fn expose_protocol_contract_reserves_with_matching_transport() {
+        let requested: SocketAddr = "127.0.0.1:0".parse().unwrap();
+
+        let tcp = HostPortReservation::bind(requested, TransportProtocol::Tcp).unwrap();
+        assert!(matches!(tcp, HostPortReservation::Tcp(_)));
+
+        let udp = HostPortReservation::bind(requested, TransportProtocol::Udp).unwrap();
+        assert!(matches!(udp, HostPortReservation::Udp(_)));
+    }
+
+    #[tokio::test]
+    async fn expose_protocol_contract_udp_auto_returns_nonzero_udp_forward() {
+        use tokio::net::UnixListener;
+
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let listener = UnixListener::bind(&ctl).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let request = read_captured_request(&mut conn).await;
+            let local: SocketAddr = json_body(&request)["local"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            let reservation_was_released = std::net::UdpSocket::bind(local).is_ok();
+            write_services_response(&mut conn, 204, "").await;
+            (request, reservation_was_released)
+        });
+
+        let forward = backend
+            .expose("127.0.0.1:0", "192.168.127.2:53", TransportProtocol::Udp)
+            .await
+            .unwrap();
+
+        let (request, reservation_was_released) = server.await.unwrap();
+        let body = json_body(&request);
+        let posted_local: SocketAddr = body["local"].as_str().unwrap().parse().unwrap();
+        assert_ne!(posted_local.port(), 0);
+        assert_eq!(body["protocol"], "udp");
+        assert_eq!(forward.local, posted_local.to_string());
+        assert_eq!(forward.protocol, "udp");
+        assert!(
+            reservation_was_released,
+            "gvproxy must be able to bind the selected UDP port"
+        );
+    }
+
+    #[tokio::test]
+    async fn expose_protocol_contract_keeps_unix_local_opaque() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let server = spawn_services_response(&ctl, 204, "");
+
+        let forward = backend
+            .expose(
+                "127.0.0.1:0",
+                "tcp://192.168.127.2:80",
+                TransportProtocol::Unix,
+            )
+            .await
+            .unwrap();
+
+        let request = server.await.unwrap();
+        let body = json_body(&request);
+        assert_eq!(body["local"], "127.0.0.1:0");
+        assert_eq!(body["protocol"], "unix");
+        assert_eq!(forward.local, "127.0.0.1:0");
+        assert_eq!(forward.protocol, "unix");
+    }
+
+    #[tokio::test]
+    async fn expose_fixed_reports_bind_conflict_as_already_exists_without_retry() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let server = spawn_services_response(&ctl, 500, "proxy already running");
+
+        let error = backend
+            .expose(
+                "127.0.0.1:18080",
+                "192.168.127.2:80",
+                TransportProtocol::Tcp,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            server.await.unwrap().request_line,
+            "POST /services/forwarder/expose HTTP/1.1"
+        );
+        let BoxliteError::AlreadyExists(message) = error else {
+            panic!("expected AlreadyExists, got {error:?}");
+        };
+        assert!(message.contains("returned 500"));
+        assert!(message.contains("proxy already running"));
+    }
+
+    #[tokio::test]
+    async fn expose_auto_retries_known_proxy_already_running_response() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let server = spawn_services_responses(
+            &ctl,
+            vec![
+                (500, "proxy already running".to_string()),
+                (204, String::new()),
+            ],
+        );
+
+        let forward = backend
+            .expose("127.0.0.1:0", "192.168.127.2:80", TransportProtocol::Tcp)
+            .await
+            .unwrap();
+
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|request| {
+            json_body(request)["local"]
+                .as_str()
+                .unwrap()
+                .parse::<SocketAddr>()
+                .unwrap()
+                .port()
+                != 0
+        }));
+        assert_eq!(
+            forward.local,
+            json_body(&requests[1])["local"].as_str().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn expose_auto_stops_after_five_bind_conflicts() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let server = spawn_services_responses(
+            &ctl,
+            (0..EXPOSE_AUTO_PORT_ATTEMPTS)
+                .map(|_| {
+                    (
+                        500,
+                        "listen tcp 127.0.0.1:1234: bind: address already in use".to_string(),
+                    )
+                })
+                .collect(),
+        );
+
+        let error = backend
+            .expose("127.0.0.1:0", "192.168.127.2:80", TransportProtocol::Tcp)
+            .await
+            .unwrap_err();
+
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), EXPOSE_AUTO_PORT_ATTEMPTS);
+        let BoxliteError::AlreadyExists(message) = error else {
+            panic!("expected AlreadyExists, got {error:?}");
+        };
+        assert!(message.contains("exhausted 5 automatic port attempts"));
+        assert!(message.contains("bind: address already in use"));
+    }
+
+    #[tokio::test]
+    async fn expose_auto_does_not_retry_unrelated_500_response() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-svctest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let server = spawn_services_response(&ctl, 500, "internal forwarder failure");
+
+        let error = backend
+            .expose("127.0.0.1:0", "192.168.127.2:80", TransportProtocol::Tcp)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            server.await.unwrap().request_line,
+            "POST /services/forwarder/expose HTTP/1.1"
+        );
+        let BoxliteError::Network(message) = error else {
+            panic!("expected Network, got {error:?}");
+        };
+        assert!(message.contains("returned 500"));
+        assert!(message.contains("internal forwarder failure"));
+        assert!(!message.contains("exhausted"));
     }
 
     #[tokio::test]
@@ -888,7 +1407,6 @@ mod tests {
         });
 
         let config = NetworkBackendConfig {
-            port_mappings: Vec::new(),
             socket_path: net_sock,
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -938,7 +1456,6 @@ mod tests {
         });
 
         let config = NetworkBackendConfig {
-            port_mappings: Vec::new(),
             socket_path: net_sock,
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -961,7 +1478,6 @@ mod tests {
     #[ignore]
     async fn expose_unexpose_roundtrip_over_services_socket() {
         use crate::net::gvproxy::GvproxyInstance;
-        use std::time::Duration;
 
         // Short socket dir (sun_path budget); auto-removed on drop.
         let dir = tempfile::Builder::new()
@@ -972,12 +1488,10 @@ mod tests {
 
         // Bind a real gvproxy instance; it derives + serves its control socket
         // (`gvproxy-ctl.sock`) as a sibling of net.sock.
-        let _instance =
-            GvproxyInstance::new(net_sock.clone(), &[], Vec::new(), Vec::new(), None, None)
-                .expect("create gvproxy instance");
+        let _instance = GvproxyInstance::new(net_sock.clone(), Vec::new(), Vec::new(), None, None)
+            .expect("create gvproxy instance");
 
         let config = NetworkBackendConfig {
-            port_mappings: Vec::new(),
             socket_path: net_sock.clone(),
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -985,16 +1499,11 @@ mod tests {
         };
         let ctl = GvproxyBackend::from_config(&config);
 
-        // The services socket is bound just after create returns; wait for it.
-        let mut ready = false;
-        for _ in 0..50 {
-            if ctl.list_forwards().await.is_ok() {
-                ready = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        assert!(ready, "services socket never became reachable");
+        // `gvproxy_create` returns only once the services socket is listening,
+        // so a single call must succeed.
+        ctl.list_forwards()
+            .await
+            .expect("services socket is bound before create returns");
 
         let local = "127.0.0.1:18080";
         let has = |fs: &[Forward]| fs.iter().any(|f| f.local == local);
@@ -1030,19 +1539,16 @@ mod tests {
     #[ignore]
     async fn tunnel_handshake_over_services_socket() {
         use crate::net::gvproxy::GvproxyInstance;
-        use std::time::Duration;
 
         let dir = tempfile::Builder::new()
             .prefix("bl-tun-test-")
             .tempdir_in("/tmp")
             .unwrap();
         let net_sock = dir.path().join("net.sock");
-        let _instance =
-            GvproxyInstance::new(net_sock.clone(), &[], Vec::new(), Vec::new(), None, None)
-                .expect("create gvproxy instance");
+        let _instance = GvproxyInstance::new(net_sock.clone(), Vec::new(), Vec::new(), None, None)
+            .expect("create gvproxy instance");
 
         let config = NetworkBackendConfig {
-            port_mappings: Vec::new(),
             socket_path: net_sock.clone(),
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -1050,16 +1556,12 @@ mod tests {
         };
         let backend = GvproxyBackend::from_config(&config);
 
-        // Wait for the services socket to be served.
-        let mut ready = false;
-        for _ in 0..50 {
-            if backend.list_forwards().await.is_ok() {
-                ready = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        assert!(ready, "services socket never became reachable");
+        // `gvproxy_create` returns only once the services socket is listening,
+        // so a single call must succeed.
+        backend
+            .list_forwards()
+            .await
+            .expect("services socket is bound before create returns");
 
         let target: SocketAddr = "192.168.127.2:8080".parse().unwrap();
         let tunnel = backend.tunnel(target).await.expect("tunnel handshake");

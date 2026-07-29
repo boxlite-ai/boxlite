@@ -1,19 +1,8 @@
 //! Regression: when a host port is already bound by another process,
-//! `boxlite run -p HOST:GUEST` must fail-fast with a Rust-layer error
-//! that names gvproxy as the failure source — not silently boot a box
-//! with a dead netstack whose breakage only surfaces 20s+ later as a
-//! guest "DNS lookup … i/o timeout".
-//!
-//! Pre-fix:
-//! `virtualnetwork.New(tapConfig)` at
-//! `src/deps/libgvproxy-sys/gvproxy-bridge/main.go:412-418` returned
-//! the bind error to the surrounding goroutine, which logged it to
-//! logrus and returned. `gvproxy_create` had already returned a valid
-//! id by then, so the FFI caller never learned about the failure.
-//!
-//! Fix: surface the result via an `initErr` channel so `gvproxy_create`
-//! returns -1 on bind failure and the Rust runtime maps that to
-//! `Network("gvproxy_create failed")`.
+//! `boxlite run -p HOST:GUEST` must fail fast through gvproxy's runtime
+//! `/services/forwarder/expose` API, with the underlying bind error intact.
+//! Port publication runs only after gvproxy's control socket is ready, so a
+//! conflict must never leave a silently running box with a missing forward.
 
 mod common;
 
@@ -21,12 +10,42 @@ use std::net::TcpListener;
 use std::process::Command;
 use std::time::Instant;
 
+fn bind_exclusive_ephemeral() -> TcpListener {
+    use socket2::{Domain, Protocol, Socket, Type};
+    use std::io;
+    use std::net::SocketAddr;
+
+    fn bind(domain: Domain, address: &str, is_dual_stack: bool) -> io::Result<TcpListener> {
+        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+        if is_dual_stack {
+            socket.set_only_v6(false)?;
+        }
+        socket.set_reuse_address(false)?;
+        let address = address.parse::<SocketAddr>().unwrap();
+        socket.bind(&address.into())?;
+        socket.listen(1)?;
+        Ok(socket.into())
+    }
+
+    // Go uses an IPv6 dual-stack socket for a wildcard TCP bind when the host
+    // supports IPv4-mapped IPv6. Rust's TcpListener uses IPv4 here, and Darwin
+    // allows those two families to coexist on one port. Match Go's choice, with
+    // its IPv4 fallback for hosts where dual-stack IPv6 is unavailable.
+    bind(Domain::IPV6, "[::]:0", true).unwrap_or_else(|ipv6_error| {
+        bind(Domain::IPV4, "0.0.0.0:0", false).unwrap_or_else(|ipv4_error| {
+            panic!(
+                "bind exclusive ephemeral TCP listener: IPv6 failed ({ipv6_error}); \
+                 IPv4 failed ({ipv4_error})"
+            )
+        })
+    })
+}
+
 #[test]
 fn gvproxy_port_conflict_fails_fast_with_named_error() {
-    // Plain TcpListener (no boxlite involvement) holds the host port
-    // for the test's lifetime; OS picks a free ephemeral port so the
-    // test is parallel-safe with everything.
-    let holder = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+    // Hold the same dual-stack wildcard gvproxy uses for BoxLite's default
+    // publication. Port 0 keeps the test parallel-safe.
+    let holder = bind_exclusive_ephemeral();
     let host_port = holder.local_addr().unwrap().port();
 
     let ctx = common::boxlite();
@@ -68,8 +87,9 @@ fn gvproxy_port_conflict_fails_fast_with_named_error() {
     if output.status.success() {
         failures.push("L1 [boxlite rc != 0]: boxlite returned success despite host-port conflict");
     }
-    if !stderr.contains("gvproxy_create failed") {
-        failures.push("L2 [stderr names gvproxy]: stderr missing 'gvproxy_create failed'");
+    if !stderr.contains("/services/forwarder/expose") {
+        failures
+            .push("L2 [stderr names gvproxy expose]: stderr missing '/services/forwarder/expose'");
     }
     if !stderr.contains("address already in use") {
         failures.push("L3 [stderr carries OS detail]: stderr missing 'address already in use'");
@@ -89,12 +109,9 @@ fn gvproxy_port_conflict_fails_fast_with_named_error() {
 /// exercising a *different* gvproxy bind failure mode: EACCES on a
 /// privileged port instead of EADDRINUSE on a busy one.
 ///
-/// Same plumbing (`virtualnetwork.New` → goroutine → `initErr` channel
-/// → `gvproxy_create` errOut → Rust `Network` folding), but the
-/// underlying OS error string differs ("permission denied" vs
-/// "address already in use"). Proves the fix surfaces *whatever* the
-/// kernel returned at bind time, not a hard-coded port-conflict
-/// shortcut.
+/// The underlying OS error differs ("permission denied" rather than
+/// "address already in use"), proving that the expose path preserves the
+/// backend's actual bind failure instead of synthesizing one conflict string.
 #[test]
 fn gvproxy_privileged_port_fails_fast_with_named_error() {
     // Skip when the runner happens to have permission to bind <1024
@@ -134,8 +151,9 @@ fn gvproxy_privileged_port_fails_fast_with_named_error() {
         failures
             .push("L1 [boxlite rc != 0]: boxlite returned success despite privileged-port bind");
     }
-    if !stderr.contains("gvproxy_create failed") {
-        failures.push("L2 [stderr names gvproxy]: stderr missing 'gvproxy_create failed'");
+    if !stderr.contains("/services/forwarder/expose") {
+        failures
+            .push("L2 [stderr names gvproxy expose]: stderr missing '/services/forwarder/expose'");
     }
     if !stderr.contains("permission denied") {
         failures.push("L3 [stderr carries OS detail]: stderr missing 'permission denied'");

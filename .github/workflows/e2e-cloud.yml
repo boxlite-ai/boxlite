@@ -1,0 +1,327 @@
+# E2E suite against the dev cloud stack — SDK → dev API → dev Runner → VM.
+#
+# Builds Python SDK, Node SDK, and the CLI from source using
+# BOXLITE_DEPS_STUB=1 (skips vendor submodule builds — those only
+# matter inside the runner, not the SDK client), then runs the REST
+# e2e pytest suite against the dev environment.
+#
+# C and Go SDK tests are excluded — those SDKs wrap libboxlite.a over
+# REST purely to test FFI bindings, not a real user path. Python,
+# Node, and CLI cover the actual user-facing REST surface.
+#
+# Does NOT build or deploy the API or runner — the dev stack is
+# assumed to be already running the version you want to test against.
+#
+# Authentication: one boxlite API key, in the repo secret
+# `BOXLITE_DEV_API_KEY`. That is the whole of it — the suite reads
+# [profiles.p1] from ~/.boxlite/credentials.toml and every request is
+# `Authorization: Bearer <token>` (scripts/test/e2e/lib/e2e_auth.py).
+# `path_prefix` is derived from the same key via /v1/me, not a second
+# credential. No AWS, no OIDC.
+#
+# Optional repo variable (Settings → Variables → Actions):
+#   - BOXLITE_DEV_API_URL   target stack; defaults to api.dev.boxlite.ai
+#
+# The key is issued to a maintainer, deliberately. It is therefore
+# mortal: API keys are primary-keyed on (organizationId, userId, name)
+# and ApiKeyStrategy re-reads the user on every request, throwing
+# UnauthorizedException('User not found') once that account is deleted.
+# Redis caches the user lookup, so such a key keeps working for a TTL
+# after the account goes and then fails for good. If this workflow
+# starts 401-ing for no apparent reason, that is the first thing to
+# check — the preflight below says so explicitly.
+#
+# Last known-good: run 29995466177 (2026-07-23) authenticated fine — its
+# credential step passed, and that step is what calls /v1/me. The four
+# failures in that run were test failures, not auth. So a 401 after this
+# date means something changed since, not that the setup never worked.
+#
+# The durable alternative is a key on a principal that is not a person:
+# `boxlite-admin`, which the API provisions for itself on boot
+# (initializeAdminUser in apps/api/src/app.service.ts), or a dedicated
+# service account with a scoped key (CreateApiKeyDto takes `permissions`
+# and `expiresAt`). Both were weighed and declined: a maintainer key is
+# less privileged than boxlite-admin's SystemRole.ADMIN, and a service
+# account needs provisioning work on the dev stack that nothing else
+# currently needs.
+#
+# Triggers mirror e2e-local: push on main, a label-gated PR trigger, and
+# manual dispatch. The `e2e-cloud` label is the cost gate — every run
+# consumes dev-stack capacity, so PRs opt in rather than run by default.
+#
+# Fork PRs: DENIED, and this is the one place the model diverges from
+# e2e-local. There, untrusted code runs in a job holding no secrets, so a
+# maintainer label is purely a cost decision. Here the suite needs the
+# API key in the same job that builds and runs the PR's own code, and
+# GitHub has no secret-safe way to hand a credential from a privileged
+# job to an unprivileged one — job outputs are plaintext. So a labeled
+# fork run would hand arbitrary code a live maintainer credential for
+# the dev stack; a conftest.py is enough to exfiltrate it. Same-repo PRs
+# are allowed because their authors already have write access.
+#
+# The event is still pull_request_target with head-SHA pinning so the
+# trigger surface matches e2e-local. Enabling forks needs more than
+# relaxing `should-run`: the run would first have to mint a scoped,
+# short-lived key (CreateApiKeyDto takes `permissions` and `expiresAt`)
+# and pass only that to the test step.
+#
+# Runbook: docs/ci/e2e-local.md covers the shared label/gate mechanics.
+
+name: E2E cloud
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/boxlite/**'
+      - 'src/shared/**'
+      - 'src/cli/**'
+      - 'src/guest/**'
+      - 'sdks/**'
+      - 'scripts/test/e2e/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/e2e-cloud.yml'
+  pull_request_target:
+    types: [labeled, synchronize]
+    branches: [main]
+    paths:
+      - 'src/boxlite/**'
+      - 'src/shared/**'
+      - 'src/cli/**'
+      - 'src/guest/**'
+      - 'sdks/**'
+      - 'scripts/test/e2e/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'Dev API base URL (blank = repo variable BOXLITE_DEV_API_URL)'
+        type: string
+        required: false
+        # Deliberately no default. A default would make inputs.api_url
+        # always non-empty on a dispatch run, so BOXLITE_DEV_API_URL
+        # would be silently ignored exactly when someone is trying to
+        # dispatch against the configured stack.
+
+# pull_request_target's default token is write-capable — keep the
+# inherited token read-only, as e2e-local does.
+permissions:
+  contents: read
+
+# Single global group: every run targets the same dev stack, so two in
+# flight would race over shared boxes.
+#
+# A newer push queues behind the in-progress run instead of cancelling
+# it. The `box` fixture's teardown is the only thing that deletes the
+# boxes a run creates: auto_remove is a no-op over REST (see
+# deprecated_auto_remove_does_not_change_rest_lifecycle_defaults) and the
+# API defaults autoDelete to disabled, so a run killed mid-suite strands
+# every box it had open — they auto-stop after 15 min but are never
+# deleted. Note this bounds the damage rather than eliminating it:
+# GitHub retains only the newest *pending* run per group, so intermediate
+# queued pushes are still superseded before they ever start.
+concurrency:
+  group: e2e-cloud
+  cancel-in-progress: false
+
+env:
+  BOXLITE_DEPS_STUB: "1"
+  # Precedence: a dispatch input overrides for one run; otherwise the
+  # repo variable is the configured stack; otherwise the built-in
+  # default, so the workflow still runs with nothing configured.
+  API_URL: ${{ inputs.api_url || vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai/api' }}
+
+jobs:
+  # =========================================================================
+  # Gate: PRs require the 'e2e-cloud' label (only maintainers can add it).
+  # Same-repo PRs re-run while labeled. Fork PRs never run — see the header:
+  # this workflow's only job holds a live dev API key.
+  # =========================================================================
+  should-run:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - name: Check trigger conditions
+        id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request_target" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"   # push / workflow_dispatch
+            exit 0
+          fi
+          if ! echo "$LABELS" | jq -e 'index("e2e-cloud")' > /dev/null 2>&1; then
+            echo "run=false" >> "$GITHUB_OUTPUT"  # label is the cost gate
+            exit 0
+          fi
+          if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Fork PRs cannot run E2E cloud: the suite needs a live dev API key in the same job that runs the PR's code. Use workflow_dispatch from a maintainer branch instead."
+          fi
+
+  e2e:
+    name: E2E suite (cloud)
+    needs: should-run
+    if: needs.should-run.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # pull_request_target resolves to the BASE branch by default,
+          # which would silently test main instead of the PR. Pin the head
+          # SHA the maintainer approved when labeling; push/dispatch keep
+          # github.sha. Same-repo heads only — see `should-run`.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      # ── Health check ──────────────────────────────────────────────
+      - name: Probe API health
+        run: |
+          curl -fsS --retry 6 --retry-delay 5 --retry-all-errors --max-time 10 \
+               -o /dev/null "${API_URL}/health"
+          echo "::notice::${API_URL}/health returned 2xx"
+
+      # ── Configure pytest credentials ─────────────────────────────
+      # Written here rather than by scripts/test/e2e/fixture_setup.py,
+      # which the local entry points (make test:e2e:setup, run.sh) use.
+      # That script talks to the stack's Postgres directly — `psql -h
+      # localhost -d boxlite_dev` for snapshot state, and an
+      # `UPDATE organization SET max_*_per_box` for quotas — because, as
+      # its own comment puts it, the fixture lives next to the DB.
+      # e2e-local and e2e-stack run on a host that bootstrapped that DB;
+      # this runs on a GitHub runner against a remote API, so there is no
+      # localhost Postgres and fixture_setup would exit on the quota patch.
+      #
+      # The consequence is deliberate: this workflow only READS from the
+      # dev control plane. It registers no snapshots and rewrites no
+      # quotas — a deployed dev stack is expected to already have both,
+      # and silently UPDATE-ing a shared environment's rows from CI would
+      # be worse than failing. The only writes to dev are the boxes the
+      # suite itself creates and deletes.
+      - name: Configure pytest profile p1
+        env:
+          BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${BOXLITE_DEV_API_KEY:-}" ]; then
+            echo "::error::Secret BOXLITE_DEV_API_KEY is not set. Add it in Settings → Secrets → Actions."
+            exit 1
+          fi
+          echo "::add-mask::$BOXLITE_DEV_API_KEY"
+
+          # /v1/me is the auth smoke test — it exercises auth + DB + Redis
+          # in one call, the same way bootstrap.sh probes a fresh stack.
+          # Report the status code so a failure names itself instead of
+          # surfacing later as an empty path_prefix.
+          ME_HTTP=$(curl -sS -o /tmp/me.json -w '%{http_code}' \
+            -H "Authorization: Bearer $BOXLITE_DEV_API_KEY" "${API_URL}/v1/me" || echo 000)
+          if [ "$ME_HTTP" != "200" ]; then
+            echo "::error::/v1/me returned HTTP ${ME_HTTP}."
+            if [ "$ME_HTTP" = "401" ]; then
+              echo "::error::401 means the key is no longer valid. This key belongs to a person: if that account was deleted, ApiKeyStrategy now throws 'User not found' and the key is dead for good. Issue a new one and update the secret."
+            fi
+            exit 1
+          fi
+
+          PATH_PREFIX=$(python3 -c 'import json;print(json.load(open("/tmp/me.json"))["path_prefix"])')
+          rm -f /tmp/me.json
+          [ -n "$PATH_PREFIX" ] || { echo "::error::Empty path_prefix from /v1/me"; exit 1; }
+          echo "Resolved path_prefix=${PATH_PREFIX}"
+
+          mkdir -p ~/.boxlite
+          chmod 700 ~/.boxlite
+          {
+              printf '[profiles.p1]\n'
+              printf 'url = "%s"\n'         "$API_URL"
+              printf 'api_key = "%s"\n'     "$BOXLITE_DEV_API_KEY"
+              printf 'path_prefix = "%s"\n' "$PATH_PREFIX"
+          } > ~/.boxlite/credentials.toml
+          chmod 600 ~/.boxlite/credentials.toml
+
+      # ── System deps ──────────────────────────────────────────────
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends protobuf-compiler
+
+      # ── Rust toolchain ───────────────────────────────────────────
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # ── CLI (cargo build, warms the shared boxlite core) ─────────
+      - name: Build CLI
+        run: |
+          cargo build --release -p boxlite-cli
+          sudo install -m 0755 target/release/boxlite /usr/local/bin/boxlite
+          boxlite --version
+
+      # ── Node SDK (napi-rs) ───────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build Node SDK (napi + tsc)
+        run: |
+          cd sdks/node
+          npm install --ignore-scripts
+          npm run build:native
+          npm run build
+          ls -lh native/ dist/
+
+      # ── Python SDK (maturin + PyO3) ──────────────────────────────
+      - name: Build & install Python SDK
+        run: |
+          cd sdks/python
+          pip install --break-system-packages --quiet maturin
+          maturin build --release
+          pip install --break-system-packages --force-reinstall ../../target/wheels/boxlite-*.whl
+          pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout
+
+      # ── Run pytest ───────────────────────────────────────────────
+      # --ignore rationale:
+      #  - C/Go entry+coverage: FFI-binding tests whose SDKs aren't built here.
+      #  - node-entry: needs runner journal access (unreachable from GHA
+      #    against remote dev); node-coverage already covers the Node REST
+      #    surface without journal checks.
+      #  - exec-timeout: the timeout fires and kills the process on time, but
+      #    the guest kills only the direct child — an orphaned grandchild
+      #    (e.g. `sh`'s `sleep`) keeps the stdout pipe open, so the attach
+      #    stream never EOFs and ex.wait() hangs to the 45s bound. Guest-side
+      #    root cause + fix tracked in #910. Un-ignore once that lands. The
+      #    kill itself is covered by sdks/python/tests/test_exec_timeout_sigalrm.py.
+      # test_path_verification is NOT ignored — despite the name it never
+      # touches the journal; it proves the API→Runner chain via the
+      # X-BoxLite-Api-Version response header + an exec marker.
+      - name: Run E2E suite
+        env:
+          BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
+          BOXLITE_E2E_PROFILE: p1
+        run: |
+          timeout 35m python3 -m pytest scripts/test/e2e/cases/ \
+              --ignore=scripts/test/e2e/cases/test_c_entry.py \
+              --ignore=scripts/test/e2e/cases/test_c_coverage.py \
+              --ignore=scripts/test/e2e/cases/test_go_entry.py \
+              --ignore=scripts/test/e2e/cases/test_go_coverage.py \
+              --ignore=scripts/test/e2e/cases/test_node_entry.py \
+              --ignore=scripts/test/e2e/cases/test_exec_timeout.py \
+              -v -s --tb=short --no-header -p no:cacheprovider \
+              --timeout=180 --timeout-method=thread \
+              --junit-xml=pytest-junit.xml
+
+      - name: Upload pytest junit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-junit
+          path: pytest-junit.xml
+          if-no-files-found: ignore

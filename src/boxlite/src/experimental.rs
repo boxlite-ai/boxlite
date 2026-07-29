@@ -10,6 +10,7 @@ use crate::{BoxliteError, BoxliteResult, BoxliteRuntime};
 use std::collections::BTreeSet;
 
 pub mod custom_kernel;
+pub mod nested_virtualization;
 
 /// Comma-separated list of release-candidate features enabled for this process.
 pub const EXPERIMENTAL_FEATURES_ENV: &str = "BOXLITE_EXPERIMENTAL";
@@ -19,6 +20,7 @@ pub const EXPERIMENTAL_FEATURES_ENV: &str = "BOXLITE_EXPERIMENTAL";
 #[non_exhaustive]
 pub enum ExperimentalFeature {
     CustomKernel,
+    NestedVirtualization,
 }
 
 impl ExperimentalFeature {
@@ -26,12 +28,14 @@ impl ExperimentalFeature {
     pub const fn token(self) -> &'static str {
         match self {
             Self::CustomKernel => "custom-kernel",
+            Self::NestedVirtualization => "nested-virtualization",
         }
     }
 
     const fn description(self) -> &'static str {
         match self {
             Self::CustomKernel => "custom kernel support",
+            Self::NestedVirtualization => "nested virtualization support",
         }
     }
 }
@@ -53,6 +57,7 @@ impl ExperimentalFeatures {
         for token in value.split(',').map(str::trim) {
             let feature = match token {
                 "custom-kernel" => ExperimentalFeature::CustomKernel,
+                "nested-virtualization" => ExperimentalFeature::NestedVirtualization,
                 "" => {
                     return Err(BoxliteError::Config(format!(
                         "{EXPERIMENTAL_FEATURES_ENV} contains an empty feature name"
@@ -60,7 +65,7 @@ impl ExperimentalFeatures {
                 }
                 unknown => {
                     return Err(BoxliteError::Config(format!(
-                        "unknown feature '{unknown}' in {EXPERIMENTAL_FEATURES_ENV}; supported values: custom-kernel"
+                        "unknown feature '{unknown}' in {EXPERIMENTAL_FEATURES_ENV}; supported values: custom-kernel, nested-virtualization"
                     )));
                 }
             };
@@ -92,6 +97,9 @@ impl ExperimentalFeatures {
     pub(crate) fn require_for_options(&self, options: &BoxOptions) -> BoxliteResult<()> {
         if options.advanced.kernel.is_some() {
             self.require(ExperimentalFeature::CustomKernel)?;
+        }
+        if options.advanced.nested_virtualization {
+            self.require(ExperimentalFeature::NestedVirtualization)?;
         }
         Ok(())
     }
@@ -139,9 +147,11 @@ mod tests {
 
     #[test]
     fn feature_tokens_are_granular_and_trimmed() {
-        let features = ExperimentalFeatures::parse(" custom-kernel ").unwrap();
+        let features =
+            ExperimentalFeatures::parse(" custom-kernel, nested-virtualization ").unwrap();
 
         assert!(features.is_enabled(ExperimentalFeature::CustomKernel));
+        assert!(features.is_enabled(ExperimentalFeature::NestedVirtualization));
     }
 
     #[test]
@@ -149,6 +159,7 @@ mod tests {
         let features = ExperimentalFeatures::parse("  ").unwrap();
 
         assert!(!features.is_enabled(ExperimentalFeature::CustomKernel));
+        assert!(!features.is_enabled(ExperimentalFeature::NestedVirtualization));
     }
 
     #[test]
@@ -185,5 +196,24 @@ mod tests {
                 .to_string()
                 .contains("BOXLITE_EXPERIMENTAL=custom-kernel")
         );
+    }
+
+    #[test]
+    fn nested_virtualization_options_require_the_matching_token() {
+        let mut options = BoxOptions::default();
+        nested_virtualization::configure(&mut options);
+
+        let error = ExperimentalFeatures::default()
+            .require_for_options(&options)
+            .expect_err("nested virtualization must be disabled by default");
+
+        assert!(
+            error
+                .to_string()
+                .contains("BOXLITE_EXPERIMENTAL=nested-virtualization")
+        );
+
+        let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
+        enabled.require_for_options(&options).unwrap();
     }
 }

@@ -21,6 +21,23 @@ const (
 	StateStopped    State = "stopped"
 )
 
+// PublishedPort is a concrete host publication for a guest service port.
+type PublishedPort struct {
+	GuestPort int
+	HostIP    string
+	HostPort  int
+	Protocol  PortProtocol
+}
+
+// NetworkInfo describes the box network and its resolved local publications.
+type NetworkInfo struct {
+	Mode     NetworkMode
+	AllowNet []string
+	// PublishedPorts is nil when this handle does not know the bindings. A
+	// non-nil empty slice means that the box has no active publications.
+	PublishedPorts []PublishedPort
+}
+
 // BoxInfo holds information about a box.
 type BoxInfo struct {
 	ID         string
@@ -31,6 +48,7 @@ type BoxInfo struct {
 	PID        int
 	CPUs       int
 	MemoryMiB  int
+	Network    *NetworkInfo
 	AutoPause  uint32
 	AutoDelete uint32
 	AutoResume bool
@@ -38,23 +56,32 @@ type BoxInfo struct {
 }
 
 // Info returns information about the box.
-//
-// boxlite_box_info is synchronous on the C side (it reads cached fields on
-// the handle), so no drain participation is required.
-func (b *Box) Info(_ context.Context) (*BoxInfo, error) {
-	var cInfo *C.CBoxInfo
+func (b *Box) Info(ctx context.Context) (*BoxInfo, error) {
+	b.runtime.ensureDrainRunning()
+
+	ch := make(chan infoResult, 1)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_box_info(b.handle, &cInfo, &cerr)
+	code := C.boxlite_box_info(b.handle, C.cbInfo(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
 	}
-	defer C.boxlite_free_box_info(cInfo)
 
-	info := cBoxInfoToGo(cInfo)
-	if info.Name != "" && b.name == "" {
-		b.name = info.Name
+	select {
+	case res := <-ch:
+		if res.value != nil && res.value.Name != "" && b.name == "" {
+			b.name = res.value.Name
+		}
+		return res.value, res.err
+	case <-ctx.Done():
+		drainAndDelete(ch, h, b.runtime.closing)
+		return nil, ctx.Err()
+	case <-b.runtime.closing:
+		drainAndDelete(ch, h, b.runtime.closing)
+		return nil, ErrRuntimeClosed
 	}
-	return &info, nil
 }
 
 // ListInfo lists all boxes.
@@ -123,10 +150,68 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 		PID:        pid,
 		CPUs:       int(info.cpus),
 		MemoryMiB:  int(info.memory_mib),
+		Network:    cNetworkInfoToGo(info.network),
 		AutoPause:  uint32(info.auto_pause),
 		AutoDelete: uint32(info.auto_delete),
 		AutoResume: info.auto_resume != 0,
 		CreatedAt:  time.Unix(int64(info.created_at), 0),
+	}
+}
+
+func networkModeFromCValue(mode uint32) NetworkMode {
+	switch mode {
+	case uint32(C.BoxliteNetworkModeEnabled):
+		return NetworkModeEnabled
+	case uint32(C.BoxliteNetworkModeDisabled):
+		return NetworkModeDisabled
+	default:
+		return NetworkMode("")
+	}
+}
+
+func portProtocolFromCValue(protocol uint32) PortProtocol {
+	switch protocol {
+	case uint32(C.BoxlitePortProtocolTcp):
+		return PortProtocolTcp
+	case uint32(C.BoxlitePortProtocolUdp):
+		return PortProtocolUdp
+	default:
+		return PortProtocolUnknown
+	}
+}
+
+func cNetworkInfoToGo(network *C.CNetworkInfo) *NetworkInfo {
+	if network == nil {
+		return nil
+	}
+
+	allowNet := make([]string, 0, int(network.allow_net_count))
+	if network.allow_net != nil && network.allow_net_count > 0 {
+		for _, host := range unsafe.Slice(network.allow_net, int(network.allow_net_count)) {
+			allowNet = append(allowNet, cString(host))
+		}
+	}
+
+	var publishedPorts []PublishedPort
+	if network.published_ports != nil {
+		ports := network.published_ports
+		publishedPorts = make([]PublishedPort, 0, int(ports.count))
+		if ports.items != nil && ports.count > 0 {
+			for _, port := range unsafe.Slice(ports.items, int(ports.count)) {
+				publishedPorts = append(publishedPorts, PublishedPort{
+					GuestPort: int(port.guest_port),
+					HostIP:    cString(port.host_ip),
+					HostPort:  int(port.host_port),
+					Protocol:  portProtocolFromCValue(port.protocol),
+				})
+			}
+		}
+	}
+
+	return &NetworkInfo{
+		Mode:           networkModeFromCValue(network.mode),
+		AllowNet:       allowNet,
+		PublishedPorts: publishedPorts,
 	}
 }
 

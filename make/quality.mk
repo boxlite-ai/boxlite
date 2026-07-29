@@ -182,20 +182,24 @@ lint\:c:
 		exit 1; \
 	fi; \
 	for file in sdks/c/tests/*.c; do \
-		"$$CLANG_TIDY" --warnings-as-errors='*' "$$file" -- -std=c11 -D_XOPEN_SOURCE=500 -Isdks/c/include || exit 1; \
+		"$$CLANG_TIDY" --warnings-as-errors='*' "$$file" -- -std=c11 -D_XOPEN_SOURCE=700 -Isdks/c/include || exit 1; \
 	done
 
 fmt\:go:
-	@echo "🔧 Formatting Go SDK..."
+	@echo "🔧 Formatting Go code..."
 	@cd sdks/go && go fmt ./...
+	@cd src/deps/libgvproxy-sys/gvproxy-bridge && gofmt -w main.go
 
 fmt\:check\:go:
-	@echo "🔍 Checking Go SDK formatting..."
+	@echo "🔍 Checking Go formatting..."
 	@cd sdks/go && test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
+	@cd src/deps/libgvproxy-sys/gvproxy-bridge && \
+		test -z "$$(gofmt -l main.go)" || (gofmt -l main.go && exit 1)
 
 lint\:go:
-	@echo "🔍 Linting Go SDK (vet)..."
+	@echo "🔍 Linting Go code (vet)..."
 	@cd sdks/go && go vet -tags boxlite_dev ./...
+	@cd src/deps/libgvproxy-sys/gvproxy-bridge && go vet ./...
 
 clippy: _ensure-python-deps
 	@echo "🔍 Running Rust clippy checks..."

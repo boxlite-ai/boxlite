@@ -38,12 +38,13 @@ set(TEST_TARGETS
     test_simple_api
     test_null_callback
     test_rest
+    test_info
 )
 
 foreach(TARGET ${TEST_TARGETS})
     add_executable(${TARGET} ${TARGET}.c)
     target_link_libraries(${TARGET} ${BOXLITE_LIB})
-    target_compile_definitions(${TARGET} PRIVATE _XOPEN_SOURCE=500)
+    target_compile_definitions(${TARGET} PRIVATE _XOPEN_SOURCE=700)
 
     # Set RPATH so the executable can find the dylib
     if(APPLE)
@@ -71,10 +72,11 @@ endforeach()
 set_tests_properties(test_simple_api PROPERTIES LABELS "integration")
 # test_null_callback only exercises the FFI argument-validation path;
 # no VM is required, but we still link the runtime dylib.
-set_tests_properties(test_null_callback PROPERTIES LABELS "ffi")
+set_tests_properties(test_null_callback PROPERTIES LABELS "unit;ffi")
 # REST runtime construction does no I/O (lazy connect), so it is a
 # true unit test — runs under `make test:unit:c` (ctest -L unit).
 set_tests_properties(test_rest PROPERTIES LABELS "unit")
+set_tests_properties(test_info PROPERTIES LABELS "unit")
 
 message(STATUS "BoxLite C Tests Configuration:")
 message(STATUS "  Include dir: ${BOXLITE_INCLUDE_DIR}")

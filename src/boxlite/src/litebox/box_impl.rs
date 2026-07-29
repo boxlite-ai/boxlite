@@ -62,6 +62,10 @@ pub(crate) struct LiveState {
     #[allow(dead_code)]
     network: Option<Arc<dyn NetworkBackend>>,
 
+    /// Port bindings confirmed while constructing this live VM. Retaining them
+    /// here lets `info()` report the current lifecycle without backend I/O.
+    published_ports: Option<crate::litebox::ports::LivePublishedPorts>,
+
     // Metrics
     metrics: BoxMetricsStorage,
 
@@ -82,6 +86,7 @@ impl LiveState {
         handler: Box<dyn VmmHandler>,
         guest_session: GuestSession,
         network: Option<Box<dyn NetworkBackend>>,
+        published_ports: Option<crate::litebox::ports::LivePublishedPorts>,
         metrics: BoxMetricsStorage,
         container_rootfs_disk: Disk,
         guest_rootfs_disk: Option<Disk>,
@@ -91,6 +96,7 @@ impl LiveState {
             handler: std::sync::Mutex::new(handler),
             guest_session,
             network: network.map(Arc::from),
+            published_ports,
             metrics,
             _container_rootfs_disk: container_rootfs_disk,
             guest_rootfs_disk,
@@ -226,9 +232,28 @@ impl BoxImpl {
         self.config.container.id.as_str()
     }
 
+    /// Metadata for this box. Local reads are synchronous: everything comes
+    /// from persisted state plus the bindings this handle itself published.
     pub(crate) fn info(&self) -> BoxInfo {
         let state = self.state.read();
-        BoxInfo::new(&self.config, &state)
+        let mut info = BoxInfo::new(&self.config, &state);
+        // Bindings are only reportable while the shim that owns their listeners
+        // is still the live one — a recycled PID must not inherit them.
+        if state.status.is_active()
+            && let Some(lifecycle) = crate::util::PidFileReader::at(self.layout.pid_file_path())
+                .verified_shim()
+                .map(|shim| shim.identity())
+            && state.pid == Some(lifecycle.pid)
+            && let Some(bindings) = self
+                .live
+                .get()
+                .and_then(|live| live.published_ports.as_ref())
+                .and_then(|published_ports| published_ports.bindings_for(lifecycle))
+            && let Some(network) = info.network.as_mut()
+        {
+            network.published_ports = Some(bindings.to_vec());
+        }
+        info
     }
 
     // ========================================================================
@@ -991,7 +1016,7 @@ impl BoxImpl {
     /// BoxBuilder handles all status types with different execution plans:
     /// - Configured: full pipeline (filesystem, rootfs, spawn, connect, init)
     /// - Stopped: restart pipeline (reuse rootfs, spawn, connect, init)
-    /// - Running: attach pipeline (attach, connect)
+    /// - Running: attach pipeline (attach, connect, reconcile port publication)
     ///
     /// Note: Lock is allocated in create(), not here. DB persistence also
     /// happens in create().
@@ -1313,8 +1338,8 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self.config.name.as_deref()
     }
 
-    fn info(&self) -> BoxInfo {
-        self.info()
+    async fn info(&self) -> BoxliteResult<BoxInfo> {
+        Ok(BoxImpl::info(self))
     }
 
     async fn start(&self) -> BoxliteResult<()> {
@@ -1403,15 +1428,25 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::disk::DiskFormat;
     use crate::litebox::config::ContainerRuntimeConfig;
+    use crate::net::{NetworkBackendConfig, NetworkBackendFactory};
     use crate::runtime::id::BoxIDMint;
-    use crate::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
+    use crate::runtime::options::{BoxOptions, BoxliteOptions, PortProtocol, PortSpec, RootfsSpec};
     use crate::runtime::rt_impl::RuntimeImpl;
-    use crate::runtime::types::ContainerID;
-    use crate::util::is_process_alive;
+    use crate::runtime::types::{ContainerID, PublishedPort};
+    use crate::util::{PidFileWriter, PidRecord, ShimPidRecord, is_process_alive};
     use crate::vmm::VmmKind;
+    use crate::vmm::controller::VmmMetrics;
+    use boxlite_shared::BoxTransport;
     use chrono::Utc;
     use tempfile::TempDir;
+
+    fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
+        info.network
+            .as_ref()
+            .and_then(|network| network.published_ports.as_deref())
+    }
 
     /// RAII guard so a panic between spawn and the end of the test still
     /// reaps the helper process — without it a failed assertion would leak a
@@ -1422,6 +1457,34 @@ mod tests {
         fn drop(&mut self) {
             let _ = self.0.kill();
             let _ = self.0.wait();
+        }
+    }
+
+    struct InfoTestHandler(u32);
+
+    struct MetadataReadTrapFactory;
+
+    impl NetworkBackendFactory for MetadataReadTrapFactory {
+        fn create(&self, _: &NetworkBackendConfig) -> Option<Box<dyn NetworkBackend>> {
+            panic!("info() must not create or query a network backend");
+        }
+    }
+
+    impl VmmHandler for InfoTestHandler {
+        fn stop(&mut self) -> BoxliteResult<()> {
+            Ok(())
+        }
+
+        fn metrics(&self) -> BoxliteResult<VmmMetrics> {
+            Ok(VmmMetrics::default())
+        }
+
+        fn is_running(&self) -> bool {
+            true
+        }
+
+        fn pid(&self) -> u32 {
+            self.0
         }
     }
 
@@ -1520,6 +1583,7 @@ mod tests {
         runtime: &SharedRuntimeImpl,
         removes_on_stop: bool,
         exit_code: i32,
+        ports: Vec<PortSpec>,
     ) -> (ChildGuard, BoxID, u32) {
         let child = ChildGuard(
             std::process::Command::new("sleep")
@@ -1542,6 +1606,7 @@ mod tests {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 detach: false,
                 auto_delete: Some(u32::from(removes_on_stop)),
+                ports,
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
@@ -1559,7 +1624,14 @@ mod tests {
             .layout
             .box_layout(config.id.as_str(), false)
             .expect("box_layout is infallible");
-        std::fs::write(layout.pid_file_path(), format!("{pid}\n{st}\n")).expect("write pid file");
+        let lifecycle = ShimPidRecord::with_runtime_port_control(PidRecord {
+            pid,
+            start_time: Some(st),
+        });
+        PidFileWriter::at(&layout.pid_file_path())
+            .expect("create PID writer")
+            .write_shim(&lifecycle)
+            .expect("write shim PID record");
 
         // The exit record the guest writes on its way down — what on_shim_exit
         // reads for the code.
@@ -1594,6 +1666,140 @@ mod tests {
         runtime.get_info(id).await.expect("query box")
     }
 
+    #[tokio::test]
+    async fn get_info_without_live_state_does_not_touch_running_shim() {
+        let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
+        let mut runtime = RuntimeImpl::new(BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .expect("create runtime");
+        Arc::get_mut(&mut runtime)
+            .expect("new runtime has one owner")
+            .network_factory = Arc::new(MetadataReadTrapFactory);
+        let requested = PortSpec {
+            host_port: None,
+            guest_port: 3000,
+            protocol: PortProtocol::Tcp,
+            host_ip: Some("127.0.0.1".to_string()),
+        };
+        let (child, id, pid) = running_box_with_standin(&runtime, false, 0, vec![requested]);
+        let layout = runtime
+            .layout
+            .box_layout(id.as_str(), false)
+            .expect("box layout");
+        assert!(
+            !crate::net::gvproxy::control_socket_path(&layout.net_backend_socket_path()).exists(),
+            "missing control socket is the reconciliation failure under test"
+        );
+
+        let litebox = runtime
+            .get(id.as_str())
+            .await
+            .expect("get box")
+            .expect("box exists");
+        let info = runtime
+            .get_info(id.as_str())
+            .await
+            .expect("query box")
+            .expect("box remains registered");
+        assert!(
+            published_ports(&info).is_none(),
+            "a handle that has not attached must leave live bindings unresolved"
+        );
+        assert!(
+            is_process_alive(pid),
+            "a metadata read must not touch an already-running shim"
+        );
+        assert_eq!(info.status, BoxStatus::Running);
+        assert_eq!(info.pid, Some(pid));
+        drop(litebox);
+        drop(child);
+    }
+
+    #[tokio::test]
+    async fn info_reports_live_ports_for_the_current_shim_only() {
+        let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
+        let runtime = RuntimeImpl::new(BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .expect("create runtime");
+        let requested = PortSpec {
+            host_port: None,
+            guest_port: 3000,
+            protocol: PortProtocol::Tcp,
+            host_ip: Some("127.0.0.1".to_string()),
+        };
+        let resolved = PublishedPort {
+            guest_port: requested.guest_port,
+            host_ip: requested.host_ip.clone().unwrap(),
+            host_port: 49152,
+            protocol: requested.protocol,
+        };
+        let (mut child, id, pid) = running_box_with_standin(&runtime, false, 0, vec![requested]);
+        let (config, state) = runtime
+            .box_manager
+            .box_by_id(&id)
+            .expect("load box")
+            .expect("box exists");
+        let box_impl = BoxImpl::new(
+            config,
+            state,
+            runtime.clone(),
+            runtime.shutdown_token.child_token(),
+        );
+        let before_reattach = box_impl.info();
+        assert!(published_ports(&before_reattach).is_none());
+
+        let live = LiveState::new(
+            Box::new(InfoTestHandler(pid)),
+            GuestSession::new(BoxTransport::tcp(0)),
+            None,
+            Some(crate::litebox::ports::LivePublishedPorts::new(
+                crate::util::PidFileReader::at(box_impl.layout.pid_file_path())
+                    .verified_shim()
+                    .expect("verified stand-in lifecycle")
+                    .identity(),
+                vec![resolved.clone()],
+            )),
+            BoxMetricsStorage::new(),
+            Disk::new(
+                temp_dir.path().join("container.qcow2"),
+                DiskFormat::Qcow2,
+                true,
+            ),
+            None,
+            #[cfg(target_os = "linux")]
+            None,
+        );
+        assert!(box_impl.live.set(live).is_ok());
+
+        let info = box_impl.info();
+        assert_eq!(published_ports(&info), Some([resolved.clone()].as_slice()));
+
+        assert!(crate::util::kill_process(pid));
+        child.0.wait().expect("reap stopped stand-in");
+        let dead_lifecycle = box_impl.info();
+        assert!(
+            published_ports(&dead_lifecycle).is_none(),
+            "live bindings must not outlive their shim lifecycle"
+        );
+
+        {
+            let mut state = box_impl.state.write();
+            state.status = BoxStatus::Stopped;
+            state.pid = None;
+        }
+        let stopped = box_impl.info();
+        assert!(
+            published_ports(&stopped).is_some_and(<[PublishedPort]>::is_empty),
+            "a stopped box with no live shim has no published ports"
+        );
+
+        drop(child);
+    }
+
     /// The watcher records `Stopped` + the guest's exit code the moment the shim
     /// dies — the exit-arm of `BoxWatcher`, the single writer of the transition.
     #[tokio::test]
@@ -1605,7 +1811,7 @@ mod tests {
         })
         .expect("create runtime");
 
-        let (child, id, pid) = running_box_with_standin(&runtime, false, 7);
+        let (child, id, pid) = running_box_with_standin(&runtime, false, 7, Vec::new());
 
         // Handing out a handle arms the watcher (adopt path, health = None).
         let litebox = runtime
@@ -1648,7 +1854,7 @@ mod tests {
         })
         .expect("create runtime");
 
-        let (child, id, pid) = running_box_with_standin(&runtime, true, 0);
+        let (child, id, pid) = running_box_with_standin(&runtime, true, 0, Vec::new());
 
         let litebox = runtime
             .get(id.as_str())

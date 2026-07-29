@@ -519,7 +519,11 @@ paths:
       summary: Import a box from an archive
       description: |
         Imports a `.boxlite` archive (produced by the export endpoint) to create
-        a new box. The archive is uploaded as a binary payload.
+        a new box. The archive is uploaded as a binary payload and treated as
+        untrusted: archived security settings are replaced by the server's
+        defaults. Archives selecting server host paths through a local rootfs or
+        volume mount are rejected, as are archives requiring host-only
+        experimental features such as custom kernels or nested virtualization.
       tags: [Boxes]
       parameters:
         - name: name
@@ -1249,6 +1253,10 @@ components:
           type: object
           description: Server capability limits and feature flags
           properties:
+            linux_capabilities_enabled:
+              type: boolean
+              description: Whether Docker-style Linux capability add/drop policy is supported
+              example: true
             max_cpus:
               type: integer
               description: Maximum allowed vCPUs per box
@@ -1486,7 +1494,7 @@ components:
     # =======================================================================
     Box:
       type: object
-      description: Box metadata (maps to BoxInfo)
+      description: REST box metadata
       required: [box_id, status, created_at, updated_at, image, cpus, memory_mib]
       properties:
         box_id:
@@ -1565,6 +1573,7 @@ components:
         - `stopping`: Graceful shutdown in progress (transient)
         - `stopped`: VM terminated, can be restarted
         - `paused`: VM frozen via SIGSTOP (during snapshot/export)
+        - `failed`: Initialization failed; diagnostic state is retained
         - `unknown`: Error recovery state
       enum:
         - configured
@@ -1572,12 +1581,21 @@ components:
         - stopping
         - stopped
         - paused
+        - failed
         - unknown
 
     CreateBoxRequest:
       type: object
-      description: Configuration for creating a new box (maps to BoxOptions)
+      description: |
+        REST-supported configuration for creating a new box. Host port
+        publication is intentionally absent; use the box network tunnel
+        endpoint for remote service access.
+      additionalProperties: false
       properties:
+        advanced:
+          $ref: "#/components/schemas/CreateBoxAdvancedOptions"
+        security:
+          $ref: "#/components/schemas/SecurityPreset"
         name:
           type: string
           description: Unique name within the workspace
@@ -1639,10 +1657,6 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/VolumeSpec"
-        ports:
-          type: array
-          items:
-            $ref: "#/components/schemas/PortSpec"
         network:
           $ref: "#/components/schemas/NetworkSpec"
         secrets:
@@ -1670,8 +1684,38 @@ components:
           type: boolean
           default: true
           description: Whether the box automatically resumes when accessed after AutoPause
-        security:
-          $ref: "#/components/schemas/SecurityPreset"
+
+    CreateBoxAdvancedOptions:
+      type: object
+      description: Expert-only container options.
+      additionalProperties: false
+      properties:
+        capabilities:
+          $ref: "#/components/schemas/CreateContainerCapabilities"
+
+    CreateContainerCapabilities:
+      type: object
+      description: Linux capability additions and removals for container processes.
+      additionalProperties: false
+      properties:
+        add:
+          type: array
+          items:
+            type: string
+          default: []
+          description: |
+            Linux capabilities to add to the default container capability set.
+            Names are case-insensitive, may include the `CAP_` prefix, and may be `ALL`.
+          example: [SYS_ADMIN]
+        drop:
+          type: array
+          items:
+            type: string
+          default: []
+          description: |
+            Linux capabilities to remove from the container capability set.
+            Names are case-insensitive, may include the `CAP_` prefix, and may be `ALL`.
+          example: [NET_RAW]
 
     VolumeSpec:
       type: object
@@ -1707,29 +1751,6 @@ components:
             Optional outbound allowlist used only when `mode=enabled`.
             Empty or omitted means full outbound access.
             Supports hostnames, wildcard hostnames, IPs, and CIDRs.
-
-    PortSpec:
-      type: object
-      description: Port forwarding rule (host → guest)
-      required: [guest_port]
-      properties:
-        host_port:
-          type: integer
-          minimum: 0
-          maximum: 65535
-          description: Host port (0 or omit for dynamic assignment)
-        guest_port:
-          type: integer
-          minimum: 1
-          maximum: 65535
-          description: Container port to expose
-        protocol:
-          type: string
-          enum: [tcp, udp]
-          default: tcp
-        host_ip:
-          type: string
-          description: Host IP to bind (defaults to 0.0.0.0)
 
     SecretSpec:
       type: object

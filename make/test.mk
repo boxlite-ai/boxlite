@@ -1,4 +1,4 @@
-PHONY_TARGETS += test
+PHONY_TARGETS += test test\:unit\:guest
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -167,10 +167,10 @@ test\:stress:
 	@echo ""
 	@echo "✅ Stress test matrix passed"
 
-# Core unit suites: Rust unit + FFI unit.
+# Core unit suites: Rust unit + FFI unit + gvproxy bridge unit.
 test\:unit\:core:
-	@echo "── Core unit suites (rust, ffi) ──"
-	$(call run_suites,test:unit:rust test:unit:ffi)
+	@echo "── Core unit suites (rust, ffi, gvproxy) ──"
+	$(call run_suites,test:unit:rust test:unit:ffi test:unit:gvproxy)
 
 # Core integration suites: Rust integration + CLI integration.
 test\:integration\:core:
@@ -206,6 +206,24 @@ test\:unit\:rust:
 	fi; \
 	exit $$rc
 
+# Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
+# excluded from test:unit:rust because the zygote suite forks real processes.
+# nextest's process-per-test isolation is what makes the whole crate runnable:
+# several suites assert on process-global state (raw fd numbers, waitpid), so
+# they can interfere under a shared process. The cargo fallback has no such
+# isolation, so it stays on the two modules that are pure logic.
+test\:unit\:guest:
+	@if [ "$$(uname)" != "Linux" ]; then \
+		echo "⏭️  Guest unit tests require Linux"; \
+		exit 0; \
+	fi; \
+	echo "🧪 Running guest unit tests..."; \
+	if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run --no-tests=fail -p boxlite-guest; \
+	else \
+		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests; \
+	fi
+
 # Pre-warm Rust integration test image cache (internal helper, still callable).
 test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🔥 Warming Rust integration test image cache..."
@@ -239,6 +257,11 @@ test\:unit\:ffi:
 	else \
 		cargo test -p boxlite-c $(CARGOTEST_FILTER); \
 	fi
+
+# Go bridge unit tests for the embedded gvproxy library.
+test\:unit\:gvproxy:
+	@echo "🧪 Running gvproxy bridge unit tests..."
+	@cd src/deps/libgvproxy-sys/gvproxy-bridge && go test ./... $(GOTEST_FILTER)
 
 # CLI integration tests.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)

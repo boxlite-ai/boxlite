@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-Port forwarding test — verify that a guest service is reachable from the host.
+Local port publication — verify that a guest service is reachable from the host.
 
 Starts a simple HTTP server inside a box on port 18789,
 then curls it from the host on 127.0.0.1:18789.
 
+This example intentionally uses the local runtime. Portable local/remote SDK
+code should use the box network tunnel API instead.
+
 Usage:
-    python examples/python/port_forward_example.py
+    python examples/python/02_features/forward_ports.py
 """
 
 import asyncio

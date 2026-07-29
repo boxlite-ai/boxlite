@@ -2,7 +2,7 @@
 SyncSkillBox - Synchronous wrapper for SkillBox.
 
 Provides a synchronous API for Claude Code CLI execution using greenlet fiber switching.
-API mirrors async SkillBox exactly.
+Box metadata remains async-only and is not exposed by this wrapper.
 """
 
 import json
@@ -30,7 +30,8 @@ class SyncSkillBox(SyncSimpleBox):
 
     Provides synchronous methods for executing Claude Code CLI with skills.
     Built on top of SyncSimpleBox with Claude-specific convenience methods.
-    API mirrors async SkillBox exactly.
+    It mirrors the sync-capable SkillBox operations. Box metadata remains
+    async-only and is not exposed by this wrapper.
 
     SyncSkillBox includes a desktop GUI accessible via noVNC, allowing you to
     visually monitor Claude's work in real-time through a web browser.

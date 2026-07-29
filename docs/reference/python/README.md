@@ -9,6 +9,7 @@ Complete API reference for the BoxLite Python SDK.
 
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
+- [Network Tunnels](#network-tunnels)
 - [Command Execution](#command-execution)
 - [Box Types](#box-types)
 - [Sync API](#sync-api)
@@ -39,10 +40,11 @@ from boxlite import Boxlite, Options, BoxOptions, ImageRegistry
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `create()` | `(options: BoxOptions, name: str = None) -> Box` | Create a new box (async) |
-| `get()` | `(box_id: str) -> Box` | Reattach to an existing box by ID (async) |
-| `list()` | `() -> List[BoxInfo]` | List all boxes (async) |
-| `metrics()` | `() -> RuntimeMetrics` | Get runtime-wide metrics (async) |
+| `create()` | `async (options: BoxOptions, name: str = None) -> Box` | Create a new box |
+| `get()` | `async (box_id: str) -> Optional[Box]` | Reattach to an existing box by ID |
+| `get_info()` | `async (box_id: str) -> Optional[BoxInfo]` | Get current box metadata by ID or name |
+| `list_info()` | `async () -> List[BoxInfo]` | List all boxes |
+| `metrics()` | `async () -> RuntimeMetrics` | Get runtime-wide metrics |
 
 #### Example
 
@@ -68,8 +70,8 @@ runtime = Boxlite(Options(
 box = await runtime.create(BoxOptions(image="alpine:latest"))
 
 # List all boxes
-for info in await runtime.list():
-    print(f"{info.id}: {info.status}")
+for info in await runtime.list_info():
+    print(f"{info.id}: {info.state.status}")
 ```
 
 ---
@@ -130,10 +132,27 @@ Configuration options for creating a box.
 | `env` | `List[Tuple[str, str]]` | `[]` | Environment variables as (key, value) pairs |
 | `volumes` | `List[Tuple[str, str, str]]` | `[]` | Volume mounts as (host_path, guest_path, mode) |
 | `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
-| `ports` | `List[Tuple[int, int, str]]` | `[]` | Port forwarding as (host_port, guest_port, protocol) |
+| `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
 | `secrets` | `List[Secret]` | `[]` | Outbound HTTP(S) secret substitution rules |
+| `advanced` | `AdvancedBoxOptions \| None` | `None` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
 | `auto_remove` | `bool` | `True` | Auto cleanup when stopped |
 | `detach` | `bool` | `False` | Survive parent process exit |
+
+Capability policy is intentionally nested with the other expert-only options:
+
+```python
+from boxlite import AdvancedBoxOptions, BoxOptions, ContainerCapabilities
+
+options = BoxOptions(
+    image="alpine:latest",
+    advanced=AdvancedBoxOptions(
+        capabilities=ContainerCapabilities(
+            add=["NET_BIND_SERVICE"],
+            drop=["NET_RAW"],
+        )
+    ),
+)
+```
 
 #### `NetworkSpec`
 
@@ -168,9 +187,12 @@ volumes=[
 ports=[
     (8080, 80, "tcp"),    # HTTP
     (5432, 5432, "tcp"),  # PostgreSQL
-    (53, 53, "udp"),      # DNS
+    {"guest_port": 3000},  # OS-selected host port
 ]
 ```
+
+Port publication is local-only and TCP-only. For portable local/remote access,
+use `box.network.tunnel(port)`; each tunnel handle represents one connection.
 
 #### Secret Format
 
@@ -200,6 +222,7 @@ Handle to a running or stopped box.
 | Property | Type | Description |
 |----------|------|-------------|
 | `id` | `str` | Unique box identifier (ULID format) |
+| `network` | `NetworkHandle` | Box-scoped tunnel operations |
 
 #### Methods
 
@@ -208,7 +231,7 @@ Handle to a running or stopped box.
 | `exec()` | `(cmd, args, env, tty) -> Execution` | Execute command (async) |
 | `stop()` | `() -> None` | Stop the box gracefully (async) |
 | `remove()` | `() -> None` | Delete box and its data (async) |
-| `info()` | `() -> BoxInfo` | Get box metadata (async) |
+| `info()` | `async () -> BoxInfo` | Get box metadata |
 | `metrics()` | `() -> BoxMetrics` | Get resource usage metrics (async) |
 
 ---
@@ -221,12 +244,28 @@ Metadata about a box.
 |-------|------|-------------|
 | `id` | `str` | Unique box identifier (ULID) |
 | `name` | `str \| None` | Optional user-assigned name |
-| `status` | `str` | Current status: `"running"`, `"stopped"`, `"created"` |
-| `created_at` | `datetime` | Creation timestamp |
-| `pid` | `int \| None` | Process ID (if running) |
+| `state` | `BoxStateInfo` | Runtime state with `status`, `running`, and nullable `pid` fields |
+| `created_at` | `str` | ISO 8601 creation timestamp |
 | `image` | `str` | OCI image used |
 | `cpus` | `int` | Allocated CPU cores |
 | `memory_mib` | `int` | Allocated memory in MiB |
+| `network` | `NetworkInfo \| None` | Current network configuration and resolved local publications |
+
+`NetworkInfo` has `mode: str`, `allow_net: List[str]`, and
+`published_ports: List[PublishedPort] | None`. Each `PublishedPort` has named
+`guest_port`, `host_ip`, `host_port`, and `protocol` attributes.
+
+`network is None` means network information is unavailable. Within
+`NetworkInfo`, `published_ports is None` means the current handle does not know
+the lifecycle's publications, `[]` means there are no active publications, and
+a populated list contains concrete active local bindings. `BoxOptions.ports`
+remains the request API; its optional host port is not reused in resolved output.
+
+`box.info()` has no synchronous variant. Local metadata reads report
+bindings captured when this handle started or reattached the box; REST metadata
+reads fetch the current server record. A newly loaded local running box has no
+live binding data yet, so box, get, or list info may report
+`published_ports is None` until an operation requiring live state reattaches it.
 
 ---
 
@@ -242,6 +281,25 @@ Detailed state information for a box.
 | `Stopping` | Box is shutting down |
 | `Stopped` | Box is stopped |
 | `Failed` | Box encountered an error |
+
+---
+
+## Network Tunnels
+
+Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.network`.
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Prepare | `await box.network.tunnel(port) -> BoxTunnel` | Prepare one connection to a TCP service in the box |
+| Inspect | `tunnel.endpoint() -> str \| int` | Return the remote URI or borrowed local file descriptor |
+| Connect | `await tunnel.connect() -> BoxConnection` | Consume the tunnel and return its bidirectional byte stream |
+| Read/write | `await connection.read(max_bytes)`, `await connection.write(data)` | Exchange bytes with the service |
+| Close | `await connection.close()` | Close the connection |
+
+Each `BoxTunnel` carries exactly one connection. Call `tunnel()` again for each
+additional or concurrent connection. This differs from `BoxOptions.ports`,
+which creates a persistent, local-only host listener that accepts repeated
+connections from ordinary host applications.
 
 ---
 
@@ -384,7 +442,7 @@ SimpleBox(
 |--------|-----------|-------------|
 | `start()` | `() -> Self` | Explicitly start the box (async) |
 | `exec()` | `(cmd, *args, env=None, user=None, timeout=None, cwd=None) -> ExecResult` | Execute command and wait (async) |
-| `info()` | `() -> BoxInfo` | Get box metadata |
+| `info()` | `async () -> BoxInfo` | Get box metadata |
 | `shutdown()` | `() -> None` | Shutdown and release resources |
 
 #### Example
@@ -691,13 +749,13 @@ from boxlite import SyncBoxlite, SyncBox, SyncSimpleBox, SyncCodeBox
 
 | Async API | Sync API | Notes |
 |-----------|----------|-------|
-| `Boxlite` | `SyncBoxlite` | |
-| `Box` | `SyncBox` | |
+| `Boxlite` | `SyncBoxlite` | `get_info()` and `list_info()` are async-only |
+| `Box` | `SyncBox` | `Box.info()` is async-only and is not exposed by `SyncBox` |
 | `Execution` | `SyncExecution` | |
 | `ExecStdout` | `SyncExecStdout` | Regular iterator |
 | `ExecStderr` | `SyncExecStderr` | Regular iterator |
-| `SimpleBox` | `SyncSimpleBox` | |
-| `CodeBox` | `SyncCodeBox` | |
+| `SimpleBox` | `SyncSimpleBox` | `SimpleBox.info()` is async-only and is not exposed by `SyncSimpleBox` |
+| `CodeBox` | `SyncCodeBox` | Inherits the async-only metadata rule |
 
 ### Classes
 

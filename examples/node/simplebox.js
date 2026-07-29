@@ -34,7 +34,7 @@ async function main() {
     console.log(`   Output: ${result3.stdout.trim()}\n`);
 
     console.log('4. Box metadata...');
-    const info = box.info();
+    const info = await box.info();
     console.log(`   ID: ${box.id}`);
     console.log(`   Name: ${box.name || '(unnamed)'}`);
     console.log(`   Info: ${JSON.stringify(info, null, 2)}\n`);

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Optional
 from greenlet import greenlet
 
 if TYPE_CHECKING:
-    from ..boxlite import BoxInfo, Boxlite, BoxOptions, Options, RuntimeMetrics
+    from ..boxlite import Boxlite, BoxOptions, Options, RuntimeMetrics
     from ._box import SyncBox
     from ._images import SyncImageHandle
 
@@ -26,7 +26,8 @@ class SyncBoxlite:
     Synchronous wrapper for Boxlite runtime.
 
     This class handles both the dispatcher fiber lifecycle AND provides the
-    runtime API. API mirrors async Boxlite exactly.
+    sync-capable runtime operations. Metadata methods remain async-only and are
+    not exposed by this wrapper.
 
     Usage (default runtime - preferred):
         with SyncBoxlite.default() as runtime:
@@ -251,7 +252,7 @@ class SyncBoxlite:
         return self._sync_helper._sync(coro)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Runtime API (mirrors Boxlite)
+    # Sync-capable runtime API
     # ─────────────────────────────────────────────────────────────────────────
 
     def create(
@@ -263,7 +264,10 @@ class SyncBoxlite:
         Create a new box.
 
         Args:
-            options: BoxOptions specifying image, resources, etc.
+            options: BoxOptions specifying image, resources, etc. General
+                options are ignored when a box is reused; the local runtime
+                additionally refuses to reuse a box whose capability policy
+                differs from the requested one.
             name: Optional unique name for the box.
 
         Returns:
@@ -319,29 +323,6 @@ class SyncBoxlite:
         if native_box is None:
             return None
         return SyncBox(self, native_box)
-
-    def list_info(self) -> list["BoxInfo"]:
-        """
-        List all boxes.
-
-        Returns:
-            List of BoxInfo for all boxes.
-        """
-        self._require_started()
-        return self._sync(self._boxlite.list_info())
-
-    def get_info(self, id_or_name: str) -> Optional["BoxInfo"]:
-        """
-        Get info for a box by ID or name.
-
-        Args:
-            id_or_name: Box ID or name to look up.
-
-        Returns:
-            BoxInfo if found, None otherwise.
-        """
-        self._require_started()
-        return self._sync(self._boxlite.get_info(id_or_name))
 
     def metrics(self) -> "RuntimeMetrics":
         """

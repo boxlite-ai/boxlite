@@ -57,8 +57,6 @@ pub enum NetworkBackendEndpoint {
 /// can derive.
 #[derive(Debug, Clone)]
 pub struct NetworkBackendConfig {
-    /// Port mappings: (host_port, guest_port).
-    pub port_mappings: Vec<(u16, u16)>,
     /// Unix socket path for the network backend (`net.sock`).
     pub socket_path: PathBuf,
     /// Network allowlist. When non-empty, DNS sinkhole blocks unlisted hosts.
@@ -79,8 +77,6 @@ pub struct NetworkBackendConfig {
 /// line. `secrets` already redacts via [`Secret`](crate::runtime::options::Secret).
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct NetworkBackendSpec {
-    /// Port mappings: (host_port, guest_port).
-    pub port_mappings: Vec<(u16, u16)>,
     /// Unix socket path for the network backend.
     pub socket_path: PathBuf,
     /// Network allowlist. When non-empty, DNS sinkhole blocks unlisted hosts.
@@ -100,7 +96,6 @@ pub struct NetworkBackendSpec {
 impl std::fmt::Debug for NetworkBackendSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NetworkBackendSpec")
-            .field("port_mappings", &self.port_mappings)
             .field("socket_path", &self.socket_path)
             .field("allow_net", &self.allow_net)
             .field("secrets", &self.secrets)
@@ -129,7 +124,9 @@ pub struct Forward {
 }
 
 /// Transport protocol for a runtime forward.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum TransportProtocol {
     #[default]
@@ -147,6 +144,27 @@ impl TransportProtocol {
             TransportProtocol::Udp => "udp",
             TransportProtocol::Unix => "unix",
             TransportProtocol::Npipe => "npipe",
+        }
+    }
+
+    /// Inverse of [`Self::as_str`]. `None` for a token this build does not know,
+    /// which a backend may still report on a forward it owns.
+    pub fn from_wire(token: &str) -> Option<Self> {
+        match token {
+            "tcp" => Some(TransportProtocol::Tcp),
+            "udp" => Some(TransportProtocol::Udp),
+            "unix" => Some(TransportProtocol::Unix),
+            "npipe" => Some(TransportProtocol::Npipe),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::runtime::options::PortProtocol> for TransportProtocol {
+    fn from(protocol: crate::runtime::options::PortProtocol) -> Self {
+        match protocol {
+            crate::runtime::options::PortProtocol::Tcp => TransportProtocol::Tcp,
+            crate::runtime::options::PortProtocol::Udp => TransportProtocol::Udp,
         }
     }
 }
@@ -359,13 +377,18 @@ pub trait NetworkBackend: Send + Sync + std::fmt::Debug {
     /// backend-specific material (e.g. gvproxy's MITM CA).
     fn spec(&self) -> NetworkBackendSpec;
 
-    /// Add a forward: bind host `local` (`ip:port`) → guest `remote` (`ip:port`).
+    /// Add a forward and return the concrete binding held by the backend.
+    ///
+    /// For TCP and UDP, `local` is an IP socket address and may contain port
+    /// zero to request automatic allocation. The returned [`Forward::local`]
+    /// must then contain the actual non-zero endpoint. Path transports keep
+    /// their backend-specific local address opaque.
     async fn expose(
         &self,
         _local: &str,
         _remote: &str,
         _protocol: TransportProtocol,
-    ) -> BoxliteResult<()> {
+    ) -> BoxliteResult<Forward> {
         Err(control_unsupported("expose"))
     }
 
@@ -460,7 +483,6 @@ mod tests {
         let key_sentinel = "----BEGIN PRIVATE KEY----TOPSECRETPKCS8";
         let cert_sentinel = "----BEGIN CERTIFICATE----TOPSECRETCERT";
         let spec = NetworkBackendSpec {
-            port_mappings: vec![(8080, 80)],
             socket_path: PathBuf::from("/tmp/test-net.sock"),
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -493,7 +515,6 @@ mod tests {
     #[test]
     fn spec_serde_carries_ca_pems_that_debug_redacts() {
         let spec = NetworkBackendSpec {
-            port_mappings: vec![(8080, 80)],
             socket_path: PathBuf::from("/tmp/net.sock"),
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -511,7 +532,6 @@ mod tests {
         let json = r#"{"port_mappings":[[8080,80]],"socket_path":"/tmp/net.sock"}"#;
         let spec: NetworkBackendSpec = serde_json::from_str(json).unwrap();
 
-        assert_eq!(spec.port_mappings, vec![(8080, 80)]);
         assert_eq!(spec.socket_path, PathBuf::from("/tmp/net.sock"));
         assert!(spec.allow_net.is_empty());
         assert!(spec.secrets.is_empty());
@@ -522,7 +542,6 @@ mod tests {
     #[test]
     fn default_factory_creates_runtime_gvproxy_backend_without_ffi_feature() {
         let config = NetworkBackendConfig {
-            port_mappings: vec![(8080, 80)],
             socket_path: PathBuf::from("/tmp/default-factory/net.sock"),
             allow_net: vec!["example.com".to_string()],
             secrets: Vec::new(),
@@ -536,7 +555,6 @@ mod tests {
 
         assert_eq!(backend.name(), "gvisor-tap-vsock");
         assert_eq!(spec.socket_path, config.socket_path);
-        assert_eq!(spec.port_mappings, config.port_mappings);
         assert_eq!(spec.allow_net, config.allow_net);
         assert!(spec.ca_cert_pem.is_none());
         assert!(spec.ca_key_pem.is_none());
@@ -603,7 +621,6 @@ mod tests {
 
         fn spec(&self) -> NetworkBackendSpec {
             NetworkBackendSpec {
-                port_mappings: Vec::new(),
                 socket_path: PathBuf::from("/tmp/net.sock"),
                 allow_net: Vec::new(),
                 secrets: Vec::new(),

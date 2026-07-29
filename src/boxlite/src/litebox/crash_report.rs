@@ -3,7 +3,7 @@
 //! Transforms raw [`ExitInfo`] into human-readable crash reports
 //! with context-aware troubleshooting suggestions.
 
-use crate::vmm::ExitInfo;
+use crate::vmm::{ExitInfo, exit_info::ExitErrorKind};
 use std::path::Path;
 
 /// Formatted crash report for user-friendly error messages.
@@ -16,6 +16,9 @@ pub struct CrashReport {
     pub user_message: String,
     /// Raw debug info (stderr content for signals).
     pub debug_info: String,
+    /// Category the shim recorded, so callers can pick the matching
+    /// [`BoxliteError`](boxlite_shared::errors::BoxliteError) variant.
+    pub error_kind: ExitErrorKind,
 }
 
 impl CrashReport {
@@ -149,6 +152,7 @@ impl CrashReport {
         Self {
             user_message,
             debug_info,
+            error_kind: info.error_kind(),
         }
     }
 
@@ -238,6 +242,8 @@ impl CrashReport {
         Self {
             user_message: msg,
             debug_info: stderr_content.to_string(),
+            // No exit file means the shim died before it could categorize.
+            error_kind: ExitErrorKind::Engine,
         }
     }
 }

@@ -303,7 +303,8 @@ impl BoxliteRuntime {
     ///
     /// Returns `(LiteBox, true)` if a new box was created, or `(LiteBox, false)`
     /// if an existing box with the given name was found. When an existing box is
-    /// returned, the provided `options` are ignored (no config drift validation).
+    /// returned, each backend decides which requested options must be
+    /// compatible with the existing box.
     pub async fn get_or_create(
         &self,
         options: BoxOptions,

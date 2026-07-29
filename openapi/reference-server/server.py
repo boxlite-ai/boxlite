@@ -58,7 +58,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 import boxlite
@@ -121,6 +121,39 @@ class NetworkSpec(BaseModel):
         return self
 
 
+class ContainerCapabilities(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    add: list[str] = Field(default_factory=list)
+    drop: list[str] = Field(default_factory=list)
+
+    @field_validator("add", "drop")
+    @classmethod
+    def validate_capabilities(cls, capabilities: list[str]) -> list[str]:
+        for capability in capabilities:
+            if not capability.isascii():
+                raise ValueError("capability names must contain only ASCII characters")
+            normalized = capability.upper()
+            if normalized == "ALL":
+                continue
+            name = normalized.removeprefix("CAP_")
+            if (
+                not name
+                or not name[0].isalpha()
+                or not all(
+                    char.isalpha() or char.isdigit() or char == "_" for char in name
+                )
+            ):
+                raise ValueError(f"malformed Linux capability: {capability}")
+        return capabilities
+
+
+class CreateBoxAdvancedOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capabilities: ContainerCapabilities = Field(default_factory=ContainerCapabilities)
+
+
 class CreateBoxRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -136,13 +169,13 @@ class CreateBoxRequest(BaseModel):
     cmd: Optional[list[str]] = None
     user: Optional[str] = None
     volumes: Optional[list[dict]] = None
-    ports: Optional[list[dict]] = None
     network: Optional[NetworkSpec] = None
     secrets: Optional[list[SecretSpec]] = None
     auto_pause: Optional[int] = Field(default=None, ge=0)
     auto_delete: Optional[int] = Field(default=None, ge=0)
     auto_resume: Optional[bool] = None
     detach: Optional[bool] = False
+    advanced: Optional[CreateBoxAdvancedOptions] = None
     security: Optional[str] = None
 
 
@@ -215,6 +248,7 @@ def get_server_config() -> ServerConfig:
     if state.server_config is None:
         raise RuntimeError("server configuration not initialized")
     return state.server_config
+
 
 # ============================================================================
 # Error Mapping
@@ -370,6 +404,15 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
         kwargs["cmd"] = req.cmd
     if req.user is not None:
         kwargs["user"] = req.user
+    if req.advanced is not None and (
+        req.advanced.capabilities.add or req.advanced.capabilities.drop
+    ):
+        kwargs["advanced"] = boxlite.AdvancedBoxOptions(
+            capabilities=boxlite.ContainerCapabilities(
+                add=req.advanced.capabilities.add,
+                drop=req.advanced.capabilities.drop,
+            )
+        )
     if req.secrets:
         kwargs["secrets"] = [
             boxlite.Secret(
@@ -392,11 +435,6 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
         kwargs["volumes"] = [
             (v["host_path"], v["guest_path"], v.get("read_only", False))
             for v in req.volumes
-        ]
-    if req.ports:
-        kwargs["ports"] = [
-            (p.get("host_port", 0), p["guest_port"], p.get("protocol", "tcp"))
-            for p in req.ports
         ]
     if req.security:
         presets = {
@@ -423,7 +461,7 @@ def snapshot_info_to_dict(info) -> dict:
 
 
 async def cache_box_handle(box_handle: Any) -> str:
-    box_id = box_handle.info().id
+    box_id = (await box_handle.info()).id
     async with state.active_boxes_lock:
         state.active_boxes_by_id[box_id] = box_handle
     return box_id
@@ -437,6 +475,23 @@ async def get_cached_box_handle(box_id: str) -> Optional[Any]:
 async def evict_cached_box_by_id(box_id: str) -> None:
     async with state.active_boxes_lock:
         state.active_boxes_by_id.pop(box_id, None)
+
+
+async def find_box_info(id_or_name: str):
+    """Find metadata without attaching a handle or observing live networking."""
+    cached = await get_cached_box_handle(id_or_name)
+    if cached is not None:
+        return await cached.info()
+
+    infos = await state.runtime.list_info()
+    return next(
+        (
+            info
+            for info in infos
+            if str(info.id) == id_or_name or info.name == id_or_name
+        ),
+        None,
+    )
 
 
 async def clear_cached_box_handles() -> None:
@@ -543,6 +598,7 @@ async def get_config():
         },
         "overrides": {},
         "capabilities": {
+            "linux_capabilities_enabled": True,
             "max_cpus": 32,
             "max_memory_mib": 16384,
             "max_disk_size_gb": 100,
@@ -582,7 +638,7 @@ async def create_box(
     options = build_box_options(req)
     box_handle = await state.runtime.create(options, req.name)
     await cache_box_handle(box_handle)
-    info = box_handle.info()
+    info = await box_handle.info()
     data = box_info_to_dict(info)
     return JSONResponse(
         status_code=201,
@@ -624,7 +680,7 @@ async def box_exists(
     box_id: str,
     _auth: dict = Depends(require_auth),
 ):
-    info = await state.runtime.get_info(box_id)
+    info = await find_box_info(box_id)
     if info is None:
         return Response(status_code=404)
     return Response(status_code=204)
@@ -637,7 +693,7 @@ async def remove_box(
     force: bool = Query(False),
     _auth: dict = Depends(require_auth),
 ):
-    info = await state.runtime.get_info(box_id)
+    info = await find_box_info(box_id)
     await state.runtime.remove(box_id, force=force)
     if info is not None:
         await evict_cached_box_by_id(info.id)
@@ -653,7 +709,7 @@ async def start_box(
     box_handle = await get_box_or_404(box_id)
     await box_handle.start()
     await cache_box_handle(box_handle)
-    info = box_handle.info()
+    info = await box_handle.info()
     return box_info_to_dict(info)
 
 
@@ -666,7 +722,7 @@ async def stop_box(
 ):
     box_handle = await get_box_or_404(box_id)
     await box_handle.stop()
-    info = box_handle.info()
+    info = await box_handle.info()
     await evict_cached_box_by_id(info.id)
     return box_info_to_dict(info)
 
@@ -749,7 +805,7 @@ async def clone_box(
     opts = boxlite.CloneOptions()
     cloned = await box_handle.clone(req.name, opts)
     await cache_box_handle(cloned)
-    info = cloned.info()
+    info = await cloned.info()
     return JSONResponse(
         status_code=201,
         content=box_info_to_dict(info),
@@ -791,10 +847,12 @@ async def import_box(
         with open(archive_path, "wb") as f:
             f.write(payload)
 
-        imported = await state.runtime.import_box(archive_path, name=name)
+        imported = await state.runtime.import_box(
+            archive_path, name=name, untrusted=True
+        )
 
     await cache_box_handle(imported)
-    info = imported.info()
+    info = await imported.info()
     return JSONResponse(
         status_code=201,
         content=box_info_to_dict(info),

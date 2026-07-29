@@ -145,7 +145,9 @@ impl JsBoxlite {
     /// Returns an object with `box` (the box handle) and `created` (true if
     /// newly created, false if an existing box was found).
     ///
-    /// When an existing box is returned, the provided options are ignored.
+    /// When an existing box is returned, general options are ignored. The
+    /// local runtime additionally refuses to adopt a box whose capability
+    /// policy differs from the requested one.
     ///
     /// # Arguments
     /// * `options` - Box configuration (used only if creating a new box)
@@ -187,7 +189,7 @@ impl JsBoxlite {
     /// ```javascript
     /// const boxes = await runtime.listInfo();
     /// boxes.forEach(box => {
-    ///   console.log(`${box.id}: ${box.status}`);
+    ///   console.log(`${box.id}: ${box.state.status}`);
     /// });
     /// ```
     #[napi]
@@ -210,7 +212,7 @@ impl JsBoxlite {
     /// ```javascript
     /// const info = await runtime.getInfo('my-python-box');
     /// if (info) {
-    ///   console.log(`Status: ${info.status}`);
+    ///   console.log(`Status: ${info.state.status}`);
     /// }
     /// ```
     #[napi]

@@ -1,5 +1,119 @@
-use boxlite::{BoxInfo, BoxStateInfo, BoxStatus, HealthState as CoreHealthState};
+use boxlite::runtime::options::PortProtocol;
+use boxlite::{
+    BoxInfo, BoxStateInfo, BoxStatus, HealthState as CoreHealthState, NetworkInfo, NetworkMode,
+    PublishedPort,
+};
 use pyo3::prelude::*;
+
+fn port_protocol_to_string(protocol: PortProtocol) -> String {
+    match protocol {
+        PortProtocol::Tcp => "tcp",
+        PortProtocol::Udp => "udp",
+    }
+    .to_string()
+}
+
+fn network_mode_to_string(mode: NetworkMode) -> String {
+    match mode {
+        NetworkMode::Enabled => "enabled",
+        NetworkMode::Disabled => "disabled",
+    }
+    .to_string()
+}
+
+// ============================================================================
+// PublishedPort / NetworkInfo - Resolved network metadata
+// ============================================================================
+
+#[pyclass(name = "PublishedPort")]
+#[derive(Clone, Debug)]
+pub(crate) struct PyPublishedPort {
+    #[pyo3(get)]
+    pub(crate) guest_port: u16,
+    #[pyo3(get)]
+    pub(crate) host_ip: String,
+    #[pyo3(get)]
+    pub(crate) host_port: u16,
+    #[pyo3(get)]
+    pub(crate) protocol: String,
+}
+
+impl From<PublishedPort> for PyPublishedPort {
+    fn from(port: PublishedPort) -> Self {
+        Self {
+            guest_port: port.guest_port,
+            host_ip: port.host_ip,
+            host_port: port.host_port,
+            protocol: port_protocol_to_string(port.protocol),
+        }
+    }
+}
+
+impl PyPublishedPort {
+    fn json_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "guest_port": self.guest_port,
+            "host_ip": self.host_ip,
+            "host_port": self.host_port,
+            "protocol": self.protocol,
+        })
+    }
+}
+
+#[pymethods]
+impl PyPublishedPort {
+    fn __repr__(&self) -> String {
+        serde_json::to_string_pretty(&self.json_value()).unwrap_or_default()
+    }
+}
+
+#[pyclass(name = "NetworkInfo")]
+#[derive(Clone, Debug)]
+pub(crate) struct PyNetworkInfo {
+    #[pyo3(get)]
+    pub(crate) mode: String,
+    #[pyo3(get)]
+    pub(crate) allow_net: Vec<String>,
+    /// `None` means this handle does not know the bindings; an empty list means
+    /// there are no active publications.
+    #[pyo3(get)]
+    pub(crate) published_ports: Option<Vec<PyPublishedPort>>,
+}
+
+impl From<NetworkInfo> for PyNetworkInfo {
+    fn from(network: NetworkInfo) -> Self {
+        Self {
+            mode: network_mode_to_string(network.mode),
+            allow_net: network.allow_net,
+            published_ports: network
+                .published_ports
+                .map(|ports| ports.into_iter().map(PyPublishedPort::from).collect()),
+        }
+    }
+}
+
+impl PyNetworkInfo {
+    fn json_value(&self) -> serde_json::Value {
+        let published_ports = self.published_ports.as_ref().map(|ports| {
+            ports
+                .iter()
+                .map(PyPublishedPort::json_value)
+                .collect::<Vec<_>>()
+        });
+        serde_json::json!({
+            "mode": self.mode,
+            "allow_net": self.allow_net,
+            "published_ports": published_ports,
+        })
+    }
+}
+
+#[pymethods]
+impl PyNetworkInfo {
+    fn __repr__(&self) -> String {
+        serde_json::to_string_pretty(&self.json_value()).unwrap_or_default()
+    }
+}
 
 // ============================================================================
 // HealthState - Health check state enumeration
@@ -177,6 +291,8 @@ pub(crate) struct PyBoxInfo {
     #[pyo3(get)]
     pub(crate) memory_mib: u32,
     #[pyo3(get)]
+    pub(crate) network: Option<PyNetworkInfo>,
+    #[pyo3(get)]
     pub(crate) auto_pause: u32,
     #[pyo3(get)]
     pub(crate) auto_delete: u32,
@@ -189,6 +305,7 @@ pub(crate) struct PyBoxInfo {
 #[pymethods]
 impl PyBoxInfo {
     fn __repr__(&self) -> String {
+        let network = self.network.as_ref().map(PyNetworkInfo::json_value);
         serde_json::to_string_pretty(&serde_json::json!({
             "id": self.id,
             "name": self.name,
@@ -200,6 +317,7 @@ impl PyBoxInfo {
             "image": self.image,
             "cpus": self.cpus,
             "memory_mib": self.memory_mib,
+            "network": network,
             "auto_pause": self.auto_pause,
             "auto_delete": self.auto_delete,
             "auto_resume": self.auto_resume,
@@ -223,7 +341,6 @@ impl From<BoxInfo> for PyBoxInfo {
             failures: info.health_status.failures,
             last_check: info.health_status.last_check.map(|dt| dt.to_rfc3339()),
         };
-
         PyBoxInfo {
             id: info.id.to_string(),
             name: info.name,
@@ -232,10 +349,98 @@ impl From<BoxInfo> for PyBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
+            network: info.network.map(PyNetworkInfo::from),
             auto_pause: info.auto_pause,
             auto_delete: info.auto_delete,
             auto_resume: info.auto_resume,
             health_status,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::time::SystemTime;
+
+    use boxlite::runtime::options::PortProtocol;
+    use boxlite::{
+        BoxID, BoxInfo, BoxStatus, HealthStatus, NetworkInfo, NetworkMode, PublishedPort,
+    };
+
+    use super::PyBoxInfo;
+
+    fn core_info(network: Option<NetworkInfo>) -> BoxInfo {
+        BoxInfo {
+            id: BoxID::parse("box-python-info").unwrap(),
+            name: Some("python-info".to_string()),
+            status: BoxStatus::Running,
+            created_at: SystemTime::UNIX_EPOCH.into(),
+            last_updated: SystemTime::UNIX_EPOCH.into(),
+            pid: Some(1234),
+            image: "alpine:latest".to_string(),
+            cpus: 2,
+            memory_mib: 512,
+            network,
+            labels: HashMap::new(),
+            auto_pause: 0,
+            auto_delete: 0,
+            auto_resume: true,
+            health_status: HealthStatus::default(),
+            exit_code: None,
+        }
+    }
+
+    #[test]
+    fn box_info_conversion_preserves_network_and_publication_state() {
+        let resolved = PyBoxInfo::from(core_info(Some(NetworkInfo {
+            mode: NetworkMode::Enabled,
+            allow_net: vec!["api.example.com".to_string()],
+            published_ports: Some(vec![PublishedPort {
+                guest_port: 3000,
+                host_ip: "127.0.0.1".to_string(),
+                host_port: 49152,
+                protocol: PortProtocol::Tcp,
+            }]),
+        })));
+
+        let network = resolved.network.expect("network metadata");
+        assert_eq!(network.mode, "enabled");
+        assert_eq!(network.allow_net, vec!["api.example.com"]);
+        let ports = network.published_ports.expect("resolved publications");
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].guest_port, 3000);
+        assert_eq!(ports[0].host_ip, "127.0.0.1");
+        assert_eq!(ports[0].host_port, 49152);
+        assert_eq!(ports[0].protocol, "tcp");
+
+        let resolved_empty = PyBoxInfo::from(core_info(Some(NetworkInfo {
+            mode: NetworkMode::Disabled,
+            allow_net: Vec::new(),
+            published_ports: Some(Vec::new()),
+        })));
+        assert!(
+            resolved_empty
+                .network
+                .expect("network metadata")
+                .published_ports
+                .expect("resolved publications")
+                .is_empty()
+        );
+
+        let unresolved = PyBoxInfo::from(core_info(Some(NetworkInfo {
+            mode: NetworkMode::Enabled,
+            allow_net: Vec::new(),
+            published_ports: None,
+        })));
+        assert!(
+            unresolved
+                .network
+                .expect("network metadata")
+                .published_ports
+                .is_none()
+        );
+
+        assert!(PyBoxInfo::from(core_info(None)).network.is_none());
     }
 }

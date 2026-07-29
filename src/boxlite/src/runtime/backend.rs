@@ -73,7 +73,8 @@ pub(crate) trait BoxBackend: Send + Sync {
 
     fn name(&self) -> Option<&str>;
 
-    fn info(&self) -> BoxInfo;
+    /// Return metadata for this box.
+    async fn info(&self) -> BoxliteResult<BoxInfo>;
 
     async fn start(&self) -> BoxliteResult<()>;
 
