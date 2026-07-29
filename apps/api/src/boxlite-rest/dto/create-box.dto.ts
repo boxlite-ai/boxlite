@@ -72,6 +72,7 @@ export class CreateBoxDto {
   @Min(1)
   disk_size_gb?: number
 
+  // 以下字段定义主进程启动方式，并在请求入口处校验后交给控制面持久化。
   @IsOptional()
   @IsString()
   working_dir?: string
@@ -82,15 +83,21 @@ export class CreateBoxDto {
 
   @IsOptional()
   @IsArray()
+  @IsString({ each: true })
   entrypoint?: string[]
 
   @IsOptional()
   @IsArray()
+  @IsString({ each: true })
   cmd?: string[]
 
   @IsOptional()
   @IsString()
   user?: string
+
+  @IsOptional()
+  @IsBoolean()
+  tty?: boolean
 
   @IsOptional()
   @IsBoolean()

@@ -23,6 +23,8 @@ import type { RegistryDTO } from './registry-dto';
 export interface CreateBoxDTO {
     'authToken'?: string;
     'cpuQuota'?: number;
+    'cmd'?: Array<string>;
+    'detach'?: boolean;
     'entrypoint'?: Array<string>;
     'env'?: { [key: string]: string; };
     'fromVolumeId'?: string;
@@ -43,6 +45,7 @@ export interface CreateBoxDTO {
     'skipStart'?: boolean;
     'image': string;
     'storageQuota'?: number;
+    'tty'?: boolean;
     'volumes'?: Array<DtoVolumeDTO>;
+    'workingDir'?: string;
 }
-

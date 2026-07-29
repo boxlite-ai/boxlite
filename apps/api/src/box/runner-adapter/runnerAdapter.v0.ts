@@ -249,7 +249,11 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
-  async createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined> {
+  async createBox(
+    box: Box,
+    metadata?: { [key: string]: string },
+    skipStart?: boolean,
+  ): Promise<StartBoxResponse | undefined> {
     const response = await this.boxApiClient.create({
       id: box.id,
       image: box.image ?? '',
@@ -259,12 +263,19 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       memoryQuota: box.mem,
       storageQuota: box.disk,
       env: box.env,
+      // V0 同步接口也必须收到完整配置，保证混合版本部署时启动语义一致。
+      entrypoint: box.launchConfig?.entrypoint,
+      cmd: box.launchConfig?.cmd,
+      workingDir: box.launchConfig?.workingDir,
+      tty: box.launchConfig?.tty,
+      detach: box.launchConfig?.detach,
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
       metadata,
       authToken: box.authToken,
       organizationId: box.organizationId,
       regionId: box.region,
+      skipStart,
     })
 
     if (!response?.data?.daemonVersion) {

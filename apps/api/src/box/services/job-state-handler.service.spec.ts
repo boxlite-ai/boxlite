@@ -52,3 +52,41 @@ describe('JobStateHandlerService RESIZE_BOX completion', () => {
     })
   })
 })
+
+describe('JobStateHandlerService CREATE_BOX completion', () => {
+  it('keeps a foreground skip-start box stopped after a completed V2 create job', async () => {
+    const box = {
+      id: 'box-foreground',
+      state: BoxState.CREATING,
+      desiredState: BoxDesiredState.STARTED,
+    }
+    const boxRepository = {
+      findOne: jest.fn().mockResolvedValue(box),
+      update: jest.fn().mockResolvedValue(undefined),
+    } as any
+    const redisLockProvider = {
+      unlock: jest.fn().mockResolvedValue(undefined),
+    } as any
+    const service = new JobStateHandlerService(boxRepository, redisLockProvider)
+    const job = new Job({
+      id: 'job-create-foreground',
+      type: JobType.CREATE_BOX,
+      status: JobStatus.COMPLETED,
+      runnerId: 'runner-1',
+      resourceType: ResourceType.BOX,
+      resourceId: box.id,
+      payload: JSON.stringify({ skipStart: true }),
+    })
+
+    await service.handleJobCompletion(job)
+
+    expect(boxRepository.update).toHaveBeenCalledWith(box.id, {
+      updateData: {
+        state: BoxState.STOPPED,
+        desiredState: BoxDesiredState.STOPPED,
+        errorReason: null,
+      },
+      entity: box,
+    })
+  })
+})

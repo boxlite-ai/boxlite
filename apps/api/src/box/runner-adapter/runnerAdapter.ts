@@ -46,12 +46,19 @@ export interface RunnerAdapter {
   runnerInfo(signal?: AbortSignal): Promise<RunnerInfo>
 
   boxInfo(boxId: string): Promise<RunnerBoxInfo>
-  createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined>
+  /**
+   * 创建 Box；skipStart=true 时只准备运行环境，不启动主进程，
+   * 供远程前台流程完成输出流附加后再显式启动。
+   */
+  createBox(
+    box: Box,
+    metadata?: { [key: string]: string },
+    skipStart?: boolean,
+  ): Promise<StartBoxResponse | undefined>
   startBox(
     boxId: string,
     authToken: string,
     metadata?: { [key: string]: string },
-    skipStart?: boolean,
   ): Promise<StartBoxResponse | undefined>
   stopBox(boxId: string, force?: boolean): Promise<void>
   destroyBox(boxId: string): Promise<void>

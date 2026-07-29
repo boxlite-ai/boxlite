@@ -102,8 +102,19 @@ export class JobStateHandlerService {
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`CREATE_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
-        updateData.state = BoxState.STARTED
+        const payload = job.getPayload<{ skipStart?: boolean }>() ?? {}
+        // CREATE_BOX 完成只代表运行环境已创建；skipStart 任务的主进程尚未启动。
+        const skippedStart = payload.skipStart === true
+        this.logger.debug(
+          `CREATE_BOX job ${job.id} completed successfully, marking box ${boxId} as ${
+            skippedStart ? 'STOPPED' : 'STARTED'
+          }`,
+        )
+        updateData.state = skippedStart ? BoxState.STOPPED : BoxState.STARTED
+        if (skippedStart) {
+          // 阻止状态协调器在客户端附加输出流之前自动拉起主进程。
+          updateData.desiredState = BoxDesiredState.STOPPED
+        }
         updateData.errorReason = null
         const metadata = job.getResultMetadata()
         if (metadata?.daemonVersion && typeof metadata.daemonVersion === 'string') {

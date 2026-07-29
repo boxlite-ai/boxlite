@@ -8,6 +8,7 @@ import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, I
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxVolume } from './box.dto'
+import { BoxLaunchConfig } from '../entities/box.entity'
 
 @ApiSchema({ name: 'CreateBox' })
 export class CreateBoxDto {
@@ -170,4 +171,14 @@ export class CreateBoxDto {
   @IsOptional()
   @IsArray()
   volumes?: BoxVolume[]
+
+  @ApiPropertyOptional({
+    description: 'Launch configuration for the box main process. Used by remote foreground run.',
+    type: 'object',
+    additionalProperties: true,
+  })
+  @IsOptional()
+  @IsObject()
+  // 由 REST 边界完成字段校验和映射，服务层只负责持久化。
+  launchConfig?: BoxLaunchConfig
 }

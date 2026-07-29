@@ -114,7 +114,11 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     }
   }
 
-  async createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined> {
+  async createBox(
+    box: Box,
+    metadata?: { [key: string]: string },
+    skipStart?: boolean,
+  ): Promise<StartBoxResponse | undefined> {
     if (!box.image) {
       throw new Error(`Box ${box.id} has no image; cannot create on runner`)
     }
@@ -128,6 +132,12 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       memoryQuota: box.mem,
       storageQuota: box.disk,
       env: box.env,
+      // 启动配置写入异步任务载荷，Runner 重启并重放任务时仍可恢复。
+      entrypoint: box.launchConfig?.entrypoint,
+      cmd: box.launchConfig?.cmd,
+      workingDir: box.launchConfig?.workingDir,
+      tty: box.launchConfig?.tty,
+      detach: box.launchConfig?.detach,
       volumes: box.volumes?.map((volume) => ({
         volumeId: volume.volumeId,
         mountPath: volume.mountPath,
@@ -137,6 +147,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       networkAllowList: box.networkAllowList,
       metadata,
       authToken: box.authToken,
+      skipStart,
       organizationId: box.organizationId,
       regionId: box.region,
     }

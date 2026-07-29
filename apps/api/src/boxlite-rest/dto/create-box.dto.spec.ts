@@ -71,6 +71,38 @@ describe('CreateBoxDto lifecycle policy', () => {
   })
 })
 
+describe('CreateBoxDto launch config validation', () => {
+  it('accepts launch argv, working directory, tty, and detach fields', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        image: 'alpine:3.23',
+        entrypoint: ['/bin/sh'],
+        cmd: ['-lc', 'echo foreground-ok'],
+        working_dir: '/workspace',
+        tty: true,
+        detach: false,
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('rejects non-string launch argv entries and non-boolean tty', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        image: 'alpine:3.23',
+        entrypoint: ['/bin/sh', 42],
+        cmd: ['-lc', false],
+        tty: 'true',
+      }),
+    )
+
+    expect(errors.find((error) => error.property === 'entrypoint')?.constraints).toHaveProperty('isString')
+    expect(errors.find((error) => error.property === 'cmd')?.constraints).toHaveProperty('isString')
+    expect(errors.find((error) => error.property === 'tty')?.constraints).toHaveProperty('isBoolean')
+  })
+})
+
 describe('CreateBoxDto network validation', () => {
   it('accepts supported allow_net entry types', async () => {
     const errors = await validate(
