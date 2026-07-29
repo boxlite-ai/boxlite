@@ -18,6 +18,29 @@ import {
   DEFAULT_AUTO_RESUME,
 } from '../constants/box-lifecycle.constants'
 
+/**
+ * Box 主进程的启动配置。
+ *
+ * 远程前台运行不能只依赖创建请求中的临时参数：API 或 Runner 重启后，
+ * 控制面仍需使用这些字段恢复“创建、附加、再启动”的完整流程。
+ */
+export interface BoxLaunchConfig {
+  /** 覆盖镜像默认入口程序。 */
+  entrypoint?: string[]
+  /** 传给入口程序的命令及参数。 */
+  cmd?: string[]
+  /** 主进程启动时使用的工作目录。 */
+  workingDir?: string
+  /** 是否为主进程分配终端。 */
+  tty?: boolean
+  /** 客户端是否要求与主进程分离。 */
+  detach?: boolean
+  /** 是否使用先附加输出流、再启动主进程的前台流程。 */
+  foreground?: boolean
+  /** 前台主进程退出后是否删除 Box，用于实现远程 `run --rm`。 */
+  autoDeleteAfterExit?: boolean
+}
+
 @Entity('box')
 @Unique(['organizationId', 'name'])
 @Index('box_state_idx', ['state'])
@@ -137,6 +160,13 @@ export class Box {
     default: [],
   })
   volumes: BoxVolume[] = []
+
+  @Column({
+    type: 'jsonb',
+    nullable: true,
+  })
+  // 与 Box 一起持久化，保证控制面重启后仍能恢复前台启动语义。
+  launchConfig?: BoxLaunchConfig
 
   @CreateDateColumn({
     type: 'timestamp with time zone',

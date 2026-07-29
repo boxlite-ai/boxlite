@@ -7,7 +7,7 @@
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxState } from '../enums/box-state.enum'
 import { IsEnum, IsOptional } from 'class-validator'
-import { Box } from '../entities/box.entity'
+import { Box, BoxLaunchConfig } from '../entities/box.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 
@@ -204,6 +204,16 @@ export class BoxDto {
   volumes?: BoxVolume[]
 
   @ApiPropertyOptional({
+    description: 'Launch configuration for the box main process.',
+    type: 'object',
+    additionalProperties: true,
+    required: false,
+  })
+  @IsOptional()
+  // 返回持久化后的启动配置，便于后续前台附加与恢复流程读取。
+  launchConfig?: BoxLaunchConfig
+
+  @ApiPropertyOptional({
     description: 'The creation timestamp of the box',
     example: '2024-10-01T12:00:00Z',
     required: false,
@@ -270,6 +280,7 @@ export class BoxDto {
       networkAllowList: box.networkAllowList,
       labels: box.labels,
       volumes: box.volumes,
+      launchConfig: box.launchConfig,
       state: this.getBoxState(box),
       desiredState: box.desiredState,
       errorReason: box.errorReason,

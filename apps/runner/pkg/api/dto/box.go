@@ -5,17 +5,22 @@
 package dto
 
 type CreateBoxDTO struct {
-	Id               string            `json:"id" validate:"required"`
-	FromVolumeId     string            `json:"fromVolumeId,omitempty"`
-	Image            string            `json:"image" validate:"required"`
-	OsUser           string            `json:"osUser" validate:"required"`
-	CpuQuota         int64             `json:"cpuQuota" validate:"min=1"`
-	GpuQuota         int64             `json:"gpuQuota" validate:"min=0"`
-	MemoryQuota      int64             `json:"memoryQuota" validate:"min=1"`
-	StorageQuota     int64             `json:"storageQuota" validate:"min=1"`
-	Env              map[string]string `json:"env,omitempty"`
-	Registry         *RegistryDTO      `json:"registry,omitempty"`
+	Id           string            `json:"id" validate:"required"`
+	FromVolumeId string            `json:"fromVolumeId,omitempty"`
+	Image        string            `json:"image" validate:"required"`
+	OsUser       string            `json:"osUser" validate:"required"`
+	CpuQuota     int64             `json:"cpuQuota" validate:"min=1"`
+	GpuQuota     int64             `json:"gpuQuota" validate:"min=0"`
+	MemoryQuota  int64             `json:"memoryQuota" validate:"min=1"`
+	StorageQuota int64             `json:"storageQuota" validate:"min=1"`
+	Env          map[string]string `json:"env,omitempty"`
+	Registry     *RegistryDTO      `json:"registry,omitempty"`
+	// 以下字段描述主进程启动方式，由控制面持久化后透传给 Runner。
 	Entrypoint       []string          `json:"entrypoint,omitempty"`
+	Cmd              []string          `json:"cmd,omitempty"`
+	WorkingDir       *string           `json:"workingDir,omitempty"`
+	TTY              *bool             `json:"tty,omitempty"`
+	Detach           *bool             `json:"detach,omitempty"`
 	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
 	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
 	NetworkAllowList *string           `json:"networkAllowList,omitempty"`

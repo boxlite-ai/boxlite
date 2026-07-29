@@ -38,6 +38,7 @@ export abstract class BoxAction {
     errorReason?: string,
     daemonVersion?: string,
     recoverable?: boolean,
+    extraUpdateData?: Partial<Box>,
   ) {
     //  check if the lock code is still valid
     const lockKey = getStateChangeLockKey(box.id)
@@ -64,6 +65,8 @@ export abstract class BoxAction {
     }
 
     const updateData: Partial<Box> = {
+      // 状态转换有时需要原子地修正 desiredState 等关联字段。
+      ...extraUpdateData,
       state,
     }
 
