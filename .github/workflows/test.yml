@@ -295,8 +295,9 @@ jobs:
     # build scripts, Nx/Jest), so it must not carry write scopes.
     permissions:
       contents: read
-    # Redis lets the quota engine's real-Lua integration spec run (it self-skips
-    # without REDIS_HOST); the rest of the api suite is pure/mocked.
+    # Redis lets the quota engine's real-Lua integration spec run and Postgres
+    # lets the usage ledger's spec run (each self-skips without its env vars);
+    # the rest of the api suite is pure/mocked.
     services:
       redis:
         image: redis:7
@@ -309,8 +310,25 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: boxlite
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       REDIS_HOST: localhost
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: boxlite
     defaults:
       run:
         working-directory: apps
