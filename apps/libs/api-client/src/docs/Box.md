@@ -18,7 +18,6 @@ Name | Type | Description | Notes
 **image** | **string** | The image used for the box | [optional] [default to undefined]
 **cpu** | **number** | The CPU quota for the box | [default to undefined]
 **gpu** | **number** | The GPU quota for the box | [default to undefined]
-**gpuType** | [**GpuType**](GpuType.md) | The GPU type assigned to the box | [optional] [default to undefined]
 **memory** | **number** | The memory quota for the box | [default to undefined]
 **disk** | **number** | The disk quota for the box | [default to undefined]
 **state** | [**BoxState**](BoxState.md) | The state of the box | [optional] [default to undefined]
@@ -55,7 +54,6 @@ const instance: Box = {
     image,
     cpu,
     gpu,
-    gpuType,
     memory,
     disk,
     state,

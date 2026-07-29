@@ -122,12 +122,10 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     if (!diskOnly) {
       usagePeriod.cpu = event.box.cpu
       usagePeriod.gpu = event.box.gpu
-      usagePeriod.gpuType = event.box.gpuType ?? null
       usagePeriod.mem = event.box.mem
     } else {
       usagePeriod.cpu = 0
       usagePeriod.gpu = 0
-      usagePeriod.gpuType = null
       usagePeriod.mem = 0
     }
     usagePeriod.disk = event.box.disk
@@ -205,7 +203,6 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
             if (box.state === BoxState.STOPPED) {
               newUsagePeriod.cpu = 0
               newUsagePeriod.gpu = 0
-              newUsagePeriod.gpuType = null
               newUsagePeriod.mem = 0
             }
             await transactionalEntityManager.save(newUsagePeriod)

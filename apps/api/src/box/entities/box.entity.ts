@@ -8,7 +8,6 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, OneToOne, Uniqu
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
-import { GpuType } from '../enums/gpu-type.enum'
 import { BoxVolume } from '../dto/box.dto'
 import { nanoid } from 'nanoid'
 import { BoxLastActivity } from './box-last-activity.entity'
@@ -126,13 +125,6 @@ export class Box {
 
   @Column({ type: 'int', default: 0 })
   gpu = 0
-
-  @Column({
-    type: 'character varying',
-    nullable: true,
-    name: 'gpu_type',
-  })
-  gpuType?: GpuType | null
 
   @Column({ type: 'int', default: 4 })
   mem = 4

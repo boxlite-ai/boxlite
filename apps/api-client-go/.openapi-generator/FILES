@@ -73,7 +73,6 @@ model_create_runner.go
 model_create_runner_response.go
 model_create_user.go
 model_create_volume.go
-model_gpu_type.go
 model_health_controller_check_200_response.go
 model_health_controller_check_200_response_info_value.go
 model_job.go

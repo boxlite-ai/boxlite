@@ -51,7 +51,6 @@ export * from './create-runner';
 export * from './create-runner-response';
 export * from './create-user';
 export * from './create-volume';
-export * from './gpu-type';
 export * from './health-controller-check200-response';
 export * from './health-controller-check200-response-info-value';
 export * from './job';

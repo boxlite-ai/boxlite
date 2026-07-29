@@ -47,8 +47,6 @@ type Box struct {
 	Cpu float32 `json:"cpu"`
 	// The GPU quota for the box
 	Gpu float32 `json:"gpu"`
-	// The GPU type assigned to the box
-	GpuType *GpuType `json:"gpuType,omitempty"`
 	// The memory quota for the box
 	Memory float32 `json:"memory"`
 	// The disk quota for the box
@@ -444,38 +442,6 @@ func (o *Box) GetGpuOk() (*float32, bool) {
 // SetGpu sets field value
 func (o *Box) SetGpu(v float32) {
 	o.Gpu = v
-}
-
-// GetGpuType returns the GpuType field value if set, zero value otherwise.
-func (o *Box) GetGpuType() GpuType {
-	if o == nil || IsNil(o.GpuType) {
-		var ret GpuType
-		return ret
-	}
-	return *o.GpuType
-}
-
-// GetGpuTypeOk returns a tuple with the GpuType field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *Box) GetGpuTypeOk() (*GpuType, bool) {
-	if o == nil || IsNil(o.GpuType) {
-		return nil, false
-	}
-	return o.GpuType, true
-}
-
-// HasGpuType returns a boolean if a field has been set.
-func (o *Box) HasGpuType() bool {
-	if o != nil && !IsNil(o.GpuType) {
-		return true
-	}
-
-	return false
-}
-
-// SetGpuType gets a reference to the given GpuType and assigns it to the GpuType field.
-func (o *Box) SetGpuType(v GpuType) {
-	o.GpuType = &v
 }
 
 // GetMemory returns the Memory field value
@@ -996,9 +962,6 @@ func (o Box) ToMap() (map[string]interface{}, error) {
 	}
 	toSerialize["cpu"] = o.Cpu
 	toSerialize["gpu"] = o.Gpu
-	if !IsNil(o.GpuType) {
-		toSerialize["gpuType"] = o.GpuType
-	}
 	toSerialize["memory"] = o.Memory
 	toSerialize["disk"] = o.Disk
 	if !IsNil(o.State) {
@@ -1110,7 +1073,6 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "image")
 		delete(additionalProperties, "cpu")
 		delete(additionalProperties, "gpu")
-		delete(additionalProperties, "gpuType")
 		delete(additionalProperties, "memory")
 		delete(additionalProperties, "disk")
 		delete(additionalProperties, "state")

@@ -80,7 +80,6 @@ docs/CreateRunner.md
 docs/CreateRunnerResponse.md
 docs/CreateUser.md
 docs/CreateVolume.md
-docs/GpuType.md
 docs/HealthApi.md
 docs/HealthControllerCheck200Response.md
 docs/HealthControllerCheck200ResponseInfoValue.md
@@ -208,7 +207,6 @@ models/create-runner-response.ts
 models/create-runner.ts
 models/create-user.ts
 models/create-volume.ts
-models/gpu-type.ts
 models/health-controller-check200-response-info-value.ts
 models/health-controller-check200-response.ts
 models/index.ts

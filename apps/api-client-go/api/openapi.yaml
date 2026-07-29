@@ -6409,12 +6409,6 @@ components:
       - provider
       - userId
       type: object
-    GpuType:
-      description: The GPU type assigned to the box
-      enum:
-      - H100
-      - RTX-PRO-6000
-      type: string
     BoxState:
       description: The state of the box
       enum:
@@ -6481,7 +6475,6 @@ components:
         image: boxlite/base
         cpu: 2
         gpu: 0
-        gpuType: H100
         memory: 4
         disk: 10
         state: creating
@@ -6564,11 +6557,6 @@ components:
           description: The GPU quota for the box
           example: 0
           type: number
-        gpuType:
-          allOf:
-          - $ref: "#/components/schemas/GpuType"
-          description: The GPU type assigned to the box
-          example: H100
         memory:
           description: The memory quota for the box
           example: 4
@@ -6675,7 +6663,6 @@ components:
           image: boxlite/base
           cpu: 2
           gpu: 0
-          gpuType: H100
           memory: 4
           disk: 10
           state: creating
@@ -6713,7 +6700,6 @@ components:
           image: boxlite/base
           cpu: 2
           gpu: 0
-          gpuType: H100
           memory: 4
           disk: 10
           state: creating

@@ -6,7 +6,6 @@
 
 import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
 import { BoxClass } from '../../box/enums/box-class.enum'
-import { GpuType } from '../../box/enums/gpu-type.enum'
 import { RegionType } from '../../region/enums/region-type.enum'
 
 @Entity('box_usage_periods')
@@ -38,13 +37,6 @@ export class BoxUsagePeriod {
   @Column({ type: 'float' })
   gpu: number
 
-  @Column({
-    type: 'character varying',
-    nullable: true,
-    name: 'gpu_type',
-  })
-  gpuType: GpuType | null
-
   @Column({ type: 'float' })
   mem: number
 
@@ -71,7 +63,6 @@ export class BoxUsagePeriod {
     usagePeriodEntity.endAt = usagePeriod.endAt
     usagePeriodEntity.cpu = usagePeriod.cpu
     usagePeriodEntity.gpu = usagePeriod.gpu
-    usagePeriodEntity.gpuType = usagePeriod.gpuType
     usagePeriodEntity.mem = usagePeriod.mem
     usagePeriodEntity.disk = usagePeriod.disk
     usagePeriodEntity.region = usagePeriod.region

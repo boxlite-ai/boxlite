@@ -22,9 +22,6 @@ import type { BoxState } from './box-state';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { BoxVolume } from './box-volume';
-// May contain unused imports in some cases
-// @ts-ignore
-import type { GpuType } from './gpu-type';
 
 export interface Box {
     /**
@@ -79,10 +76,6 @@ export interface Box {
      * The GPU quota for the box
      */
     'gpu': number;
-    /**
-     * The GPU type assigned to the box
-     */
-    'gpuType'?: GpuType;
     /**
      * The memory quota for the box
      */

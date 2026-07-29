@@ -36,7 +36,7 @@ box_usage_periods           open + recently closed periods (hot, small)
 box_usage_periods_archive   closed periods only (cold, grows forever)
 ```
 
-Both carry `boxId`, `organizationId`, `startAt`, `endAt`, `cpu`, `gpu`, `gpu_type`, `mem`, `disk`, `region`, `boxClass`, `regionType`. `organizationId` is denormalized onto the period so billing queries never join `box` — a box may be reassigned or deleted while its history must not move.
+Both carry `boxId`, `organizationId`, `startAt`, `endAt`, `cpu`, `gpu`, `mem`, `disk`, `region`, `boxClass`, `regionType`. `organizationId` is denormalized onto the period so billing queries never join `box` — a box may be reassigned or deleted while its history must not move.
 
 **Invariant: at most one open period per box.** Enforced in the database by a unique partial index on `("boxId") WHERE "endAt" IS NULL`, not by application logic, so a lost lock or a concurrent writer fails loudly instead of double-billing.
 
