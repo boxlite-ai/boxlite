@@ -123,10 +123,10 @@ impl Sandbox for BwrapSandbox {
         // =====================================================================
         // Environment sanitization
         // =====================================================================
-        // The statically-linked shim dlopen's libkrunfw via LD_LIBRARY_PATH (its
-        // `$ORIGIN` rpath is ineffective), and `--clearenv` wipes it — without
-        // this the VM fails to start ("Couldn't find or load libkrunfw.so.5",
-        // libkrun status=-2). Point it at the shim's own directory (`<box>/bin`),
+        // The shim dlopen's libkrunfw via LD_LIBRARY_PATH, which `--clearenv`
+        // wipes. Without it the VM fails to start
+        // ("Couldn't find or load libkrunfw.so.5", libkrun status=-2). Point
+        // it at the shim's own directory (`<box>/bin`),
         // which is bound into the sandbox and is exactly where `copy_libkrunfw`
         // placed the library the shim loads.
         let shim_dir = std::path::Path::new(&binary)
@@ -175,9 +175,8 @@ mod tests {
     use super::*;
     use crate::runtime::advanced_options::ResourceLimits;
 
-    /// The shim is statically linked, so libkrun's `dlopen` of `libkrunfw.so.5`
-    /// can only be satisfied via `LD_LIBRARY_PATH` inside the `--clearenv`
-    /// sandbox — the shim's `$ORIGIN` rpath is absent and the inherited
+    /// Libkrun's `dlopen` of `libkrunfw.so.5` is satisfied via
+    /// `LD_LIBRARY_PATH` inside the `--clearenv` sandbox; the inherited
     /// `LD_LIBRARY_PATH` is wiped by `--clearenv`. Without this the VM fails to
     /// start ("Couldn't find or load libkrunfw.so.5", libkrun status=-2). This
     /// guards the env var the composable `apply()` dropped relative to the
@@ -211,7 +210,7 @@ mod tests {
         let pos = args
             .windows(3)
             .position(|w| w[0] == "--setenv" && w[1] == "LD_LIBRARY_PATH")
-            .expect("bwrap must --setenv LD_LIBRARY_PATH so the static shim can dlopen libkrunfw");
+            .expect("bwrap must --setenv LD_LIBRARY_PATH so the shim can dlopen libkrunfw");
         assert_eq!(
             args[pos + 2],
             "/var/lib/boxlite/boxes/abc/bin",

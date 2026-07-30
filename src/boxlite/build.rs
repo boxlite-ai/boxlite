@@ -957,32 +957,13 @@ impl EmbeddedManifest {
 
     /// Find pre-built boxlite-shim binary for the given build profile.
     ///
-    /// Search order:
-    /// 1. Native: `target/{profile}/boxlite-shim` (macOS)
-    /// 2. Linux gnu: `target/{arch}-unknown-linux-gnu/{profile}/boxlite-shim` (static glibc)
+    /// The shared build script always writes `target/{profile}/boxlite-shim`.
     fn find_prebuilt_shim(workspace_root: &Path, profile: &str) -> Option<PathBuf> {
-        let target_dir = workspace_root.join("target");
-
-        // Native path (macOS)
-        let native = target_dir.join(profile).join("boxlite-shim");
-        if native.is_file() {
-            return Some(native);
-        }
-
-        // Linux gnu (static glibc — Go c-archive is incompatible with musl TLS)
-        // Check matching architecture first to avoid picking wrong binary on
-        // multi-arch machines.
-        for arch in Self::preferred_arches() {
-            let gnu = target_dir
-                .join(format!("{}-unknown-linux-gnu", arch))
-                .join(profile)
-                .join("boxlite-shim");
-            if gnu.is_file() {
-                return Some(gnu);
-            }
-        }
-
-        None
+        let shim = workspace_root
+            .join("target")
+            .join(profile)
+            .join("boxlite-shim");
+        shim.is_file().then_some(shim)
     }
 
     /// Find pre-built boxlite-guest binary for the given build profile.
