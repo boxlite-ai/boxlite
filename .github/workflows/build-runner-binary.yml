@@ -1,15 +1,14 @@
 # Build the runner Go binary for Linux amd64.
 #
-# Self-contained workflow that downloads the prebuilt libboxlite.a from
-# GitHub Releases, builds the runner with plain `go build`, and uploads the
-# runner binary to GitHub Releases.
+# Consumes the Linux AMD64 C SDK artifact from the exact successful Build C SDK
+# run, builds the runner with plain `go build`, and uploads the runner binary.
 #
 # The runner binary is fully self-contained: it links libboxlite.a, which
 # auto-extracts the embedded runtime at startup.
 #
 # Triggers:
-# - workflow_run: After "Build C SDK" completes (ensures libboxlite.a exists)
-# - workflow_dispatch: Manual trigger for testing
+# - workflow_run: After "Build C SDK" completes
+# - workflow_dispatch: Manual trigger using a successful Build C SDK run ID
 name: Build Runner Binary
 
 on:
@@ -17,8 +16,14 @@ on:
     workflows: ["Build C SDK"]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      c_sdk_run_id:
+        description: Successful Build C SDK workflow run ID to consume
+        required: true
+        type: string
 
 permissions:
+  actions: read
   contents: read
 
 env:
@@ -36,10 +41,63 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
+    outputs:
+      head-sha: ${{ steps.c-sdk-run.outputs.head-sha }}
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ needs.config.outputs.node-build-version }}
+
+      - name: Test runner build artifact boundaries
+        run: make test:ci:runner-build
+
+      - name: Resolve C SDK artifact run
+        id: c-sdk-run
+        uses: actions/github-script@v7
+        env:
+          REQUESTED_RUN_ID: ${{ inputs.c_sdk_run_id }}
+        with:
+          script: |
+            const path = require('node:path')
+            const resolver = require(path.join(
+              process.env.GITHUB_WORKSPACE,
+              'scripts/ci/resolve-c-sdk-run.cjs',
+            ))
+            const runId = resolver.parseRunId(
+              context.eventName === 'workflow_run'
+                ? context.payload.workflow_run.id
+                : process.env.REQUESTED_RUN_ID,
+            )
+
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            })
+            const { data: workflow } = await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'build-c.yml',
+            })
+            const resolved = resolver.validateCSdkRun(
+              run,
+              `${context.repo.owner}/${context.repo.repo}`,
+              workflow.id,
+            )
+
+            core.setOutput('run-id', resolved.runId)
+            core.setOutput('head-sha', resolved.headSha)
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.c-sdk-run.outputs.head-sha }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -55,16 +113,16 @@ jobs:
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Download prebuilt libboxlite.a
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          ARCHIVE="boxlite-c-v${VERSION}-linux-x64-gnu.tar.gz"
-          URL="https://github.com/${GH_REPO}/releases/download/v${VERSION}/${ARCHIVE}"
-          echo "Downloading $URL"
-          curl -fsSL "${URL}" | tar xz -C /tmp/
-          cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a" sdks/go/libboxlite.a
+      - name: Download C SDK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: c-sdk-linux-x64-gnu
+          path: /tmp/boxlite-c-sdk
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ steps.c-sdk-run.outputs.run-id }}
+
+      - name: Install libboxlite.a
+        run: bash scripts/ci/install-c-sdk-artifact.sh /tmp/boxlite-c-sdk sdks/go/libboxlite.a
 
       - name: Rewrite go.work for minimal modules
         run: |
@@ -110,16 +168,23 @@ jobs:
     if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'release'
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.head-sha }}
 
-      - name: Determine version
-        id: version
+      - name: Validate release provenance
+        env:
+          RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          [ "$RELEASE_TAG" = "v$VERSION" ] || {
+            echo "Release tag $RELEASE_TAG does not match validated runner version v$VERSION" >&2
+            exit 1
+          }
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -131,7 +196,7 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
+          tag_name: ${{ github.event.workflow_run.head_branch }}
           files: |
             dist/boxlite-runner-v*.tar.gz
             dist/boxlite-runner-v*.tar.gz.sha256

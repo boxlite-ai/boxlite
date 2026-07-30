@@ -1,4 +1,4 @@
-PHONY_TARGETS += test test\:unit\:guest test\:shim-loader
+PHONY_TARGETS += test test\:unit\:guest test\:shim-loader test\:ci\:runner-build
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -242,6 +242,11 @@ test\:shim-loader:
 		exit 1; \
 	fi; \
 	bash scripts/test/shim-libkrunfw-dlopen.sh "$$runtime_dir"
+
+test\:ci\:runner-build:
+	@node --test scripts/test/resolve-c-sdk-run.test.cjs
+	@bash scripts/test/install-c-sdk-artifact.sh
+	@bash scripts/test/release-version-consistency.sh
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
 test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)

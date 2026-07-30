@@ -40,6 +40,7 @@ help:
 	@echo "    make test:integration:sdk   - Run SDK integration suites (Python + Node + C)"
 	@echo "    make test:unit:rust         - Run Rust unit tests (nextest when available)"
 	@echo "    make test:shim-loader       - Verify packaged shim/libkrunfw loading on native Linux"
+	@echo "    make test:ci:runner-build   - Verify runner artifact provenance and extraction"
 	@echo "    make test:warm-cache:rust   - Pre-warm Rust integration image cache"
 	@echo "    make test:integration:rust  - Run Rust integration tests (requires VM, FILTER=<pattern>)"
 	@echo "    make test:unit:ffi          - Run BoxLite FFI unit tests"
