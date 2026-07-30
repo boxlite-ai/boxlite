@@ -322,6 +322,9 @@ jobs:
           cache: npm
           cache-dependency-path: apps/infra/package-lock.json
 
+      - name: Enable Corepack
+        run: corepack enable
+
       - name: Run infrastructure deployment tests
         run: make test:apps:infra
 
