@@ -124,6 +124,7 @@ docs/RunnersApi.md
 docs/SendWebhookDto.md
 docs/SignedPortPreviewUrl.md
 docs/StorageAccessDto.md
+docs/SupportedImage.md
 docs/SystemRole.md
 docs/ToolboxProxyUrl.md
 docs/TraceSpan.md
@@ -240,6 +241,7 @@ models/runner.ts
 models/send-webhook-dto.ts
 models/signed-port-preview-url.ts
 models/storage-access-dto.ts
+models/supported-image.ts
 models/system-role.ts
 models/toolbox-proxy-url.ts
 models/trace-span.ts

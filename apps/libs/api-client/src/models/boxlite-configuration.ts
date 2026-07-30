@@ -25,6 +25,9 @@ import type { PosthogConfig } from './posthog-config';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { RateLimitConfig } from './rate-limit-config';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { SupportedImage } from './supported-image';
 
 export interface BoxliteConfiguration {
     /**
@@ -71,6 +74,10 @@ export interface BoxliteConfiguration {
      * Current environment
      */
     'environment': string;
+    /**
+     * Ordered images accepted by the box-create API; the first entry is the default
+     */
+    'supportedImages': Array<SupportedImage>;
     /**
      * Billing API URL
      */

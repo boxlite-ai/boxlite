@@ -110,6 +110,7 @@ model_runner_state.go
 model_send_webhook_dto.go
 model_signed_port_preview_url.go
 model_storage_access_dto.go
+model_supported_image.go
 model_system_role.go
 model_toolbox_proxy_url.go
 model_trace_span.go

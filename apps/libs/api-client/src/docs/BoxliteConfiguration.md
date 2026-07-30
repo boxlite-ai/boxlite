@@ -16,6 +16,7 @@ Name | Type | Description | Notes
 **dashboardUrl** | **string** | Dashboard URL | [default to undefined]
 **maintananceMode** | **boolean** | Whether maintenance mode is enabled | [default to undefined]
 **environment** | **string** | Current environment | [default to undefined]
+**supportedImages** | [**Array&lt;SupportedImage&gt;**](SupportedImage.md) | Ordered images accepted by the box-create API; the first entry is the default | [default to undefined]
 **billingApiUrl** | **string** | Billing API URL | [optional] [default to undefined]
 **analyticsApiUrl** | **string** | Analytics API URL | [optional] [default to undefined]
 **rateLimit** | [**RateLimitConfig**](RateLimitConfig.md) | Rate limit configuration | [optional] [default to undefined]
@@ -37,6 +38,7 @@ const instance: BoxliteConfiguration = {
     dashboardUrl,
     maintananceMode,
     environment,
+    supportedImages,
     billingApiUrl,
     analyticsApiUrl,
     rateLimit,

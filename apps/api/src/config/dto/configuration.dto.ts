@@ -5,7 +5,8 @@
  */
 
 import { ApiExtraModels, ApiProperty, ApiPropertyOptional, ApiSchema, getSchemaPath } from '@nestjs/swagger'
-import { IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator'
+import { IsArray, IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator'
+import { supportedImages } from '../../box/constants/curated-images.constant'
 import { TypedConfigService } from '../typed-config.service'
 import { EndSessionState, isValidHttpUrl } from '../oidc-metadata.service'
 
@@ -127,7 +128,24 @@ export class OidcConfig {
   endSessionEndpoint?: string
 }
 
-@ApiExtraModels(Announcement)
+@ApiSchema({ name: 'SupportedImage' })
+export class SupportedImageDto {
+  @ApiProperty({
+    description: 'Stable image selector accepted by the box-create API',
+    example: 'python',
+  })
+  @IsString()
+  name: string
+
+  @ApiProperty({
+    description: 'Exact OCI image reference resolved by the box-create API',
+    example: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3',
+  })
+  @IsString()
+  ref: string
+}
+
+@ApiExtraModels(Announcement, SupportedImageDto)
 @ApiSchema({ name: 'BoxliteConfiguration' })
 export class ConfigurationDto {
   @ApiProperty({
@@ -207,6 +225,19 @@ export class ConfigurationDto {
   @IsString()
   environment: string
 
+  @ApiProperty({
+    description: 'Ordered images accepted by the box-create API; the first entry is the default',
+    type: SupportedImageDto,
+    isArray: true,
+    example: [
+      { name: 'base', ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3' },
+      { name: 'python', ref: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3' },
+      { name: 'node', ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3' },
+    ],
+  })
+  @IsArray()
+  supportedImages: SupportedImageDto[]
+
   @ApiPropertyOptional({
     description: 'Billing API URL',
     example: 'https://billing.example.com',
@@ -254,6 +285,7 @@ export class ConfigurationDto {
     this.dashboardUrl = configService.getOrThrow('dashboardUrl')
     this.maintananceMode = configService.getOrThrow('maintananceMode')
     this.environment = configService.getOrThrow('environment')
+    this.supportedImages = supportedImages()
 
     if (configService.get('billingApiUrl')) {
       this.billingApiUrl = configService.get('billingApiUrl')

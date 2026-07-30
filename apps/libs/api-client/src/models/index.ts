@@ -88,6 +88,7 @@ export * from './runner-state';
 export * from './send-webhook-dto';
 export * from './signed-port-preview-url';
 export * from './storage-access-dto';
+export * from './supported-image';
 export * from './system-role';
 export * from './toolbox-proxy-url';
 export * from './trace-span';

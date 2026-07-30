@@ -43,6 +43,8 @@ type BoxliteConfiguration struct {
 	MaintananceMode bool `json:"maintananceMode"`
 	// Current environment
 	Environment string `json:"environment"`
+	// Ordered images accepted by the box-create API; the first entry is the default
+	SupportedImages []SupportedImage `json:"supportedImages"`
 	// Billing API URL
 	BillingApiUrl *string `json:"billingApiUrl,omitempty"`
 	// Analytics API URL
@@ -58,7 +60,7 @@ type _BoxliteConfiguration BoxliteConfiguration
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnabled bool, announcements map[string]Announcement, proxyTemplateUrl string, proxyToolboxUrl string, dashboardUrl string, maintananceMode bool, environment string) *BoxliteConfiguration {
+func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnabled bool, announcements map[string]Announcement, proxyTemplateUrl string, proxyToolboxUrl string, dashboardUrl string, maintananceMode bool, environment string, supportedImages []SupportedImage) *BoxliteConfiguration {
 	this := BoxliteConfiguration{}
 	this.Version = version
 	this.Oidc = oidc
@@ -69,6 +71,7 @@ func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnab
 	this.DashboardUrl = dashboardUrl
 	this.MaintananceMode = maintananceMode
 	this.Environment = environment
+	this.SupportedImages = supportedImages
 	return &this
 }
 
@@ -360,6 +363,30 @@ func (o *BoxliteConfiguration) SetEnvironment(v string) {
 	o.Environment = v
 }
 
+// GetSupportedImages returns the SupportedImages field value
+func (o *BoxliteConfiguration) GetSupportedImages() []SupportedImage {
+	if o == nil {
+		var ret []SupportedImage
+		return ret
+	}
+
+	return o.SupportedImages
+}
+
+// GetSupportedImagesOk returns a tuple with the SupportedImages field value
+// and a boolean to check if the value has been set.
+func (o *BoxliteConfiguration) GetSupportedImagesOk() ([]SupportedImage, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.SupportedImages, true
+}
+
+// SetSupportedImages sets field value
+func (o *BoxliteConfiguration) SetSupportedImages(v []SupportedImage) {
+	o.SupportedImages = v
+}
+
 // GetBillingApiUrl returns the BillingApiUrl field value if set, zero value otherwise.
 func (o *BoxliteConfiguration) GetBillingApiUrl() string {
 	if o == nil || IsNil(o.BillingApiUrl) {
@@ -481,6 +508,7 @@ func (o BoxliteConfiguration) ToMap() (map[string]interface{}, error) {
 	toSerialize["dashboardUrl"] = o.DashboardUrl
 	toSerialize["maintananceMode"] = o.MaintananceMode
 	toSerialize["environment"] = o.Environment
+	toSerialize["supportedImages"] = o.SupportedImages
 	if !IsNil(o.BillingApiUrl) {
 		toSerialize["billingApiUrl"] = o.BillingApiUrl
 	}
@@ -512,6 +540,7 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 		"dashboardUrl",
 		"maintananceMode",
 		"environment",
+		"supportedImages",
 	}
 
 	allProperties := make(map[string]interface{})
@@ -552,6 +581,7 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "dashboardUrl")
 		delete(additionalProperties, "maintananceMode")
 		delete(additionalProperties, "environment")
+		delete(additionalProperties, "supportedImages")
 		delete(additionalProperties, "billingApiUrl")
 		delete(additionalProperties, "analyticsApiUrl")
 		delete(additionalProperties, "rateLimit")
