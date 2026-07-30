@@ -10,7 +10,7 @@ import (
 
 // TestStackFieldExists validates that VirtualNetwork has a "stack" field.
 // If gvisor-tap-vsock renames or removes this field, this test fails fast
-// instead of a silent runtime panic in OverrideTCPHandler.
+// instead of a silent runtime panic in installAllowNetHandlers.
 func TestStackFieldExists(t *testing.T) {
 	config := &types.Configuration{
 		Subnet:            "192.168.127.0/24",
