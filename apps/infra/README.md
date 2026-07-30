@@ -76,10 +76,11 @@ GitHub `dev` Environment. GitHub OIDC supplies short-lived AWS credentials; no
 AWS access keys are stored in GitHub. `DEPLOY_ENV` materializes the stage's
 gitignored `.env` only for the job and is deleted even if deployment fails.
 
-The current workflow deliberately targets only `Api` and excludes `Runner`:
+The current workflow deliberately targets only `Api`; selecting only the API
+also skips the Runner release-asset preflight:
 
 ```bash
-npm run deploy -- --stage dev --target Api --exclude Runner
+npm run deploy -- --stage dev --target Api
 ```
 
 The role template grants only the AWS control-plane actions used by this SST
@@ -378,12 +379,13 @@ capability-gated two-phase rollout:
    requests to Runners at the required version, and each upgraded Runner only
    becomes schedulable after the control plane reports that exact version.
 
-An explicit `--exclude Runner` deployment is the operator escape hatch for a
-control-plane-only rollout. It skips the Runner release-asset preflight and
-leaves the EC2 resource, binary, and identity tag untouched. Detached requests
-that use legacy Runner capabilities remain available; requests needing the new
-Runner version fail explicitly until a later full rollout applies the metadata
-and upgrades the binary.
+An API-only `--target Api` deployment, or a broader deployment with an explicit
+`--exclude Runner`, is the operator escape hatch for a control-plane-only
+rollout. Either form skips the Runner release-asset preflight and leaves the EC2
+resource, binary, and identity tag untouched. Detached requests that use legacy
+Runner capabilities remain available; requests needing the new Runner version
+fail explicitly until a later full rollout applies the metadata and upgrades
+the binary.
 
 This bounded compatibility window is intentional: silently discarding a
 requested command or foreground lifecycle would be data loss, while sending it

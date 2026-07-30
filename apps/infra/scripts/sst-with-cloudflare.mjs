@@ -200,7 +200,7 @@ if (sstArgs[0] === 'deploy') {
     publicDeploymentConfig = resolvePublicDeploymentConfig(process.env, workspaceVersion)
     if (isSstComponentExcluded(sstArgs, 'Runner')) {
       console.warn(
-        `sst-with-cloudflare: Runner excluded; skipping the v${workspaceVersion} release-asset preflight. ` +
+        `sst-with-cloudflare: Runner not selected; skipping the v${workspaceVersion} release-asset preflight. ` +
           'Runner metadata and new Runner-only capabilities will remain unavailable until a later full rollout.',
       )
     } else {

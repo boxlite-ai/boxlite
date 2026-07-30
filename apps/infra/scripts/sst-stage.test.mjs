@@ -44,11 +44,19 @@ test('retains the dev credential lookup default for non-deploy commands', () => 
   assert.equal(resolveSstStage(['diff'], {}), 'dev')
 })
 
-test('recognizes only an explicitly excluded SST component', () => {
+test('recognizes SST components omitted by exclude or target selection', () => {
   assert.equal(isSstComponentExcluded(['deploy', '--exclude', 'Runner'], 'Runner'), true)
   assert.equal(isSstComponentExcluded(['deploy', '--exclude=Runner'], 'Runner'), true)
   assert.equal(isSstComponentExcluded(['deploy', '--exclude', 'Runner-runner-2'], 'Runner'), false)
+  assert.equal(isSstComponentExcluded(['deploy', '--target', 'Api'], 'Runner'), true)
+  assert.equal(isSstComponentExcluded(['deploy', '--target=Api'], 'Runner'), true)
   assert.equal(isSstComponentExcluded(['deploy', '--target', 'Runner'], 'Runner'), false)
+  assert.equal(isSstComponentExcluded(['deploy', '--target=Runner'], 'Runner'), false)
+  assert.equal(isSstComponentExcluded(['deploy'], 'Runner'), false)
+  assert.throws(
+    () => isSstComponentExcluded(['deploy', '--target', 'Api', '--exclude', 'Runner'], 'Runner'),
+    /--target and --exclude cannot be combined/,
+  )
 })
 
 test('requires the provisioned IAM boundary stage to match the SST stage', () => {

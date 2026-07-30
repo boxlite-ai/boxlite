@@ -42,15 +42,33 @@ export function resolveSstStage(args, environment = process.env) {
 }
 
 export function isSstComponentExcluded(args, component) {
+  let selector
+  const selectedComponents = new Set()
+
   for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === '--exclude') {
-      if (args[index + 1] === component) return true
+    const separateSelector = args[index].match(/^--(target|exclude)$/)?.[1]
+    if (separateSelector) {
+      const value = args[index + 1]
+      if (!value || value.startsWith('-')) throw new Error(`--${separateSelector} requires a value`)
+      if (selector && selector !== separateSelector) throw new Error('--target and --exclude cannot be combined')
+      selector = separateSelector
+      selectedComponents.add(value)
       index += 1
       continue
     }
 
-    if (args[index] === `--exclude=${component}`) return true
+    const inlineSelector = args[index].match(/^--(target|exclude)=(.*)$/)
+    if (inlineSelector) {
+      const [, nextSelector, value] = inlineSelector
+      if (!value) throw new Error(`--${nextSelector} requires a value`)
+      if (selector && selector !== nextSelector) throw new Error('--target and --exclude cannot be combined')
+      selector = nextSelector
+      selectedComponents.add(value)
+    }
   }
+
+  if (selector === 'target') return !selectedComponents.has(component)
+  if (selector === 'exclude') return selectedComponents.has(component)
   return false
 }
 
