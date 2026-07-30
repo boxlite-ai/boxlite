@@ -6,12 +6,38 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { DEFAULT_SCHEMA, Type, load } from 'js-yaml'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SST_WRAPPER = join(REPO_ROOT, 'apps/infra/scripts/sst-with-cloudflare.mjs')
 const DEV_API_DEPLOY_WORKFLOW = join(REPO_ROOT, '.github/workflows/deploy-dev-api.yml')
 const LINT_WORKFLOW = join(REPO_ROOT, '.github/workflows/lint.yml')
 const DEV_DEPLOY_ROLE = join(REPO_ROOT, 'apps/infra/ci/github-deploy-role.yaml')
+const CLOUDFORMATION_SCHEMA = DEFAULT_SCHEMA.extend([
+  new Type('!Sub', {
+    kind: 'scalar',
+    construct: (value) => value,
+  }),
+  new Type('!Ref', {
+    kind: 'scalar',
+    construct: (value) => value,
+  }),
+  new Type('!GetAtt', {
+    kind: 'scalar',
+    construct: (value) => value,
+  }),
+])
+
+function readRuntimeBoundaryStatements() {
+  const template = load(readFileSync(DEV_DEPLOY_ROLE, 'utf8'), { schema: CLOUDFORMATION_SCHEMA })
+  return template.Resources.BoxLiteRuntimePermissionsBoundary.Properties.PolicyDocument.Statement
+}
+
+function findStatement(statements, sid) {
+  const statement = statements.find((candidate) => candidate.Sid === sid)
+  assert.ok(statement, `missing ${sid} statement`)
+  return statement
+}
 
 test('SST deploy verifies Runner release assets before invoking SST', () => {
   const source = readFileSync(SST_WRAPPER, 'utf8')
@@ -71,6 +97,7 @@ test('infrastructure tests cannot persist or write with the workflow token', () 
 test('dev deploy role trusts only the repository GitHub Environment identity', () => {
   assert.ok(existsSync(DEV_DEPLOY_ROLE), 'the GitHub deployment role template is missing')
   const source = readFileSync(DEV_DEPLOY_ROLE, 'utf8')
+  const statements = readRuntimeBoundaryStatements()
 
   assert.match(source, /oidc-provider\/token\.actions\.githubusercontent\.com/)
   assert.match(source, /token\.actions\.githubusercontent\.com:aud: sts\.amazonaws\.com/)
@@ -82,9 +109,56 @@ test('dev deploy role trusts only the repository GitHub Environment identity', (
   assert.match(source, /BoxLiteRuntimePermissionsBoundary:/)
   assert.match(source, /iam:PermissionsBoundary/)
   assert.match(source, /PolicyName: boxlite-sst-deploy/)
-  assert.match(source, /secret:boxlite-\$\{GitHubEnvironment\}-\*/)
-  assert.match(source, /arn:\$\{AWS::Partition\}:s3:::boxlite-\$\{GitHubEnvironment\}-\*/)
-  assert.match(source, /kms:ResourceAliases:/)
+
+  assert.deepEqual(findStatement(statements, 'BoxLiteStageSecrets'), {
+    Sid: 'BoxLiteStageSecrets',
+    Effect: 'Allow',
+    Action: ['secretsmanager:DescribeSecret', 'secretsmanager:GetSecretValue'],
+    Resource:
+      'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:boxlite-${GitHubEnvironment}-*',
+  })
+  assert.deepEqual(findStatement(statements, 'BoxLiteStageKmsKeys'), {
+    Sid: 'BoxLiteStageKmsKeys',
+    Effect: 'Allow',
+    Action: 'kms:Decrypt',
+    Resource: 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*',
+    Condition: {
+      'ForAnyValue:StringLike': {
+        'kms:ResourceAliases': 'alias/boxlite-${GitHubEnvironment}-*',
+      },
+    },
+  })
+  assert.deepEqual(findStatement(statements, 'BoxLiteBuckets'), {
+    Sid: 'BoxLiteBuckets',
+    Effect: 'Allow',
+    Action: [
+      's3:CreateBucket',
+      's3:DeleteBucket',
+      's3:GetBucketLocation',
+      's3:ListBucket',
+      's3:ListBucketVersions',
+      's3:PutBucketTagging',
+    ],
+    Resource: [
+      'arn:${AWS::Partition}:s3:::boxlite-${GitHubEnvironment}-*',
+      'arn:${AWS::Partition}:s3:::boxlite-volume-*',
+    ],
+  })
+  assert.deepEqual(findStatement(statements, 'BoxLiteBucketObjects'), {
+    Sid: 'BoxLiteBucketObjects',
+    Effect: 'Allow',
+    Action: [
+      's3:AbortMultipartUpload',
+      's3:DeleteObject',
+      's3:DeleteObjectVersion',
+      's3:GetObject',
+      's3:PutObject',
+    ],
+    Resource: [
+      'arn:${AWS::Partition}:s3:::boxlite-${GitHubEnvironment}-*/*',
+      'arn:${AWS::Partition}:s3:::boxlite-volume-*/*',
+    ],
+  })
 })
 
 test('SST preflights the workspace Runner artifact even when VERSION overrides the public API version', () => {

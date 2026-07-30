@@ -13,6 +13,7 @@
   },
   "devDependencies": {
     "@pulumi/aws": "^7.24.0",
+    "js-yaml": "^4.1.0",
     "sst": "^4.6.11"
   },
   "dependencies": {
