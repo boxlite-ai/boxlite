@@ -1,10 +1,12 @@
 package main
 
-// tcp_filter.go — AllowNet matcher for TCP-level filtering.
+// allow_net_filter.go — AllowNet matcher shared by the TCP and UDP paths.
 //
 // Supports: exact IP, CIDR, exact hostname, wildcard hostname (*.example.com).
-// IP/CIDR rules are checked directly against destination IPs.
-// Hostname rules are checked via SNI/Host header inspection (see forked_tcp.go).
+// IP/CIDR rules are checked directly against destination IPs, so they apply to
+// both transports. Hostname rules need SNI/Host inspection (forked_tcp.go),
+// which only TCP can do — UDP therefore denies hostname-only allowlists
+// (forked_udp.go).
 
 import (
 	"net"
@@ -13,9 +15,9 @@ import (
 	logrus "github.com/sirupsen/logrus"
 )
 
-// TCPFilter checks outbound TCP connections against an allowlist.
+// AllowNetFilter checks outbound traffic against an allowlist.
 // nil filter means no filtering (all traffic allowed).
-type TCPFilter struct {
+type AllowNetFilter struct {
 	exactIPs         map[[4]byte]bool
 	cidrs            []*net.IPNet
 	alwaysAllow      map[[4]byte]bool // internal IPs that should never be filtered
@@ -24,14 +26,14 @@ type TCPFilter struct {
 	hasHostnameRules bool
 }
 
-// NewTCPFilter parses allow_net rules into IP/CIDR and hostname categories.
+// NewAllowNetFilter parses allow_net rules into IP/CIDR and hostname categories.
 // Returns nil if rules is empty (zero overhead fast path).
-func NewTCPFilter(rules []string, internalIPs ...string) *TCPFilter {
+func NewAllowNetFilter(rules []string, internalIPs ...string) *AllowNetFilter {
 	if len(rules) == 0 {
 		return nil
 	}
 
-	f := &TCPFilter{
+	f := &AllowNetFilter{
 		exactIPs:    make(map[[4]byte]bool),
 		alwaysAllow: make(map[[4]byte]bool),
 		exactHosts:  make(map[string]bool),
@@ -59,7 +61,7 @@ func NewTCPFilter(rules []string, internalIPs ...string) *TCPFilter {
 		if ip := net.ParseIP(rule); ip != nil {
 			if ip4 := ip.To4(); ip4 != nil {
 				f.exactIPs[toIPv4Key(ip4)] = true
-				logrus.WithField("ip", rule).Debug("allowNet TCP: added exact IP")
+				logrus.WithField("ip", rule).Debug("allowNet: added exact IP")
 			}
 			continue
 		}
@@ -67,7 +69,7 @@ func NewTCPFilter(rules []string, internalIPs ...string) *TCPFilter {
 		// CIDR: "10.0.0.0/8"
 		if _, cidr, err := net.ParseCIDR(rule); err == nil {
 			f.cidrs = append(f.cidrs, cidr)
-			logrus.WithField("cidr", rule).Debug("allowNet TCP: added CIDR")
+			logrus.WithField("cidr", rule).Debug("allowNet: added CIDR")
 			continue
 		}
 
@@ -82,14 +84,14 @@ func NewTCPFilter(rules []string, internalIPs ...string) *TCPFilter {
 			suffix := strings.ToLower(host[1:]) // ".example.com"
 			f.wildcardSuffixes = append(f.wildcardSuffixes, suffix)
 			f.hasHostnameRules = true
-			logrus.WithField("wildcard", host).Debug("allowNet TCP: added wildcard")
+			logrus.WithField("wildcard", host).Debug("allowNet: added wildcard")
 			continue
 		}
 
 		// Exact hostname
 		f.exactHosts[strings.ToLower(host)] = true
 		f.hasHostnameRules = true
-		logrus.WithField("hostname", host).Debug("allowNet TCP: added hostname")
+		logrus.WithField("hostname", host).Debug("allowNet: added hostname")
 	}
 
 	logrus.WithFields(logrus.Fields{
@@ -97,13 +99,13 @@ func NewTCPFilter(rules []string, internalIPs ...string) *TCPFilter {
 		"cidrs":     len(f.cidrs),
 		"hostnames": len(f.exactHosts),
 		"wildcards": len(f.wildcardSuffixes),
-	}).Info("allowNet TCP: filter initialized")
+	}).Info("allowNet: filter initialized")
 
 	return f
 }
 
 // MatchesIP checks if destIP is allowed by IP/CIDR rules or always-allow.
-func (f *TCPFilter) MatchesIP(destIP net.IP) bool {
+func (f *AllowNetFilter) MatchesIP(destIP net.IP) bool {
 	ip4 := destIP.To4()
 	if ip4 == nil {
 		return false
@@ -124,7 +126,7 @@ func (f *TCPFilter) MatchesIP(destIP net.IP) bool {
 }
 
 // MatchesHostname checks if hostname is allowed by hostname rules.
-func (f *TCPFilter) MatchesHostname(hostname string) bool {
+func (f *AllowNetFilter) MatchesHostname(hostname string) bool {
 	hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
 	if hostname == "" {
 		return false
@@ -141,7 +143,7 @@ func (f *TCPFilter) MatchesHostname(hostname string) bool {
 }
 
 // HasHostnameRules returns true if any hostname/wildcard rules exist.
-func (f *TCPFilter) HasHostnameRules() bool {
+func (f *AllowNetFilter) HasHostnameRules() bool {
 	return f.hasHostnameRules
 }
 

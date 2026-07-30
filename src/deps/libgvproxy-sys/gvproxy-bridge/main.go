@@ -429,11 +429,11 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 
 		// Override TCP handler with AllowNet filter and/or MITM secret substitution
 		if len(config.AllowNet) > 0 || instance.secretMatcher != nil {
-			var tcpFilter *TCPFilter
+			var allowNetFilter *AllowNetFilter
 			if len(config.AllowNet) > 0 {
-				tcpFilter = NewTCPFilter(config.AllowNet, config.GatewayIP, config.GuestIP, config.HostIP)
+				allowNetFilter = NewAllowNetFilter(config.AllowNet, config.GatewayIP, config.GuestIP, config.HostIP)
 			}
-			if err := OverrideTCPHandler(vn, tapConfig, tapConfig.Ec2MetadataAccess, tcpFilter, instance.ca, instance.secretMatcher); err != nil {
+			if err := OverrideTCPHandler(vn, tapConfig, tapConfig.Ec2MetadataAccess, allowNetFilter, instance.ca, instance.secretMatcher); err != nil {
 				logrus.WithError(err).Error("TCP: failed to override handler")
 			}
 		}

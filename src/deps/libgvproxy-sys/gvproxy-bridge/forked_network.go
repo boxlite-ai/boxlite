@@ -30,7 +30,7 @@ func OverrideTCPHandler(
 	vn *virtualnetwork.VirtualNetwork,
 	config *types.Configuration,
 	ec2MetadataAccess bool,
-	filter *TCPFilter,
+	filter *AllowNetFilter,
 	ca *BoxCA,
 	secretMatcher *SecretHostMatcher,
 ) error {
