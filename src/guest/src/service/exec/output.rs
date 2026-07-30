@@ -261,12 +261,13 @@ impl OutputManager {
 
     async fn reader_failed(&self, source: OutputSource, error: std::io::Error) {
         let mut state = self.inner.lock().await;
-        let stream = state.stream_mut(source);
-        stream.finished = true;
-        state.failure = Some(ReaderFailure {
-            sequence: state.next_sequence,
-            message: format!("failed to read {source:?}: {error}"),
-        });
+        state.stream_mut(source).finished = true;
+        if state.failure.is_none() {
+            state.failure = Some(ReaderFailure {
+                sequence: state.next_sequence,
+                message: format!("failed to read {source:?}: {error}"),
+            });
+        }
         drop(state);
         self.updated.send_replace(());
     }
@@ -438,5 +439,38 @@ mod tests {
         let error = output.next().await.unwrap().unwrap_err();
         assert_eq!(error.code(), tonic::Code::Internal);
         assert!(error.message().contains("simulated pipe failure"));
+    }
+
+    #[tokio::test]
+    async fn first_reader_failure_stops_output_before_later_reader_failure() {
+        let manager = OutputManager::new(None, None);
+        manager
+            .push(OutputSource::Stdout, b"before failure".to_vec())
+            .await;
+        manager
+            .reader_failed(
+                OutputSource::Stdout,
+                std::io::Error::other("stdout failure"),
+            )
+            .await;
+        manager
+            .push(OutputSource::Stderr, b"after failure".to_vec())
+            .await;
+        manager
+            .reader_failed(
+                OutputSource::Stderr,
+                std::io::Error::other("stderr failure"),
+            )
+            .await;
+
+        let mut output = manager.attach().await.unwrap();
+        let first = output.next().await.unwrap().unwrap();
+        let Some(exec_output::Event::Stdout(first)) = first.event else {
+            panic!("buffered stdout must arrive before the first reader failure");
+        };
+        assert_eq!(first.data, b"before failure");
+
+        let error = output.next().await.unwrap().unwrap_err();
+        assert!(error.message().contains("stdout failure"));
     }
 }

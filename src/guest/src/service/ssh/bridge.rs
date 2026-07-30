@@ -198,6 +198,7 @@ impl ChannelBridge {
                 OutputPumpStart::AwaitActivation {
                     output: ready.output,
                     buffered_stdout: ready.buffered_stdout,
+                    stdout_offset: ready.stdout_offset,
                     activate_rx,
                 },
                 Some(activate_tx),
@@ -513,6 +514,7 @@ fn streamlocal_launch(container_id: &str, socket_path: String) -> InternalHelper
 struct PreparedStreamlocalOutput {
     output: mpsc::Receiver<Result<ExecOutput, tonic::Status>>,
     buffered_stdout: Vec<u8>,
+    stdout_offset: u64,
 }
 
 enum OutputPumpStart {
@@ -520,6 +522,7 @@ enum OutputPumpStart {
     AwaitActivation {
         output: mpsc::Receiver<Result<ExecOutput, tonic::Status>>,
         buffered_stdout: Vec<u8>,
+        stdout_offset: u64,
         activate_rx: oneshot::Receiver<()>,
     },
 }
@@ -527,10 +530,16 @@ enum OutputPumpStart {
 #[derive(Default)]
 struct StreamlocalReadyParser {
     matched: usize,
+    stdout_offset: u64,
 }
 
 impl StreamlocalReadyParser {
-    fn push_stdout(&mut self, data: &[u8]) -> Result<Option<Vec<u8>>, BridgeError> {
+    fn push_stdout(
+        &mut self,
+        offset: Option<u64>,
+        data: &[u8],
+    ) -> Result<Option<Vec<u8>>, BridgeError> {
+        self.stdout_offset = offset.unwrap_or(self.stdout_offset) + data.len() as u64;
         let magic = crate::service::ssh::streamlocal::STREAMLOCAL_READY_MAGIC;
         let prefix_bytes = (magic.len() - self.matched).min(data.len());
         if data[..prefix_bytes] != magic[self.matched..self.matched + prefix_bytes] {
@@ -570,10 +579,13 @@ async fn await_streamlocal_ready(
                 })?;
             match message.event {
                 Some(boxlite_shared::exec_output::Event::Stdout(stdout)) => {
-                    if let Some(buffered_stdout) = parser.push_stdout(&stdout.data)? {
+                    if let Some(buffered_stdout) =
+                        parser.push_stdout(stdout.offset, &stdout.data)?
+                    {
                         return Ok(PreparedStreamlocalOutput {
                             output,
                             buffered_stdout,
+                            stdout_offset: parser.stdout_offset,
                         });
                     }
                 }
@@ -610,7 +622,7 @@ fn spawn_output_pump(
     mut cancel_rx: oneshot::Receiver<()>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let (mut output, buffered_stdout) = match output_start {
+        let (mut output, buffered_stdout, mut stdout_offset) = match output_start {
             OutputPumpStart::Attach => {
                 let attached = tokio::select! {
                     _ = &mut cancel_rx => return,
@@ -626,7 +638,7 @@ fn spawn_output_pump(
                     Err(_) => Err(ExecutionError::Io("attach timed out".into())),
                 };
                 match attached {
-                    Ok(output) => (output, Vec::new()),
+                    Ok(output) => (output, Vec::new(), 0),
                     Err(error) => {
                         warn!(%error, %execution_id, "SSH attach failed");
                         terminate_process_group(server.clone(), execution_id.clone()).await;
@@ -644,6 +656,7 @@ fn spawn_output_pump(
             OutputPumpStart::AwaitActivation {
                 output,
                 buffered_stdout,
+                stdout_offset,
                 mut activate_rx,
             } => {
                 let activated = tokio::select! {
@@ -653,7 +666,7 @@ fn spawn_output_pump(
                 if activated.is_err() {
                     return;
                 }
-                (output, buffered_stdout)
+                (output, buffered_stdout, stdout_offset)
             }
         };
 
@@ -661,7 +674,6 @@ fn spawn_output_pump(
             let _ = session_handle.data(channel_id, buffered_stdout).await;
         }
 
-        let mut stdout_offset = 0;
         let mut stderr_offset = 0;
         loop {
             tokio::select! {
@@ -680,12 +692,28 @@ fn spawn_output_pump(
                                     stdout.data.len(),
                                     stdout.total_bytes,
                                 ) {
-                                    let _ = session_handle
-                                        .data(
-                                            channel_id,
-                                            output_gap_message("stdout", lost_bytes),
-                                        )
-                                        .await;
+                                    match output_gap_disposition(completion) {
+                                        OutputGapDisposition::Report => {
+                                            let _ = session_handle
+                                                .data(
+                                                    channel_id,
+                                                    output_gap_message("stdout", lost_bytes),
+                                                )
+                                                .await;
+                                        }
+                                        OutputGapDisposition::Abort => {
+                                            warn!(%execution_id, lost_bytes, "SSH forwarding output gap");
+                                            terminate_process_group(server.clone(), execution_id.clone()).await;
+                                            finish_channel(
+                                                &session_handle,
+                                                channel_id,
+                                                completion,
+                                                ExitNotification::Status(INDETERMINATE_EXIT_STATUS),
+                                            )
+                                            .await;
+                                            return;
+                                        }
+                                    }
                                 }
                                 if !stdout.data.is_empty() {
                                     let _ = session_handle.data(channel_id, stdout.data).await;
@@ -698,13 +726,29 @@ fn spawn_output_pump(
                                     stderr.data.len(),
                                     stderr.total_bytes,
                                 ) {
-                                    let _ = session_handle
-                                        .extended_data(
-                                            channel_id,
-                                            1,
-                                            output_gap_message("stderr", lost_bytes),
-                                        )
-                                        .await;
+                                    match output_gap_disposition(completion) {
+                                        OutputGapDisposition::Report => {
+                                            let _ = session_handle
+                                                .extended_data(
+                                                    channel_id,
+                                                    1,
+                                                    output_gap_message("stderr", lost_bytes),
+                                                )
+                                                .await;
+                                        }
+                                        OutputGapDisposition::Abort => {
+                                            warn!(%execution_id, lost_bytes, "SSH forwarding output gap");
+                                            terminate_process_group(server.clone(), execution_id.clone()).await;
+                                            finish_channel(
+                                                &session_handle,
+                                                channel_id,
+                                                completion,
+                                                ExitNotification::Status(INDETERMINATE_EXIT_STATUS),
+                                            )
+                                            .await;
+                                            return;
+                                        }
+                                    }
                                 }
                                 if !stderr.data.is_empty() {
                                     let _ = session_handle.extended_data(channel_id, 1, stderr.data).await;
@@ -787,6 +831,19 @@ fn output_gap(
     let lost_bytes = offset - *expected_offset;
     *expected_offset = offset + data_len as u64;
     (lost_bytes > 0).then_some(lost_bytes)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OutputGapDisposition {
+    Report,
+    Abort,
+}
+
+fn output_gap_disposition(completion: ChannelCompletion) -> OutputGapDisposition {
+    match completion {
+        ChannelCompletion::Session => OutputGapDisposition::Report,
+        ChannelCompletion::Forwarding => OutputGapDisposition::Abort,
+    }
 }
 
 fn output_gap_message(source: &str, lost_bytes: u64) -> Vec<u8> {
@@ -1153,9 +1210,13 @@ mod tests {
         let magic = crate::service::ssh::streamlocal::STREAMLOCAL_READY_MAGIC;
         let mut parser = StreamlocalReadyParser::default();
 
-        assert_eq!(parser.push_stdout(&magic[..3]).unwrap(), None);
-        assert_eq!(parser.push_stdout(&magic[3..11]).unwrap(), None);
-        assert_eq!(parser.push_stdout(&magic[11..]).unwrap(), Some(Vec::new()));
+        assert_eq!(parser.push_stdout(Some(0), &magic[..3]).unwrap(), None);
+        assert_eq!(parser.push_stdout(Some(3), &magic[3..11]).unwrap(), None);
+        assert_eq!(
+            parser.push_stdout(Some(11), &magic[11..]).unwrap(),
+            Some(Vec::new())
+        );
+        assert_eq!(parser.stdout_offset, magic.len() as u64);
     }
 
     #[test]
@@ -1166,15 +1227,49 @@ mod tests {
 
         let mut parser = StreamlocalReadyParser::default();
         assert_eq!(
-            parser.push_stdout(&frame).unwrap(),
+            parser.push_stdout(Some(0), &frame).unwrap(),
             Some(b"socket payload".to_vec())
         );
+        assert_eq!(parser.stdout_offset, frame.len() as u64);
     }
 
     #[test]
     fn streamlocal_readiness_rejects_non_helper_output() {
         let mut parser = StreamlocalReadyParser::default();
-        assert!(parser.push_stdout(b"not readiness").is_err());
+        assert!(parser.push_stdout(Some(0), b"not readiness").is_err());
+    }
+
+    #[test]
+    fn streamlocal_ready_prefix_does_not_create_an_output_gap() {
+        let magic = crate::service::ssh::streamlocal::STREAMLOCAL_READY_MAGIC;
+        let mut parser = StreamlocalReadyParser::default();
+        assert_eq!(
+            parser.push_stdout(Some(0), magic).unwrap(),
+            Some(Vec::new())
+        );
+
+        let mut stdout_offset = parser.stdout_offset;
+        assert_eq!(
+            output_gap(
+                &mut stdout_offset,
+                Some(magic.len() as u64),
+                b"socket payload".len(),
+                None,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn forwarding_output_gaps_abort_instead_of_writing_to_the_byte_stream() {
+        assert_eq!(
+            output_gap_disposition(ChannelCompletion::Session),
+            OutputGapDisposition::Report
+        );
+        assert_eq!(
+            output_gap_disposition(ChannelCompletion::Forwarding),
+            OutputGapDisposition::Abort
+        );
     }
 
     #[test]
