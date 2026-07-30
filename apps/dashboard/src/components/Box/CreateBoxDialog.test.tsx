@@ -88,7 +88,9 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await flush()
   }
 
-  async function rerenderOpen(host = document.body.firstElementChild ?? document.body.appendChild(document.createElement('div'))) {
+  async function rerenderOpen(
+    host = document.body.firstElementChild ?? document.body.appendChild(document.createElement('div')),
+  ) {
     await act(async () => {
       root ??= createRoot(host)
       root.render(<CreateBoxDialog open onOpenChange={() => {}} />)

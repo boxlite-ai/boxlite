@@ -122,13 +122,7 @@ export class OrganizationUsageService {
    * a failure here is logged, and the reservation's TTL is the final backstop.
    */
   async rollbackPendingUsage(organizationId: string, reservation: PendingBoxReservation): Promise<void> {
-    if (
-      !reservation.cpu &&
-      !reservation.memory &&
-      !reservation.disk &&
-      !reservation.gpu &&
-      !reservation.count
-    ) {
+    if (!reservation.cpu && !reservation.memory && !reservation.disk && !reservation.gpu && !reservation.count) {
       return
     }
 
@@ -216,7 +210,14 @@ export class OrganizationUsageService {
     }
 
     const [cpu, memory, disk, gpu, count] = pendingValues.map((v) => this.parseNonNegative(v) ?? 0)
-    return { ...current, pendingCpu: cpu, pendingMemory: memory, pendingDisk: disk, pendingGpu: gpu, pendingCount: count }
+    return {
+      ...current,
+      pendingCpu: cpu,
+      pendingMemory: memory,
+      pendingDisk: disk,
+      pendingGpu: gpu,
+      pendingCount: count,
+    }
   }
 
   private async getCachedPendingUsage(
@@ -313,10 +314,7 @@ export class OrganizationUsageService {
     )
   }
 
-  private async decrementPendingBoxUsage(
-    organizationId: string,
-    reservation: PendingBoxReservation,
-  ): Promise<void> {
+  private async decrementPendingBoxUsage(organizationId: string, reservation: PendingBoxReservation): Promise<void> {
     const script = `
       for i = 1, #KEYS do
         local amount = tonumber(ARGV[i])
@@ -340,11 +338,7 @@ export class OrganizationUsageService {
    * change up), and only draws down pending on positive deltas (a box entering a
    * consuming state realizes its reservation; leaving one just lowers current usage).
    */
-  private async updateCurrentQuotaUsage(
-    organizationId: string,
-    resource: QuotaResource,
-    delta: number,
-  ): Promise<void> {
+  private async updateCurrentQuotaUsage(organizationId: string, resource: QuotaResource, delta: number): Promise<void> {
     if (delta === 0) {
       return
     }

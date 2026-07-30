@@ -130,12 +130,11 @@ export function BoxTable({
   const shownFirstItem = totalItems === 0 || data.length === 0 ? 0 : Math.min(pageIndex * pageSize + 1, totalItems)
   const shownLastItem =
     totalItems === 0 || data.length === 0 ? 0 : Math.min(pageIndex * pageSize + data.length, totalItems)
-  const itemRangeLabel =
-    isPageFetching
-      ? 'Loading boxes...'
-      : totalItems === 0
-        ? 'Showing 0 boxes'
-        : `Showing ${shownFirstItem.toLocaleString('en-US')}-${shownLastItem.toLocaleString('en-US')} of ${totalItems.toLocaleString('en-US')} boxes`
+  const itemRangeLabel = isPageFetching
+    ? 'Loading boxes...'
+    : totalItems === 0
+      ? 'Showing 0 boxes'
+      : `Showing ${shownFirstItem.toLocaleString('en-US')}-${shownLastItem.toLocaleString('en-US')} of ${totalItems.toLocaleString('en-US')} boxes`
   const goTo = (index: number) => {
     if (isPagingLocked || index === pageIndex || index < 0 || index >= pageCount) {
       return
