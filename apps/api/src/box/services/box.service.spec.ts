@@ -50,6 +50,8 @@ function makeService() {
     noop, // regionService
     noop, // boxLookupCacheInvalidationService
     noop, // boxActivityService
+    noop, // jobRepository
+    noop, // jobService
   )
   return { service, boxRepository, eventEmitter, organizationService, organizationUsageService }
 }
@@ -91,6 +93,8 @@ function makePreviewUrlService() {
     regionService, // regionService
     noop, // boxLookupCacheInvalidationService
     noop, // boxActivityService
+    noop, // jobRepository
+    noop, // jobService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -266,6 +270,8 @@ function makeNetworkTunnelService() {
     regionService,
     noop,
     noop,
+    noop, // jobRepository
+    noop, // jobService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',

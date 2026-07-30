@@ -1,7 +1,40 @@
 use crate::net::socket_path::BoxSockets;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use boxlite_shared::layout::{SharedGuestLayout, dirs as shared_dirs};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
+
+/// Contents of [`BoxFilesystemLayout::started_file_path`] — written by the host
+/// once the guest's `Container.Start` returns success for the current physical
+/// lifecycle.
+///
+/// It crosses a process boundary — BoxLite writes it, the cloud runner reads it
+/// straight out of the box home — so the schema is owned here rather than
+/// hand-rolled at the writing end. `pid` names the shim this record belongs to:
+/// the reader pairs it with the box's live PID and rejects a record that does
+/// not match, so a stale file can never be read as evidence about a later shim.
+///
+/// Write-only on this side by design. The reader is in another language, and a
+/// Rust `read` would be a second, untested definition of the same wire format;
+/// the field names are asserted against raw JSON in
+/// `tests/container_start_record.rs` instead, from the reader's point of view.
+#[derive(Serialize)]
+pub struct StartedRecord {
+    /// Shim PID that was running when `Container.Start` succeeded.
+    pub pid: u32,
+    /// Wall-clock time of the successful `Container.Start`, Unix milliseconds.
+    /// Millisecond precision keeps the record readable from any language
+    /// without agreeing on a timestamp format.
+    pub at_unix_ms: i64,
+}
+
+impl StartedRecord {
+    /// Write the record, replacing any previous lifecycle's.
+    pub fn write(&self, path: &Path) -> std::io::Result<()> {
+        let json = serde_json::to_string(self).expect("two scalar fields are infallible");
+        std::fs::write(path, json)
+    }
+}
 
 /// Directory structure constants
 pub mod dirs {
@@ -569,6 +602,21 @@ impl BoxFilesystemLayout {
     /// while freeing the canonical slot for the next crash.
     pub fn exit_previous_path(&self) -> PathBuf {
         self.box_dir.join("exit.previous")
+    }
+
+    /// Started file path: `~/.boxlite/boxes/{box_id}/started` — a [`StartedRecord`].
+    ///
+    /// The positive counterpart of [`Self::exit_file_path`]: written once the
+    /// guest's `Container.Start` returns success, removed when a new physical
+    /// lifecycle begins. Its presence means "this box's init was launched by
+    /// the shim currently recorded in it".
+    ///
+    /// Scoped to one lifecycle the same way the container's `exit.json` is
+    /// (see [`boxlite_shared::layout::SharedContainerLayout::exit_file`]): the
+    /// single removal point is the start of the next boot, so a stale record
+    /// can never outlive the shim it names.
+    pub fn started_file_path(&self) -> PathBuf {
+        self.box_dir.join("started")
     }
 
     /// Stderr file path: ~/.boxlite/boxes/{box_id}/shim.stderr

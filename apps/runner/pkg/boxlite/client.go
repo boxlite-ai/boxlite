@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -133,11 +135,47 @@ func buildImageRegistries(insecureRegistries []string, ghcrUsername, ghcrToken s
 	return registries
 }
 
+// boxliteHomeEnv mirrors the environment variable BoxLite itself consults when
+// no home directory is configured (src/boxlite/src/runtime/constants.rs).
+const boxliteHomeEnv = "BOXLITE_HOME"
+
+// boxliteHomeDirName mirrors BoxLite's default home directory name
+// (src/boxlite/src/runtime/layout.rs, dirs::BOXLITE_DIR).
+const boxliteHomeDirName = ".boxlite"
+
+// resolveHomeDir reproduces BoxLite's own home-directory resolution so the
+// runner and the runtime always name the same directory. Returns "" only when
+// the user's home cannot be determined, which leaves BoxLite to fall back on
+// its default exactly as it did before.
+func resolveHomeDir(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	if fromEnv := os.Getenv(boxliteHomeEnv); fromEnv != "" {
+		return fromEnv
+	}
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(userHome, boxliteHomeDirName)
+}
+
+// HomeDir returns the resolved BoxLite data directory this client writes to.
+func (c *Client) HomeDir() string {
+	return c.homeDir
+}
+
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	var opts []boxlite.RuntimeOption
-	if config.HomeDir != "" {
-		opts = append(opts, boxlite.WithHomeDir(config.HomeDir))
+	// Resolve the home directory here rather than letting BoxLite fall back to
+	// its own default. Services that read files out of the box home (BoxSync
+	// reads each box's start record) need the same path BoxLite writes to, and
+	// an unset HomeDir would leave the two sides guessing separately.
+	homeDir := resolveHomeDir(config.HomeDir)
+	if homeDir != "" {
+		opts = append(opts, boxlite.WithHomeDir(homeDir))
 	}
 	insecureRegistries := normalizeRegistryHosts(config.InsecureRegistries)
 	registries := buildImageRegistries(insecureRegistries, config.GhcrUsername, config.GhcrToken)
@@ -171,7 +209,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	return &Client{
 		runtime:            rt,
 		logger:             logger,
-		homeDir:            config.HomeDir,
+		homeDir:            homeDir,
 		boxes:              make(map[string]*boxlite.Box),
 		awsRegion:          config.AWSRegion,
 		awsEndpointUrl:     config.AWSEndpointUrl,
@@ -298,6 +336,14 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		boxDto.Image,
 	)
 
+	// bx.Start must stay the last step of Create that can fail.
+	//
+	// A successful Start makes BoxLite write the box's start record, and
+	// BoxSync reads that record as evidence this job body succeeded — it is
+	// what lets a lost job-completion callback be repaired later. A fallible
+	// step added below would publish that evidence for a Create that then
+	// returns an error, and the two would disagree with no way to tell which
+	// is right. TestCreateHasNoFallibleStepAfterStart enforces this.
 	skipStart := boxDto.SkipStart != nil && *boxDto.SkipStart
 	if !skipStart {
 		if err := bx.Start(ctx); err != nil {

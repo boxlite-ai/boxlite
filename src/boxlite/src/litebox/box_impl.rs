@@ -295,6 +295,12 @@ impl BoxImpl {
         let live = self.ensure_booted().await?;
         let started_now = self.ensure_container_started(live).await?;
 
+        // Nothing below may fail. `ensure_container_started` has already written
+        // the start record (see [`Self::write_started_record`]), and readers of
+        // that file — the cloud runner among them — take it as evidence that
+        // this whole call succeeded. A fallible step added here would publish
+        // that evidence for a start that then returned `Err`.
+        //
         // Announce the start only when *this* call actually ran init — not on an
         // idempotent re-`start()` or a reattach to an already-running box.
         if started_now {
@@ -994,7 +1000,47 @@ impl BoxImpl {
                 Ok::<(), BoxliteError>(())
             })
             .await?;
+        if started_here {
+            self.write_started_record();
+        }
         Ok(started_here)
+    }
+
+    /// Record that this lifecycle's `Container.Start` succeeded.
+    ///
+    /// The counterpart of the shim's `exit` file: one names how the box died,
+    /// this names that its init was launched. `init_live_state` removes it when
+    /// the next boot begins, so its presence is scoped to one physical shim.
+    ///
+    /// A failed write leaves no record and is logged, never propagated — the
+    /// guest RPC already succeeded and the box is running, so turning a
+    /// bookkeeping failure into a start failure would be a worse answer than
+    /// the missing record.
+    ///
+    /// **Callers downstream of this treat the file as evidence that the whole
+    /// start succeeded**, so `start()` must not grow a fallible step after
+    /// `ensure_container_started`. See the note at the tail of [`Self::start`].
+    fn write_started_record(&self) {
+        let Some(pid) = self.state.read().pid else {
+            tracing::warn!(
+                box_id = %self.config.id,
+                "Container.Start succeeded with no shim PID on record; start not recorded"
+            );
+            return;
+        };
+
+        let record = crate::runtime::layout::StartedRecord {
+            pid,
+            at_unix_ms: chrono::Utc::now().timestamp_millis(),
+        };
+        if let Err(error) = record.write(&self.layout.started_file_path()) {
+            tracing::error!(
+                box_id = %self.config.id,
+                pid,
+                error = %error,
+                "Container.Start succeeded but the start record could not be written"
+            );
+        }
     }
 
     /// The box's network control backend (gvproxy ServicesMux client), owned in
@@ -1049,6 +1095,27 @@ impl BoxImpl {
         // Hold the lock for the duration of build operations.
         // LockGuard acquires lock on creation and releases on drop.
         let _guard = LockGuard::new(&*locker);
+
+        // A new physical lifecycle starts here, so drop the start record the
+        // previous one left behind — the same discipline `Container.Init` keeps
+        // for the container's exit file. Adopting a *running* box is not a new
+        // lifecycle: its record still names the live shim and must survive.
+        //
+        // This is the single removal point. Everything downstream reads the
+        // record together with the box's live PID, so a record that outlives
+        // its shim is already inert; clearing here keeps it from being
+        // resurrected by the next boot.
+        if !adopting_running {
+            match std::fs::remove_file(self.layout.started_file_path()) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(
+                    box_id = %self.config.id,
+                    error = %e,
+                    "Failed to clear the previous lifecycle's start record"
+                ),
+            }
+        }
 
         // Build the box (lock is held)
         // The returned cleanup_guard stays armed until we disarm it after all

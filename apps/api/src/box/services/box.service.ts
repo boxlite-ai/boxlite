@@ -55,6 +55,9 @@ import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { validateMountPaths, validateSubpaths } from '../utils/volume-mount-path-validation.util'
 import { BoxRepository } from '../repositories/box.repository'
+import { Job } from '../entities/job.entity'
+import { JobService } from './job.service'
+import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { PortPreviewUrlDto, SignedPortPreviewUrlDto } from '../dto/port-preview-url.dto'
 import { RegionService } from '../../region/services/region.service'
 import { BoxCreatedEvent } from '../events/box-create.event'
@@ -110,6 +113,9 @@ export class BoxService {
     private readonly regionService: RegionService,
     private readonly boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
     private readonly boxActivityService: BoxActivityService,
+    @InjectRepository(Job)
+    private readonly jobRepository: Repository<Job>,
+    private readonly jobService: JobService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -553,15 +559,63 @@ export class BoxService {
     return this.getExpectedDesiredStateForState(state) !== undefined
   }
 
+  private getStartupJobTypeForState(state: BoxState): JobType | undefined {
+    switch (state) {
+      case BoxState.CREATING:
+        return JobType.CREATE_BOX
+      case BoxState.STARTING:
+        return JobType.START_BOX
+      default:
+        return undefined
+    }
+  }
+
+  /**
+   * The box's own startup job, if it was claimed by its runner and has since
+   * stopped making progress.
+   *
+   * "Stalled" is measured from when the runner claimed the job, because that
+   * is what a lost completion callback looks like from here: claimed, never
+   * closed. A job still within the window is assumed to be running normally,
+   * and an unclaimed (PENDING) job has no runner to have lost anything.
+   */
+  private async findStalledStartupJob(box: Box): Promise<Job | null> {
+    const startupJobType = this.getStartupJobTypeForState(box.state)
+    if (!startupJobType || !box.runnerId) {
+      return null
+    }
+
+    const stallSeconds = this.configService.getOrThrow('boxSync.startConfirmationStallSeconds')
+    const claimedBefore = new Date(Date.now() - stallSeconds * 1000)
+
+    return this.jobRepository.findOne({
+      where: {
+        runnerId: box.runnerId,
+        resourceType: ResourceType.BOX,
+        resourceId: box.id,
+        type: startupJobType,
+        status: JobStatus.IN_PROGRESS,
+        startedAt: LessThan(claimedBefore),
+      },
+      order: { createdAt: 'DESC' },
+    })
+  }
+
   async findByRunnerId(runnerId: string, states?: BoxState[], skipReconcilingBoxes?: boolean): Promise<Box[]> {
     const where: FindOptionsWhere<Box> = { runnerId }
     if (states && states.length > 0) {
-      // Validate that all states have corresponding desired states
-      states.forEach((state) => {
-        if (!this.hasValidDesiredState(state)) {
-          throw new BadRequestError(`State ${state} does not have a corresponding desired state`)
-        }
-      })
+      // Only the skip filter needs a state to have a corresponding desired
+      // state — it is defined as "state already matches desired state". Asking
+      // for a transitional state is a legitimate query on its own (a runner
+      // reconciling a startup whose job completion was lost does exactly
+      // that), so the requirement belongs to the filter, not to the parameter.
+      if (skipReconcilingBoxes) {
+        states.forEach((state) => {
+          if (!this.hasValidDesiredState(state)) {
+            throw new BadRequestError(`State ${state} does not have a corresponding desired state`)
+          }
+        })
+      }
       where.state = In(states)
     }
 
@@ -1272,7 +1326,31 @@ export class BoxService {
 
     //  only allow updating the state of started | stopped boxes
     if (![BoxState.STARTED, BoxState.STOPPED].includes(box.state)) {
-      throw new BadRequestError('Box is not in a valid state to be updated')
+      // One exception: a runner reporting STARTED for a box we still show as
+      // coming up. That means its startup job finished on the runner but the
+      // completion never reached us. Believe it only once the job has stopped
+      // making progress on its own — until then the normal callback is still
+      // the better answer, and we say nothing rather than reject a runner that
+      // is telling the truth.
+      if (newState !== BoxState.STARTED || box.desiredState !== BoxDesiredState.STARTED) {
+        throw new BadRequestError('Box is not in a valid state to be updated')
+      }
+
+      const stalledStartupJob = await this.findStalledStartupJob(box)
+      if (!stalledStartupJob) {
+        this.logger.debug(`Box ${boxId} start not yet confirmable; startup job still progressing`)
+        return
+      }
+
+      // Completing the job is what moves the box: the normal completion
+      // handler owns the STARTED transition, the pending flag, the activity
+      // stamp, the state-change event, and releasing the box's Redis lock.
+      // Doing any of that here instead would fork that logic.
+      this.logger.warn(
+        `Completing stalled startup job ${stalledStartupJob.id} for box ${boxId} from runner-reported state`,
+      )
+      await this.jobService.updateJobStatus(stalledStartupJob.id, JobStatus.COMPLETED)
+      return
     }
 
     if (box.desiredState == BoxDesiredState.DESTROYED) {
