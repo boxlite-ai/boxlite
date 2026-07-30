@@ -235,33 +235,38 @@ export class JobService {
     errorMessage?: string,
     resultMetadata?: string,
   ): Promise<Job> {
-    const job = await this.findOne(jobId)
-    if (!job) {
-      throw new NotFoundException(`Job with ID ${jobId} not found`)
-    }
+    const updatedJob = await this.jobRepository.manager.transaction(async (manager) => {
+      const job = await manager.findOne(Job, {
+        where: { id: jobId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!job) {
+        throw new NotFoundException(`Job with ID ${jobId} not found`)
+      }
 
-    if (!this.isValidStatusTransition(job.status, status)) {
-      throw new ConflictException(`Invalid job status transition from ${job.status} to ${status} for job ${jobId}`)
-    }
+      if (!this.isValidStatusTransition(job.status, status)) {
+        throw new ConflictException(`Invalid job status transition from ${job.status} to ${status} for job ${jobId}`)
+      }
 
-    job.status = status
-    if (errorMessage) {
-      job.errorMessage = errorMessage
-    }
+      job.status = status
+      if (errorMessage) {
+        job.errorMessage = errorMessage
+      }
 
-    if (status === JobStatus.IN_PROGRESS && !job.startedAt) {
-      job.startedAt = new Date()
-    }
+      if (status === JobStatus.IN_PROGRESS && !job.startedAt) {
+        job.startedAt = new Date()
+      }
 
-    if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
-      job.completedAt = new Date()
-    }
+      if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
+        job.completedAt = new Date()
+      }
 
-    if (resultMetadata) {
-      job.resultMetadata = resultMetadata
-    }
+      if (resultMetadata) {
+        job.resultMetadata = resultMetadata
+      }
 
-    const updatedJob = await this.jobRepository.save(job)
+      return manager.save(Job, job)
+    })
     this.logger.debug(`Updated job ${jobId} status to ${status}`)
 
     // Handle job completion for v2 runners - update box, artifact, or backup state.
@@ -469,24 +474,35 @@ export class JobService {
       return []
     }
 
-    // Update jobs to IN_PROGRESS
     const now = new Date()
+    // A single conditional UPDATE prevents a later-row error from leaving
+    // earlier claims committed. The status predicate retains the compare-and-swap,
+    // so a concurrent poll may still win a subset of these candidates.
+    const claim = await this.jobRepository.update(
+      {
+        id: In(jobs.map((job) => job.id)),
+        status: JobStatus.PENDING,
+      },
+      {
+        status: JobStatus.IN_PROGRESS,
+        startedAt: now,
+        updatedAt: now,
+      },
+      { returning: ['id'] },
+    )
+    const claimedIds = new Set((claim.raw as Array<Pick<Job, 'id'>>).map((row) => row.id))
     const claimedJobs: JobDto[] = []
 
     for (const job of jobs) {
-      try {
-        job.status = JobStatus.IN_PROGRESS
-        job.startedAt = now
-        job.updatedAt = now
-
-        // save() with @VersionColumn will automatically check version and throw OptimisticLockVersionMismatchError if changed
-        const savedJob = await this.jobRepository.save(job)
-
-        claimedJobs.push(new JobDto(savedJob))
-      } catch (error) {
-        // If optimistic lock fails, job was already claimed by another runner - skip it
-        this.logger.debug(`Job ${job.id} already claimed by another runner (version mismatch)`)
+      if (!claimedIds.has(job.id)) {
+        this.logger.debug(`Job ${job.id} was already claimed by a concurrent poll`)
+        continue
       }
+
+      job.status = JobStatus.IN_PROGRESS
+      job.startedAt = now
+      job.updatedAt = now
+      claimedJobs.push(new JobDto(job))
     }
 
     if (claimedJobs.length > 0) {
