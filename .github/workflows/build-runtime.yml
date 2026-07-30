@@ -151,6 +151,10 @@ jobs:
             quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }} \
             bash /tmp/build.sh
 
+      - name: Verify packaged shim loader (Linux)
+        if: runner.os == 'Linux'
+        run: make test:shim-loader
+
       - name: Build runtime (macOS)
         if: runner.os == 'macOS'
         run: |

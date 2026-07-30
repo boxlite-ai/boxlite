@@ -1,4 +1,4 @@
-PHONY_TARGETS += test test\:unit\:guest
+PHONY_TARGETS += test test\:unit\:guest test\:shim-loader
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -16,6 +16,7 @@ export FILTER
 # Advanced nextest-only filter expression. Use this for CI-specific exclusions
 # that cannot be expressed as a simple positive FILTER pattern.
 export NEXTEST_FILTER_EXPR
+export RUNTIME_DIR
 
 NEXTEST_FILTER   = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',))
 NEXTEST_CLI_FILTER = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',-E 'not binary(stress_disk)'))
@@ -223,6 +224,24 @@ test\:unit\:guest:
 	else \
 		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests; \
 	fi
+
+# Runs on the native Linux CI host after the portable runtime is built in the
+# manylinux container. This catches loader incompatibilities that the older
+# build-container glibc cannot expose.
+test\:shim-loader:
+	@if [ "$$(uname)" != "Linux" ]; then \
+		echo "⏭️  Shim loader smoke requires Linux"; \
+		exit 0; \
+	fi; \
+	runtime_dir="$${RUNTIME_DIR:-}"; \
+	if [ -z "$$runtime_dir" ]; then \
+		runtime_dir=$$(ls -dt target/release/build/boxlite-*/out/runtime 2>/dev/null | head -1); \
+	fi; \
+	if [ -z "$$runtime_dir" ]; then \
+		echo "error: runtime directory not found; build it first or set RUNTIME_DIR" >&2; \
+		exit 1; \
+	fi; \
+	bash scripts/test/shim-libkrunfw-dlopen.sh "$$runtime_dir"
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
 test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)

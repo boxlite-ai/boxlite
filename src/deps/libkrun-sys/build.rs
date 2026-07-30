@@ -451,15 +451,20 @@ impl LibFixup {
     /// fails as `undefined symbol: _dl_var_init`, naming the library, which
     /// does not reference it. Depending on libc pulls `ld.so` into scope.
     ///
-    /// Libraries that already link libc are left alone, so this only ever
-    /// touches one that would otherwise be unloadable from a static binary.
+    /// This is deliberately aarch64-only. x86_64's static loader does not need
+    /// the dependency; adding it makes a portable static shim load the host's
+    /// libc as a second libc, coupling the shim to the deployment glibc and its
+    /// loader search paths. Libraries that already link libc are left alone.
     ///
     /// Gated on a glibc host: `libc.so.6` is glibc's soname, and build scripts
     /// compile for the host, so a musl host would otherwise be stamped with a
     /// dependency it cannot resolve.
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    fn ensure_libc_dependency(lib_path: &Path) {
+    fn ensure_aarch64_libc_dependency(lib_path: &Path) {
         const LIBC: &str = "libc.so.6";
+        if env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("aarch64") {
+            return;
+        }
         let lib_path_str = lib_path.to_str().expect("Invalid library path");
 
         let needed = Command::new("patchelf")
@@ -531,7 +536,7 @@ impl LibFixup {
                             println!("cargo:warning=Renamed {} to {}", filename, soname);
                             Self::fix_install_name(&soname, &new_path);
                             #[cfg(target_env = "gnu")]
-                            Self::ensure_libc_dependency(&new_path);
+                            Self::ensure_aarch64_libc_dependency(&new_path);
                             continue;
                         }
                     }
@@ -539,7 +544,7 @@ impl LibFixup {
 
                 Self::fix_install_name(&filename, &path);
                 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-                Self::ensure_libc_dependency(&path);
+                Self::ensure_aarch64_libc_dependency(&path);
 
                 // macOS: re-sign after modifying
                 #[cfg(target_os = "macos")]
