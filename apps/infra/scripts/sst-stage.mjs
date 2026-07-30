@@ -53,3 +53,17 @@ export function isSstComponentExcluded(args, component) {
   }
   return false
 }
+
+export function requireIamPermissionsBoundaryStage(stage, environment = process.env) {
+  const selectedStage = validateSstStage(stage)
+  const configuredStage = environment.IAM_PERMISSIONS_BOUNDARY_STAGE
+  if (!configuredStage) {
+    throw new Error('IAM_PERMISSIONS_BOUNDARY_STAGE is required to identify the provisioned runtime boundary')
+  }
+
+  const boundaryStage = validateSstStage(configuredStage)
+  if (boundaryStage !== selectedStage) {
+    throw new Error(`IAM permissions boundary stage ${boundaryStage} does not match SST stage ${selectedStage}`)
+  }
+  return boundaryStage
+}

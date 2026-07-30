@@ -29,6 +29,8 @@ test('pins the AWS provider used by the deployed stack', () => {
 
 test('applies the deployment permissions boundary to every SST-created IAM role', () => {
   assert.match(source, /const runtimePermissionsBoundaryArn =/)
+  assert.match(source, /requireIamPermissionsBoundaryStage\(\$app\.stage\)/)
+  assert.match(environmentExample, /^IAM_PERMISSIONS_BOUNDARY_STAGE=dev$/m)
   assert.match(
     source,
     /\$transform\(aws\.iam\.Role,[\s\S]*args\.permissionsBoundary \?\?= runtimePermissionsBoundaryArn/,

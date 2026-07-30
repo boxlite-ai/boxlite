@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { isSstComponentExcluded, resolveSstStage } from './sst-stage.mjs'
+import { isSstComponentExcluded, requireIamPermissionsBoundaryStage, resolveSstStage } from './sst-stage.mjs'
 
 test('resolves a stage from separate and inline CLI arguments', () => {
   assert.equal(resolveSstStage(['deploy', '--stage', 'dev'], {}), 'dev')
@@ -49,4 +49,13 @@ test('recognizes only an explicitly excluded SST component', () => {
   assert.equal(isSstComponentExcluded(['deploy', '--exclude=Runner'], 'Runner'), true)
   assert.equal(isSstComponentExcluded(['deploy', '--exclude', 'Runner-runner-2'], 'Runner'), false)
   assert.equal(isSstComponentExcluded(['deploy', '--target', 'Runner'], 'Runner'), false)
+})
+
+test('requires the provisioned IAM boundary stage to match the SST stage', () => {
+  assert.equal(requireIamPermissionsBoundaryStage('dev', { IAM_PERMISSIONS_BOUNDARY_STAGE: 'dev' }), 'dev')
+  assert.throws(
+    () => requireIamPermissionsBoundaryStage('production', { IAM_PERMISSIONS_BOUNDARY_STAGE: 'dev' }),
+    /IAM permissions boundary stage dev does not match SST stage production/,
+  )
+  assert.throws(() => requireIamPermissionsBoundaryStage('dev', {}), /IAM_PERMISSIONS_BOUNDARY_STAGE is required/)
 })

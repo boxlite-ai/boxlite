@@ -21,6 +21,7 @@ jobs:
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
       AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+      IAM_PERMISSIONS_BOUNDARY_STAGE: dev
 
     steps:
       - name: Checkout main

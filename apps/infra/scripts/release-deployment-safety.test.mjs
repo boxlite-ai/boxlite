@@ -82,6 +82,9 @@ test('dev deploy role trusts only the repository GitHub Environment identity', (
   assert.match(source, /BoxLiteRuntimePermissionsBoundary:/)
   assert.match(source, /iam:PermissionsBoundary/)
   assert.match(source, /PolicyName: boxlite-sst-deploy/)
+  assert.match(source, /secret:boxlite-\$\{GitHubEnvironment\}-\*/)
+  assert.match(source, /arn:\$\{AWS::Partition\}:s3:::boxlite-\$\{GitHubEnvironment\}-\*/)
+  assert.match(source, /kms:ResourceAliases:/)
 })
 
 test('SST preflights the workspace Runner artifact even when VERSION overrides the public API version', () => {

@@ -196,5 +196,5 @@ test('the infrastructure config check does not invoke SST outside the cleanup wr
   const makeTargets = await readFile(new URL('../../../make/test.mk', import.meta.url), 'utf8')
 
   assert.doesNotMatch(makeTargets, /npm exec -- sst/)
-  assert.match(makeTargets, /npm run sst -- install --stage ci/)
+  assert.match(makeTargets, /IAM_PERMISSIONS_BOUNDARY_STAGE=ci npm run sst -- install --stage ci/)
 })

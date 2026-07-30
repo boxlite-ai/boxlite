@@ -108,6 +108,7 @@ export default $config({
     const { readWorkspaceVersion, resolveAwsRegion, resolvePublicDeploymentConfig } =
       await import('./scripts/deployment-environment.mjs')
     const { optionalPublicOidcIssuer, requireOidcIssuer } = await import('./scripts/oidc-issuer.mjs')
+    const { requireIamPermissionsBoundaryStage } = await import('./scripts/sst-stage.mjs')
     const REGION = resolveAwsRegion()
     const workspaceVersion = readWorkspaceVersion()
     const deploymentConfig = resolvePublicDeploymentConfig(process.env, workspaceVersion)
@@ -118,6 +119,7 @@ export default $config({
     // Every role created by this stack must stay inside the boundary provisioned
     // with the GitHub deployment role. The raw-resource transform also covers IAM
     // roles created internally by SST components, not only the roles declared here.
+    requireIamPermissionsBoundaryStage($app.stage)
     const runtimePermissionsBoundaryArn = $interpolate`arn:aws:iam::${aws.getCallerIdentityOutput().accountId}:policy/${$app.name}-${$app.stage}-runtime-boundary`
     $transform(aws.iam.Role, (args) => {
       args.permissionsBoundary ??= runtimePermissionsBoundaryArn

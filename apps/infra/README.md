@@ -88,7 +88,9 @@ profiles. Every role created by SST must carry the stage's runtime permissions
 boundary, which excludes IAM mutation and limits workloads to the data-plane APIs
 they need. Its trust policy accepts only OIDC tokens for `boxlite-ai/boxlite`
 using the `dev` Environment. Redeploy the bootstrap stack whenever this policy or
-boundary changes, and keep required reviewers enabled on that Environment.
+boundary changes. `IAM_PERMISSIONS_BOUNDARY_STAGE` must match both the SST stage
+and the template's `GitHubEnvironment`; deployment fails before creating roles if
+they differ. Keep required reviewers enabled on that Environment.
 
 ## Secrets & credentials
 
