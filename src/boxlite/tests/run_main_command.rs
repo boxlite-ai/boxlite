@@ -156,9 +156,9 @@ async fn late_attach_reports_output_gap() {
         .attach(None)
         .await
         .expect("attach to the main command");
-    let mut stderr = execution.stderr().expect("stderr stream");
+    let mut stdout = execution.stdout().expect("stdout stream");
     let dropped = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while let Some(chunk) = stderr.next().await {
+        while let Some(chunk) = stdout.next().await {
             if chunk.contains("[boxlite] stdout output dropped") {
                 return Some(chunk);
             }
