@@ -482,12 +482,16 @@ operation by design:
    `npm run deploy -- --stage <stage>` again — a new Runner is created with
    fresh state.
 
-This is deliberate by construction: three code edits across two deploys. The
-control plane now provides two drain modes around this ceremony: ordinary
-decommission drains remain eligible for the decommission worker, while the
-admin updater uses a restart drain that keeps the Runner protected and
-unschedulable until its in-place binary update succeeds. Neither mode removes
-the explicit Pulumi protection steps required to replace the EC2 resource.
+This is deliberate by construction: three code edits across two deploys. Around
+that ceremony the control plane offers two independent flags, and they are not
+equivalent. `unschedulable` keeps a Runner out of both placement paths — the
+`findAvailableRunners` filter and the warm-pool candidate query. `draining` is
+narrower: it excludes the Runner from `findAvailableRunners` and sweeps it
+toward decommissioning once its boxes are gone, but the warm-pool query does
+not consult it, so a pre-warmed box can still be assigned there. Nothing sets
+either flag automatically, and the binary upgrade above does not drain the
+Runner it restarts. Neither flag removes the explicit Pulumi protection steps
+required to replace the EC2 resource.
 
 ## Architecture
 
