@@ -325,7 +325,10 @@ pub struct JsNetworkSpec {
     /// Network mode: "enabled" or "disabled".
     pub mode: String,
 
-    /// Outbound allowlist when network is enabled.
+    /// Outbound allowlist when network is enabled. Restricts both TCP and UDP.
+    /// Hostname entries rely on TLS SNI / HTTP Host inspection, which only TCP
+    /// carries, so a hostname-only list denies all UDP egress — add the IP or
+    /// CIDR to keep UDP open.
     #[napi(js_name = "allowNet")]
     pub allow_net: Option<Vec<String>>,
 }

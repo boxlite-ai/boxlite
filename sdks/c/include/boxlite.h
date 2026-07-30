@@ -747,6 +747,13 @@ void boxlite_options_set_network_enabled(CBoxliteOptions *opts);
 
 void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
 
+// Adds one entry to the outbound allowlist. Patterns: exact host,
+// "*.example.com", IP, or CIDR.
+//
+// A non-empty allowlist restricts both TCP and UDP egress. Hostname entries
+// are enforced by TLS SNI / HTTP Host inspection, which only TCP carries, so
+// an allowlist holding only hostnames denies all UDP egress — add the IP or
+// CIDR to keep UDP open.
 void boxlite_options_add_network_allow(CBoxliteOptions *opts, const char *host);
 
 void boxlite_options_add_secret(CBoxliteOptions *opts,

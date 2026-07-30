@@ -699,7 +699,7 @@ pub enum NetworkSpec {
 }
 ```
 
-`allow_net` supports exact hosts, wildcard hosts, IPs, and CIDRs. `Disabled` removes the guest network interface entirely.
+`allow_net` supports exact hosts, wildcard hosts, IPs, and CIDRs, and restricts both TCP and UDP egress. Hostname rules rely on TLS SNI / HTTP Host inspection, which only TCP carries, so an `allow_net` holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP open. `Disabled` removes the guest network interface entirely.
 
 ### Secret
 

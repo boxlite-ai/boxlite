@@ -257,6 +257,11 @@ Configuration options for creating a box.
 - `mode: str` - `"enabled"` or `"disabled"`
 - `allow_net: List[str]` - Optional outbound allowlist when `mode="enabled"`
 
+`allow_net` restricts both TCP and UDP egress. Hostname entries are enforced by
+inspecting TLS SNI / HTTP Host, which only TCP carries, so an `allow_net`
+holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP
+open.
+
 `mode="disabled"` removes the guest network interface entirely.
 
 **Example:**
