@@ -536,7 +536,7 @@ impl ImageStore {
         // path never re-downloads — so re-verify the bytes here before trusting
         // their DiffIDs. Otherwise a corrupted / tampered cached config could
         // supply attacker-chosen rootfs.diff_ids and defeat layer verification.
-        let computed = format!("sha256:{:x}", Sha256::digest(&config_bytes));
+        let computed = format!("sha256:{}", hex::encode(Sha256::digest(&config_bytes)));
         if computed != config_digest {
             return Err(BoxliteError::Storage(format!(
                 "image config digest mismatch: expected {}, computed {} ({} bytes)",
@@ -1696,7 +1696,7 @@ mod tests {
     /// `load_diff_ids_from_config`'s digest check passes.
     fn write_config_blob(inner: &ImageStoreInner, bytes: &[u8]) -> String {
         use sha2::{Digest, Sha256};
-        let digest = format!("sha256:{:x}", Sha256::digest(bytes));
+        let digest = format!("sha256:{}", hex::encode(Sha256::digest(bytes)));
         let path = inner.storage.config_path(&digest);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, bytes).unwrap();

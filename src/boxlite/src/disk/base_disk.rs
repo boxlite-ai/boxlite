@@ -16,7 +16,10 @@
 //! dependents. If none exist, the base is deleted and GC cascades to the
 //! parent base disk.
 
+use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use boxlite_shared::errors::BoxliteResult;
 use serde::{Deserialize, Serialize};
@@ -78,6 +81,10 @@ pub(crate) struct BaseDiskManager {
 }
 
 impl BaseDiskManager {
+    /// How long a base file must sit untouched before the orphan sweep may
+    /// consider it. Covers the window between `install`'s rename and its insert.
+    const ORPHAN_GRACE: Duration = Duration::from_secs(300);
+
     pub(crate) fn new(bases_dir: PathBuf, store: BaseDiskStore) -> Self {
         // Canonicalize once at construction so all path comparisons are consistent
         // with the canonical backing paths written by write_cow_child_header().
@@ -96,6 +103,189 @@ impl BaseDiskManager {
     #[allow(dead_code)] // used in tests
     pub(crate) fn bases_dir(&self) -> &Path {
         &self.bases_dir
+    }
+
+    /// Every base file something still depends on, following chains to the end.
+    ///
+    /// Three dimensions have to be covered or live data becomes reachable:
+    /// - **Both** overlays a box owns — `disk.qcow2`, backed by a clone base or
+    ///   snapshot, and `guest-rootfs.qcow2`, backed by a rootfs base. Reading one
+    ///   makes live bases of the other kind look unclaimed.
+    /// - The **full** chain, not just the immediate backing file, since clone
+    ///   bases nest (see `find_parent_base` and `try_gc_base`'s parent cascade).
+    /// - Chains rooted at the **bases themselves**, not only at box overlays. A
+    ///   clone base points at its parent (`test_create_base_disk_tracks_ancestry`
+    ///   builds exactly that), so a parent whose row went missing would otherwise
+    ///   be deleted out from under a child that still has one.
+    ///
+    /// Over-reporting is the safe direction: if a whole chain is orphaned, the
+    /// leaf is collected on this pass and its parent on the next, so the sweep
+    /// still converges.
+    ///
+    /// `read_backing_chain` returns partial results on a read error and caps at
+    /// `MAX_BACKING_CHAIN_DEPTH`, so this can under-report. It is one of two
+    /// independent guards in [`Self::gc_orphans`], never the sole authority.
+    pub(crate) fn referenced_backing_paths(&self, boxes_dir: &Path) -> HashSet<PathBuf> {
+        let mut referenced = HashSet::new();
+
+        match fs::read_dir(boxes_dir) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let disks_dir = entry.path().join("disks");
+                    for overlay in [
+                        disk_filenames::CONTAINER_DISK,
+                        disk_filenames::GUEST_ROOTFS_DISK,
+                    ] {
+                        let overlay_path = disks_dir.join(overlay);
+                        if overlay_path.exists() {
+                            referenced.extend(super::read_backing_chain(&overlay_path));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                if boxes_dir.exists() {
+                    tracing::warn!(
+                        "GC: failed to read boxes dir {}: {}",
+                        boxes_dir.display(),
+                        e
+                    );
+                }
+            }
+        }
+
+        // Ancestry between bases themselves.
+        match fs::read_dir(&self.bases_dir) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    referenced.extend(super::read_backing_chain(&entry.path()));
+                }
+            }
+            Err(e) => {
+                if self.bases_dir.exists() {
+                    tracing::warn!(
+                        "GC: failed to read bases dir {}: {}",
+                        self.bases_dir.display(),
+                        e
+                    );
+                }
+            }
+        }
+
+        referenced
+    }
+
+    /// Delete base files that nothing claims.
+    ///
+    /// The per-kind collectors work from DB records, so a file whose row is gone
+    /// — a crash between the rename and the insert, a hand-edited database, a
+    /// schema reset — becomes permanently invisible to them and is never
+    /// reclaimed. This sweep starts from the filesystem instead.
+    ///
+    /// A file is deleted only when **both** hold, because snapshots are user data
+    /// that no collector may remove:
+    /// - no `base_disk` row of *any* kind names it, and
+    /// - nothing backs onto it — see [`Self::referenced_backing_paths`], which
+    ///   covers box overlays and base-to-base ancestry alike.
+    ///
+    /// The two guards are independent on purpose: each can miss (a lost row, an
+    /// unreadable qcow2 header, a chain deeper than the walk), so a file has to
+    /// look unclaimed to *both* before it is removed.
+    ///
+    /// Files younger than [`Self::ORPHAN_GRACE`] are skipped: `install` renames a
+    /// file into place before inserting its row, so a fresh entry looks unclaimed
+    /// for a moment. `RuntimeLock` already excludes a concurrent installer; the
+    /// grace period costs nothing and removes the reliance on that.
+    pub(crate) fn gc_orphans(&self, boxes_dir: &Path) -> BoxliteResult<usize> {
+        let entries = match fs::read_dir(&self.bases_dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                if self.bases_dir.exists() {
+                    tracing::warn!(
+                        "GC: failed to read bases dir {}: {}",
+                        self.bases_dir.display(),
+                        e
+                    );
+                }
+                return Ok(0);
+            }
+        };
+        let referenced = self.referenced_backing_paths(boxes_dir);
+        let now = SystemTime::now();
+
+        let mut removed = 0;
+        let mut reclaimed_bytes = 0u64;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(extension) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            // Only the two shapes this manager creates; never touch anything else
+            // that happens to sit in the directory.
+            if !matches!(extension, "ext4" | "qcow2") {
+                continue;
+            }
+
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if !metadata.is_file() {
+                continue;
+            }
+
+            let settled = metadata
+                .modified()
+                .ok()
+                .and_then(|mtime| now.duration_since(mtime).ok())
+                .is_some_and(|age| age >= Self::ORPHAN_GRACE);
+            if !settled {
+                continue;
+            }
+
+            if referenced.contains(&path) {
+                continue;
+            }
+            // Fail closed, as `try_gc_base` does: a DB error must never read as
+            // "unclaimed". One SQLITE_BUSY during `recover_boxes` would otherwise
+            // sweep every settled file here, snapshots included.
+            let claimed = match self.store.find_by_base_path(&path.to_string_lossy()) {
+                Ok(record) => record.is_some(),
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        "GC: cannot determine whether a base disk is claimed, keeping it: {}",
+                        e
+                    );
+                    true
+                }
+            };
+            if claimed {
+                continue;
+            }
+
+            tracing::info!(
+                path = %path.display(),
+                size_mb = metadata.len() / (1024 * 1024),
+                "GC: removing orphaned base disk (no DB record, no overlay reference)"
+            );
+            match fs::remove_file(&path) {
+                Ok(()) => {
+                    removed += 1;
+                    reclaimed_bytes += metadata.len();
+                }
+                Err(e) => tracing::warn!("GC: failed to remove {}: {}", path.display(), e),
+            }
+        }
+
+        if removed > 0 {
+            tracing::info!(
+                removed,
+                reclaimed_mb = reclaimed_bytes / (1024 * 1024),
+                "GC: reclaimed orphaned base disks"
+            );
+        }
+        Ok(removed)
     }
 
     /// Core operation: create a base disk from a box's live container disk.
@@ -606,5 +796,208 @@ mod tests {
             "Base should be deleted (no more dependents)"
         );
         assert!(!base_file.exists());
+    }
+
+    /// Backdate past `ORPHAN_GRACE` so the sweep will consider the file.
+    fn age(path: &Path) {
+        let old = filetime::FileTime::from_system_time(
+            SystemTime::now() - BaseDiskManager::ORPHAN_GRACE * 2,
+        );
+        filetime::set_file_mtime(path, old).unwrap();
+    }
+
+    fn insert_row(mgr: &BaseDiskManager, id: &str, kind: BaseDiskKind, path: &Path) {
+        mgr.store()
+            .insert(&BaseDisk {
+                id: base_id(id),
+                source_box_id: "__global__".to_string(),
+                name: Some(id.to_string()),
+                kind,
+                disk_info: DiskInfo {
+                    base_path: path.to_string_lossy().to_string(),
+                    container_disk_bytes: 0,
+                    size_bytes: 0,
+                },
+                created_at: 0,
+            })
+            .unwrap();
+    }
+
+    /// Only a file that *nothing* claims may be deleted.
+    ///
+    /// The per-kind collectors iterate DB records, so a file whose row is gone is
+    /// invisible to them and accumulates forever. This sweep starts from the
+    /// filesystem — which means it must not mistake a snapshot, a clone base, or
+    /// an overlay's backing file for garbage.
+    #[test]
+    fn gc_orphans_removes_only_unclaimed_files() {
+        let (dir, mgr) = setup();
+        let boxes_dir = dir.path().join("boxes");
+
+        // 1. Unclaimed — no DB row, no overlay. The only legitimate target.
+        let orphan = mgr.bases_dir.join("orphan01.ext4");
+        std::fs::write(&orphan, b"unclaimed").unwrap();
+        age(&orphan);
+
+        // 2. Claimed by a DB row, and a Snapshot at that — user data.
+        let snapshot = mgr.bases_dir.join("snapshot.qcow2");
+        std::fs::write(&snapshot, b"user snapshot").unwrap();
+        age(&snapshot);
+        insert_row(&mgr, "snapshot", BaseDiskKind::Snapshot, &snapshot);
+
+        // 3. No DB row, but a live box's guest-rootfs overlay backs onto it.
+        let backed = mgr.bases_dir.join("backed001.ext4");
+        std::fs::write(&backed, b"still in use").unwrap();
+        age(&backed);
+        let box_disks = boxes_dir.join("box-1").join("disks");
+        std::fs::create_dir_all(&box_disks).unwrap();
+        write_qcow2_with_backing(
+            &box_disks.join(disk_filenames::GUEST_ROOTFS_DISK),
+            Some(&backed.to_string_lossy()),
+        );
+
+        // 4. No DB row, but a container overlay backs onto it. Scanning only
+        //    guest-rootfs.qcow2 would delete this one.
+        let clone_base = mgr.bases_dir.join("clonebas.qcow2");
+        std::fs::write(&clone_base, b"clone base").unwrap();
+        age(&clone_base);
+        let box2_disks = boxes_dir.join("box-2").join("disks");
+        std::fs::create_dir_all(&box2_disks).unwrap();
+        write_qcow2_with_backing(
+            &box2_disks.join(disk_filenames::CONTAINER_DISK),
+            Some(&clone_base.to_string_lossy()),
+        );
+
+        let removed = mgr.gc_orphans(&boxes_dir).unwrap();
+
+        assert_eq!(removed, 1, "exactly one file was unclaimed");
+        assert!(!orphan.exists(), "unclaimed file should be reclaimed");
+        assert!(snapshot.exists(), "a snapshot must never be auto-deleted");
+        assert!(
+            backed.exists(),
+            "guest-rootfs overlay still backs onto this"
+        );
+        assert!(
+            clone_base.exists(),
+            "container overlay still backs onto this"
+        );
+    }
+
+    /// Clone bases nest, and a mid-chain base with no DB row is precisely what
+    /// this sweep exists to handle — so it must not be reachable by deleting it.
+    #[test]
+    fn gc_orphans_follows_the_whole_backing_chain() {
+        let (dir, mgr) = setup();
+        let boxes_dir = dir.path().join("boxes");
+
+        // bd1 <- bd2 <- overlay. Neither base has a DB row.
+        let bd1 = mgr.bases_dir.join("chain001.qcow2");
+        write_qcow2_with_backing(&bd1, None);
+        age(&bd1);
+        let bd2 = mgr.bases_dir.join("chain002.qcow2");
+        write_qcow2_with_backing(&bd2, Some(&bd1.to_string_lossy()));
+        age(&bd2);
+
+        let box_disks = boxes_dir.join("box-1").join("disks");
+        std::fs::create_dir_all(&box_disks).unwrap();
+        write_qcow2_with_backing(
+            &box_disks.join(disk_filenames::CONTAINER_DISK),
+            Some(&bd2.to_string_lossy()),
+        );
+
+        let removed = mgr.gc_orphans(&boxes_dir).unwrap();
+
+        assert_eq!(removed, 0, "every link in a live chain is in use");
+        assert!(bd2.exists(), "immediate backing file");
+        assert!(
+            bd1.exists(),
+            "grandparent — reachable only by walking the chain"
+        );
+    }
+
+    /// A base's parent may be reachable only through the child, never through a
+    /// box overlay — `create_base_disk` chains bases directly.
+    ///
+    /// If the parent's row is the one that went missing, scanning only box
+    /// overlays would delete it out from under a child that is still tracked.
+    #[test]
+    fn gc_orphans_follows_ancestry_between_bases() {
+        let (dir, mgr) = setup();
+
+        // bd1 <- bd2, no box overlay anywhere. Only bd2 keeps a DB row.
+        let bd1 = mgr.bases_dir.join("parent01.qcow2");
+        write_qcow2_with_backing(&bd1, None);
+        age(&bd1);
+        let bd2 = mgr.bases_dir.join("child001.qcow2");
+        write_qcow2_with_backing(&bd2, Some(&bd1.to_string_lossy()));
+        age(&bd2);
+        insert_row(&mgr, "child001", BaseDiskKind::CloneBase, &bd2);
+
+        let removed = mgr.gc_orphans(&dir.path().join("boxes")).unwrap();
+
+        assert_eq!(removed, 0, "a tracked child still needs its parent");
+        assert!(bd2.exists(), "claimed by its DB row");
+        assert!(bd1.exists(), "claimed only by its child's backing chain");
+    }
+
+    /// A database error must never read as "unclaimed".
+    ///
+    /// `try_gc_base` already fails closed (`has_dependents(..).unwrap_or(true)`).
+    /// This sweep deletes, so failing open here would let one transient error
+    /// during `recover_boxes` take out every settled file, snapshots included.
+    #[test]
+    fn gc_orphans_keeps_files_when_the_db_cannot_be_read() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(&dir.path().join("db").join("test.db")).unwrap();
+        let bases_dir = dir.path().join("bases");
+        std::fs::create_dir_all(&bases_dir).unwrap();
+        let mgr = BaseDiskManager::new(bases_dir, BaseDiskStore::new(db.clone()));
+
+        let base = mgr.bases_dir.join("atrisk01.ext4");
+        std::fs::write(&base, b"unclaimed as far as a broken DB can tell").unwrap();
+        age(&base);
+
+        // Make every `find_by_base_path` return Err rather than Ok(None).
+        // Dropping the table is what a query error looks like from the caller's
+        // side, without depending on page-cache behaviour.
+        db.conn().execute("DROP TABLE base_disk", []).unwrap();
+
+        let removed = mgr.gc_orphans(&dir.path().join("boxes")).unwrap();
+
+        assert_eq!(removed, 0, "an unreadable DB must not authorise deletion");
+        assert!(base.exists(), "files must survive a DB error");
+    }
+
+    /// A file installed moments ago has not had its DB row written yet.
+    #[test]
+    fn gc_orphans_spares_freshly_written_files() {
+        let (dir, mgr) = setup();
+
+        let fresh = mgr.bases_dir.join("fresh001.ext4");
+        std::fs::write(&fresh, b"just renamed into place").unwrap();
+
+        let removed = mgr.gc_orphans(&dir.path().join("boxes")).unwrap();
+
+        assert_eq!(removed, 0);
+        assert!(
+            fresh.exists(),
+            "a file inside the grace window must survive"
+        );
+    }
+
+    /// The sweep owns two filename shapes; anything else in the directory is
+    /// not its to delete.
+    #[test]
+    fn gc_orphans_ignores_unrecognized_files() {
+        let (dir, mgr) = setup();
+
+        let stray = mgr.bases_dir.join("notes.txt");
+        std::fs::write(&stray, b"not ours").unwrap();
+        age(&stray);
+
+        let removed = mgr.gc_orphans(&dir.path().join("boxes")).unwrap();
+
+        assert_eq!(removed, 0);
+        assert!(stray.exists());
     }
 }

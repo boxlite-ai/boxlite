@@ -4,7 +4,7 @@
 //! bundled with BoxLite. The search follows a priority order:
 //!
 //! 1. `BOXLITE_RUNTIME_DIR` - Explicit override (highest priority)
-//! 2. Embedded runtime cache (e.g., `~/.local/share/boxlite/runtimes/v{VERSION}-{HASH}/`) - Self-contained SDKs
+//! 2. Embedded runtime cache (e.g., `~/.local/share/boxlite/runtimes/v{VERSION}-{COMMIT}-{HASH}/`) - Self-contained SDKs
 //! 3. `DYLD_LIBRARY_PATH` (macOS) / `LD_LIBRARY_PATH` (Linux) - User-specified runtime location
 //! 4. dladdr-based detection - For packaged/installed scenarios
 

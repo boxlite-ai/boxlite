@@ -1446,6 +1446,13 @@ impl RuntimeImpl {
             tracing::warn!("Guest rootfs GC failed: {}", e);
         }
 
+        // Then reclaim base files no DB record and no overlay claims — the
+        // per-kind collectors above work from records, so a file whose row is
+        // gone is invisible to them.
+        if let Err(e) = self.base_disk_mgr.gc_orphans(&self.layout.boxes_dir()) {
+            tracing::warn!("Orphaned base disk GC failed: {}", e);
+        }
+
         tracing::info!("Box recovery complete");
         Ok(())
     }

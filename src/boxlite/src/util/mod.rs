@@ -171,11 +171,14 @@ pub fn register_to_tracing(non_blocking: NonBlocking, env_filter: EnvFilter) {
 pub fn inject_guest_binary(rootfs_path: &std::path::Path) -> BoxliteResult<()> {
     let dest_dir = rootfs_path.join("boxlite/bin");
     let dest_path = dest_dir.join("boxlite-guest");
-    let guest_bin = find_binary("boxlite-guest")?;
+    // Same resolution the disk path uses, so the two can never inject different
+    // binaries. (mtime+size below answers a different question — whether this
+    // destination copy is current — not which binary is authoritative.)
+    let guest_bin = crate::vmm::guest_binary::GuestBinary::get()?.path();
 
     // Check if binary needs update
     if dest_path.exists() {
-        if is_binary_up_to_date(&guest_bin, &dest_path)? {
+        if is_binary_up_to_date(guest_bin, &dest_path)? {
             return Ok(());
         }
         // Remove old binary before copying (it might be read-only 0o555)
@@ -196,7 +199,7 @@ pub fn inject_guest_binary(rootfs_path: &std::path::Path) -> BoxliteResult<()> {
         ))
     })?;
 
-    std::fs::copy(&guest_bin, &dest_path).map_err(|e| {
+    std::fs::copy(guest_bin, &dest_path).map_err(|e| {
         BoxliteError::Storage(format!(
             "Failed to copy guest binary to {}: {}",
             dest_path.display(),

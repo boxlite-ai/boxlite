@@ -260,7 +260,7 @@ pub(crate) fn sha256_file(path: &Path) -> BoxliteResult<String> {
         hasher.update(&buf[..n]);
     }
 
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
 
 #[cfg(test)]

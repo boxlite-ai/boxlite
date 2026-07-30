@@ -5,9 +5,11 @@
 //! under the platform's local data dir, then serves that directory to
 //! [`RuntimeBinaryFinder`](crate::util::RuntimeBinaryFinder) for binary discovery.
 //!
-//! Every profile uses `~/.local/share/boxlite/runtimes/v{VERSION}-{HASH}/`, where
-//! `{HASH}` is a 12-character SHA256 prefix of all embedded file contents. This
-//! prevents same-version builds with different assets from sharing a stale cache.
+//! Every profile uses `~/.local/share/boxlite/runtimes/v{VERSION}-{COMMIT}-{HASH}/`,
+//! where `{HASH}` is a 12-character SHA256 prefix of all embedded file contents
+//! and `{COMMIT}` the git commit the build came from. The hash prevents
+//! same-version builds with different assets from sharing a stale cache; the
+//! commit lets a cache directory say which checkout produced it.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -32,7 +34,7 @@ include!(concat!(env!("OUT_DIR"), "/embedded_manifest.rs"));
 ///   └─ extract to {dir}.extracting.{pid}/
 ///      ├─ write all files + .complete stamp
 ///      ├─ atomic rename → dir
-///      ├─ cleanup stale versions (TTL 30d)
+///      ├─ cleanup stale versions (disuse TTL: 7d release, 1h debug)
 ///      └─ Ok(Self { dir })
 /// ```
 pub struct EmbeddedRuntime {
@@ -194,9 +196,11 @@ impl EmbeddedRuntime {
         let data_dir = dirs::data_local_dir()
             .ok_or_else(|| BoxliteError::Storage("No local data directory".into()))?;
 
-        // Include the manifest hash for every profile so rebuilding the same version
-        // with different runtime assets cannot reuse a stale extracted cache.
-        let dir_name = format!("v{}-{}", crate::VERSION, env!("BOXLITE_MANIFEST_HASH"));
+        let dir_name = Self::dir_name(
+            crate::VERSION,
+            boxlite_shared::GIT_COMMIT,
+            env!("BOXLITE_MANIFEST_HASH"),
+        );
 
         let dir = data_dir.join("boxlite").join("runtimes").join(dir_name);
         let parent = dir.parent().ok_or_else(|| {
@@ -208,6 +212,29 @@ impl EmbeddedRuntime {
         std::fs::create_dir_all(parent)
             .map_err(|e| BoxliteError::Storage(format!("mkdir {}: {}", parent.display(), e)))?;
         Ok(dir)
+    }
+
+    /// Cache directory name: `v{version}-{commit}-{manifest_hash}`.
+    ///
+    /// `manifest_hash` is what makes the name *correct* — rebuilding the same
+    /// version with different runtime assets must not reuse a stale extracted
+    /// cache. `commit` makes it *legible*: the directory otherwise cannot say
+    /// which checkout produced it. A build with no commit to report keeps the
+    /// two-segment name rather than carrying a placeholder.
+    ///
+    /// Including it does split the cache for byte-identical assets, which is
+    /// the same cost the guest rootfs key refuses to pay. The trade differs
+    /// because the split is bounded here and unbounded there: [`cleanup_stale`]
+    /// reclaims these directories on a disuse TTL, whereas a rootfs base is
+    /// retained for as long as any box overlay backs onto it, so a per-commit
+    /// split would accumulate for the life of those boxes.
+    ///
+    /// [`cleanup_stale`]: Self::cleanup_stale
+    fn dir_name(version: &str, commit: Option<&str>, manifest_hash: &str) -> String {
+        match commit {
+            Some(commit) => format!("v{}-{}-{}", version, commit, manifest_hash),
+            None => format!("v{}-{}", version, manifest_hash),
+        }
     }
 
     #[cfg(unix)]
@@ -238,17 +265,50 @@ mod tests {
         let dir = EmbeddedRuntime::versioned_dir().unwrap();
         let dir_str = dir.to_string_lossy();
 
-        // Verify path structure: .../boxlite/runtimes/v{VERSION}-{HASH}
+        // Verify path structure: .../boxlite/runtimes/v{VERSION}-[{COMMIT}-]{HASH}
         assert!(
             dir_str.contains("boxlite/runtimes/"),
             "Expected path to contain boxlite/runtimes/, got {}",
             dir.display()
         );
         let dir_name = dir.file_name().unwrap().to_string_lossy();
-        let expected = format!("v{}-{}", crate::VERSION, env!("BOXLITE_MANIFEST_HASH"));
+        assert!(
+            dir_name.starts_with(&format!("v{}-", crate::VERSION)),
+            "Runtime dir should be version-stamped: {dir_name}"
+        );
+        assert!(
+            dir_name.ends_with(env!("BOXLITE_MANIFEST_HASH")),
+            "Runtime dir should include the manifest hash: {dir_name}"
+        );
+        // This checks only that a stamped commit reaches the directory name;
+        // that the build script stamps one at all is guarded by boxlite-shared's
+        // `commit_is_stamped_when_built_from_a_tracked_checkout`.
+        if let Some(commit) = boxlite_shared::GIT_COMMIT {
+            assert!(
+                dir_name.contains(&format!("-{commit}-")),
+                "Runtime dir should name the commit it was built from: {dir_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn dir_name_carries_the_commit() {
         assert_eq!(
-            dir_name, expected,
-            "Runtime dir should include the manifest hash"
+            EmbeddedRuntime::dir_name("0.9.8", Some("ea34a8c4"), "4e5f6a7b8c9d"),
+            "v0.9.8-ea34a8c4-4e5f6a7b8c9d"
+        );
+        assert_ne!(
+            EmbeddedRuntime::dir_name("0.9.8", Some("ea34a8c4"), "4e5f6a7b8c9d"),
+            EmbeddedRuntime::dir_name("0.9.8", Some("8103b2cb"), "4e5f6a7b8c9d"),
+            "byte-identical assets from different commits must not share a cache dir"
+        );
+    }
+
+    #[test]
+    fn dir_name_without_a_commit_keeps_the_two_segment_form() {
+        assert_eq!(
+            EmbeddedRuntime::dir_name("0.9.8", None, "4e5f6a7b8c9d"),
+            "v0.9.8-4e5f6a7b8c9d"
         );
     }
 
