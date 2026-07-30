@@ -674,6 +674,23 @@ export default $config({
         rules: [{ listen: '443/tls', forward: `${PORTS.PROXY}/tcp` }],
         health: { [`${PORTS.PROXY}/tcp`]: {} },
       },
+      // Keep the NLB's health check on the Proxy HTTP endpoint. Letting SST
+      // infer a TCP probe while the existing target group retains an HTTP
+      // matcher produces an invalid AWS target-group update.
+      transform: {
+        target: (targetArgs) => {
+          targetArgs.healthCheck = {
+            protocol: 'HTTP',
+            port: 'traffic-port',
+            path: '/health',
+            matcher: '200-399',
+            interval: 30,
+            timeout: 5,
+            healthyThreshold: 2,
+            unhealthyThreshold: 3,
+          }
+        },
+      },
       environment: {
         PROXY_PORT: String(PORTS.PROXY),
         PROXY_PROTOCOL: envOr('PROXY_PROTOCOL', 'https'),
