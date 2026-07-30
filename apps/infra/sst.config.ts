@@ -88,6 +88,70 @@ const requireEnv = (key: string, why: string) => {
 const runnerEndpoint = (override: string, port: number, scheme: string) =>
   envOr(override, `${scheme}localhost:${port}`)
 
+// ── runner artifact resolution ───────────────────────────────────────────────
+// One parser for the workspace version, used by every runner artifact URL below.
+// SST invokes from apps/infra/ as cwd; Cargo.toml lives at the repo root.
+const readWorkspaceVersion = async () => {
+  const { readFileSync } = await import('fs')
+  const { resolve } = await import('path')
+  const cargoToml = readFileSync(resolve(process.cwd(), '../../Cargo.toml'), 'utf-8')
+  const versionMatch = cargoToml.match(/^version\s*=\s*"(.+?)"/m)
+  if (!versionMatch) {
+    throw new Error('could not parse runner version from ../../Cargo.toml (expected a top-level `version = "X.Y.Z"`)')
+  }
+  return versionMatch[1]
+}
+
+const RELEASE_BASE = 'https://github.com/boxlite-ai/boxlite/releases/download'
+
+// Resolve one runner artifact to the exact bytes the fleet may install.
+//
+// The checksum is pinned at deploy time rather than fetched next to the artifact
+// at install time: a deploy is reviewed and authenticated, so it is the right
+// place to assert which build is legitimate. Because it is always present, the
+// on-box agent has no "checksum missing, install anyway" branch — which is
+// exactly the hole the old boot user-data and rollout script both carried.
+//
+// `urlOverride` (RUNNER_ARTIFACT_URL / RUNNER_AGENT_ARTIFACT_URL) points at a
+// dev build; it may be an s3:// URL in the RunnerBuilds bucket, which the agent
+// reads with its instance role. A dispatched run of build-runner-binary.yml
+// prints the matching sha256 in its job summary.
+const resolveRunnerArtifact = async (input: {
+  asset: 'boxlite-runner' | 'boxlite-runner-agent'
+  version: string
+  urlOverride?: string
+  sha256Override?: string
+}) => {
+  const { asset, version, urlOverride, sha256Override } = input
+  const url = urlOverride || `${RELEASE_BASE}/v${version}/${asset}-v${version}-linux-amd64.tar.gz`
+
+  // A dev artifact carries its own version (v{X}-dev-{seq}-{guest12}); take it
+  // from the filename so the parameter reports what is actually installed.
+  const assetVersion =
+    new RegExp(`^${asset}-v(.+)-linux-amd64\\.tar\\.gz$`).exec(url.split('/').pop() ?? '')?.[1] ?? version
+
+  if (sha256Override) {
+    if (!/^[0-9a-f]{64}$/.test(sha256Override)) {
+      throw new Error(`${asset}: sha256 override must be 64 lowercase hex chars, got ${JSON.stringify(sha256Override)}`)
+    }
+    return { version: assetVersion, url, sha256: sha256Override }
+  }
+
+  if (url.startsWith('s3://')) {
+    throw new Error(`${asset}: an s3:// artifact URL has no published checksum — set the matching *_SHA256 env var`)
+  }
+
+  const res = await fetch(`${url}.sha256`)
+  if (!res.ok) {
+    throw new Error(`${asset}: no checksum at ${url}.sha256 (HTTP ${res.status}); set the matching *_SHA256 env var`)
+  }
+  const sha256 = (await res.text()).trim().split(/\s+/)[0] ?? ''
+  if (!/^[0-9a-f]{64}$/.test(sha256)) {
+    throw new Error(`${asset}: malformed checksum at ${url}.sha256: ${JSON.stringify(sha256.slice(0, 80))}`)
+  }
+  return { version: assetVersion, url, sha256 }
+}
+
 // ── app config ───────────────────────────────────────────────────────────────
 export default $config({
   app(input) {
@@ -747,8 +811,67 @@ export default $config({
     router.route('/', api.url)
 
     // ─── 10. RUNNER (EC2 with nested KVM) ────────────────────────────────────
-    // Boots an Ubuntu EC2 that runs the prebuilt runner binary (downloaded from
-    // GitHub Releases) under systemd, with nested KVM enabled for box VMs.
+    // Boots an Ubuntu EC2 that installs boxlite-runner-agent, which then brings
+    // the box to whatever build RunnerDesiredState names — at boot and on every
+    // subsequent change. Nested KVM is enabled for box VMs.
+    //
+    // Which build the fleet runs is declared here and nowhere else. The EC2 keeps
+    // `ignoreChanges: ['ami','userDataBase64']` + `protect: true` (see makeRunner
+    // below) so a version bump never replaces a state-holding instance; the
+    // rollout is a parameter write, which does not touch the instance resource at
+    // all. That is what replaced scripts/deploy/runner-update-binary.sh.
+    const workspaceVersion = await readWorkspaceVersion()
+    const [runnerArtifact, agentArtifact] = await Promise.all([
+      resolveRunnerArtifact({
+        asset: 'boxlite-runner',
+        version: workspaceVersion,
+        urlOverride: process.env.RUNNER_ARTIFACT_URL,
+        sha256Override: process.env.RUNNER_ARTIFACT_SHA256,
+      }),
+      resolveRunnerArtifact({
+        asset: 'boxlite-runner-agent',
+        version: workspaceVersion,
+        urlOverride: process.env.RUNNER_AGENT_ARTIFACT_URL,
+        sha256Override: process.env.RUNNER_AGENT_ARTIFACT_SHA256,
+      }),
+    ])
+
+    // Distribution point for dev runner builds. Release builds come straight
+    // from GitHub Releases; a build that is not published anywhere still has to
+    // be reachable by an instance-role fetch, and this is that place. Nothing
+    // created it before — the old rollout script wrote to a bucket name that
+    // existed only by hand.
+    const runnerBuilds = new sst.aws.Bucket('RunnerBuilds')
+    new aws.s3.BucketLifecycleConfiguration('RunnerBuildsLifecycle', {
+      bucket: runnerBuilds.name,
+      rules: [
+        {
+          id: 'expire-dev-builds',
+          status: 'Enabled',
+          filter: { prefix: 'dev/' },
+          // Long enough to roll back to the build before last, short enough
+          // that untagged dev artifacts do not accumulate indefinitely.
+          expiration: { days: 30 },
+          abortIncompleteMultipartUpload: { daysAfterInitiation: 1 },
+        },
+      ],
+    })
+
+    const runnerDesiredStateName = `/boxlite/${$app.stage}/runner/desired`
+    const runnerDesiredState = new aws.ssm.Parameter('RunnerDesiredState', {
+      name: runnerDesiredStateName,
+      type: 'String',
+      description: 'Runner build the agent on each runner EC2 reconciles to. Written only by sst deploy.',
+      // Shape is the contract with apps/runner/internal/rollout.DesiredState.
+      // guestSha256 and runtimeSuffix are deliberately absent: they live in
+      // sidecars inside the tarball, which this checksum already covers.
+      value: JSON.stringify({
+        version: runnerArtifact.version,
+        url: runnerArtifact.url,
+        sha256: runnerArtifact.sha256,
+      }),
+    })
+
     const ubuntuAmi = aws.ec2.getAmi({
       mostRecent: true,
       owners: [RUNNER.ubuntuOwnerId],
@@ -788,6 +911,24 @@ export default $config({
           },
         ],
       }),
+    })
+    // What the agent needs and nothing more: read the one parameter that names
+    // the desired build, and read dev artifacts out of the builds bucket.
+    // AmazonSSMManagedInstanceCore above covers the SSM *channel* (Session
+    // Manager, inventory) but not Parameter Store reads, so this is required
+    // rather than redundant — and scoping it to the single path is why it stays
+    // an inline policy instead of another managed attachment.
+    new aws.iam.RolePolicy('RunnerDesiredStatePolicy', {
+      role: runnerRole.name,
+      policy: $resolve([runnerDesiredState.arn, runnerBuilds.arn]).apply(([parameterArn, bucketArn]) =>
+        JSON.stringify({
+          Version: '2012-10-17',
+          Statement: [
+            { Effect: 'Allow', Action: ['ssm:GetParameter'], Resource: [parameterArn] },
+            { Effect: 'Allow', Action: ['s3:GetObject'], Resource: [`${bucketArn}/*`] },
+          ],
+        }),
+      ),
     })
     const runnerInstanceProfile = new aws.iam.InstanceProfile('RunnerProfile', { role: runnerRole.name })
 
@@ -862,7 +1003,16 @@ export default $config({
       otelCollectorOtlpHttpUrl,
       ghcrSecret ? ghcrSecret.arn : '',
     ]).apply(([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-      buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
+      buildRunnerUserData({
+              apiUrl,
+              token,
+              otelEndpoint,
+              agentUrl: agentArtifact.url,
+              agentSha256: agentArtifact.sha256,
+              desiredStateParameter: runnerDesiredStateName,
+              ghcrSecretArn: ghcrSecretArn || undefined,
+              ghcrUsername,
+            }),
     )
 
     // Runners hold load-bearing box state (/var/lib/boxlite + in-memory libkrun VMs).
@@ -870,9 +1020,14 @@ export default $config({
     // name, Name tag, and per-runner user-data, so they share one factory. Two Pulumi
     // options keep a runner persistent across routine deploys:
     //   • ignoreChanges ['ami','userDataBase64']: monthly Ubuntu AMIs and Cargo.toml
-    //     version bumps no longer force replacement; a new binary lands out-of-band via
-    //     SSM instead of recreating the EC2 — scripts/deploy/runner-update-binary.sh
-    //     upgrades the DEFAULT runner (matches its tag only); extra runners separately.
+    //     version bumps no longer force replacement. A new build reaches every runner
+    //     through RunnerDesiredState instead, which the agent reconciles to — so this
+    //     option costs nothing in reachability, unlike when a rollout had to target
+    //     one instance by tag.
+    //
+    //     Corollary: anything user-data writes is frozen for the life of the instance.
+    //     That is why /etc/boxlite/runner-agent.env holds only a stable parameter path
+    //     and region, and never a version or a URL.
     //   • protect: refuses any delete (errant `pulumi destroy` / teardown). Deliberate
     //     decommission = set protect:false, deploy, then `pulumi destroy --target ...`.
     const makeRunner = (resourceName: string, nameTag: string, userData: $util.Input<string>) =>
@@ -933,7 +1088,16 @@ export default $config({
         `boxlite-runner-${index}`,
         $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
           ([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-            buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
+            buildRunnerUserData({
+              apiUrl,
+              token,
+              otelEndpoint,
+              agentUrl: agentArtifact.url,
+              agentSha256: agentArtifact.sha256,
+              desiredStateParameter: runnerDesiredStateName,
+              ghcrSecretArn: ghcrSecretArn || undefined,
+              ghcrUsername,
+            }),
         ),
       )
       return { name, apiKey, instance }
@@ -966,26 +1130,24 @@ export default $config({
 })
 
 // ── runner bootstrap ─────────────────────────────────────────────────────────
-// EC2 user-data: downloads prebuilt runner binary from GitHub Releases
-// and runs it directly with BoxLite VM isolation.
+// EC2 user-data: installs boxlite-runner-agent and hands it the job of putting
+// the runner on the box.
+//
+// The runner binary is deliberately NOT fetched here. When boot did its own
+// install and rollouts did a different one, a freshly replaced instance and a
+// rolled-out instance ended in materially different on-disk states — no
+// versioned release directory, no guest-hash verification, no BOXLITE_RUNTIME_DIR
+// drop-in. Both paths are now the same code: `runner-agent reconcile`.
 async function buildRunnerUserData(input: {
   apiUrl: string
   token: string
   otelEndpoint: string
+  agentUrl: string
+  agentSha256: string
+  desiredStateParameter: string
   ghcrSecretArn?: string
   ghcrUsername?: string
 }): Promise<string> {
-  const { readFileSync } = await import('fs')
-  const { resolve } = await import('path')
-
-  // SST invokes from apps/infra/ as cwd; Cargo.toml lives at repo root.
-  const cargoToml = readFileSync(resolve(process.cwd(), '../../Cargo.toml'), 'utf-8')
-  const versionMatch = cargoToml.match(/^version\s*=\s*"(.+?)"/m)
-  if (!versionMatch) {
-    throw new Error('could not parse runner version from ../../Cargo.toml (expected a top-level `version = "X.Y.Z"`)')
-  }
-  const RUNNER_VERSION = versionMatch[1]
-
   // ghcr pull credential delivery (option B, rotation-capable): install AWS CLI v2
   // and write a start-wrapper that re-fetches the TOKEN from Secrets Manager on
   // EVERY service start — so `systemctl restart` picks up a rotated token — and is
@@ -1045,24 +1207,21 @@ curl -fsSL "https://s3.amazonaws.com/mountpoint-s3-release/\${MOUNT_S3_VERSION}/
 apt-get install -y /tmp/mount-s3.deb
 rm -f /tmp/mount-s3.deb
 
-# Download the prebuilt runner binary, then verify its SHA-256 against the
-# checksum published next to the release asset before installing (it runs as
-# root). Best-effort for backward compatibility: a release with no .sha256 asset
-# warns and proceeds; a present-but-mismatched checksum is fatal (fail-closed).
-RUNNER_BASE="https://github.com/boxlite-ai/boxlite/releases/download/v${RUNNER_VERSION}"
-RUNNER_TARBALL="boxlite-runner-v${RUNNER_VERSION}-linux-amd64.tar.gz"
-curl -fsSL "\${RUNNER_BASE}/\${RUNNER_TARBALL}" -o "/tmp/\${RUNNER_TARBALL}"
-if curl -fsSL "\${RUNNER_BASE}/\${RUNNER_TARBALL}.sha256" -o /tmp/runner.sha256; then
-  EXPECTED=\$(awk '{print \$1}' /tmp/runner.sha256)
-  ACTUAL=\$(sha256sum "/tmp/\${RUNNER_TARBALL}" | awk '{print \$1}')
-  [ "\$EXPECTED" = "\$ACTUAL" ] || { echo "FATAL: runner checksum mismatch (want \$EXPECTED got \$ACTUAL)" >&2; exit 1; }
-  echo "runner tarball checksum verified (\$ACTUAL)"
-else
-  echo "WARNING: no .sha256 published for v${RUNNER_VERSION}; installing without integrity verification" >&2
+# Install the reconciler. Its checksum is pinned by the deploy that produced
+# this user-data, so there is no "no checksum published" branch to fall through:
+# a mismatch is fatal, full stop. The agent is the only thing fetched here — it
+# installs the runner itself, from the desired-state parameter.
+AGENT_TARBALL=/tmp/boxlite-runner-agent.tar.gz
+curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused "${input.agentUrl}" -o "\$AGENT_TARBALL"
+ACTUAL=\$(sha256sum "\$AGENT_TARBALL" | awk '{print \$1}')
+if [ "\$ACTUAL" != "${input.agentSha256}" ]; then
+  echo "FATAL: runner-agent checksum mismatch (want ${input.agentSha256} got \$ACTUAL)" >&2
+  exit 1
 fi
-tar -xzf "/tmp/\${RUNNER_TARBALL}" -C /usr/local/bin/
-rm -f "/tmp/\${RUNNER_TARBALL}" /tmp/runner.sha256
-chmod +x /usr/local/bin/boxlite-runner
+tar -xzf "\$AGENT_TARBALL" -C /usr/local/bin/
+rm -f "\$AGENT_TARBALL"
+chmod +x /usr/local/bin/boxlite-runner-agent
+echo "runner-agent installed and checksum verified (\$ACTUAL)"
 
 # Get host IP via IMDSv2
 IMDS_TOKEN=\$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
@@ -1102,9 +1261,60 @@ WantedBy=multi-user.target
 UNIT
 
 mkdir -p /var/lib/boxlite
+
+# Config for the agent, read on every reconcile — including the ones the timer
+# below fires long after this boot.
+mkdir -p /etc/boxlite
+cat > /etc/boxlite/runner-agent.env << AGENTENV
+BOXLITE_AGENT_PARAMETER=${input.desiredStateParameter}
+BOXLITE_AGENT_REGION=${REGION}
+BOXLITE_AGENT_SERVICE=boxlite-runner
+AGENTENV
+
+cat > /etc/systemd/system/boxlite-runner-agent.service << AGENTUNIT
+[Unit]
+Description=BoxLite Runner Agent (reconcile runner build to desired state)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/boxlite/runner-agent.env
+ExecStart=/usr/local/bin/boxlite-runner-agent reconcile
+# A reconcile that swaps the binary stops and starts boxlite-runner; give it the
+# same headroom the runner's own TimeoutStopSec assumes, plus the health and
+# box re-attach checks that follow.
+TimeoutStartSec=900
+AGENTUNIT
+
+# Enable but do not start boxlite-runner: it has no binary yet. The agent
+# installs one and starts the unit as part of the first reconcile, so a failed
+# install leaves the unit stopped rather than crash-looping on a missing file.
 systemctl daemon-reload
 systemctl enable boxlite-runner
-systemctl start boxlite-runner
+
+# First reconcile runs inline so this boot either produces a working runner or
+# fails visibly in /var/log/runner-setup.log.
+systemctl start --wait boxlite-runner-agent
+
+# Re-reconcile on a schedule so a parameter change reaches every runner without
+# anyone reaching for a rollout command. Reconcile is a no-op when the installed
+# build already matches, so the steady-state cost is one SSM read.
+cat > /etc/systemd/system/boxlite-runner-agent.timer << AGENTTIMER
+[Unit]
+Description=Periodic BoxLite runner reconcile
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+AGENTTIMER
+
+systemctl daemon-reload
+systemctl enable --now boxlite-runner-agent.timer
 
 echo "Runner setup complete"
 `

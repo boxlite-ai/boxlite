@@ -160,10 +160,26 @@ jobs:
 
       - name: Package runtime
         run: |
+          set -euo pipefail
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           RUNTIME_DIR=$(ls -dt target/release/build/boxlite-*/out/runtime 2>/dev/null | head -1)
           [ -n "$RUNTIME_DIR" ] || { echo "ERROR: Runtime directory not found under target/"; exit 1; }
           cp -a "$RUNTIME_DIR" boxlite-runtime
+
+          # #937 moved libkrunfw out of the cargo out/runtime payload, so a plain
+          # copy of that directory ships a runtime with no VM kernel: the shim's
+          # dlopen fallback then fails and every box start dies with libkrun
+          # status=-2. Collect it from target/ the way scripts/build/build-runtime.sh
+          # does, and refuse to publish a payload that ends up without one.
+          for lib in target/libkrunfw.*; do
+            [ -e "$lib" ] || continue
+            cp -a "$lib" boxlite-runtime/
+          done
+          if ! ls boxlite-runtime/libkrunfw.* >/dev/null 2>&1; then
+            echo "ERROR: no libkrunfw.* in the runtime payload — boxes would fail with libkrun status=-2"
+            exit 1
+          fi
+
           tar czf "boxlite-runtime-v${VERSION}-${{ matrix.target }}.tar.gz" boxlite-runtime/
           rm -rf boxlite-runtime
 

@@ -1,20 +1,31 @@
-# Build the runner Go binary for Linux amd64.
+# Build the runner Go binary for Linux amd64, packaged with everything the
+# on-box reconciler needs to install it without ever guessing.
 #
-# Self-contained workflow that downloads the prebuilt libboxlite.a from
-# GitHub Releases, builds the runner with plain `go build`, and uploads the
-# runner binary to GitHub Releases.
+# The tarball layout is a contract shared with apps/runner/internal/rollout:
 #
-# The runner binary is fully self-contained: it links libboxlite.a, which
-# auto-extracts the embedded runtime at startup.
+#   boxlite-runner                 the cgo binary
+#   boxlite-runner.guest.sha256    sha256 of the boxlite-guest inside the payload
+#   boxlite-runner.runtime-suffix  runtime cache-dir suffix ("" for releases)
+#   boxlite-runtime.tar.gz         embedded runtime payload, contents at root
+#
+# Every tarball carries all four — release build and dev build alike — so the
+# agent has exactly one install path and never degrades to warn-and-proceed on a
+# missing sidecar. Adding a fifth entry means changing rollout.TarballLayout too.
+#
+# Nothing here is compiled from Rust source: libboxlite.a comes from "Build C
+# SDK" and the runtime payload from "Build Runtime", both as published release
+# assets. This workflow only builds Go and assembles.
 #
 # Triggers:
-# - workflow_run: After "Build C SDK" completes (ensures libboxlite.a exists)
-# - workflow_dispatch: Manual trigger for testing
+# - workflow_run: after "Build C SDK" or "Build Runtime" completes — whichever
+#   lands second finds both assets present (the download step polls for them)
+# - workflow_dispatch: manual dev build, versioned so it can never collide with
+#   a release's runtime cache directory
 name: Build Runner Binary
 
 on:
   workflow_run:
-    workflows: ["Build C SDK"]
+    workflows: ["Build C SDK", "Build Runtime"]
     types: [completed]
   workflow_dispatch:
 
@@ -23,6 +34,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # The one platform the runner ships on; both upstream assets use this suffix.
+  ASSET_TARGET: linux-x64-gnu
 
 jobs:
   config:
@@ -44,31 +57,136 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
+          # go.mod pins the real toolchain (go 1.25.4); this only needs to be
+          # new enough to honour that directive and fetch it.
           go-version: ${{ needs.config.outputs.go-version }}
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev
 
       - name: Determine version
         id: version
         run: |
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          [ -n "$VERSION" ] || { echo "::error::could not read version from Cargo.toml"; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Download prebuilt libboxlite.a
+      # Both assets are published by sibling workflows on the same release. This
+      # workflow can start while the other is still uploading, so poll rather
+      # than fail on the first 404.
+      - name: Download C SDK and runtime assets
         env:
           VERSION: ${{ steps.version.outputs.version }}
           GH_REPO: ${{ github.repository }}
         run: |
-          ARCHIVE="boxlite-c-v${VERSION}-linux-x64-gnu.tar.gz"
-          URL="https://github.com/${GH_REPO}/releases/download/v${VERSION}/${ARCHIVE}"
-          echo "Downloading $URL"
-          curl -fsSL "${URL}" | tar xz -C /tmp/
-          cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a" sdks/go/libboxlite.a
+          set -euo pipefail
+          BASE="https://github.com/${GH_REPO}/releases/download/v${VERSION}"
+          mkdir -p upstream
+
+          fetch_asset() {
+            name="$1"
+            for attempt in $(seq 1 30); do
+              if curl -fsSL "${BASE}/${name}" -o "upstream/${name}"; then
+                echo "fetched ${name}"
+                return 0
+              fi
+              echo "waiting for ${name} (attempt ${attempt}/30)"
+              sleep 20
+            done
+            echo "::error::${name} never appeared under ${BASE}"
+            return 1
+          }
+
+          fetch_asset "boxlite-c-v${VERSION}-${ASSET_TARGET}.tar.gz"
+          fetch_asset "boxlite-runtime-v${VERSION}-${ASSET_TARGET}.tar.gz"
+
+      - name: Stage libboxlite.a and verify header ABI
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tar xzf "upstream/boxlite-c-v${VERSION}-${ASSET_TARGET}.tar.gz" -C upstream
+          CSDK="upstream/boxlite-c-v${VERSION}-${ASSET_TARGET}"
+
+          # The Go SDK compiles against its own checked-in boxlite.h but links
+          # the archive built from the C SDK's. If those two drift, the runner
+          # links a different ABI than it was compiled for and fails in ways
+          # that surface only at runtime — so compare them, don't just copy.
+          if ! cmp -s "${CSDK}/include/boxlite.h" sdks/go/boxlite.h; then
+            echo "::error::C SDK header for v${VERSION} differs from the tracked sdks/go/boxlite.h"
+            diff -u sdks/go/boxlite.h "${CSDK}/include/boxlite.h" || true
+            exit 1
+          fi
+          echo "header ABI matches tracked sdks/go/boxlite.h"
+
+          cp "${CSDK}/lib/libboxlite.a" sdks/go/libboxlite.a
+
+      # The payload the runner extracts at startup. Its boxlite-guest hash is
+      # what the agent verifies on the box before letting a box start, so it is
+      # also what identifies the build.
+      - name: Assemble runtime payload
+        id: payload
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tar xzf "upstream/boxlite-runtime-v${VERSION}-${ASSET_TARGET}.tar.gz" -C upstream
+          STAGE=upstream/boxlite-runtime
+          [ -d "$STAGE" ] || { echo "::error::runtime tarball did not contain boxlite-runtime/"; exit 1; }
+
+          [ -f "$STAGE/boxlite-guest" ] || { echo "::error::runtime payload has no boxlite-guest"; exit 1; }
+          [ -f "$STAGE/boxlite-shim" ] || { echo "::error::runtime payload has no boxlite-shim"; exit 1; }
+
+          # #937: libkrunfw moved out of the cargo out/runtime payload. Without
+          # it the shim's dlopen fallback fails and every box start dies with
+          # libkrun status=-2 — a failure that only shows up once a box is
+          # actually created, long after this workflow is green.
+          if ! ls "$STAGE"/libkrunfw.* >/dev/null 2>&1; then
+            echo "::error::runtime payload has no libkrunfw.* — VM kernel missing, boxes would fail with libkrun status=-2"
+            echo "         Build Runtime must ship target/libkrunfw.* inside boxlite-runtime/."
+            exit 1
+          fi
+
+          # #319/#937: the shim links a Go c-archive and must stay non-PIE
+          # static. A static-pie shim loads but crashes on first use.
+          if file "$STAGE/boxlite-shim" | grep -q "pie executable"; then
+            echo "::error::boxlite-shim linked as static-pie — incompatible with the embedded Go c-archive (#319)"
+            exit 1
+          fi
+
+          GUEST_SHA256=$(sha256sum "$STAGE/boxlite-guest" | awk '{print $1}')
+          echo "guest-sha256=$GUEST_SHA256" >> "$GITHUB_OUTPUT"
+          echo "guest-sha12=${GUEST_SHA256:0:12}" >> "$GITHUB_OUTPUT"
+
+          # Contents at root, not nested under boxlite-runtime/ — the agent
+          # extracts this straight into the runtime cache directory.
+          tar czf boxlite-runtime.tar.gz -C "$STAGE" .
+          echo "payload guest ${GUEST_SHA256:0:12}, $(ls -1 "$STAGE" | wc -l) entries"
+
+      # A dispatched build is not a release: give it its own runtime cache
+      # directory so it can never reuse (or poison) the official v{VERSION} one.
+      - name: Resolve runner version
+        id: runner_version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GUEST_SHA12: ${{ steps.payload.outputs.guest-sha12 }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SUFFIX="dev-${GITHUB_RUN_NUMBER}-${GUEST_SHA12}"
+            echo "runner-version=${VERSION}-${SUFFIX}" >> "$GITHUB_OUTPUT"
+            echo "runtime-suffix=${SUFFIX}" >> "$GITHUB_OUTPUT"
+          else
+            echo "runner-version=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "runtime-suffix=" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Rewrite go.work for minimal modules
         run: |
-          printf 'go 1.25.4\n\nuse (\n\t./runner\n\t./libs/common-go\n\t./libs/api-client-go\n\t../sdks/go\n)\n' > apps/go.work
+          set -euo pipefail
+          GO_VERSION=$(awk '/^go / { print $2; exit }' apps/runner/go.mod)
+          [ -n "$GO_VERSION" ] || { echo "::error::could not read go directive from apps/runner/go.mod"; exit 1; }
+          printf 'go %s\n\nuse (\n\t./runner\n\t./libs/common-go\n\t./libs/api-client-go\n\t../sdks/go\n)\n' "$GO_VERSION" > apps/go.work
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev
 
       - name: Download Go dependencies
         run: |
@@ -78,21 +196,60 @@ jobs:
 
       - name: Build runner
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          RUNNER_VERSION: ${{ steps.runner_version.outputs.runner-version }}
         run: |
+          set -euo pipefail
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
-            -ldflags "-X 'github.com/boxlite-ai/runner/internal.Version=${VERSION}'" \
+            -ldflags "-X 'github.com/boxlite-ai/runner/internal.Version=${RUNNER_VERSION}'" \
             -o /tmp/boxlite-runner \
             ./runner/cmd/runner/
 
-      - name: Package runner binary
+      # Pure Go, no cgo: the agent must keep working even when the runner it is
+      # replacing cannot start, so it shares none of the runner's link surface.
+      - name: Build runner agent
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          RUNNER_VERSION: ${{ steps.runner_version.outputs.runner-version }}
         run: |
-          tar czf "boxlite-runner-v${VERSION}-linux-amd64.tar.gz" -C /tmp boxlite-runner
-          # Integrity manifest the runner's user-data verifies before installing
-          # the binary (apps/infra/sst.config.ts buildRunnerUserData).
-          sha256sum "boxlite-runner-v${VERSION}-linux-amd64.tar.gz" > "boxlite-runner-v${VERSION}-linux-amd64.tar.gz.sha256"
+          set -euo pipefail
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C apps \
+            -ldflags "-X 'github.com/boxlite-ai/runner/internal.Version=${RUNNER_VERSION}'" \
+            -o /tmp/boxlite-runner-agent \
+            ./runner/cmd/runner-agent/
+
+      - name: Package runner tarball
+        env:
+          RUNNER_VERSION: ${{ steps.runner_version.outputs.runner-version }}
+          GUEST_SHA256: ${{ steps.payload.outputs.guest-sha256 }}
+          RUNTIME_SUFFIX: ${{ steps.runner_version.outputs.runtime-suffix }}
+        run: |
+          set -euo pipefail
+          STAGE=$(mktemp -d)
+          cp /tmp/boxlite-runner "$STAGE/boxlite-runner"
+          cp boxlite-runtime.tar.gz "$STAGE/boxlite-runtime.tar.gz"
+          printf '%s  boxlite-guest\n' "$GUEST_SHA256" > "$STAGE/boxlite-runner.guest.sha256"
+          printf '%s\n' "$RUNTIME_SUFFIX" > "$STAGE/boxlite-runner.runtime-suffix"
+
+          TARBALL="boxlite-runner-v${RUNNER_VERSION}-linux-amd64.tar.gz"
+          tar czf "$TARBALL" -C "$STAGE" \
+            boxlite-runner \
+            boxlite-runner.guest.sha256 \
+            boxlite-runner.runtime-suffix \
+            boxlite-runtime.tar.gz
+          sha256sum "$TARBALL" > "$TARBALL.sha256"
+
+          AGENT_TARBALL="boxlite-runner-agent-v${RUNNER_VERSION}-linux-amd64.tar.gz"
+          tar czf "$AGENT_TARBALL" -C /tmp boxlite-runner-agent
+          sha256sum "$AGENT_TARBALL" > "$AGENT_TARBALL.sha256"
+
+          {
+            echo "### Runner build \`v${RUNNER_VERSION}\`"
+            echo
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| tarball sha256 | \`$(awk '{print $1}' < "$TARBALL.sha256")\` |"
+            echo "| guest sha256 | \`${GUEST_SHA256}\` |"
+            echo "| runtime suffix | \`${RUNTIME_SUFFIX:-(release)}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -101,6 +258,8 @@ jobs:
           path: |
             boxlite-runner-v*-linux-amd64.tar.gz
             boxlite-runner-v*-linux-amd64.tar.gz.sha256
+            boxlite-runner-agent-v*-linux-amd64.tar.gz
+            boxlite-runner-agent-v*-linux-amd64.tar.gz.sha256
           if-no-files-found: error
           retention-days: ${{ needs.config.outputs.artifact-retention-days }}
 
@@ -135,4 +294,6 @@ jobs:
           files: |
             dist/boxlite-runner-v*.tar.gz
             dist/boxlite-runner-v*.tar.gz.sha256
+            dist/boxlite-runner-agent-v*.tar.gz
+            dist/boxlite-runner-agent-v*.tar.gz.sha256
           fail_on_unmatched_files: true

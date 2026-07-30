@@ -261,21 +261,42 @@ resource options on `sst.config.ts`'s Runner enforce that:
 
 ### Upgrading the runner binary
 
-The Runner binary version is pinned to `Cargo.toml`'s `version` field at the
-repo root. To deliver a new runner build without recreating the EC2:
+There is no rollout command. The runner build is declared by the
+`RunnerDesiredState` SSM parameter (`/boxlite/<stage>/runner/desired`), which
+`sst deploy` writes and nothing else does. `boxlite-runner-agent` on each runner
+reconciles to it — at boot, and on a 5-minute timer — so a deploy that changes
+the parameter *is* the rollout.
 
 ```bash
-# Uses the version in Cargo.toml by default; pass an explicit arg to override.
-scripts/deploy/runner-update-binary.sh           # latest from Cargo.toml
-scripts/deploy/runner-update-binary.sh 0.9.5     # explicit
+# Release build: version comes from Cargo.toml, artifact from GitHub Releases.
+npm run deploy -- --stage dev
 ```
 
-The script uses AWS SSM Run Command to download the release tarball from
-GitHub Releases and verify its SHA-256 *before* stopping the systemd unit — so
-a failed or corrupt fetch never takes the runner down — then backs up the live
-binary, swaps `/usr/local/bin/boxlite-runner`, and restarts. If the new binary
-fails to come up, it performs a rollback to the backup. Box state under
-`/var/lib/boxlite` is untouched.
+A dev build that is not published as a release is pointed at explicitly. Run
+`build-runner-binary.yml` via `workflow_dispatch`, upload its tarball to the
+`RunnerBuilds` bucket, then pass the URL and the checksum the run printed in its
+job summary:
+
+```bash
+RUNNER_ARTIFACT_URL=s3://<runner-builds-bucket>/dev/boxlite-runner-v0.9.7-dev-42-58d8f01bcd02-linux-amd64.tar.gz \
+RUNNER_ARTIFACT_SHA256=<sha256 from the job summary> \
+npm run deploy -- --stage dev
+```
+
+Rolling back is the same operation with the previous values.
+
+What the agent does on each reconcile, and refuses to finish without: verify the
+tarball against the checksum pinned in the parameter; verify the payload's
+`boxlite-guest` against the hash sidecar inside it; install the runtime into a
+cache directory keyed by build, so a dev build never shares the release's;
+install the binary into `/usr/local/lib/boxlite-runner/releases/v<version>/` and
+swap the `/usr/local/bin/boxlite-runner` symlink; then confirm the new process
+serves `/info` twice and that every box that was running before the restart is
+still alive and re-attachable. Any failure rolls back to the previous release
+directory. Box state under `/var/lib/boxlite` is untouched throughout.
+
+Because boot and rollout are the same code path, a replaced instance comes up in
+exactly the state a rolled-out one is in.
 
 ### Deliberate decommission (three-step ceremony)
 
