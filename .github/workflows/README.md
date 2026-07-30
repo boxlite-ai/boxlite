@@ -159,6 +159,22 @@ is enabled. The workflow is dormant until repository variable
 4. Trigger a new push, pull request update, or manual dispatch and verify CodeQL analysis uploads successfully.
 5. Roll back by setting `CODEQL_ADVANCED_SETUP_ENABLED=false` and re-enabling default setup.
 
+### `deploy-dev-api.yml`
+
+Manually deploys only the dev `Api` component from `main` on a native AMD64
+GitHub runner. The job is serialized, uses the protected `dev` Environment, and
+authenticates to AWS with short-lived OIDC credentials. Docker runs entirely in
+CI; no developer machine or public SSH builder participates.
+
+Required `dev` Environment configuration:
+
+- Variable `AWS_DEPLOY_ROLE_ARN`
+- Variable `AWS_REGION` (defaults to `ap-southeast-1`)
+- Secret `DEPLOY_ENV` containing the stage's dotenv configuration
+
+Bootstrap the role with `apps/infra/ci/github-deploy-role.yaml`, then require
+reviewers on the GitHub Environment before enabling deployments.
+
 ### `e2e-local.yml`
 
 Runs VM-based integration tests on a persistent, self-hosted AWS EC2 runner — GitHub-hosted

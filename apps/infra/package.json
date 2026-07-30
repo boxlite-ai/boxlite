@@ -7,8 +7,9 @@
     "dev": "node scripts/sst-with-cloudflare.mjs dev",
     "deploy": "node scripts/sst-with-cloudflare.mjs deploy",
     "remove": "node scripts/sst-with-cloudflare.mjs remove",
+    "test": "node --test scripts/*.test.mjs",
     "sst": "node scripts/sst-with-cloudflare.mjs",
-    "secrets": "sst secret list"
+    "secrets": "node scripts/sst-with-cloudflare.mjs secret list"
   },
   "devDependencies": {
     "@pulumi/aws": "^7.24.0",

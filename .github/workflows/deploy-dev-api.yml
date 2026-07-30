@@ -1,0 +1,76 @@
+name: Deploy dev API
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-dev-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy API
+    if: github.ref == 'refs/heads/main'
+    environment: dev
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Verify native AMD64 Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "x86_64"
+          test "$(docker info --format '{{.Architecture}}')" = "x86_64"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-dev-api-${{ github.run_id }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/infra/package-lock.json
+
+      - name: Install deployment dependencies
+        working-directory: apps/infra
+        run: npm ci
+
+      - name: Materialize stage configuration
+        shell: bash
+        env:
+          DEPLOY_ENV: ${{ secrets.DEPLOY_ENV }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_ENV"
+          umask 077
+          printf '%s\n' "$DEPLOY_ENV" > apps/infra/.env
+          if grep -Eq '^(AWS_PROFILE|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|BUILDX_BUILDER)=' apps/infra/.env; then
+            echo "DEPLOY_ENV must rely on workflow OIDC and the native CI builder" >&2
+            exit 1
+          fi
+
+      - name: Deploy the API only
+        working-directory: apps/infra
+        run: npm run deploy -- --stage dev --target Api --exclude Runner
+
+      - name: Remove materialized configuration
+        if: always()
+        run: rm -f apps/infra/.env

@@ -1,0 +1,39 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: GitHub Actions OIDC role for BoxLite SST deployments
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    Default: boxlite-ai/boxlite
+    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+  GitHubEnvironment:
+    Type: String
+    Default: dev
+    AllowedPattern: '^[A-Za-z0-9_.-]+$'
+
+Resources:
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub boxlite-${GitHubEnvironment}-github-deploy
+      Description: Short-lived role used only by the guarded BoxLite GitHub deployment environment
+      MaxSessionDuration: 7200
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepository}:environment:${GitHubEnvironment}
+      ManagedPolicyArns:
+        # SST can create IAM and arbitrary AWS resources declared by the app.
+        # The OIDC trust boundary and protected GitHub Environment are the gate.
+        - arn:aws:iam::aws:policy/AdministratorAccess
+
+Outputs:
+  RoleArn:
+    Value: !GetAtt GitHubDeployRole.Arn
