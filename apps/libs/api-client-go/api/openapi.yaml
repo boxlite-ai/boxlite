@@ -6583,6 +6583,7 @@ components:
         state: initializing
         lastChecked: 2024-10-01T12:00:00Z
         unschedulable: false
+        draining: false
         createdAt: 2023-10-01T12:00:00Z
         updatedAt: 2023-10-01T12:00:00Z
         version: "0"
@@ -6684,6 +6685,10 @@ components:
           description: Whether the runner is unschedulable
           example: false
           type: boolean
+        draining:
+          description: Whether the runner is draining
+          example: false
+          type: boolean
         createdAt:
           description: The creation timestamp of the runner
           example: 2023-10-01T12:00:00Z
@@ -6723,6 +6728,7 @@ components:
       - cpu
       - createdAt
       - disk
+      - draining
       - id
       - memory
       - name
@@ -6757,6 +6763,7 @@ components:
         state: initializing
         lastChecked: 2024-10-01T12:00:00Z
         unschedulable: false
+        draining: false
         createdAt: 2023-10-01T12:00:00Z
         updatedAt: 2023-10-01T12:00:00Z
         version: "0"
@@ -6856,6 +6863,10 @@ components:
           description: Whether the runner is unschedulable
           example: false
           type: boolean
+        draining:
+          description: Whether the runner is draining
+          example: false
+          type: boolean
         createdAt:
           description: The creation timestamp of the runner
           example: 2023-10-01T12:00:00Z
@@ -6885,6 +6896,7 @@ components:
       - cpu
       - createdAt
       - disk
+      - draining
       - id
       - memory
       - name
@@ -7364,6 +7376,7 @@ components:
         state: initializing
         lastChecked: 2024-10-01T12:00:00Z
         unschedulable: false
+        draining: false
         createdAt: 2023-10-01T12:00:00Z
         updatedAt: 2023-10-01T12:00:00Z
         version: "0"
@@ -7464,6 +7477,10 @@ components:
           description: Whether the runner is unschedulable
           example: false
           type: boolean
+        draining:
+          description: Whether the runner is draining
+          example: false
+          type: boolean
         createdAt:
           description: The creation timestamp of the runner
           example: 2023-10-01T12:00:00Z
@@ -7498,6 +7515,7 @@ components:
       - cpu
       - createdAt
       - disk
+      - draining
       - id
       - memory
       - name
@@ -7762,13 +7780,13 @@ components:
         state: initializing
         lastChecked: 2024-10-01T12:00:00Z
         unschedulable: false
+        draining: false
         createdAt: 2023-10-01T12:00:00Z
         updatedAt: 2023-10-01T12:00:00Z
         version: "0"
         apiVersion: "0"
         appVersion: v0.0.0-dev
         regionType: shared
-        draining: false
       properties:
         id:
           description: The ID of the runner
@@ -7863,6 +7881,10 @@ components:
           description: Whether the runner is unschedulable
           example: false
           type: boolean
+        draining:
+          description: Whether the runner is draining
+          example: false
+          type: boolean
         createdAt:
           description: The creation timestamp of the runner
           example: 2023-10-01T12:00:00Z
@@ -7891,10 +7913,6 @@ components:
           - $ref: "#/components/schemas/RegionType"
           description: The region type of the runner
           example: shared
-        draining:
-          description: Whether the runner is currently draining
-          example: false
-          type: boolean
       required:
       - apiVersion
       - class
@@ -9074,13 +9092,13 @@ components:
           state: initializing
           lastChecked: 2024-10-01T12:00:00Z
           unschedulable: false
+          draining: false
           createdAt: 2023-10-01T12:00:00Z
           updatedAt: 2023-10-01T12:00:00Z
           version: "0"
           apiVersion: "0"
           appVersion: v0.0.0-dev
           regionType: shared
-          draining: false
         - id: runner123
           domain: runner1.example.com
           apiUrl: https://api.runner1.example.com
@@ -9104,13 +9122,13 @@ components:
           state: initializing
           lastChecked: 2024-10-01T12:00:00Z
           unschedulable: false
+          draining: false
           createdAt: 2023-10-01T12:00:00Z
           updatedAt: 2023-10-01T12:00:00Z
           version: "0"
           apiVersion: "0"
           appVersion: v0.0.0-dev
           regionType: shared
-          draining: false
         machines:
         - host: runner-uuid
           region: us-east-1

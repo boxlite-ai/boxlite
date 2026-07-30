@@ -114,6 +114,10 @@ export interface Runner {
      */
     'unschedulable': boolean;
     /**
+     * Whether the runner is draining
+     */
+    'draining': boolean;
+    /**
      * The creation timestamp of the runner
      */
     'createdAt': string;

@@ -28,13 +28,13 @@ Name | Type | Description | Notes
 **state** | [**RunnerState**](RunnerState.md) | The state of the runner | [default to undefined]
 **lastChecked** | **string** | The last time the runner was checked | [optional] [default to undefined]
 **unschedulable** | **boolean** | Whether the runner is unschedulable | [default to undefined]
+**draining** | **boolean** | Whether the runner is draining | [default to undefined]
 **createdAt** | **string** | The creation timestamp of the runner | [default to undefined]
 **updatedAt** | **string** | The last update timestamp of the runner | [default to undefined]
 **version** | **string** | The version of the runner (deprecated in favor of apiVersion) | [default to undefined]
 **apiVersion** | **string** | The api version of the runner | [default to undefined]
 **appVersion** | **string** | The app version of the runner | [optional] [default to undefined]
 **regionType** | [**RegionType**](RegionType.md) | The region type of the runner | [optional] [default to undefined]
-**draining** | **boolean** | Whether the runner is currently draining | [default to undefined]
 
 ## Example
 
@@ -65,13 +65,13 @@ const instance: AdminRunnerItem = {
     state,
     lastChecked,
     unschedulable,
+    draining,
     createdAt,
     updatedAt,
     version,
     apiVersion,
     appVersion,
     regionType,
-    draining,
 };
 ```
 

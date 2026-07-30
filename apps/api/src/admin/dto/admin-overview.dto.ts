@@ -131,7 +131,7 @@ export class AdminBoxItemDto {
   owner: AdminBoxOwnerDto
 }
 
-// ─── Runner admin item (safe RunnerDto + draining flag) ──────────────────────
+// ─── Runner admin item ───────────────────────────────────────────────────────
 
 @ApiSchema({ name: 'AdminRunner' })
 export class AdminRunnerDto extends RunnerDto {
@@ -145,10 +145,7 @@ export class AdminRunnerDto extends RunnerDto {
 }
 
 @ApiSchema({ name: 'AdminRunnerItem' })
-export class AdminRunnerItemDto extends AdminRunnerDto {
-  @ApiProperty({ description: 'Whether the runner is currently draining', example: false })
-  draining: boolean
-}
+export class AdminRunnerItemDto extends AdminRunnerDto {}
 
 // ─── Machine (runner-as-machine) view ────────────────────────────────────────
 

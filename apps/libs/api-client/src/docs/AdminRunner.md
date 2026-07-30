@@ -28,6 +28,7 @@ Name | Type | Description | Notes
 **state** | [**RunnerState**](RunnerState.md) | The state of the runner | [default to undefined]
 **lastChecked** | **string** | The last time the runner was checked | [optional] [default to undefined]
 **unschedulable** | **boolean** | Whether the runner is unschedulable | [default to undefined]
+**draining** | **boolean** | Whether the runner is draining | [default to undefined]
 **createdAt** | **string** | The creation timestamp of the runner | [default to undefined]
 **updatedAt** | **string** | The last update timestamp of the runner | [default to undefined]
 **version** | **string** | The version of the runner (deprecated in favor of apiVersion) | [default to undefined]
@@ -64,6 +65,7 @@ const instance: AdminRunner = {
     state,
     lastChecked,
     unschedulable,
+    draining,
     createdAt,
     updatedAt,
     version,

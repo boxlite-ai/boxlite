@@ -117,6 +117,10 @@ export interface AdminRunnerItem {
      */
     'unschedulable': boolean;
     /**
+     * Whether the runner is draining
+     */
+    'draining': boolean;
+    /**
      * The creation timestamp of the runner
      */
     'createdAt': string;
@@ -143,10 +147,6 @@ export interface AdminRunnerItem {
      * The region type of the runner
      */
     'regionType'?: RegionType;
-    /**
-     * Whether the runner is currently draining
-     */
-    'draining': boolean;
 }
 
 

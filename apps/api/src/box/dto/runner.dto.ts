@@ -168,6 +168,12 @@ export class RunnerDto {
   unschedulable: boolean
 
   @ApiProperty({
+    description: 'Whether the runner is draining',
+    example: false,
+  })
+  draining: boolean
+
+  @ApiProperty({
     description: 'The creation timestamp of the runner',
     example: '2023-10-01T12:00:00Z',
   })
@@ -226,6 +232,7 @@ export class RunnerDto {
       state: runner.state,
       lastChecked: runner.lastChecked?.toISOString(),
       unschedulable: runner.unschedulable,
+      draining: runner.draining,
       createdAt: runner.createdAt.toISOString(),
       updatedAt: runner.updatedAt.toISOString(),
       version: runner.apiVersion,
