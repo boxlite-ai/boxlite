@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { isSstComponentExcluded, requireIamPermissionsBoundaryStage, resolveSstStage } from './sst-stage.mjs'
+import { requireIamPermissionsBoundaryStage, resolveSstStage } from './sst-stage.mjs'
 
 test('resolves a stage from separate and inline CLI arguments', () => {
   assert.equal(resolveSstStage(['deploy', '--stage', 'dev'], {}), 'dev')
@@ -42,21 +42,6 @@ test('requires an explicit stage for state-changing stack commands', () => {
 
 test('retains the dev credential lookup default for non-deploy commands', () => {
   assert.equal(resolveSstStage(['diff'], {}), 'dev')
-})
-
-test('recognizes SST components omitted by exclude or target selection', () => {
-  assert.equal(isSstComponentExcluded(['deploy', '--exclude', 'Runner'], 'Runner'), true)
-  assert.equal(isSstComponentExcluded(['deploy', '--exclude=Runner'], 'Runner'), true)
-  assert.equal(isSstComponentExcluded(['deploy', '--exclude', 'Runner-runner-2'], 'Runner'), false)
-  assert.equal(isSstComponentExcluded(['deploy', '--target', 'Api'], 'Runner'), true)
-  assert.equal(isSstComponentExcluded(['deploy', '--target=Api'], 'Runner'), true)
-  assert.equal(isSstComponentExcluded(['deploy', '--target', 'Runner'], 'Runner'), false)
-  assert.equal(isSstComponentExcluded(['deploy', '--target=Runner'], 'Runner'), false)
-  assert.equal(isSstComponentExcluded(['deploy'], 'Runner'), false)
-  assert.throws(
-    () => isSstComponentExcluded(['deploy', '--target', 'Api', '--exclude', 'Runner'], 'Runner'),
-    /--target and --exclude cannot be combined/,
-  )
 })
 
 test('requires the provisioned IAM boundary stage to match the SST stage', () => {

@@ -6,12 +6,13 @@
 > See the project root `LICENSE` file and individual source file headers for
 > full license terms.
 
-One-command deploy of the BoxLite control plane: ECS Fargate services, an
-EC2 runner with nested KVM, RDS Postgres, ElastiCache Redis, S3, CloudFront.
+Guarded deployment of an existing BoxLite control-plane stack: ECS Fargate
+services, an EC2 Runner with nested KVM, RDS Postgres, ElastiCache Redis, S3,
+and CloudFront.
 
 - **Region:** `AWS_REGION` (defaults to `ap-southeast-1`)
 - **IaC:** SST v4 (Pulumi under the hood)
-- **Cost at rest:** ~$570/month always-on — Runner + load balancers dominate (tear down with one command)
+- **Cost at rest:** ~$570/month always-on — Runner + load balancers dominate
 
 ## Prerequisites
 
@@ -19,24 +20,39 @@ EC2 runner with nested KVM, RDS Postgres, ElastiCache Redis, S3, CloudFront.
 - An **Auth0 tenant** (or any OIDC provider — see `.env.example` for setup steps)
 - A protected GitHub **`dev` Environment** with required reviewers
 - An AWS GitHub OIDC provider and the deployment role described below
+- An existing SST stack whose Runner inventory exactly matches `RUNNERS`
 - **AWS CLI** and **GitHub CLI** for one-time CI bootstrap only
 
-## Quick start
+## Deploy an existing stack
+
+This workflow cannot create the first Runner or recover a missing one. Complete
+a separately reviewed Runner provisioning operation before using it for a new
+stage; that operation is not implemented in this repository yet.
 
 ```bash
 cd apps/infra
 npm install
 cp .env.example .env        # stage config: STACK_DOMAIN, OIDC_ISSUER_BASE_URL, OIDC_AUDIENCE
 
-# Cloudflare provider credentials live in SSM (per stage) — see "Secrets & credentials":
-aws ssm put-parameter --region ap-southeast-1 --type SecureString \
-  --name /boxlite/dev/cloudflare-api-token  --value "<token>"
-aws ssm put-parameter --region ap-southeast-1 --type SecureString \
-  --name /boxlite/dev/cloudflare-account-id --value "<account-id>"
+# Cloudflare provider credentials live in SSM (per stage). Read each value
+# without terminal echo, then pass it through stdin instead of process argv:
+printf 'Cloudflare API token: ' >&2
+IFS= read -rs secret_value; printf '\n' >&2
+printf '%s' "$secret_value" | aws ssm put-parameter --region ap-southeast-1 \
+  --type SecureString --name /boxlite/dev/cloudflare-api-token --value file:///dev/stdin
+unset secret_value
+printf 'Cloudflare account ID: ' >&2
+IFS= read -rs secret_value; printf '\n' >&2
+printf '%s' "$secret_value" | aws ssm put-parameter --region ap-southeast-1 \
+  --type SecureString --name /boxlite/dev/cloudflare-account-id --value file:///dev/stdin
+unset secret_value
 
 # Required application secret. There is no placeholder fallback because a wrong
-# client ID makes every interactive login fail.
-npm run sst -- secret set OIDC_CLIENT_ID "<spa-client-id>" --stage dev
+# client ID makes every interactive login fail. SST reads an omitted value from stdin.
+printf 'OIDC client ID: ' >&2
+IFS= read -rs secret_value; printf '\n' >&2
+printf '%s' "$secret_value" | npm run sst -- secret set OIDC_CLIENT_ID --stage dev
+unset secret_value
 
 # Bootstrap the short-lived GitHub OIDC role. The account's GitHub OIDC provider
 # already exists when the E2E CI setup has been run.
@@ -51,15 +67,18 @@ aws cloudformation deploy --region ap-southeast-1 \
 #   secret   DEPLOY_ENV          = the contents of this .env file
 gh secret set DEPLOY_ENV --env dev < .env
 
-# The workflow is manual and accepts deployments only from main.
-gh workflow run deploy-dev-api.yml --ref main
+# The workflow is manual and accepts runs only from main. It updates an existing
+# stack; initial Runner provisioning is intentionally a separate operation.
+gh workflow run deploy-dev-api.yml --ref main -f apply=false
+gh workflow run deploy-dev-api.yml --ref main -f apply=true
 ```
 
 `OIDC_CLIENT_ID` is required. Other app secrets (SSH keys, Auth0 Management API,
 Svix, PostHog) are optional and set per-stage in the SST secret store — see
 [Secrets & credentials](#secrets--credentials).
 
-First deploy: 10–15 minutes. Output prints service URLs + CloudFront domain.
+A full reconciliation typically takes 10–15 minutes. Output prints service URLs
+and the CloudFront domain.
 
 If a build fails on a transient registry or package-mirror error, rerun the
 workflow — SST resumes from the failed step.
@@ -76,12 +95,27 @@ GitHub `dev` Environment. GitHub OIDC supplies short-lived AWS credentials; no
 AWS access keys are stored in GitHub. `DEPLOY_ENV` materializes the stage's
 gitignored `.env` only for the job and is deleted even if deployment fails.
 
-The current workflow deliberately targets only `Api`; selecting only the API
-also skips the Runner release-asset preflight:
+The workflow first runs deployment safety tests that require every Runner to
+retain `protect: true` and the AMI/user-data ignore rules. It then runs a full
+`sst diff --json` and passes the structured plan through
+`scripts/deployment-preview.mjs`. The gate rejects creating, replacing, or
+deleting a Runner instance and any in-place Runner change other than provider
+association or tags. Workflow dispatch defaults to a preview-only run; set
+`apply=true` only after reviewing it. An apply run repeats the same guarded
+preview before the full-stack deploy:
 
 ```bash
-npm run deploy -- --stage dev --target Api
+npm run deploy -- --stage dev
 ```
+
+Both commands deliberately avoid `--target` and `--exclude`. Pulumi treats both
+as partial updates, which cannot safely migrate a provider while omitted
+resources still reference the old provider. Full reconciliation also avoids
+silently accumulating stack drift. The deployment wrapper rejects partial
+deploy selectors; targeted `diff` remains available for read-only inspection.
+The Runner EC2 identity and binary remain stable through the lifecycle controls
+under [Runner lifecycle](#runner-lifecycle), and the matching release-asset
+preflight always runs before deployment.
 
 The role template grants only the AWS control-plane actions used by this SST
 stack. IAM mutation is limited to `boxlite-*` roles, policies, and instance
@@ -98,20 +132,30 @@ they differ. Keep required reviewers enabled on that Environment.
 Three homes, one access gate — **AWS IAM**. Nothing secret lives in git or a
 single laptop's `.env`:
 
-| What                                                                                                                              | Where                                                                        | Set with                                                                         |
-| --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| **App secrets** — SSH host/private keys, Auth0 Management API id + secret, `SVIX_AUTH_TOKEN`, `POSTHOG_API_KEY`, `OIDC_CLIENT_ID` | SST secret store (encrypted in SST state, per stage)                         | `npm run sst -- secret set <NAME> "<value>" --stage <stage>`                     |
-| **Cloudflare provider creds** — `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`                                           | AWS SSM (`SecureString`, per stage)                                          | `aws ssm put-parameter --type SecureString --name /boxlite/<stage>/cloudflare-…` |
-| **Stage config** — `STACK_DOMAIN`, `OIDC_ISSUER_BASE_URL`, `OIDC_AUDIENCE`, toggles                                               | GitHub Environment secret `DEPLOY_ENV`; local `.env` is the bootstrap source | `gh secret set DEPLOY_ENV --env dev < .env`                                      |
+| What                                                                                                                              | Where                                                                        | Set with                                                         |
+| --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| **App secrets** — SSH host/private keys, Auth0 Management API id + secret, `SVIX_AUTH_TOKEN`, `POSTHOG_API_KEY`, `OIDC_CLIENT_ID` | SST secret store (encrypted in SST state, per stage)                         | Non-echoing prompt + SST stdin procedure below                   |
+| **Cloudflare provider creds** — `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`                                           | AWS SSM (`SecureString`, per stage)                                          | Non-echoing prompt + AWS CLI `file:///dev/stdin` procedure above |
+| **Stage config** — `STACK_DOMAIN`, `OIDC_ISSUER_BASE_URL`, `OIDC_AUDIENCE`, toggles                                               | GitHub Environment secret `DEPLOY_ENV`; local `.env` is the bootstrap source | `gh secret set DEPLOY_ENV --env dev < .env`                      |
+
+Grant each API token only the permissions and resources required for its
+documented use; the Cloudflare token needs `Zone:Read` and `DNS:Edit` for the
+managed zone. Rotate tokens regularly and immediately after suspected
+disclosure, updating the value in SSM or the SST secret store. Never put token
+values in command arguments, echo them, enable shell tracing around
+secret-handling commands, or copy secret-bearing logs or workflow output into
+issues.
 
 `VERSION` is optional; it controls the release reported by `/api/config` and
 defaults to the canonical workspace version in `Cargo.toml`.
 
 The Cloudflare creds can't be `sst.Secret`: the provider initializes in `app()`
 before `run()` (where secrets exist), so it reads them from the environment.
-`scripts/sst-with-cloudflare.mjs` — wired into `npm run dev`/`deploy`/`remove`,
+`scripts/sst-with-cloudflare.mjs` — wired into `npm run deploy`/`remove`,
 `npm run secrets`, and `npm run sst` — fetches them from SSM and exports them
-before invoking sst.
+before invoking sst. `sst dev` is disabled for this stateful stack because a
+long-running process cannot refresh the Runner state baseline before every
+update.
 **Run sst through these npm scripts**, not bare `npx sst`, so the creds load.
 SST 4.6.11 exposes no supported deploy option to disable or redact this event
 stream, so the wrapper removes Pulumi's transient
@@ -124,9 +168,12 @@ the stale event log.
 ### App secrets
 
 ```bash
-npm run sst -- secret set SVIX_AUTH_TOKEN "<value>" --stage dev  # set one
-npm run sst -- secret load .env.secrets --stage dev              # bulk-load an ignored secret dotenv
-npm run secrets -- --stage dev                                   # list what's set
+printf 'SVIX auth token: ' >&2
+IFS= read -rs secret_value; printf '\n' >&2
+printf '%s' "$secret_value" | npm run sst -- secret set SVIX_AUTH_TOKEN --stage dev
+unset secret_value
+npm run sst -- secret load .env.secrets --stage dev # bulk-load an ignored secret dotenv
+npm run secrets -- --stage dev                      # list what's set
 ```
 
 Secret names match the env keys the services expect, but values in the ordinary
@@ -141,30 +188,35 @@ Access is **AWS IAM only**: anyone who can deploy (read SST state + SSM, run
 offboard by revoking it. There's no secret file or vault to hand over. Secret
 values and the SSM params are **per-stage** — seed each stage you run.
 
-## After first deploy
+## After deployment
 
-Nothing needs to be fed back into `.env`. The runner EC2 self-registers with the
-API on boot — v2 runners report their address via healthcheck — so boxes
-work as soon as the runner reaches `READY` (~30–60s), visible in the dashboard
-Runner table or `GET /admin/runners`.
+Nothing needs to be fed back into `.env`. Existing Runner EC2 instances
+self-report their addresses through healthchecks and remain visible in the
+dashboard Runner table or `GET /admin/runners`.
 
-### Adding a runner
+### Runner inventory
 
-The default runner is auto-seeded by the API at boot. To run more, set the total
-count and redeploy:
+The default runner is auto-seeded by the API at boot. `RUNNERS` records the
+expected total (1-100), including the default Runner:
 
 ```bash
-echo "RUNNERS=3" >> .env     # default runner (#1) + runner-2 + runner-3
-npm run deploy -- --stage dev
+# Existing inventory: default (#1) + runner-2 + runner-3.
+echo "RUNNERS=3" >> .env
 ```
+
+Routine control-plane deployment requires this inventory to match the current
+SST checkpoint exactly. It will not create a first Runner, scale out, or replace
+a missing Runner. A separately designed and reviewed provisioning operation is
+required so unknown preview-time secrets and network IDs cannot bypass the
+control-plane safety gate; none is implemented in this repository yet.
 
 Each extra runner gets its own EC2 + minted token. Because the API only
 auto-seeds the single default, the extras are registered with the control plane
 by a post-deploy step (`RegisterExtraRunners` in `sst.config.ts`, which runs
 `scripts/register-runners.mjs` against the admin API once the API is healthy).
-It's idempotent — re-running `sst deploy` won't duplicate rows. Scaling **down**
-is the deliberate decommission ceremony under [Runner lifecycle](#runner-lifecycle),
-applied per runner.
+It's idempotent — re-running `sst deploy` won't duplicate rows. Scaling down is
+also excluded from routine deployment; see
+[Runner decommission and recovery](#runner-decommission-and-recovery).
 
 ### Custom system images
 
@@ -188,12 +240,12 @@ URLs must use HTTPS; an HTTP fallback is accepted only on a loopback host.
 
 Four public DNS names, three different fronting layers:
 
-| Hostname                 | Fronted by           | Purpose                                                           |
-| ------------------------ | -------------------- | ----------------------------------------------------------------- |
-| `<STACK_DOMAIN>`         | CloudFront Router    | Dashboard SPA + static assets (cache-friendly, edge-served)       |
-| `api.<STACK_DOMAIN>`     | Api ALB (direct)     | REST API, WebSocket `/attach`, build-log streaming, file transfer |
-| `proxy.<STACK_DOMAIN>`   | Proxy NLB (TLS)      | Port-preview wildcard `<port>-<boxId>.proxy.<domain>`             |
-| `*.proxy.<STACK_DOMAIN>` | Proxy NLB (TLS)      | Wildcard alias of the above (per-box preview hosts)               |
+| Hostname                 | Fronted by        | Purpose                                                           |
+| ------------------------ | ----------------- | ----------------------------------------------------------------- |
+| `<STACK_DOMAIN>`         | CloudFront Router | Dashboard SPA + static assets (cache-friendly, edge-served)       |
+| `api.<STACK_DOMAIN>`     | Api ALB (direct)  | REST API, WebSocket `/attach`, build-log streaming, file transfer |
+| `proxy.<STACK_DOMAIN>`   | Proxy NLB (TLS)   | Port-preview wildcard `<port>-<boxId>.proxy.<domain>`             |
+| `*.proxy.<STACK_DOMAIN>` | Proxy NLB (TLS)   | Wildcard alias of the above (per-box preview hosts)               |
 
 **Why `/api/*` bypasses CloudFront.** CloudFront imposes a non-configurable
 10-minute idle cap on WebSocket connections — even with WS Ping frames and
@@ -333,22 +385,41 @@ For Auth0 specifically:
 | **ClickHouse Cloud** | Managed OTel storage                  | external service; configured by env                                      |
 | **ClickStack**       | Logs/traces/metrics explorer          | external ClickHouse Cloud UI                                             |
 
-Run the `Deploy dev API` workflow again to redeploy the API. See
+Run the `Deploy dev stack` workflow again to redeploy. See
 [Public hostnames](#public-hostnames) below for the rationale behind the
 dashboard-vs-API split.
 
 ## Common commands
 
 ```bash
-gh workflow run deploy-dev-api.yml --ref main # native AMD64 API deployment
+# Preview the protected GitHub deployment environment without mutation.
+gh workflow run deploy-dev-api.yml --ref main -f apply=false
+
+# After the preview passes review, evaluate again and apply the full stack.
+gh workflow run deploy-dev-api.yml --ref main -f apply=true
+
 npm run sst -- diff --stage dev     # preview changes
 npm run sst -- unlock --stage dev   # recover from "concurrent update detected"
 npm run sst -- shell --stage dev    # open shell with SST-linked env vars
-npm run remove -- --stage dev       # requires the Proxy/Runner unprotect procedures
 ```
 
 > The workflow routes deployment through `scripts/sst-with-cloudflare.mjs` so
 > Cloudflare credentials load from SSM. Bare `npx sst …` skips that integration.
+> The wrapper also requires the repository's mandatory Runner policy for every
+> `diff` and `deploy`, and requires the SST subcommand to be the first argument.
+> `sst dev` is disabled.
+> Before each diff or deploy it exports the encrypted SST checkpoint, keeps
+> only a non-secret hash of every non-default Runner input except the four
+> deliberately mutable fields (AMI, user data, declared tags, and
+> provider-expanded tags),
+> and compares current state with desired Runner properties. The current SST
+> CLI cannot save and later apply one exact preview plan, so apply performs a
+> fresh state export and evaluation. The policy blocks every Runner create,
+> unsafe property change, changed protection, or changed identity even if the
+> human-readable preview stream is incomplete. A separate actor can still
+> change backend state between that export and Pulumi acquiring its update lock;
+> the protected Environment
+> and serialized workflow reduce this residual window but cannot eliminate it.
 
 ## Runner lifecycle
 
@@ -380,38 +451,18 @@ capability-gated two-phase rollout:
    requests to Runners at the required version, and each upgraded Runner only
    becomes schedulable after the control plane reports that exact version.
 
-An API-only `--target Api` deployment, or a broader deployment with an explicit
-`--exclude Runner`, is the operator escape hatch for a control-plane-only
-rollout. Either form skips the Runner release-asset preflight and leaves the EC2
-resource and its identity tag untouched. Detached requests that use legacy
-Runner capabilities remain available; requests needing the new Runner version
-fail explicitly until a later full rollout applies the metadata and upgrades
-the binary.
+Routine infrastructure deploys reconcile the full stack. They may update the
+Runner's provider association or tags in place, but the preview gate rejects
+creation, replacement, deletion, or other instance changes. The mandatory
+policy also requires the exact current inventory and identity, `protect: true`,
+only the two intended `ignoreChanges` properties, and equality of all other
+non-default inputs during preview and apply. The EC2 stays in place; a version
+change is delivered during the full deployment by the sequential
+`UpgradeRunnerBinary-*` SSM commands described below.
 
-> Of the two, only `--target Api` also leaves the **binary** alone, because it
-> deploys the API and nothing else. `--exclude Runner` drops just the `Runner`
-> component; the upgrade commands below are separate ones
-> (`UpgradeRunnerBinary-default`, and one per extra Runner), so they still run
-> while the preflight is skipped. That fails closed rather than dangerously — a
-> missing asset stops the download before the unit is touched — but it turns an
-> intentionally Runner-free rollout into a failed deploy. `--target` and
-> `--exclude` cannot be combined, so with that form every generated upgrade
-> command has to be named — one per Runner, not just the default:
->
-> ```bash
-> # RUNNERS=1
-> npm run deploy -- --stage dev --exclude Runner \
->   --exclude UpgradeRunnerBinary-default
->
-> # RUNNERS=3 — extras are UpgradeRunnerBinary-runner-2, -runner-3, … up to RUNNERS
-> npm run deploy -- --stage dev --exclude Runner \
->   --exclude UpgradeRunnerBinary-default \
->   --exclude UpgradeRunnerBinary-runner-2 \
->   --exclude UpgradeRunnerBinary-runner-3
-> ```
->
-> Prefer `--target Api` when you can: it creates no upgrade command at all, so
-> there is no per-Runner bookkeeping to get wrong.
+Detached requests that use legacy Runner capabilities remain available during
+the compatibility window; requests needing the new Runner version fail
+explicitly until the rolling binary upgrade reaches that Runner.
 
 This bounded compatibility window is intentional: silently discarding a
 requested command or foreground lifecycle would be data loss, while sending it
@@ -454,7 +505,7 @@ hand-install. Version ordering understands prereleases: `0.9.10` outranks
 `0.9.9`, and `0.9.8-alpha` is treated as older than `0.9.8`, so promoting a
 prerelease host to the matching release is an upgrade, not a refused downgrade.
 
-To upgrade out of band — after a partial roll, or to pin a version without
+To upgrade out of band — after an interrupted roll, or to pin a version without
 deploying:
 
 ```bash
@@ -472,42 +523,14 @@ ALLOW_DOWNGRADE=1 npm run runner:update -- 0.9.5   # deliberate rollback
 > the deploy path has — so treat any Runner upgrade as disruptive and drain it
 > yourself when that matters.
 
-### Deliberate decommission (multi-step ceremony)
+### Runner decommission and recovery
 
-When you actually need to replace the Runner (failed disk, security incident,
-major version upgrade with on-disk format change), it is a multi-edit
-operation by design:
-
-1. Make the Runner unschedulable first — `PATCH /runners/:id/scheduling` with
-   `unschedulable: true`. Order matters: it is the only flag both placement
-   paths honour, so without it a box can be assigned between the check below
-   and the destroy. `draining` alone will not do, because the warm pool does
-   not consult it.
-2. Verify no `running` boxes are pinned to this Runner (DB query against
-   `box.runnerId`), and leave it unschedulable for the rest of the ceremony.
-3. Edit `sst.config.ts`: change `protect: true` to `protect: false` on the
-   Runner resource. Run `npm run deploy -- --stage <stage>`. This only updates
-   the resource metadata; the EC2 is not yet touched.
-4. Destroy the EC2:
-
-   ```bash
-   npx pulumi destroy --target 'urn:pulumi:<stage>::boxlite::aws:ec2/instance:Instance::Runner'
-   ```
-
-5. Edit `sst.config.ts`: change `protect: false` back to `protect: true`. Run
-   `npm run deploy -- --stage <stage>` again — a new Runner is created with
-   fresh state.
-
-This is deliberate by construction: a cordon, two config edits, two deploys. Around
-that ceremony the control plane offers two independent flags, and they are not
-equivalent. `unschedulable` keeps a Runner out of both placement paths — the
-`findAvailableRunners` filter and the warm-pool candidate query. `draining` is
-narrower: it excludes the Runner from `findAvailableRunners` and sweeps it
-toward decommissioning once its boxes are gone, but the warm-pool query does
-not consult it, so a pre-warmed box can still be assigned there. Nothing sets
-either flag automatically, and the binary upgrade above does not drain the
-Runner it restarts. Neither flag removes the explicit Pulumi protection steps
-required to replace the EC2 resource.
+The routine workflow intentionally does not provision, decommission, or recover
+Runner EC2 instances. Do not change `protect: true` or edit SST state as part of
+a normal deployment. A separate reviewed runbook must cover control-plane
+draining, pinned-box checks, the exact cloud and SST-state operations, and
+post-operation verification before any Runner is removed or recreated. That
+break-glass operation is not implemented in this repository yet.
 
 ## Architecture
 
@@ -617,6 +640,7 @@ service, and the dashboard's configured API base URL.
 | **Total**                             | **~$570** |
 
 Figures are approximate (ap-southeast-1 on-demand). The **Runner and the load
-balancers dominate** — the NAT is ~$16, not a headline cost. Stack removal
-requires the Proxy and Runner unprotect procedures above; S3 buckets and RDS
-snapshots are retained in production (`--stage production`) per SST's default.
+balancers dominate** — the NAT is ~$16, not a headline cost. Whole-stack removal
+requires a separate reviewed Proxy and Runner decommission runbook, which is not
+implemented here. S3 buckets and RDS snapshots are retained in production
+(`--stage production`) per SST's default.

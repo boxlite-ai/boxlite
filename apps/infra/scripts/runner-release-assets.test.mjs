@@ -23,6 +23,7 @@ function createFakeCurl(
     checksum = `${DIGEST}  ${TARBALL}\n`,
     checksumExit = 0,
     expectedProxy = process.env.HTTPS_PROXY ?? '',
+    delaySeconds = 0,
     tarballExit = 0,
   } = {},
 ) {
@@ -36,6 +37,7 @@ function createFakeCurl(
     `#!/usr/bin/env bash
 set -euo pipefail
 [[ "\${HTTPS_PROXY:-}" == ${shellQuote(expectedProxy)} ]] || { echo 'HTTPS_PROXY was not forwarded' >&2; exit 90; }
+sleep ${delaySeconds}
 printf '%s\\n' "$*" >> ${shellQuote(logPath)}
 case "$*" in
   *${TARBALL}.sha256*)
@@ -80,19 +82,32 @@ test('uses bounded curl requests so deployment honors the host proxy environment
 test('rejects a missing or mismatched Runner release before deployment', async (t) => {
   const missing = createFakeCurl(t, { checksumExit: 22 })
   await assert.rejects(
-    verifyRunnerReleaseAssets(VERSION, { curlPath: missing.curlPath, timeoutMs: 1_000 }),
+    verifyRunnerReleaseAssets(VERSION, { curlPath: missing.curlPath, timeoutMs: 5_000 }),
     /checksum request failed/i,
   )
 
   const mismatched = createFakeCurl(t, { checksum: `${DIGEST}  another-file.tar.gz\n` })
   await assert.rejects(
-    verifyRunnerReleaseAssets(VERSION, { curlPath: mismatched.curlPath, timeoutMs: 1_000 }),
+    verifyRunnerReleaseAssets(VERSION, { curlPath: mismatched.curlPath, timeoutMs: 5_000 }),
     /checksum manifest.*exactly/i,
   )
 
   const missingTarball = createFakeCurl(t, { tarballExit: 22 })
   await assert.rejects(
-    verifyRunnerReleaseAssets(VERSION, { curlPath: missingTarball.curlPath, timeoutMs: 1_000 }),
+    verifyRunnerReleaseAssets(VERSION, { curlPath: missingTarball.curlPath, timeoutMs: 5_000 }),
     /tarball request failed/i,
   )
+})
+
+test('aborts a pending Runner release preflight', async (t) => {
+  const fixture = createFakeCurl(t, { delaySeconds: 10 })
+  const controller = new AbortController()
+  const verification = verifyRunnerReleaseAssets(VERSION, {
+    curlPath: fixture.curlPath,
+    signal: controller.signal,
+    timeoutMs: 15_000,
+  })
+
+  controller.abort(new Error('synthetic interruption'))
+  await assert.rejects(verification, /checksum request failed/i)
 })

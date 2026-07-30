@@ -1,19 +1,25 @@
-name: Deploy dev API
+name: Deploy dev stack
 
 on:
   workflow_dispatch:
+    inputs:
+      apply:
+        description: Preview again, then deploy the full stack
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: deploy-dev-api
+  group: deploy-dev-stack
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Deploy API
+    name: Deploy dev stack
     if: github.ref == 'refs/heads/main'
     environment: dev
     runs-on: ubuntu-24.04
@@ -41,7 +47,7 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: deploy-dev-api-${{ github.run_id }}
+          role-session-name: deploy-dev-stack-${{ github.run_id }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -54,6 +60,10 @@ jobs:
         working-directory: apps/infra
         run: npm ci
 
+      - name: Run deployment safety tests
+        working-directory: apps/infra
+        run: npm test
+
       - name: Materialize stage configuration
         shell: bash
         env:
@@ -63,14 +73,24 @@ jobs:
           test -n "$DEPLOY_ENV"
           umask 077
           printf '%s\n' "$DEPLOY_ENV" > apps/infra/.env
-          if grep -Eq '^(AWS_PROFILE|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|BUILDX_BUILDER)=' apps/infra/.env; then
-            echo "DEPLOY_ENV must rely on workflow OIDC and the native CI builder" >&2
-            exit 1
-          fi
+          node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env
 
-      - name: Deploy the API only
+      - name: Install SST providers
         working-directory: apps/infra
-        run: npm run deploy -- --stage dev --target Api
+        run: npm run --silent sst -- install --stage dev
+
+      - name: Preview the full stack
+        shell: bash
+        working-directory: apps/infra
+        run: |
+          set -euo pipefail
+          npm run --silent sst -- diff --stage dev --policy . --json |
+            node scripts/deployment-preview.mjs
+
+      - name: Deploy the full stack
+        if: ${{ inputs.apply }}
+        working-directory: apps/infra
+        run: npm run deploy -- --stage dev --policy .
 
       - name: Remove materialized configuration
         if: always()

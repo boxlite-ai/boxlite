@@ -108,11 +108,13 @@ export default $config({
     const { readWorkspaceVersion, resolveAwsRegion, resolvePublicDeploymentConfig } =
       await import('./scripts/deployment-environment.mjs')
     const { optionalPublicOidcIssuer, requireOidcIssuer } = await import('./scripts/oidc-issuer.mjs')
+    const { resolveRunnerInventory } = (await import('./scripts/runner-inventory.cjs')).default
     const { requireIamPermissionsBoundaryStage } = await import('./scripts/sst-stage.mjs')
     const REGION = resolveAwsRegion()
     const workspaceVersion = readWorkspaceVersion()
     const deploymentConfig = resolvePublicDeploymentConfig(process.env, workspaceVersion)
     const { stackDomain, proxyDomain, proxyProtocol, proxyTemplateUrl, releaseVersion } = deploymentConfig
+    const runnerInventory = resolveRunnerInventory(process.env)
     const oidcIssuer = requireOidcIssuer()
     const publicOidcIssuer = optionalPublicOidcIssuer()
 
@@ -167,7 +169,8 @@ export default $config({
     const proxyApiKey = randomKey('ProxyApiKey')
     const adminApiKey = randomKey('AdminApiKey')
     const defaultRunnerApiKey = randomKey('DefaultRunnerApiKey')
-    const defaultRunnerName = envOr('DEFAULT_RUNNER_NAME', 'default')
+    const defaultRunnerConfig = runnerInventory[0]
+    const defaultRunnerName = defaultRunnerConfig.controlPlaneRunnerName
     const pgAdminPassword = randomKey('PgAdminPassword', 24)
 
     // App secrets — set via `npm run sst -- secret set <NAME> --stage <stage>`
@@ -934,8 +937,8 @@ export default $config({
     //     version bumps no longer force replacement. The version bump still has to reach
     //     the running fleet, so the UpgradeRunnerBinary commands below land it over SSM
     //     instead — every runner, one at a time (see scripts/runner-update-binary.mjs).
-    //   • protect: refuses any delete (errant `pulumi destroy` / teardown). Deliberate
-    //     decommission = set protect:false, deploy, then `pulumi destroy --target ...`.
+    //   • protect: refuses any delete (errant `pulumi destroy` / teardown). Keep this
+    //     true; decommission and recovery stay outside routine deployments.
     const makeRunner = (
       resourceName: string,
       nameTag: string,
@@ -976,7 +979,12 @@ export default $config({
     // Default runner — auto-seeded by the API at boot via DEFAULT_RUNNER_*.
     // Pulumi resource id stays 'Runner' (renaming it would replace a protect:true
     // instance); the AWS tags bind it to the API's configured default name.
-    const defaultRunner = makeRunner('Runner', 'boxlite-runner-default', defaultRunnerName, runnerUserData)
+    const defaultRunner = makeRunner(
+      defaultRunnerConfig.resourceName,
+      defaultRunnerConfig.nameTag,
+      defaultRunnerConfig.controlPlaneRunnerName,
+      runnerUserData,
+    )
 
     // Multi-runner provisioning. Extra runners share the same OTel endpoint as
     // the default runner.
@@ -990,18 +998,15 @@ export default $config({
     // BOXLITE_RUNNER_TOKEN baked into the matching EC2's user-data) — and the
     // same protect/ignoreChanges options as the default so routine deploys never
     // replace a state-holding runner.
-    const totalRunners = Math.max(1, parseInt(envOr('RUNNERS', '1'), 10) || 1)
-    const extraRunners = Array.from({ length: totalRunners - 1 }, (_, i) => {
-      const index = i + 2 // default runner is #1, so extras start at #2
-      const name = `runner-${index}` // control-plane registration name
-      const apiKey = randomKey(`RunnerApiKey-${name}`)
+    const extraRunners = runnerInventory.slice(1).map((runner) => {
+      const apiKey = randomKey(`RunnerApiKey-${runner.controlPlaneRunnerName}`)
       // Resource id stays `Runner-runner-N` (stable — these are protect:true);
       // the AWS Name tag takes the cleaner `boxlite-runner-N` form while a
       // separate tag preserves the exact control-plane name.
       const instance = makeRunner(
-        `Runner-${name}`,
-        `boxlite-runner-${index}`,
-        name,
+        runner.resourceName,
+        runner.nameTag,
+        runner.controlPlaneRunnerName,
         $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
           ([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
             buildRunnerUserData({
@@ -1015,7 +1020,7 @@ export default $config({
             }),
         ),
       )
-      return { name, apiKey, instance }
+      return { name: runner.controlPlaneRunnerName, apiKey, instance }
     })
 
     // Register the extra runners with the control plane once the API is healthy.

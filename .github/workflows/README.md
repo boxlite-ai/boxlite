@@ -161,10 +161,16 @@ is enabled. The workflow is dormant until repository variable
 
 ### `deploy-dev-api.yml`
 
-Manually deploys only the dev `Api` component from `main` on a native AMD64
-GitHub runner. The job is serialized, uses the protected `dev` Environment, and
-authenticates to AWS with short-lived OIDC credentials. Docker runs entirely in
-CI; no developer machine or public SSH builder participates.
+Previews or deploys the full dev stack from `main` on a native AMD64 GitHub
+runner. Deployment safety tests first enforce the Runner lifecycle options.
+Dispatch defaults to preview-only; `apply=true` repeats the full structured
+preview and deploys only when the Runner safety gate accepts the plan. Routine
+control-plane deployment rejects every Runner create, delete, replacement, or
+protected-property change; the routine workflow does not provision Runners.
+The job rejects partial `--target`/`--exclude` deploys so provider changes and
+resources reconcile together. It is serialized, uses the protected `dev`
+Environment, and authenticates to AWS with short-lived OIDC credentials. Docker
+runs entirely in CI; no developer machine or public SSH builder participates.
 
 Required `dev` Environment configuration:
 

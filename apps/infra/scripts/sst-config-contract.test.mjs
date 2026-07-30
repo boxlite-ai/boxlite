@@ -9,20 +9,16 @@ const source = readFileSync(new URL('../sst.config.ts', import.meta.url), 'utf8'
 const environmentExample = readFileSync(new URL('../.env.example', import.meta.url), 'utf8')
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
 
-// Slice a named region out of a source file. Asserting the markers first turns a renamed
-// comment into "marker missing", instead of indexOf returning -1 and slice() silently
-// handing back the tail (or last character) of the file so every assertion below fails
-// for the wrong reason.
-function sliceBetween(text, label, startMarker, endMarker) {
-  const start = text.indexOf(startMarker)
-  assert.notEqual(start, -1, `${label} is missing the marker: ${startMarker}`)
-  if (endMarker === undefined) return text.slice(start)
-  const end = text.indexOf(endMarker)
-  assert.notEqual(end, -1, `${label} is missing the marker: ${endMarker}`)
-  return text.slice(start, end)
-}
+function extractSection(contents, startMarker, endMarker) {
+  const start = contents.indexOf(startMarker)
+  assert.notEqual(start, -1, `missing start marker: ${startMarker}`)
+  if (endMarker === undefined) return contents.slice(start)
 
-const section = (startMarker, endMarker) => sliceBetween(source, 'sst.config.ts', startMarker, endMarker)
+  const end = contents.indexOf(endMarker, start + startMarker.length)
+  assert.notEqual(end, -1, `missing end marker: ${endMarker}`)
+  assert.ok(end > start, `end marker must follow start marker: ${endMarker}`)
+  return contents.slice(start, end)
+}
 
 test('loads local helpers dynamically inside SST config callbacks', () => {
   assert.doesNotMatch(source, /^import\s/m)
@@ -31,7 +27,7 @@ test('loads local helpers dynamically inside SST config callbacks', () => {
 })
 
 test('does not force a laptop-managed remote builder', () => {
-  const appSource = section('async app(input)', 'async run()')
+  const appSource = extractSection(source, 'async app(input)', 'async run()')
 
   assert.doesNotMatch(appSource, /buildx-builder/)
   assert.doesNotMatch(appSource, /BUILDX_BUILDER/)
@@ -59,12 +55,12 @@ test('uses the shared AWS region resolver and waits for the critical API service
   )
   assert.match(source, /const REGION = resolveAwsRegion\(\)/)
 
-  const apiService = section("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+  const apiService = extractSection(source, "const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
   assert.match(apiService, /wait: true,/)
 })
 
 test('uses the canonical deployment config for every Proxy-facing SST value', () => {
-  const runSource = section('async run()', '// ── runner bootstrap')
+  const runSource = extractSection(source, 'async run()', '// ── runner bootstrap')
 
   assert.match(runSource, /resolvePublicDeploymentConfig/)
   assert.match(runSource, /const deploymentConfig = resolvePublicDeploymentConfig\(process\.env, workspaceVersion\)/)
@@ -73,8 +69,8 @@ test('uses the canonical deployment config for every Proxy-facing SST value', ()
 })
 
 test('keeps the AWS region in run scope and passes it into Runner user data', () => {
-  const runSource = section('async run()', '// ── runner bootstrap')
-  const runnerUserDataSource = section('async function buildRunnerUserData')
+  const runSource = extractSection(source, 'async run()', '// ── runner bootstrap')
+  const runnerUserDataSource = extractSection(source, 'async function buildRunnerUserData')
 
   assert.match(runSource, /const REGION = resolveAwsRegion\(\)/)
   assert.equal(runSource.match(/awsRegion: REGION/g)?.length, 2)
@@ -83,15 +79,29 @@ test('keeps the AWS region in run scope and passes it into Runner user data', ()
 })
 
 test('tags Runner instances with their exact control-plane identity', () => {
-  const runnerResources = section('const makeRunner =', '// Register the extra runners')
+  const runnerResources = extractSection(source, 'const makeRunner =', '// Register the extra runners')
 
+  assert.match(source, /import\('\.\/scripts\/runner-inventory\.cjs'\)/)
+  assert.match(source, /const runnerInventory = resolveRunnerInventory\(process\.env\)/)
   assert.match(runnerResources, /'boxlite:control-plane-runner-name': controlPlaneRunnerName/)
-  assert.match(runnerResources, /makeRunner\('Runner', 'boxlite-runner-default', defaultRunnerName, runnerUserData\)/)
-  assert.match(runnerResources, /`boxlite-runner-\$\{index\}`,[\s\S]*name,[\s\S]*buildRunnerUserData/)
+  assert.match(
+    runnerResources,
+    /makeRunner\([\s\S]*defaultRunnerConfig\.resourceName,[\s\S]*defaultRunnerConfig\.nameTag,[\s\S]*defaultRunnerConfig\.controlPlaneRunnerName,[\s\S]*runnerUserData/,
+  )
+  assert.match(runnerResources, /runnerInventory\.slice\(1\)\.map\([\s\S]*runner\.nameTag,[\s\S]*buildRunnerUserData/)
+})
+
+test('keeps every Runner instance protected from replacement during full-stack deploys', () => {
+  const runnerFactory = extractSection(source, 'const makeRunner =', '// Default runner')
+
+  assert.match(runnerFactory, /new aws\.ec2\.Instance\(/)
+  assert.match(runnerFactory, /ignoreChanges: \['ami', 'userDataBase64'\]/)
+  assert.match(runnerFactory, /protect: true/)
+  assert.equal(source.match(/new aws\.ec2\.Instance\(/g)?.length, 1)
 })
 
 test('passes both the internal and public OIDC issuers to Proxy', () => {
-  const proxyService = section("new sst.aws.Service('Proxy'", '// ─── 8.')
+  const proxyService = extractSection(source, "new sst.aws.Service('Proxy'", '// ─── 8.')
 
   assert.match(proxyService, /OIDC_DOMAIN: oidcIssuer,/)
   assert.match(proxyService, /publicOidcIssuer[\s\S]*OIDC_PUBLIC_DOMAIN: publicOidcIssuer/)
@@ -102,9 +112,12 @@ test('requires the OIDC client ID through the SST secret store', () => {
   assert.doesNotMatch(source, /new sst\.Secret\('OIDC_CLIENT_ID',/)
   assert.doesNotMatch(environmentExample, /^OIDC_CLIENT_ID=/m)
 
-  const quickStart = sliceBetween(readme, 'README.md', '## Quick start', '## Secrets & credentials')
-  assert.match(quickStart, /npm run sst -- secret set OIDC_CLIENT_ID/)
-  assert.doesNotMatch(quickStart, /App secrets .* are optional/)
+  const deploymentGuide = extractSection(readme, '## Deploy an existing stack', '## Secrets & credentials')
+  assert.match(deploymentGuide, /npm run sst -- secret set OIDC_CLIENT_ID/)
+  assert.doesNotMatch(deploymentGuide, /App secrets .* are optional/)
+  for (const documentation of [readme, environmentExample]) {
+    assert.doesNotMatch(documentation, /secret set (?:[A-Z_]+|<NAME>)\s+["']?<[^>\n]+>["']?\s+--stage/)
+  }
 })
 
 test('does not restore the removed SSH gateway deployment', () => {
@@ -114,7 +127,7 @@ test('does not restore the removed SSH gateway deployment', () => {
 })
 
 test('passes explicit management API endpoints into the API service', () => {
-  const apiService = section("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+  const apiService = extractSection(source, "const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
 
   assert.match(apiService, /OIDC_MANAGEMENT_API_BASE_URL: process\.env\.OIDC_MANAGEMENT_API_BASE_URL/)
   assert.match(apiService, /OIDC_MANAGEMENT_API_TOKEN_URL: process\.env\.OIDC_MANAGEMENT_API_TOKEN_URL/)
@@ -125,12 +138,12 @@ test('reports the canonical workspace release unless VERSION overrides it', () =
   assert.match(source, /resolvePublicDeploymentConfig\(process\.env, workspaceVersion\)/)
   assert.match(source, /proxyTemplateUrl, releaseVersion \} = deploymentConfig/)
 
-  const apiService = section("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+  const apiService = extractSection(source, "const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
   assert.match(apiService, /VERSION: releaseVersion,/)
 })
 
 test('Runner bootstrap fails closed when the release checksum is unavailable', () => {
-  const runnerBootstrap = section('async function buildRunnerUserData')
+  const runnerBootstrap = extractSection(source, 'async function buildRunnerUserData')
 
   assert.doesNotMatch(runnerBootstrap, /if curl -fsSL .*\.sha256/)
   assert.match(runnerBootstrap, /curl -fsSL .*\.sha256.*-o \/tmp\/runner\.sha256/)
@@ -141,10 +154,10 @@ test('upgrades every Runner through a dependsOn chain, one host per command', ()
   // The chain is the only thing sequencing the restarts, and it cannot be observed
   // without a real deploy — so it is pinned here, next to the other deploy-shape
   // invariants, rather than left to prose.
-  const upgrades = section('── Rolling runner binary upgrade')
+  const upgrades = extractSection(source, '── Rolling runner binary upgrade')
 
   // Every Runner gets a command: the default (captured for exactly this) plus each extra.
-  assert.match(source, /const defaultRunner = makeRunner\('Runner', 'boxlite-runner-default'/)
+  assert.match(source, /const defaultRunner = makeRunner\(/)
   assert.match(upgrades, /\{ label: 'default', instance: defaultRunner \}/)
   assert.match(upgrades, /\.\.\.extraRunners\.map\(\(r\) => \(\{ label: r\.name, instance: r\.instance \}\)\)/)
   assert.match(upgrades, /new command\.local\.Command\(\s*`UpgradeRunnerBinary-\$\{label\}`/)

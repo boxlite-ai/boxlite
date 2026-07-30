@@ -10,20 +10,19 @@
  * per stage, and this wrapper fetches + exports them just before invoking sst.
  * App secrets are NOT handled here; sst resolves those from its own store.
  *
- * Wired into the dev/deploy/remove npm scripts, plus a passthrough:
+ * Wired into the deploy/remove npm scripts, plus a passthrough:
  *   npm run deploy -- --stage dev      → node sst-with-cloudflare.mjs deploy --stage dev
- *   npm run sst -- diff --stage dev     → any other subcommand
+ *   npm run sst -- diff --stage dev    → any other subcommand
+ * `sst dev` is disabled because one long-running process cannot keep its Runner
+ * state baseline fresh for every update.
  * A successful deploy is followed by a read-only AWS check that the Proxy NLB
  * listener, ECS target-group attachment, and healthy targets agree.
  *
  * One access gate: a deployer already needs AWS credentials to deploy, so the
  * same credentials fetch the Cloudflare token from SSM — nothing extra to share.
  *
- * Seed the parameters once per stage:
- *   aws ssm put-parameter --region ap-southeast-1 --type SecureString \
- *     --name /boxlite/<stage>/cloudflare-api-token   --value "<token>"
- *   aws ssm put-parameter --region ap-southeast-1 --type SecureString \
- *     --name /boxlite/<stage>/cloudflare-account-id  --value "<account-id>"
+ * Seed the parameters once per stage with the README's non-echoing prompt and
+ * `--value file:///dev/stdin`; never put credential values in process argv.
  *
  * A credential already in the environment is used as-is (works offline / before
  * the params are seeded). Missing creds are a warning, not a hard stop: commands
@@ -41,51 +40,48 @@ import {
   resolveAwsRegion,
   resolvePublicDeploymentConfig,
 } from './deployment-environment.mjs'
+import { requireFullStackDeploy, requireSstSubcommandFirst, withRequiredRunnerPolicy } from './deployment-scope.mjs'
 import {
   resolveAwsCliPath,
   verifyProxyDeploymentWithRetry,
   verifyPublicDeploymentWithRetry,
 } from './proxy-deployment-verify.mjs'
 import { verifyRunnerReleaseAssets } from './runner-release-assets.mjs'
-import { isSstComponentExcluded, resolveSstStage } from './sst-stage.mjs'
+import { readRunnerStateBaseline } from './runner-policy-baseline.mjs'
+import { resolveSstExecutable } from './sst-executable.mjs'
+import { SstProcessTerminator } from './sst-process-termination.mjs'
+import { resolveSstStage } from './sst-stage.mjs'
 import { removePulumiEventLogs, withPulumiEventLogCleanup } from './sst-event-log-security.mjs'
 
 const APP = 'boxlite'
 const PULUMI_EVENT_LOG_ROOT = fileURLToPath(new URL('../.sst/pulumi', import.meta.url))
-const CHILD_TERMINATION_GRACE_MS = 10_000
 const TERMINATION_SIGNALS = ['SIGINT', 'SIGTERM']
 
-let activeSstChild
-let childTerminationTimer
 let terminationSignal
+let runnerReleasePreflightAbortController
+let runnerPolicyPreflightAbortController
 let deploymentVerificationAbortController
+const sstProcessTerminator = new SstProcessTerminator()
 
 function signalExitCode(signal) {
   return 128 + (osConstants.signals[signal] ?? 0)
 }
 
-function signalActiveSstChild(signal) {
-  if (!activeSstChild || activeSstChild.exitCode !== null || activeSstChild.signalCode !== null) return
-  activeSstChild.kill(signal)
-  if (childTerminationTimer) return
-
-  childTerminationTimer = setTimeout(() => {
-    if (activeSstChild && activeSstChild.exitCode === null && activeSstChild.signalCode === null) {
-      activeSstChild.kill('SIGKILL')
-    }
-  }, CHILD_TERMINATION_GRACE_MS)
-  childTerminationTimer.unref()
-}
-
 for (const signal of TERMINATION_SIGNALS) {
   process.on(signal, () => {
-    if (terminationSignal) {
-      signalActiveSstChild('SIGKILL')
-      return
+    const isRepeatedTermination = Boolean(terminationSignal)
+    if (!terminationSignal) {
+      terminationSignal = signal
+      runnerReleasePreflightAbortController?.abort(new Error(`Runner release preflight interrupted by ${signal}`))
+      runnerPolicyPreflightAbortController?.abort(new Error(`Runner policy preflight interrupted by ${signal}`))
+      deploymentVerificationAbortController?.abort(new Error(`Deployment verification interrupted by ${signal}`))
     }
-    terminationSignal = signal
-    deploymentVerificationAbortController?.abort(new Error(`Deployment verification interrupted by ${signal}`))
-    signalActiveSstChild(signal)
+    if (isRepeatedTermination) {
+      sstProcessTerminator.forceStop()
+    } else {
+      // Forward SIGTERM as SIGINT too so SST can cancel Pulumi cleanly.
+      sstProcessTerminator.interrupt()
+    }
   })
 }
 
@@ -97,10 +93,18 @@ try {
   console.error(`sst-with-cloudflare: secure event-log cleanup failed: ${error.message}`)
   process.exit(1)
 }
+if (terminationSignal) process.exit(signalExitCode(terminationSignal))
 
 loadDeploymentEnvironment()
 
 const REGION = resolveAwsRegion()
+let sstExecutable
+try {
+  sstExecutable = resolveSstExecutable()
+} catch (error) {
+  console.error(`sst-with-cloudflare: ${error.message}`)
+  process.exit(1)
+}
 
 // SSM param consulted only when the matching env var is unset.
 const CREDS = [
@@ -108,9 +112,17 @@ const CREDS = [
   { env: 'CLOUDFLARE_DEFAULT_ACCOUNT_ID', param: 'cloudflare-account-id' },
 ]
 
-const sstArgs = process.argv.slice(2)
+let sstArgs = process.argv.slice(2)
 if (sstArgs.length === 0) {
   console.error('sst-with-cloudflare: expected an sst subcommand (e.g. "deploy --stage dev")')
+  process.exit(1)
+}
+try {
+  requireSstSubcommandFirst(sstArgs)
+  requireFullStackDeploy(sstArgs)
+  sstArgs = withRequiredRunnerPolicy(sstArgs)
+} catch (error) {
+  console.error(`sst-with-cloudflare: ${error.message}`)
   process.exit(1)
 }
 
@@ -158,58 +170,81 @@ for (const { env, param } of CREDS) {
   } else {
     console.warn(
       `sst-with-cloudflare: ${env} not in env and ${name} not in SSM (${REGION}); ` +
-        `seed it with: aws ssm put-parameter --region ${REGION} --type SecureString --name ${name} --value <...>`,
+        `seed it with the README's stdin-based aws ssm put-parameter procedure`,
     )
   }
 }
+if (terminationSignal) process.exit(signalExitCode(terminationSignal))
 
 async function runSstCommand() {
   if (terminationSignal) return signalExitCode(terminationSignal)
 
-  // node_modules/.bin is on PATH because this runs via `npm run`, so `sst` resolves.
+  // Run the native binary directly so this process can await SST's graceful
+  // cancellation instead of losing it behind the JavaScript launcher shim.
   return new Promise((resolve) => {
     let isSettled = false
+    const sstChild = spawn(sstExecutable, sstArgs, {
+      stdio: 'inherit',
+      env: process.env,
+      detached: process.platform !== 'win32',
+    })
+    sstProcessTerminator.attach(sstChild)
+
     const settle = (exitCode) => {
       if (isSettled) return
       isSettled = true
-      activeSstChild = undefined
-      if (childTerminationTimer) clearTimeout(childTerminationTimer)
-      childTerminationTimer = undefined
+      sstProcessTerminator.settle(sstChild)
       resolve(terminationSignal ? signalExitCode(terminationSignal) : exitCode)
     }
 
-    activeSstChild = spawn('sst', sstArgs, { stdio: 'inherit', env: process.env })
-    activeSstChild.once('error', (error) => {
+    sstChild.once('error', (error) => {
       console.error(`sst-with-cloudflare: failed to launch sst: ${error.message}`)
       settle(1)
     })
-    activeSstChild.once('exit', (code, signal) => {
+    sstChild.once('exit', (code, signal) => {
       settle(code ?? (signal ? signalExitCode(signal) : 1))
     })
 
     // A signal may arrive after the early check but before spawn returns.
-    if (terminationSignal) signalActiveSstChild(terminationSignal)
+    if (terminationSignal) sstProcessTerminator.interrupt()
   })
 }
 
 let publicDeploymentConfig
 if (sstArgs[0] === 'deploy') {
+  runnerReleasePreflightAbortController = new AbortController()
   try {
     resolveAwsCliPath()
     const workspaceVersion = readWorkspaceVersion()
     publicDeploymentConfig = resolvePublicDeploymentConfig(process.env, workspaceVersion)
-    if (isSstComponentExcluded(sstArgs, 'Runner')) {
-      console.warn(
-        `sst-with-cloudflare: Runner not selected; skipping the v${workspaceVersion} release-asset preflight. ` +
-          'Runner metadata and new Runner-only capabilities will remain unavailable until a later full rollout.',
-      )
-    } else {
-      await verifyRunnerReleaseAssets(workspaceVersion)
-      console.log(`sst-with-cloudflare: Runner release asset availability verified (v${workspaceVersion}, linux-amd64)`)
-    }
+    await verifyRunnerReleaseAssets(workspaceVersion, { signal: runnerReleasePreflightAbortController.signal })
+    console.log(`sst-with-cloudflare: Runner release asset availability verified (v${workspaceVersion}, linux-amd64)`)
   } catch (error) {
+    if (terminationSignal) process.exit(signalExitCode(terminationSignal))
     console.error(`sst-with-cloudflare: deployment preflight failed: ${error.message}`)
     process.exit(1)
+  } finally {
+    runnerReleasePreflightAbortController = undefined
+  }
+}
+
+if (terminationSignal) process.exit(signalExitCode(terminationSignal))
+if (sstArgs[0] === 'diff' || sstArgs[0] === 'deploy') {
+  runnerPolicyPreflightAbortController = new AbortController()
+  try {
+    process.env.BOXLITE_RUNNER_STATE_BASELINE = await readRunnerStateBaseline({
+      stage,
+      sstPath: sstExecutable,
+      sstArgs,
+      environment: process.env,
+      signal: runnerPolicyPreflightAbortController.signal,
+    })
+  } catch (error) {
+    if (terminationSignal) process.exit(signalExitCode(terminationSignal))
+    console.error(`sst-with-cloudflare: Runner policy preflight failed: ${error.message}`)
+    process.exit(1)
+  } finally {
+    runnerPolicyPreflightAbortController = undefined
   }
 }
 
