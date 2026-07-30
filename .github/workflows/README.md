@@ -172,8 +172,10 @@ Required `dev` Environment configuration:
 - Variable `AWS_REGION` (defaults to `ap-southeast-1`)
 - Secret `DEPLOY_ENV` containing the stage's dotenv configuration
 
-Bootstrap the role with `apps/infra/ci/github-deploy-role.yaml`, then require
-reviewers on the GitHub Environment before enabling deployments.
+Bootstrap the scoped role and runtime permissions boundary with
+`apps/infra/ci/github-deploy-role.yaml`, then require reviewers on the GitHub
+Environment before enabling deployments. Redeploy that CloudFormation stack
+when its policy changes.
 
 ### `e2e-local.yml`
 

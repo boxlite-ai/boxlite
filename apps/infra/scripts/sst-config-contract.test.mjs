@@ -24,7 +24,15 @@ test('does not force a laptop-managed remote builder', () => {
 })
 
 test('pins the AWS provider used by the deployed stack', () => {
-  assert.match(source, /aws: \{ version: '7\.20\.0', region: REGION,/)
+  assert.match(source, /aws:\s*\{\s*version: '7\.24\.0',\s*region: REGION,/)
+})
+
+test('applies the deployment permissions boundary to every SST-created IAM role', () => {
+  assert.match(source, /const runtimePermissionsBoundaryArn =/)
+  assert.match(
+    source,
+    /\$transform\(aws\.iam\.Role,[\s\S]*args\.permissionsBoundary \?\?= runtimePermissionsBoundaryArn/,
+  )
 })
 
 test('uses the shared AWS region resolver and waits for the critical API service', () => {

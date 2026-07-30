@@ -90,7 +90,11 @@ export default $config({
       removal: input?.stage === 'production' ? 'retain' : 'remove',
       home: 'aws',
       providers: {
-        aws: { version: '7.20.0', region: REGION, ...(process.env.AWS_PROFILE ? { profile: process.env.AWS_PROFILE } : {}) },
+        aws: {
+          version: '7.24.0',
+          region: REGION,
+          ...(process.env.AWS_PROFILE ? { profile: process.env.AWS_PROFILE } : {}),
+        },
         cloudflare: '6.15.0',
         random: '4.16.6',
         // command provider: multi-runner post-deploy registration
@@ -110,6 +114,14 @@ export default $config({
     const { stackDomain, proxyDomain, proxyProtocol, proxyTemplateUrl, releaseVersion } = deploymentConfig
     const oidcIssuer = requireOidcIssuer()
     const publicOidcIssuer = optionalPublicOidcIssuer()
+
+    // Every role created by this stack must stay inside the boundary provisioned
+    // with the GitHub deployment role. The raw-resource transform also covers IAM
+    // roles created internally by SST components, not only the roles declared here.
+    const runtimePermissionsBoundaryArn = $interpolate`arn:aws:iam::${aws.getCallerIdentityOutput().accountId}:policy/${$app.name}-${$app.stage}-runtime-boundary`
+    $transform(aws.iam.Role, (args) => {
+      args.permissionsBoundary ??= runtimePermissionsBoundaryArn
+    })
 
     // Strip trailing slash from service.url so path concat produces clean URLs
     // (api.url = "https://api.dev.boxlite.ai/" → apiBase = "https://api.dev.boxlite.ai").

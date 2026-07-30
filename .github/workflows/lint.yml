@@ -308,12 +308,16 @@ jobs:
 
   infra:
     name: SST deployment tests
+    permissions:
+      contents: read
     needs: changes
     if: ${{ needs.changes.outputs.infra == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

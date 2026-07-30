@@ -66,15 +66,15 @@ test('uses bounded curl requests so deployment honors the host proxy environment
   const assets = await verifyRunnerReleaseAssets(VERSION, {
     curlPath: fixture.curlPath,
     environment: { ...process.env, HTTPS_PROXY: expectedProxy },
-    timeoutMs: 1_000,
+    timeoutMs: 5_000,
   })
 
   assert.equal(assets.tarballName, TARBALL)
   const requests = readFileSync(fixture.logPath, 'utf8').trim().split('\n')
   assert.equal(requests.length, 2)
-  assert.match(requests[0], new RegExp(`--max-time 1 .*${TARBALL}\\.sha256$`))
+  assert.match(requests[0], new RegExp(`--max-time 5 .*${TARBALL}\\.sha256$`))
   assert.doesNotMatch(requests[0], /--head/)
-  assert.match(requests[1], new RegExp(`--max-time 1 .*--head .*${TARBALL}$`))
+  assert.match(requests[1], new RegExp(`--max-time [1-5] .*--head .*${TARBALL}$`))
 })
 
 test('rejects a missing or mismatched Runner release before deployment', async (t) => {

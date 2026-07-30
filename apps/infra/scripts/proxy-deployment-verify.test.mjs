@@ -145,6 +145,39 @@ test('verifies the listener, ECS attachment, and healthy Proxy targets', () => {
   assert.equal(fixture.calls.length, 6)
 })
 
+test('rejects a Proxy service response without a running task count', () => {
+  const fixture = createAwsFixture({
+    'ecs describe-services': {
+      failures: [],
+      services: [
+        {
+          serviceArn: SERVICE_ARN,
+          status: 'ACTIVE',
+          desiredCount: 1,
+          loadBalancers: [
+            {
+              targetGroupArn: TARGET_GROUP_ARN,
+              containerName: 'Proxy',
+              containerPort: 4000,
+            },
+          ],
+        },
+      ],
+    },
+  })
+
+  assert.throws(
+    () =>
+      verifyProxyDeployment({
+        app: 'boxlite',
+        stage: 'dev',
+        region: 'ap-southeast-1',
+        awsJson: fixture.awsJson,
+      }),
+    /running task count is missing, expected a non-negative integer/,
+  )
+})
+
 test('rejects a listener that forwards to a target group not attached to Proxy', () => {
   const fixture = createAwsFixture({
     [`elbv2 describe-listeners ${LOAD_BALANCER_ARN}`]: {
@@ -345,6 +378,27 @@ test('returns the last verification error after the retry limit', async () => {
     expectedError,
   )
   assert.equal(verificationAttempts, 2)
+})
+
+test('aborts a pending verification retry delay', async () => {
+  const controller = new AbortController()
+  const interrupted = new Error('deployment verification interrupted')
+  const startedAt = Date.now()
+  const verification = verifyProxyDeploymentWithRetry(
+    { app: 'boxlite', stage: 'dev', region: 'ap-southeast-1' },
+    {
+      attempts: 2,
+      delayMs: 250,
+      signal: controller.signal,
+      verify() {
+        throw new Error('target is still registering')
+      },
+    },
+  )
+
+  controller.abort(interrupted)
+  await assert.rejects(verification, interrupted)
+  assert.ok(Date.now() - startedAt < 200, 'abort must not wait for the retry delay')
 })
 
 test('the default retry window covers two 30-second target health checks', async () => {

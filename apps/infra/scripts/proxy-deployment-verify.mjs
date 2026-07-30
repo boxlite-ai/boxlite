@@ -125,10 +125,13 @@ export function verifyProxyDeployment({ app, stage, region, awsJson }) {
   if (!Number.isInteger(service.desiredCount) || service.desiredCount < 1) {
     throw new Error(`Proxy ECS service desired count is ${service.desiredCount ?? 'missing'}, expected at least 1`)
   }
-  if (service.runningCount < service.desiredCount) {
+  if (!Number.isInteger(service.runningCount) || service.runningCount < 0) {
     throw new Error(
-      `Proxy ECS service has ${service.runningCount ?? 0} running tasks; expected ${service.desiredCount}`,
+      `Proxy ECS service running task count is ${service.runningCount ?? 'missing'}, expected a non-negative integer`,
     )
+  }
+  if (service.runningCount < service.desiredCount) {
+    throw new Error(`Proxy ECS service has ${service.runningCount} running tasks; expected ${service.desiredCount}`)
   }
 
   const serviceLoadBalancer = exactlyOne(service.loadBalancers, 'Proxy ECS load-balancer attachment')
@@ -375,12 +378,36 @@ export async function verifyPublicDeployment({
   }
 }
 
-function wait(delayMs) {
-  return new Promise((resolve) => setTimeout(resolve, delayMs))
+function abortReason(signal) {
+  return signal.reason instanceof Error ? signal.reason : new Error('Deployment verification interrupted')
+}
+
+function wait(delayMs, signal) {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, delayMs))
+  if (signal.aborted) return Promise.reject(abortReason(signal))
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, delayMs)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(abortReason(signal))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 async function verifyWithRetry(options, retryOptions, defaultVerify) {
-  const { attempts = 7, delayMs = 10_000, verify = defaultVerify, sleep = wait, onRetry = () => {} } = retryOptions
+  const {
+    attempts = 7,
+    delayMs = 10_000,
+    verify = defaultVerify,
+    sleep = wait,
+    onRetry = () => {},
+    signal,
+  } = retryOptions
   if (!Number.isInteger(attempts) || attempts < 1) {
     throw new Error(`Deployment verification retry attempts must be a positive integer, received ${attempts}`)
   }
@@ -389,12 +416,14 @@ async function verifyWithRetry(options, retryOptions, defaultVerify) {
   }
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (signal?.aborted) throw abortReason(signal)
     try {
       return await verify(options)
     } catch (error) {
+      if (signal?.aborted) throw abortReason(signal)
       if (attempt === attempts) throw error
       onRetry({ error, attempt, nextAttempt: attempt + 1, attempts, delayMs })
-      await sleep(delayMs)
+      await sleep(delayMs, signal)
     }
   }
 

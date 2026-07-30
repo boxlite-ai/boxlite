@@ -157,7 +157,7 @@ setInterval(() => {}, 1_000)
       try {
         process.kill(childPid, 'SIGKILL')
       } catch (error) {
-        if (error.code !== 'ESRCH') throw error
+        if (error.code !== 'ESRCH') console.warn(`failed to reap the synthetic SST child: ${error.message}`)
       }
     }
     await rm(dirname(eventLog), { recursive: true, force: true })

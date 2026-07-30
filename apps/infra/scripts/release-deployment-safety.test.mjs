@@ -10,6 +10,7 @@ import test from 'node:test'
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SST_WRAPPER = join(REPO_ROOT, 'apps/infra/scripts/sst-with-cloudflare.mjs')
 const DEV_API_DEPLOY_WORKFLOW = join(REPO_ROOT, '.github/workflows/deploy-dev-api.yml')
+const LINT_WORKFLOW = join(REPO_ROOT, '.github/workflows/lint.yml')
 const DEV_DEPLOY_ROLE = join(REPO_ROOT, 'apps/infra/ci/github-deploy-role.yaml')
 
 test('SST deploy verifies Runner release assets before invoking SST', () => {
@@ -59,6 +60,14 @@ test('manual dev API deployment runs natively in guarded GitHub CI', () => {
   assert.doesNotMatch(source, /setup-qemu/)
 })
 
+test('infrastructure tests cannot persist or write with the workflow token', () => {
+  const source = readFileSync(LINT_WORKFLOW, 'utf8')
+  const infraJob = source.slice(source.indexOf('\n  infra:\n'), source.indexOf('  # Single required status check'))
+
+  assert.match(infraJob, /permissions:\s+contents: read/)
+  assert.match(infraJob, /uses: actions\/checkout@v5\s+with:\s+persist-credentials: false/)
+})
+
 test('dev deploy role trusts only the repository GitHub Environment identity', () => {
   assert.ok(existsSync(DEV_DEPLOY_ROLE), 'the GitHub deployment role template is missing')
   const source = readFileSync(DEV_DEPLOY_ROLE, 'utf8')
@@ -69,6 +78,10 @@ test('dev deploy role trusts only the repository GitHub Environment identity', (
     source,
     /token\.actions\.githubusercontent\.com:sub: !Sub repo:\$\{GitHubRepository\}:environment:\$\{GitHubEnvironment\}/,
   )
+  assert.doesNotMatch(source, /AdministratorAccess/)
+  assert.match(source, /BoxLiteRuntimePermissionsBoundary:/)
+  assert.match(source, /iam:PermissionsBoundary/)
+  assert.match(source, /PolicyName: boxlite-sst-deploy/)
 })
 
 test('SST preflights the workspace Runner artifact even when VERSION overrides the public API version', () => {

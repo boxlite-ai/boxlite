@@ -58,6 +58,7 @@ const TERMINATION_SIGNALS = ['SIGINT', 'SIGTERM']
 let activeSstChild
 let childTerminationTimer
 let terminationSignal
+let deploymentVerificationAbortController
 
 function signalExitCode(signal) {
   return 128 + (osConstants.signals[signal] ?? 0)
@@ -83,6 +84,7 @@ for (const signal of TERMINATION_SIGNALS) {
       return
     }
     terminationSignal = signal
+    deploymentVerificationAbortController?.abort(new Error(`Deployment verification interrupted by ${signal}`))
     signalActiveSstChild(signal)
   })
 }
@@ -203,7 +205,7 @@ if (sstArgs[0] === 'deploy') {
       )
     } else {
       await verifyRunnerReleaseAssets(workspaceVersion)
-      console.log(`sst-with-cloudflare: Runner release assets verified (v${workspaceVersion}, linux-amd64)`)
+      console.log(`sst-with-cloudflare: Runner release asset availability verified (v${workspaceVersion}, linux-amd64)`)
     }
   } catch (error) {
     console.error(`sst-with-cloudflare: deployment preflight failed: ${error.message}`)
@@ -220,10 +222,12 @@ try {
 }
 
 if (exitCode === 0 && !terminationSignal && sstArgs[0] === 'deploy') {
+  deploymentVerificationAbortController = new AbortController()
   try {
     const verification = await verifyProxyDeploymentWithRetry(
       { app: APP, stage, region: REGION },
       {
+        signal: deploymentVerificationAbortController.signal,
         onRetry({ error, nextAttempt, attempts, delayMs }) {
           console.warn(
             `sst-with-cloudflare: Proxy routing is not ready (${error.message}); ` +
@@ -239,6 +243,7 @@ if (exitCode === 0 && !terminationSignal && sstArgs[0] === 'deploy') {
     )
 
     const publicVerification = await verifyPublicDeploymentWithRetry(publicDeploymentConfig, {
+      signal: deploymentVerificationAbortController.signal,
       onRetry({ error, nextAttempt, attempts, delayMs }) {
         console.warn(
           `sst-with-cloudflare: public deployment is not ready (${error.message}); ` +
@@ -253,8 +258,12 @@ if (exitCode === 0 && !terminationSignal && sstArgs[0] === 'deploy') {
         `version ${publicVerification.version}, issuer ${publicVerification.oidcIssuer})`,
     )
   } catch (error) {
-    console.error(`sst-with-cloudflare: SST deploy completed, but deployment verification failed: ${error.message}`)
+    if (!terminationSignal) {
+      console.error(`sst-with-cloudflare: SST deploy completed, but deployment verification failed: ${error.message}`)
+    }
     exitCode = 1
+  } finally {
+    deploymentVerificationAbortController = undefined
   }
 }
 

@@ -82,11 +82,13 @@ The current workflow deliberately targets only `Api` and excludes `Runner`:
 npm run deploy -- --stage dev --target Api --exclude Runner
 ```
 
-The role template grants `AdministratorAccess` because this SST app creates IAM
-roles and many AWS resource types. Its trust policy accepts only OIDC tokens for
-`boxlite-ai/boxlite` using the `dev` Environment. Keep required reviewers enabled
-and use a separate AWS account for dev; narrow the policy later from CloudTrail
-with IAM Access Analyzer.
+The role template grants only the AWS control-plane actions used by this SST
+stack. IAM mutation is limited to `boxlite-*` roles, policies, and instance
+profiles. Every role created by SST must carry the stage's runtime permissions
+boundary, which excludes IAM mutation and limits workloads to the data-plane APIs
+they need. Its trust policy accepts only OIDC tokens for `boxlite-ai/boxlite`
+using the `dev` Environment. Redeploy the bootstrap stack whenever this policy or
+boundary changes, and keep required reviewers enabled on that Environment.
 
 ## Secrets & credentials
 

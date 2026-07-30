@@ -12,6 +12,71 @@ Parameters:
     AllowedPattern: '^[A-Za-z0-9_.-]+$'
 
 Resources:
+  BoxLiteRuntimePermissionsBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub boxlite-${GitHubEnvironment}-runtime-boundary
+      Description: Maximum data-plane permissions for roles created by the BoxLite SST stack
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: RuntimeDataPlane
+            Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+              - ecr:BatchCheckLayerAvailability
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+              - kms:Decrypt
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:DescribeLogGroups
+              - logs:DescribeLogStreams
+              - logs:FilterLogEvents
+              - logs:PutLogEvents
+              - s3:AbortMultipartUpload
+              - s3:CreateBucket
+              - s3:DeleteBucket
+              - s3:DeleteObject
+              - s3:DeleteObjectVersion
+              - s3:GetBucketLocation
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:ListBucketVersions
+              - s3:PutBucketTagging
+              - s3:PutObject
+              - secretsmanager:DescribeSecret
+              - secretsmanager:GetSecretValue
+              - ssm:DescribeAssociation
+              - ssm:GetDeployablePatchSnapshotForInstance
+              - ssm:GetDocument
+              - ssm:GetManifest
+              - ssm:GetParameter
+              - ssm:GetParameters
+              - ssm:ListAssociations
+              - ssm:ListInstanceAssociations
+              - ssm:PutComplianceItems
+              - ssm:PutConfigurePackageResult
+              - ssm:PutInventory
+              - ssm:UpdateAssociationStatus
+              - ssm:UpdateInstanceAssociationStatus
+              - ssm:UpdateInstanceInformation
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+              - ec2messages:AcknowledgeMessage
+              - ec2messages:DeleteMessage
+              - ec2messages:FailMessage
+              - ec2messages:GetEndpoint
+              - ec2messages:GetMessages
+              - ec2messages:SendReply
+            Resource: '*'
+          - Sid: AssumeBoxLiteRuntimeRoles
+            Effect: Allow
+            Action: sts:AssumeRole
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*
+
   GitHubDeployRole:
     Type: AWS::IAM::Role
     Properties:
@@ -29,11 +94,113 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
                 token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepository}:environment:${GitHubEnvironment}
-      ManagedPolicyArns:
-        # SST can create IAM and arbitrary AWS resources declared by the app.
-        # The OIDC trust boundary and protected GitHub Environment are the gate.
-        - arn:aws:iam::aws:policy/AdministratorAccess
+      Policies:
+        - PolicyName: boxlite-sst-deploy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: BoxLiteAwsControlPlane
+                Effect: Allow
+                Action:
+                  - acm:*
+                  - application-autoscaling:*
+                  - autoscaling:*
+                  - cloudfront:*
+                  - cloudwatch:*
+                  - ec2:*
+                  - ecr:*
+                  - ecs:*
+                  - elasticache:*
+                  - elasticloadbalancing:*
+                  - kms:DescribeKey
+                  - lambda:*
+                  - logs:*
+                  - rds:*
+                  - s3:*
+                  - secretsmanager:*
+                  - servicediscovery:*
+                  - ssm:*
+                  - tag:GetResources
+                  - tag:GetTagKeys
+                  - tag:GetTagValues
+                Resource: '*'
+              - Sid: ReadIamAndAccountMetadata
+                Effect: Allow
+                Action:
+                  - iam:GetInstanceProfile
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:ListPolicyVersions
+                  - iam:ListRolePolicies
+                  - iam:ListRoleTags
+                  - sts:GetCallerIdentity
+                Resource: '*'
+              - Sid: CreateBoundedBoxLiteRoles
+                Effect: Allow
+                Action: iam:CreateRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*
+                Condition:
+                  StringEquals:
+                    iam:PermissionsBoundary: !Ref BoxLiteRuntimePermissionsBoundary
+              - Sid: ManageBoxLiteRoles
+                Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:RemoveRoleFromInstanceProfile
+                  - iam:AddRoleToInstanceProfile
+                  - iam:TagInstanceProfile
+                  - iam:TagRole
+                  - iam:UntagInstanceProfile
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:UpdateRole
+                  - iam:UpdateRoleDescription
+                Resource:
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/boxlite-*
+              - Sid: SetBoxLiteRoleBoundary
+                Effect: Allow
+                Action: iam:PutRolePermissionsBoundary
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*
+                Condition:
+                  StringEquals:
+                    iam:PermissionsBoundary: !Ref BoxLiteRuntimePermissionsBoundary
+              - Sid: ManageBoxLitePolicies
+                Effect: Allow
+                Action:
+                  - iam:CreatePolicy
+                  - iam:CreatePolicyVersion
+                  - iam:DeletePolicy
+                  - iam:DeletePolicyVersion
+                  - iam:SetDefaultPolicyVersion
+                  - iam:TagPolicy
+                  - iam:UntagPolicy
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boxlite-*
+              - Sid: CreateRequiredServiceLinkedRoles
+                Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: !Sub arn:${AWS::Partition}:iam::*:role/aws-service-role/*
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName:
+                      - autoscaling.amazonaws.com
+                      - ecs.amazonaws.com
+                      - elasticloadbalancing.amazonaws.com
+                      - rds.amazonaws.com
 
 Outputs:
   RoleArn:
     Value: !GetAtt GitHubDeployRole.Arn
+  RuntimePermissionsBoundaryArn:
+    Value: !Ref BoxLiteRuntimePermissionsBoundary
