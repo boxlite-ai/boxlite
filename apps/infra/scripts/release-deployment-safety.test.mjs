@@ -70,6 +70,8 @@ test('SST deploy does not depend on a laptop-managed remote builder', () => {
 test('manual dev API deployment runs natively in guarded GitHub CI', () => {
   assert.ok(existsSync(DEV_API_DEPLOY_WORKFLOW), 'the dev API deployment workflow is missing')
   const source = readFileSync(DEV_API_DEPLOY_WORKFLOW, 'utf8')
+  const workflow = load(source)
+  const deployStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Deploy the API only')
 
   assert.match(source, /workflow_dispatch:/)
   assert.match(source, /if: github\.ref == 'refs\/heads\/main'/)
@@ -82,7 +84,8 @@ test('manual dev API deployment runs natively in guarded GitHub CI', () => {
   assert.match(source, /role-to-assume: \$\{\{ vars\.AWS_DEPLOY_ROLE_ARN \}\}/)
   assert.match(source, /secrets\.DEPLOY_ENV/)
   assert.match(source, /AWS_ACCESS_KEY_ID[\s\S]*native CI builder/)
-  assert.match(source, /npm run deploy -- --stage dev --target Api --exclude Runner/)
+  assert.ok(deployStep, 'the API deployment step is missing')
+  assert.equal(deployStep.run, 'npm run deploy -- --stage dev --target Api')
   assert.doesNotMatch(source, /setup-qemu/)
 })
 

@@ -70,7 +70,7 @@ jobs:
 
       - name: Deploy the API only
         working-directory: apps/infra
-        run: npm run deploy -- --stage dev --target Api --exclude Runner
+        run: npm run deploy -- --stage dev --target Api
 
       - name: Remove materialized configuration
         if: always()
