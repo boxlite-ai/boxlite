@@ -51,6 +51,11 @@ export function buildMockConfig(billingApiUrl: string): BoxliteConfiguration {
     dashboardUrl: 'http://localhost:3000',
     maintananceMode: false,
     environment: 'mock',
+    supportedImages: [
+      { name: 'base', ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3' },
+      { name: 'python', ref: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3' },
+      { name: 'node', ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3' },
+    ],
     billingApiUrl,
   }
 }

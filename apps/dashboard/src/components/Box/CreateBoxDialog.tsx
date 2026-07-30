@@ -8,12 +8,13 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Switch } from '@/components/ui/switch'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
+import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
 import { validateLifecyclePolicy } from '@/lib/cloudBox'
 import { cn } from '@/lib/utils'
-import type { Box } from '@boxlite-ai/api-client'
+import type { Box, SupportedImage } from '@boxlite-ai/api-client'
 import { ChevronDown, Plus } from '@/components/ui/icon'
 import { useEffect, useRef, useState } from 'react'
 import { generatePath, useNavigate } from 'react-router-dom'
@@ -21,11 +22,25 @@ import { toast } from 'sonner'
 
 const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
 
-const SUPPORTED_BOX_IMAGES = [
-  { id: 'base', name: 'Base', ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3', isDefault: true },
-  { id: 'python', name: 'Python', ref: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3', isDefault: false },
-  { id: 'node', name: 'Node.js', ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3', isDefault: false },
-] as const
+const LEGACY_BUILTIN_IMAGES: SupportedImage[] = [
+  { name: 'base', ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3' },
+  { name: 'python', ref: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3' },
+  { name: 'node', ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3' },
+]
+
+const BUILTIN_IMAGE_LABELS: Record<string, string> = {
+  base: 'Base',
+  python: 'Python',
+  node: 'Node.js',
+}
+
+type SupportedBoxImage = SupportedImage & { label: string }
+
+/** Preserve the built-ins while an older API and newer dashboard overlap. */
+export function resolveSupportedBoxImages(configuredImages?: SupportedImage[]): SupportedBoxImage[] {
+  const images = configuredImages?.length ? configuredImages : LEGACY_BUILTIN_IMAGES
+  return images.map((image) => ({ ...image, label: BUILTIN_IMAGE_LABELS[image.name] ?? image.name }))
+}
 
 const DEFAULTS = { cpu: 1, memory: 1, disk: 10, autoPauseIntervalSeconds: 900, autoDelete: 0 }
 
@@ -207,8 +222,10 @@ export const CreateBoxDialog = ({
   const setOpen = onOpenChange ?? setInternalOpen
 
   const { selectedOrganization } = useSelectedOrganization()
+  const config = useConfig()
   const createBoxMutation = useCreateBoxMutation()
-  const defaultImage = SUPPORTED_BOX_IMAGES.find((i) => i.isDefault) ?? SUPPORTED_BOX_IMAGES[0]
+  const supportedBoxImages = resolveSupportedBoxImages(config.supportedImages)
+  const defaultImage = supportedBoxImages[0]
 
   // Per-box ceilings for the current org (backend rejects a create above these).
   const limits = resolvePerBoxLimits(selectedOrganization)
@@ -275,7 +292,7 @@ export const CreateBoxDialog = ({
     }))
   }, [open, cpu, memory, disk, limits.cpu, limits.memory, limits.disk])
 
-  const selectedImage = SUPPORTED_BOX_IMAGES.find((i) => i.ref === imageRef) ?? defaultImage
+  const selectedImage = supportedBoxImages.find((i) => i.ref === imageRef) ?? defaultImage
   const nameValid = !name || NAME_REGEX.test(name)
   const lifecycleError = validateLifecyclePolicy({ autoPauseIntervalSeconds, autoDelete })
 
@@ -296,7 +313,7 @@ export const CreateBoxDialog = ({
     try {
       const box = await createBoxMutation.mutateAsync({
         name: name.trim() || undefined,
-        image: imageRef || defaultImage.ref,
+        image: selectedImage.ref,
         network: { mode: 'enabled' },
         resources: { cpu, memory, disk },
         autoPauseIntervalSeconds,
@@ -361,20 +378,20 @@ export const CreateBoxDialog = ({
             <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">Image</div>
             <DropdownMenu>
               <DropdownMenuTrigger className="flex items-center justify-between border border-border bg-card px-[13px] py-[11px] font-mono text-[13px] text-foreground outline-none data-[state=open]:border-brand">
-                <span>{selectedImage.name}</span>
+                <span>{selectedImage.label}</span>
                 <ChevronDown className="size-3.5 text-muted-foreground" />
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="start"
                 className="min-w-[var(--radix-dropdown-menu-trigger-width)] font-mono text-[12px]"
               >
-                {SUPPORTED_BOX_IMAGES.map((img) => (
+                {supportedBoxImages.map((img) => (
                   <DropdownMenuItem
-                    key={img.id}
+                    key={`${img.name}:${img.ref}`}
                     className={cn('cursor-pointer', img.ref === imageRef && 'text-brand')}
                     onClick={() => setImageRef(img.ref)}
                   >
-                    {img.name}
+                    {img.label}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>

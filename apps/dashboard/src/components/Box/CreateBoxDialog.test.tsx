@@ -10,7 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CreateBoxDialog, resolvePerBoxLimits } from './CreateBoxDialog'
 
 // Mutable org returned by the mocked hook; each test sets `state.org`.
-const state = vi.hoisted(() => ({ org: null as unknown }))
+const state = vi.hoisted(() => ({
+  org: null as unknown,
+  config: {} as { supportedImages?: Array<{ name: string; ref: string }> },
+}))
 
 const mutationMocks = vi.hoisted(() => ({
   createBox: vi.fn(),
@@ -21,6 +24,9 @@ vi.mock('@/hooks/useSelectedOrganization', () => ({
 }))
 vi.mock('@/hooks/mutations/useCreateBoxMutation', () => ({
   useCreateBoxMutation: () => ({ mutateAsync: mutationMocks.createBox }),
+}))
+vi.mock('@/hooks/useConfig', () => ({
+  useConfig: () => state.config,
 }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 vi.mock('react-router-dom', async (importOriginal) => {
@@ -69,6 +75,8 @@ describe('CreateBoxDialog per-org resource cap', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     state.org = makeOrg({ maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 10 })
+    state.config = {}
+    mutationMocks.createBox.mockReset()
   })
 
   afterEach(() => {
@@ -88,7 +96,9 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await flush()
   }
 
-  async function rerenderOpen(host = document.body.firstElementChild ?? document.body.appendChild(document.createElement('div'))) {
+  async function rerenderOpen(
+    host = document.body.firstElementChild ?? document.body.appendChild(document.createElement('div')),
+  ) {
     await act(async () => {
       root ??= createRoot(host)
       root.render(<CreateBoxDialog open onOpenChange={() => {}} />)
@@ -248,6 +258,88 @@ describe('CreateBoxDialog per-org resource cap', () => {
         name: 'resume-test',
         autoResume: false,
       }),
+    )
+  })
+
+  it('shows an operator-added image from runtime config and submits its exact ref', async () => {
+    state.config = {
+      supportedImages: [
+        { name: 'base', ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:runtime' },
+        { name: 'sandbaseai-hermes', ref: 'sam2026go/hermes-agent:boxlite-noexpose-20260726' },
+      ],
+    }
+    await renderOpen()
+
+    const imageTrigger = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent === 'Base',
+    )
+    expect(imageTrigger).toBeTruthy()
+    await act(async () => imageTrigger?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 })))
+    await act(async () => imageTrigger?.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 })))
+    await flush()
+
+    const hermesItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (item) => item.textContent === 'sandbaseai-hermes',
+    )
+    expect(hermesItem).toBeTruthy()
+    await act(async () => hermesItem?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+
+    const createButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent === 'Create Box',
+    )
+    await act(async () => createButton?.click())
+    await flush()
+
+    expect(mutationMocks.createBox).toHaveBeenCalledWith(
+      expect.objectContaining({ image: 'sam2026go/hermes-agent:boxlite-noexpose-20260726' }),
+    )
+  })
+
+  it('keeps the built-in image choices when an older API omits supportedImages', async () => {
+    state.config = {}
+    await renderOpen()
+
+    expect(document.body.textContent).toContain('Base')
+  })
+
+  it('submits the visible fallback when runtime config removes the selected image', async () => {
+    state.config = {
+      supportedImages: [
+        { name: 'base', ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:runtime' },
+        { name: 'custom', ref: 'ghcr.io/acme/custom:1' },
+      ],
+    }
+    await renderOpen()
+
+    const imageTrigger = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent === 'Base',
+    )
+    await act(async () => imageTrigger?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 })))
+    await act(async () => imageTrigger?.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 })))
+    await flush()
+    const customItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (item) => item.textContent === 'custom',
+    )
+    expect(customItem).toBeTruthy()
+    await act(async () => customItem?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+    expect(imageTrigger?.textContent).toBe('custom')
+
+    state.config = {
+      supportedImages: [{ name: 'base', ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:runtime' }],
+    }
+    await rerenderOpen()
+
+    expect(imageTrigger?.textContent).toBe('Base')
+    const createButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent === 'Create Box',
+    )
+    await act(async () => createButton?.click())
+    await flush()
+
+    expect(mutationMocks.createBox).toHaveBeenCalledWith(
+      expect.objectContaining({ image: 'ghcr.io/boxlite-ai/boxlite-agent-base:runtime' }),
     )
   })
 })
