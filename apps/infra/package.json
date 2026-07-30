@@ -9,7 +9,8 @@
     "remove": "node scripts/sst-with-cloudflare.mjs remove",
     "test": "node --test scripts/*.test.mjs",
     "sst": "node scripts/sst-with-cloudflare.mjs",
-    "secrets": "node scripts/sst-with-cloudflare.mjs secret list"
+    "secrets": "node scripts/sst-with-cloudflare.mjs secret list",
+    "runner:update": "node scripts/runner-update-binary.mjs"
   },
   "devDependencies": {
     "@pulumi/aws": "^7.24.0",

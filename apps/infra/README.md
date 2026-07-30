@@ -359,8 +359,9 @@ resource options on `sst.config.ts`'s Runner enforce that:
 
 - `ignoreChanges: ["ami", "userDataBase64"]` — Ubuntu publishes new AMIs
   monthly and Cargo.toml version bumps rewrite the embedded `RUNNER_VERSION`.
-  Without this option, either change would replace the EC2. With it, drift is
-  detected but not acted on.
+  Without this option, either change would replace the EC2. With it, neither
+  change is acted on — a version bump instead reaches the running fleet through
+  the rolling upgrade below.
 - `protect: true` — refuses any deletion attempt, including a stray
   `pulumi destroy` or stack-wide teardown.
 
@@ -382,61 +383,83 @@ capability-gated two-phase rollout:
 An API-only `--target Api` deployment, or a broader deployment with an explicit
 `--exclude Runner`, is the operator escape hatch for a control-plane-only
 rollout. Either form skips the Runner release-asset preflight and leaves the EC2
-resource, binary, and identity tag untouched. Detached requests that use legacy
+resource and its identity tag untouched. Detached requests that use legacy
 Runner capabilities remain available; requests needing the new Runner version
 fail explicitly until a later full rollout applies the metadata and upgrades
 the binary.
 
+> Of the two, only `--target Api` also leaves the **binary** alone, because it
+> deploys the API and nothing else. `--exclude Runner` drops just the `Runner`
+> component; the upgrade commands below are separate ones
+> (`UpgradeRunnerBinary-default`, and one per extra Runner), so they still run
+> while the preflight is skipped. That fails closed rather than dangerously — a
+> missing asset stops the download before the unit is touched — but it turns an
+> intentionally Runner-free rollout into a failed deploy. `--target` and
+> `--exclude` cannot be combined, so name the upgrade commands explicitly if you
+> need that form:
+>
+> ```bash
+> npm run deploy -- --stage dev --exclude Runner --exclude UpgradeRunnerBinary-default
+> ```
+
 This bounded compatibility window is intentional: silently discarding a
 requested command or foreground lifecycle would be data loss, while sending it
-to an older Runner would be a protocol error. To deliver a new runner build
-without recreating the EC2:
+to an older Runner would be a protocol error.
+
+A version bump then lands on the next deploy:
 
 ```bash
-# Supply an admin API token from the operator's secret manager. Do not commit it
-# or put it in the SST deployment environment.
-CONTROL_PLANE_API_URL=https://api.dev.boxlite.ai/api \
-CONTROL_PLANE_API_KEY="$OPERATOR_API_KEY" \
-CONTROL_PLANE_RUNNER_ID=00000000-0000-4000-8000-000000000001 \
-CONTROL_PLANE_RUNNER_NAME=default \
-STAGE=dev scripts/deploy/runner-update-binary.sh \
-  --allow-disruptive-restart 0.9.8
-
-# Update additional runners one at a time. Each Runner has its own control-plane
-# UUID even when the AWS Name tag follows the same naming convention.
-CONTROL_PLANE_API_URL=https://api.boxlite.ai/api \
-CONTROL_PLANE_API_KEY="$OPERATOR_API_KEY" \
-CONTROL_PLANE_RUNNER_ID=00000000-0000-4000-8000-000000000002 \
-CONTROL_PLANE_RUNNER_NAME=runner-2 \
-STAGE=production RUNNER_NAME=boxlite-runner-2 \
-  scripts/deploy/runner-update-binary.sh --allow-disruptive-restart 0.9.8
+npm run deploy -- --stage dev
 ```
 
-The AWS `Name` and control-plane Runner names are intentionally different, so
-both must be supplied. Before touching AWS, the script resolves
-`CONTROL_PLANE_RUNNER_ID` through the admin API and requires its exact name to
-equal `CONTROL_PLANE_RUNNER_NAME`. It then selects exactly one running EC2 using
-the SST app, explicit stage, AWS `RUNNER_NAME`, and the
-`boxlite:control-plane-runner-name` mapping tag. Only after those checks does it
-start a persistent `restart` drain. That transaction makes the Runner
-unschedulable; new box assignments, warm-pool claims, and pending starts are
-fenced while the script polls the control plane until the active-box count
-reaches zero.
+`sst.config.ts` declares one `UpgradeRunnerBinary-*` command per Runner, each
+depending on the previous one. The intent is that the fleet upgrades **one host
+at a time** — the dependency chain, rather than anything in the script, is what
+should keep two Runners from restarting at once, and a failed host should stop
+the roll with the hosts not yet visited still serving. Each command runs
+[`scripts/runner-update-binary.mjs`](scripts/runner-update-binary.mjs) against a
+single instance id taken straight from the Pulumi graph, so extra Runners
+(`RUNNERS > 1`) are covered too. The sequencing has not yet been observed on a
+real deploy — only the script's own sequential loop has.
 
-Only then does AWS SSM Run Command download the release tarball, require its
-SHA-256 sidecar, and confirm the candidate's exact version before stopping the
-systemd unit. It backs up the live binary, swaps it, and requires both the local
-`--version` output and Runner HTTP health response to report the requested
-version. It then waits for the control plane to see the restarted Runner as
-drained with zero active boxes and to report the requested `appVersion`; only
-then does the updater clear the restart drain. On success, the control plane
-restores the scheduling state that existed before the drain. On any drain, SSM,
-rollback, readiness, or version-observation failure, the Runner remains drained
-for operator inspection; do not manually re-enable it until the failed command
-is understood. Files under
-`/var/lib/boxlite` remain on disk, but that does not make an active-VM restart
-non-disruptive, so the explicit `--allow-disruptive-restart` acknowledgement
-remains required.
+Per host, over AWS SSM Run Command: the release tarball and its SHA-256 sidecar
+are downloaded and verified before the systemd unit is stopped — so a failed,
+missing-sidecar, or corrupt fetch never takes the Runner down — then the live
+binary is backed up, `/usr/local/bin/boxlite-runner` swapped, and the unit
+restarted. The host counts as done only once the Runner's HTTP health route
+reports the new version; if it does not come up, the backup is restored and the
+command fails. Asset URLs and the stable-version rule come from
+[`runner-release-assets.mjs`](scripts/runner-release-assets.mjs), the same
+resolver the deploy preflight uses, so an unreleasable target is rejected before
+any host is touched. The binary itself exposes no `--version` flag, so its health
+route is the only version oracle available here.
+
+The step is a converge, not a reinstall. A host is left completely alone when it
+is already serving the target version, when it is still bootstrapping (its
+user-data installs that same version anyway), or when it is serving something
+**newer** than `Cargo.toml` declares — that last case is refused rather than
+silently reverted, since a Runner ahead of the repo is usually a deliberate
+hand-install. Version ordering understands prereleases: `0.9.10` outranks
+`0.9.9`, and `0.9.8-alpha` is treated as older than `0.9.8`, so promoting a
+prerelease host to the matching release is an upgrade, not a refused downgrade.
+
+To upgrade out of band — after a partial roll, or to pin a version without
+deploying:
+
+```bash
+npm run runner:update              # version from Cargo.toml, every running Runner
+npm run runner:update -- 0.9.5     # explicit version
+INSTANCE_IDS=i-0abc… npm run runner:update   # one specific host
+ALLOW_DOWNGRADE=1 npm run runner:update -- 0.9.5   # deliberate rollback
+```
+
+> The Runner is **not** drained first. Files under `/var/lib/boxlite` survive,
+> but boxes running on the host being upgraded take the restart; the unit's
+> `TimeoutStopSec=60` only buys a graceful VM shutdown. Cordoning through the
+> admin API (`PATCH /runners/:id/scheduling`) would need a control-plane Runner
+> id, an operator key, and the organization-infrastructure flag, none of which
+> the deploy path has — so treat any Runner upgrade as disruptive and drain it
+> yourself when that matters.
 
 ### Deliberate decommission (three-step ceremony)
 

@@ -931,9 +931,9 @@ export default $config({
     // name, identity tags, and per-runner user-data, so they share one factory. Two Pulumi
     // options keep a runner persistent across routine deploys:
     //   • ignoreChanges ['ami','userDataBase64']: monthly Ubuntu AMIs and Cargo.toml
-    //     version bumps no longer force replacement; a new binary lands out-of-band via
-    //     SSM instead of recreating the EC2 — scripts/deploy/runner-update-binary.sh
-    //     upgrades one Runner selected by both its AWS and control-plane identity tags.
+    //     version bumps no longer force replacement. The version bump still has to reach
+    //     the running fleet, so the UpgradeRunnerBinary commands below land it over SSM
+    //     instead — every runner, one at a time (see scripts/runner-update-binary.mjs).
     //   • protect: refuses any delete (errant `pulumi destroy` / teardown). Deliberate
     //     decommission = set protect:false, deploy, then `pulumi destroy --target ...`.
     const makeRunner = (
@@ -976,7 +976,7 @@ export default $config({
     // Default runner — auto-seeded by the API at boot via DEFAULT_RUNNER_*.
     // Pulumi resource id stays 'Runner' (renaming it would replace a protect:true
     // instance); the AWS tags bind it to the API's configured default name.
-    makeRunner('Runner', 'boxlite-runner-default', defaultRunnerName, runnerUserData)
+    const defaultRunner = makeRunner('Runner', 'boxlite-runner-default', defaultRunnerName, runnerUserData)
 
     // Multi-runner provisioning. Extra runners share the same OTel endpoint as
     // the default runner.
@@ -1039,6 +1039,52 @@ export default $config({
           triggers: [api.url, runnersPayload],
         },
         { dependsOn: extraRunners.map((r) => r.instance) },
+      )
+    }
+
+    // ── Rolling runner binary upgrade ────────────────────────────────────────
+    // ignoreChanges ['userDataBase64'] above means a Cargo.toml version bump never
+    // reaches a running runner, so these commands land it over SSM instead — the EC2
+    // and the box state on it are never replaced.
+    //
+    // Rolling is meant to be structural rather than scripted: each command handles
+    // exactly one instance and dependsOn the previous one, so the dependency graph — not
+    // any logic in the script — is what should keep two runners from restarting at once,
+    // and a failure should stop the chain with the unvisited hosts still serving.
+    //
+    // `triggers` REPLACES the command rather than updating it, so `create` is the body
+    // that re-runs on a version bump (@pulumi/command documents this) — hence create and
+    // update are the same script. The script converges rather than reinstalls: it leaves
+    // alone a runner already on the target version, one whose binary/unit are not in place
+    // yet (its user-data is installing this same version), and one serving something NEWER
+    // than Cargo.toml declares — that last case is refused, not silently reverted, so a
+    // deliberate hand-install survives an unrelated deploy (ALLOW_DOWNGRADE=1 forces it).
+    // That second guard is what keeps the create-time run on a brand-new runner from
+    // fighting cloud-init: this resource only depends on the instance reaching `running`,
+    // which happens long before cloud-init finishes. The deployer side of the same race —
+    // SendCommand being rejected until the SSM agent registers — is handled by a bounded
+    // retry in the script, since no host-side guard can see it.
+    //
+    // Typed as a bare Resource because the chain only needs something to depend on.
+    let previousUpgrade: $util.Resource | undefined
+    for (const { label, instance } of [
+      { label: 'default', instance: defaultRunner },
+      ...extraRunners.map((r) => ({ label: r.name, instance: r.instance })),
+    ]) {
+      previousUpgrade = new command.local.Command(
+        `UpgradeRunnerBinary-${label}`,
+        {
+          create: 'node scripts/runner-update-binary.mjs',
+          update: 'node scripts/runner-update-binary.mjs',
+          environment: {
+            AWS_REGION: REGION,
+            INSTANCE_IDS: instance.id,
+            RUNNER_VERSION: workspaceVersion,
+            RUNNER_PORT: String(PORTS.RUNNER),
+          },
+          triggers: [workspaceVersion, instance.id],
+        },
+        { dependsOn: previousUpgrade ? [instance, previousUpgrade] : [instance] },
       )
     }
   },

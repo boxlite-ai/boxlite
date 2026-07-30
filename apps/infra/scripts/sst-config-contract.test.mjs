@@ -133,3 +133,35 @@ test('Runner bootstrap fails closed when the release checksum is unavailable', (
   assert.match(runnerBootstrap, /curl -fsSL .*\.sha256.*-o \/tmp\/runner\.sha256/)
   assert.match(runnerBootstrap, /runner checksum mismatch/)
 })
+
+test('upgrades every Runner through a dependsOn chain, one host per command', () => {
+  // The chain is the only thing sequencing the restarts, and it cannot be observed
+  // without a real deploy — so it is pinned here, next to the other deploy-shape
+  // invariants, rather than left to prose.
+  const upgrades = source.slice(source.indexOf('── Rolling runner binary upgrade'))
+
+  // Every Runner gets a command: the default (captured for exactly this) plus each extra.
+  assert.match(source, /const defaultRunner = makeRunner\('Runner', 'boxlite-runner-default'/)
+  assert.match(upgrades, /\{ label: 'default', instance: defaultRunner \}/)
+  assert.match(upgrades, /\.\.\.extraRunners\.map\(\(r\) => \(\{ label: r\.name, instance: r\.instance \}\)\)/)
+  assert.match(upgrades, /new command\.local\.Command\(\s*`UpgradeRunnerBinary-\$\{label\}`/)
+
+  // Each command waits on the previous one, so two Runners never restart at once.
+  assert.match(upgrades, /previousUpgrade = new command\.local\.Command/)
+  assert.match(upgrades, /dependsOn: previousUpgrade \? \[instance, previousUpgrade\] : \[instance\]/)
+
+  // Exactly one host per command, and a version bump is what re-runs it.
+  assert.match(upgrades, /INSTANCE_IDS: instance\.id/)
+  assert.match(upgrades, /triggers: \[workspaceVersion, instance\.id\]/)
+  // `triggers` replaces the resource, so `create` must carry the same body as `update`.
+  assert.match(
+    upgrades,
+    /create: 'node scripts\/runner-update-binary\.mjs',\s*update: 'node scripts\/runner-update-binary\.mjs',/,
+  )
+})
+
+test('no longer points operators at the deleted shell updater', () => {
+  assert.doesNotMatch(source, /scripts\/deploy\/runner-update-binary\.sh/)
+  assert.doesNotMatch(readme, /runner-update-binary\.sh/)
+  assert.match(readme, /scripts\/runner-update-binary\.mjs/)
+})
