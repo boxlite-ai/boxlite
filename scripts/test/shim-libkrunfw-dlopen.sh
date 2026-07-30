@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Verify the packaged Linux shim can load the packaged libkrunfw on the
-# deployment glibc before KVM is required.
+# deployment host before KVM is required.
 
 set -euo pipefail
 
@@ -31,7 +31,6 @@ done
 machine=$(readelf -h "$firmware" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')
 shim_machine=$(readelf -h "$shim" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')
 firmware_needed=$(readelf -d "$firmware" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p')
-shim_needed=$(readelf -d "$shim" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p')
 interpreter=$(readelf -l "$shim" | sed -n 's/.*Requesting program interpreter: \([^]]*\)].*/\1/p')
 readelf -d "$firmware" | grep -q 'SONAME.*\[libkrunfw.so.5\]' || {
   echo "error: libkrunfw does not declare SONAME libkrunfw.so.5" >&2
@@ -41,30 +40,28 @@ readelf -d "$firmware" | grep -q 'SONAME.*\[libkrunfw.so.5\]' || {
   echo "error: shim machine $shim_machine does not match firmware machine $machine" >&2
   exit 1
 }
-if grep -Fxq 'libc.so.6' <<<"$firmware_needed"; then
-  echo "error: libkrunfw must not carry a synthetic libc dependency" >&2
+if [[ -n "$interpreter" ]]; then
+  echo "error: Linux shim must be statically linked, found interpreter $interpreter" >&2
   exit 1
 fi
-grep -Fxq 'libc.so.6' <<<"$shim_needed" || {
-  echo "error: Linux shim must dynamically link the manylinux-compatible glibc" >&2
-  exit 1
-}
 case "$machine" in
   *X86-64*)
-    expected_interpreter=/lib64/ld-linux-x86-64.so.2
+    if grep -Fxq 'libc.so.6' <<<"$firmware_needed"; then
+      echo "error: x86_64 libkrunfw must not load a second, host-version libc from the static shim" >&2
+      exit 1
+    fi
     ;;
   *AArch64*)
-    expected_interpreter=/lib/ld-linux-aarch64.so.1
+    grep -Fxq 'libc.so.6' <<<"$firmware_needed" || {
+      echo "error: aarch64 libkrunfw requires libc.so.6 for static-shim dlopen" >&2
+      exit 1
+    }
     ;;
   *)
     echo "error: unsupported libkrunfw machine: $machine" >&2
     exit 1
     ;;
 esac
-[[ "$interpreter" == "$expected_interpreter" ]] || {
-  echo "error: expected shim interpreter $expected_interpreter, found ${interpreter:-none}" >&2
-  exit 1
-}
 
 probe_dir=$(mktemp -d "${TMPDIR:-/tmp}/boxlite-shim-loader.XXXXXX")
 cleanup() {

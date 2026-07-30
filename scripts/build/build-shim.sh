@@ -9,8 +9,8 @@
 #   --profile PROFILE   Build profile: release or debug (default: release)
 #
 # Note: On macOS, the binary is automatically signed with hypervisor entitlements
-# Note: On Linux, the binary is dynamically linked against glibc.
-#       Go c-archive is incompatible with musl TLS, so Linux uses the GNU target.
+# Note: On Linux, the binary is statically linked using glibc (crt-static).
+#       Go c-archive is incompatible with musl TLS, so we use glibc static linking instead.
 
 set -e
 
@@ -84,12 +84,25 @@ build_shim_binary() {
     fi
 
     if [ "$OS" = "linux" ]; then
-        # libkrun dlopen's libkrunfw. A static glibc caller requires the host
-        # loader to be the exact glibc version used at link time, so build a
-        # normal GNU executable against the manylinux baseline instead.
-        echo "🎯 Dynamic glibc binary"
+        # Go c-archive crashes with musl TLS; use glibc + crt-static instead.
+        # crt-static on aarch64 relies on libkrun-sys adding libkrunfw's libc
+        # DT_NEEDED. x86_64 must not get that dependency: it would mix the
+        # build-image glibc in this shim with the deployment host's glibc.
+        # relocation-model=static avoids static-pie which is incompatible with Go c-archive relocations.
+        # --target is required so RUSTFLAGS (crt-static, relocation-model) don't leak into
+        # proc-macro compilation — proc-macros are dylibs and can't use crt-static.
+        # The downside is cargo outputs to target/<triple>/$PROFILE/ instead of target/$PROFILE/,
+        # so we copy the binary back to the canonical path after building.
+        local arch
+        arch=$(uname -m)
+        local target="${arch}-unknown-linux-gnu"
+        export RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C link-arg=-Wl,-z,stack-size=2097152 -C link-arg=-Wl,--allow-multiple-definition"
+        echo "🎯 Static glibc binary (crt-static + relocation-model=static)"
+        cargo build $build_flag -p boxlite-shim --target "$target"
+        cp "$PROJECT_ROOT/target/$target/$PROFILE/boxlite-shim" "$SHIM_BINARY_PATH"
+    else
+        cargo build $build_flag -p boxlite-shim
     fi
-    cargo build $build_flag -p boxlite-shim
 }
 
 # Sign the binary (macOS only, automatic)

@@ -102,9 +102,8 @@ install_system_deps() {
         fi
     done
 
-    # Vendored libkrun compiles its guest init with `-static`; this package
-    # supplies the libc archive for that guest binary. The host shim itself is
-    # dynamically linked.
+    # glibc-static is required for boxlite-shim (built with +crt-static).
+    # Provides libc.a and libresolv.a needed for static glibc linking.
     print_step "Checking for glibc-static... "
     if yum_installed glibc-static; then
         print_success "Already installed"
