@@ -1,8 +1,16 @@
-name: Deploy dev stack
+name: Deploy stack
+run-name: Deploy ${{ inputs.stage }} stack
 
 on:
   workflow_dispatch:
     inputs:
+      stage:
+        description: 'Stage to deploy (must already be bootstrapped — see apps/infra/README.md)'
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
       apply:
         description: Preview again, then deploy the full stack
         required: true
@@ -14,20 +22,21 @@ permissions:
   id-token: write
 
 concurrency:
-  group: deploy-dev-stack
+  group: deploy-${{ inputs.stage }}-stack
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Deploy dev stack
+    name: Deploy ${{ inputs.stage }} stack
     if: github.ref == 'refs/heads/main'
-    environment: dev
+    environment: ${{ inputs.stage }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
       AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
-      IAM_PERMISSIONS_BOUNDARY_STAGE: dev
+      STAGE: ${{ inputs.stage }}
+      IAM_PERMISSIONS_BOUNDARY_STAGE: ${{ inputs.stage }}
 
     steps:
       - name: Checkout main
@@ -47,7 +56,7 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: deploy-dev-stack-${{ github.run_id }}
+          role-session-name: deploy-${{ inputs.stage }}-stack-${{ github.run_id }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -77,20 +86,20 @@ jobs:
 
       - name: Install SST providers
         working-directory: apps/infra
-        run: npm run --silent sst -- install --stage dev
+        run: npm run --silent sst -- install --stage "$STAGE"
 
       - name: Preview the full stack
         shell: bash
         working-directory: apps/infra
         run: |
           set -euo pipefail
-          npm run --silent sst -- diff --stage dev --policy . --json |
+          npm run --silent sst -- diff --stage "$STAGE" --policy . --json |
             node scripts/deployment-preview.mjs
 
       - name: Deploy the full stack
         if: ${{ inputs.apply }}
         working-directory: apps/infra
-        run: npm run deploy -- --stage dev --policy .
+        run: npm run deploy -- --stage "$STAGE" --policy .
 
       - name: Remove materialized configuration
         if: always()

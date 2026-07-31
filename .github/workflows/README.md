@@ -159,20 +159,26 @@ is enabled. The workflow is dormant until repository variable
 4. Trigger a new push, pull request update, or manual dispatch and verify CodeQL analysis uploads successfully.
 5. Roll back by setting `CODEQL_ADVANCED_SETUP_ENABLED=false` and re-enabling default setup.
 
-### `deploy-dev-api.yml`
+### `deploy-infra.yml`
 
-Previews or deploys the full dev stack from `main` on a native AMD64 GitHub
-runner. Deployment safety tests first enforce the Runner lifecycle options.
-Dispatch defaults to preview-only; `apply=true` repeats the full structured
-preview and deploys only when the Runner safety gate accepts the plan. Routine
-control-plane deployment rejects every Runner create, delete, replacement, or
-protected-property change; the routine workflow does not provision Runners.
-The job rejects partial `--target`/`--exclude` deploys so provider changes and
-resources reconcile together. It is serialized, uses the protected `dev`
-Environment, and authenticates to AWS with short-lived OIDC credentials. Docker
-runs entirely in CI; no developer machine or public SSH builder participates.
+Previews or deploys the full stack from `main` on a native AMD64 GitHub
+runner, for a `workflow_dispatch`-selected `stage` (an allowlisted `choice`
+input, `dev` today). Deployment safety tests first enforce the Runner lifecycle
+options. Dispatch defaults to preview-only; `apply=true` repeats the full
+structured preview and deploys only when the Runner safety gate accepts the
+plan. Routine control-plane deployment rejects every Runner create, delete,
+replacement, or protected-property change; the routine workflow does not
+provision Runners. The job rejects partial `--target`/`--exclude` deploys so
+provider changes and resources reconcile together. It is serialized, uses the
+selected stage's protected GitHub Environment, and authenticates to AWS with
+short-lived OIDC credentials. Docker runs entirely in CI; no developer machine
+or public SSH builder participates.
 
-Required `dev` Environment configuration:
+The `stage` input is an allowlist rather than free text, so a
+required-reviewers Environment cannot be targeted by an unbootstrapped or
+misspelled name. Adding a stage means adding it to that `options` list.
+
+Required Environment configuration (per stage):
 
 - Variable `AWS_DEPLOY_ROLE_ARN`
 - Variable `AWS_REGION` (defaults to `ap-southeast-1`)

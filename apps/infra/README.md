@@ -69,8 +69,8 @@ gh secret set DEPLOY_ENV --env dev < .env
 
 # The workflow is manual and accepts runs only from main. It updates an existing
 # stack; initial Runner provisioning is intentionally a separate operation.
-gh workflow run deploy-dev-api.yml --ref main -f apply=false
-gh workflow run deploy-dev-api.yml --ref main -f apply=true
+gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false
+gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=true
 ```
 
 `OIDC_CLIENT_ID` is required. Other app secrets (SSH keys, Auth0 Management API,
@@ -85,7 +85,7 @@ workflow — SST resumes from the failed step.
 
 ## Native AMD64 CI deployment
 
-`.github/workflows/deploy-dev-api.yml` runs the deployment on GitHub's native
+`.github/workflows/deploy-infra.yml` runs the deployment on GitHub's native
 `ubuntu-24.04` AMD64 runner. Docker, Buildx, image compilation, and the daemon all
 run in CI; a developer Mac needs neither Docker Desktop nor the Docker CLI. The
 workflow checks both the kernel and Docker engine architecture before SST runs.
@@ -385,7 +385,7 @@ For Auth0 specifically:
 | **ClickHouse Cloud** | Managed OTel storage                  | external service; configured by env                                      |
 | **ClickStack**       | Logs/traces/metrics explorer          | external ClickHouse Cloud UI                                             |
 
-Run the `Deploy dev stack` workflow again to redeploy. See
+Run the `Deploy stack` workflow (`deploy-infra.yml`) again to redeploy. See
 [Public hostnames](#public-hostnames) below for the rationale behind the
 dashboard-vs-API split.
 
@@ -393,10 +393,10 @@ dashboard-vs-API split.
 
 ```bash
 # Preview the protected GitHub deployment environment without mutation.
-gh workflow run deploy-dev-api.yml --ref main -f apply=false
+gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false
 
 # After the preview passes review, evaluate again and apply the full stack.
-gh workflow run deploy-dev-api.yml --ref main -f apply=true
+gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=true
 
 npm run sst -- diff --stage dev     # preview changes
 npm run sst -- unlock --stage dev   # recover from "concurrent update detected"

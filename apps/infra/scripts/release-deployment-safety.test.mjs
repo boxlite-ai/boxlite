@@ -14,7 +14,7 @@ const SST_WRAPPER = join(REPO_ROOT, 'apps/infra/scripts/sst-with-cloudflare.mjs'
 const RUNNER_POLICY_PROJECT = join(REPO_ROOT, 'apps/infra/PulumiPolicy.yaml')
 const RUNNER_POLICY_ENTRY = join(REPO_ROOT, 'apps/infra/policies/runner/index.js')
 const RUNNER_POLICY_DEFINITIONS = join(REPO_ROOT, 'apps/infra/policies/runner/definitions.cjs')
-const DEV_DEPLOY_WORKFLOW = join(REPO_ROOT, '.github/workflows/deploy-dev-api.yml')
+const DEPLOY_WORKFLOW = join(REPO_ROOT, '.github/workflows/deploy-infra.yml')
 const LINT_WORKFLOW = join(REPO_ROOT, '.github/workflows/lint.yml')
 const DEV_DEPLOY_ROLE = join(REPO_ROOT, 'apps/infra/ci/github-deploy-role.yaml')
 const CLOUDFORMATION_SCHEMA = DEFAULT_SCHEMA.extend([
@@ -103,9 +103,9 @@ test('SST deploy does not depend on a laptop-managed remote builder', () => {
   }
 })
 
-test('manual dev deployment previews and reconciles the full stack in guarded GitHub CI', () => {
-  assert.ok(existsSync(DEV_DEPLOY_WORKFLOW), 'the dev stack deployment workflow is missing')
-  const source = readFileSync(DEV_DEPLOY_WORKFLOW, 'utf8')
+test('deployment previews and reconciles the full stack in guarded GitHub CI', () => {
+  assert.ok(existsSync(DEPLOY_WORKFLOW), 'the stack deployment workflow is missing')
+  const source = readFileSync(DEPLOY_WORKFLOW, 'utf8')
   const workflow = load(source)
   const safetyTestStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Run deployment safety tests')
   const materializeStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Materialize stage configuration')
@@ -114,6 +114,8 @@ test('manual dev deployment previews and reconciles the full stack in guarded Gi
   const deployStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Deploy the full stack')
 
   assert.match(source, /workflow_dispatch:/)
+  assert.equal(workflow.on.workflow_dispatch.inputs.stage.type, 'choice')
+  assert.ok(workflow.on.workflow_dispatch.inputs.stage.options.includes('dev'))
   assert.deepEqual(workflow.on.workflow_dispatch.inputs.apply, {
     description: 'Preview again, then deploy the full stack',
     required: true,
@@ -122,7 +124,7 @@ test('manual dev deployment previews and reconciles the full stack in guarded Gi
   })
   assert.equal(workflow.on.workflow_dispatch.inputs.runner_create_allowlist, undefined)
   assert.match(source, /if: github\.ref == 'refs\/heads\/main'/)
-  assert.match(source, /environment: dev/)
+  assert.match(source, /environment: \$\{\{ inputs\.stage \}\}/)
   assert.match(source, /id-token: write/)
   assert.match(source, /runs-on: ubuntu-24\.04/)
   assert.match(source, /uname -m[\s\S]*x86_64/)
@@ -131,6 +133,10 @@ test('manual dev deployment previews and reconciles the full stack in guarded Gi
   assert.match(source, /role-to-assume: \$\{\{ vars\.AWS_DEPLOY_ROLE_ARN \}\}/)
   assert.match(source, /secrets\.DEPLOY_ENV/)
   assert.equal(workflow.jobs.deploy.env.RUNNER_CREATE_ALLOWLIST, undefined)
+  // Every sst step passes --stage "$STAGE"; without this job env they would all
+  // run with an empty stage.
+  assert.equal(workflow.jobs.deploy.env.STAGE, '${{ inputs.stage }}')
+  assert.equal(workflow.jobs.deploy.env.IAM_PERMISSIONS_BOUNDARY_STAGE, '${{ inputs.stage }}')
   assert.match(source, /node apps\/infra\/scripts\/deploy-environment-validation\.mjs apps\/infra\/\.env/)
   assert.doesNotMatch(materializeStep.run, /grep/)
   assert.ok(safetyTestStep, 'the deployment safety test step is missing')
@@ -143,7 +149,7 @@ test('manual dev deployment previews and reconciles the full stack in guarded Gi
   assert.notEqual(materializeConfigIndex, -1, 'the stage configuration is not materialized')
   assert.ok(validateConfigIndex > materializeConfigIndex, 'DEPLOY_ENV must be validated after it is materialized')
   assert.ok(installStep, 'the SST provider installation step is missing')
-  assert.equal(installStep.run, 'npm run --silent sst -- install --stage dev')
+  assert.equal(installStep.run, 'npm run --silent sst -- install --stage "$STAGE"')
   assert.ok(previewStep, 'the full-stack preview step is missing')
   assert.equal(previewStep.if, undefined, 'Preview validation must not be conditional')
   assert.equal(previewStep['continue-on-error'], undefined, 'Preview failures must stop deployment')
@@ -152,14 +158,14 @@ test('manual dev deployment previews and reconciles the full stack in guarded Gi
     previewStep.run,
     [
       'set -euo pipefail',
-      'npm run --silent sst -- diff --stage dev --policy . --json |',
+      'npm run --silent sst -- diff --stage "$STAGE" --policy . --json |',
       '  node scripts/deployment-preview.mjs',
       '',
     ].join('\n'),
   )
   assert.ok(deployStep, 'the full-stack deployment step is missing')
   assert.equal(deployStep.if, '${{ inputs.apply }}')
-  assert.equal(deployStep.run, 'npm run deploy -- --stage dev --policy .')
+  assert.equal(deployStep.run, 'npm run deploy -- --stage "$STAGE" --policy .')
   assert.ok(
     workflow.jobs.deploy.steps.indexOf(previewStep) < workflow.jobs.deploy.steps.indexOf(deployStep),
     'Preview validation must complete before deployment',

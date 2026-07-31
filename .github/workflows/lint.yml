@@ -23,7 +23,7 @@ on:
       - '.github/workflows/lint.yml'
       - '.github/workflows/config.yml'
       - '.github/workflows/build-runtime.yml'
-      - '.github/workflows/deploy-dev-api.yml'
+      - '.github/workflows/deploy-infra.yml'
       - 'apps/infra/**'
       - 'scripts/release/**'
   # No path filter on pull_request: the `Lint (conclusion)` job is a required
@@ -85,7 +85,7 @@ jobs:
               - '.github/workflows/lint.yml'
             infra:
               - 'apps/infra/**'
-              - '.github/workflows/deploy-dev-api.yml'
+              - '.github/workflows/deploy-infra.yml'
               - 'make/test.mk'
             install_script:
               - 'scripts/release/**'
