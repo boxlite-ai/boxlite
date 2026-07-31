@@ -73,6 +73,22 @@ Write for a reviewer skimming in ~30 seconds. Describe the change, not the proce
 
 - Title: a Conventional-Commit subject (same rule as above).
 - Description: fill in [`.github/pull_request_template.md`](./.github/pull_request_template.md); delete sections that don't apply.
+- **Call graph (required):** the end-to-end path the PR touches, *before* and *after* — one line per hop, `fn_name  (Type · path/file.rs:LOC)  — role`, flow shown by arrows or indent. Only the hops that change; elide the rest with `…`. Same shape as the graphs used to explain code elsewhere in this repo.
+- **Bug fixes** additionally mark the defect in the *Before* graph — `← BUG: <what goes wrong>` on the faulty hop — and link the issue with `Fixes #<n>`.
+
+```text
+Before
+  exec_box            (BoxHandle · src/boxlite/src/portal/exec.rs:88)
+    └─ open_console   (Jailer · src/boxlite/src/jailer/console.rs:41)  ← BUG: returns before the socket binds
+         └─ attach_stdio (Guest · src/guest/src/io.rs:12)              — never reached
+
+After
+  exec_box            (BoxHandle · src/boxlite/src/portal/exec.rs:88)
+    └─ open_console   (Jailer · src/boxlite/src/jailer/console.rs:41)  — awaits the bind future
+         └─ attach_stdio (Guest · src/guest/src/io.rs:12)
+
+Fixes #1042
+```
 
 **Never put in a commit or PR** the process that produced the change (conversation / AI / step-by-step narrative), pasted logs or tickets, or secrets.
 

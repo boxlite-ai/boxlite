@@ -26,6 +26,11 @@
 #   arbitrary string is rare and the failure mode is "let one PR through
 #   without ack," not a destructive action.
 #
+# * Two deterministic content checks run before the ack gate — a Conventional-
+#   Commit `--title`, and a `--body` carrying the before/after call graph
+#   (CONTRIBUTING.md #commit--pr-messages). Both only fire when the flag is
+#   actually present and inspectable; neither consumes the ack marker.
+#
 # * One-shot consumption: the marker file is `rm -f`'d on the allow path so
 #   each successive gh pr command forces a fresh ack, even at the same HEAD.
 #   Mirrors the trade-off in preflight-commit-push.sh.
@@ -109,6 +114,92 @@ if [[ -n "$pr_title" ]]; then
   types: feat fix docs refactor test chore perf ci build
 
 Fix --title and retry. See CONTRIBUTING.md #commit--pr-messages."
+  fi
+fi
+
+# Deterministic body check: a supplied PR body must carry the before/after
+# end-to-end call graph mandated by CONTRIBUTING.md #commit--pr-messages.
+#
+# Only inspected when the command actually supplies a body. `gh pr ready` and
+# editor-driven `gh pr create` carry nothing to read, and the editor path opens
+# .github/pull_request_template.md, which already holds the section.
+pr_body=""
+body_supplied=0
+if [[ "$command" =~ (^|[[:space:]])(--body-file|-F)[[:space:]]+([^[:space:]]+) ]]; then
+  body_supplied=1
+  body_path="${BASH_REMATCH[3]//[\"\']/}"
+  [[ -r "$body_path" ]] && pr_body="$(cat "$body_path")"
+elif [[ "$command" =~ (^|[[:space:]])(--body|-b)[[:space:]]+\"([^\"]*)\" ]]; then
+  # Covers both `--body "…"` and `--body "$(cat <<'EOF' … EOF)"`: the capture stops
+  # at the next `"`, so a body containing a double quote truncates and fails the
+  # checks below — closed, not open.
+  body_supplied=1
+  pr_body="${BASH_REMATCH[3]}"
+elif [[ "$command" =~ (^|[[:space:]])(--body|-b)[[:space:]]+\'([^\']*)\' ]]; then
+  body_supplied=1
+  pr_body="${BASH_REMATCH[3]}"
+elif [[ "$command" =~ (^|[[:space:]])(--body|-b|--fill|--fill-first|--fill-verbose|-f)([[:space:]]|=|$) ]]; then
+  # A body flag we cannot read (unquoted `--body`), or `--fill`, which supplies no
+  # body of its own — commit text is not a PR description.
+  body_supplied=1
+  pr_body="$command"
+fi
+
+if (( body_supplied )); then
+  # Line-start anchors below: an extracted body begins mid-line, glued to the flag.
+  pr_body=$'\n'"$pr_body"
+  body_lc="$(tr '[:upper:]' '[:lower:]' <<<"$pr_body")"
+  # Herestrings, not pipes: `grep -q` exits on first match and would SIGPIPE the
+  # writer, which `set -o pipefail` would then read as a failed check.
+  has_line() { grep -qE "$1" <<<"$body_lc"; }
+  missing=""
+
+  has_line '^[[:space:]]*#{2,}[[:space:]]*call[[:space:]]+graph[[:space:]]*$' \
+    || missing+="
+  - a '## Call graph' section"
+  has_line '^[[:space:]]*before([[:space:]]|:|$)' \
+    || missing+="
+  - a 'Before' graph"
+  has_line '^[[:space:]]*after([[:space:]]|:|$)' \
+    || missing+="
+  - an 'After' graph"
+
+  # Hops must be real: `fn_name (Type · path/file.ext:LOC)`. Requiring two
+  # file:LOC references is what an unfilled template cannot fake — its Before
+  # and After labels are literal text, but its hop lines are HTML comments.
+  hop_lines="$(grep -cE '[A-Za-z0-9_./-]+\.[A-Za-z]+:[0-9]+' <<<"$pr_body" || true)"
+  (( hop_lines >= 2 )) \
+    || missing+="
+  - 2+ hop lines carrying 'path/file.ext:LOC' (found ${hop_lines})"
+
+  # Bug-fix extras — only decidable when --title was inspectable above.
+  if [[ "$pr_title" =~ ^fix(\([^\)]+\))?!?: ]]; then
+    has_line 'bug:' \
+      || missing+="
+  - fix: PR — '← BUG: <what goes wrong>' on the faulty hop in Before"
+    has_line '(fixes|closes|resolves)[[:space:]]+#[0-9]+' \
+      || missing+="
+  - fix: PR — an issue link, 'Fixes #<n>'"
+  fi
+
+  if [[ -n "$missing" ]]; then
+    deny "PR description is missing the mandated before/after call graph.
+
+Missing:${missing}
+
+Shape — one line per hop, only the hops this PR changes:
+  Before
+    exec_box            (BoxHandle · src/boxlite/src/portal/exec.rs:88)
+      └─ open_console   (Jailer · src/boxlite/src/jailer/console.rs:41)  ← BUG: returns before the socket binds
+  After
+    exec_box            (BoxHandle · src/boxlite/src/portal/exec.rs:88)
+      └─ open_console   (Jailer · src/boxlite/src/jailer/console.rs:41)  — awaits the bind future
+
+Read the real call sites before writing the graph — a graph with invented
+symbols or stale line numbers is worse than none.
+
+Rewrite the body and retry. Rule and full example: CONTRIBUTING.md
+#commit--pr-messages; section layout: .github/pull_request_template.md."
   fi
 fi
 

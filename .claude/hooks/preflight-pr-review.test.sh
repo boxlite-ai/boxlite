@@ -118,5 +118,43 @@ run "good --title + valid marker → allow"  'gh pr create --title "feat(api): a
 run "marker consumed after allow → deny"   'gh pr create --title "feat(api): add a cool thing"'  "deny"
 
 echo
+echo "## Body check: a supplied --body must carry the before/after call graph"
+
+GRAPH=$'## Call graph\n\nBefore\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)\n\nAfter\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)'
+FIX_GRAPH=$'## Call graph\n\nBefore\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)  <- BUG: returns before the socket binds\n\nAfter\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)\n\nFixes #1042'
+FEAT='--title "feat(api): add a cool thing"'
+FIX='--title "fix(portal): await console bind"'
+
+printf '%s' "$GRAPH" > "$TMP/body.md"
+printf 'Adds a thing. Tested locally.\n' > "$TMP/prose.md"
+
+# A fresh marker before EVERY case: the allow path consumes it, so without one
+# a later case would deny for want of an ack and look like a body-check pass.
+run_body() {
+  write_marker "reviewed: body cases"
+  run "$@"
+}
+
+run_body "prose body, no graph → deny"        "gh pr create $FEAT --body \"Adds a thing. Tested locally.\"" "deny"
+run_body "graph missing After → deny"         "gh pr create $FEAT --body \"${GRAPH%%$'\n\n'After*}\""       "deny"
+run_body "labels but no file:LOC → deny"      "gh pr create $FEAT --body \"## Call graph
+
+Before
+  exec_box calls open_console
+
+After
+  exec_box awaits open_console\""                                                                           "deny"
+run_body "unfilled template → deny"           "gh pr create $FEAT --body-file $REPO_ROOT/.github/pull_request_template.md" "deny"
+run_body "--fill (no body of its own) → deny" "gh pr create $FEAT --fill"                                   "deny"
+run_body "fix: graph w/o BUG marker → deny"   "gh pr create $FIX --body \"$GRAPH\""                         "deny"
+run_body "fix: BUG but no issue link → deny"  "gh pr create $FIX --body \"${FIX_GRAPH%%$'\n\n'Fixes*}\""    "deny"
+run_body "--body-file prose → deny"           "gh pr create $FEAT --body-file $TMP/prose.md"                "deny"
+
+run_body "gh pr ready (no body flag) → allow" "gh pr ready 42"                                              "passthrough"
+run_body "valid graph body → allow"           "gh pr create $FEAT --body \"$GRAPH\""                        "passthrough"
+run_body "--body-file with graph → allow"     "gh pr create $FEAT --body-file $TMP/body.md"                 "passthrough"
+run_body "fix: graph + BUG + issue → allow"   "gh pr create $FIX --body \"$FIX_GRAPH\""                     "passthrough"
+
+echo
 echo "RESULT: $pass passed, $fail failed"
 exit $(( fail > 0 ? 1 : 0 ))
