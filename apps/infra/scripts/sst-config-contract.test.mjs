@@ -9,6 +9,21 @@ const source = readFileSync(new URL('../sst.config.ts', import.meta.url), 'utf8'
 const environmentExample = readFileSync(new URL('../.env.example', import.meta.url), 'utf8')
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
 
+// Slice a named region out of a source file. Asserting the markers first turns a renamed
+// comment into "marker missing", instead of indexOf returning -1 and slice() silently
+// handing back the tail (or last character) of the file so every assertion below fails
+// for the wrong reason.
+function sliceBetween(text, label, startMarker, endMarker) {
+  const start = text.indexOf(startMarker)
+  assert.notEqual(start, -1, `${label} is missing the marker: ${startMarker}`)
+  if (endMarker === undefined) return text.slice(start)
+  const end = text.indexOf(endMarker)
+  assert.notEqual(end, -1, `${label} is missing the marker: ${endMarker}`)
+  return text.slice(start, end)
+}
+
+const section = (startMarker, endMarker) => sliceBetween(source, 'sst.config.ts', startMarker, endMarker)
+
 test('loads local helpers dynamically inside SST config callbacks', () => {
   assert.doesNotMatch(source, /^import\s/m)
   assert.match(source, /async app\(input\)/)
@@ -16,7 +31,7 @@ test('loads local helpers dynamically inside SST config callbacks', () => {
 })
 
 test('does not force a laptop-managed remote builder', () => {
-  const appSource = source.slice(source.indexOf('async app(input)'), source.indexOf('async run()'))
+  const appSource = section('async app(input)', 'async run()')
 
   assert.doesNotMatch(appSource, /buildx-builder/)
   assert.doesNotMatch(appSource, /BUILDX_BUILDER/)
@@ -44,15 +59,12 @@ test('uses the shared AWS region resolver and waits for the critical API service
   )
   assert.match(source, /const REGION = resolveAwsRegion\(\)/)
 
-  const apiService = source.slice(
-    source.indexOf("const api = new sst.aws.Service('Api'"),
-    source.indexOf('// Assumed by the Api task role'),
-  )
+  const apiService = section("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
   assert.match(apiService, /wait: true,/)
 })
 
 test('uses the canonical deployment config for every Proxy-facing SST value', () => {
-  const runSource = source.slice(source.indexOf('async run()'), source.indexOf('// ── runner bootstrap'))
+  const runSource = section('async run()', '// ── runner bootstrap')
 
   assert.match(runSource, /resolvePublicDeploymentConfig/)
   assert.match(runSource, /const deploymentConfig = resolvePublicDeploymentConfig\(process\.env, workspaceVersion\)/)
@@ -61,8 +73,8 @@ test('uses the canonical deployment config for every Proxy-facing SST value', ()
 })
 
 test('keeps the AWS region in run scope and passes it into Runner user data', () => {
-  const runSource = source.slice(source.indexOf('async run()'), source.indexOf('// ── runner bootstrap'))
-  const runnerUserDataSource = source.slice(source.indexOf('async function buildRunnerUserData'))
+  const runSource = section('async run()', '// ── runner bootstrap')
+  const runnerUserDataSource = section('async function buildRunnerUserData')
 
   assert.match(runSource, /const REGION = resolveAwsRegion\(\)/)
   assert.equal(runSource.match(/awsRegion: REGION/g)?.length, 2)
@@ -71,10 +83,7 @@ test('keeps the AWS region in run scope and passes it into Runner user data', ()
 })
 
 test('tags Runner instances with their exact control-plane identity', () => {
-  const runnerResources = source.slice(
-    source.indexOf('const makeRunner ='),
-    source.indexOf('// Register the extra runners'),
-  )
+  const runnerResources = section('const makeRunner =', '// Register the extra runners')
 
   assert.match(runnerResources, /'boxlite:control-plane-runner-name': controlPlaneRunnerName/)
   assert.match(runnerResources, /makeRunner\('Runner', 'boxlite-runner-default', defaultRunnerName, runnerUserData\)/)
@@ -82,7 +91,7 @@ test('tags Runner instances with their exact control-plane identity', () => {
 })
 
 test('passes both the internal and public OIDC issuers to Proxy', () => {
-  const proxyService = source.slice(source.indexOf("new sst.aws.Service('Proxy'"), source.indexOf('// ─── 8.'))
+  const proxyService = section("new sst.aws.Service('Proxy'", '// ─── 8.')
 
   assert.match(proxyService, /OIDC_DOMAIN: oidcIssuer,/)
   assert.match(proxyService, /publicOidcIssuer[\s\S]*OIDC_PUBLIC_DOMAIN: publicOidcIssuer/)
@@ -93,7 +102,7 @@ test('requires the OIDC client ID through the SST secret store', () => {
   assert.doesNotMatch(source, /new sst\.Secret\('OIDC_CLIENT_ID',/)
   assert.doesNotMatch(environmentExample, /^OIDC_CLIENT_ID=/m)
 
-  const quickStart = readme.slice(readme.indexOf('## Quick start'), readme.indexOf('## Secrets & credentials'))
+  const quickStart = sliceBetween(readme, 'README.md', '## Quick start', '## Secrets & credentials')
   assert.match(quickStart, /npm run sst -- secret set OIDC_CLIENT_ID/)
   assert.doesNotMatch(quickStart, /App secrets .* are optional/)
 })
@@ -105,10 +114,7 @@ test('does not restore the removed SSH gateway deployment', () => {
 })
 
 test('passes explicit management API endpoints into the API service', () => {
-  const apiService = source.slice(
-    source.indexOf("const api = new sst.aws.Service('Api'"),
-    source.indexOf('// Assumed by the Api task role'),
-  )
+  const apiService = section("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
 
   assert.match(apiService, /OIDC_MANAGEMENT_API_BASE_URL: process\.env\.OIDC_MANAGEMENT_API_BASE_URL/)
   assert.match(apiService, /OIDC_MANAGEMENT_API_TOKEN_URL: process\.env\.OIDC_MANAGEMENT_API_TOKEN_URL/)
@@ -119,15 +125,12 @@ test('reports the canonical workspace release unless VERSION overrides it', () =
   assert.match(source, /resolvePublicDeploymentConfig\(process\.env, workspaceVersion\)/)
   assert.match(source, /proxyTemplateUrl, releaseVersion \} = deploymentConfig/)
 
-  const apiService = source.slice(
-    source.indexOf("const api = new sst.aws.Service('Api'"),
-    source.indexOf('// Assumed by the Api task role'),
-  )
+  const apiService = section("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
   assert.match(apiService, /VERSION: releaseVersion,/)
 })
 
 test('Runner bootstrap fails closed when the release checksum is unavailable', () => {
-  const runnerBootstrap = source.slice(source.indexOf('async function buildRunnerUserData'))
+  const runnerBootstrap = section('async function buildRunnerUserData')
 
   assert.doesNotMatch(runnerBootstrap, /if curl -fsSL .*\.sha256/)
   assert.match(runnerBootstrap, /curl -fsSL .*\.sha256.*-o \/tmp\/runner\.sha256/)
@@ -138,7 +141,7 @@ test('upgrades every Runner through a dependsOn chain, one host per command', ()
   // The chain is the only thing sequencing the restarts, and it cannot be observed
   // without a real deploy — so it is pinned here, next to the other deploy-shape
   // invariants, rather than left to prose.
-  const upgrades = source.slice(source.indexOf('── Rolling runner binary upgrade'))
+  const upgrades = section('── Rolling runner binary upgrade')
 
   // Every Runner gets a command: the default (captured for exactly this) plus each extra.
   assert.match(source, /const defaultRunner = makeRunner\('Runner', 'boxlite-runner-default'/)

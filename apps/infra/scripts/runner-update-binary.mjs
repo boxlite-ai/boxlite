@@ -33,6 +33,8 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { realpathSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 
 import { readWorkspaceVersion } from './deployment-environment.mjs'
 import { resolveRunnerReleaseAssets } from './runner-release-assets.mjs'
@@ -92,6 +94,9 @@ export function resolveTargets(environment = process.env) {
   ])
     .split(/\s+/)
     .filter((id) => id && id !== 'None')
+    // describe-instances does not promise an order; sort so a fleet-wide roll visits the
+    // same hosts in the same sequence every run.
+    .sort()
 
   if (discovered.length === 0) {
     throw new Error(`no running instances tagged Name=${NAME_TAG_PATTERN} in ${REGION}`)
@@ -112,6 +117,11 @@ export function buildRemoteScript(version, { runnerPort = RUNNER_PORT, allowDown
   // Shared with the deploy-time preflight, so a target with no usable release is
   // rejected here too rather than 404-ing on the host.
   const { tarballUrl, checksumUrl, tarballName } = resolveRunnerReleaseAssets(version)
+  // The port reaches the remote script body verbatim, so reject a malformed one here
+  // rather than letting it fail obscurely inside a curl on the host.
+  if (!/^[0-9]+$/.test(String(runnerPort))) {
+    throw new Error(`RUNNER_PORT must be numeric (got '${runnerPort}')`)
+  }
   // The manifest's filename column is matched as an awk ERE, so the dots in the tarball
   // name must be escaped — otherwise they are wildcards and a differently-named asset
   // could satisfy the check.
@@ -255,12 +265,14 @@ const indent = (text) =>
 // nothing to interleave and this keeps the call chain synchronous.
 const sleepSeconds = (seconds) => spawnSync('sleep', [String(seconds)])
 
-// SendCommand is rejected with InvalidInstanceId until the instance's SSM agent has
-// registered, and an instance reports `running` — all the Pulumi resource waits for —
-// well before that. This runs on the deployer, before any payload exists, so the
-// still-bootstrapping guard inside the payload cannot cover it: retry this one error so a
-// deploy that creates a runner doesn't fail on a timing accident. Everything else, a bad
-// id included, fails immediately.
+// Two transient conditions are worth retrying, and nothing else. SendCommand is rejected
+// with InvalidInstanceId until the instance's SSM agent has registered, and an instance
+// reports `running` — all the Pulumi resource waits for — well before that; this runs on
+// the deployer, before any payload exists, so the still-bootstrapping guard inside the
+// payload cannot cover it. Throttling is the other: losing a whole roll to a rate limit
+// would strand the fleet half-upgraded. A bad id, a denied permission, anything else,
+// fails immediately.
+const RETRYABLE_SEND_ERRORS = /InvalidInstanceId|ThrottlingException|TooManyUpdates|RequestLimitExceeded/
 export function sendCommand(instanceId, version, payload, { run = runAws, sleep = sleepSeconds } = {}) {
   const args = [
     'ssm',
@@ -283,10 +295,12 @@ export function sendCommand(instanceId, version, payload, { run = runAws, sleep 
   for (let attempt = 1; ; attempt++) {
     const { ok, stdout, stderr } = run(args)
     if (ok) return stdout
-    if (!/InvalidInstanceId/.test(stderr) || attempt >= SSM_REGISTRATION_ATTEMPTS) {
+    if (!RETRYABLE_SEND_ERRORS.test(stderr) || attempt >= SSM_REGISTRATION_ATTEMPTS) {
       throw new Error(`aws ssm send-command failed for ${instanceId}: ${stderr || '(no stderr)'}`)
     }
-    console.log(`    ${instanceId} not reachable via SSM yet (${attempt}/${SSM_REGISTRATION_ATTEMPTS}); retrying`)
+    console.log(
+      `    ${instanceId} SSM send-command not accepted yet (${attempt}/${SSM_REGISTRATION_ATTEMPTS}); retrying`,
+    )
     sleep(10)
   }
 }
@@ -311,6 +325,10 @@ export function waitForTerminalStatus(invocation, instanceId, { run = runAws, sl
     if (ok) {
       if (TERMINAL_SSM_STATUSES.has(stdout)) return stdout
       lastStatus = stdout
+      // Cleared on recovery: InvocationDoesNotExist right after send-command is expected,
+      // and a stale one would otherwise outrank ten minutes of later InProgress polls and
+      // blame a failure that had already resolved.
+      lastFailure = ''
     } else {
       lastFailure = stderr || '(no stderr)'
     }
@@ -366,8 +384,12 @@ function main() {
   console.log(`==> done (${targets.length} instance(s))`)
 }
 
-// Importable for tests; only the direct invocation performs the roll.
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+// Importable for tests; only the direct invocation performs the roll. Both normalizations
+// are load-bearing, and both failure modes are silent — the roll is skipped while the
+// Pulumi command still reports success. `import.meta.url` is percent-encoded and
+// symlink-resolved; a raw `file://${argv[1]}` matches neither a path containing a space
+// nor a checkout reached through a symlink.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   try {
     main()
   } catch (err) {

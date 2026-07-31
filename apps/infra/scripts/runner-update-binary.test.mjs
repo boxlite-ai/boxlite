@@ -3,6 +3,10 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { cpSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
 import {
@@ -101,6 +105,14 @@ test('buildRemoteScript honours a non-default runner port', () => {
   assert.ok(buildRemoteScript(VERSION, { runnerPort: '3100' }).includes('http://127.0.0.1:3100/'))
 })
 
+test('buildRemoteScript rejects a non-numeric runner port on the deployer', () => {
+  // The port lands verbatim in the remote script body, so a typo should fail here
+  // rather than obscurely inside a curl on the host.
+  for (const bad of ['80 80', 'http://x', '', '3003;id']) {
+    assert.throws(() => buildRemoteScript(VERSION, { runnerPort: bad }), /RUNNER_PORT must be numeric/)
+  }
+})
+
 test('the payload never asks the binary for its version', () => {
   // The Go runner parses no CLI args, so `boxlite-runner --version` starts a second
   // process that exits non-zero — which is what made the old script report a failed
@@ -138,7 +150,34 @@ test('a stalled-but-healthy command reports the status it was stuck on', () => {
   assert.throws(() => waitForTerminalStatus([], 'i-1', { run, sleep: () => {} }), /last status: InProgress/)
 })
 
-test('sendCommand retries only while the SSM agent is unregistered', () => {
+test('a recovered transient poll error does not outlive the stall it preceded', () => {
+  // InvocationDoesNotExist right after send-command is expected. If it were never
+  // cleared it would outrank every later InProgress poll and blame a failure that had
+  // already resolved.
+  let call = 0
+  const run = () => {
+    call += 1
+    return call === 1
+      ? { ok: false, stdout: '', stderr: 'InvocationDoesNotExist' }
+      : { ok: true, stdout: 'InProgress', stderr: '' }
+  }
+  assert.throws(() => waitForTerminalStatus([], 'i-1', { run, sleep: () => {} }), /last status: InProgress/)
+})
+
+test('sendCommand retries throttling as well as an unregistered agent', () => {
+  // Losing a whole roll to a rate limit would strand the fleet half-upgraded.
+  for (const transient of ['ThrottlingException', 'RequestLimitExceeded', 'TooManyUpdates']) {
+    let calls = 0
+    const run = () => {
+      calls += 1
+      return calls === 1 ? { ok: false, stdout: '', stderr: transient } : { ok: true, stdout: 'cmd-1', stderr: '' }
+    }
+    assert.equal(sendCommand('i-1', VERSION, 'x', { run, sleep: () => {} }), 'cmd-1', transient)
+    assert.equal(calls, 2, `${transient} should have been retried once`)
+  }
+})
+
+test('sendCommand retries an unregistered agent but not a permission failure', () => {
   const slept = []
   const sleep = (seconds) => slept.push(seconds)
 
@@ -162,6 +201,29 @@ test('sendCommand retries only while the SSM agent is unregistered', () => {
   assert.equal(denied, 1, 'a non-registration error fails immediately')
 })
 
+test('runs as a script from a path that needs percent-encoding', (t) => {
+  // `file://${argv[1]}` never equals import.meta.url once the path contains a space, so
+  // the old guard skipped main() and exited 0 — the roll silently did nothing while the
+  // Pulumi command reported success. Invoke the real file from such a path and require
+  // that it actually got as far as needing the aws CLI.
+  const root = mkdtempSync(join(tmpdir(), 'boxlite runner update '))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const scriptDirectory = fileURLToPath(new URL('.', import.meta.url))
+  const copied = join(root, 'scripts')
+  cpSync(scriptDirectory, copied, { recursive: true })
+  // The copies still import dotenv; point module resolution at the real dependencies
+  // without moving the script back out of the spaced path.
+  symlinkSync(join(scriptDirectory, '..', 'node_modules'), join(root, 'node_modules'), 'dir')
+
+  const result = spawnSync(process.execPath, [join(copied, 'runner-update-binary.mjs'), VERSION], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: '/nonexistent', INSTANCE_IDS: 'i-1' },
+  })
+
+  assert.equal(result.status, 1, `expected the roll to run and fail on the missing CLI:\n${result.stdout}`)
+  assert.match(result.stderr, /aws` CLI is required/)
+})
+
 const bash = (script, args = []) => spawnSync('bash', ['-c', script, 'test', ...args], { encoding: 'utf8' })
 
 test('the generated payload is valid bash', () => {
@@ -172,10 +234,11 @@ test('the generated payload is valid bash', () => {
 test('live_is_newer orders releases and prereleases the way semver does', () => {
   // Runs the comparison the production payload actually carries, rather than a copy.
   const payload = buildRemoteScript(VERSION)
-  const fn = payload.slice(
-    payload.indexOf('live_is_newer() {'),
-    payload.indexOf('\n}\n', payload.indexOf('live_is_newer() {')) + 2,
-  )
+  const start = payload.indexOf('live_is_newer() {')
+  assert.notEqual(start, -1, 'the payload no longer defines live_is_newer')
+  const end = payload.indexOf('\n}\n', start)
+  assert.notEqual(end, -1, 'live_is_newer is not closed by a top-level brace')
+  const fn = payload.slice(start, end + 2)
 
   const cases = [
     ['0.9.8-alpha', '0.9.7', true], // a prerelease still outranks an older release

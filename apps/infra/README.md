@@ -395,12 +395,23 @@ the binary.
 > while the preflight is skipped. That fails closed rather than dangerously — a
 > missing asset stops the download before the unit is touched — but it turns an
 > intentionally Runner-free rollout into a failed deploy. `--target` and
-> `--exclude` cannot be combined, so name the upgrade commands explicitly if you
-> need that form:
+> `--exclude` cannot be combined, so with that form every generated upgrade
+> command has to be named — one per Runner, not just the default:
 >
 > ```bash
-> npm run deploy -- --stage dev --exclude Runner --exclude UpgradeRunnerBinary-default
+> # RUNNERS=1
+> npm run deploy -- --stage dev --exclude Runner \
+>   --exclude UpgradeRunnerBinary-default
+>
+> # RUNNERS=3 — extras are UpgradeRunnerBinary-runner-2, -runner-3, … up to RUNNERS
+> npm run deploy -- --stage dev --exclude Runner \
+>   --exclude UpgradeRunnerBinary-default \
+>   --exclude UpgradeRunnerBinary-runner-2 \
+>   --exclude UpgradeRunnerBinary-runner-3
 > ```
+>
+> Prefer `--target Api` when you can: it creates no upgrade command at all, so
+> there is no per-Runner bookkeeping to get wrong.
 
 This bounded compatibility window is intentional: silently discarding a
 requested command or foreground lifecycle would be data loss, while sending it
@@ -461,28 +472,33 @@ ALLOW_DOWNGRADE=1 npm run runner:update -- 0.9.5   # deliberate rollback
 > the deploy path has — so treat any Runner upgrade as disruptive and drain it
 > yourself when that matters.
 
-### Deliberate decommission (three-step ceremony)
+### Deliberate decommission (multi-step ceremony)
 
 When you actually need to replace the Runner (failed disk, security incident,
 major version upgrade with on-disk format change), it is a multi-edit
 operation by design:
 
-1. Verify no `running` boxes are pinned to this Runner (DB query against
-   `box.runnerId`).
-2. Edit `sst.config.ts`: change `protect: true` to `protect: false` on the
+1. Make the Runner unschedulable first — `PATCH /runners/:id/scheduling` with
+   `unschedulable: true`. Order matters: it is the only flag both placement
+   paths honour, so without it a box can be assigned between the check below
+   and the destroy. `draining` alone will not do, because the warm pool does
+   not consult it.
+2. Verify no `running` boxes are pinned to this Runner (DB query against
+   `box.runnerId`), and leave it unschedulable for the rest of the ceremony.
+3. Edit `sst.config.ts`: change `protect: true` to `protect: false` on the
    Runner resource. Run `npm run deploy -- --stage <stage>`. This only updates
    the resource metadata; the EC2 is not yet touched.
-3. Destroy the EC2:
+4. Destroy the EC2:
 
    ```bash
    npx pulumi destroy --target 'urn:pulumi:<stage>::boxlite::aws:ec2/instance:Instance::Runner'
    ```
 
-4. Edit `sst.config.ts`: change `protect: false` back to `protect: true`. Run
+5. Edit `sst.config.ts`: change `protect: false` back to `protect: true`. Run
    `npm run deploy -- --stage <stage>` again — a new Runner is created with
    fresh state.
 
-This is deliberate by construction: three code edits across two deploys. Around
+This is deliberate by construction: a cordon, two config edits, two deploys. Around
 that ceremony the control plane offers two independent flags, and they are not
 equivalent. `unschedulable` keeps a Runner out of both placement paths — the
 `findAvailableRunners` filter and the warm-pool candidate query. `draining` is
