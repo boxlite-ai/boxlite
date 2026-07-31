@@ -17,22 +17,19 @@ const EM_AARCH64: u16 = 0xB7;
 /// ELF program header type for interpreter (PT_INTERP).
 const PT_INTERP: u32 = 3;
 
-/// Validate that a guest binary is a valid ELF for the current host architecture.
+/// Validate that guest binary contents are a runnable ELF for this host.
 ///
 /// Checks:
-/// 1. File exists and is non-empty
+/// 1. Non-empty and large enough to hold an ELF header
 /// 2. Valid ELF magic bytes
 /// 3. Machine type matches host architecture
 /// 4. Binary is statically linked (no PT_INTERP program header)
-pub fn validate_guest_binary(path: &Path) -> BoxliteResult<()> {
-    let data = std::fs::read(path).map_err(|e| {
-        BoxliteError::Internal(format!(
-            "Cannot read guest binary {}: {}",
-            path.display(),
-            e
-        ))
-    })?;
-
+///
+/// Takes bytes rather than a path because the only caller
+/// ([`GuestBinary`](crate::vmm::guest_binary::GuestBinary)) has already read the
+/// ~18 MB file to digest it; reading it a second time to validate is waste.
+/// `path` names the binary in error messages only.
+pub fn validate_guest_bytes(data: &[u8], path: &Path) -> BoxliteResult<()> {
     if data.len() < 64 {
         return Err(BoxliteError::Internal(format!(
             "Guest binary {} is too small ({} bytes) — not a valid ELF",
@@ -88,7 +85,7 @@ pub fn validate_guest_binary(path: &Path) -> BoxliteResult<()> {
         )));
     }
 
-    if has_pt_interp(&data) {
+    if has_pt_interp(data) {
         tracing::warn!(
             path = %path.display(),
             "Guest binary is dynamically linked — it may fail inside the VM"
@@ -127,6 +124,11 @@ fn has_pt_interp(data: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    /// Stand-in for the path these checks only ever name in error messages.
+    fn guest_path() -> &'static Path {
+        Path::new("/runtime/boxlite-guest")
+    }
+
     /// Create a minimal valid 64-bit little-endian ELF header for testing.
     fn make_elf_header(machine: u16, add_interp: bool) -> Vec<u8> {
         let mut data = vec![0u8; 128];
@@ -154,76 +156,51 @@ mod tests {
 
     #[test]
     fn test_valid_binary_matching_arch() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("boxlite-guest");
-
         let machine = match std::env::consts::ARCH {
             "x86_64" => EM_X86_64,
             "aarch64" => EM_AARCH64,
             _ => return,
         };
 
-        std::fs::write(&path, make_elf_header(machine, false)).unwrap();
-        assert!(validate_guest_binary(&path).is_ok());
+        assert!(validate_guest_bytes(&make_elf_header(machine, false), guest_path()).is_ok());
     }
 
     #[test]
     fn test_wrong_arch() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("boxlite-guest");
-
         let machine = match std::env::consts::ARCH {
             "x86_64" => EM_AARCH64,
             "aarch64" => EM_X86_64,
             _ => return,
         };
 
-        std::fs::write(&path, make_elf_header(machine, false)).unwrap();
-        let err = validate_guest_binary(&path).unwrap_err();
+        let err = validate_guest_bytes(&make_elf_header(machine, false), guest_path()).unwrap_err();
         assert!(err.to_string().contains("compiled for"));
         assert!(err.to_string().contains("but host is"));
     }
 
     #[test]
     fn test_not_elf() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("boxlite-guest");
-        std::fs::write(&path, b"not an elf file at all").unwrap();
-
-        let err = validate_guest_binary(&path).unwrap_err();
+        let err = validate_guest_bytes(
+            b"not an elf file at all, but long enough to reach the magic check",
+            guest_path(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("not a valid ELF"));
     }
 
     #[test]
     fn test_too_small() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("boxlite-guest");
-        std::fs::write(&path, b"tiny").unwrap();
-
-        let err = validate_guest_binary(&path).unwrap_err();
+        let err = validate_guest_bytes(b"tiny", guest_path()).unwrap_err();
         assert!(err.to_string().contains("too small"));
     }
 
     #[test]
-    fn test_missing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nonexistent");
-
-        let err = validate_guest_binary(&path).unwrap_err();
-        assert!(err.to_string().contains("Cannot read"));
-    }
-
-    #[test]
     fn test_32bit_elf() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("boxlite-guest");
-
         let mut data = vec![0u8; 64];
         data[0..4].copy_from_slice(&ELF_MAGIC);
         data[4] = 1; // 32-bit class
-        std::fs::write(&path, &data).unwrap();
 
-        let err = validate_guest_binary(&path).unwrap_err();
+        let err = validate_guest_bytes(&data, guest_path()).unwrap_err();
         assert!(err.to_string().contains("not 64-bit"));
     }
 
@@ -235,17 +212,13 @@ mod tests {
 
     #[test]
     fn test_dynamically_linked_binary_warns() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("boxlite-guest");
-
         let machine = match std::env::consts::ARCH {
             "x86_64" => EM_X86_64,
             "aarch64" => EM_AARCH64,
             _ => return,
         };
 
-        std::fs::write(&path, make_elf_header(machine, true)).unwrap();
         // Should still pass (warning only, not error)
-        assert!(validate_guest_binary(&path).is_ok());
+        assert!(validate_guest_bytes(&make_elf_header(machine, true), guest_path()).is_ok());
     }
 }

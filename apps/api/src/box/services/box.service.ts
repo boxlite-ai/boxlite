@@ -177,7 +177,13 @@ export class BoxService {
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
-      quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(organization, cpu, mem, disk, gpu)
+      quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
+        organization,
+        cpu,
+        mem,
+        disk,
+        gpu,
+      )
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)

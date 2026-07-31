@@ -444,6 +444,7 @@ message AttachRequest {
 }
 
 message ExecOutput {
+  // An empty stdout/stderr event with total_bytes marks that stream's end.
   oneof event {
     Stdout stdout = 1;
     Stderr stderr = 2;
@@ -452,10 +453,14 @@ message ExecOutput {
 
 message Stdout {
   bytes data = 1;
+  optional uint64 offset = 2;
+  optional uint64 total_bytes = 3;
 }
 
 message Stderr {
   bytes data = 1;
+  optional uint64 offset = 2;
+  optional uint64 total_bytes = 3;
 }
 
 // SendInput: client streaming stdin

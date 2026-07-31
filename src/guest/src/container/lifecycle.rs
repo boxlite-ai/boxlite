@@ -339,7 +339,7 @@ impl Container {
                 stdin,
                 stdout,
                 stderr,
-            } => ExecHandle::new(pid, stdin, stdout, Some(stderr)),
+            } => init_pipe_handle(pid, stdin, stdout, stderr)?,
             // Mirrors the tenant PTY path: the master becomes stdin+stdout and
             // is retained for window-size ioctls, so ResizeTty reaches the main
             // command exactly as it reaches an exec.
@@ -540,6 +540,21 @@ impl Container {
     }
 }
 
+fn init_pipe_handle(
+    pid: nix::unistd::Pid,
+    stdin: std::os::fd::OwnedFd,
+    stdout: std::os::fd::OwnedFd,
+    stderr: std::os::fd::OwnedFd,
+) -> BoxliteResult<ExecHandle> {
+    match ExecHandle::new(pid, stdin, stdout, Some(stderr)) {
+        Ok(handle) => Ok(handle),
+        Err(error) => {
+            super::command::terminate_process(pid);
+            Err(error)
+        }
+    }
+}
+
 // ====================
 // Init Health Check
 // ====================
@@ -578,5 +593,53 @@ impl Drop for Container {
         start::cleanup_bundle_directory(&self.bundle_path);
 
         tracing::debug!(container_id = %self.id, "Container cleanup complete");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nix::sys::signal::kill;
+    use nix::unistd::{pipe, Pid};
+    use std::os::fd::OwnedFd;
+    use std::process::{Child, Command};
+
+    struct ChildGuard(Child);
+
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[test]
+    fn init_pipe_handle_failure_reaps_init() {
+        let child = ChildGuard(
+            Command::new("/bin/sh")
+                .args(["-c", "sleep 30"])
+                .spawn()
+                .unwrap(),
+        );
+        let pid = Pid::from_raw(child.0.id() as i32);
+        let (_stdin_read, stdin_write) = pipe().unwrap();
+        let stdout: OwnedFd = std::fs::File::open("/proc/self/stat").unwrap().into();
+        let (stderr_read, _stderr_write) = pipe().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .unwrap();
+
+        let result =
+            runtime.block_on(async { init_pipe_handle(pid, stdin_write, stdout, stderr_read) });
+
+        assert!(
+            result.is_err(),
+            "regular files cannot register with AsyncFd"
+        );
+        assert!(
+            kill(pid, None).is_err(),
+            "failed init handle must not leave a child"
+        );
     }
 }

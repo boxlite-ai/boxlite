@@ -3,15 +3,19 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "main": "policies/runner/index.js",
   "scripts": {
-    "dev": "node scripts/sst-with-cloudflare.mjs dev",
     "deploy": "node scripts/sst-with-cloudflare.mjs deploy",
     "remove": "node scripts/sst-with-cloudflare.mjs remove",
+    "test": "node --test scripts/*.test.mjs",
     "sst": "node scripts/sst-with-cloudflare.mjs",
-    "secrets": "sst secret list"
+    "secrets": "node scripts/sst-with-cloudflare.mjs secret list",
+    "runner:update": "node scripts/runner-update-binary.mjs"
   },
   "devDependencies": {
     "@pulumi/aws": "^7.24.0",
+    "@pulumi/policy": "1.21.0",
+    "js-yaml": "^4.1.0",
     "sst": "^4.6.11"
   },
   "dependencies": {

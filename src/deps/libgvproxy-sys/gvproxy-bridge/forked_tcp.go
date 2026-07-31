@@ -55,7 +55,7 @@ func init() {
 	}
 }
 
-func decideTCPRoute(destIP net.IP, destPort uint16, filter *TCPFilter, secretMatcher *SecretHostMatcher) tcpRoute {
+func decideTCPRoute(destIP net.IP, destPort uint16, filter *AllowNetFilter, secretMatcher *SecretHostMatcher) tcpRoute {
 	if filter == nil {
 		if secretMatcher != nil && destPort == 443 {
 			return tcpRouteInspect
@@ -96,7 +96,7 @@ func resolveTCPDestination(localAddress tcpip.Address, nat map[tcpip.Address]tcp
 }
 
 func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
-	natLock *sync.Mutex, ec2MetadataAccess bool, filter *TCPFilter,
+	natLock *sync.Mutex, ec2MetadataAccess bool, filter *AllowNetFilter,
 	ca *BoxCA, secretMatcher *SecretHostMatcher) *tcp.Forwarder {
 
 	return tcp.NewForwarder(s, 0, 10, func(r *tcp.ForwarderRequest) {
@@ -164,7 +164,7 @@ func standardForward(r *tcp.ForwarderRequest, destAddr string) {
 // inspectAndForward: Accept → Peek SNI/Host → check allowlist → Dial → relay.
 // The flow is reversed from upstream because we need to read from the guest
 // before deciding whether to connect to the upstream server.
-func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16, filter *TCPFilter, ca *BoxCA, secretMatcher *SecretHostMatcher) {
+func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16, filter *AllowNetFilter, ca *BoxCA, secretMatcher *SecretHostMatcher) {
 	// Step 1: Accept TCP from guest first (reversed from upstream)
 	var wq waiter.Queue
 	ep, tcpErr := r.CreateEndpoint(&wq)

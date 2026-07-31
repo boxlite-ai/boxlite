@@ -513,7 +513,7 @@ struct RunningHelper {
     execution_id: String,
     stdin: mpsc::Sender<ExecStdin>,
     stdin_task: JoinHandle<()>,
-    output: mpsc::Receiver<ExecOutput>,
+    output: mpsc::Receiver<Result<ExecOutput, tonic::Status>>,
     buffered_stdout: Vec<u8>,
 }
 
@@ -765,10 +765,10 @@ fn spawn_listener(
                 }
                 output = helper.output.recv() => {
                     match output {
-                        Some(ExecOutput { event: Some(exec_output::Event::Stderr(stderr)) }) => {
+                        Some(Ok(ExecOutput { event: Some(exec_output::Event::Stderr(stderr)) })) => {
                             debug!(bytes = stderr.data.len(), "reverse streamlocal helper stderr");
                         }
-                        Some(ExecOutput { event: Some(exec_output::Event::Stdout(stdout)) }) => {
+                        Some(Ok(ExecOutput { event: Some(exec_output::Event::Stdout(stdout)) })) => {
                             if !append_stopped_marker_prefix(
                                 &mut helper.buffered_stdout,
                                 &stdout.data,
@@ -777,7 +777,11 @@ fn spawn_listener(
                                 break End::HelperEnded;
                             }
                         }
-                        Some(ExecOutput { event: None }) => {}
+                        Some(Ok(ExecOutput { event: None })) => {}
+                        Some(Err(error)) => {
+                            warn!(%error, "reverse streamlocal helper output failed");
+                            break End::HelperEnded;
+                        }
                         None => break End::HelperEnded,
                     }
                 }
@@ -923,7 +927,7 @@ impl MarkerParser {
 }
 
 async fn read_marker(
-    output: &mut mpsc::Receiver<ExecOutput>,
+    output: &mut mpsc::Receiver<Result<ExecOutput, tonic::Status>>,
     marker: &[u8],
     initial_stdout: Vec<u8>,
     max_trailing_bytes: usize,
@@ -936,9 +940,13 @@ async fn read_marker(
             }
         }
         loop {
-            let message = output.recv().await.ok_or_else(|| {
-                "reverse streamlocal helper exited before control marker".to_string()
-            })?;
+            let message = output
+                .recv()
+                .await
+                .ok_or_else(|| {
+                    "reverse streamlocal helper exited before control marker".to_string()
+                })?
+                .map_err(|error| format!("reverse streamlocal helper output failed: {error}"))?;
             match message.event {
                 Some(exec_output::Event::Stdout(stdout)) => {
                     if let Some(buffered) = parser.push(marker, &stdout.data, max_trailing_bytes)? {
@@ -976,7 +984,7 @@ fn spawn_failed_helper_cleanup(
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
-    output: Option<mpsc::Receiver<ExecOutput>>,
+    output: Option<mpsc::Receiver<Result<ExecOutput, tonic::Status>>>,
     stdin_task: Option<JoinHandle<()>>,
 ) {
     spawn_execution_cleanup(server, registry, execution_id, output, stdin_task, true);
@@ -986,7 +994,7 @@ fn spawn_execution_cleanup(
     server: Arc<GuestServer>,
     registry: ExecutionRegistry,
     execution_id: String,
-    output: Option<mpsc::Receiver<ExecOutput>>,
+    output: Option<mpsc::Receiver<Result<ExecOutput, tonic::Status>>>,
     stdin_task: Option<JoinHandle<()>>,
     force_termination: bool,
 ) {
@@ -994,6 +1002,9 @@ fn spawn_execution_cleanup(
         let output_task = output.map(|mut output| {
             tokio::spawn(async move {
                 while let Some(message) = output.recv().await {
+                    let Ok(message) = message else {
+                        break;
+                    };
                     if let Some(exec_output::Event::Stderr(stderr)) = message.event {
                         debug!(
                             bytes = stderr.data.len(),

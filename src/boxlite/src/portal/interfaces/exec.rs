@@ -337,8 +337,8 @@ impl ExecProtocol {
                     // cut, doubling visible columns and desyncing TUI cursor
                     // math (see https://github.com/.../issues/...). Holding
                     // the trailing partial across chunks fixes this.
-                    let mut stdout = DecodedStream::new(stdout_tx);
-                    let mut stderr = DecodedStream::new(stderr_tx);
+                    let mut stdout = OutputTracker::new(stdout_tx);
+                    let mut stderr = OutputTracker::new(stderr_tx);
 
                     loop {
                         // Use select! to handle cancellation while streaming
@@ -375,7 +375,8 @@ impl ExecProtocol {
                                 // synthesized "Attach stream error: …" line.
                                 stdout.flush();
                                 stderr.flush();
-                                let _ = stderr.tx.send(format!("Attach stream error: {}", e));
+                                let _ =
+                                    stderr.stream.tx.send(format!("Attach stream error: {}", e));
                                 break;
                             }
                             None => {
@@ -404,18 +405,64 @@ impl ExecProtocol {
         });
     }
 
-    fn route_output(output: ExecOutput, stdout: &mut DecodedStream, stderr: &mut DecodedStream) {
+    fn route_output(output: ExecOutput, stdout: &mut OutputTracker, stderr: &mut OutputTracker) {
         match output.event {
             Some(exec_output::Event::Stdout(chunk)) => {
                 tracing::trace!(len = chunk.data.len(), "Received exec stdout");
-                stdout.send_bytes(chunk.data);
+                Self::forward_output(
+                    stdout,
+                    "stdout",
+                    chunk.offset,
+                    chunk.data,
+                    chunk.total_bytes,
+                );
             }
             Some(exec_output::Event::Stderr(chunk)) => {
                 tracing::trace!(len = chunk.data.len(), "Received exec stderr");
-                stderr.send_bytes(chunk.data);
+                Self::forward_output(
+                    stderr,
+                    "stderr",
+                    chunk.offset,
+                    chunk.data,
+                    chunk.total_bytes,
+                );
             }
             None => {}
         }
+    }
+
+    fn forward_output(
+        output: &mut OutputTracker,
+        source: &str,
+        offset: Option<u64>,
+        data: Vec<u8>,
+        total_bytes: Option<u64>,
+    ) {
+        match output.receive(offset, data, total_bytes) {
+            ReceivedOutput::Data { data, lost_bytes } => {
+                if let Some(lost_bytes) = lost_bytes {
+                    Self::report_gap(output, source, lost_bytes);
+                }
+                output.stream.send_bytes(data);
+            }
+            ReceivedOutput::End { lost_bytes } => {
+                if let Some(lost_bytes) = lost_bytes {
+                    Self::report_gap(output, source, lost_bytes);
+                }
+            }
+            ReceivedOutput::Ignore => {}
+        }
+    }
+
+    fn report_gap(output: &mut OutputTracker, source: &str, lost_bytes: u64) {
+        tracing::warn!(
+            source,
+            lost_bytes,
+            "Guest output buffer dropped older output"
+        );
+        let _ = output.stream.tx.send(format!(
+            "[boxlite] {source} output dropped {lost_bytes} bytes\r\n"
+        ));
     }
 
     fn spawn_wait(
@@ -716,6 +763,95 @@ impl DecodedStream {
         if !tail.is_empty() {
             let _ = self.tx.send(tail);
         }
+    }
+}
+
+struct OutputTracker {
+    expected_offset: u64,
+    stream: DecodedStream,
+}
+
+enum ReceivedOutput {
+    Data {
+        data: Vec<u8>,
+        lost_bytes: Option<u64>,
+    },
+    End {
+        lost_bytes: Option<u64>,
+    },
+    Ignore,
+}
+
+impl OutputTracker {
+    fn new(tx: mpsc::UnboundedSender<String>) -> Self {
+        Self {
+            expected_offset: 0,
+            stream: DecodedStream::new(tx),
+        }
+    }
+
+    fn receive(
+        &mut self,
+        offset: Option<u64>,
+        data: Vec<u8>,
+        total_bytes: Option<u64>,
+    ) -> ReceivedOutput {
+        if let Some(total_bytes) = total_bytes {
+            let Some(offset) = offset else {
+                tracing::warn!(total_bytes, "Exec output end frame has no offset");
+                return ReceivedOutput::Ignore;
+            };
+            if !data.is_empty() || offset != total_bytes {
+                tracing::warn!(offset, total_bytes, "Invalid exec output end frame");
+                return ReceivedOutput::Ignore;
+            }
+            if total_bytes < self.expected_offset {
+                tracing::warn!(
+                    expected_offset = self.expected_offset,
+                    total_bytes,
+                    "Exec output end frame moved backwards"
+                );
+                return ReceivedOutput::Ignore;
+            }
+
+            let lost_bytes = total_bytes - self.expected_offset;
+            self.expected_offset = total_bytes;
+            self.stream.flush();
+            return ReceivedOutput::End {
+                lost_bytes: (lost_bytes > 0).then_some(lost_bytes),
+            };
+        }
+
+        let Some(offset) = offset else {
+            self.expected_offset += data.len() as u64;
+            return ReceivedOutput::Data {
+                data,
+                lost_bytes: None,
+            };
+        };
+
+        if offset < self.expected_offset {
+            tracing::warn!(
+                expected_offset = self.expected_offset,
+                offset,
+                "Exec output chunk moved backwards"
+            );
+            return ReceivedOutput::Ignore;
+        }
+
+        let lost_bytes = offset - self.expected_offset;
+        if lost_bytes > 0 {
+            self.stream.flush();
+        }
+        self.expected_offset = offset + data.len() as u64;
+        ReceivedOutput::Data {
+            data,
+            lost_bytes: (lost_bytes > 0).then_some(lost_bytes),
+        }
+    }
+
+    fn flush(&mut self) {
+        self.stream.flush();
     }
 }
 
@@ -1146,16 +1282,20 @@ mod tests {
 
         let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
         let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
-        let mut stdout = DecodedStream::new(stdout_tx);
-        let mut stderr = DecodedStream::new(stderr_tx);
+        let mut stdout = OutputTracker::new(stdout_tx);
+        let mut stderr = OutputTracker::new(stderr_tx);
 
-        let mk_stdout = |bytes: Vec<u8>| ExecOutput {
-            event: Some(exec_output::Event::Stdout(StdoutMsg { data: bytes })),
+        let mk_stdout = |offset, bytes: Vec<u8>| ExecOutput {
+            event: Some(exec_output::Event::Stdout(StdoutMsg {
+                data: bytes,
+                offset: Some(offset),
+                total_bytes: None,
+            })),
         };
 
         // "─" split into [E2] and [94 80] across two messages.
-        ExecProtocol::route_output(mk_stdout(vec![0xE2]), &mut stdout, &mut stderr);
-        ExecProtocol::route_output(mk_stdout(vec![0x94, 0x80]), &mut stdout, &mut stderr);
+        ExecProtocol::route_output(mk_stdout(0, vec![0xE2]), &mut stdout, &mut stderr);
+        ExecProtocol::route_output(mk_stdout(1, vec![0x94, 0x80]), &mut stdout, &mut stderr);
 
         // First message: holdover only, no emission.
         // Second message: complete "─" emitted.
@@ -1164,6 +1304,113 @@ mod tests {
             received.push_str(&s);
         }
         assert_eq!(received, "─");
+        assert!(stderr_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn output_gap_only_flushes_the_affected_utf8_decoder() {
+        use boxlite_shared::{Stderr as StderrMsg, Stdout as StdoutMsg, exec_output};
+
+        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+        let mut stdout = OutputTracker::new(stdout_tx);
+        let mut stderr = OutputTracker::new(stderr_tx);
+
+        let output = |event| ExecOutput { event: Some(event) };
+        ExecProtocol::route_output(
+            output(exec_output::Event::Stderr(StderrMsg {
+                data: vec![0xE2],
+                offset: Some(0),
+                total_bytes: None,
+            })),
+            &mut stdout,
+            &mut stderr,
+        );
+        ExecProtocol::route_output(
+            output(exec_output::Event::Stdout(StdoutMsg {
+                data: b"after-gap".to_vec(),
+                offset: Some(1),
+                total_bytes: None,
+            })),
+            &mut stdout,
+            &mut stderr,
+        );
+        ExecProtocol::route_output(
+            output(exec_output::Event::Stderr(StderrMsg {
+                data: vec![0x94, 0x80],
+                offset: Some(1),
+                total_bytes: None,
+            })),
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(
+            stdout_rx.try_recv().ok(),
+            Some("[boxlite] stdout output dropped 1 bytes\r\n".to_string())
+        );
+        assert_eq!(stdout_rx.try_recv().ok(), Some("after-gap".to_string()));
+        assert_eq!(stderr_rx.try_recv().ok(), Some("─".to_string()));
+    }
+
+    #[test]
+    fn output_end_reports_a_missing_tail() {
+        use boxlite_shared::{Stdout as StdoutMsg, exec_output};
+
+        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+        let mut stdout = OutputTracker::new(stdout_tx);
+        let mut stderr = OutputTracker::new(stderr_tx);
+
+        let output = |event| ExecOutput { event: Some(event) };
+        ExecProtocol::route_output(
+            output(exec_output::Event::Stdout(StdoutMsg {
+                data: b"hello".to_vec(),
+                offset: Some(0),
+                total_bytes: None,
+            })),
+            &mut stdout,
+            &mut stderr,
+        );
+        ExecProtocol::route_output(
+            output(exec_output::Event::Stdout(StdoutMsg {
+                data: Vec::new(),
+                offset: Some(10),
+                total_bytes: Some(10),
+            })),
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(stdout_rx.try_recv().ok(), Some("hello".to_string()));
+        assert_eq!(
+            stdout_rx.try_recv().ok(),
+            Some("[boxlite] stdout output dropped 5 bytes\r\n".to_string())
+        );
+        assert!(stderr_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn legacy_output_without_offsets_remains_contiguous() {
+        use boxlite_shared::{Stdout as StdoutMsg, exec_output};
+
+        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+        let mut stdout = OutputTracker::new(stdout_tx);
+        let mut stderr = OutputTracker::new(stderr_tx);
+
+        let output = |data| ExecOutput {
+            event: Some(exec_output::Event::Stdout(StdoutMsg {
+                data,
+                offset: None,
+                total_bytes: None,
+            })),
+        };
+        ExecProtocol::route_output(output(b"hello ".to_vec()), &mut stdout, &mut stderr);
+        ExecProtocol::route_output(output(b"world".to_vec()), &mut stdout, &mut stderr);
+
+        assert_eq!(stdout_rx.try_recv().ok(), Some("hello ".to_string()));
+        assert_eq!(stdout_rx.try_recv().ok(), Some("world".to_string()));
         assert!(stderr_rx.try_recv().is_err());
     }
 

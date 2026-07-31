@@ -7,7 +7,7 @@ use boxlite::runtime::options::{BoxOptions, BoxliteOptions, NetworkSpec};
 use boxlite::{BoxCommand, BoxliteRuntime};
 use futures::StreamExt;
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -174,6 +174,80 @@ async fn run_exit_code(litebox: &boxlite::LiteBox, cmd: &str, args: &[&str]) -> 
 
 fn wget_url_command(url: &str) -> String {
     format!("wget -O- --timeout=5 {url} 2>&1; printf '\\nEXIT:%s\\n' $?")
+}
+
+const UDP_PROBE_MARKER: &str = "boxlite-udp-allow-net-probe";
+const UDP_PROBE_EXIT_PREFIX: &str = "UDP_PROBE_EXIT:";
+
+/// The probe reports its own exit status, because `run_stdout` drops it. A
+/// missing or failing `nc` otherwise produces the same silence as a blocked
+/// datagram, letting the negative test pass without ever sending one.
+fn nc_udp_command(host: &str, port: u16) -> String {
+    format!(
+        "printf %s {UDP_PROBE_MARKER} | nc -u -w 2 {host} {port}; \
+         printf '\\n{UDP_PROBE_EXIT_PREFIX}%s\\n' $?"
+    )
+}
+
+/// BusyBox `nc -u -w` exits 0 once the wait elapses, whether or not anything
+/// answered, so a nonzero status means the probe never ran (127 = no `nc`).
+fn assert_udp_probe_ran(output: &str) {
+    assert!(
+        output.contains(&format!("{UDP_PROBE_EXIT_PREFIX}0")),
+        "UDP probe did not run in the guest: {output}"
+    );
+}
+
+/// Binds a loopback-or-wildcard UDP socket and hands the first datagram to the
+/// returned channel. The reader thread exits on the first packet or after
+/// `listen_for`, so callers waiting for "nothing arrives" still terminate.
+fn start_host_udp_receiver(
+    bind_addr: &str,
+    listen_for: Duration,
+) -> (u16, mpsc::Receiver<Vec<u8>>, thread::JoinHandle<()>) {
+    let socket = UdpSocket::bind(bind_addr).expect("bind host udp receiver");
+    let port = socket.local_addr().expect("host udp receiver addr").port();
+    socket
+        .set_read_timeout(Some(listen_for))
+        .expect("set host udp receiver timeout");
+
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let mut buf = [0_u8; 2048];
+        if let Ok((len, _)) = socket.recv_from(&mut buf) {
+            let _ = tx.send(buf[..len].to_vec());
+        }
+    });
+
+    (port, rx, handle)
+}
+
+/// The host's outward-facing IPv4, discovered without sending anything: a
+/// connected UDP socket only records the route the kernel would pick. Tests
+/// need an address that is reachable from gvproxy yet outside both allow_net
+/// and the always-allowed internal IPs, which the 192.168.127.0/24 aliases
+/// cannot provide.
+fn host_routable_ipv4() -> Option<Ipv4Addr> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    match socket.local_addr().ok()? {
+        SocketAddr::V4(addr) if !addr.ip().is_loopback() => Some(*addr.ip()),
+        _ => None,
+    }
+}
+
+const REQUIRE_EGRESS_ENV: &str = "BOXLITE_TEST_REQUIRE_EGRESS";
+
+/// Handles a host that cannot supply an egress precondition. Skipping keeps the
+/// suite usable on developer machines and in routeless sandboxes; a runner that
+/// is supposed to have egress sets `BOXLITE_TEST_REQUIRE_EGRESS=1` so the skip
+/// becomes a failure instead of a green test that exercised no allowlist at all.
+fn skip_missing_egress(test: &str, reason: &str) {
+    assert!(
+        std::env::var_os(REQUIRE_EGRESS_ENV).is_none(),
+        "{test}: {reason}; {REQUIRE_EGRESS_ENV} is set, so this host must provide egress"
+    );
+    eprintln!("SKIP {test}: {reason}");
 }
 
 fn start_host_http_server(response_body: &'static str) -> (u16, thread::JoinHandle<()>) {
@@ -372,6 +446,87 @@ async fn tcp_filter_blocks_direct_ip_connection() {
         "direct IP should be blocked by TCP filter, got: {out}"
     );
 
+    litebox.stop().await.unwrap();
+}
+
+/// The UDP twin of `tcp_filter_blocks_direct_ip_connection`. A hostname-only
+/// allowlist cannot be enforced for UDP by inspection, so datagrams to an
+/// address outside the allowlist must be dropped rather than forwarded.
+#[tokio::test]
+async fn udp_filter_blocks_direct_ip_datagram() {
+    let Some(host_ip) = host_routable_ipv4() else {
+        skip_missing_egress(
+            "udp_filter_blocks_direct_ip_datagram",
+            "no routable host IPv4 to use as an unlisted destination",
+        );
+        return;
+    };
+
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let opts = BoxOptions {
+        network: NetworkSpec::Enabled {
+            allow_net: vec!["example.com".into()],
+        },
+        ..common::alpine_opts()
+    };
+
+    let litebox = runtime.create(opts, None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    let (port, received, receiver) = start_host_udp_receiver("0.0.0.0:0", Duration::from_secs(8));
+    let command = nc_udp_command(&host_ip.to_string(), port);
+    let probe = run_stdout(&litebox, "sh", &["-c", &command]).await;
+    assert_udp_probe_ran(&probe);
+
+    let leaked = received.recv_timeout(Duration::from_secs(5));
+    assert!(
+        leaked.is_err(),
+        "UDP to unlisted {host_ip} escaped the allowlist: {:?}",
+        leaked.map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    );
+
+    receiver.join().unwrap();
+    litebox.stop().await.unwrap();
+}
+
+/// The UDP twin of `host_alias_reaches_host_loopback_service_with_restrictive_allowlist`:
+/// tightening UDP must not cut the host alias, which is always allowed.
+#[tokio::test]
+async fn udp_reaches_host_alias_with_restrictive_allowlist() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let opts = BoxOptions {
+        network: NetworkSpec::Enabled {
+            allow_net: vec!["example.com".into()],
+        },
+        ..common::alpine_opts()
+    };
+
+    let litebox = runtime.create(opts, None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    // The host alias NATs to loopback, so bind where the datagram lands.
+    let (port, received, receiver) = start_host_udp_receiver("127.0.0.1:0", Duration::from_secs(8));
+    let command = nc_udp_command(HOST_IP, port);
+    let _ = run_stdout(&litebox, "sh", &["-c", &command]).await;
+
+    let payload = received
+        .recv_timeout(Duration::from_secs(5))
+        .expect("host alias UDP should still be delivered under a restrictive allowlist");
+    assert_eq!(String::from_utf8_lossy(&payload), UDP_PROBE_MARKER);
+
+    receiver.join().unwrap();
     litebox.stop().await.unwrap();
 }
 

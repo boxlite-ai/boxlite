@@ -681,10 +681,7 @@ impl ImageFilesystemLayout {
         // Hash the bundle path for location identity
         let path_str = bundle_path.to_string_lossy();
         let path_hash = Sha256::digest(path_str.as_bytes());
-        let path_short = format!("{:x}", path_hash)
-            .chars()
-            .take(8)
-            .collect::<String>();
+        let path_short = hex::encode(path_hash).chars().take(8).collect::<String>();
 
         // Extract short manifest digest for content identity
         let manifest_short = manifest_digest

@@ -69,6 +69,10 @@ const (
 	NetworkModeDisabled NetworkMode = "disabled"
 )
 
+// NetworkSpec configures guest networking. A non-empty AllowNet restricts
+// both TCP and UDP egress. Hostname entries are enforced by TLS SNI / HTTP
+// Host inspection, which only TCP carries, so a hostname-only AllowNet denies
+// all UDP egress — add the IP or CIDR to keep UDP open.
 type NetworkSpec struct {
 	Mode     NetworkMode
 	AllowNet []string

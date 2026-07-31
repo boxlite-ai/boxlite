@@ -6,7 +6,7 @@
 /// <reference path="./.sst/platform/config.d.ts" />
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BoxLite control plane on AWS (ap-southeast-1).
+// BoxLite control plane on AWS (AWS_REGION, default ap-southeast-1).
 //
 // Top of file: constants + helpers + the runner user-data builder.
 // Inside `run()`, resources are created in deploy order:
@@ -17,8 +17,6 @@
 //   4. auth (external OIDC)         9. CDN (CloudFront)
 //   5. observability               10. runner (EC2 + nested KVM)
 // ─────────────────────────────────────────────────────────────────────────────
-
-const REGION = 'ap-southeast-1'
 
 // Container ports each service listens on internally
 const PORTS = {
@@ -67,13 +65,6 @@ const httpHealth = (path: string, overrides: Partial<{ successCodes: string }> =
   ...overrides,
 })
 
-// OIDC issuer URL — must be set (Auth0, Okta, etc.). No default.
-const requireOidcIssuer = () => {
-  const v = process.env.OIDC_ISSUER_BASE_URL
-  if (!v) throw new Error('OIDC_ISSUER_BASE_URL is required (e.g. https://<tenant>.auth0.com/)')
-  return v
-}
-
 // Required env var, with the reason it's needed (for vars that become mandatory
 // only under a feature flag). Throws a clear error at deploy time instead of
 // silently shipping the TS non-null assertion's `undefined` into the container.
@@ -85,18 +76,25 @@ const requireEnv = (key: string, why: string) => {
 
 // Runner endpoint default — localhost. v2 runners self-report their address via
 // healthcheck, so the DEFAULT_RUNNER_* override is rarely needed.
-const runnerEndpoint = (override: string, port: number, scheme: string) =>
-  envOr(override, `${scheme}localhost:${port}`)
+const runnerEndpoint = (override: string, port: number, scheme: string) => envOr(override, `${scheme}localhost:${port}`)
 
 // ── app config ───────────────────────────────────────────────────────────────
 export default $config({
-  app(input) {
+  async app(input) {
+    const { loadDeploymentEnvironment, resolveAwsRegion } = await import('./scripts/deployment-environment.mjs')
+    loadDeploymentEnvironment()
+    const REGION = resolveAwsRegion()
+
     return {
       name: 'boxlite',
       removal: input?.stage === 'production' ? 'retain' : 'remove',
       home: 'aws',
       providers: {
-        aws: { region: REGION, ...(process.env.AWS_PROFILE ? { profile: process.env.AWS_PROFILE } : {}) },
+        aws: {
+          version: '7.24.0',
+          region: REGION,
+          ...(process.env.AWS_PROFILE ? { profile: process.env.AWS_PROFILE } : {}),
+        },
         cloudflare: '6.15.0',
         random: '4.16.6',
         // command provider: multi-runner post-deploy registration
@@ -107,9 +105,27 @@ export default $config({
   },
 
   async run() {
-    // Load .env overrides (anything unset falls back to auto-generated values)
-    const { config } = await import('dotenv')
-    config()
+    const { readWorkspaceVersion, resolveAwsRegion, resolvePublicDeploymentConfig } =
+      await import('./scripts/deployment-environment.mjs')
+    const { optionalPublicOidcIssuer, requireOidcIssuer } = await import('./scripts/oidc-issuer.mjs')
+    const { resolveRunnerInventory } = (await import('./scripts/runner-inventory.cjs')).default
+    const { requireIamPermissionsBoundaryStage } = await import('./scripts/sst-stage.mjs')
+    const REGION = resolveAwsRegion()
+    const workspaceVersion = readWorkspaceVersion()
+    const deploymentConfig = resolvePublicDeploymentConfig(process.env, workspaceVersion)
+    const { stackDomain, proxyDomain, proxyProtocol, proxyTemplateUrl, releaseVersion } = deploymentConfig
+    const runnerInventory = resolveRunnerInventory(process.env)
+    const oidcIssuer = requireOidcIssuer()
+    const publicOidcIssuer = optionalPublicOidcIssuer()
+
+    // Every role created by this stack must stay inside the boundary provisioned
+    // with the GitHub deployment role. The raw-resource transform also covers IAM
+    // roles created internally by SST components, not only the roles declared here.
+    requireIamPermissionsBoundaryStage($app.stage)
+    const runtimePermissionsBoundaryArn = $interpolate`arn:aws:iam::${aws.getCallerIdentityOutput().accountId}:policy/${$app.name}-${$app.stage}-runtime-boundary`
+    $transform(aws.iam.Role, (args) => {
+      args.permissionsBoundary ??= runtimePermissionsBoundaryArn
+    })
 
     // Strip trailing slash from service.url so path concat produces clean URLs
     // (api.url = "https://api.dev.boxlite.ai/" → apiBase = "https://api.dev.boxlite.ai").
@@ -122,10 +138,14 @@ export default $config({
     const clickHouseReaderHost = process.env.CLICKHOUSE_READER_HOST || process.env.CLICKHOUSE_HOST
     const clickHouseExporterEnabled = process.env.CLICKHOUSE_EXPORTER_ENABLED === 'true'
     if (clickHouseExporterEnabled && !clickHouseWriterEndpoint) {
-      throw new Error('CLICKHOUSE_WRITER_ENDPOINT or CLICKHOUSE_ENDPOINT is required when CLICKHOUSE_EXPORTER_ENABLED=true')
+      throw new Error(
+        'CLICKHOUSE_WRITER_ENDPOINT or CLICKHOUSE_ENDPOINT is required when CLICKHOUSE_EXPORTER_ENABLED=true',
+      )
     }
     if (clickHouseExporterEnabled && !clickHouseWriterPassword) {
-      throw new Error('CLICKHOUSE_WRITER_PASSWORD or CLICKHOUSE_PASSWORD is required when CLICKHOUSE_EXPORTER_ENABLED=true')
+      throw new Error(
+        'CLICKHOUSE_WRITER_PASSWORD or CLICKHOUSE_PASSWORD is required when CLICKHOUSE_EXPORTER_ENABLED=true',
+      )
     }
     const collectorExporters = clickHouseExporterEnabled ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
 
@@ -134,10 +154,6 @@ export default $config({
     // port-80-only ALB → 502). We side-step that by giving Api and Dex ALBs
     // HTTPS listeners with a wildcard ACM cert, so Router routes to https://
     // origins and the non-buggy branch runs.
-    const stackDomain = process.env.STACK_DOMAIN
-    if (!stackDomain) {
-      throw new Error('STACK_DOMAIN is required (Cloudflare-managed subdomain, e.g. dev.boxlite.ai)')
-    }
     const cloudflareDns = sst.cloudflare.dns()
     const serviceDomain = (name: string) => ({
       name: `${name}.${stackDomain}`,
@@ -153,17 +169,20 @@ export default $config({
     const proxyApiKey = randomKey('ProxyApiKey')
     const adminApiKey = randomKey('AdminApiKey')
     const defaultRunnerApiKey = randomKey('DefaultRunnerApiKey')
+    const defaultRunnerConfig = runnerInventory[0]
+    const defaultRunnerName = defaultRunnerConfig.controlPlaneRunnerName
     const pgAdminPassword = randomKey('PgAdminPassword', 24)
 
-    // App secrets — set via `sst secret set <NAME> --stage <stage>` (or bulk
-    // `sst secret load <dotenv>`); stored encrypted in SST state and shared
-    // per-stage by anyone with deploy access. Names match the env keys so a
-    // dotenv `sst secret load` maps 1:1. Optional ones carry an empty-string
-    // placeholder, so "unset" reads as '' — an "empty = off" contract.
-    // NB: the Cloudflare provider creds can't live
-    // here (the provider initializes in app() before run() exists); they're
-    // injected from SSM by scripts/sst-with-cloudflare.mjs.
-    const oidcClientId = new sst.Secret('OIDC_CLIENT_ID', 'boxlite')
+    // App secrets — set via `npm run sst -- secret set <NAME> --stage <stage>`
+    // (or bulk `npm run sst -- secret load <dotenv>`); stored encrypted in SST
+    // state and shared per-stage by anyone with deploy access. OIDC_CLIENT_ID is
+    // required and has no deployable fallback: a placeholder would let the stack
+    // become healthy while every interactive login fails. Optional secrets carry
+    // an empty-string fallback, where empty means that the feature is disabled.
+    // NB: the Cloudflare provider creds can't live here (the provider initializes
+    // in app() before run() exists); scripts/sst-with-cloudflare.mjs injects them
+    // from SSM instead.
+    const oidcClientId = new sst.Secret('OIDC_CLIENT_ID')
     const oidcMgmtClientId = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_ID')
     const oidcMgmtClientSecret = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_SECRET')
     const posthogApiKey = new sst.Secret('POSTHOG_API_KEY', '')
@@ -367,6 +386,7 @@ export default $config({
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────
     const api = new sst.aws.Service('Api', {
       cluster,
+      wait: true,
       image: {
         context: '../..',
         dockerfile: 'apps/api/Dockerfile',
@@ -402,9 +422,7 @@ export default $config({
           // observability reader defaults to this region
           // (ADMIN_OBSERVABILITY_CLOUDWATCH_REGION).
           actions: ['logs:DescribeLogGroups'],
-          resources: [
-            $interpolate`arn:aws:logs:${REGION}:${aws.getCallerIdentityOutput().accountId}:log-group:*`,
-          ],
+          resources: [$interpolate`arn:aws:logs:${REGION}:${aws.getCallerIdentityOutput().accountId}:log-group:*`],
         },
         {
           // Admin observability S3 reader + VolumeManager boot probe are
@@ -449,7 +467,7 @@ export default $config({
         PORT: String(PORTS.API),
         ENVIRONMENT: 'production',
         RUN_MIGRATIONS: 'true',
-        VERSION: '0.1.0',
+        VERSION: releaseVersion,
         DEFAULT_REGION_ENFORCE_QUOTAS: 'false',
         DEFAULT_TEMPLATE: envOr('DEFAULT_TEMPLATE', 'boxlite/base'),
         // Box base images: the three *_IMAGE refs below are the built-in curated set the API
@@ -503,20 +521,29 @@ export default $config({
         // OIDC — external provider (Auth0/Okta/etc.)
         OIDC_CLIENT_ID: oidcClientId.value,
         OIDC_AUDIENCE: envOr('OIDC_AUDIENCE', 'boxlite'),
-        OIDC_ISSUER_BASE_URL: requireOidcIssuer(),
-        ...(process.env.PUBLIC_OIDC_DOMAIN && {
-          PUBLIC_OIDC_DOMAIN: process.env.PUBLIC_OIDC_DOMAIN,
+        OIDC_ISSUER_BASE_URL: oidcIssuer,
+        ...(publicOidcIssuer && {
+          PUBLIC_OIDC_DOMAIN: publicOidcIssuer,
         }),
         // Optional: Auth0 Management API (enables account linking etc.)
         ...(process.env.OIDC_MANAGEMENT_API_ENABLED === 'true' && {
           OIDC_MANAGEMENT_API_ENABLED: 'true',
+          ...(process.env.OIDC_MANAGEMENT_API_BASE_URL && {
+            OIDC_MANAGEMENT_API_BASE_URL: process.env.OIDC_MANAGEMENT_API_BASE_URL,
+          }),
+          ...(process.env.OIDC_MANAGEMENT_API_TOKEN_URL && {
+            OIDC_MANAGEMENT_API_TOKEN_URL: process.env.OIDC_MANAGEMENT_API_TOKEN_URL,
+          }),
           // Client id/secret come from the SST secret store now. If the feature
           // is enabled but a secret is unset, the value resolves to '' and the
           // Api errors at runtime — instead of the old deploy-time requireEnv
           // throw (Output values can't be guarded at config-build time).
           OIDC_MANAGEMENT_API_CLIENT_ID: oidcMgmtClientId.value,
           OIDC_MANAGEMENT_API_CLIENT_SECRET: oidcMgmtClientSecret.value,
-          OIDC_MANAGEMENT_API_AUDIENCE: requireEnv('OIDC_MANAGEMENT_API_AUDIENCE', 'when OIDC_MANAGEMENT_API_ENABLED=true'),
+          OIDC_MANAGEMENT_API_AUDIENCE: requireEnv(
+            'OIDC_MANAGEMENT_API_AUDIENCE',
+            'when OIDC_MANAGEMENT_API_ENABLED=true',
+          ),
         }),
         // RP-initiated logout fallback. Safe to set unconditionally: the API
         // probes the IdP's discovery doc at startup and only exposes this URL
@@ -540,10 +567,10 @@ export default $config({
         S3_ROLE_NAME: s3AccessRoleName,
 
         // Proxy
-        PROXY_DOMAIN: envOr('PROXY_DOMAIN', `proxy.${stackDomain}`),
-        PROXY_PROTOCOL: envOr('PROXY_PROTOCOL', 'https'),
+        PROXY_DOMAIN: proxyDomain,
+        PROXY_PROTOCOL: proxyProtocol,
         PROXY_API_KEY: envOr('PROXY_API_KEY', proxyApiKey.result),
-        PROXY_TEMPLATE_URL: envOr('PROXY_TEMPLATE_URL', `https://proxy.${stackDomain}`),
+        PROXY_TEMPLATE_URL: proxyTemplateUrl,
 
         // Admin
         ADMIN_API_KEY: envOr('ADMIN_API_KEY', adminApiKey.result),
@@ -615,7 +642,7 @@ export default $config({
         DASHBOARD_BASE_API_URL: envOr('DASHBOARD_BASE_API_URL', `https://api.${stackDomain}`),
 
         // Default runner — the API auto-seeds it at boot; v2 runners self-report
-        DEFAULT_RUNNER_NAME: envOr('DEFAULT_RUNNER_NAME', 'default'),
+        DEFAULT_RUNNER_NAME: defaultRunnerName,
         DEFAULT_RUNNER_API_KEY: envOr('DEFAULT_RUNNER_API_KEY', defaultRunnerApiKey.result),
         DEFAULT_RUNNER_DOMAIN: runnerEndpoint('DEFAULT_RUNNER_DOMAIN', PORTS.RUNNER, ''),
         DEFAULT_RUNNER_API_URL: runnerEndpoint('DEFAULT_RUNNER_API_URL', PORTS.RUNNER, 'http://'),
@@ -659,12 +686,17 @@ export default $config({
     })
 
     // ─── 7. EDGE SERVICES ────────────────────────────────────────────────────
-    // Proxy: routes `<port>-<boxid>.proxy.<stack>` to the box port.
-    // Wildcard cert covers *.proxy.<stack>; Cloudflare serves wildcard DNS.
-    const proxyDomain = `proxy.${stackDomain}`
+    // Proxy: routes `<port>-<boxid>.<proxyDomain>` to the box port.
+    // SST terminates TLS on the NLB listener and manages the proxy + wildcard
+    // Cloudflare records from the same env-driven domain exposed by the API.
+    // Protect the NLB topology so an immutable replacement fails instead of
+    // partially switching the listener to a target group that ECS has not
+    // attached. Routine task revisions continue to use ECS rolling deployments.
+
     new sst.aws.Service('Proxy', {
       cluster,
       image: { context: '../..', dockerfile: 'apps/proxy/Dockerfile', cache: false },
+      wait: true,
       loadBalancer: {
         domain: {
           name: proxyDomain,
@@ -672,17 +704,41 @@ export default $config({
           dns: cloudflareDns,
         },
         rules: [{ listen: '443/tls', forward: `${PORTS.PROXY}/tcp` }],
-        health: { [`${PORTS.PROXY}/tcp`]: {} },
       },
       environment: {
         PROXY_PORT: String(PORTS.PROXY),
-        PROXY_PROTOCOL: envOr('PROXY_PROTOCOL', 'https'),
+        PROXY_PROTOCOL: proxyProtocol,
         PROXY_API_KEY: envOr('PROXY_API_KEY', proxyApiKey.result),
         // api-client-go appends paths like "/config" directly → include /api suffix
         BOXLITE_API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
         OIDC_CLIENT_ID: oidcClientId.value,
         OIDC_AUDIENCE: envOr('OIDC_AUDIENCE', 'boxlite'),
-        OIDC_DOMAIN: requireOidcIssuer(),
+        OIDC_DOMAIN: oidcIssuer,
+        ...(publicOidcIssuer && {
+          OIDC_PUBLIC_DOMAIN: publicOidcIssuer,
+        }),
+      },
+      transform: {
+        loadBalancer: (_args, opts) => {
+          opts.protect = true
+        },
+        listener: (_args, opts) => {
+          opts.protect = true
+        },
+        target: (args, opts) => {
+          args.healthCheck = {
+            enabled: true,
+            protocol: 'HTTP',
+            path: '/health',
+            port: 'traffic-port',
+            matcher: '200-399',
+            interval: 30,
+            timeout: 5,
+            healthyThreshold: 2,
+            unhealthyThreshold: 3,
+          }
+          opts.protect = true
+        },
       },
     })
 
@@ -794,8 +850,8 @@ export default $config({
     // Dedicated runner security group (least-privilege, explicit in IaC).
     // Without it the runner falls back to the VPC's shared default SG, which
     // allows ALL ports from the whole VPC CIDR. The runner multiplexes its
-    // control-plane API and box proxy onto a single port (API_PORT =
-    // PORTS.RUNNER); box ports are served INSIDE the runner and
+    // control-plane API, box proxy, and (when enabled) ssh-gateway onto a single
+    // port (API_PORT = PORTS.RUNNER); box ports are served INSIDE the runner and
     // never bound on the host NIC. So one inbound port — reachable only from
     // inside the VPC — is the complete surface. Combined with the public-subnet
     // placement (the runner egresses via the Internet Gateway, not the NAT that
@@ -810,7 +866,7 @@ export default $config({
           fromPort: PORTS.RUNNER,
           toPort: PORTS.RUNNER,
           cidrBlocks: [vpc.nodes.vpc.cidrBlock],
-          description: 'control-plane API + box proxy (multiplexed on the runner API port)',
+          description: 'control-plane API + box proxy + ssh-gateway (multiplexed on the runner API port)',
         },
       ],
       egress: [
@@ -862,20 +918,33 @@ export default $config({
       otelCollectorOtlpHttpUrl,
       ghcrSecret ? ghcrSecret.arn : '',
     ]).apply(([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-      buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
+      buildRunnerUserData({
+        apiUrl,
+        token,
+        otelEndpoint,
+        awsRegion: REGION,
+        runnerVersion: workspaceVersion,
+        ghcrSecretArn: ghcrSecretArn || undefined,
+        ghcrUsername,
+      }),
     )
 
     // Runners hold load-bearing box state (/var/lib/boxlite + in-memory libkrun VMs).
     // The default runner and every extra runner are identical except for resource
-    // name, Name tag, and per-runner user-data, so they share one factory. Two Pulumi
+    // name, identity tags, and per-runner user-data, so they share one factory. Two Pulumi
     // options keep a runner persistent across routine deploys:
     //   • ignoreChanges ['ami','userDataBase64']: monthly Ubuntu AMIs and Cargo.toml
-    //     version bumps no longer force replacement; a new binary lands out-of-band via
-    //     SSM instead of recreating the EC2 — scripts/deploy/runner-update-binary.sh
-    //     upgrades the DEFAULT runner (matches its tag only); extra runners separately.
-    //   • protect: refuses any delete (errant `pulumi destroy` / teardown). Deliberate
-    //     decommission = set protect:false, deploy, then `pulumi destroy --target ...`.
-    const makeRunner = (resourceName: string, nameTag: string, userData: $util.Input<string>) =>
+    //     version bumps no longer force replacement. The version bump still has to reach
+    //     the running fleet, so the UpgradeRunnerBinary commands below land it over SSM
+    //     instead — every runner, one at a time (see scripts/runner-update-binary.mjs).
+    //   • protect: refuses any delete (errant `pulumi destroy` / teardown). Keep this
+    //     true; decommission and recovery stay outside routine deployments.
+    const makeRunner = (
+      resourceName: string,
+      nameTag: string,
+      controlPlaneRunnerName: string,
+      userData: $util.Input<string>,
+    ) =>
       new aws.ec2.Instance(
         resourceName,
         {
@@ -896,7 +965,10 @@ export default $config({
           metadataOptions: { httpEndpoint: 'enabled', httpTokens: 'required', httpPutResponseHopLimit: 1 },
           userDataBase64: userData,
           rootBlockDevice: { volumeSize: RUNNER.rootDiskGB },
-          tags: { Name: nameTag },
+          tags: {
+            Name: nameTag,
+            'boxlite:control-plane-runner-name': controlPlaneRunnerName,
+          },
         },
         {
           ignoreChanges: ['ami', 'userDataBase64'],
@@ -906,8 +978,13 @@ export default $config({
 
     // Default runner — auto-seeded by the API at boot via DEFAULT_RUNNER_*.
     // Pulumi resource id stays 'Runner' (renaming it would replace a protect:true
-    // instance); only the AWS Name tag carries the explicit `-default` suffix.
-    makeRunner('Runner', 'boxlite-runner-default', runnerUserData)
+    // instance); the AWS tags bind it to the API's configured default name.
+    const defaultRunner = makeRunner(
+      defaultRunnerConfig.resourceName,
+      defaultRunnerConfig.nameTag,
+      defaultRunnerConfig.controlPlaneRunnerName,
+      runnerUserData,
+    )
 
     // Multi-runner provisioning. Extra runners share the same OTel endpoint as
     // the default runner.
@@ -921,22 +998,29 @@ export default $config({
     // BOXLITE_RUNNER_TOKEN baked into the matching EC2's user-data) — and the
     // same protect/ignoreChanges options as the default so routine deploys never
     // replace a state-holding runner.
-    const totalRunners = Math.max(1, parseInt(envOr('RUNNERS', '1'), 10) || 1)
-    const extraRunners = Array.from({ length: totalRunners - 1 }, (_, i) => {
-      const index = i + 2 // default runner is #1, so extras start at #2
-      const name = `runner-${index}` // control-plane registration name
-      const apiKey = randomKey(`RunnerApiKey-${name}`)
+    const extraRunners = runnerInventory.slice(1).map((runner) => {
+      const apiKey = randomKey(`RunnerApiKey-${runner.controlPlaneRunnerName}`)
       // Resource id stays `Runner-runner-N` (stable — these are protect:true);
-      // only the AWS Name tag takes the cleaner `boxlite-runner-N` form.
+      // the AWS Name tag takes the cleaner `boxlite-runner-N` form while a
+      // separate tag preserves the exact control-plane name.
       const instance = makeRunner(
-        `Runner-${name}`,
-        `boxlite-runner-${index}`,
+        runner.resourceName,
+        runner.nameTag,
+        runner.controlPlaneRunnerName,
         $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
           ([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-            buildRunnerUserData({ apiUrl, token, otelEndpoint, ghcrSecretArn: ghcrSecretArn || undefined, ghcrUsername }),
+            buildRunnerUserData({
+              apiUrl,
+              token,
+              otelEndpoint,
+              awsRegion: REGION,
+              runnerVersion: workspaceVersion,
+              ghcrSecretArn: ghcrSecretArn || undefined,
+              ghcrUsername,
+            }),
         ),
       )
-      return { name, apiKey, instance }
+      return { name: runner.controlPlaneRunnerName, apiKey, instance }
     })
 
     // Register the extra runners with the control plane once the API is healthy.
@@ -962,6 +1046,52 @@ export default $config({
         { dependsOn: extraRunners.map((r) => r.instance) },
       )
     }
+
+    // ── Rolling runner binary upgrade ────────────────────────────────────────
+    // ignoreChanges ['userDataBase64'] above means a Cargo.toml version bump never
+    // reaches a running runner, so these commands land it over SSM instead — the EC2
+    // and the box state on it are never replaced.
+    //
+    // Rolling is meant to be structural rather than scripted: each command handles
+    // exactly one instance and dependsOn the previous one, so the dependency graph — not
+    // any logic in the script — is what should keep two runners from restarting at once,
+    // and a failure should stop the chain with the unvisited hosts still serving.
+    //
+    // `triggers` REPLACES the command rather than updating it, so `create` is the body
+    // that re-runs on a version bump (@pulumi/command documents this) — hence create and
+    // update are the same script. The script converges rather than reinstalls: it leaves
+    // alone a runner already on the target version, one whose binary/unit are not in place
+    // yet (its user-data is installing this same version), and one serving something NEWER
+    // than Cargo.toml declares — that last case is refused, not silently reverted, so a
+    // deliberate hand-install survives an unrelated deploy (ALLOW_DOWNGRADE=1 forces it).
+    // That second guard is what keeps the create-time run on a brand-new runner from
+    // fighting cloud-init: this resource only depends on the instance reaching `running`,
+    // which happens long before cloud-init finishes. The deployer side of the same race —
+    // SendCommand being rejected until the SSM agent registers — is handled by a bounded
+    // retry in the script, since no host-side guard can see it.
+    //
+    // Typed as a bare Resource because the chain only needs something to depend on.
+    let previousUpgrade: $util.Resource | undefined
+    for (const { label, instance } of [
+      { label: 'default', instance: defaultRunner },
+      ...extraRunners.map((r) => ({ label: r.name, instance: r.instance })),
+    ]) {
+      previousUpgrade = new command.local.Command(
+        `UpgradeRunnerBinary-${label}`,
+        {
+          create: 'node scripts/runner-update-binary.mjs',
+          update: 'node scripts/runner-update-binary.mjs',
+          environment: {
+            AWS_REGION: REGION,
+            INSTANCE_IDS: instance.id,
+            RUNNER_VERSION: workspaceVersion,
+            RUNNER_PORT: String(PORTS.RUNNER),
+          },
+          triggers: [workspaceVersion, instance.id],
+        },
+        { dependsOn: previousUpgrade ? [instance, previousUpgrade] : [instance] },
+      )
+    }
   },
 })
 
@@ -972,19 +1102,12 @@ async function buildRunnerUserData(input: {
   apiUrl: string
   token: string
   otelEndpoint: string
+  awsRegion: string
+  runnerVersion: string
   ghcrSecretArn?: string
   ghcrUsername?: string
 }): Promise<string> {
-  const { readFileSync } = await import('fs')
-  const { resolve } = await import('path')
-
-  // SST invokes from apps/infra/ as cwd; Cargo.toml lives at repo root.
-  const cargoToml = readFileSync(resolve(process.cwd(), '../../Cargo.toml'), 'utf-8')
-  const versionMatch = cargoToml.match(/^version\s*=\s*"(.+?)"/m)
-  if (!versionMatch) {
-    throw new Error('could not parse runner version from ../../Cargo.toml (expected a top-level `version = "X.Y.Z"`)')
-  }
-  const RUNNER_VERSION = versionMatch[1]
+  const RUNNER_VERSION = input.runnerVersion
 
   // ghcr pull credential delivery (option B, rotation-capable): install AWS CLI v2
   // and write a start-wrapper that re-fetches the TOKEN from Secrets Manager on
@@ -1047,19 +1170,16 @@ rm -f /tmp/mount-s3.deb
 
 # Download the prebuilt runner binary, then verify its SHA-256 against the
 # checksum published next to the release asset before installing (it runs as
-# root). Best-effort for backward compatibility: a release with no .sha256 asset
-# warns and proceeds; a present-but-mismatched checksum is fatal (fail-closed).
+# root). A missing, malformed, or mismatched checksum is fatal.
 RUNNER_BASE="https://github.com/boxlite-ai/boxlite/releases/download/v${RUNNER_VERSION}"
 RUNNER_TARBALL="boxlite-runner-v${RUNNER_VERSION}-linux-amd64.tar.gz"
 curl -fsSL "\${RUNNER_BASE}/\${RUNNER_TARBALL}" -o "/tmp/\${RUNNER_TARBALL}"
-if curl -fsSL "\${RUNNER_BASE}/\${RUNNER_TARBALL}.sha256" -o /tmp/runner.sha256; then
-  EXPECTED=\$(awk '{print \$1}' /tmp/runner.sha256)
-  ACTUAL=\$(sha256sum "/tmp/\${RUNNER_TARBALL}" | awk '{print \$1}')
-  [ "\$EXPECTED" = "\$ACTUAL" ] || { echo "FATAL: runner checksum mismatch (want \$EXPECTED got \$ACTUAL)" >&2; exit 1; }
-  echo "runner tarball checksum verified (\$ACTUAL)"
-else
-  echo "WARNING: no .sha256 published for v${RUNNER_VERSION}; installing without integrity verification" >&2
-fi
+curl -fsSL "\${RUNNER_BASE}/\${RUNNER_TARBALL}.sha256" -o /tmp/runner.sha256
+EXPECTED=\$(awk 'NR == 1 {print \$1}' /tmp/runner.sha256)
+[[ "\$EXPECTED" =~ ^[0-9a-f]{64}\$ ]] || { echo "FATAL: invalid runner checksum file" >&2; exit 1; }
+ACTUAL=\$(sha256sum "/tmp/\${RUNNER_TARBALL}" | awk '{print \$1}')
+[ "\$EXPECTED" = "\$ACTUAL" ] || { echo "FATAL: runner checksum mismatch (want \$EXPECTED got \$ACTUAL)" >&2; exit 1; }
+echo "runner tarball checksum verified (\$ACTUAL)"
 tar -xzf "/tmp/\${RUNNER_TARBALL}" -C /usr/local/bin/
 rm -f "/tmp/\${RUNNER_TARBALL}" /tmp/runner.sha256
 chmod +x /usr/local/bin/boxlite-runner
@@ -1089,13 +1209,17 @@ Environment=API_VERSION=2
 Environment=API_PORT=${PORTS.RUNNER}
 Environment=RUNNER_DOMAIN=\$HOST_IP
 Environment=BOXLITE_HOME_DIR=/var/lib/boxlite
-Environment=AWS_REGION=${REGION}
+Environment=AWS_REGION=${input.awsRegion}
 Environment=OTEL_LOGGING_ENABLED=true
 Environment=OTEL_TRACING_ENABLED=true
-Environment=OTEL_EXPORTER_OTLP_ENDPOINT=${input.otelEndpoint}${input.ghcrSecretArn ? `
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=${input.otelEndpoint}${
+    input.ghcrSecretArn
+      ? `
 # ghcr: username + secret ARN are non-secret; the start-wrapper fetches the TOKEN at runtime.
 Environment=GHCR_USERNAME=${input.ghcrUsername ?? ''}
-Environment=GHCR_SECRET_ARN=${input.ghcrSecretArn}` : ''}
+Environment=GHCR_SECRET_ARN=${input.ghcrSecretArn}`
+      : ''
+  }
 
 [Install]
 WantedBy=multi-user.target

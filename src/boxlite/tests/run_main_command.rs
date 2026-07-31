@@ -8,7 +8,7 @@
 
 mod common;
 
-use boxlite::{BoxOptions, RootfsSpec};
+use boxlite::{BoxCommand, BoxOptions, LiteBox, RootfsSpec};
 use tokio_stream::StreamExt;
 
 /// Create a box whose main command is `cmd`, optionally on a PTY.
@@ -61,6 +61,122 @@ async fn attached_stdout(opts: BoxOptions) -> String {
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 
     stdout
+}
+
+async fn wait_for_file(handle: &LiteBox, path: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let execution = handle
+                .exec(BoxCommand::new("test").args(["-e", path]))
+                .await
+                .expect("check main command marker");
+            if execution
+                .wait()
+                .await
+                .expect("wait for marker check")
+                .exit_code
+                == 0
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("main command must reach marker");
+}
+
+#[tokio::test]
+async fn main_command_exits_after_large_output_without_attach() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime
+        .create(
+            main_command_opts(&["sh", "-c", "head -c 1048576 /dev/zero; exit 23"], false),
+            None,
+        )
+        .await
+        .expect("create box");
+
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        handle.start().await.expect("start box");
+        loop {
+            if handle.info().await.expect("get box info").status == boxlite::BoxStatus::Stopped {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    let _ = handle.stop().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+
+    assert!(
+        completed,
+        "a main command that has no Attach consumer must still drain and exit"
+    );
+}
+
+#[tokio::test]
+async fn late_attach_reports_output_gap() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime
+        .create(
+            main_command_opts(
+                &[
+                    "sh",
+                    "-c",
+                    "head -c 2097152 /dev/zero; touch /tmp/main-output-ready; sleep 30",
+                ],
+                false,
+            ),
+            None,
+        )
+        .await
+        .expect("create box");
+
+    handle.start().await.expect("start box");
+    wait_for_file(&handle, "/tmp/main-output-ready").await;
+
+    let mut execution = handle
+        .attach(None)
+        .await
+        .expect("attach to the main command");
+    let mut stdout = execution.stdout().expect("stdout stream");
+    let dropped = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Some(chunk) = stdout.next().await {
+            if chunk.contains("[boxlite] stdout output dropped") {
+                return Some(chunk);
+            }
+        }
+        None
+    })
+    .await
+    .unwrap_or(None);
+
+    let _ = handle.stop().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+
+    let dropped = dropped.expect("late attach must report overwritten output");
+    assert!(
+        dropped.contains("stdout output dropped"),
+        "late attach must report the stdout gap: {dropped:?}"
+    );
 }
 
 /// `tty: true` must give the *main command* a real terminal.

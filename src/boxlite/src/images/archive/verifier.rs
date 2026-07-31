@@ -61,7 +61,7 @@ impl LayerVerifier {
             }
             hasher.update(&buffer[..n]);
         }
-        let computed = format!("{:x}", hasher.finalize());
+        let computed = hex::encode(hasher.finalize());
         if computed != self.expected_hash {
             tracing::error!(
                 "DiffID mismatch for {}: expected sha256:{}, computed sha256:{}",
@@ -93,7 +93,7 @@ mod tests {
     fn accepts_matching_in_memory_stream() {
         use sha2::Digest;
         let payload = b"boxlite layer verifier test bytes";
-        let expected = format!("sha256:{:x}", sha2::Sha256::digest(payload));
+        let expected = format!("sha256:{}", hex::encode(sha2::Sha256::digest(payload)));
         let verifier = LayerVerifier::new(&expected).unwrap();
         assert!(verifier.verify_reader(&payload[..], None).unwrap());
     }
@@ -113,7 +113,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         let tar_data = b"fake-tar-bytes-for-hashing";
-        let expected = format!("sha256:{:x}", sha2::Sha256::digest(tar_data));
+        let expected = format!("sha256:{}", hex::encode(sha2::Sha256::digest(tar_data)));
 
         let mut gz = GzEncoder::new(Vec::new(), Compression::default());
         gz.write_all(tar_data).unwrap();
@@ -132,7 +132,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         let tar_data = b"uncompressed-tar-bytes";
-        let expected = format!("sha256:{:x}", sha2::Sha256::digest(tar_data));
+        let expected = format!("sha256:{}", hex::encode(sha2::Sha256::digest(tar_data)));
 
         let path = tmp.path().join("layer.tar");
         std::fs::write(&path, tar_data).unwrap();

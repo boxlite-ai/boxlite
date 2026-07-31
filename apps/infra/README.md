@@ -6,73 +6,180 @@
 > See the project root `LICENSE` file and individual source file headers for
 > full license terms.
 
-One-command deploy of the BoxLite control plane: ECS Fargate services, an
-EC2 runner with nested KVM, RDS Postgres, ElastiCache Redis, S3, CloudFront.
+Guarded deployment of an existing BoxLite control-plane stack: ECS Fargate
+services, an EC2 Runner with nested KVM, RDS Postgres, ElastiCache Redis, S3,
+and CloudFront.
 
-- **Region:** `ap-southeast-1`
+- **Region:** `AWS_REGION` (defaults to `ap-southeast-1`)
 - **IaC:** SST v4 (Pulumi under the hood)
-- **Cost at rest:** ~$570/month always-on — Runner + load balancers dominate (tear down with one command)
+- **Cost at rest:** ~$570/month always-on — Runner + load balancers dominate
 
 ## Prerequisites
 
 - A **Cloudflare-managed domain** (SST creates ACM certs + DNS records automatically)
 - An **Auth0 tenant** (or any OIDC provider — see `.env.example` for setup steps)
-- **Docker Desktop** running locally (SST builds container images)
-- **AWS CLI** configured with a profile that has admin access
+- A protected GitHub **`dev` Environment** with required reviewers
+- An AWS GitHub OIDC provider and the deployment role described below
+- An existing SST stack whose Runner inventory exactly matches `RUNNERS`
+- **AWS CLI** and **GitHub CLI** for one-time CI bootstrap only
 
-## Quick start
+## Deploy an existing stack
+
+This workflow cannot create the first Runner or recover a missing one. Complete
+a separately reviewed Runner provisioning operation before using it for a new
+stage; that operation is not implemented in this repository yet.
 
 ```bash
 cd apps/infra
 npm install
-cp .env.example .env        # non-secret config: STACK_DOMAIN, OIDC_ISSUER_BASE_URL, OIDC_AUDIENCE
+cp .env.example .env        # stage config: STACK_DOMAIN, OIDC_ISSUER_BASE_URL, OIDC_AUDIENCE
 
-# Cloudflare provider credentials live in SSM (per stage) — see "Secrets & credentials":
-aws ssm put-parameter --region ap-southeast-1 --type SecureString \
-  --name /boxlite/dev/cloudflare-api-token  --value "<token>"
-aws ssm put-parameter --region ap-southeast-1 --type SecureString \
-  --name /boxlite/dev/cloudflare-account-id --value "<account-id>"
+# Cloudflare provider credentials live in SSM (per stage). Read each value
+# without terminal echo, then pass it through stdin instead of process argv:
+printf 'Cloudflare API token: ' >&2
+IFS= read -rs secret_value; printf '\n' >&2
+printf '%s' "$secret_value" | aws ssm put-parameter --region ap-southeast-1 \
+  --type SecureString --name /boxlite/dev/cloudflare-api-token --value file:///dev/stdin
+unset secret_value
+printf 'Cloudflare account ID: ' >&2
+IFS= read -rs secret_value; printf '\n' >&2
+printf '%s' "$secret_value" | aws ssm put-parameter --region ap-southeast-1 \
+  --type SecureString --name /boxlite/dev/cloudflare-account-id --value file:///dev/stdin
+unset secret_value
 
-npm run deploy -- --stage dev   # the wrapper loads the Cloudflare creds, then runs sst deploy
+# Required application secret. There is no placeholder fallback because a wrong
+# client ID makes every interactive login fail. SST reads an omitted value from stdin.
+printf 'OIDC client ID: ' >&2
+IFS= read -rs secret_value; printf '\n' >&2
+printf '%s' "$secret_value" | npm run sst -- secret set OIDC_CLIENT_ID --stage dev
+unset secret_value
+
+# Bootstrap the short-lived GitHub OIDC role. The account's GitHub OIDC provider
+# already exists when the E2E CI setup has been run.
+aws cloudformation deploy --region ap-southeast-1 \
+  --stack-name boxlite-dev-github-deploy \
+  --template-file ci/github-deploy-role.yaml \
+  --capabilities CAPABILITY_NAMED_IAM
+
+# In the protected GitHub `dev` Environment, configure:
+#   variable AWS_DEPLOY_ROLE_ARN = the stack's RoleArn output
+#   variable AWS_REGION          = ap-southeast-1
+#   secret   DEPLOY_ENV          = the contents of this .env file
+gh secret set DEPLOY_ENV --env dev < .env
+
+# The workflow is manual and accepts runs only from main. It updates an existing
+# stack; initial Runner provisioning is intentionally a separate operation.
+gh workflow run deploy-dev-api.yml --ref main -f apply=false
+gh workflow run deploy-dev-api.yml --ref main -f apply=true
 ```
 
-App secrets (Auth0 Management API, Svix, PostHog) are optional and set
-per-stage in the SST secret store — see [Secrets & credentials](#secrets--credentials).
+`OIDC_CLIENT_ID` is required. Other app secrets (SSH keys, Auth0 Management API,
+Svix, PostHog) are optional and set per-stage in the SST secret store — see
+[Secrets & credentials](#secrets--credentials).
 
-First deploy: 10–15 minutes. Output prints service URLs + CloudFront domain.
+A full reconciliation typically takes 10–15 minutes. Output prints service URLs
+and the CloudFront domain.
 
-If the build fails with a transient `auth.docker.io` EOF or Debian mirror
-`502 Bad Gateway`, just rerun `npm run deploy -- --stage dev` — SST resumes
-from the failed step.
+If a build fails on a transient registry or package-mirror error, rerun the
+workflow — SST resumes from the failed step.
+
+## Native AMD64 CI deployment
+
+`.github/workflows/deploy-dev-api.yml` runs the deployment on GitHub's native
+`ubuntu-24.04` AMD64 runner. Docker, Buildx, image compilation, and the daemon all
+run in CI; a developer Mac needs neither Docker Desktop nor the Docker CLI. The
+workflow checks both the kernel and Docker engine architecture before SST runs.
+
+The job is manual, serialized, restricted to `main`, and bound to the protected
+GitHub `dev` Environment. GitHub OIDC supplies short-lived AWS credentials; no
+AWS access keys are stored in GitHub. `DEPLOY_ENV` materializes the stage's
+gitignored `.env` only for the job and is deleted even if deployment fails.
+
+The workflow first runs deployment safety tests that require every Runner to
+retain `protect: true` and the AMI/user-data ignore rules. It then runs a full
+`sst diff --json` and passes the structured plan through
+`scripts/deployment-preview.mjs`. The gate rejects creating, replacing, or
+deleting a Runner instance and any in-place Runner change other than provider
+association or tags. Workflow dispatch defaults to a preview-only run; set
+`apply=true` only after reviewing it. An apply run repeats the same guarded
+preview before the full-stack deploy:
+
+```bash
+npm run deploy -- --stage dev
+```
+
+Both commands deliberately avoid `--target` and `--exclude`. Pulumi treats both
+as partial updates, which cannot safely migrate a provider while omitted
+resources still reference the old provider. Full reconciliation also avoids
+silently accumulating stack drift. The deployment wrapper rejects partial
+deploy selectors; targeted `diff` remains available for read-only inspection.
+The Runner EC2 identity and binary remain stable through the lifecycle controls
+under [Runner lifecycle](#runner-lifecycle), and the matching release-asset
+preflight always runs before deployment.
+
+The role template grants only the AWS control-plane actions used by this SST
+stack. IAM mutation is limited to `boxlite-*` roles, policies, and instance
+profiles. Every role created by SST must carry the stage's runtime permissions
+boundary, which excludes IAM mutation and limits workloads to the data-plane APIs
+they need. Its trust policy accepts only OIDC tokens for `boxlite-ai/boxlite`
+using the `dev` Environment. Redeploy the bootstrap stack whenever this policy or
+boundary changes. `IAM_PERMISSIONS_BOUNDARY_STAGE` must match both the SST stage
+and the template's `GitHubEnvironment`; deployment fails before creating roles if
+they differ. Keep required reviewers enabled on that Environment.
 
 ## Secrets & credentials
 
 Three homes, one access gate — **AWS IAM**. Nothing secret lives in git or a
 single laptop's `.env`:
 
-| What | Where | Set with |
-|---|---|---|
-| **App secrets** — Auth0 Management API id + secret, `SVIX_AUTH_TOKEN`, `POSTHOG_API_KEY`, `OIDC_CLIENT_ID` | SST secret store (encrypted in SST state, per stage) | `sst secret set <NAME> "<value>" --stage <stage>` |
-| **Cloudflare provider creds** — `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID` | AWS SSM (`SecureString`, per stage) | `aws ssm put-parameter --type SecureString --name /boxlite/<stage>/cloudflare-…` |
-| **Non-secret config** — `STACK_DOMAIN`, `OIDC_ISSUER_BASE_URL`, `OIDC_AUDIENCE`, toggles | local `.env` (gitignored) | edit `.env` |
+| What                                                                                                                              | Where                                                                        | Set with                                                         |
+| --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| **App secrets** — SSH host/private keys, Auth0 Management API id + secret, `SVIX_AUTH_TOKEN`, `POSTHOG_API_KEY`, `OIDC_CLIENT_ID` | SST secret store (encrypted in SST state, per stage)                         | Non-echoing prompt + SST stdin procedure below                   |
+| **Cloudflare provider creds** — `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`                                           | AWS SSM (`SecureString`, per stage)                                          | Non-echoing prompt + AWS CLI `file:///dev/stdin` procedure above |
+| **Stage config** — `STACK_DOMAIN`, `OIDC_ISSUER_BASE_URL`, `OIDC_AUDIENCE`, toggles                                               | GitHub Environment secret `DEPLOY_ENV`; local `.env` is the bootstrap source | `gh secret set DEPLOY_ENV --env dev < .env`                      |
+
+Grant each API token only the permissions and resources required for its
+documented use; the Cloudflare token needs `Zone:Read` and `DNS:Edit` for the
+managed zone. Rotate tokens regularly and immediately after suspected
+disclosure, updating the value in SSM or the SST secret store. Never put token
+values in command arguments, echo them, enable shell tracing around
+secret-handling commands, or copy secret-bearing logs or workflow output into
+issues.
+
+`VERSION` is optional; it controls the release reported by `/api/config` and
+defaults to the canonical workspace version in `Cargo.toml`.
 
 The Cloudflare creds can't be `sst.Secret`: the provider initializes in `app()`
 before `run()` (where secrets exist), so it reads them from the environment.
-`scripts/sst-with-cloudflare.mjs` — wired into `npm run dev`/`deploy`/`remove`
-and `npm run sst` — fetches them from SSM and exports them before invoking sst.
+`scripts/sst-with-cloudflare.mjs` — wired into `npm run deploy`/`remove`,
+`npm run secrets`, and `npm run sst` — fetches them from SSM and exports them
+before invoking sst. `sst dev` is disabled for this stateful stack because a
+long-running process cannot refresh the Runner state baseline before every
+update.
 **Run sst through these npm scripts**, not bare `npx sst`, so the creds load.
+SST 4.6.11 exposes no supported deploy option to disable or redact this event
+stream, so the wrapper removes Pulumi's transient
+`.sst/pulumi/**/eventlog.json` before and after every wrapped SST command. These event
+streams can contain provider credentials; SST state and non-secret diagnostics
+are left in place. If an existing event log is ever found to contain a provider
+token, rotate that token immediately, then run any wrapped SST command to remove
+the stale event log.
 
 ### App secrets
 
 ```bash
-sst secret set SVIX_AUTH_TOKEN "<value>" --stage dev   # set one
-sst secret load .env --stage dev                       # bulk-load a dotenv (names match 1:1)
-npm run secrets -- --stage dev                          # list what's set
+printf 'SVIX auth token: ' >&2
+IFS= read -rs secret_value; printf '\n' >&2
+printf '%s' "$secret_value" | npm run sst -- secret set SVIX_AUTH_TOKEN --stage dev
+unset secret_value
+npm run sst -- secret load .env.secrets --stage dev # bulk-load an ignored secret dotenv
+npm run secrets -- --stage dev                      # list what's set
 ```
 
-Secret names match the env keys the services expect. Unset optional secrets
-resolve to empty (feature off); `OIDC_CLIENT_ID` defaults to `boxlite`. A changed
-value takes effect on the next `npm run deploy`.
+Secret names match the env keys the services expect, but values in the ordinary
+deployment `.env` are not consumed as SST application secrets. `OIDC_CLIENT_ID`
+has no fallback and must exist before deploy. Unset optional secrets resolve to
+empty (feature off). A changed value takes effect on the next `npm run deploy`.
 
 ### Onboarding / offboarding
 
@@ -81,30 +188,43 @@ Access is **AWS IAM only**: anyone who can deploy (read SST state + SSM, run
 offboard by revoking it. There's no secret file or vault to hand over. Secret
 values and the SSM params are **per-stage** — seed each stage you run.
 
-## After first deploy
+## After deployment
 
-Nothing needs to be fed back into `.env`. The runner EC2 self-registers with the
-API on boot — v2 runners report their address via healthcheck — so boxes
-work as soon as the runner reaches `READY` (~30–60s), visible in the dashboard
-Runner table or `GET /admin/runners`.
+Nothing needs to be fed back into `.env`. Existing Runner EC2 instances
+self-report their addresses through healthchecks and remain visible in the
+dashboard Runner table or `GET /admin/runners`.
 
-### Adding a runner
+### Runner inventory
 
-The default runner is auto-seeded by the API at boot. To run more, set the total
-count and redeploy:
+The default runner is auto-seeded by the API at boot. `RUNNERS` records the
+expected total (1-100), including the default Runner:
 
 ```bash
-echo "RUNNERS=3" >> .env     # default runner (#1) + runner-2 + runner-3
-npm run deploy -- --stage dev
+# Existing inventory: default (#1) + runner-2 + runner-3.
+echo "RUNNERS=3" >> .env
 ```
+
+Routine control-plane deployment requires this inventory to match the current
+SST checkpoint exactly. It will not create a first Runner, scale out, or replace
+a missing Runner. A separately designed and reviewed provisioning operation is
+required so unknown preview-time secrets and network IDs cannot bypass the
+control-plane safety gate; none is implemented in this repository yet.
 
 Each extra runner gets its own EC2 + minted token. Because the API only
 auto-seeds the single default, the extras are registered with the control plane
 by a post-deploy step (`RegisterExtraRunners` in `sst.config.ts`, which runs
 `scripts/register-runners.mjs` against the admin API once the API is healthy).
-It's idempotent — re-running `sst deploy` won't duplicate rows. Scaling **down**
-is the deliberate decommission ceremony under [Runner lifecycle](#runner-lifecycle),
-applied per runner.
+It's idempotent — re-running `sst deploy` won't duplicate rows. Scaling down is
+also excluded from routine deployment; see
+[Runner decommission and recovery](#runner-decommission-and-recovery).
+
+### Custom system images
+
+Add supported images through `BOXLITE_SYSTEM_IMAGES` as documented in
+`.env.example`, for example
+`sandbaseai-hermes=sam2026go/hermes-agent:boxlite-noexpose-20260726`. Runners
+cache exact image refs, so publish updated bytes under a new immutable tag or
+digest; do not repush a mutable tag and expect an existing cache to refresh.
 
 > **Note:** `CLOUDFRONT_DOMAIN` is no longer needed — SST Router resolves
 > it automatically via your `STACK_DOMAIN`. The dashboard's API base URL
@@ -112,16 +232,20 @@ applied per runner.
 > `https://api.<STACK_DOMAIN>` and is substituted into the bundled JS at
 > container start (see `apps/api/src/main.ts`).
 
+The dashboard derives one canonical `/api` URL from that injected value and
+uses it for both runtime requests and every generated SDK/CLI example. Remote
+URLs must use HTTPS; an HTTP fallback is accepted only on a loopback host.
+
 ## Public hostnames
 
 Four public DNS names, three different fronting layers:
 
-| Hostname                       | Fronted by             | Purpose                                                           |
-|--------------------------------|------------------------|-------------------------------------------------------------------|
-| `<STACK_DOMAIN>`               | CloudFront Router      | Dashboard SPA + static assets (cache-friendly, edge-served)       |
-| `api.<STACK_DOMAIN>`           | Api ALB (direct)       | REST API, WebSocket `/attach`, build-log streaming, file transfer |
-| `proxy.<STACK_DOMAIN>`         | Proxy ALB (direct)     | Port-preview wildcard `<port>-<boxId>.proxy.<domain>`         |
-| `*.proxy.<STACK_DOMAIN>`       | Proxy ALB (direct)     | Wildcard alias of the above (per-box preview hosts)           |
+| Hostname                 | Fronted by        | Purpose                                                           |
+| ------------------------ | ----------------- | ----------------------------------------------------------------- |
+| `<STACK_DOMAIN>`         | CloudFront Router | Dashboard SPA + static assets (cache-friendly, edge-served)       |
+| `api.<STACK_DOMAIN>`     | Api ALB (direct)  | REST API, WebSocket `/attach`, build-log streaming, file transfer |
+| `proxy.<STACK_DOMAIN>`   | Proxy NLB (TLS)   | Port-preview wildcard `<port>-<boxId>.proxy.<domain>`             |
+| `*.proxy.<STACK_DOMAIN>` | Proxy NLB (TLS)   | Wildcard alias of the above (per-box preview hosts)               |
 
 **Why `/api/*` bypasses CloudFront.** CloudFront imposes a non-configurable
 10-minute idle cap on WebSocket connections — even with WS Ping frames and
@@ -135,16 +259,44 @@ CF-fronted. The dashboard's bundled JS picks up
 `apps/api/src/main.ts::replaceInDirectory`) so all its `/api/*` fetches go
 direct to the Api ALB.
 
-**SDK base URL.** Long-lived SDK sessions (`exec`, `attach`) should target
-`https://api.<STACK_DOMAIN>` directly, not `https://<STACK_DOMAIN>/api`. The
-CloudFront-routed path works for short request/response calls but caps
-WebSockets at 10 minutes.
+**SDK and CLI base URL.** Use `https://api.<STACK_DOMAIN>/api` for SDK and CLI
+profiles, especially for long-lived operations (`exec`, `attach`, SSE, and
+uploads). The CloudFront-routed `https://<STACK_DOMAIN>/api` path is only for
+short request/response calls; WebSocket execution attach is not a supported
+CloudFront path.
+
+## Proxy deployment safety
+
+The Proxy NLB, TLS listener, and target group are protected Pulumi resources.
+An immutable topology change therefore fails instead of silently replacing a
+target group during a partial deploy. Proxy and API task updates use ECS rolling
+deployments and wait for steady state. Proxy targets must pass `GET /health`.
+
+After every successful `npm run deploy`, `scripts/sst-with-cloudflare.mjs`
+queries AWS and verifies that the NLB listener forwards to the target group
+attached to the Proxy ECS service and that the group has at least the desired
+number of healthy targets. It then probes `/health` through both the base Proxy
+hostname and a deliberately invalid `deployment-probe.<PROXY_DOMAIN>` wildcard
+hostname, which verifies the wildcard DNS record and TLS certificate without a
+live box. The API `/api/config` probe also checks the exact OIDC issuer, release
+version, and Proxy template host. A failed check makes the deploy command exit nonzero; it reports the
+mismatch but does not mutate or roll back AWS resources.
+Deploys and removals require `--stage <stage>` (or `SST_STAGE`) so SST, the
+verifier, and destructive operations cannot target different stages.
+
+A deliberate NLB or target-group migration must be performed as a separate
+operation. First set all three Proxy transform `opts.protect` values to `false`
+and deploy that metadata-only change without changing topology. Then carry out
+the separately reviewed migration or `sst remove`; restore protection afterward
+if the stack remains. This prevents a topology replacement from being mixed
+into the same deploy that disables protection.
 
 ## WebSocket session length
 
-Api and Proxy ALBs have `idle_timeout: 3600` (1 hour) via the SST
-`transform.loadBalancer` hook in `sst.config.ts`. This pairs with three
-layers per AWS's "WebSocket through ALB" guidance:
+The Api ALB has `idle_timeout: 3600` (1 hour) via the SST
+`transform.loadBalancer` hook in `sst.config.ts`. Proxy traffic uses the TLS
+NLB described above. The API setting pairs with three layers per AWS's
+"WebSocket through ALB" guidance:
 
 - **App-layer WS Ping every 15s** sent by the runner
   (`apps/runner/pkg/api/controllers/{boxlite_exec_attach,proxy}.go`). The
@@ -187,6 +339,7 @@ For Auth0 specifically:
      `--callback-port` flag, add the matching URL here too.
 
    Set **Allowed Logout URLs** to `https://<STACK_DOMAIN>`.
+
 2. **Custom API** — identifier becomes `OIDC_AUDIENCE` (e.g. `https://dev.boxlite.ai/api`)
 3. **Post-Login Action** — Auth0 access_tokens don't include `email_verified` by default;
    without it BoxLite suspends the user's organization. Use
@@ -203,7 +356,11 @@ For Auth0 specifically:
    BoxLite fallback. ([Auth0 docs](https://auth0.com/docs/authenticate/login/logout/log-users-out-of-auth0))
 5. **Machine-to-Machine app** (optional, for account linking) — authorize for Auth0 Management API
    with permissions: `read:users`, `update:users`, `read:connections`,
-   `create:guardian_enrollment_tickets`, `read:connections_options`.
+   `create:guardian_enrollment_tickets`, `read:connections_options`. A root
+   issuer safely derives Auth0's `/api/v2/` prefix and `/oauth/token` endpoint.
+   If the provider issuer has a path, set `OIDC_MANAGEMENT_API_BASE_URL` and
+   `OIDC_MANAGEMENT_API_TOKEN_URL` to the provider's exact endpoints; the API
+   refuses to guess either value from the issuer path.
 6. **`OIDC_ISSUER_BASE_URL` env var** — set to Auth0's canonical issuer
    **with the trailing slash** (e.g. `https://dev-xxxxx.us.auth0.com/`).
    Auth0's discovery doc reports `issuer` with a trailing slash, and
@@ -216,34 +373,53 @@ For Auth0 specifically:
 
 ## Service URLs
 
-| Service             | Purpose                              | Exposure                                     |
-|---------------------|--------------------------------------|----------------------------------------------|
-| **Dashboard SPA**   | Browser UI (static assets via CDN)   | `https://<STACK_DOMAIN>` (CloudFront)        |
-| **Api**             | REST API + WebSocket `/attach`       | `https://api.<STACK_DOMAIN>` (public ALB)    |
-| **Proxy**           | `<port>-<id>.proxy.<domain>` previews | `https://*.proxy.<STACK_DOMAIN>` (public ALB) |
-| **Jaeger**          | Trace viewer (no auth)               | internal ALB (set `JAEGER_PUBLIC=true` to expose) |
-| **OtelCollector**   | OTLP ingest + health                 | internal ALB (in-VPC emitters only)          |
-| **PgAdmin**         | Postgres admin UI                    | internal ALB (set `PGADMIN_PUBLIC=true` to expose) |
-| **MailDev**         | Mock SMTP + web UI (no auth)         | internal ALB only — no public option (`MAILDEV_PUBLIC=true` is rejected) |
-| **ClickHouse Cloud** | Managed OTel storage                 | external service; configured by env         |
-| **ClickStack**      | Logs/traces/metrics explorer         | external ClickHouse Cloud UI                |
+| Service              | Purpose                               | Exposure                                                                 |
+| -------------------- | ------------------------------------- | ------------------------------------------------------------------------ |
+| **Dashboard SPA**    | Browser UI (static assets via CDN)    | `https://<STACK_DOMAIN>` (CloudFront)                                    |
+| **Api**              | REST API + WebSocket `/attach`        | `https://api.<STACK_DOMAIN>` (public ALB)                                |
+| **Proxy**            | `<port>-<id>.proxy.<domain>` previews | `https://*.proxy.<STACK_DOMAIN>` (public TLS NLB)                        |
+| **Jaeger**           | Trace viewer (no auth)                | internal ALB (set `JAEGER_PUBLIC=true` to expose)                        |
+| **OtelCollector**    | OTLP ingest + health                  | internal ALB (in-VPC emitters only)                                      |
+| **PgAdmin**          | Postgres admin UI                     | internal ALB (set `PGADMIN_PUBLIC=true` to expose)                       |
+| **MailDev**          | Mock SMTP + web UI (no auth)          | internal ALB only — no public option (`MAILDEV_PUBLIC=true` is rejected) |
+| **ClickHouse Cloud** | Managed OTel storage                  | external service; configured by env                                      |
+| **ClickStack**       | Logs/traces/metrics explorer          | external ClickHouse Cloud UI                                             |
 
-Run `npm run deploy -- --stage dev` without changes to reprint all URLs. See
+Run the `Deploy dev stack` workflow again to redeploy. See
 [Public hostnames](#public-hostnames) below for the rationale behind the
 dashboard-vs-API split.
 
 ## Common commands
 
 ```bash
-npm run deploy -- --stage dev       # deploy / update
+# Preview the protected GitHub deployment environment without mutation.
+gh workflow run deploy-dev-api.yml --ref main -f apply=false
+
+# After the preview passes review, evaluate again and apply the full stack.
+gh workflow run deploy-dev-api.yml --ref main -f apply=true
+
 npm run sst -- diff --stage dev     # preview changes
 npm run sst -- unlock --stage dev   # recover from "concurrent update detected"
 npm run sst -- shell --stage dev    # open shell with SST-linked env vars
-npm run remove -- --stage dev       # destroy everything
 ```
 
-> These route through `scripts/sst-with-cloudflare.mjs` so the Cloudflare provider
-> creds load from SSM. Bare `npx sst …` skips that and can't reach Cloudflare.
+> The workflow routes deployment through `scripts/sst-with-cloudflare.mjs` so
+> Cloudflare credentials load from SSM. Bare `npx sst …` skips that integration.
+> The wrapper also requires the repository's mandatory Runner policy for every
+> `diff` and `deploy`, and requires the SST subcommand to be the first argument.
+> `sst dev` is disabled.
+> Before each diff or deploy it exports the encrypted SST checkpoint, keeps
+> only a non-secret hash of every non-default Runner input except the four
+> deliberately mutable fields (AMI, user data, declared tags, and
+> provider-expanded tags),
+> and compares current state with desired Runner properties. The current SST
+> CLI cannot save and later apply one exact preview plan, so apply performs a
+> fresh state export and evaluation. The policy blocks every Runner create,
+> unsafe property change, changed protection, or changed identity even if the
+> human-readable preview stream is incomplete. A separate actor can still
+> change backend state between that export and Pulumi acquiring its update lock;
+> the protected Environment
+> and serialized workflow reduce this residual window but cannot eliminate it.
 
 ## Runner lifecycle
 
@@ -254,60 +430,107 @@ resource options on `sst.config.ts`'s Runner enforce that:
 
 - `ignoreChanges: ["ami", "userDataBase64"]` — Ubuntu publishes new AMIs
   monthly and Cargo.toml version bumps rewrite the embedded `RUNNER_VERSION`.
-  Without this option, either change would replace the EC2. With it, drift is
-  detected but not acted on.
+  Without this option, either change would replace the EC2. With it, neither
+  change is acted on — a version bump instead reaches the running fleet through
+  the rolling upgrade below.
 - `protect: true` — refuses any deletion attempt, including a stray
   `pulumi destroy` or stack-wide teardown.
 
 ### Upgrading the runner binary
 
 The Runner binary version is pinned to `Cargo.toml`'s `version` field at the
-repo root. To deliver a new runner build without recreating the EC2:
+repo root. Treat a release that changes the API-to-Runner protocol as a
+capability-gated two-phase rollout:
+
+1. Publish the matching Runner tarball and checksum, then deploy the API and
+   infrastructure. The deploy preflight refuses to mutate SST when those
+   assets are absent. Existing detached box creates remain routable to older
+   Runners; requests that need the new foreground/command session capability
+   fail explicitly until a compatible Runner is available.
+2. Upgrade Runners one at a time with the command below. The API filters those
+   requests to Runners at the required version, and each upgraded Runner only
+   becomes schedulable after the control plane reports that exact version.
+
+Routine infrastructure deploys reconcile the full stack. They may update the
+Runner's provider association or tags in place, but the preview gate rejects
+creation, replacement, deletion, or other instance changes. The mandatory
+policy also requires the exact current inventory and identity, `protect: true`,
+only the two intended `ignoreChanges` properties, and equality of all other
+non-default inputs during preview and apply. The EC2 stays in place; a version
+change is delivered during the full deployment by the sequential
+`UpgradeRunnerBinary-*` SSM commands described below.
+
+Detached requests that use legacy Runner capabilities remain available during
+the compatibility window; requests needing the new Runner version fail
+explicitly until the rolling binary upgrade reaches that Runner.
+
+This bounded compatibility window is intentional: silently discarding a
+requested command or foreground lifecycle would be data loss, while sending it
+to an older Runner would be a protocol error.
+
+A version bump then lands on the next deploy:
 
 ```bash
-# Uses the version in Cargo.toml by default; pass an explicit arg to override.
-scripts/deploy/runner-update-binary.sh           # latest from Cargo.toml
-scripts/deploy/runner-update-binary.sh 0.9.5     # explicit
+npm run deploy -- --stage dev
 ```
 
-The script uses AWS SSM Run Command to download the release tarball from
-GitHub Releases and verify its SHA-256 *before* stopping the systemd unit — so
-a failed or corrupt fetch never takes the runner down — then backs up the live
-binary, swaps `/usr/local/bin/boxlite-runner`, and restarts. If the new binary
-fails to come up, it performs a rollback to the backup. Box state under
-`/var/lib/boxlite` is untouched.
+`sst.config.ts` declares one `UpgradeRunnerBinary-*` command per Runner, each
+depending on the previous one. The intent is that the fleet upgrades **one host
+at a time** — the dependency chain, rather than anything in the script, is what
+should keep two Runners from restarting at once, and a failed host should stop
+the roll with the hosts not yet visited still serving. Each command runs
+[`scripts/runner-update-binary.mjs`](scripts/runner-update-binary.mjs) against a
+single instance id taken straight from the Pulumi graph, so extra Runners
+(`RUNNERS > 1`) are covered too. The sequencing has not yet been observed on a
+real deploy — only the script's own sequential loop has.
 
-### Deliberate decommission (three-step ceremony)
+Per host, over AWS SSM Run Command: the release tarball and its SHA-256 sidecar
+are downloaded and verified before the systemd unit is stopped — so a failed,
+missing-sidecar, or corrupt fetch never takes the Runner down — then the live
+binary is backed up, `/usr/local/bin/boxlite-runner` swapped, and the unit
+restarted. The host counts as done only once the Runner's HTTP health route
+reports the new version; if it does not come up, the backup is restored and the
+command fails. Asset URLs and the stable-version rule come from
+[`runner-release-assets.mjs`](scripts/runner-release-assets.mjs), the same
+resolver the deploy preflight uses, so an unreleasable target is rejected before
+any host is touched. The binary itself exposes no `--version` flag, so its health
+route is the only version oracle available here.
 
-When you actually need to replace the Runner (failed disk, security incident,
-major version upgrade with on-disk format change), it is a multi-edit
-operation by design:
+The step is a converge, not a reinstall. A host is left completely alone when it
+is already serving the target version, when it is still bootstrapping (its
+user-data installs that same version anyway), or when it is serving something
+**newer** than `Cargo.toml` declares — that last case is refused rather than
+silently reverted, since a Runner ahead of the repo is usually a deliberate
+hand-install. Version ordering understands prereleases: `0.9.10` outranks
+`0.9.9`, and `0.9.8-alpha` is treated as older than `0.9.8`, so promoting a
+prerelease host to the matching release is an upgrade, not a refused downgrade.
 
-1. Verify no `running` boxes are pinned to this Runner (DB query against
-   `box.runnerId`).
-2. Edit `sst.config.ts`: change `protect: true` to `protect: false` on the
-   Runner resource. Run `npm run deploy -- --stage <stage>`. This only updates
-   the resource metadata; the EC2 is not yet touched.
-3. Destroy the EC2:
+To upgrade out of band — after an interrupted roll, or to pin a version without
+deploying:
 
-   ```bash
-   npx pulumi destroy --target 'urn:pulumi:<stage>::boxlite::aws:ec2/instance:Instance::Runner'
-   ```
+```bash
+npm run runner:update              # version from Cargo.toml, every running Runner
+npm run runner:update -- 0.9.5     # explicit version
+INSTANCE_IDS=i-0abc… npm run runner:update   # one specific host
+ALLOW_DOWNGRADE=1 npm run runner:update -- 0.9.5   # deliberate rollback
+```
 
-4. Edit `sst.config.ts`: change `protect: false` back to `protect: true`. Run
-   `npm run deploy` again — a new Runner is created with fresh state.
+> The Runner is **not** drained first. Files under `/var/lib/boxlite` survive,
+> but boxes running on the host being upgraded take the restart; the unit's
+> `TimeoutStopSec=60` only buys a graceful VM shutdown. Cordoning through the
+> admin API (`PATCH /runners/:id/scheduling`) would need a control-plane Runner
+> id, an operator key, and the organization-infrastructure flag, none of which
+> the deploy path has — so treat any Runner upgrade as disruptive and drain it
+> yourself when that matters.
 
-This is deliberate by construction: three code edits across two deploys. If
-you find yourself doing this often, look at the future drain API (tracked
-separately) instead of streamlining the ceremony.
+### Runner decommission and recovery
 
-### Future: control-plane drain (`runner.state` enum)
-
-The current state is single-Runner with manual decommission. A future phase
-will add a `runner.state` enum (`initializing`, `ready`, `disabled`,
-`decommissioned`, `unresponsive`) and admin endpoints to drain a Runner via
-the API, mirroring the upstream Daytona model. Multi-Runner Pulumi shape
-follows that. Not yet implemented.
+The routine workflow intentionally does not provision, decommission, or recover
+Runner EC2 instances. Do not change `protect: true` or edit SST state as part of
+a normal deployment. A separate reviewed runbook must cover control-plane
+draining, pinned-box checks, the exact cloud and SST-state operations, and
+post-operation verification before any Runner is removed or recreated. That
+break-glass operation is not implemented in this repository yet.
 
 ## Architecture
 
@@ -321,9 +544,9 @@ follows that. Not yet implemented.
                                      api.<STACK_DOMAIN>
                                      idle_timeout=1h  (for long WS sessions)
 
-  Browser ───▶ Proxy ALB ───▶ box port (toolbox + user-app previews)
+  Browser ───▶ Proxy NLB ───▶ Proxy ECS ───▶ box port (toolbox + user-app previews)
                 proxy.<STACK_DOMAIN> + *.proxy.<STACK_DOMAIN>
-                idle_timeout=1h
+                TLS:443 → TCP:4000
 
                           ┌───────┬────────┬────────┐
                           │  RDS  │ Redis  │   S3   │  Api → DB/Redis (linked);
@@ -352,7 +575,7 @@ is fine; ignore it.
 **Api crashes with `Failed to fetch OpenID configuration`** — the API can't
 reach `<OIDC_ISSUER_BASE_URL>/.well-known/openid-configuration`. Check network
 egress from the API container to the IdP, and confirm `OIDC_ISSUER_BASE_URL`
-points at a working host. apps/api strips a trailing slash *only* when composing
+points at a working host. apps/api strips a trailing slash _only_ when composing
 its own internal discovery URL; the value is exposed to clients via `/api/config`
 verbatim — see the next two entries.
 
@@ -361,7 +584,7 @@ verbatim — see the next two entries.
 under `issuer`. Auth0 always reports the issuer with a trailing slash; spec-
 compliant OIDC clients (including the Rust CLI's `openidconnect` crate)
 demand byte-for-byte match. Fix: set `OIDC_ISSUER_BASE_URL` to the form your
-IdP returns (Auth0: `https://dev-xxxxx.us.auth0.com/` *with* slash). See
+IdP returns (Auth0: `https://dev-xxxxx.us.auth0.com/` _with_ slash). See
 the OIDC setup section above. The Rust CLI tolerates this with a one-shot
 retry that toggles the trailing slash, so the user-visible failure here is
 typically the web dashboard, not the CLI — but treat any `unexpected issuer
@@ -392,24 +615,32 @@ missing `email_verified` claim. Deploy the Post-Login Action described above.
 systemd logs (`aws ssm start-session` → `journalctl -u boxlite-runner`) for auth
 or connectivity errors to the API.
 
-**Box preview URL returns 503** — Proxy service may need a force-redeploy after
-initial setup: `aws ecs update-service --force-new-deployment --service Proxy`.
+**Box preview cannot connect** — verify that the NLB listener target group
+matches the Proxy ECS service attachment and has a registered target. Do not
+switch the listener to a replacement target group until its Proxy target passes
+`/health`.
+
+**Dashboard terminal cannot connect** — the terminal uses the direct API host,
+not the Proxy NLB. Verify `https://api.<STACK_DOMAIN>/api/config`, the API ECS
+service, and the dashboard's configured API base URL.
 
 **Docker build fails with "broken pipe"** — transient ECR push failure. Retry deploy.
 
 ## Cost (ap-southeast-1, always-on)
 
-| Resource                              | Monthly |
-|---------------------------------------|---------|
-| EC2 c8i.2xlarge (Runner)              | ~$325   |
-| Load balancers (6 ALB + 1 NLB)        | ~$115   |
-| 7x Fargate 0.25 vCPU / 0.5 GB         | ~$65    |
-| 2x NAT EC2 (`t4g.nano`) + public IPv4 | ~$16    |
-| RDS `t4g.micro` Postgres              | ~$15    |
-| ElastiCache Redis                     | ~$15    |
-| CloudFront + S3 + CloudWatch Logs     | ~$20    |
+| Resource                              | Monthly   |
+| ------------------------------------- | --------- |
+| EC2 c8i.2xlarge (Runner)              | ~$325     |
+| Load balancers (5 ALB + 2 NLB)        | ~$115     |
+| 7x Fargate 0.25 vCPU / 0.5 GB         | ~$65      |
+| 2x NAT EC2 (`t4g.nano`) + public IPv4 | ~$16      |
+| RDS `t4g.micro` Postgres              | ~$15      |
+| ElastiCache Redis                     | ~$15      |
+| CloudFront + S3 + CloudWatch Logs     | ~$20      |
 | **Total**                             | **~$570** |
 
 Figures are approximate (ap-southeast-1 on-demand). The **Runner and the load
-balancers dominate** — the NAT is ~$16, not a headline cost. `npm run remove -- --stage dev` tears it all down; S3 buckets and RDS snapshots are retained in
-production stage (`--stage production`) per SST's default.
+balancers dominate** — the NAT is ~$16, not a headline cost. Whole-stack removal
+requires a separate reviewed Proxy and Runner decommission runbook, which is not
+implemented here. S3 buckets and RDS snapshots are retained in production
+(`--stage production`) per SST's default.

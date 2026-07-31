@@ -288,7 +288,7 @@ impl ImageObject {
         for layer in &self.manifest.layers {
             hasher.update(layer.digest.as_bytes());
         }
-        format!("sha256:{:x}", hasher.finalize())
+        format!("sha256:{}", hex::encode(hasher.finalize()))
     }
 
     // ========================================================================

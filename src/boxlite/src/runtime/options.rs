@@ -718,6 +718,20 @@ impl From<&NetworkSpec> for NetworkConfig {
 /// - `"*.example.com"` — wildcard subdomain
 /// - `"192.168.1.1"` — exact IP
 /// - `"10.0.0.0/8"` — CIDR range
+///
+/// A non-empty `allow_net` restricts both TCP and UDP egress. The two
+/// transports enforce it differently:
+/// - IP and CIDR rules are matched against the destination address, so they
+///   apply to TCP and UDP alike.
+/// - Hostname rules are enforced by inspecting the TLS SNI or HTTP Host
+///   header, which only TCP carries. UDP has no equivalent, so an
+///   `allow_net` holding **only** hostnames denies all UDP egress —
+///   otherwise a guest could sidestep the rule by addressing the resolved IP
+///   directly. QUIC/HTTP3 to such a host falls back to TCP; add the IP or
+///   CIDR to `allow_net` to keep UDP open.
+///
+/// The gateway's DNS resolver and DHCP are unaffected: they are internal
+/// services, not egress.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum NetworkSpec {
     /// Network enabled. Empty `allow_net` = full access.

@@ -1,21 +1,18 @@
 //! Guest rootfs types and metadata.
 
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::disk::{
     BaseDisk, BaseDiskKind, BaseDiskManager, Disk, DiskFormat, inject_file_into_ext4,
-    read_backing_file_path,
 };
 use crate::images::{ImageDiskManager, ImageObject};
 #[cfg(test)]
 use crate::runtime::id::BaseDiskID;
 use crate::runtime::id::BaseDiskIDMint;
-use crate::util;
+use crate::vmm::guest_binary::GuestBinary;
 
 /// A fully resolved and ready-to-use guest rootfs.
 ///
@@ -262,7 +259,6 @@ impl GuestRootfs {
 pub struct GuestRootfsManager {
     base_disk_mgr: BaseDiskManager,
     temp_dir: PathBuf,
-    guest_hash: OnceLock<Result<String, String>>,
 }
 
 /// Sentinel source_box_id for global rootfs cache entries.
@@ -273,18 +269,6 @@ impl GuestRootfsManager {
         Self {
             base_disk_mgr,
             temp_dir,
-            guest_hash: OnceLock::new(),
-        }
-    }
-
-    /// Get the cached guest binary hash, computing it once on first access.
-    fn cached_guest_hash(&self) -> BoxliteResult<&str> {
-        let cached = self
-            .guest_hash
-            .get_or_init(|| Self::guest_binary_hash().map_err(|e| e.to_string()));
-        match cached {
-            Ok(hash) => Ok(hash.as_str()),
-            Err(msg) => Err(BoxliteError::Storage(msg.clone())),
         }
     }
 
@@ -312,17 +296,13 @@ impl GuestRootfsManager {
 
         // Stage 2: versioned guest rootfs
         let digest = image.compute_image_digest();
-        let hash_start = std::time::Instant::now();
-        let guest_hash = self.cached_guest_hash()?;
-        tracing::info!(
-            elapsed_ms = hash_start.elapsed().as_millis() as u64,
-            "get_or_create: cached_guest_hash done"
-        );
-        let version_key = Self::version_key(&digest, guest_hash);
+        let guest = GuestBinary::get()?;
+        let version_key = Self::version_key(&digest, guest.id());
 
         if let Some(disk) = self.find(&version_key) {
             tracing::info!(
                 version_key = %version_key,
+                commit = boxlite_shared::GIT_COMMIT.unwrap_or("unknown"),
                 total_ms = total_start.elapsed().as_millis() as u64,
                 "get_or_create: CACHE HIT"
             );
@@ -333,9 +313,7 @@ impl GuestRootfsManager {
             version_key = %version_key,
             "get_or_create: CACHE MISS — building guest rootfs"
         );
-        let disk = self
-            .build_and_install(&image_disk, &digest, &version_key)
-            .await?;
+        let disk = self.build_and_install(&image_disk, &version_key).await?;
 
         tracing::info!(
             total_ms = total_start.elapsed().as_millis() as u64,
@@ -389,14 +367,9 @@ impl GuestRootfsManager {
 
     /// Build guest rootfs from image disk and atomically install.
     ///
-    /// Verifies the actual guest binary hash against the expected version key.
-    /// If the compile-time hash is stale, uses the actual hash for the version key.
-    async fn build_and_install(
-        &self,
-        image_disk: &Disk,
-        digest: &str,
-        expected_version_key: &str,
-    ) -> BoxliteResult<Disk> {
+    /// Injects the same [`GuestBinary`] the caller keyed `version_key` on, so
+    /// what is cached always matches what the key names.
+    async fn build_and_install(&self, image_disk: &Disk, version_key: &str) -> BoxliteResult<Disk> {
         let build_start = std::time::Instant::now();
 
         // Stage: copy image disk to temp, inject guest binary there
@@ -424,54 +397,25 @@ impl GuestRootfsManager {
             "build_and_install: copy image disk done"
         );
 
-        // Inject guest binary into staged disk via debugfs
+        // Inject the guest binary the version key was derived from. Resolution
+        // and validation already happened in `GuestBinary::get`, so there is no
+        // second lookup that could pick a different file.
         let inject_start = std::time::Instant::now();
-        let guest_bin = util::find_binary("boxlite-guest")?;
+        let guest = GuestBinary::get()?;
 
-        // Pre-flight: validate guest binary is a valid ELF for this architecture
-        crate::vmm::guest_check::validate_guest_binary(&guest_bin)?;
-
-        // Verify the actual guest binary hash matches what we expected.
-        // The compile-time hash (from build.rs) may be stale if the guest
-        // binary was rebuilt after boxlite was compiled.
-        let actual_hash = Self::sha256_file(&guest_bin)?;
-        let actual_version_key = Self::version_key(digest, &actual_hash);
-
-        if actual_version_key != expected_version_key {
-            if option_env!("BOXLITE_GUEST_HASH").is_some() {
-                // Compile-time hash exists but doesn't match the actual binary.
-                // This means boxlite was compiled against a different guest binary
-                // than what's found at runtime — an inconsistent build.
-                return Err(BoxliteError::Internal(format!(
-                    "Guest binary hash mismatch: compile-time key {} but actual key {}. \
-                     Rebuild boxlite to fix.",
-                    expected_version_key, actual_version_key
-                )));
-            }
-            // No compile-time hash (fallback mode) — use actual hash
-            tracing::info!(
-                expected = %expected_version_key,
-                actual = %actual_version_key,
-                "No compile-time hash, using actual guest hash"
-            );
-            // Check cache with actual key — might already exist
-            if let Some(disk) = self.find(&actual_version_key) {
-                return Ok(disk);
-            }
-        }
-
-        inject_file_into_ext4(&staged_path, &guest_bin, "boxlite/bin/boxlite-guest")?;
+        inject_file_into_ext4(&staged_path, guest.path(), "boxlite/bin/boxlite-guest")?;
         tracing::info!(
             elapsed_ms = inject_start.elapsed().as_millis() as u64,
             "build_and_install: inject guest binary done"
         );
 
-        // Atomic install: use the actual version key (may differ from expected)
         let staged_disk = Disk::new(staged_path, DiskFormat::Ext4, false);
-        let result = self.install(&actual_version_key, staged_disk);
+        let result = self.install(version_key, staged_disk);
 
         tracing::info!(
-            version_key = %actual_version_key,
+            version_key = %version_key,
+            commit = boxlite_shared::GIT_COMMIT.unwrap_or("unknown"),
+            guest_id = %guest.id(),
             total_ms = build_start.elapsed().as_millis() as u64,
             "build_and_install: completed"
         );
@@ -564,16 +508,12 @@ impl GuestRootfsManager {
     pub fn gc(&self, boxes_dir: &Path) -> BoxliteResult<usize> {
         let gc_start = std::time::Instant::now();
 
-        // Compute current guest hash prefix to identify current-version entries.
         // Version keys are "{image_12}-{guest_12}", so entries whose name ends
-        // with the current guest hash suffix are still valid for future boxes.
-        let current_guest_suffix = match self.cached_guest_hash() {
-            Ok(hash) => {
-                let g = &hash[..12.min(hash.len())];
-                format!("-{}", g)
-            }
+        // with the current guest id are still valid for future boxes.
+        let current_guest_suffix = match GuestBinary::get() {
+            Ok(guest) => format!("-{}", guest.id()),
             Err(e) => {
-                tracing::warn!("GC: cannot determine current guest hash, skipping: {}", e);
+                tracing::warn!("GC: cannot resolve the guest binary, skipping: {}", e);
                 return Ok(0);
             }
         };
@@ -593,7 +533,9 @@ impl GuestRootfsManager {
     ///
     /// Queries the DB for all rootfs entries, then determines which to keep:
     /// - Entries whose version key (name) ends with `current_guest_suffix`
-    /// - Entries whose base_path is referenced by a box's `disks/guest-rootfs.qcow2`
+    /// - Entries whose base_path any box overlay backs onto (see
+    ///   [`BaseDiskManager::referenced_backing_paths`], which covers both
+    ///   `disk.qcow2` and `disks/guest-rootfs.qcow2`)
     fn gc_inner(&self, boxes_dir: &Path, current_guest_suffix: &str) -> BoxliteResult<usize> {
         let records = self
             .base_disk_mgr
@@ -605,7 +547,7 @@ impl GuestRootfsManager {
         }
 
         // Collect all referenced backing file paths from box qcow2 overlays.
-        let referenced = Self::collect_referenced_rootfs_paths(boxes_dir);
+        let referenced = self.base_disk_mgr.referenced_backing_paths(boxes_dir);
 
         tracing::info!(
             referenced_count = referenced.len(),
@@ -667,106 +609,7 @@ impl GuestRootfsManager {
         Ok(removed)
     }
 
-    /// Collect all backing file paths referenced by boxes' guest-rootfs.qcow2 overlays.
-    fn collect_referenced_rootfs_paths(boxes_dir: &Path) -> HashSet<PathBuf> {
-        let mut referenced = HashSet::new();
-
-        if !boxes_dir.exists() {
-            return referenced;
-        }
-
-        let entries = match fs::read_dir(boxes_dir) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!(
-                    "GC: failed to read boxes dir {}: {}",
-                    boxes_dir.display(),
-                    e
-                );
-                return referenced;
-            }
-        };
-
-        for entry in entries.flatten() {
-            // Correct path: boxes/{box_id}/disks/guest-rootfs.qcow2
-            let qcow2_path = entry.path().join("disks").join("guest-rootfs.qcow2");
-            if !qcow2_path.exists() {
-                continue;
-            }
-
-            match read_backing_file_path(&qcow2_path) {
-                Ok(Some(backing_path)) => {
-                    referenced.insert(PathBuf::from(backing_path));
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to read backing file from {}: {}",
-                        qcow2_path.display(),
-                        e
-                    );
-                }
-            }
-        }
-
-        referenced
-    }
-
-    /// Compute SHA256 hash of the boxlite-guest binary.
-    ///
-    /// Uses compile-time hash (embedded by build.rs) when available,
-    /// falling back to runtime computation.
-    fn guest_binary_hash() -> BoxliteResult<String> {
-        // Fast path: use compile-time hash embedded by build.rs
-        if let Some(hash) = option_env!("BOXLITE_GUEST_HASH") {
-            tracing::info!(
-                hash_prefix = &hash[..12.min(hash.len())],
-                "guest_binary_hash: using compile-time hash"
-            );
-            return Ok(hash.to_string());
-        }
-
-        let guest_bin = util::find_binary("boxlite-guest")?;
-        Self::sha256_file(&guest_bin)
-    }
-
-    /// Compute SHA256 hex digest of a file.
-    fn sha256_file(path: &Path) -> BoxliteResult<String> {
-        use sha2::{Digest, Sha256};
-        use std::io::Read;
-
-        let start = std::time::Instant::now();
-        let mut file = fs::File::open(path).map_err(|e| {
-            BoxliteError::Storage(format!("Failed to open {}: {}", path.display(), e))
-        })?;
-
-        let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
-
-        let mut hasher = Sha256::new();
-        let mut buffer = vec![0u8; 64 * 1024];
-        loop {
-            let n = file.read(&mut buffer).map_err(|e| {
-                BoxliteError::Storage(format!("Failed to read {}: {}", path.display(), e))
-            })?;
-            if n == 0 {
-                break;
-            }
-            hasher.update(&buffer[..n]);
-        }
-
-        let hash = format!("{:x}", hasher.finalize());
-        tracing::info!(
-            path = %path.display(),
-            size_mb = file_size / (1024 * 1024),
-            elapsed_ms = start.elapsed().as_millis() as u64,
-            hash_prefix = &hash[..12.min(hash.len())],
-            "sha256_file computed"
-        );
-
-        Ok(hash)
-    }
-
-    /// Compute the version key from image digest and guest binary hash.
+    /// Compute the version key from image digest and guest binary id.
     fn version_key(digest: &str, guest_hash: &str) -> String {
         let d = digest.strip_prefix("sha256:").unwrap_or(digest);
         let d = &d[..12.min(d.len())];
@@ -834,6 +677,56 @@ mod tests {
     fn test_version_key_short_inputs() {
         let key = GuestRootfsManager::version_key("abc", "def");
         assert_eq!(key, "abc-def");
+    }
+
+    /// Rebuilding the guest must move the cache key, so an existing entry is not
+    /// reused for a different binary.
+    ///
+    /// Same verification caveat as `guest_binary::id_tracks_the_bytes_on_disk`:
+    /// this composes `GuestBinary::resolve_at`, which the fix introduces, so a
+    /// full production revert stops it compiling instead of failing it. It was
+    /// checked by mutation (digest the path, not the bytes) and by a booted VM.
+    #[test]
+    fn version_key_follows_the_guest_binary_on_disk() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let digest = "sha256:18264223e3ecaaaabbbbccccdddd";
+
+        // One path, rewritten — what `make guest` does. Distinct paths would let
+        // an implementation that keyed on the path alone pass this test.
+        let write_guest = |filler: u8| {
+            let path = dir.path().join("boxlite-guest");
+            let mut elf = vec![0u8; 128];
+            elf[..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+            elf[4] = 2;
+            let machine: u16 = if std::env::consts::ARCH == "x86_64" {
+                0x3E
+            } else {
+                0xB7
+            };
+            elf[18..20].copy_from_slice(&machine.to_le_bytes());
+            elf[64..].fill(filler);
+            std::fs::write(&path, elf).unwrap();
+            path
+        };
+
+        let before = GuestBinary::resolve_at(write_guest(0xAA)).unwrap();
+        let after = GuestBinary::resolve_at(write_guest(0xBB)).unwrap();
+
+        let key_before = GuestRootfsManager::version_key(digest, before.id());
+        let key_after = GuestRootfsManager::version_key(digest, after.id());
+
+        assert_ne!(
+            key_before, key_after,
+            "a rebuilt guest must not reuse the previous rootfs cache entry"
+        );
+        // Same image, so only the guest half may move — otherwise every image
+        // would rebuild whenever the guest changed.
+        assert_eq!(
+            key_before[..12],
+            key_after[..12],
+            "image half must be stable"
+        );
+        assert!(key_after.ends_with(after.id()), "GC matches on this suffix");
     }
 
     #[test]

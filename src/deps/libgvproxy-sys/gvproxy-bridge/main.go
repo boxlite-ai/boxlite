@@ -427,14 +427,20 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 			return
 		}
 
-		// Override TCP handler with AllowNet filter and/or MITM secret substitution
+		// Override the TCP and UDP handlers with the AllowNet filter and/or
+		// MITM secret substitution
 		if len(config.AllowNet) > 0 || instance.secretMatcher != nil {
-			var tcpFilter *TCPFilter
+			var allowNetFilter *AllowNetFilter
 			if len(config.AllowNet) > 0 {
-				tcpFilter = NewTCPFilter(config.AllowNet, config.GatewayIP, config.GuestIP, config.HostIP)
+				allowNetFilter = NewAllowNetFilter(config.AllowNet, config.GatewayIP, config.GuestIP, config.HostIP)
 			}
-			if err := OverrideTCPHandler(vn, tapConfig, tapConfig.Ec2MetadataAccess, tcpFilter, instance.ca, instance.secretMatcher); err != nil {
-				logrus.WithError(err).Error("TCP: failed to override handler")
+			// Fatal on purpose: the handlers left behind are upstream's
+			// unfiltered forwarders, so a box that starts anyway would carry
+			// an allow_net the caller believes in and the network ignores.
+			if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, allowNetFilter, instance.ca, instance.secretMatcher); err != nil {
+				logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("allowNet: failed to install transport handlers")
+				initErr <- fmt.Errorf("failed to install allow_net transport handlers: %w", err)
+				return
 			}
 		}
 

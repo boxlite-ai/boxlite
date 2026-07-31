@@ -20,6 +20,7 @@ pub(in crate::service) mod error;
 #[cfg(target_os = "linux")]
 pub mod exec_handle;
 pub(in crate::service) mod executor;
+mod output;
 pub(in crate::service) mod registry;
 pub(in crate::service) mod state;
 mod timeout;
@@ -64,7 +65,7 @@ impl GuestServer {
     pub(crate) async fn attach_execution(
         &self,
         exec_id: &str,
-    ) -> Result<mpsc::Receiver<ExecOutput>, ExecutionError> {
+    ) -> Result<mpsc::Receiver<Result<ExecOutput, Status>>, ExecutionError> {
         info!(execution_id = %exec_id, "attach request");
         self.execution(exec_id).await?.attach(exec_id).await
     }
@@ -194,7 +195,7 @@ impl Execution for GuestServer {
         let rx = self
             .attach_execution(&request.into_inner().execution_id)
             .await?;
-        let stream = ReceiverStream::new(rx).map(Ok);
+        let stream = ReceiverStream::new(rx);
         Ok(Response::new(Box::pin(stream) as Self::AttachStream))
     }
 

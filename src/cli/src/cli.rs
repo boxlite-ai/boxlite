@@ -628,9 +628,12 @@ pub struct NetworkFlags {
     #[arg(long = "network", value_name = "MODE")]
     pub network: Option<String>,
 
-    /// Restrict egress to the listed hosts/IPs (repeatable); everything else
-    /// is DNS-sinkholed. Implies network=enabled. Patterns: exact host,
-    /// "*.example.com", IP, or CIDR. Incompatible with `--network disabled`.
+    /// Restrict TCP and UDP egress to the listed hosts/IPs (repeatable);
+    /// everything else is DNS-sinkholed and dropped. Implies network=enabled.
+    /// Patterns: exact host, "*.example.com", IP, or CIDR. Hostname rules need
+    /// TLS SNI / HTTP Host inspection, so a hostname-only list denies all UDP;
+    /// add the IP or CIDR to keep UDP open. Incompatible with `--network
+    /// disabled`.
     #[arg(long = "allow-net", value_name = "HOST")]
     pub allow_net: Vec<String>,
 }

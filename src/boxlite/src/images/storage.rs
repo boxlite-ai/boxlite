@@ -155,7 +155,7 @@ impl ImageStorage {
 
         let mut hasher = Sha256::new();
         hasher.update(&file_data);
-        let computed_hash = format!("sha256:{:x}", hasher.finalize());
+        let computed_hash = format!("sha256:{}", hex::encode(hasher.finalize()));
 
         if computed_hash != digest {
             tracing::error!(
@@ -485,7 +485,7 @@ impl<W> HashingWriter<W> {
     /// Consume the writer and return (inner_writer, hex_hash, bytes_written).
     pub fn finalize(self) -> (W, String, u64) {
         use sha2::Digest;
-        let hash = format!("{:x}", self.hasher.finalize());
+        let hash = hex::encode(self.hasher.finalize());
         (self.inner, hash, self.bytes_written)
     }
 }
@@ -812,7 +812,7 @@ mod tests {
         use tokio::io::AsyncWriteExt;
 
         let data = b"hello world - hashing writer test";
-        let expected_hash = format!("{:x}", sha2::Sha256::digest(data));
+        let expected_hash = hex::encode(sha2::Sha256::digest(data));
 
         let buf = Vec::new();
         let mut writer = HashingWriter::new(buf);
@@ -834,7 +834,7 @@ mod tests {
         use sha2::Digest;
         use tokio::io::AsyncWriteExt;
 
-        let hash = format!("{:x}", sha2::Sha256::digest(content));
+        let hash = hex::encode(sha2::Sha256::digest(content));
         let digest = format!("sha256:{}", hash);
         let mut staged = store
             .stage_layer_download(&digest, expected_size)

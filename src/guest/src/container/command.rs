@@ -307,12 +307,13 @@ impl ContainerCommand {
 
         tracing::debug!(pid = pid.as_raw(), "spawned with pipes");
         // Non-PTY mode: stdout and stderr are separate pipes
-        Ok(ExecHandle::new(
-            pid,
-            stdin_write,
-            stdout_read,
-            Some(stderr_read),
-        ))
+        match ExecHandle::new(pid, stdin_write, stdout_read, Some(stderr_read)) {
+            Ok(handle) => Ok(handle),
+            Err(error) => {
+                terminate_process(pid);
+                Err(error)
+            }
+        }
     }
 
     /// Build phase of PTY spawn: zygote IPC only, no console-socket handshake.
@@ -493,7 +494,13 @@ impl SpawnedPty {
     /// Call this AFTER releasing the container mutex — the handshake
     /// does not need serialization.
     pub(crate) fn finish(self) -> BoxliteResult<ExecHandle> {
-        let pty_master = self.socket.receive_pty_master()?;
+        let pty_master = match self.socket.receive_pty_master() {
+            Ok(pty_master) => pty_master,
+            Err(error) => {
+                terminate_process(self.pid);
+                return Err(error);
+            }
+        };
         create_pty_child(self.pid, pty_master, self.config)
     }
 }
@@ -510,16 +517,40 @@ pub(crate) fn create_pty_child(
     pty_master: OwnedFd,
     config: PtyConfig,
 ) -> BoxliteResult<ExecHandle> {
-    set_pty_window_size(&pty_master, &config)?;
-    crate::service::exec::tty::apply_modes(&pty_master, &config.modes)?;
-    let (stdin, stdout) = reconcile_pty_fds(&pty_master)?;
+    if let Err(error) = set_pty_window_size(&pty_master, &config) {
+        terminate_process(pid);
+        return Err(error);
+    }
+    if let Err(error) = crate::service::exec::tty::apply_modes(&pty_master, &config.modes) {
+        terminate_process(pid);
+        return Err(error);
+    }
+    let (stdin, stdout) = match reconcile_pty_fds(&pty_master) {
+        Ok(fds) => fds,
+        Err(error) => {
+            terminate_process(pid);
+            return Err(error);
+        }
+    };
 
     // PTY mode: stderr is None (merged into stdout)
-    let mut child = ExecHandle::new(pid, stdin, stdout, None);
+    let mut child = match ExecHandle::new(pid, stdin, stdout, None) {
+        Ok(handle) => handle,
+        Err(error) => {
+            terminate_process(pid);
+            return Err(error);
+        }
+    };
     let pty_controller = pty_master_to_file(pty_master);
     child.set_pty(pty_controller, config);
 
     Ok(child)
+}
+
+pub(super) fn terminate_process(pid: Pid) {
+    let _fence = crate::reaper::reap_fence();
+    let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+    let _ = nix::sys::wait::waitpid(pid, None);
 }
 
 /// Set PTY terminal window size via ioctl.

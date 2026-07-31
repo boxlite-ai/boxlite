@@ -1,4 +1,4 @@
-PHONY_TARGETS += test test\:unit\:guest
+PHONY_TARGETS += test test\:unit\:guest _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -362,8 +362,25 @@ test\:all\:go:
 # Without the tag, `go test` uses bridge_cgo_prebuilt.go, which needs the
 # downloaded sdks/go/{libboxlite.a,include} bundle (absent on dev checkouts)
 # and fails #579. Same pattern as test:unit:go above.
+_ensure-infra-deps:
+	@if [ ! -d apps/infra/node_modules ]; then \
+		echo "📦 Installing SST deployment dependencies..."; \
+		cd apps/infra && npm ci --no-audit --no-fund; \
+	fi
+
+test\:apps\:infra: _ensure-infra-deps
+	@echo "🧪 Running infrastructure script tests..."
+	@cd apps/infra && npm test
+
+test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
+	@echo "🧪 Installing and type-checking the SST deployment config..."
+	@cd apps/infra && IAM_PERMISSIONS_BOUNDARY_STAGE=ci npm run sst -- install --stage ci
+	@cd apps/infra && ../node_modules/.bin/tsc --noEmit --allowJs --checkJs false \
+		--module NodeNext --moduleResolution NodeNext --target ES2022 --skipLibCheck sst.config.ts
+
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
+	@$(MAKE) test:apps:infra
 	@cd apps && GOFLAGS=-tags=boxlite_dev yarn nx run-many --target=test --all --parallel=$$(getconf _NPROCESSORS_ONLN) $(if $(FILTER),-- --testNamePattern '$(FILTER)',)
 
 test\:rest\:inventory: _ensure-apps-deps

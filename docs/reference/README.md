@@ -156,6 +156,14 @@ Structured network configuration for outbound connectivity.
 - `"enabled"` gives the guest outbound connectivity.
 - `"disabled"` removes the guest network interface entirely.
 - Empty or omitted `allow_net` means full outbound access.
+- A non-empty `allow_net` restricts both TCP and UDP egress. IP and CIDR rules
+  match the destination address and apply to both. Hostname rules are enforced
+  by inspecting TLS SNI / HTTP Host, which only TCP carries, so an `allow_net`
+  holding **only** hostnames denies all UDP egress — otherwise a guest could
+  sidestep the rule by addressing the resolved IP directly. QUIC/HTTP3 to such
+  a host falls back to TCP; add the IP or CIDR to keep UDP open.
+- The gateway's DNS resolver and DHCP are internal services and stay reachable
+  regardless of `allow_net`.
 - `host.boxlite.internal` is always available as a built-in hostname for
   reaching host loopback services and is not governed by `allow_net`.
 - Security: when networking is enabled, any service bound to host loopback can

@@ -61,14 +61,8 @@ describe('validateLifecyclePolicy', () => {
   })
 
   it('rejects invalid sentinels and delete deadlines that do not follow pause', () => {
-    expect(validateLifecyclePolicy({ autoPauseIntervalSeconds: -1, autoDelete: 0 })).toMatch(
-      /Auto-pause/,
-    )
-    expect(validateLifecyclePolicy({ autoPauseIntervalSeconds: 900, autoDelete: -1 })).toMatch(
-      /Auto-delete/,
-    )
-    expect(validateLifecyclePolicy({ autoPauseIntervalSeconds: 900, autoDelete: 900 })).toMatch(
-      /greater than/,
-    )
+    expect(validateLifecyclePolicy({ autoPauseIntervalSeconds: -1, autoDelete: 0 })).toMatch(/Auto-pause/)
+    expect(validateLifecyclePolicy({ autoPauseIntervalSeconds: 900, autoDelete: -1 })).toMatch(/Auto-delete/)
+    expect(validateLifecyclePolicy({ autoPauseIntervalSeconds: 900, autoDelete: 900 })).toMatch(/greater than/)
   })
 })
