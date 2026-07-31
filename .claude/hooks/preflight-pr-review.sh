@@ -157,26 +157,50 @@ if (( body_supplied )); then
   has_line '^[[:space:]]*#{2,}[[:space:]]*call[[:space:]]+graph[[:space:]]*$' \
     || missing+="
   - a '## Call graph' section"
-  has_line '^[[:space:]]*before([[:space:]]|:|$)' \
+  # Shared with the Before-section extractor below, so the header shape can
+  # never drift between "is there a Before label" and "where does Before end".
+  before_re='^[[:space:]]*before([[:space:]]|:|$)'
+  after_re='^[[:space:]]*after([[:space:]]|:|$)'
+  has_line "$before_re" \
     || missing+="
   - a 'Before' graph"
-  has_line '^[[:space:]]*after([[:space:]]|:|$)' \
+  has_line "$after_re" \
     || missing+="
   - an 'After' graph"
 
   # Hops must be real: `fn_name (Type · path/file.ext:LOC)`. Requiring two
   # file:LOC references is what an unfilled template cannot fake — its Before
   # and After labels are literal text, but its hop lines are HTML comments.
-  hop_lines="$(grep -cE '[A-Za-z0-9_./-]+\.[A-Za-z]+:[0-9]+' <<<"$pr_body" || true)"
+  hop_re='[A-Za-z0-9_./-]+\.[A-Za-z]+:[0-9]+'
+  hop_lines="$(grep -cE "$hop_re" <<<"$pr_body" || true)"
   (( hop_lines >= 2 )) \
     || missing+="
   - 2+ hop lines carrying 'path/file.ext:LOC' (found ${hop_lines})"
 
   # Bug-fix extras — only decidable when --title was inspectable above.
   if [[ "$pr_title" =~ ^fix(\([^\)]+\))?!?: ]]; then
-    has_line 'bug:' \
+    # "Mark the faulty hop" is literal: the marker has to sit on a hop line
+    # inside the Before graph. A `BUG:` loose in prose, or down in After, marks
+    # nothing. The arrow is deliberately not required — `←`, `<-` and a bare
+    # `BUG:` all read the same, and mandating one Unicode glyph is typing
+    # friction, not signal. The word boundary keeps `debug:` from qualifying.
+    # Rule order is load-bearing: reset on After, then print, then set on
+    # Before — that sequence is what keeps the two header lines themselves out
+    # of the captured section, so a marker on the `Before` line marks no hop.
+    before_graph="$(awk -v before_re="$before_re" -v after_re="$after_re" '
+      $0 ~ after_re  { in_before = 0 }
+      in_before      { print }
+      $0 ~ before_re { in_before = 1 }
+    ' <<<"$body_lc")"
+    marker_re='(^|[^[:alnum:]_])bug:'
+    # Same line, either order: `hop … ← BUG: why` or `← BUG: why … hop`.
+    marked_hop() {
+      grep -qE "${hop_re}.*${marker_re}" <<<"$before_graph" ||
+        grep -qE "${marker_re}.*${hop_re}" <<<"$before_graph"
+    }
+    marked_hop \
       || missing+="
-  - fix: PR — '← BUG: <what goes wrong>' on the faulty hop in Before"
+  - fix: PR — '← BUG: <what goes wrong>' on a hop line inside the Before graph"
     has_line '(fixes|closes|resolves)[[:space:]]+#[0-9]+' \
       || missing+="
   - fix: PR — an issue link, 'Fixes #<n>'"

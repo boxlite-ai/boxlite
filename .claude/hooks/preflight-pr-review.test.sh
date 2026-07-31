@@ -121,7 +121,14 @@ echo
 echo "## Body check: a supplied --body must carry the before/after call graph"
 
 GRAPH=$'## Call graph\n\nBefore\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)\n\nAfter\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)'
-FIX_GRAPH=$'## Call graph\n\nBefore\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)  <- BUG: returns before the socket binds\n\nAfter\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)\n\nFixes #1042'
+FIX_GRAPH=$'## Call graph\n\nBefore\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)  ← BUG: returns before the socket binds\n\nAfter\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)\n\nFixes #1042'
+# The arrow glyph is not part of the contract — ASCII `<-`, or none at all, reads
+# the same. What is enforced is the marker's position: on a hop line, in Before.
+FIX_ASCII="${FIX_GRAPH/← BUG:/<- BUG:}"
+FIX_BARE="${FIX_GRAPH/← BUG:/BUG:}"
+FIX_MARK_IN_AFTER=$'## Call graph\n\nBefore\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)\n\nAfter\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)  ← BUG: returns before the socket binds\n\nFixes #1042'
+FIX_MARK_OFF_HOP=$'## Call graph\n\nBefore\n  ← BUG: open_console returns too early\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)\n\nAfter\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)\n\nFixes #1042'
+FIX_DEBUG_ONLY=$'## Call graph\n\nBefore\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)  debug: enabled\n\nAfter\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)\n\nFixes #1042'
 FEAT='--title "feat(api): add a cool thing"'
 FIX='--title "fix(portal): await console bind"'
 
@@ -148,12 +155,17 @@ run_body "unfilled template → deny"           "gh pr create $FEAT --body-file 
 run_body "--fill (no body of its own) → deny" "gh pr create $FEAT --fill"                                   "deny"
 run_body "fix: graph w/o BUG marker → deny"   "gh pr create $FIX --body \"$GRAPH\""                         "deny"
 run_body "fix: BUG but no issue link → deny"  "gh pr create $FIX --body \"${FIX_GRAPH%%$'\n\n'Fixes*}\""    "deny"
+run_body "fix: BUG marked in After → deny"    "gh pr create $FIX --body \"$FIX_MARK_IN_AFTER\""             "deny"
+run_body "fix: BUG off any hop line → deny"   "gh pr create $FIX --body \"$FIX_MARK_OFF_HOP\""              "deny"
+run_body "fix: 'debug:' is not a marker → deny" "gh pr create $FIX --body \"$FIX_DEBUG_ONLY\""              "deny"
 run_body "--body-file prose → deny"           "gh pr create $FEAT --body-file $TMP/prose.md"                "deny"
 
 run_body "gh pr ready (no body flag) → allow" "gh pr ready 42"                                              "passthrough"
 run_body "valid graph body → allow"           "gh pr create $FEAT --body \"$GRAPH\""                        "passthrough"
 run_body "--body-file with graph → allow"     "gh pr create $FEAT --body-file $TMP/body.md"                 "passthrough"
 run_body "fix: graph + BUG + issue → allow"   "gh pr create $FIX --body \"$FIX_GRAPH\""                     "passthrough"
+run_body "fix: ASCII '<- BUG:' → allow"       "gh pr create $FIX --body \"$FIX_ASCII\""                     "passthrough"
+run_body "fix: bare 'BUG:' (no arrow) → allow" "gh pr create $FIX --body \"$FIX_BARE\""                     "passthrough"
 
 echo
 echo "RESULT: $pass passed, $fail failed"
