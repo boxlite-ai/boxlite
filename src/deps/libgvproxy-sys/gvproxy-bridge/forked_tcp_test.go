@@ -133,7 +133,7 @@ func TestMitmRouting_AllowlistAndSecrets_MitmPriority(t *testing.T) {
 	matcher := NewSecretHostMatcher(secrets)
 
 	// Also create an allowlist filter that includes the same host
-	filter := NewAllowNetFilter([]string{"api.example.com"}, "192.168.127.1", "192.168.127.2", "192.168.127.254")
+	filter := testFilter("api.example.com")
 
 	// Both should match
 	if !matcher.Matches("api.example.com") {

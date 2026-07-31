@@ -20,10 +20,7 @@ func ipv4Addr(t *testing.T, s string) tcpip.Address {
 }
 
 func TestUDPDestinationAllowed_IPAndCIDRRules(t *testing.T) {
-	filter := NewAllowNetFilter(
-		[]string{"1.2.3.4", "10.0.0.0/8"},
-		"192.168.127.1", "192.168.127.2", "192.168.127.254",
-	)
+	filter := testFilter("1.2.3.4", "10.0.0.0/8")
 
 	cases := []struct {
 		dest string
@@ -35,7 +32,7 @@ func TestUDPDestinationAllowed_IPAndCIDRRules(t *testing.T) {
 		{"11.1.2.3", false, "outside every rule"},
 		{"8.8.8.8", false, "unapproved resolver"},
 		{"192.168.127.1", true, "gateway is always allowed"},
-		{"192.168.127.254", true, "host alias is always allowed"},
+		{"192.168.127.254", false, "host alias NATs to host loopback, so it obeys the allowlist"},
 	}
 
 	for _, tc := range cases {
@@ -49,10 +46,7 @@ func TestUDPDestinationAllowed_IPAndCIDRRules(t *testing.T) {
 // hostname-only allowlist must therefore deny UDP outright — otherwise a
 // guest bypasses the rule by addressing the resolved IP directly.
 func TestUDPDestinationAllowed_HostnameOnlyRulesDenyEverything(t *testing.T) {
-	filter := NewAllowNetFilter(
-		[]string{"api.openai.com", "*.example.com"},
-		"192.168.127.1", "192.168.127.2", "192.168.127.254",
-	)
+	filter := testFilter("api.openai.com", "*.example.com")
 
 	for _, dest := range []string{"1.2.3.4", "93.184.216.34", "8.8.8.8"} {
 		if udpDestinationAllowed(ipv4Addr(t, dest), filter) {
@@ -69,10 +63,7 @@ func TestUDPDestinationAllowed_HostnameOnlyRulesDenyEverything(t *testing.T) {
 // Link-local is denied regardless of the allowlist: ec2MetadataAccess opens
 // IMDS over TCP only, so a UDP hole there would be pure added egress.
 func TestUDPDestinationAllowed_LinkLocalAndBroadcastDenied(t *testing.T) {
-	filter := NewAllowNetFilter(
-		[]string{"169.254.0.0/16", "255.255.255.255"},
-		"192.168.127.1", "192.168.127.2", "192.168.127.254",
-	)
+	filter := testFilter("169.254.0.0/16", "255.255.255.255")
 
 	if udpDestinationAllowed(ipv4Addr(t, "169.254.169.254"), filter) {
 		t.Error("link-local must be denied even when a CIDR rule covers it")

@@ -26,8 +26,8 @@ pub const HOST_HOSTNAME: &str = "host.boxlite.internal";
 ///
 /// gvproxy NATs traffic sent to this IP to `127.0.0.1` on the host.
 /// The built-in [`HOST_HOSTNAME`] alias resolves to this address.
-/// This destination is always allowed while networking is enabled, even when
-/// `allow_net` would otherwise restrict outbound traffic.
+/// Egress to this address is governed by `allow_net`: add `"192.168.127.254"`
+/// to reach it under a non-empty allowlist. The DNS record is always served.
 pub const HOST_IP: &str = "192.168.127.254";
 
 /// Guest IP with subnet prefix (for static IP assignment in guest)

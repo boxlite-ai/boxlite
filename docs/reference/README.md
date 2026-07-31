@@ -164,10 +164,13 @@ Structured network configuration for outbound connectivity.
   a host falls back to TCP; add the IP or CIDR to keep UDP open.
 - The gateway's DNS resolver and DHCP are internal services and stay reachable
   regardless of `allow_net`.
-- `host.boxlite.internal` is always available as a built-in hostname for
-  reaching host loopback services and is not governed by `allow_net`.
-- Security: when networking is enabled, any service bound to host loopback can
-  be reached from inside the box via `host.boxlite.internal` or `192.168.127.254`.
+- `host.boxlite.internal` is a built-in hostname that resolves to
+  `192.168.127.254` and reaches host loopback services. The DNS record is
+  always served, but egress to that address is governed by `allow_net`: add
+  `"192.168.127.254"` to reach it under a non-empty allowlist.
+- Security: with an empty or omitted `allow_net`, any service bound to host
+  loopback is reachable from inside the box via `host.boxlite.internal` or
+  `192.168.127.254`; allowing `"192.168.127.254"` opens all of them.
 
 **Supported patterns:**
 - Exact hostname: `"api.openai.com"`
