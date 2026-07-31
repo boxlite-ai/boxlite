@@ -184,6 +184,9 @@ pub struct JsBoxInfo {
     /// Creation timestamp (ISO 8601 format)
     pub created_at: String,
 
+    /// Most recent successful container start timestamp (RFC 3339), when recorded
+    pub started_at: Option<String>,
+
     /// Image reference or rootfs path
     pub image: String,
 
@@ -226,6 +229,7 @@ impl From<BoxInfo> for JsBoxInfo {
             name: info.name,
             state,
             created_at: info.created_at.to_rfc3339(),
+            started_at: info.started_at.map(|at| at.to_rfc3339()),
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
@@ -244,7 +248,7 @@ impl From<BoxInfo> for JsBoxInfo {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
 
     use boxlite::runtime::options::PortProtocol;
     use boxlite::{
@@ -273,6 +277,7 @@ mod tests {
             auto_resume: true,
             health_status: HealthStatus::default(),
             exit_code: None,
+            started_at: None,
         }
     }
 
@@ -333,5 +338,18 @@ mod tests {
             JsBoxInfo::from(core_info(None)).network,
             Either::B(_)
         ));
+    }
+
+    #[test]
+    fn box_info_conversion_exposes_started_at() {
+        let mut info = core_info(None);
+        info.started_at = Some((SystemTime::UNIX_EPOCH + Duration::from_secs(1)).into());
+
+        let started = JsBoxInfo::from(info);
+        assert_eq!(
+            started.started_at.as_deref(),
+            Some("1970-01-01T00:00:01+00:00")
+        );
+        assert!(JsBoxInfo::from(core_info(None)).started_at.is_none());
     }
 }

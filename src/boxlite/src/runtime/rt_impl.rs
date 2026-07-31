@@ -234,6 +234,13 @@ impl RuntimeImpl {
         Self::initialize(options, experimental_features)
     }
 
+    /// Build a runtime without host validation. Tests using this must not exercise
+    /// VM or hypervisor operations.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(options: BoxliteOptions) -> BoxliteResult<SharedRuntimeImpl> {
+        Self::initialize(options, ExperimentalFeatures::default())
+    }
+
     fn initialize(
         options: BoxliteOptions,
         experimental_features: ExperimentalFeatures,
@@ -1388,8 +1395,7 @@ impl RuntimeImpl {
             // lifecycle, so it only matters when no shim is alive.
             match PidFileReader::at(&pid_path).process_identity() {
                 ProcessIdentity::Verified(pid) => {
-                    state.set_pid(Some(pid));
-                    state.set_status(BoxStatus::Running);
+                    state.adopt_recovered_shim(pid);
                     // Live shim wins — archive any prior-lifecycle exit
                     // file so the next crash gets the canonical slot.
                     if had_stale_exit {
@@ -1411,8 +1417,7 @@ impl RuntimeImpl {
                     // Pre-fingerprint PID file. Adopt the live PID so VMs
                     // aren't lost on upgrade; the next stop/start writes a
                     // two-line file and the fingerprint check takes over.
-                    state.set_pid(Some(pid));
-                    state.set_status(BoxStatus::Running);
+                    state.adopt_recovered_shim(pid);
                     if had_stale_exit {
                         stash_exit_file(&box_layout);
                         tracing::warn!(

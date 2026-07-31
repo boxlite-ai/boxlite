@@ -1,41 +1,18 @@
-//! Integration tests for the box's `Container.Start` success record.
+//! Integration tests for `BoxInfo::started_at`.
 //!
-//! The record is deliberately distinct from `BoxStatus::Running`: booting
+//! The timestamp is deliberately distinct from `BoxStatus::Running`: booting
 //! publishes Running before the guest's separate `Container.Start` RPC runs, so
 //! Running alone cannot say whether a box's init was ever launched. The cloud
-//! runner reads this record to repair a startup whose job completion was lost,
-//! which only works while the record names the shim that is running right now.
+//! runner reads this to repair a startup whose job completion was lost, which
+//! only works while the value describes the lifecycle running right now.
 
 mod common;
 
 use boxlite::BoxliteRuntime;
 use boxlite::runtime::options::BoxliteOptions;
-use std::path::{Path, PathBuf};
-
-/// The record's path, spelled out the way an outside reader derives it — the
-/// cloud runner walks the same `{home}/boxes/{box_id}/started` layout from Go,
-/// so this must not go through `BoxFilesystemLayout`.
-fn started_file(home_dir: &Path, box_id: &str) -> PathBuf {
-    home_dir.join("boxes").join(box_id).join("started")
-}
-
-/// Read the record as an outside reader would: raw JSON, by field name.
-fn read_record(home_dir: &Path, box_id: &str) -> Option<(u32, i64)> {
-    let contents = std::fs::read_to_string(started_file(home_dir, box_id)).ok()?;
-    let json: serde_json::Value =
-        serde_json::from_str(&contents).expect("record must be valid JSON");
-    Some((
-        json.get("pid")
-            .and_then(serde_json::Value::as_u64)
-            .expect("record must carry a pid field") as u32,
-        json.get("at_unix_ms")
-            .and_then(serde_json::Value::as_i64)
-            .expect("record must carry an at_unix_ms field"),
-    ))
-}
 
 #[tokio::test]
-async fn start_record_tracks_the_shim_that_launched_init() {
+async fn started_at_tracks_the_shim_that_launched_init() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -50,30 +27,45 @@ async fn start_record_tracks_the_shim_that_launched_init() {
     let box_id = handle.id().clone();
 
     assert!(
-        read_record(&home.path, box_id.as_str()).is_none(),
+        handle
+            .info()
+            .await
+            .expect("inspect created box")
+            .started_at
+            .is_none(),
         "creating a container must not claim its init was launched"
     );
 
-    let before_start = chrono::Utc::now().timestamp_millis();
-    handle.start().await.expect("start box");
-
-    let (recorded_pid, recorded_at) = read_record(&home.path, box_id.as_str())
-        .expect("a successful Container.Start must be recorded");
-    let live_pid = handle
-        .info()
-        .await
-        .expect("inspect running box")
-        .pid
-        .expect("a running box has a shim pid");
-
+    // Booting is not starting: `attach` brings the VM up and stops short of
+    // running init, which is the state `BoxStatus::Running` cannot tell apart
+    // from a box whose init is live — and the whole reason this field exists.
+    let attached = handle.attach(None).await.expect("attach to booted box");
+    let booted = handle.info().await.expect("inspect booted box");
+    assert!(
+        booted.status.is_running(),
+        "attach must leave the box Running, or this test is not observing the window"
+    );
     assert_eq!(
-        recorded_pid, live_pid,
-        "the record must name the shim that is running the box, or a reader cannot tell \
-         it apart from a leftover"
+        booted.started_at, None,
+        "a booted box whose init was never launched must not report a container start"
+    );
+
+    let before_start = chrono::Utc::now();
+    handle.start().await.expect("start box");
+    drop(attached);
+
+    let info = handle.info().await.expect("inspect running box");
+    let started_at = info
+        .started_at
+        .expect("a successful Container.Start must be recorded");
+
+    assert!(
+        info.pid.is_some(),
+        "a box that recorded a start must name the shim running it"
     );
     assert!(
-        recorded_at >= before_start,
-        "record timestamp {recorded_at} predates the start that produced it ({before_start})"
+        started_at >= before_start,
+        "record timestamp {started_at} predates the start that produced it ({before_start})"
     );
 
     let _ = handle.stop().await;
@@ -100,10 +92,21 @@ async fn a_fresh_lifecycle_replaces_the_previous_record() {
     let box_id = handle.id().clone();
 
     handle.start().await.expect("start first lifecycle");
-    let (first_pid, first_at) =
-        read_record(&home.path, box_id.as_str()).expect("first start must be recorded");
+    let first = handle
+        .info()
+        .await
+        .expect("inspect first lifecycle")
+        .started_at
+        .expect("first start must be recorded");
 
     handle.stop().await.expect("stop first lifecycle");
+
+    assert_eq!(
+        handle.info().await.expect("inspect stopped box").started_at,
+        Some(first),
+        "a stop must leave the record of the run that just ended, the way docker keeps \
+         StartedAt on an exited container"
+    );
 
     // A spent handle cannot boot another VM, so the restart goes through a
     // fresh one — the same path the runner takes after a box has stopped.
@@ -113,29 +116,21 @@ async fn a_fresh_lifecycle_replaces_the_previous_record() {
         .await
         .expect("get a fresh handle")
         .expect("box still exists");
+
     restarted.start().await.expect("start second lifecycle");
 
-    let (second_pid, second_at) =
-        read_record(&home.path, box_id.as_str()).expect("second start must be recorded");
-    let live_pid = restarted
-        .info()
-        .await
-        .expect("inspect restarted box")
-        .pid
-        .expect("a running box has a shim pid");
+    let second_info = restarted.info().await.expect("inspect restarted box");
+    let second = second_info
+        .started_at
+        .expect("second start must be recorded");
 
-    assert_eq!(
-        second_pid, live_pid,
-        "the record must follow the new shim, not the one the first lifecycle used"
+    assert!(
+        second_info.pid.is_some(),
+        "a restarted box that recorded a start must name the shim running it"
     );
     assert!(
-        second_at >= first_at,
-        "second record timestamp {second_at} predates the first ({first_at})"
-    );
-    assert_ne!(
-        (first_pid, first_at),
-        (second_pid, second_at),
-        "the second lifecycle must replace the first record rather than inherit it"
+        second > first,
+        "second record timestamp {second} does not follow the first ({first})"
     );
 
     let _ = restarted.stop().await;
@@ -151,7 +146,7 @@ async fn adopting_the_same_running_shim_preserves_its_record() {
         image_registries: common::test_registries(),
     };
 
-    let (box_id, recorded) = {
+    let (box_id, recorded, recorded_pid) = {
         let first = BoxliteRuntime::new(options()).expect("create first runtime");
         let mut box_options = common::alpine_opts();
         box_options.detach = true;
@@ -160,10 +155,12 @@ async fn adopting_the_same_running_shim_preserves_its_record() {
             .await
             .expect("create detached box");
         handle.start().await.expect("start detached box");
-        let box_id = handle.id().clone();
-        let recorded =
-            read_record(&home.path, box_id.as_str()).expect("detached start must be recorded");
-        (box_id, recorded)
+        let info = handle.info().await.expect("inspect detached box");
+        (
+            handle.id().clone(),
+            info.started_at.expect("detached start must be recorded"),
+            info.pid.expect("a running box has a shim pid"),
+        )
     };
 
     // Reattaching to a still-running shim is not a new lifecycle: its init is
@@ -177,14 +174,14 @@ async fn adopting_the_same_running_shim_preserves_its_record() {
     let adopted_info = adopted.info().await.expect("inspect adopted box");
 
     assert_eq!(
-        read_record(&home.path, box_id.as_str()),
+        adopted_info.started_at,
         Some(recorded),
         "adopting a live shim must not clear or rewrite its start record"
     );
     assert_eq!(
         adopted_info.pid,
-        Some(recorded.0),
-        "the preserved record must still name the shim the adopted box is running"
+        Some(recorded_pid),
+        "the preserved record must still describe the shim the adopted box is running"
     );
 
     let _ = adopted.stop().await;

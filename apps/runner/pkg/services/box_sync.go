@@ -6,11 +6,8 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
@@ -24,7 +21,6 @@ import (
 // narrow so the sync loop can be exercised without a live runtime.
 type boxStateReader interface {
 	ListInfo(ctx context.Context) ([]sdkboxlite.BoxInfo, error)
-	GetBoxState(ctx context.Context, boxID string) (enums.BoxState, error)
 }
 
 type BoxSyncServiceConfig struct {
@@ -36,17 +32,17 @@ type BoxSyncServiceConfig struct {
 type BoxSyncService struct {
 	log      *slog.Logger
 	boxlite  boxStateReader
-	homeDir  string
 	interval time.Duration
 	client   *apiclient.APIClient
 }
 
-// localContainerState pairs a box's local runtime state with the durable
-// evidence that the current shim actually launched its init.
+// localContainerState pairs a box's local runtime state with its durable
+// Container.Start timestamp from the same BoxInfo snapshot.
 type localContainerState struct {
 	state enums.BoxState
-	// startedAt is non-nil only when BoxLite recorded a successful
-	// Container.Start for the shim this box is running right now.
+	// startedAt is non-nil when BoxLite recorded a successful Container.Start
+	// for the current or most recently ended lifecycle. Callers combine it with
+	// state before treating it as evidence that the box is running now.
 	startedAt *time.Time
 }
 
@@ -54,7 +50,6 @@ func NewBoxSyncService(config BoxSyncServiceConfig) *BoxSyncService {
 	return &BoxSyncService{
 		log:      config.Logger.With(slog.String("component", "box_sync_service")),
 		boxlite:  config.Boxlite,
-		homeDir:  config.Boxlite.HomeDir(),
 		interval: config.Interval,
 	}
 }
@@ -72,56 +67,28 @@ func (s *BoxSyncService) GetLocalContainerStates(ctx context.Context) (map[strin
 			boxId = box.ID
 		}
 
-		state, err := s.boxlite.GetBoxState(ctx, boxId)
-		if err != nil {
-			s.log.DebugContext(ctx, "Failed to get state for box", "boxId", boxId, "error", err)
-			continue
-		}
-
-		// The record lives under BoxLite's own id for the box, which is not
-		// always the key the control plane uses (that one prefers the name).
 		boxStates[boxId] = localContainerState{
-			state:     state,
-			startedAt: readStartedRecord(s.homeDir, box.ID, box.PID),
+			state:     blclient.ToBoxState(box.State),
+			startedAt: boxStartedAt(box),
 		}
 	}
 
 	return boxStates, nil
 }
 
-// startedRecord mirrors StartedRecord in src/boxlite/src/runtime/layout.rs,
-// written by BoxLite once a box's guest Container.Start returns success.
-type startedRecord struct {
-	PID      int   `json:"pid"`
-	AtUnixMs int64 `json:"at_unix_ms"`
-}
-
-// readStartedRecord returns when BoxLite last confirmed a successful
-// Container.Start for the shim currently running this box, or nil when there
-// is no such evidence.
+// boxStartedAt reports when BoxLite confirmed a successful Container.Start for
+// the current or most recently ended lifecycle, or nil when no lifecycle has
+// such confirmation.
 //
-// The PID cross-check is what makes the record trustworthy: BoxLite clears it
-// at the start of every new lifecycle, and pairing it with the box's live PID
-// closes the remaining window where a record could survive the shim it names.
-func readStartedRecord(homeDir string, boxID string, livePID int) *time.Time {
-	if homeDir == "" || boxID == "" || livePID <= 0 {
+// BoxLite publishes the timestamp beside the PID it belongs to and voids it in
+// the same write that publishes a new lifecycle's PID. That only buys the
+// reader anything while state and timestamp come from one snapshot, which is
+// why both are read off the same `BoxInfo`.
+func boxStartedAt(box sdkboxlite.BoxInfo) *time.Time {
+	if box.StartedAt.IsZero() {
 		return nil
 	}
-
-	contents, err := os.ReadFile(filepath.Join(homeDir, "boxes", boxID, "started"))
-	if err != nil {
-		return nil
-	}
-
-	var record startedRecord
-	if err := json.Unmarshal(contents, &record); err != nil {
-		return nil
-	}
-	if record.PID != livePID || record.AtUnixMs <= 0 {
-		return nil
-	}
-
-	startedAt := time.UnixMilli(record.AtUnixMs)
+	startedAt := box.StartedAt
 	return &startedAt
 }
 
@@ -145,7 +112,7 @@ func (s *BoxSyncService) GetRemoteBoxStates(ctx context.Context) (map[string]api
 		false,
 	)
 	if err != nil {
-		s.log.DebugContext(
+		s.log.WarnContext(
 			ctx,
 			"Transitional box query unavailable; skipping start confirmation this cycle",
 			"error", err,
@@ -251,7 +218,8 @@ func (s *BoxSyncService) PerformSync(ctx context.Context) error {
 // once the VM is up, which happens before the guest's separate Container.Start
 // runs. Reporting STARTED off that alone would call a box ready whose init was
 // never launched — so a transitional box additionally needs BoxLite's durable
-// record that Container.Start did succeed for the shim now running it.
+// record that Container.Start did succeed for the shim now running it. Both
+// facts come from one `BoxInfo`, so they cannot describe two lifecycles.
 //
 // Every other remote state keeps the long-standing behaviour: the local view
 // wins unconditionally.

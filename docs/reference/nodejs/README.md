@@ -219,6 +219,7 @@ Metadata about a box.
 | `name` | `string \| undefined` | User-defined name |
 | `state` | `JsBoxStateInfo` | Runtime state with `status`, `running`, and optional `pid` fields |
 | `createdAt` | `string` | Creation timestamp (ISO 8601) |
+| `startedAt` | `string \| undefined` | Most recent successful container start timestamp (RFC 3339); absent if not recorded or unavailable over REST |
 | `image` | `string` | OCI image reference or rootfs path |
 | `cpus` | `number` | Allocated CPU count |
 | `memoryMib` | `number` | Allocated memory in MiB |

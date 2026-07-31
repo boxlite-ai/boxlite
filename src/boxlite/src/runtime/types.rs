@@ -400,6 +400,20 @@ pub struct BoxInfo {
     /// Exit code of the container's init process, when the box stopped
     /// because its main command exited (docker semantics).
     pub exit_code: Option<i32>,
+
+    /// When the guest's `Container.Start` most recently returned success
+    /// (docker's `State.StartedAt`); `None` when no successful start has been
+    /// recorded. The value survives stop and reboot as lifecycle history. When
+    /// [`Self::pid`] is present, the timestamp describes that live PID.
+    ///
+    /// Answers what [`Self::status`] cannot: `Running` is published once the
+    /// VM is up, which is before the separate `Container.Start` runs — and
+    /// `attach()` leaves a box `Running` with its init deliberately unstarted.
+    /// The cloud runner reads this to confirm a startup whose job-completion
+    /// callback was lost. Serde default keeps metadata from an older producer
+    /// readable.
+    #[serde(default)]
+    pub started_at: Option<DateTime<Utc>>,
 }
 
 impl BoxInfo {
@@ -436,6 +450,7 @@ impl BoxInfo {
             auto_resume: config.options.auto_resume.unwrap_or(true),
             health_status: state.health_status,
             exit_code: state.exit_code,
+            started_at: state.started_at,
         }
     }
 }

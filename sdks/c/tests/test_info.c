@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <assert.h>
 #include <signal.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,9 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+_Static_assert(offsetof(CBoxInfo, network) < offsetof(CBoxInfo, started_at),
+               "CBoxInfo.started_at must follow network");
 
 /* The loopback REST server keeps this unit test VM-free. Its two distinct
  * responses prove boxlite_box_info fetches current metadata instead of
@@ -119,10 +123,10 @@ static void on_info(CBoxInfo *info, CBoxliteError *error, void *user_data) {
   InfoRequest *request = user_data;
   request->error_code = error->code;
   if (info != NULL) {
-    request->saw_expected_info = strcmp(info->id, "box1") == 0 &&
-                                 strcmp(info->status, "stopped") == 0 &&
-                                 info->running == 0 && info->pid == 0 &&
-                                 info->cpus == 2 && info->memory_mib == 512;
+    request->saw_expected_info =
+        strcmp(info->id, "box1") == 0 && strcmp(info->status, "stopped") == 0 &&
+        info->running == 0 && info->pid == 0 && info->cpus == 2 &&
+        info->memory_mib == 512 && info->started_at == 0;
     boxlite_free_box_info(info);
   }
   request->done = 1;

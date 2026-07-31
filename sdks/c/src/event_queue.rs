@@ -1260,6 +1260,10 @@ mod owned_ffi_ptr_nested_leak_tests {
             pid: 0,
             cpus: 1,
             memory_mib: 256,
+            auto_stop: 900,
+            auto_delete: 0,
+            auto_resume: 1,
+            created_at: 0,
             network: crate::info::network_to_c_ptr(&Some(NetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: vec!["api.example.com".to_string()],
@@ -1270,10 +1274,7 @@ mod owned_ffi_ptr_nested_leak_tests {
                     protocol: PortProtocol::Tcp,
                 }]),
             })),
-            created_at: 0,
-            auto_stop: 900,
-            auto_delete: 0,
-            auto_resume: 1,
+            started_at: 0,
         });
 
         let owned = OwnedFfiPtr::new_with(payload, crate::info::free_box_info_ptr);
@@ -1340,11 +1341,12 @@ mod owned_ffi_ptr_nested_leak_tests {
             pid: 0,
             cpus: 2,
             memory_mib: 512,
-            network: std::ptr::null_mut(),
-            created_at: 0,
             auto_stop: 900,
             auto_delete: 0,
             auto_resume: 1,
+            created_at: 0,
+            network: std::ptr::null_mut(),
+            started_at: 0,
         }];
         let items_ptr = items_vec.as_mut_ptr();
         let items_len = items_vec.len();

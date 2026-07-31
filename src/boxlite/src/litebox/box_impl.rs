@@ -295,11 +295,11 @@ impl BoxImpl {
         let live = self.ensure_booted().await?;
         let started_now = self.ensure_container_started(live).await?;
 
-        // Nothing below may fail. `ensure_container_started` has already written
-        // the start record (see [`Self::write_started_record`]), and readers of
-        // that file — the cloud runner among them — take it as evidence that
-        // this whole call succeeded. A fallible step added here would publish
-        // that evidence for a start that then returned `Err`.
+        // Nothing below may fail. `ensure_container_started` has already
+        // published `started_at` (see [`Self::record_started`]), and readers of
+        // it — the cloud runner among them — take it as evidence that this
+        // whole call succeeded. A fallible step added here would publish that
+        // evidence for a start that then returned `Err`.
         //
         // Announce the start only when *this* call actually ran init — not on an
         // idempotent re-`start()` or a reattach to an already-running box.
@@ -1001,44 +1001,40 @@ impl BoxImpl {
             })
             .await?;
         if started_here {
-            self.write_started_record();
+            self.record_started();
         }
         Ok(started_here)
     }
 
-    /// Record that this lifecycle's `Container.Start` succeeded.
+    /// Publish `started_at` for this lifecycle.
     ///
     /// The counterpart of the shim's `exit` file: one names how the box died,
-    /// this names that its init was launched. `init_live_state` removes it when
-    /// the next boot begins, so its presence is scoped to one physical shim.
+    /// this names that its init was launched. It rides in `BoxState` beside the
+    /// PID it belongs to, so the pair is written and read as one row and no
+    /// consumer has to re-derive which shim the timestamp describes.
     ///
-    /// A failed write leaves no record and is logged, never propagated — the
-    /// guest RPC already succeeded and the box is running, so turning a
-    /// bookkeeping failure into a start failure would be a worse answer than
-    /// the missing record.
+    /// A failed persist is logged, never propagated — the guest RPC already
+    /// succeeded and the box is running, so turning a bookkeeping failure into
+    /// a start failure would be a worse answer than the missing timestamp.
     ///
-    /// **Callers downstream of this treat the file as evidence that the whole
-    /// start succeeded**, so `start()` must not grow a fallible step after
-    /// `ensure_container_started`. See the note at the tail of [`Self::start`].
-    fn write_started_record(&self) {
-        let Some(pid) = self.state.read().pid else {
-            tracing::warn!(
-                box_id = %self.config.id,
-                "Container.Start succeeded with no shim PID on record; start not recorded"
-            );
-            return;
+    /// **Consumers treat this as evidence that the whole start succeeded**, so
+    /// `start()` must not grow a fallible step after `ensure_container_started`.
+    /// See the note at the tail of [`Self::start`].
+    fn record_started(&self) {
+        let (persist_result, pid) = {
+            let mut state = self.state.write();
+            state.mark_started();
+            let pid = state.pid;
+            let result = self.runtime.box_manager.save_box(&self.config.id, &state);
+            (result, pid)
         };
 
-        let record = crate::runtime::layout::StartedRecord {
-            pid,
-            at_unix_ms: chrono::Utc::now().timestamp_millis(),
-        };
-        if let Err(error) = record.write(&self.layout.started_file_path()) {
+        if let Err(error) = persist_result {
             tracing::error!(
                 box_id = %self.config.id,
-                pid,
+                pid = ?pid,
                 error = %error,
-                "Container.Start succeeded but the start record could not be written"
+                "Container.Start succeeded but the start could not be recorded"
             );
         }
     }
@@ -1096,27 +1092,6 @@ impl BoxImpl {
         // LockGuard acquires lock on creation and releases on drop.
         let _guard = LockGuard::new(&*locker);
 
-        // A new physical lifecycle starts here, so drop the start record the
-        // previous one left behind — the same discipline `Container.Init` keeps
-        // for the container's exit file. Adopting a *running* box is not a new
-        // lifecycle: its record still names the live shim and must survive.
-        //
-        // This is the single removal point. Everything downstream reads the
-        // record together with the box's live PID, so a record that outlives
-        // its shim is already inert; clearing here keeps it from being
-        // resurrected by the next boot.
-        if !adopting_running {
-            match std::fs::remove_file(self.layout.started_file_path()) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => tracing::warn!(
-                    box_id = %self.config.id,
-                    error = %e,
-                    "Failed to clear the previous lifecycle's start record"
-                ),
-            }
-        }
-
         // Build the box (lock is held)
         // The returned cleanup_guard stays armed until we disarm it after all
         // operations succeed. If any operation fails, the guard's Drop will
@@ -1171,6 +1146,15 @@ impl BoxImpl {
             // clears ExitCode on start too). The guest drops its matching
             // exit file in Container.Init.
             state.exit_code = None;
+            // Same reasoning for the start record, and this is the write that
+            // makes it safe: publishing the new PID and voiding the previous
+            // lifecycle's evidence happen in one `save_box`, so no reader can
+            // ever see this shim paired with the last one's start. Adopting a
+            // *running* box is not a new lifecycle — its record still names the
+            // live shim and must survive.
+            if !adopting_running {
+                state.started_at = None;
+            }
 
             // Initialize health status if health check is configured
             if self.config.options.advanced.health_check.is_some() {
@@ -1553,6 +1537,127 @@ mod tests {
         fn pid(&self) -> u32 {
             self.0
         }
+    }
+
+    struct RecordStartedSaveGate {
+        entered: std::sync::mpsc::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    }
+
+    static RECORD_STARTED_SAVE_GATE: std::sync::Mutex<Option<RecordStartedSaveGate>> =
+        std::sync::Mutex::new(None);
+
+    fn block_record_started_save(_: i32) -> bool {
+        let gate = RECORD_STARTED_SAVE_GATE
+            .lock()
+            .expect("record-started save gate lock poisoned")
+            .take();
+        let Some(gate) = gate else {
+            return false;
+        };
+
+        gate.entered.send(()).is_ok() && gate.release.recv().is_ok()
+    }
+
+    #[test]
+    fn record_started_holds_state_lock_until_persist_completes() {
+        let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .expect("create runtime");
+
+        let id = BoxIDMint::mint();
+        let config = BoxConfig {
+            id: id.clone(),
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions {
+                rootfs: RootfsSpec::Image("alpine:latest".into()),
+                detach: true,
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            engine_kind: VmmKind::Libkrun,
+            box_home: runtime.layout.boxes_dir().join(id.as_str()),
+        };
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Running;
+        state.pid = Some(4242);
+        state.set_lock_id(runtime.lock_manager.allocate().expect("allocate lock"));
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add box to manager");
+
+        let box_impl = Arc::new(BoxImpl::new(
+            config,
+            state,
+            runtime.clone(),
+            runtime.shutdown_token.child_token(),
+        ));
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        *RECORD_STARTED_SAVE_GATE
+            .lock()
+            .expect("record-started save gate lock poisoned") = Some(RecordStartedSaveGate {
+            entered: entered_tx,
+            release: release_rx,
+        });
+
+        // Hold SQLite's writer lock so its busy handler marks the exact point
+        // where record_started has entered the real persistence operation.
+        let database = runtime.box_manager.db();
+        let db_path = {
+            let conn = database.conn();
+            conn.busy_handler(Some(block_record_started_save))
+                .expect("install busy handler");
+            conn.path().expect("database has a path").to_owned()
+        };
+        let blocker = rusqlite::Connection::open(db_path).expect("open blocking connection");
+        blocker
+            .execute_batch("BEGIN IMMEDIATE")
+            .expect("acquire SQLite write lock");
+
+        let worker_box = Arc::clone(&box_impl);
+        let worker = std::thread::spawn(move || worker_box.record_started());
+        let reached_persist = entered_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+        let state_lock_held = reached_persist && box_impl.state.try_write().is_none();
+
+        blocker
+            .execute_batch("ROLLBACK")
+            .expect("release SQLite write lock");
+        let _ = release_tx.send(());
+        worker.join().expect("record-started worker panicked");
+        database
+            .conn()
+            .busy_handler(None)
+            .expect("remove database busy handler");
+        *RECORD_STARTED_SAVE_GATE
+            .lock()
+            .expect("record-started save gate lock poisoned") = None;
+
+        assert!(
+            reached_persist,
+            "record_started did not reach the real SQLite update"
+        );
+        assert!(
+            state_lock_held,
+            "record_started must hold the state write lock until persistence completes"
+        );
+        assert!(
+            runtime
+                .box_manager
+                .update_box(&id)
+                .expect("load persisted state")
+                .started_at
+                .is_some(),
+            "record_started must persist the start timestamp"
+        );
     }
 
     // Regression test for the silent-orphan bug in stop().

@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -135,47 +133,11 @@ func buildImageRegistries(insecureRegistries []string, ghcrUsername, ghcrToken s
 	return registries
 }
 
-// boxliteHomeEnv mirrors the environment variable BoxLite itself consults when
-// no home directory is configured (src/boxlite/src/runtime/constants.rs).
-const boxliteHomeEnv = "BOXLITE_HOME"
-
-// boxliteHomeDirName mirrors BoxLite's default home directory name
-// (src/boxlite/src/runtime/layout.rs, dirs::BOXLITE_DIR).
-const boxliteHomeDirName = ".boxlite"
-
-// resolveHomeDir reproduces BoxLite's own home-directory resolution so the
-// runner and the runtime always name the same directory. Returns "" only when
-// the user's home cannot be determined, which leaves BoxLite to fall back on
-// its default exactly as it did before.
-func resolveHomeDir(configured string) string {
-	if configured != "" {
-		return configured
-	}
-	if fromEnv := os.Getenv(boxliteHomeEnv); fromEnv != "" {
-		return fromEnv
-	}
-	userHome, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(userHome, boxliteHomeDirName)
-}
-
-// HomeDir returns the resolved BoxLite data directory this client writes to.
-func (c *Client) HomeDir() string {
-	return c.homeDir
-}
-
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	var opts []boxlite.RuntimeOption
-	// Resolve the home directory here rather than letting BoxLite fall back to
-	// its own default. Services that read files out of the box home (BoxSync
-	// reads each box's start record) need the same path BoxLite writes to, and
-	// an unset HomeDir would leave the two sides guessing separately.
-	homeDir := resolveHomeDir(config.HomeDir)
-	if homeDir != "" {
-		opts = append(opts, boxlite.WithHomeDir(homeDir))
+	if config.HomeDir != "" {
+		opts = append(opts, boxlite.WithHomeDir(config.HomeDir))
 	}
 	insecureRegistries := normalizeRegistryHosts(config.InsecureRegistries)
 	registries := buildImageRegistries(insecureRegistries, config.GhcrUsername, config.GhcrToken)
@@ -209,7 +171,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	return &Client{
 		runtime:            rt,
 		logger:             logger,
-		homeDir:            homeDir,
+		homeDir:            config.HomeDir,
 		boxes:              make(map[string]*boxlite.Box),
 		awsRegion:          config.AWSRegion,
 		awsEndpointUrl:     config.AWSEndpointUrl,
@@ -338,12 +300,12 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 
 	// bx.Start must stay the last step of Create that can fail.
 	//
-	// A successful Start makes BoxLite write the box's start record, and
-	// BoxSync reads that record as evidence this job body succeeded — it is
-	// what lets a lost job-completion callback be repaired later. A fallible
-	// step added below would publish that evidence for a Create that then
-	// returns an error, and the two would disagree with no way to tell which
-	// is right. TestCreateHasNoFallibleStepAfterStart enforces this.
+	// A successful Start makes BoxLite publish the box's StartedAt,
+	// and BoxSync reads it as evidence this job body succeeded — it is what
+	// lets a lost job-completion callback be repaired later. A fallible step
+	// added below would publish that evidence for a Create that then returns
+	// an error, and the two would disagree with no way to tell which is right.
+	// TestCreateHasNoFallibleStepAfterStart enforces this.
 	skipStart := boxDto.SkipStart != nil && *boxDto.SkipStart
 	if !skipStart {
 		if err := bx.Start(ctx); err != nil {
@@ -405,34 +367,16 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 	return nil
 }
 
-// GetBoxState returns the current state of a box.
+// ToBoxState maps a box's local lifecycle state onto the control plane's
+// vocabulary, one arm per state the runtime can report. Unknown is not a
+// neutral default: the API counts it as compute-consuming while Error is not,
+// so Failed must map explicitly to Error.
 //
-// It reads through the runtime rather than the handle cache. The box sync loop
-// calls this for every box on a 10s ticker (services/box_sync.go), and a state
-// read needs no bootable handle — only the persisted record. Routing it through
-// getOrFetchBox would evict and re-fetch a handle for every non-running box on
-// every tick, and eviction cannot free the old one (see evictBox), so the
-// runner would accumulate dead handles for as long as it ran.
-func (c *Client) GetBoxState(ctx context.Context, boxId string) (enums.BoxState, error) {
-	info, err := c.runtime.GetInfo(ctx, boxId)
-	if err != nil {
-		if boxlite.IsNotFound(err) {
-			return enums.BoxStateUnknown, nil
-		}
-		return enums.BoxStateUnknown, err
-	}
-
-	return apiStateFromCore(info.State), nil
-}
-
-// apiStateFromCore maps a core box status onto the control-plane state, one arm
-// per BoxStatus the runtime can report.
-//
-// Unknown is not a neutral default here: the API counts it as compute-consuming
-// (BOX_STATES_CONSUMING_COMPUTE), while Error is not. Falling through left a
-// Failed box billed as if it were still running, and a Stopping box reported as
-// Unknown even though the control plane has that exact state.
-func apiStateFromCore(state boxlite.State) enums.BoxState {
+// Exported apart from GetBoxState because a caller that already holds a
+// BoxInfo must not fetch a second one: BoxSync pairs the state with the box's
+// StartedAt, and reading the two at different moments is what lets a stale
+// timestamp meet a fresh state.
+func ToBoxState(state boxlite.State) enums.BoxState {
 	switch state {
 	case boxlite.StateRunning:
 		return enums.BoxStateStarted
@@ -453,6 +397,26 @@ func apiStateFromCore(state boxlite.State) enums.BoxState {
 	default:
 		return enums.BoxStateUnknown
 	}
+}
+
+// GetBoxState returns the current state of a box.
+//
+// It reads through the runtime rather than the handle cache. The box sync loop
+// calls this for every box on a 10s ticker (services/box_sync.go), and a state
+// read needs no bootable handle — only the persisted record. Routing it through
+// getOrFetchBox would evict and re-fetch a handle for every non-running box on
+// every tick, and eviction cannot free the old one (see evictBox), so the
+// runner would accumulate dead handles for as long as it ran.
+func (c *Client) GetBoxState(ctx context.Context, boxId string) (enums.BoxState, error) {
+	info, err := c.runtime.GetInfo(ctx, boxId)
+	if err != nil {
+		if boxlite.IsNotFound(err) {
+			return enums.BoxStateUnknown, nil
+		}
+		return enums.BoxStateUnknown, err
+	}
+
+	return ToBoxState(info.State), nil
 }
 
 // StartExecution starts an interactive execution in a box.

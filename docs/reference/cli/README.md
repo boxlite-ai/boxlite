@@ -463,12 +463,16 @@ Show detailed information for one or more boxes.
 | `--format FMT` | `-f` | `json` | `json`, `yaml`, or a Go template (e.g. `'{{.State.Status}}'`) |
 
 The Go-template engine exposes a `json` function for serializing nested values.
+`State.StartedAt` is the most recent successful container start timestamp in
+RFC 3339 format, or `null` if it has not been recorded or is unavailable over
+REST.
 
 **Examples:**
 
 ```bash
 boxlite inspect mybox
 boxlite inspect --format '{{.State.Status}}' mybox
+boxlite inspect --format '{{.State.StartedAt}}' mybox
 boxlite inspect -l --format yaml
 ```
 

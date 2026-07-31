@@ -6,99 +6,49 @@ package services
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	sdkboxlite "github.com/boxlite-ai/boxlite/sdks/go"
-	"github.com/boxlite-ai/runner/pkg/models/enums"
 )
 
-// writeStartedRecord lays down the file BoxLite writes after a successful
-// guest Container.Start, in the layout box_impl.rs uses.
-func writeStartedRecord(t *testing.T, homeDir string, boxID string, contents string) {
-	t.Helper()
-	boxDir := filepath.Join(homeDir, "boxes", boxID)
-	if err := os.MkdirAll(boxDir, 0o755); err != nil {
-		t.Fatalf("create box dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(boxDir, "started"), []byte(contents), 0o644); err != nil {
-		t.Fatalf("write start record: %v", err)
-	}
-}
-
-func TestReadStartedRecord(t *testing.T) {
-	const livePID = 4242
+// boxStartedAt only converts BoxInfo's zero-value convention. The sync decision
+// interprets the result together with State from the same BoxInfo snapshot.
+func TestBoxStartedAt(t *testing.T) {
 	startedAt := time.UnixMilli(1_769_000_000_123)
 
 	tests := []struct {
-		name     string
-		contents string
-		// omitRecord skips writing the file entirely.
-		omitRecord bool
-		livePID    int
-		want       *time.Time
+		name string
+		info sdkboxlite.BoxInfo
+		want *time.Time
 	}{
 		{
-			name:     "record written by the live shim",
-			contents: fmt.Sprintf(`{"pid":%d,"at_unix_ms":%d}`, livePID, startedAt.UnixMilli()),
-			livePID:  livePID,
-			want:     &startedAt,
+			name: "box reports a confirmed container start",
+			info: sdkboxlite.BoxInfo{ID: "box-1", PID: 4242, StartedAt: startedAt},
+			want: &startedAt,
 		},
 		{
-			name:     "record left by a previous shim",
-			contents: fmt.Sprintf(`{"pid":%d,"at_unix_ms":%d}`, livePID-1, startedAt.UnixMilli()),
-			livePID:  livePID,
-			want:     nil,
-		},
-		{
-			name:       "no record at all",
-			omitRecord: true,
-			livePID:    livePID,
-			want:       nil,
-		},
-		{
-			name:     "truncated record",
-			contents: `{"pid":4242,"at_un`,
-			livePID:  livePID,
-			want:     nil,
-		},
-		{
-			name:     "record without a timestamp",
-			contents: fmt.Sprintf(`{"pid":%d}`, livePID),
-			livePID:  livePID,
-			want:     nil,
-		},
-		{
-			name:     "box has no live pid",
-			contents: fmt.Sprintf(`{"pid":%d,"at_unix_ms":%d}`, livePID, startedAt.UnixMilli()),
-			livePID:  0,
-			want:     nil,
+			name: "running box whose init was never launched",
+			info: sdkboxlite.BoxInfo{ID: "box-1", PID: 4242},
+			want: nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			homeDir := t.TempDir()
-			if !tt.omitRecord {
-				writeStartedRecord(t, homeDir, "box-1", tt.contents)
-			}
-
-			got := readStartedRecord(homeDir, "box-1", tt.livePID)
+			got := boxStartedAt(tt.info)
 
 			switch {
 			case tt.want == nil && got != nil:
-				t.Fatalf("readStartedRecord() = %s, want nil", got)
+				t.Fatalf("boxStartedAt() = %s, want nil", got)
 			case tt.want != nil && got == nil:
-				t.Fatalf("readStartedRecord() = nil, want %s", tt.want)
+				t.Fatalf("boxStartedAt() = nil, want %s", tt.want)
 			case tt.want != nil && !got.Equal(*tt.want):
-				t.Fatalf("readStartedRecord() = %s, want %s", got, tt.want)
+				t.Fatalf("boxStartedAt() = %s, want %s", got, tt.want)
 			}
 		})
 	}
@@ -106,20 +56,11 @@ func TestReadStartedRecord(t *testing.T) {
 
 // stubBoxReader serves a fixed set of boxes to the sync loop.
 type stubBoxReader struct {
-	infos  []sdkboxlite.BoxInfo
-	states map[string]enums.BoxState
+	infos []sdkboxlite.BoxInfo
 }
 
 func (r *stubBoxReader) ListInfo(context.Context) ([]sdkboxlite.BoxInfo, error) {
 	return r.infos, nil
-}
-
-func (r *stubBoxReader) GetBoxState(_ context.Context, boxID string) (enums.BoxState, error) {
-	state, ok := r.states[boxID]
-	if !ok {
-		return enums.BoxStateUnknown, fmt.Errorf("box %s not found", boxID)
-	}
-	return state, nil
 }
 
 // remoteBox builds the wire shape the generated client requires for a Box —
@@ -199,7 +140,6 @@ func (s *runnerAPIStub) handler(t *testing.T) http.Handler {
 func newSyncServiceForTest(
 	server *httptest.Server,
 	reader boxStateReader,
-	homeDir string,
 ) *BoxSyncService {
 	config := apiclient.NewConfiguration()
 	config.Servers = apiclient.ServerConfigurations{{URL: server.URL}}
@@ -208,31 +148,22 @@ func newSyncServiceForTest(
 	return &BoxSyncService{
 		log:     slog.Default(),
 		boxlite: reader,
-		homeDir: homeDir,
 		client:  apiclient.NewAPIClient(config),
 	}
 }
 
-func TestPerformSyncConfirmsTransitionalBoxOnlyWithAStartRecord(t *testing.T) {
+func TestPerformSyncConfirmsTransitionalBoxOnlyWithAConfirmedStart(t *testing.T) {
 	tests := []struct {
 		name          string
-		writeRecord   bool
-		recordPID     int
+		startedAt     time.Time
 		wantStateSent bool
 	}{
-		{name: "start record matches the live shim", writeRecord: true, recordPID: 77, wantStateSent: true},
-		{name: "no start record", writeRecord: false, wantStateSent: false},
-		{name: "start record names a dead shim", writeRecord: true, recordPID: 76, wantStateSent: false},
+		{name: "container start confirmed", startedAt: time.Now(), wantStateSent: true},
+		{name: "running but init never launched", wantStateSent: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			homeDir := t.TempDir()
-			if tt.writeRecord {
-				writeStartedRecord(t, homeDir, "box-1",
-					fmt.Sprintf(`{"pid":%d,"at_unix_ms":%d}`, tt.recordPID, time.Now().UnixMilli()))
-			}
-
 			api := &runnerAPIStub{
 				startedBoxes: []map[string]any{},
 				transitionalBoxes: []map[string]any{
@@ -243,11 +174,15 @@ func TestPerformSyncConfirmsTransitionalBoxOnlyWithAStartRecord(t *testing.T) {
 			defer server.Close()
 
 			reader := &stubBoxReader{
-				infos:  []sdkboxlite.BoxInfo{{ID: "box-1", State: sdkboxlite.StateRunning, PID: 77}},
-				states: map[string]enums.BoxState{"box-1": enums.BoxStateStarted},
+				infos: []sdkboxlite.BoxInfo{{
+					ID:        "box-1",
+					State:     sdkboxlite.StateRunning,
+					PID:       77,
+					StartedAt: tt.startedAt,
+				}},
 			}
 
-			service := newSyncServiceForTest(server, reader, homeDir)
+			service := newSyncServiceForTest(server, reader)
 			if err := service.PerformSync(context.Background()); err != nil {
 				t.Fatalf("PerformSync: %v", err)
 			}
@@ -276,11 +211,10 @@ func TestPerformSyncStillReconcilesStartedBoxesWhenTransitionalQueryIsRejected(t
 	defer server.Close()
 
 	reader := &stubBoxReader{
-		infos:  []sdkboxlite.BoxInfo{{ID: "box-gone", State: sdkboxlite.StateStopped, PID: 0}},
-		states: map[string]enums.BoxState{"box-gone": enums.BoxStateStopped},
+		infos: []sdkboxlite.BoxInfo{{ID: "box-gone", State: sdkboxlite.StateStopped, PID: 0}},
 	}
 
-	service := newSyncServiceForTest(server, reader, t.TempDir())
+	service := newSyncServiceForTest(server, reader)
 	if err := service.PerformSync(context.Background()); err != nil {
 		t.Fatalf("PerformSync must not fail when the transitional query is rejected: %v", err)
 	}

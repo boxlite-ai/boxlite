@@ -14,7 +14,7 @@ import (
 // (sdks/c/src/info.rs status_to_str) rather than via the SDK's State constants,
 // so this file keeps compiling — and keeps failing behaviorally — if the
 // mapping and the constants it depends on are reverted together.
-func TestApiStateFromCore(t *testing.T) {
+func TestToBoxState(t *testing.T) {
 	for _, tc := range []struct {
 		core boxlite.State
 		want enums.BoxState
@@ -32,8 +32,8 @@ func TestApiStateFromCore(t *testing.T) {
 		{"unknown", enums.BoxStateUnknown},
 		{"a-status-core-gained-later", enums.BoxStateUnknown},
 	} {
-		if got := apiStateFromCore(tc.core); got != tc.want {
-			t.Errorf("apiStateFromCore(%q) = %q, want %q", tc.core, got, tc.want)
+		if got := ToBoxState(tc.core); got != tc.want {
+			t.Errorf("ToBoxState(%q) = %q, want %q", tc.core, got, tc.want)
 		}
 	}
 }
@@ -41,9 +41,9 @@ func TestApiStateFromCore(t *testing.T) {
 // Every status the runtime can currently report must reach a state other than
 // Unknown, which the API bills as compute-consuming. This list is maintained by
 // hand, so it catches a mapping that regresses — not a status the core adds.
-func TestApiStateFromCoreLeavesNoCurrentStatusUnmapped(t *testing.T) {
+func TestToBoxStateLeavesNoCurrentStatusUnmapped(t *testing.T) {
 	for _, status := range []boxlite.State{"configured", "running", "stopping", "stopped", "paused", "failed"} {
-		if got := apiStateFromCore(status); got == enums.BoxStateUnknown {
+		if got := ToBoxState(status); got == enums.BoxStateUnknown {
 			t.Errorf("core status %q fell through to Unknown", status)
 		}
 	}
