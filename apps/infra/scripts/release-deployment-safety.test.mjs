@@ -145,11 +145,25 @@ test('manual dev deployment previews and reconciles the full stack in guarded Gi
   assert.ok(installStep, 'the SST provider installation step is missing')
   assert.equal(installStep.run, 'npm run --silent sst -- install --stage dev')
   assert.ok(previewStep, 'the full-stack preview step is missing')
-  assert.match(previewStep.run, /npm run --silent sst -- diff --stage dev --policy \. --json/)
-  assert.match(previewStep.run, /node scripts\/deployment-preview\.mjs/)
+  assert.equal(previewStep.if, undefined, 'Preview validation must not be conditional')
+  assert.equal(previewStep['continue-on-error'], undefined, 'Preview failures must stop deployment')
+  assert.equal(previewStep.shell, 'bash')
+  assert.equal(
+    previewStep.run,
+    [
+      'set -euo pipefail',
+      'npm run --silent sst -- diff --stage dev --policy . --json |',
+      '  node scripts/deployment-preview.mjs',
+      '',
+    ].join('\n'),
+  )
   assert.ok(deployStep, 'the full-stack deployment step is missing')
   assert.equal(deployStep.if, '${{ inputs.apply }}')
   assert.equal(deployStep.run, 'npm run deploy -- --stage dev --policy .')
+  assert.ok(
+    workflow.jobs.deploy.steps.indexOf(previewStep) < workflow.jobs.deploy.steps.indexOf(deployStep),
+    'Preview validation must complete before deployment',
+  )
   assert.ok(
     workflow.jobs.deploy.steps.indexOf(safetyTestStep) < workflow.jobs.deploy.steps.indexOf(previewStep),
     'Runner lifecycle contracts must be tested before the deployment preview',
