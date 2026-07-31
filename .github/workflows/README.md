@@ -171,6 +171,26 @@ the labeled head commit — re-label after new pushes.
 See the **[E2E Local CI runbook](../../docs/ci/e2e-local.md)** for the jobs, the instance,
 one-time provisioning (`scripts/ci/setup-ci-runner.sh`), and troubleshooting.
 
+### `build-box-images.yml` / `release-box-images.yml`
+
+The box images in `apps/box-images/` (`base`, `python`, `node`) carry their own `VERSION`,
+independent of the product version, so build and release are split:
+
+- **`build-box-images.yml`** validates. On PRs and `main` it builds all three flavors for
+  `linux/amd64` and `linux/arm64` with `PUSH=0`, which exercises every layer without
+  publishing. It holds `contents: read` only and has no registry login, so it cannot write
+  to GHCR.
+- **`release-box-images.yml`** publishes, and is the only workflow that can. It runs on an
+  `apps/box-images/vMAJOR.MINOR.PATCH` tag — the same path-prefixed convention as the
+  `sdks/go/v*` tags — or on manual dispatch, and only from a release tag or `main`. The tag
+  must agree with `apps/box-images/VERSION`, and publishing aborts if that version already
+  exists on GHCR unless dispatched with `allow-overwrite`, so a rebuild cannot silently move
+  the tag a running box pulls. The existence check reads the registry API and branches on the
+  HTTP status: only a 404 counts as free, so a 5xx or an expired token stops the release
+  instead of reading as "not published".
+
+Releasing is therefore an explicit tag; merging to `main` does not publish.
+
 ## Trigger Behavior
 
 | Change | warm-caches | build-runtime | build-wheels | build-node |

@@ -32,14 +32,14 @@ async def test_write_and_run_python_script(box):
     )
     # Write the script
     ex = await box.exec(
-        "sh", ["-c", f"cat > /root/test.py << 'PYEOF'\n{script}PYEOF"],
+        "sh", ["-c", f"cat > /workspace/test.py << 'PYEOF'\n{script}PYEOF"],
     )
     await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
     assert rc.exit_code == 0, f"writing script failed: rc={rc.exit_code}"
 
     # Run it
-    ex = await box.exec("python3", ["/root/test.py"])
+    ex = await box.exec("python3", ["/workspace/test.py"])
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
     assert rc.exit_code == 0, f"python3 failed: rc={rc.exit_code}"
@@ -55,18 +55,18 @@ async def test_write_and_run_shell_script(box):
     """User creates a shell script, makes it executable, runs it."""
     ex = await box.exec(
         "sh", ["-c",
-               'cat > /root/greet.sh << \'EOF\'\n'
+               'cat > /workspace/greet.sh << \'EOF\'\n'
                '#!/bin/sh\n'
                'NAME="${1:-World}"\n'
                'echo "Hello, ${NAME}! Today is $(date +%A)."\n'
                'EOF\n'
-               'chmod +x /root/greet.sh'],
+               'chmod +x /workspace/greet.sh'],
     )
     await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
     assert rc.exit_code == 0
 
-    ex = await box.exec("/root/greet.sh", ["BoxliteUser"])
+    ex = await box.exec("/workspace/greet.sh", ["BoxliteUser"])
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
     assert rc.exit_code == 0
@@ -82,7 +82,7 @@ async def test_data_processing_pipeline(box):
     # Step 1: Create CSV data
     csv_data = "name,score\\nAlice,85\\nBob,92\\nCharlie,78\\nDiana,95"
     ex = await box.exec(
-        "sh", ["-c", f'printf "{csv_data}" > /root/scores.csv'],
+        "sh", ["-c", f'printf "{csv_data}" > /workspace/scores.csv'],
     )
     await drain(ex)
     await asyncio.wait_for(ex.wait(), timeout=30)
@@ -91,7 +91,7 @@ async def test_data_processing_pipeline(box):
     ex = await box.exec(
         "sh", ["-c",
                "awk -F, 'NR>1 {sum+=$2; n++} END {printf \"avg=%.1f n=%d\\n\", sum/n, n}' "
-               "/root/scores.csv"],
+               "/workspace/scores.csv"],
     )
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
@@ -102,7 +102,7 @@ async def test_data_processing_pipeline(box):
     # Step 3: Find top scorer with sort
     ex = await box.exec(
         "sh", ["-c",
-               "tail -n+2 /root/scores.csv | sort -t, -k2 -rn | head -1"],
+               "tail -n+2 /workspace/scores.csv | sort -t, -k2 -rn | head -1"],
     )
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
@@ -141,7 +141,7 @@ async def test_pip_install_and_use(box):
 async def test_git_workflow(box):
     """User initialises a git repo, adds a file, commits."""
     cmds = (
-        "cd /root && "
+        "cd /workspace && "
         "git init myproject 2>&1 && "
         "cd myproject && "
         "echo 'print(\"hello\")' > main.py && "
@@ -171,13 +171,13 @@ async def test_upload_process_download(box):
     with tempfile.TemporaryDirectory() as tmpdir:
         src = Path(tmpdir) / "input.txt"
         src.write_text(input_text)
-        await box.copy_in(str(src), "/root/input.txt")
+        await box.copy_in(str(src), "/workspace/input.txt")
 
     # Process: uppercase + word count
     ex = await box.exec(
         "sh", ["-c",
-               "tr '[:lower:]' '[:upper:]' < /root/input.txt > /root/upper.txt && "
-               "wc -w < /root/input.txt | tr -d ' ' > /root/count.txt"],
+               "tr '[:lower:]' '[:upper:]' < /workspace/input.txt > /workspace/upper.txt && "
+               "wc -w < /workspace/input.txt | tr -d ' ' > /workspace/count.txt"],
     )
     await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
@@ -185,8 +185,8 @@ async def test_upload_process_download(box):
 
     # Download results
     with tempfile.TemporaryDirectory() as tmpdir:
-        await box.copy_out("/root/upper.txt", str(Path(tmpdir) / "upper.txt"))
-        await box.copy_out("/root/count.txt", str(Path(tmpdir) / "count.txt"))
+        await box.copy_out("/workspace/upper.txt", str(Path(tmpdir) / "upper.txt"))
+        await box.copy_out("/workspace/count.txt", str(Path(tmpdir) / "count.txt"))
 
         upper = (Path(tmpdir) / "upper.txt").read_text()
         count = (Path(tmpdir) / "count.txt").read_text().strip()
@@ -210,9 +210,9 @@ async def test_compile_and_run_c(box):
     )
     ex = await box.exec(
         "sh", ["-c",
-               f'printf "{c_code}" > /root/test.c && '
-               "gcc -o /root/test /root/test.c && "
-               "/root/test"],
+               f'printf "{c_code}" > /workspace/test.c && '
+               "gcc -o /workspace/test /workspace/test.c && "
+               "/workspace/test"],
     )
     out, err = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=60)
@@ -282,9 +282,9 @@ async def test_file_permissions_workflow(box):
     """User creates files with specific permissions and verifies them."""
     ex = await box.exec(
         "sh", ["-c",
-               "echo secret > /root/private.txt && chmod 600 /root/private.txt && "
-               "echo public > /root/public.txt && chmod 644 /root/public.txt && "
-               "stat -c '%a %n' /root/private.txt /root/public.txt"],
+               "echo secret > /workspace/private.txt && chmod 600 /workspace/private.txt && "
+               "echo public > /workspace/public.txt && chmod 644 /workspace/public.txt && "
+               "stat -c '%a %n' /workspace/private.txt /workspace/public.txt"],
     )
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
@@ -316,14 +316,14 @@ async def test_python_multifile_project(box):
     # Create project structure
     ex = await box.exec(
         "sh", ["-c",
-               "mkdir -p /root/myapp && "
-               "cat > /root/myapp/utils.py << 'EOF'\n"
+               "mkdir -p /workspace/myapp && "
+               "cat > /workspace/myapp/utils.py << 'EOF'\n"
                "def greet(name):\n"
                "    return f'Hello, {name}!'\n"
                "def add(a, b):\n"
                "    return a + b\n"
                "EOF\n"
-               "cat > /root/myapp/main.py << 'EOF'\n"
+               "cat > /workspace/myapp/main.py << 'EOF'\n"
                "from utils import greet, add\n"
                "print(greet('E2E'))\n"
                "print(f'sum={add(17, 25)}')\n"
@@ -334,8 +334,8 @@ async def test_python_multifile_project(box):
     assert rc.exit_code == 0
 
     # Run the project
-    ex = await box.exec("python3", ["/root/myapp/main.py"],
-                        cwd="/root/myapp")
+    ex = await box.exec("python3", ["/workspace/myapp/main.py"],
+                        cwd="/workspace/myapp")
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
     assert rc.exit_code == 0

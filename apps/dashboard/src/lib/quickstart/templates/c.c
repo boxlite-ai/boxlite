@@ -153,7 +153,7 @@ int main(void) {
 
     require_ok(
         boxlite_options_new(
-            "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3",
+            "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0",
             &box_options,
             &error
         ),

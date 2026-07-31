@@ -267,13 +267,13 @@ async def test_exec_cwd_nonexistent_returns_error(box):
 @pytest.mark.asyncio
 async def test_exec_cwd_with_spaces(box):
     """Working directory with spaces must be handled correctly."""
-    await box.exec("mkdir", ["-p", "/root/dir with spaces"])
-    ex = await box.exec("pwd", [], cwd="/root/dir with spaces")
+    await box.exec("mkdir", ["-p", "/workspace/dir with spaces"])
+    ex = await box.exec("pwd", [], cwd="/workspace/dir with spaces")
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
     # mkdir might fail if unsupported; only assert if pwd succeeded
     if rc.exit_code == 0:
-        assert out.strip() == "/root/dir with spaces", f"cwd with spaces failed: {out!r}"
+        assert out.strip() == "/workspace/dir with spaces", f"cwd with spaces failed: {out!r}"
 
 
 # ── command not found ──────────────────────────────────────────────

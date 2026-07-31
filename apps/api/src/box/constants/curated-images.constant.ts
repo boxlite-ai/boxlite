@@ -36,17 +36,17 @@ const BUILTIN_IMAGE_SOURCES: BuiltinImageSource[] = [
   {
     name: 'base',
     envVar: 'BOXLITE_SYSTEM_BASE_IMAGE',
-    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3',
+    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0',
   },
   {
     name: 'python',
     envVar: 'BOXLITE_SYSTEM_PYTHON_IMAGE',
-    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3',
+    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0',
   },
   {
     name: 'node',
     envVar: 'BOXLITE_SYSTEM_NODE_IMAGE',
-    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3',
+    fallbackRef: 'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0',
   },
 ]
 

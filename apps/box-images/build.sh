@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail # Fail fast on command errors, unset variables, and broken pipes.
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" # Repository root, also the Docker build context.
-VERSION_FILE="$ROOT_DIR/images/agent-runtime/VERSION" # Agent image release version source of truth.
+IMAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # Dockerfiles and VERSION live beside this script.
+ROOT_DIR="$(cd "$IMAGE_DIR/../.." && pwd)" # Repository root, also the Docker build context.
+VERSION_FILE="$IMAGE_DIR/VERSION" # Box image release version source of truth.
 
 REGISTRY="${REGISTRY:-ghcr.io/boxlite-ai}" # Target registry namespace for the three image packages.
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}" # Default publish target covers Intel and ARM Linux hosts.
@@ -68,7 +69,7 @@ parse_platforms() { # Validate the comma-separated PLATFORMS input before any bu
 build_image() { # Build or publish one of base, python, or node with the shared version tag.
   local image="$1"
   local tag="$2"
-  local dockerfile="$ROOT_DIR/images/agent-runtime/${image}.Dockerfile" # Dockerfile selected by image flavor.
+  local dockerfile="$IMAGE_DIR/${image}.Dockerfile" # Dockerfile selected by image flavor.
   local target="$REGISTRY/boxlite-agent-${image}:$tag" # Existing GHCR package name plus version tag.
   local -a build_args=(buildx build --platform "$PLATFORMS" -f "$dockerfile" -t "$target") # Common Buildx arguments.
 

@@ -43,7 +43,7 @@ ADMIN_KEY = (
     or _read_admin_key_from_secrets()
     or "devkey"   # only used when bootstrap hasn't run yet
 )
-SNAPSHOTS_TO_REGISTER = ["ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3", "ubuntu:22.04", "ubuntu:24.04"]
+SNAPSHOTS_TO_REGISTER = ["ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0", "ubuntu:22.04", "ubuntu:24.04"]
 SNAPSHOT_WAIT_SECONDS = 180
 CRED_PATH = (
     Path(os.environ["BOXLITE_HOME"]) / "credentials.toml"

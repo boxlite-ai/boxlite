@@ -7,9 +7,9 @@
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { assertSupportedImage, supportedImages } from './curated-images.constant'
 
-const BASE_REF = 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3'
-const PYTHON_REF = 'ghcr.io/boxlite-ai/boxlite-agent-python:20260605-p0-r3'
-const NODE_REF = 'ghcr.io/boxlite-ai/boxlite-agent-node:20260605-p0-r3'
+const BASE_REF = 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0'
+const PYTHON_REF = 'ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0'
+const NODE_REF = 'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0'
 
 describe('supported image allowlist', () => {
   const ENV_KEYS = [

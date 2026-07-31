@@ -35,7 +35,7 @@ sys.path.insert(
     str(Path(__file__).resolve().parents[4] / "scripts" / "test" / "e2e" / "lib"),
 )
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
-IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3")
+IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0")
 CLI_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
 BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
 

@@ -52,7 +52,7 @@ def test_go_sdk_create_exec_remove(go_binary):
     env = {
         **os.environ,
         **ctx.api_key_sdk_env(),
-        "BOXLITE_E2E_IMAGE": os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3"),
+        "BOXLITE_E2E_IMAGE": os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0"),
         # CGO dev tag — uses libboxlite.so from the workspace target/release,
         # not a vendored prebuilt one.
         "LD_LIBRARY_PATH": str(REPO / "target/release"),

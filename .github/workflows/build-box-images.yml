@@ -1,0 +1,48 @@
+name: Build Box Images
+
+# Validation only — proves every flavor still builds for both architectures. Publishing lives in
+# release-box-images.yml, triggered by an apps/box-images/v* tag, so exactly one workflow can write
+# to GHCR and a Dockerfile edit can no longer move an already-published version tag.
+on:
+  pull_request:
+    paths:
+      - 'apps/box-images/**' # Dockerfiles, VERSION and the build script define image contents.
+      - '.dockerignore' # Docker context changes can change what lands in the image.
+      - '.github/workflows/build-box-images.yml' # Workflow changes should validate themselves.
+  push:
+    branches: [main] # Catch anything that reached main without a PR run.
+    paths:
+      - 'apps/box-images/**'
+      - '.dockerignore'
+      - '.github/workflows/build-box-images.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read # Checkout only needs repository read access; this job never pushes.
+
+concurrency:
+  group: build-box-images-${{ github.ref }} # Serialize per branch/ref.
+  cancel-in-progress: true # A newer commit supersedes an in-flight validation build.
+
+jobs:
+  build:
+    name: Build box images (no publish)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # Pin checkout for supply-chain stability.
+        with:
+          persist-credentials: false # Later steps do not need git credentials.
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # Enable cross-arch build emulation.
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # Buildx is required for multi-arch images.
+
+      - name: Build all flavors for both architectures
+        env:
+          PUSH: '0' # PUSH=0 with two platforms validates every build step without publishing.
+          PLATFORMS: linux/amd64,linux/arm64 # Both published architectures must keep building.
+        run: bash apps/box-images/build.sh

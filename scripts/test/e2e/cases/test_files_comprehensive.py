@@ -33,8 +33,8 @@ async def test_large_file_integrity_4mb(box):
     # Create 4 MB deterministic file on the guest
     ex = await box.exec(
         "sh", ["-c",
-               "dd if=/dev/urandom of=/root/big4m bs=4096 count=1024 2>/dev/null "
-               "&& sha256sum /root/big4m"],
+               "dd if=/dev/urandom of=/workspace/big4m bs=4096 count=1024 2>/dev/null "
+               "&& sha256sum /workspace/big4m"],
     )
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=120)
@@ -44,7 +44,7 @@ async def test_large_file_integrity_4mb(box):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         dest = Path(tmpdir) / "big4m"
-        await box.copy_out("/root/big4m", str(dest))
+        await box.copy_out("/workspace/big4m", str(dest))
         assert dest.exists(), "copy_out produced no file"
         host_sha = hashlib.sha256(dest.read_bytes()).hexdigest()
         size = dest.stat().st_size
@@ -60,23 +60,23 @@ async def test_empty_file_roundtrip(box):
     with tempfile.TemporaryDirectory() as tmpdir:
         empty = Path(tmpdir) / "empty.txt"
         empty.write_bytes(b"")
-        await box.copy_in(str(empty), "/root/empty.txt")
+        await box.copy_in(str(empty), "/workspace/empty.txt")
 
-        ex = await box.exec("wc", ["-c", "/root/empty.txt"])
+        ex = await box.exec("wc", ["-c", "/workspace/empty.txt"])
         out, _ = await drain(ex)
         rc = await asyncio.wait_for(ex.wait(), timeout=30)
     assert rc.exit_code == 0
-    # wc -c output like "0 /root/empty.txt"
+    # wc -c output like "0 /workspace/empty.txt"
     assert out.strip().startswith("0"), f"empty file has content: {out!r}"
 
 
 @pytest.mark.asyncio
 async def test_copy_out_empty_file(box):
     """copy_out of an empty file should produce a 0-byte file on host."""
-    await box.exec("touch", ["/root/zero.bin"])
+    await box.exec("touch", ["/workspace/zero.bin"])
     with tempfile.TemporaryDirectory() as tmpdir:
         dest = Path(tmpdir) / "zero.bin"
-        await box.copy_out("/root/zero.bin", str(dest))
+        await box.copy_out("/workspace/zero.bin", str(dest))
         assert dest.exists(), "copy_out didn't create file"
         assert dest.stat().st_size == 0, f"empty file has {dest.stat().st_size} bytes"
 
@@ -96,10 +96,10 @@ async def test_deeply_nested_directory(box):
             recursive=True, overwrite=True,
             follow_symlinks=False, include_parent=True,
         )
-        await box.copy_in(str(Path(tmpdir) / "a"), "/root/nested/", copy_options=opts)
+        await box.copy_in(str(Path(tmpdir) / "a"), "/workspace/nested/", copy_options=opts)
 
         ex = await box.exec(
-            "sh", ["-c", "find /root/nested -type f | sort"],
+            "sh", ["-c", "find /workspace/nested -type f | sort"],
         )
         out, _ = await drain(ex)
         rc = await asyncio.wait_for(ex.wait(), timeout=30)
@@ -119,7 +119,7 @@ async def test_copy_in_overwrites_when_true(box):
     with tempfile.TemporaryDirectory() as tmpdir:
         f1 = Path(tmpdir) / "data.txt"
         f1.write_text("original\n")
-        await box.copy_in(str(f1), "/root/data.txt")
+        await box.copy_in(str(f1), "/workspace/data.txt")
 
     # Overwrite
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -129,9 +129,9 @@ async def test_copy_in_overwrites_when_true(box):
             recursive=False, overwrite=True,
             follow_symlinks=False, include_parent=False,
         )
-        await box.copy_in(str(f2), "/root/data.txt", copy_options=opts)
+        await box.copy_in(str(f2), "/workspace/data.txt", copy_options=opts)
 
-    ex = await box.exec("cat", ["/root/data.txt"])
+    ex = await box.exec("cat", ["/workspace/data.txt"])
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
     assert rc.exit_code == 0
@@ -144,7 +144,7 @@ async def test_copy_out_nonexistent_path_raises(box):
     """copy_out of a path that doesn't exist in the guest should raise."""
     with tempfile.TemporaryDirectory() as tmpdir:
         with pytest.raises(Exception):
-            await box.copy_out("/root/does_not_exist_xyz.bin", str(Path(tmpdir) / "out"))
+            await box.copy_out("/workspace/does_not_exist_xyz.bin", str(Path(tmpdir) / "out"))
 
 
 @pytest.mark.asyncio
@@ -156,10 +156,10 @@ async def test_copy_in_binary_file_integrity(box):
     with tempfile.TemporaryDirectory() as tmpdir:
         src = Path(tmpdir) / "allbytes.bin"
         src.write_bytes(blob)
-        await box.copy_in(str(src), "/root/allbytes.bin")
+        await box.copy_in(str(src), "/workspace/allbytes.bin")
 
     # Hash inside the guest
-    ex = await box.exec("sha256sum", ["/root/allbytes.bin"])
+    ex = await box.exec("sha256sum", ["/workspace/allbytes.bin"])
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
     assert rc.exit_code == 0
@@ -176,9 +176,9 @@ async def test_copy_in_preserves_executable_bit(box):
         script = Path(tmpdir) / "run.sh"
         script.write_text("#!/bin/sh\necho EXECUTED\n")
         script.chmod(0o755)
-        await box.copy_in(str(script), "/root/run.sh")
+        await box.copy_in(str(script), "/workspace/run.sh")
 
-    ex = await box.exec("/root/run.sh", [])
+    ex = await box.exec("/workspace/run.sh", [])
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
     # If permission is preserved, it should execute successfully
@@ -198,10 +198,10 @@ async def test_multiple_files_same_directory(box):
 
         for name in ["alpha.txt", "bravo.txt", "charlie.txt"]:
             await box.copy_in(
-                str(Path(tmpdir) / name), f"/root/multi/{name}",
+                str(Path(tmpdir) / name), f"/workspace/multi/{name}",
             )
 
-    ex = await box.exec("sh", ["-c", "cat /root/multi/*.txt | sort"])
+    ex = await box.exec("sh", ["-c", "cat /workspace/multi/*.txt | sort"])
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
     assert rc.exit_code == 0

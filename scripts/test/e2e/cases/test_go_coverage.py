@@ -19,7 +19,7 @@ from e2e_auth import auth_context
 REPO = Path(__file__).resolve().parents[4]
 GO_SDK = REPO / "sdks/go"
 DRIVERS = REPO / "scripts/test/e2e/sdks/go"
-IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3")
+IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0")
 
 
 def _build_go(src_name: str) -> Path:

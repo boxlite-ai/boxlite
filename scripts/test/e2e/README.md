@@ -83,7 +83,7 @@ export BOXLITE_E2E_AUTH=api-key
 export BOXLITE_E2E_PREFIX=<org-path-prefix>
 
 # Image must exist on the remote runner:
-export BOXLITE_E2E_IMAGE=ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3
+export BOXLITE_E2E_IMAGE=ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0
 
 # Skip local-only checks (journalctl, runner log):
 export BOXLITE_E2E_SKIP_PATH_VERIFY=1

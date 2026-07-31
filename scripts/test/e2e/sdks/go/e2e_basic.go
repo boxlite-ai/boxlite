@@ -32,7 +32,7 @@ func main() {
 	url := env("BOXLITE_E2E_URL", "http://localhost:3000/api")
 	apiKey := env("BOXLITE_E2E_API_KEY", "devkey")
 	prefix := env("BOXLITE_E2E_PREFIX", "")
-	image := env("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3")
+	image := env("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0")
 
 	rt, err := boxlite.NewRest(boxlite.BoxliteRestOptions{
 		URL:        url,

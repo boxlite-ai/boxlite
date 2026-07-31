@@ -49,7 +49,7 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
   const url = env('BOXLITE_E2E_URL', 'http://localhost:3000/api');
   const apiKey = env('BOXLITE_E2E_API_KEY', 'devkey');
   const prefix = env('BOXLITE_E2E_PREFIX', '');
-  const image = env('BOXLITE_E2E_IMAGE', 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3');
+  const image = env('BOXLITE_E2E_IMAGE', 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0');
 
   const rt = JsBoxlite.rest(new BoxliteRestOptions({
     url,
@@ -358,12 +358,12 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
         const src = path.join(tmpDir, 'persist-in.txt');
         const dst = path.join(tmpDir, 'persist-out.txt');
         fs.writeFileSync(src, 'persist-me\n');
-        await b.copyIn(src, '/root/marker.txt');
+        await b.copyIn(src, '/workspace/marker.txt');
         await b.stop();
         await new Promise((r) => setTimeout(r, 1000));
         await b.start();
         await new Promise((r) => setTimeout(r, 2000));
-        await b.copyOut('/root/marker.txt', dst);
+        await b.copyOut('/workspace/marker.txt', dst);
         if (fs.readFileSync(dst, 'utf-8') !== 'persist-me\n') die(`rootfs data lost across stop/start`);
         console.log('LIFECYCLE_STOP_START=ok');
       } finally {
@@ -393,10 +393,10 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
       const o2 = path.join(tmpDir, 'iso2-out.txt');
       fs.writeFileSync(s1, 'BOX_ONE\n');
       fs.writeFileSync(s2, 'BOX_TWO\n');
-      await b1.copyIn(s1, '/root/who.txt');
-      await b2.copyIn(s2, '/root/who.txt');
-      await b1.copyOut('/root/who.txt', o1);
-      await b2.copyOut('/root/who.txt', o2);
+      await b1.copyIn(s1, '/workspace/who.txt');
+      await b2.copyIn(s2, '/workspace/who.txt');
+      await b1.copyOut('/workspace/who.txt', o1);
+      await b2.copyOut('/workspace/who.txt', o2);
       if (fs.readFileSync(o1, 'utf-8') !== 'BOX_ONE\n') die(`box1 wrong data`);
       if (fs.readFileSync(o2, 'utf-8') !== 'BOX_TWO\n') die(`box2 wrong data (leak?)`);
       console.log('TWO_BOXES_ISOLATED=ok');

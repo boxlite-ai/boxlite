@@ -14,7 +14,7 @@ REST/runner path could plausibly diverge from local FFI.
 Path note: copy_in / copy_out operate on the box's container rootfs,
 not tmpfs mounts. `/tmp` in the guest is a tmpfs (its writes never hit
 the rootfs disk and so are invisible to copy_out). Always copy under
-`/root/...` to keep tests deterministic.
+`/workspace/...` to keep tests deterministic.
 """
 
 from __future__ import annotations
@@ -40,9 +40,9 @@ async def test_copy_in_text_roundtrips_byte_exact(box):
         host_file.write_bytes(payload.encode("utf-8"))
 
         # Dest is a FULL file path (matching copy.rs::single_file_roundtrip).
-        await box.copy_in(str(host_file), "/root/hello.txt")
+        await box.copy_in(str(host_file), "/workspace/hello.txt")
 
-        ex = await box.exec("cat", ["/root/hello.txt"], None)
+        ex = await box.exec("cat", ["/workspace/hello.txt"], None)
         out, _ = await drain(ex)
         rc = await asyncio.wait_for(ex.wait(), timeout=30)
     assert rc.exit_code == 0, f"cat of copied file failed: rc={rc.exit_code}"
@@ -57,14 +57,14 @@ async def test_copy_out_binary_roundtrips_sha256(box):
     matches the guest-side sha256. Catches any silent transcoding /
     truncation in the streaming path.
 
-    Writes to /root (rootfs disk) — `/tmp` is tmpfs and copy_out can't
+    Writes to /workspace (rootfs disk) — `/tmp` is tmpfs and copy_out can't
     see it."""
     # Generate blob on the rootfs disk + hash it (guest hash is the
     # ground truth).
     ex = await box.exec(
         "sh", ["-c",
-               "dd if=/dev/urandom of=/root/blob bs=4096 count=64 2>/dev/null "
-               "&& sha256sum /root/blob && sync"], None,
+               "dd if=/dev/urandom of=/workspace/blob bs=4096 count=64 2>/dev/null "
+               "&& sha256sum /workspace/blob && sync"], None,
     )
     out, _ = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=60)
@@ -74,7 +74,7 @@ async def test_copy_out_binary_roundtrips_sha256(box):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         dest_file = Path(tmpdir) / "blob_copy"
-        await box.copy_out("/root/blob", str(dest_file))
+        await box.copy_out("/workspace/blob", str(dest_file))
         assert dest_file.exists(), (
             f"copy_out produced no file at {dest_file}: "
             f"contents={list(Path(tmpdir).rglob('*'))}"
@@ -103,17 +103,17 @@ async def test_copy_in_directory_include_parent_false(box):
             follow_symlinks=False,
             include_parent=False,
         )
-        await box.copy_in(str(root), "/root/flatdest/", copy_options=opts)
+        await box.copy_in(str(root), "/workspace/flatdest/", copy_options=opts)
 
         ex = await box.exec(
-            "sh", ["-c", "find /root/flatdest -type f | sort"], None,
+            "sh", ["-c", "find /workspace/flatdest -type f | sort"], None,
         )
         out, _ = await drain(ex)
         rc = await asyncio.wait_for(ex.wait(), timeout=30)
     assert rc.exit_code == 0, f"find inside guest failed: rc={rc.exit_code}"
     files = [ln for ln in out.split("\n") if ln]
-    assert "/root/flatdest/top.txt" in files, f"top file missing: {files}"
-    assert "/root/flatdest/sub/deep.txt" in files, (
+    assert "/workspace/flatdest/top.txt" in files, f"top file missing: {files}"
+    assert "/workspace/flatdest/sub/deep.txt" in files, (
         f"nested file missing — copy_in didn't recurse: {files}"
     )
 
@@ -131,7 +131,7 @@ async def test_copy_in_overwrite_false_rejects_conflict(rt, image):
     try:
         # Seed the guest with content the host file should NOT overwrite.
         ex = await b.exec(
-            "sh", ["-c", "echo guest-original > /root/v.txt"], None,
+            "sh", ["-c", "echo guest-original > /workspace/v.txt"], None,
         )
         await drain(ex)
         await asyncio.wait_for(ex.wait(), timeout=30)
@@ -148,11 +148,11 @@ async def test_copy_in_overwrite_false_rejects_conflict(rt, image):
             # The FFI suite asserts this raises; over REST a non-raising
             # silent-keep is also a correct implementation. Accept both.
             try:
-                await b.copy_in(str(host_file), "/root/v.txt", copy_options=opts)
+                await b.copy_in(str(host_file), "/workspace/v.txt", copy_options=opts)
             except Exception:
                 pass
 
-            ex = await b.exec("cat", ["/root/v.txt"], None)
+            ex = await b.exec("cat", ["/workspace/v.txt"], None)
             out, _ = await drain(ex)
             await asyncio.wait_for(ex.wait(), timeout=30)
         assert "guest-original" in out, (

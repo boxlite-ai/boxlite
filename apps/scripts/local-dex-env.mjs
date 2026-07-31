@@ -178,9 +178,9 @@ function ensureRegistry(config) {
 
 function ensureRuntimeImages(config) {
   const images = [
-    ['base', runtimeImageRef(config, 'base'), path.join(repoRoot, 'images', 'agent-runtime', 'base.Dockerfile')],
-    ['python', runtimeImageRef(config, 'python'), path.join(repoRoot, 'images', 'agent-runtime', 'python.Dockerfile')],
-    ['node', runtimeImageRef(config, 'node'), path.join(repoRoot, 'images', 'agent-runtime', 'node.Dockerfile')],
+    ['base', runtimeImageRef(config, 'base'), path.join(repoRoot, 'apps', 'box-images', 'base.Dockerfile')],
+    ['python', runtimeImageRef(config, 'python'), path.join(repoRoot, 'apps', 'box-images', 'python.Dockerfile')],
+    ['node', runtimeImageRef(config, 'node'), path.join(repoRoot, 'apps', 'box-images', 'node.Dockerfile')],
   ]
 
   for (const [name, imageRef, dockerfile] of images) {

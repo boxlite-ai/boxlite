@@ -29,7 +29,7 @@ async def test_stop_start_preserves_rootfs(rt, image):
     b = await rt.create(boxlite.BoxOptions(image=image, auto_remove=False))
     try:
         # Write a file
-        ex = await b.exec("sh", ["-c", "echo persist-me > /root/marker.txt"])
+        ex = await b.exec("sh", ["-c", "echo persist-me > /workspace/marker.txt"])
         await drain(ex)
         rc = await asyncio.wait_for(ex.wait(), timeout=30)
         assert rc.exit_code == 0
@@ -45,7 +45,7 @@ async def test_stop_start_preserves_rootfs(rt, image):
         await asyncio.sleep(2)
 
         # Read back
-        ex = await b.exec("cat", ["/root/marker.txt"])
+        ex = await b.exec("cat", ["/workspace/marker.txt"])
         out, _ = await drain(ex)
         rc = await asyncio.wait_for(ex.wait(), timeout=30)
         assert rc.exit_code == 0
@@ -174,20 +174,20 @@ async def test_two_boxes_are_isolated(rt, image):
     b2 = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
     try:
         # Write unique markers
-        ex1 = await b1.exec("sh", ["-c", "echo BOX_ONE > /root/who.txt"])
+        ex1 = await b1.exec("sh", ["-c", "echo BOX_ONE > /workspace/who.txt"])
         await drain(ex1)
         await asyncio.wait_for(ex1.wait(), timeout=30)
 
-        ex2 = await b2.exec("sh", ["-c", "echo BOX_TWO > /root/who.txt"])
+        ex2 = await b2.exec("sh", ["-c", "echo BOX_TWO > /workspace/who.txt"])
         await drain(ex2)
         await asyncio.wait_for(ex2.wait(), timeout=30)
 
         # Read back — each box should see its own marker
-        ex1 = await b1.exec("cat", ["/root/who.txt"])
+        ex1 = await b1.exec("cat", ["/workspace/who.txt"])
         out1, _ = await drain(ex1)
         await asyncio.wait_for(ex1.wait(), timeout=30)
 
-        ex2 = await b2.exec("cat", ["/root/who.txt"])
+        ex2 = await b2.exec("cat", ["/workspace/who.txt"])
         out2, _ = await drain(ex2)
         await asyncio.wait_for(ex2.wait(), timeout=30)
 

@@ -27,11 +27,11 @@ from pathlib import Path
 # repo root: this file is <repo>/apps/infra-local/compose/_local_arm64.py
 REPO = Path(__file__).resolve().parents[3]
 
-# The box base image. The curated agent images are now published multi-arch
+# The box base image. The curated agent images are published multi-arch
 # (linux/amd64 + linux/arm64) under the v0.1.0 tag, so the runner pulls the
 # arch matching the host straight from ghcr — no local arm64 build/push to the
-# L1 registry. (The default curated tag, …-p0-r3, is still amd64-only, hence
-# the explicit v0.1.0 override for local arm64 dev.)
+# L1 registry. This now matches the curated default, so the override only
+# changes anything when BOXLITE_LOCAL_AGENT_IMAGE points elsewhere.
 REMOTE_AGENT_IMAGE = os.environ.get(
     "BOXLITE_LOCAL_AGENT_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0"
 )
@@ -235,12 +235,12 @@ def ensure_local_boxlite() -> None:
 def resolve_agent_image() -> str | None:
     """The box base image ref to use as BOXLITE_SYSTEM_BASE_IMAGE.
 
-    The published agent image is now multi-arch (linux/arm64 included), so the
+    The published agent image is multi-arch (linux/arm64 included), so the
     runner pulls the host-matching arch straight from ghcr — no local build or
     L1-registry push. Returns the remote ref when ghcr creds are available (the
     runner needs them to pull a private image), else None so the caller leaves
-    the curated default in place (amd64-only — won't boot on arm64, but the
-    failure is then an explicit, logged pull error rather than a silent one)."""
+    the curated default in place — now the same multi-arch tag, so a missing-
+    creds failure surfaces as an explicit, logged pull error."""
     u, t = ghcr_creds()
     if not (u and t):
         print("  no ghcr.io creds (try `gh auth login` or `docker login ghcr.io`) — "

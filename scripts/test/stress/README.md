@@ -88,7 +88,7 @@ make test:stress:api-create-box-local
 
 Defaults:
 
-- image: `ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3`
+- image: `ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0`
 - resources: `1` CPU, `256` MiB memory, `1` GiB disk
 - cleanup: enabled (`DELETE /boxes/<boxId>` after each successful create)
 - rate: ramps to `0.1` creates/sec, about one create every 10 seconds
@@ -96,7 +96,7 @@ Defaults:
 Useful overrides:
 
 ```bash
-BOXLITE_STRESS_IMAGE=ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3 \
+BOXLITE_STRESS_IMAGE=ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0 \
 BOXLITE_STRESS_RATE_3=0.2 \
 BOXLITE_STRESS_CLEANUP=1 \
 make test:stress:api-create-box-local

@@ -64,7 +64,7 @@ def test_c_sdk_create_remove(c_binary):
     env = {
         **os.environ,
         **ctx.api_key_sdk_env(),
-        "BOXLITE_E2E_IMAGE": os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3"),
+        "BOXLITE_E2E_IMAGE": os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0"),
         "LD_LIBRARY_PATH": str(LIB_DIR),
     }
     r = subprocess.run(

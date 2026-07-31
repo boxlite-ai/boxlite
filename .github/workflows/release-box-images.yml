@@ -1,0 +1,172 @@
+name: Release Box Images
+
+# The only workflow that writes to GHCR. Driven by an `apps/box-images/vMAJOR.MINOR.PATCH` tag so
+# the box images keep a release line independent of the product version (same convention as the
+# existing `sdks/go/v*` tags). Publishing refuses to move a version tag that already exists, so a
+# rebuild can never silently replace the bytes a running box pulls.
+on:
+  push:
+    tags:
+      - 'apps/box-images/v*' # Path-prefixed tag keeps this release line separate from product v*.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, with or without leading v. Defaults to apps/box-images/VERSION.'
+        required: false
+        type: string
+      allow-overwrite:
+        description: 'Republish even if the version tag already exists on GHCR. Moves a published tag.'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read # Checkout only needs repository read access.
+  packages: write # GHCR push requires package write access.
+
+concurrency:
+  group: release-box-images # One release at a time, repository-wide.
+  cancel-in-progress: false # Never cancel an in-flight publish.
+
+jobs:
+  release:
+    name: Publish box images
+    runs-on: ubuntu-latest
+    # The workflow this replaced allowed publishing only from main; workflow_dispatch can target
+    # any ref, so keep that restriction. A release tag is the other legitimate source.
+    if: github.ref_type == 'tag' || github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # Pin checkout for supply-chain stability.
+        with:
+          persist-credentials: false # Later steps do not need git credentials.
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }} # Via env, never interpolated into the script body.
+          TAG_NAME: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          set -euo pipefail
+
+          file_version="$(tr -d '[:space:]' < apps/box-images/VERSION)"
+
+          if [ -n "${TAG_NAME:-}" ]; then
+            # Tag push: the tag is the request. apps/box-images/v1.2.3 -> 1.2.3
+            version="${TAG_NAME#apps/box-images/v}"
+            if [ "$version" = "$TAG_NAME" ]; then
+              echo "Tag '$TAG_NAME' is not of the form apps/box-images/vMAJOR.MINOR.PATCH" >&2
+              exit 1
+            fi
+            # A tag that disagrees with the committed VERSION means the release is ambiguous:
+            # the images would be built from a tree that does not describe itself as this version.
+            if [ "$version" != "$file_version" ]; then
+              echo "Tag version '$version' != apps/box-images/VERSION '$file_version'" >&2
+              echo "Fix the tag or the VERSION file so they agree, then re-tag." >&2
+              exit 1
+            fi
+          else
+            version="${INPUT_VERSION:-$file_version}"
+            version="${version#v}"
+          fi
+
+          if ! echo "$version" | grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "Invalid version '$version'; expected MAJOR.MINOR.PATCH with optional -PRERELEASE" >&2
+            exit 1
+          fi
+
+          echo "tag=v$version" >> "$GITHUB_OUTPUT" # Docker tag shared by all three flavors.
+
+      # Asks the registry directly and branches on the HTTP status, because "the command failed"
+      # and "the tag is absent" are different answers: a 5xx, a rate limit or an expired token
+      # would otherwise read as absent and let the publish move a released tag. Only 404 is
+      # treated as free; anything unrecognized stops the release.
+      - name: Refuse to overwrite a published version
+        env:
+          TAG: ${{ steps.version.outputs.tag }} # Resolved above.
+          ALLOW_OVERWRITE: ${{ inputs.allow-overwrite }} # Dispatch-only escape hatch; empty on tag push.
+          GHCR_USER: ${{ github.actor }} # Basic-auth user for the GHCR token exchange.
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Built-in token; read access is enough here.
+        run: |
+          set -euo pipefail
+
+          if [ "${ALLOW_OVERWRITE:-false}" = "true" ]; then
+            echo "allow-overwrite=true — existing tags may be replaced."
+            exit 0
+          fi
+
+          published=""
+          for image in base python node; do
+            repo="boxlite-ai/boxlite-agent-${image}"
+
+            # -f rejects an error response, and `// empty` catches a 200 carrying no token, so an
+            # unusable exchange stops here rather than sending an empty bearer and reading as 401.
+            token="$(curl -fsSL -u "${GHCR_USER}:${GHCR_TOKEN}" \
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:${repo}:pull" \
+              | jq -r '.token // empty')" || token=""
+            if [ -z "$token" ]; then
+              echo "Could not obtain a GHCR pull token for ${repo}; refusing to publish." >&2
+              exit 1
+            fi
+
+            status="$(curl -sS -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${token}" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json' \
+              -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
+              "https://ghcr.io/v2/${repo}/manifests/${TAG}")"
+
+            case "$status" in
+              200) published="${published}${published:+, }ghcr.io/${repo}:${TAG}" ;;
+              404) ;; # Not published — this flavor is free to take the tag.
+              *)
+                echo "Cannot tell whether ghcr.io/${repo}:${TAG} exists (HTTP ${status})." >&2
+                echo "Refusing to publish on an inconclusive check." >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          if [ -n "$published" ]; then
+            echo "Already published: $published" >&2
+            echo "Bump apps/box-images/VERSION and tag again, or re-run with allow-overwrite=true." >&2
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # Authenticate Docker for GHCR reads and pushes.
+        with:
+          registry: ghcr.io # Target registry for BoxLite box images.
+          username: ${{ github.actor }} # GitHub actor is accepted for GITHUB_TOKEN auth.
+          password: ${{ secrets.GITHUB_TOKEN }} # Built-in token has packages:write from workflow permissions.
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # Enable cross-arch build emulation.
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # Buildx is required for multi-arch images.
+
+      - name: Publish images
+        env:
+          TAG: ${{ steps.version.outputs.tag }} # Use the version resolved above.
+          PUSH: '1' # Publish to GHCR instead of building locally.
+          PLATFORMS: linux/amd64,linux/arm64 # Publish both supported CPU architectures.
+        run: bash apps/box-images/build.sh
+
+      - name: Record published digests
+        env:
+          TAG: ${{ steps.version.outputs.tag }} # Same tag that was just published.
+        run: |
+          set -euo pipefail
+
+          {
+            echo "### Published box images \`${TAG}\`"
+            echo
+            echo "| image | digest |"
+            echo "| --- | --- |"
+            for image in base python node; do
+              ref="ghcr.io/boxlite-ai/boxlite-agent-${image}:${TAG}"
+              digest="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')"
+              echo "| \`${ref}\` | \`${digest}\` |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

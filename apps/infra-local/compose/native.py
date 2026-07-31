@@ -531,7 +531,7 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
     # 3.5 box base image: the published agent image is multi-arch now, so the
     # runner pulls the host-matching arch straight from ghcr — no local build or
     # L1-registry push. None when ghcr creds are absent (caller logs it and
-    # leaves the amd64-only curated default in place).
+    # leaves the curated default in place).
     agent_img = _local_arm64.resolve_agent_image()
 
     # 4. API .env template + port + curated-image override + the apps/.env symlink

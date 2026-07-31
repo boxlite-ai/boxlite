@@ -105,7 +105,7 @@ int main(void) {
     const char* url = env_or("BOXLITE_E2E_URL", "http://localhost:3000/api");
     const char* api_key = env_or("BOXLITE_E2E_API_KEY", "devkey");
     const char* prefix = env_or("BOXLITE_E2E_PREFIX", "");
-    const char* image = env_or("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3");
+    const char* image = env_or("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0");
 
     CBoxliteError err = {0};
 

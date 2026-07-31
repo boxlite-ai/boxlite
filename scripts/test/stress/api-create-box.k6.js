@@ -4,7 +4,7 @@ import { check, sleep } from 'k6'
 const BASE_URL = (__ENV.BOXLITE_API_URL || 'https://api.dev.boxlite.ai/api').replace(/\/$/, '')
 const TOKEN = __ENV.BOXLITE_TOKEN || __ENV.BOXLITE_API_KEY || ''
 const PREFIX = __ENV.BOXLITE_PREFIX || ''
-const IMAGE = __ENV.BOXLITE_STRESS_IMAGE || 'ghcr.io/boxlite-ai/boxlite-agent-base:20260605-p0-r3'
+const IMAGE = __ENV.BOXLITE_STRESS_IMAGE || 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0'
 const NAME_PREFIX = __ENV.BOXLITE_STRESS_NAME_PREFIX || 'stress-api-create'
 const CLEANUP = (__ENV.BOXLITE_STRESS_CLEANUP || '1') !== '0'
 
