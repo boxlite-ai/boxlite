@@ -17,17 +17,20 @@ fi
 export BOXLITE_E2E_IMAGE
 echo "── image: $BOXLITE_E2E_IMAGE ──"
 
-# 1. bootstrap — idempotent, skips on re-run if services already up
+# 1. image config — fast unit tests, independent of the VM services.
+python3 -m unittest discover -s "$SCRIPT_DIR/lib" -p 'test_*.py'
+
+# 2. bootstrap — idempotent, skips on re-run if services already up
 if ! systemctl is-active --quiet boxlite-api; then
     echo "── bootstrap (services not running yet) ──"
     bash "$SCRIPT_DIR/bootstrap.sh"
 fi
 
-# 2. fixture data (snapshots / quotas / p1 profile)
+# 3. fixture data (snapshots / quotas / p1 profile)
 echo "── fixture_setup ──"
 python3 "$SCRIPT_DIR/fixture_setup.py"
 
-# 3. pip prereqs (pytest, pytest-asyncio, boxlite SDK).
+# 4. pip prereqs (pytest, pytest-asyncio, boxlite SDK).
 python3 -c "import pytest" 2>/dev/null || \
     pip install --break-system-packages --quiet pytest
 python3 -c "import pytest_asyncio" 2>/dev/null || \
@@ -35,7 +38,7 @@ python3 -c "import pytest_asyncio" 2>/dev/null || \
 python3 -c "import boxlite" 2>/dev/null || \
     pip install --break-system-packages --quiet boxlite
 
-# 4. run
+# 5. run
 echo "── pytest ──"
 cd "$SCRIPT_DIR"
 exec python3 -m pytest cases/ -v "$@"
