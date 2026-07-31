@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -68,7 +69,7 @@ func startNetwork(t *testing.T, allowNet []string) *guestTap {
 	}
 
 	if len(cfg.AllowNet) > 0 {
-		filter := NewAllowNetFilter(cfg.AllowNet, cfg.GatewayIP, cfg.GuestIP, cfg.HostIP)
+		filter := newAllowNetFilter(cfg)
 		if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, filter, nil, nil); err != nil {
 			t.Fatalf("installAllowNetHandlers: %v", err)
 		}
@@ -366,6 +367,29 @@ func listenTCP(t *testing.T) (net.Listener, uint16) {
 	return ln, uint16(ln.Addr().(*net.TCPAddr).Port)
 }
 
+// assertDatagramDropped fails unless the read deadline expires with nothing
+// delivered. Only a timeout proves the filter dropped the datagram: any other
+// read error (a closed socket, a bad deadline) would otherwise be mistaken for
+// the policy working and turn every blocking test green for the wrong reason.
+// probe describes the datagram that must not arrive.
+func assertDatagramDropped(t *testing.T, conn *net.UDPConn, probeFormat string, probeArgs ...any) {
+	t.Helper()
+	if err := conn.SetReadDeadline(time.Now().Add(forwardWindow)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	buf := make([]byte, 2048)
+	n, from, err := conn.ReadFrom(buf)
+	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return // the deadline passed with no datagram, which is the contract
+		}
+		t.Fatalf("ReadFrom: %v", err)
+	}
+	t.Fatalf("%s was forwarded, arriving from %s: %q",
+		fmt.Sprintf(probeFormat, probeArgs...), from, buf[:n])
+}
+
 // --- tests ------------------------------------------------------------------
 
 // TestAllowNetBlocksUnlistedTCP is the control: it proves the allowlist is
@@ -401,16 +425,86 @@ func TestAllowNetBlocksUnlistedUDP(t *testing.T) {
 
 	tap.send(t, udpFrame(t, unlistedIP, port, []byte(probePayload)))
 
+	assertDatagramDropped(t, conn, "allow_net=%v: UDP to unlisted %s", allowedCIDR, unlistedIP)
+}
+
+// TestAllowNetBlocksHostAliasUDP is the reproducer for the host-alias bypass.
+// 192.168.127.254 NATs to the host's loopback, so it is an egress destination
+// like any other: a guest reaching it under a restrictive allowlist would put
+// every service bound to host loopback outside the reach of allow_net.
+func TestAllowNetBlocksHostAliasUDP(t *testing.T) {
+	cfg := testGvproxyConfig()
+	conn, port := listenUDP(t)
+	tap := startNetwork(t, []string{allowedCIDR})
+
+	tap.send(t, udpFrame(t, cfg.HostIP, port, []byte(probePayload)))
+
+	assertDatagramDropped(t, conn, "allow_net=%v: UDP to host alias %s", allowedCIDR, cfg.HostIP)
+}
+
+// TestAllowNetBlocksHostAliasTCP is the TCP twin: the same allowlist, the same
+// host alias destination, over the transport that carries SNI/Host.
+func TestAllowNetBlocksHostAliasTCP(t *testing.T) {
+	cfg := testGvproxyConfig()
+	ln, port := listenTCP(t)
+	tap := startNetwork(t, []string{allowedCIDR})
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+
+	tap.send(t, tcpSynFrame(t, cfg.HostIP, port))
+
+	select {
+	case conn := <-accepted:
+		_ = conn.Close()
+		t.Fatalf("allow_net=%v: TCP to host alias %s was forwarded to host loopback",
+			allowedCIDR, cfg.HostIP)
+	case <-time.After(forwardWindow):
+	}
+}
+
+// TestAllowNetForwardsListedHostAlias pins the other half of the contract:
+// once the alias is listed, policy still matches the pre-NAT address while the
+// forwarder dials the NAT-translated loopback, so the host stays reachable.
+func TestAllowNetForwardsListedHostAlias(t *testing.T) {
+	cfg := testGvproxyConfig()
+	conn, udpPort := listenUDP(t)
+	ln, tcpPort := listenTCP(t)
+	tap := startNetwork(t, []string{cfg.HostIP})
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			accepted <- c
+		}
+	}()
+
+	tap.send(t, udpFrame(t, cfg.HostIP, udpPort, []byte(probePayload)))
 	if err := conn.SetReadDeadline(time.Now().Add(forwardWindow)); err != nil {
 		t.Fatalf("SetReadDeadline: %v", err)
 	}
 	buf := make([]byte, 2048)
-	n, from, err := conn.ReadFrom(buf)
+	n, _, err := conn.ReadFrom(buf)
 	if err != nil {
-		return // timed out: the datagram was dropped, which is the contract
+		t.Fatalf("a listed host alias must forward UDP, but the datagram was dropped: %v", err)
 	}
-	t.Fatalf("allow_net=%v: UDP to unlisted %s reached the host listener from %s: %q",
-		allowedCIDR, unlistedIP, from, buf[:n])
+	if string(buf[:n]) != probePayload {
+		t.Fatalf("forwarded payload = %q, want %q", buf[:n], probePayload)
+	}
+
+	tap.send(t, tcpSynFrame(t, cfg.HostIP, tcpPort))
+	select {
+	case c := <-accepted:
+		_ = c.Close()
+	case <-time.After(forwardWindow):
+		t.Fatal("a listed host alias must forward TCP to host loopback")
+	}
 }
 
 // TestAllowNetHostnameRulesAlsoBindUDP covers the hostname-only allowlist,
@@ -437,16 +531,7 @@ func TestAllowNetHostnameRulesAlsoBindUDP(t *testing.T) {
 
 	// Same box, same policy: a datagram to a hard-coded IP never consults it.
 	tap.send(t, udpFrame(t, unlistedIP, port, []byte(probePayload)))
-	if err := conn.SetReadDeadline(time.Now().Add(forwardWindow)); err != nil {
-		t.Fatalf("SetReadDeadline: %v", err)
-	}
-	buf := make([]byte, 2048)
-	n, from, err := conn.ReadFrom(buf)
-	if err != nil {
-		return // dropped, as a hostname-only allowlist should
-	}
-	t.Fatalf("allow_net=[example.com]: UDP to hard-coded %s reached the host listener from %s: %q",
-		unlistedIP, from, buf[:n])
+	assertDatagramDropped(t, conn, "allow_net=[example.com]: UDP to hard-coded %s", unlistedIP)
 }
 
 // TestEmptyAllowlistForwardsUDP guards the other direction: an empty

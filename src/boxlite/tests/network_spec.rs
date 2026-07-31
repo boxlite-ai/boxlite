@@ -495,10 +495,11 @@ async fn udp_filter_blocks_direct_ip_datagram() {
     litebox.stop().await.unwrap();
 }
 
-/// The UDP twin of `host_alias_reaches_host_loopback_service_with_restrictive_allowlist`:
-/// tightening UDP must not cut the host alias, which is always allowed.
+/// The UDP twin of `host_alias_blocked_by_restrictive_allowlist`. The host
+/// alias NATs to host loopback, so it is an egress destination and an
+/// allowlist that does not name it must drop the datagram.
 #[tokio::test]
-async fn udp_reaches_host_alias_with_restrictive_allowlist() {
+async fn udp_to_host_alias_blocked_by_restrictive_allowlist() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -516,14 +517,53 @@ async fn udp_reaches_host_alias_with_restrictive_allowlist() {
     let litebox = runtime.create(opts, None).await.unwrap();
     litebox.start().await.unwrap();
 
-    // The host alias NATs to loopback, so bind where the datagram lands.
+    // The host alias NATs to loopback, so bind where the datagram would land.
     let (port, received, receiver) = start_host_udp_receiver("127.0.0.1:0", Duration::from_secs(8));
     let command = nc_udp_command(HOST_IP, port);
-    let _ = run_stdout(&litebox, "sh", &["-c", &command]).await;
+    let probe = run_stdout(&litebox, "sh", &["-c", &command]).await;
+    assert_udp_probe_ran(&probe);
+
+    let leaked = received.recv_timeout(Duration::from_secs(5));
+    assert!(
+        leaked.is_err(),
+        "UDP to unlisted host alias {HOST_IP} escaped the allowlist: {:?}",
+        leaked.map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    );
+
+    receiver.join().unwrap();
+    litebox.stop().await.unwrap();
+}
+
+/// Listing the host alias restores it: policy matches the pre-NAT address
+/// while the forwarder dials the NAT-translated loopback, so the datagram
+/// still reaches the host.
+#[tokio::test]
+async fn udp_reaches_host_alias_when_listed() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let opts = BoxOptions {
+        network: NetworkSpec::Enabled {
+            allow_net: vec![HOST_IP.into()],
+        },
+        ..common::alpine_opts()
+    };
+
+    let litebox = runtime.create(opts, None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    let (port, received, receiver) = start_host_udp_receiver("127.0.0.1:0", Duration::from_secs(8));
+    let command = nc_udp_command(HOST_IP, port);
+    let probe = run_stdout(&litebox, "sh", &["-c", &command]).await;
+    assert_udp_probe_ran(&probe);
 
     let payload = received
         .recv_timeout(Duration::from_secs(5))
-        .expect("host alias UDP should still be delivered under a restrictive allowlist");
+        .expect("a listed host alias should still deliver UDP");
     assert_eq!(String::from_utf8_lossy(&payload), UDP_PROBE_MARKER);
 
     receiver.join().unwrap();
@@ -613,9 +653,12 @@ async fn host_alias_reaches_host_loopback_service() {
     litebox.stop().await.unwrap();
 }
 
+/// Resolution and egress are separate policies: the built-in DNS record is
+/// always served, but reaching the address it hands out is governed by
+/// `allow_net`.
 #[tokio::test]
 #[ignore = "requires VM runtime (run with make test)"]
-async fn host_alias_reaches_host_loopback_service_with_restrictive_allowlist() {
+async fn host_alias_blocked_by_restrictive_allowlist() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -639,13 +682,49 @@ async fn host_alias_reaches_host_loopback_service_with_restrictive_allowlist() {
         "host alias should still resolve under restrictive allowlist, got: {nslookup}"
     );
 
+    let (port, stop_server, server) = start_host_http_server_expect_no_connection();
+    let command = wget_url_command(&format!("http://{HOST_HOSTNAME}:{port}/"));
+    let out = run_stdout(&litebox, "sh", &["-c", &command]).await;
+
+    assert!(
+        out.contains("EXIT:") && !out.contains("EXIT:0"),
+        "unlisted host alias should not reach host loopback, got: {out}"
+    );
+
+    let _ = stop_server.send(());
+    server.join().unwrap();
+    litebox.stop().await.unwrap();
+}
+
+/// Listing the alias IP restores host loopback access: policy is matched on
+/// the pre-NAT address, the dial still lands on 127.0.0.1.
+#[tokio::test]
+#[ignore = "requires VM runtime (run with make test)"]
+async fn host_alias_reaches_host_loopback_service_when_listed() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let opts = BoxOptions {
+        network: NetworkSpec::Enabled {
+            allow_net: vec![HOST_IP.into()],
+        },
+        ..common::alpine_opts()
+    };
+
+    let litebox = runtime.create(opts, None).await.unwrap();
+    litebox.start().await.unwrap();
+
     let (port, server) = start_host_http_server("boxlite-host-alias-allowlist");
     let command = wget_url_command(&format!("http://{HOST_HOSTNAME}:{port}/"));
     let out = run_stdout(&litebox, "sh", &["-c", &command]).await;
 
     assert!(
         out.contains("boxlite-host-alias-allowlist"),
-        "host alias should bypass allowlist filtering for internal host access, got: {out}"
+        "a listed host alias should reach host loopback, got: {out}"
     );
 
     server.join().unwrap();

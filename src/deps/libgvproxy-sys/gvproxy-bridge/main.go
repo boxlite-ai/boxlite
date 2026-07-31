@@ -237,6 +237,23 @@ func buildDNSZones(config GvproxyConfig) []types.Zone {
 	return dnsZones
 }
 
+// newAllowNetFilter builds the egress allowlist for a box. It is the single
+// place that decides which addresses are exempt from allow_net, so the test
+// harness can build its filter the same way and a change here cannot pass
+// unnoticed.
+//
+// The gateway and guest addresses are the virtual network's own endpoints
+// rather than egress destinations. config.HostIP is deliberately not among
+// them: it NATs to the host's loopback (buildTapConfig below), which makes it
+// a real destination that must obey allow_net like any other. Its DNS record
+// is still served unconditionally — resolving the alias is not egress.
+//
+// Returns nil when allow_net is empty, which the transport handlers read as
+// "forward everything".
+func newAllowNetFilter(config GvproxyConfig) *AllowNetFilter {
+	return NewAllowNetFilter(config.AllowNet, config.GatewayIP, config.GuestIP)
+}
+
 func buildTapConfig(config GvproxyConfig, protocol types.Protocol) *types.Configuration {
 	nat := make(map[string]string)
 	gatewayVirtualIPs := []string{config.GatewayIP}
@@ -432,7 +449,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		if len(config.AllowNet) > 0 || instance.secretMatcher != nil {
 			var allowNetFilter *AllowNetFilter
 			if len(config.AllowNet) > 0 {
-				allowNetFilter = NewAllowNetFilter(config.AllowNet, config.GatewayIP, config.GuestIP, config.HostIP)
+				allowNetFilter = newAllowNetFilter(config)
 			}
 			// Fatal on purpose: the handlers left behind are upstream's
 			// unfiltered forwarders, so a box that starts anyway would carry

@@ -339,8 +339,9 @@ async with boxlite.SimpleBox(image="alpine:latest") as box:
 
 `host.boxlite.internal` is a built-in BoxLite hostname that resolves to the
 host loopback proxy address. It is not a Docker compatibility alias.
-Security note: any service bound to host loopback is reachable from inside the
-box while networking is enabled.
+Security note: with an empty `allow_net`, any service bound to host loopback is
+reachable from inside the box. A non-empty `allow_net` must list
+`"192.168.127.254"`, or a CIDR covering it, for the alias to be reachable.
 
 ### Network Metrics
 
