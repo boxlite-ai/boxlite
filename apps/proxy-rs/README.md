@@ -16,15 +16,19 @@ hostname            3000-d-416243644566313233343536.proxy.boxlite.ai
 ```
 
 1. **Public?** `GET /preview/{box}/public` (cached 3s).
-2. **If not** — or if the port is the terminal (`22222`) — authenticate, in
-   order: `Authorization: Bearer`, `X-BoxLite-Preview-Token`,
+2. **If not** — or if the hostname asks for the terminal (`term-…`) —
+   authenticate, in order: `Authorization: Bearer`, `X-BoxLite-Preview-Token`,
    `?BOXLITE_BOX_AUTH_KEY=`, a signed `boxlite-box-auth-*` cookie, the hostname
    itself being a signed preview token. A browser with none of them is sent
    through OIDC and comes back to `/callback` on the base host.
 3. **Forward.** A guest port is reached by opening
    `CONNECT /v1/boxes/{box}/network/tunnel?port=N` against the box's runner and
-   speaking HTTP over it; the terminal goes to the runner's own API. WebSockets
-   and client `CONNECT` tunnels ride the same path.
+   speaking HTTP over it. The terminal is not a port: it maps to the runner's
+   box API (`/v1/boxes/{id}/exec` and the execution lifecycle, allow-listed —
+   files and metrics live on the same prefix and are not reachable from a
+   terminal link). Because the browser authenticates by the hostname alone, it
+   never has to put a credential on a WebSocket handshake, which it cannot do.
+   WebSockets and client `CONNECT` tunnels ride the same path.
 
 Endpoints served by the proxy itself, on the base host: `GET /health`,
 `GET /callback`, `POST /accept-boxlite-preview-warning`.

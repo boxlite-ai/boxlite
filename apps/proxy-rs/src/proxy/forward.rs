@@ -243,9 +243,7 @@ mod tests {
     #[test]
     fn merges_a_query_the_target_already_carries() {
         let uri = rewrite_uri(
-            &"https://runner.test/boxes/b/toolbox/proxy/22222/x?a=1"
-                .parse()
-                .unwrap(),
+            &"https://runner.test/v1/boxes/b/x?a=1".parse().unwrap(),
             &"http://proxy.test/x?b=2".parse().unwrap(),
         )
         .expect("rewrites");

@@ -3,9 +3,11 @@
 
 //! The preview proxy.
 //!
-//! Requests arrive on `<port>-<boxId | signedToken>.<domain>`. The hostname says
-//! which box and which port; everything else — is it public, who is allowed in,
-//! which machine holds it — is answered by the control plane and cached here.
+//! Requests arrive on `<port | term>-<boxId | signedToken>.<domain>`. The
+//! hostname says which box, and which port inside it — or that the request is
+//! for the terminal, which is not a port. Everything else — is it public, who
+//! is allowed in, which machine holds it — is answered by the control plane and
+//! cached here.
 
 pub mod activity;
 pub mod auth;
@@ -14,6 +16,7 @@ pub mod host;
 pub mod login;
 pub mod oidc;
 pub mod runners;
+pub mod terminal;
 pub mod tunnel;
 pub mod upstream;
 pub mod warning;
@@ -42,10 +45,6 @@ use forward::RequestTarget;
 use host::PreviewHost;
 use runners::RunnerDirectory;
 use upstream::{Clients, Upstream};
-
-/// The box terminal is served by the runner's API rather than a port inside the
-/// box, and always requires authentication even on a public box.
-pub const TERMINAL_PORT: &str = "22222";
 
 const PKCE_COOKIE_NAME: &str = "pkce_verifier";
 const PKCE_COOKIE_MAX_AGE: Duration = Duration::from_secs(300);
@@ -264,12 +263,14 @@ impl Proxy {
 
         let mut box_id = box_reference.clone();
         let mut cookies = HeaderMap::new();
-        if !is_public || preview.target_port == TERMINAL_PORT {
+        // The terminal reaches the runner's exec API, so it is authenticated even
+        // on a public box: a public *port* is not a licence to run commands.
+        if !is_public || preview.is_terminal() {
             match self
                 .authenticate(
                     &mut request,
                     &box_reference,
-                    &preview.target_port,
+                    preview.token_scope(),
                     request_host,
                 )
                 .await?
@@ -336,7 +337,7 @@ impl Proxy {
             ),
         ];
 
-        if preview.target_port != TERMINAL_PORT {
+        if !preview.is_terminal() {
             let port: u16 = preview
                 .target_port
                 .parse()
@@ -357,14 +358,19 @@ impl Proxy {
             });
         }
 
+        // The terminal is `exec` with a TTY on the runner's box API, not a port.
+        // Only the execution lifecycle is reachable — files, metrics and tunnels
+        // live under the same prefix and must not follow from a terminal link.
+        let allowed = terminal::allowed_path(&path)
+            .ok_or_else(|| ProxyError::not_found("not reachable from a terminal preview URL"))?;
+
         let runner =
             self.runners.for_box(box_id).await.map_err(|err| {
                 ProxyError::bad_request(format!("failed to get runner info: {err}"))
             })?;
         let uri: http::Uri = format!(
-            "{}/boxes/{box_id}/toolbox/proxy/{}{path}",
-            runner.api_url.trim_end_matches('/'),
-            preview.target_port,
+            "{}/v1/boxes/{box_id}{allowed}",
+            runner.api_url.trim_end_matches('/')
         )
         .parse()
         .map_err(|err| {
@@ -443,8 +449,8 @@ pub fn request_host<B>(request: &Request<B>) -> String {
 
 /// The part of a hostname that is safe to put in telemetry.
 ///
-/// A preview hostname is `<port>-<boxId | signedToken>.<baseHost>`, and that
-/// middle label can be a credential — anyone holding the URL can reach the box.
+/// A preview hostname is `<port | term>-<boxId | signedToken>.<baseHost>`, and
+/// that middle label can be a credential — anyone holding the URL can reach the box.
 /// Only the base host is reported; the box is identified by `boxlite.box_id`
 /// once it has actually been resolved.
 ///

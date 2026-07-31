@@ -14,6 +14,8 @@ const DIRECT_BOX_ID_LENGTH: usize = 12;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct PreviewHost {
+    /// The leading label: a port number, or the terminal label. Kept as written
+    /// so the control plane's token scope can be derived from it.
     pub target_port: String,
     /// Either a raw box ID or a signed preview token — which one is only known
     /// after the API resolves it.
@@ -35,7 +37,9 @@ pub fn parse_host(host: &str) -> Result<PreviewHost> {
         .split_once('-')
         .ok_or_else(|| ProxyError::bad_request("invalid host format: port and box ID not found"))?;
 
-    if target_port.parse::<i64>().is_err() {
+    // A number selects a port inside the box; the terminal label selects the
+    // runner's exec API instead. Anything else is not a preview hostname.
+    if !super::terminal::is_terminal_label(target_port) && target_port.parse::<i64>().is_err() {
         return Err(ProxyError::bad_request(format!(
             "invalid port '{target_port}': must be numeric"
         )));
@@ -46,6 +50,23 @@ pub fn parse_host(host: &str) -> Result<PreviewHost> {
         box_id_or_token: box_id_or_token.to_string(),
         base_host: base_host.to_string(),
     })
+}
+
+impl PreviewHost {
+    pub fn is_terminal(&self) -> bool {
+        super::terminal::is_terminal_label(&self.target_port)
+    }
+
+    /// The scope the control plane minted a signed token under. Terminal tokens
+    /// are keyed by a port number even though the hostname no longer carries
+    /// one.
+    pub fn token_scope(&self) -> &str {
+        if self.is_terminal() {
+            super::terminal::TOKEN_SCOPE
+        } else {
+            &self.target_port
+        }
+    }
 }
 
 /// Decodes the hex-encoded `d-<hex>` box ID form.
@@ -205,6 +226,29 @@ mod tests {
                 base_host: "proxy.dev.boxlite.ai".into(),
             }
         );
+    }
+
+    #[test]
+    fn parses_the_terminal_label_and_derives_its_token_scope() {
+        let parsed = parse_host("term-s3cr3t.proxy.test").expect("valid host");
+        assert!(parsed.is_terminal());
+        assert_eq!(parsed.box_id_or_token, "s3cr3t");
+        assert_eq!(
+            parsed.token_scope(),
+            "22222",
+            "tokens are still minted under the old port scope"
+        );
+
+        let old_port = parse_host("22222-box.proxy.test").expect("valid host");
+        assert!(
+            !old_port.is_terminal(),
+            "22222 is an ordinary guest port again"
+        );
+        assert_eq!(old_port.token_scope(), "22222");
+
+        let port = parse_host("3000-box.proxy.test").expect("valid host");
+        assert!(!port.is_terminal());
+        assert_eq!(port.token_scope(), "3000");
     }
 
     #[test]

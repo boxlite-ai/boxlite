@@ -92,7 +92,7 @@ pub fn should_warn(
 
     // The terminal is opened from the dashboard, which has already shown its own
     // context; an interstitial there would break the embedded session.
-    if preview_host.is_some_and(|host| host.target_port == super::TERMINAL_PORT) {
+    if preview_host.is_some_and(|host| host.is_terminal()) {
         return false;
     }
 
@@ -278,7 +278,7 @@ mod tests {
             browser.headers(),
             &http::Method::GET,
             &"/app".parse().unwrap(),
-            Some(&preview(super::super::TERMINAL_PORT))
+            Some(&preview(super::super::terminal::LABEL))
         ));
         assert!(!should_warn(
             browser.headers(),
