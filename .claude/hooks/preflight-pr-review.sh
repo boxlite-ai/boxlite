@@ -157,8 +157,8 @@ if (( body_supplied )); then
   has_line '^[[:space:]]*#{2,}[[:space:]]*call[[:space:]]+graph[[:space:]]*$' \
     || missing+="
   - a '## Call graph' section"
-  # Shared with the Before-section extractor below, so the header shape can
-  # never drift between "is there a Before label" and "where does Before end".
+  # Shared with the section extractor below, so the header shape can never
+  # drift between "is there a Before label" and "where does Before end".
   before_re='^[[:space:]]*before([[:space:]]|:|$)'
   after_re='^[[:space:]]*after([[:space:]]|:|$)'
   has_line "$before_re" \
@@ -168,14 +168,41 @@ if (( body_supplied )); then
     || missing+="
   - an 'After' graph"
 
-  # Hops must be real: `fn_name (Type · path/file.ext:LOC)`. Requiring two
-  # file:LOC references is what an unfilled template cannot fake — its Before
-  # and After labels are literal text, but its hop lines are HTML comments.
+  # Lines strictly between a graph's header and whichever comes first: the
+  # other graph's header, or the next markdown heading. Rule order is
+  # load-bearing: reset on a stop, then print, then set on the header — that
+  # sequence is what keeps the header lines themselves out of the section, so a
+  # marker on the `Before` line marks no hop.
+  #
+  # Only the heading stop is fence-aware. Graphs get drawn inside a ``` fence,
+  # where a `## entry` line is drawing rather than structure, and honouring it
+  # stranded every hop that followed. The graph labels are honoured fenced or
+  # not, because CONTRIBUTING.md's own example wraps both labels and all their
+  # hops in a single fence — gating the labels the same way left that example
+  # extracting to nothing and denied for having no hops at all.
+  section() {
+    awk -v start_re="$1" -v stop_re="$2" '
+      /^[[:space:]]*```/                        { fenced = !fenced }
+      $0 ~ stop_re && in_section                { in_section = 0 }
+      !fenced && /^[[:space:]]*##/ && in_section { in_section = 0 }
+      in_section                                { print }
+      $0 ~ start_re                             { in_section = 1 }
+    ' <<<"$body_lc"
+  }
+  before_graph="$(section "$before_re" "$after_re")"
+  after_graph="$(section "$after_re" "$before_re")"
+
+  # Hops must be real: `fn_name (Type · path/file.ext:LOC)`, and each graph
+  # needs one of its own. A body-wide count lets a prose-only After ride along
+  # on Before's hops, which is not an end-to-end before/after graph. Counting
+  # per section is also what an unfilled template cannot fake — its labels are
+  # literal text, but its hop lines are HTML comments.
   hop_re='[A-Za-z0-9_./-]+\.[A-Za-z]+:[0-9]+'
-  hop_lines="$(grep -cE "$hop_re" <<<"$pr_body" || true)"
-  (( hop_lines >= 2 )) \
+  before_hops="$(grep -cE "$hop_re" <<<"$before_graph" || true)"
+  after_hops="$(grep -cE "$hop_re" <<<"$after_graph" || true)"
+  (( before_hops >= 1 && after_hops >= 1 )) \
     || missing+="
-  - 2+ hop lines carrying 'path/file.ext:LOC' (found ${hop_lines})"
+  - a hop line carrying 'path/file.ext:LOC' in each graph (found ${before_hops} in Before, ${after_hops} in After)"
 
   # Bug-fix extras — only decidable when --title was inspectable above.
   if [[ "$pr_title" =~ ^fix(\([^\)]+\))?!?: ]]; then
@@ -184,14 +211,6 @@ if (( body_supplied )); then
     # nothing. The arrow is deliberately not required — `←`, `<-` and a bare
     # `BUG:` all read the same, and mandating one Unicode glyph is typing
     # friction, not signal. The word boundary keeps `debug:` from qualifying.
-    # Rule order is load-bearing: reset on After, then print, then set on
-    # Before — that sequence is what keeps the two header lines themselves out
-    # of the captured section, so a marker on the `Before` line marks no hop.
-    before_graph="$(awk -v before_re="$before_re" -v after_re="$after_re" '
-      $0 ~ after_re  { in_before = 0 }
-      in_before      { print }
-      $0 ~ before_re { in_before = 1 }
-    ' <<<"$body_lc")"
     marker_re='(^|[^[:alnum:]_])bug:'
     # Same line, either order: `hop … ← BUG: why` or `← BUG: why … hop`.
     marked_hop() {
