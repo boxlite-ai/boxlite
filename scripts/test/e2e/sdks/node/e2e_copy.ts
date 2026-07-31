@@ -7,6 +7,7 @@ import {
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { DEFAULT_BOX_IMAGE } from '../../../image.js';
 
 function env(k: string, def: string): string {
   const v = process.env[k];
@@ -22,7 +23,7 @@ function die(msg: string): never {
   const url = env('BOXLITE_E2E_URL', 'http://localhost:3000/api');
   const apiKey = env('BOXLITE_E2E_API_KEY', 'devkey');
   const prefix = env('BOXLITE_E2E_PREFIX', '');
-  const image = env('BOXLITE_E2E_IMAGE', 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0');
+  const image = env('BOXLITE_E2E_IMAGE', DEFAULT_BOX_IMAGE);
 
   const rt = JsBoxlite.rest(new BoxliteRestOptions({
     url,

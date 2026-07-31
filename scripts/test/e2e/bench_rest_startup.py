@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import platform
 import statistics
 import subprocess
@@ -36,11 +35,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "lib"))
 from e2e_auth import auth_context
+from images import default_image
 
-IMAGE = os.environ.get(
-    "BOXLITE_E2E_IMAGE",
-    "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0",
-)
+IMAGE = default_image()
 
 
 def api_request(ctx, method: str, path: str, body=None, timeout: int = 60):

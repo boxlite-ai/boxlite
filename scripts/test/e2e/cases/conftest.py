@@ -24,9 +24,10 @@ import boxlite
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from e2e_auth import auth_context, credentials_path
+from images import default_image
 from path_verification import runner_journal_seek, runner_hits_for_box
 
-DEFAULT_IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0")
+DEFAULT_IMAGE = default_image()
 
 
 class _TrackingRuntime:

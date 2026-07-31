@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from e2e_auth import auth_context
+from images import default_image
 
 
 REPO = Path(__file__).resolve().parents[4]
@@ -40,10 +41,7 @@ def node_tunnel_env():
         **ctx.api_key_sdk_env(),
         "BOXLITE_E2E_SKIP_HALF_CLOSE": "1",
         "BOXLITE_E2E_SKIP_STOPPED_BOX": "1",
-        "BOXLITE_E2E_IMAGE": os.environ.get(
-            "BOXLITE_E2E_IMAGE",
-            "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0",
-        ),
+        "BOXLITE_E2E_IMAGE": default_image(),
     }
 
 

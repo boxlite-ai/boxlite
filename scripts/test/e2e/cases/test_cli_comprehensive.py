@@ -24,9 +24,10 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+from images import default_image
 
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
-IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0")
+IMAGE = default_image()
 CLI_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
 BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
 

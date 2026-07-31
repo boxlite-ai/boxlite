@@ -15,11 +15,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from e2e_auth import auth_context
+from images import default_image
 
 REPO = Path(__file__).resolve().parents[4]
 GO_SDK = REPO / "sdks/go"
 DRIVERS = REPO / "scripts/test/e2e/sdks/go"
-IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0")
+IMAGE = default_image()
 
 
 def _build_go(src_name: str) -> Path:
@@ -27,7 +28,9 @@ def _build_go(src_name: str) -> Path:
     assert src.exists(), f"{src} missing"
     bin_path = Path(f"/tmp/boxlite_e2e_go_{src_name.replace('.go', '')}")
     subprocess.run(
-        ["go", "build", "-o", str(bin_path), str(src)],
+        # Each driver is its own `package main`, so the shared image constant has
+        # to be named on the build line rather than picked up from the directory.
+        ["go", "build", "-o", str(bin_path), str(DRIVERS / "e2e_image.go"), str(src)],
         cwd=str(GO_SDK),
         check=True, capture_output=True, text=True, timeout=180,
     )

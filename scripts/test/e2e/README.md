@@ -82,7 +82,8 @@ export BOXLITE_E2E_AUTH=api-key
 # Optional (auto-discovered from /v1/me if omitted):
 export BOXLITE_E2E_PREFIX=<org-path-prefix>
 
-# Image must exist on the remote runner:
+# Image must exist on the remote runner. run.sh otherwise derives this from
+# apps/box-images/VERSION, so a local run needs no override:
 export BOXLITE_E2E_IMAGE=ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0
 
 # Skip local-only checks (journalctl, runner log):
@@ -165,11 +166,12 @@ scripts/test/e2e/
 ├── pytest.ini
 ├── lib/
 │   ├── e2e_auth.py          # Auth context: API-key / OIDC, env vars / profile
+│   ├── images.py            # Curated ref derived from apps/box-images/VERSION
 │   └── path_verification.py # Helpers that prove SDK→API→Runner was the route
 ├── sdks/
-│   ├── node/                # TypeScript drivers (e2e_basic.ts, e2e_exec.ts, e2e_copy.ts, e2e_errors.ts)
-│   ├── go/                  # Go drivers (e2e_basic.go, e2e_exec_options.go, e2e_copy.go, e2e_errors.go)
-│   └── c/                   # C drivers (e2e_basic.c, e2e_exec.c, e2e_errors.c)
+│   ├── node/                # TypeScript drivers (fallback: scripts/test/image.js)
+│   ├── go/                  # Go drivers + e2e_image.go fallback for direct runs
+│   └── c/                   # C drivers + e2e_image.h fallback for direct runs
 └── cases/
     ├── conftest.py                  # rt / image / box fixtures (REST-only)
     ├── test_path_verification.py    # Meta-test: prove SDK→API→Runner path

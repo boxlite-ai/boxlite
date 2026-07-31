@@ -14,10 +14,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from e2e_auth import auth_context
+from images import default_image
 from path_verification import runner_journal_seek, runner_hits_for_box
 
 REPO = Path(__file__).resolve().parents[4]
 SRC = REPO / "scripts/test/e2e/sdks/go/e2e_basic.go"
+# Each driver is its own `package main`, so the shared image constant has to be
+# named on the build line rather than picked up from the directory.
+SHARED = SRC.parent / "e2e_image.go"
 BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
 
 def _go_bin():
@@ -36,7 +40,7 @@ def go_binary():
     bin_path = Path("/tmp/boxlite_e2e_go")
     try:
         subprocess.run(
-            ["go", "build", "-o", str(bin_path), str(SRC)],
+            ["go", "build", "-o", str(bin_path), str(SHARED), str(SRC)],
             cwd=str(REPO / "sdks/go"),
             check=True, capture_output=True, text=True, timeout=180,
         )
@@ -52,7 +56,7 @@ def test_go_sdk_create_exec_remove(go_binary):
     env = {
         **os.environ,
         **ctx.api_key_sdk_env(),
-        "BOXLITE_E2E_IMAGE": os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0"),
+        "BOXLITE_E2E_IMAGE": default_image(),
         # CGO dev tag — uses libboxlite.so from the workspace target/release,
         # not a vendored prebuilt one.
         "LD_LIBRARY_PATH": str(REPO / "target/release"),

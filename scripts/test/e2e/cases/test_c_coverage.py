@@ -15,12 +15,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from e2e_auth import auth_context
+from images import default_image
 
 REPO = Path(__file__).resolve().parents[4]
 HDR = REPO / "sdks/c/include"
 LIB_DIR = REPO / "target/release"
 DRIVERS = REPO / "scripts/test/e2e/sdks/c"
-IMAGE = os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0")
+IMAGE = default_image()
 
 
 def _has_libboxlite() -> bool:

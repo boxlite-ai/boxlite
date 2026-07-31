@@ -6,6 +6,7 @@
 // and on_exit callbacks, waits for completion via condvar.
 
 #include "boxlite.h"
+#include "e2e_image.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -105,7 +106,7 @@ int main(void) {
     const char* url = env_or("BOXLITE_E2E_URL", "http://localhost:3000/api");
     const char* api_key = env_or("BOXLITE_E2E_API_KEY", "devkey");
     const char* prefix = env_or("BOXLITE_E2E_PREFIX", "");
-    const char* image = env_or("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0");
+    const char* image = boxlite_e2e_default_image();
 
     CBoxliteError err = {0};
 

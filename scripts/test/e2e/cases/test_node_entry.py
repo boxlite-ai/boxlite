@@ -18,6 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from e2e_auth import auth_context
+from images import default_image
 from path_verification import runner_journal_seek, runner_hits_for_box
 
 REPO = Path(__file__).resolve().parents[4]
@@ -59,7 +60,7 @@ def test_node_sdk_create_exec_remove(node_runner):
     env = {
         **os.environ,
         **ctx.api_key_sdk_env(),
-        "BOXLITE_E2E_IMAGE": os.environ.get("BOXLITE_E2E_IMAGE", "ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0"),
+        "BOXLITE_E2E_IMAGE": default_image(),
     }
     # Use npx tsx to run the .ts directly without a separate compile step.
     # tsx is bundled with the apps workspace.

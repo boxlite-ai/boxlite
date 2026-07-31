@@ -18,6 +18,9 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent / "lib"))
+from images import default_image
+
 API_URL = os.environ.get("BOXLITE_E2E_API_URL", "http://localhost:3000/api")
 
 
@@ -43,7 +46,7 @@ ADMIN_KEY = (
     or _read_admin_key_from_secrets()
     or "devkey"   # only used when bootstrap hasn't run yet
 )
-SNAPSHOTS_TO_REGISTER = ["ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0", "ubuntu:22.04", "ubuntu:24.04"]
+SNAPSHOTS_TO_REGISTER = [default_image(), "ubuntu:22.04", "ubuntu:24.04"]
 SNAPSHOT_WAIT_SECONDS = 180
 CRED_PATH = (
     Path(os.environ["BOXLITE_HOME"]) / "credentials.toml"

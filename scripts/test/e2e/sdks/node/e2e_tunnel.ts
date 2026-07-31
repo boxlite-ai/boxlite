@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { ApiKeyCredential, BoxliteRestOptions, JsBoxlite, SimpleBox } from '../../../../../sdks/node'
+import { DEFAULT_BOX_IMAGE } from '../../../image.js'
 
 const SERVICES = [
   { port: 18081, marker: 'node-sdk-tunnel-e2e-a' },
@@ -117,7 +118,7 @@ async function main(): Promise<void> {
     }),
   )
   const box = new SimpleBox({
-    image: env('BOXLITE_E2E_IMAGE', 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0'),
+    image: env('BOXLITE_E2E_IMAGE', DEFAULT_BOX_IMAGE),
     autoRemove: true,
     runtime,
   })
@@ -221,7 +222,7 @@ async function main(): Promise<void> {
     const isolatedBoxes = ['node-box-a', 'node-box-b'].map(
       () =>
         new SimpleBox({
-          image: env('BOXLITE_E2E_IMAGE', 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0'),
+          image: env('BOXLITE_E2E_IMAGE', DEFAULT_BOX_IMAGE),
           autoRemove: true,
           runtime,
         }),
@@ -243,7 +244,7 @@ async function main(): Promise<void> {
 
     if (process.env.BOXLITE_E2E_SKIP_HALF_CLOSE !== '1') {
       const halfCloseBox = new SimpleBox({
-        image: env('BOXLITE_E2E_IMAGE', 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0'),
+        image: env('BOXLITE_E2E_IMAGE', DEFAULT_BOX_IMAGE),
         autoRemove: true,
         runtime,
       })
