@@ -12,7 +12,7 @@
 use assert_cmd::Command;
 use boxlite_test_utils::home::PerTestBoxHome;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// `boxlite --home <home> <args...>` with a timeout.
 fn boxlite(home: &Path, args: &[&str], timeout: Duration) -> std::process::Output {
@@ -618,18 +618,18 @@ fn bystander_writes_keep_progressing_while_peer_fills_its_disk() {
         id: bystander.clone(),
     };
 
-    // Start a background appender in the bystander (one line per ~100 ms).
-    let _ = exec_sh(
+    let prepare_bystander = exec_sh(
         home.path.as_path(),
         &bystander,
-        "mkdir -p /work && \
-         ( while true; do echo tick >> /work/log; sleep 0.1; done ) </dev/null >/dev/null 2>&1 & \
-         echo $! > /tmp/loop.pid",
+        "mkdir -p /work && : > /work/log",
         Duration::from_secs(15),
     );
+    assert!(
+        prepare_bystander.status.success(),
+        "prepare bystander: {}",
+        String::from_utf8_lossy(&prepare_bystander.stderr)
+    );
 
-    // Let the loop settle, then snapshot.
-    std::thread::sleep(Duration::from_secs(1));
     let line_count = |id: &str| -> u64 {
         let out = exec_sh(
             home.path.as_path(),
@@ -644,34 +644,92 @@ fn bystander_writes_keep_progressing_while_peer_fills_its_disk() {
     };
     let before = line_count(&bystander);
 
-    // Victim fills its rootfs.
+    // Run the fill in the guest background. Separate host-side CLI processes
+    // cannot overlap because a BOXLITE_HOME has an exclusive runtime lock.
+    let start_fill = boxlite(
+        home.path.as_path(),
+        &[
+            "exec",
+            "-d",
+            &victim,
+            "--",
+            "sh",
+            "-c",
+            "rm -f /tmp/fill.done /tmp/fill.err; \
+         i=0; while dd if=/dev/zero of=/fill.$i bs=1M count=1 2>/tmp/fill.err; do \
+            i=$((i + 1)); sleep 0.25; \
+          done; touch /tmp/fill.done",
+        ],
+        Duration::from_secs(15),
+    );
+    assert!(
+        start_fill.status.success(),
+        "start victim fill: {}",
+        String::from_utf8_lossy(&start_fill.stderr)
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let mut writes_during_fill = 0;
+    let mut observed = before;
+
+    loop {
+        let done = exec_sh(
+            home.path.as_path(),
+            &victim,
+            "test -e /tmp/fill.done",
+            Duration::from_secs(15),
+        );
+        if done.status.success() {
+            break;
+        }
+
+        if writes_during_fill < 2 {
+            let write = exec_sh(
+                home.path.as_path(),
+                &bystander,
+                "echo tick >> /work/log",
+                Duration::from_secs(15),
+            );
+            let still_running = exec_sh(
+                home.path.as_path(),
+                &victim,
+                "test ! -e /tmp/fill.done",
+                Duration::from_secs(15),
+            );
+            if write.status.success() && still_running.status.success() {
+                writes_during_fill += 1;
+                observed = line_count(&bystander);
+            }
+        }
+
+        if Instant::now() >= deadline {
+            let _ = exec_sh(
+                home.path.as_path(),
+                &victim,
+                "pkill dd 2>/dev/null; true",
+                Duration::from_secs(15),
+            );
+            panic!("victim fill did not complete within 300 seconds");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
     let fill = exec_sh(
         home.path.as_path(),
         &victim,
-        "dd if=/dev/zero of=/fill bs=1M 2>&1; true",
-        Duration::from_secs(120),
+        "cat /tmp/fill.err",
+        Duration::from_secs(15),
     );
     let fill_out = String::from_utf8_lossy(&fill.stdout) + String::from_utf8_lossy(&fill.stderr);
     assert!(
         fill_out.contains("No space left"),
-        "victim fill must hit ENOSPC"
-    );
-
-    let after = line_count(&bystander);
-
-    // Stop the loop before doing anything else.
-    let _ = exec_sh(
-        home.path.as_path(),
-        &bystander,
-        "kill $(cat /tmp/loop.pid) 2>/dev/null; true",
-        Duration::from_secs(10),
+        "victim fill must hit ENOSPC; output:\n{fill_out}"
     );
 
     assert!(
-        after > before + 5,
-        "bystander's background writer must keep progressing during a peer's \
-         fill — at least a handful of new lines should land in /work/log; \
-         before={before} after={after}"
+        writes_during_fill >= 2 && observed >= before + 2,
+        "bystander must complete at least two writes while a peer's fill is \
+         still running; writes={writes_during_fill} before={before} observed={observed}"
     );
 
     assert_alive(home.path.as_path(), &victim, "after filling its own rootfs");

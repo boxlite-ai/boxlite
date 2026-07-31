@@ -113,19 +113,33 @@ fn gvproxy_port_conflict_fails_fast_with_named_error() {
 /// "address already in use"), proving that the expose path preserves the
 /// backend's actual bind failure instead of synthesizing one conflict string.
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "privileged-port permissions are Linux-specific; gvproxy may have different bind permissions from the test process on other hosts"
+)]
 fn gvproxy_privileged_port_fails_fast_with_named_error() {
     // Skip when the runner happens to have permission to bind <1024
     // (root, fcap'd binary, container with CAP_NET_BIND_SERVICE,
     // sysctl `net.ipv4.ip_unprivileged_port_start` lowered). The test
     // premise is "bind privileged port fails"; without that, the test
     // is meaningless.
-    if TcpListener::bind("127.0.0.1:80").is_ok() {
-        eprintln!(
-            "SKIP gvproxy_privileged_port_fails_fast_with_named_error: \
-             host allows binding port 80 (root / CAP_NET_BIND_SERVICE / \
-             low ip_unprivileged_port_start)"
-        );
-        return;
+    match TcpListener::bind("127.0.0.1:80") {
+        Ok(_) => {
+            eprintln!(
+                "SKIP gvproxy_privileged_port_fails_fast_with_named_error: \
+                 host allows binding port 80 (root / CAP_NET_BIND_SERVICE / \
+                 low ip_unprivileged_port_start)"
+            );
+            return;
+        }
+        Err(error) if error.kind() != std::io::ErrorKind::PermissionDenied => {
+            eprintln!(
+                "SKIP gvproxy_privileged_port_fails_fast_with_named_error: \
+                 port 80 probe failed for a reason other than permission denial: {error}"
+            );
+            return;
+        }
+        Err(_) => {}
     }
 
     let ctx = common::boxlite();
