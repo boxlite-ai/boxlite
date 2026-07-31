@@ -36,8 +36,20 @@ test('resolveVersion falls back to the workspace version', () => {
 })
 
 test('resolveTargets parses an explicit instance list without calling AWS', () => {
-  assert.deepEqual(resolveTargets({ INSTANCE_IDS: 'i-1,i-2' }), ['i-1', 'i-2'])
-  assert.deepEqual(resolveTargets({ INSTANCE_IDS: ' i-1 , , i-2 ' }), ['i-1', 'i-2'])
+  const describe = () => assert.fail('AWS must not be consulted when INSTANCE_IDS is set')
+  assert.deepEqual(resolveTargets({ INSTANCE_IDS: 'i-1,i-2' }, { describe }), ['i-1', 'i-2'])
+  assert.deepEqual(resolveTargets({ INSTANCE_IDS: ' i-1 , , i-2 ' }, { describe }), ['i-1', 'i-2'])
+})
+
+test('resolveTargets orders discovered instances so a roll is reproducible', () => {
+  // describe-instances promises no order, and an explicit list keeps the operator's.
+  const describe = () => 'i-0c\ti-0a\ti-0b'
+  assert.deepEqual(resolveTargets({}, { describe }), ['i-0a', 'i-0b', 'i-0c'])
+  assert.deepEqual(resolveTargets({ INSTANCE_IDS: 'i-0c,i-0a' }, { describe }), ['i-0c', 'i-0a'])
+})
+
+test('resolveTargets rejects an empty discovery rather than silently doing nothing', () => {
+  assert.throws(() => resolveTargets({}, { describe: () => 'None' }), /no running instances tagged/)
 })
 
 test('buildRemoteScript rejects a version with no publishable release', () => {
@@ -175,6 +187,31 @@ test('sendCommand retries throttling as well as an unregistered agent', () => {
     assert.equal(sendCommand('i-1', VERSION, 'x', { run, sleep: () => {} }), 'cmd-1', transient)
     assert.equal(calls, 2, `${transient} should have been retried once`)
   }
+})
+
+test('sendCommand hands SSM a base64 payload with no shell metacharacters', () => {
+  // Nothing else pins the argv, and the whole reason for base64 is that the payload
+  // becomes a single token inside the commands=[...] shorthand.
+  let seen
+  const run = (args) => {
+    seen = args
+    return { ok: true, stdout: 'cmd-1', stderr: '' }
+  }
+  const script = buildRemoteScript(VERSION)
+  sendCommand('i-42', VERSION, Buffer.from(script).toString('base64'), { run, sleep: () => {} })
+
+  const flag = (name) => seen[seen.indexOf(name) + 1]
+  assert.deepEqual(seen.slice(0, 2), ['ssm', 'send-command'])
+  assert.equal(flag('--document-name'), 'AWS-RunShellScript')
+  assert.equal(flag('--instance-ids'), 'i-42')
+  assert.equal(flag('--query'), 'Command.CommandId')
+
+  const parameters = flag('--parameters')
+  const encoded = parameters.match(/^commands=\["echo ([A-Za-z0-9+/=]+) \| base64 -d \| bash"\]$/)
+  assert.ok(encoded, `unexpected --parameters shape: ${parameters}`)
+  // Exact string equality, not a decode round-trip: Node's base64 decoder tolerates
+  // trailing junk, so `${payload}X` would still decode back to the original script.
+  assert.equal(encoded[1], Buffer.from(script).toString('base64'), 'the payload reaches SSM intact')
 })
 
 test('sendCommand retries an unregistered agent but not a permission failure', () => {

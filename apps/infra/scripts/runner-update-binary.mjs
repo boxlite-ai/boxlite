@@ -72,14 +72,14 @@ function aws(args) {
 
 // Explicit ids (SST passes exactly one per command) or every running runner in the
 // region. The caller walks whichever list it gets one entry at a time.
-export function resolveTargets(environment = process.env) {
+export function resolveTargets(environment = process.env, { describe = aws } = {}) {
   const explicit = (environment.INSTANCE_IDS || '')
     .split(',')
     .map((id) => id.trim())
     .filter(Boolean)
   if (explicit.length > 0) return explicit
 
-  const discovered = aws([
+  const discovered = describe([
     'ec2',
     'describe-instances',
     '--region',
