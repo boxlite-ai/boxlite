@@ -33,7 +33,11 @@ unset VERDICT_GATE_HARD_BLOCK
 # Without this, a machine with the `claude` CLI would call a live model mid-suite.
 export VERDICT_CLASSIFIER_CMD='false'
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+# Resolve from THIS script's location, not the caller's cwd. `git rev-parse
+# --show-toplevel` returns whichever checkout the shell sits in, so running this
+# suite from another worktree silently tests THAT checkout's copy instead of the
+# one shipped beside these tests, and a two-side check reports a false pass.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOOK="$REPO_ROOT/.claude/hooks/preflight-verdict-check.sh"
 
 pass=0

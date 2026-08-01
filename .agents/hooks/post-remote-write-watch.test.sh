@@ -13,7 +13,12 @@
 # Exits non-zero on any failure.
 set -uo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+# Resolve from THIS script's location, not the caller's cwd. `git rev-parse
+# --show-toplevel` returns whatever checkout the shell happens to sit in, so
+# running this suite from another directory silently tests that checkout's hook
+# instead of the one shipped beside these tests — a reverted-hook two-side check
+# then reports a false pass.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOOK="$REPO_ROOT/.agents/hooks/post-remote-write-watch.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -122,7 +127,10 @@ else
   fail=$((fail + 1)); printf '  FAIL  falls back to the branch'"'"'s open PR (got: %.60s)\n' "$got"
 fi
 
-STUB_PR_NUMBER="" got="$(ctx "git push" "")"
+# Prefix form, not a bare assignment: `VAR="" got="$(…)"` is TWO assignments, so
+# the empty value would persist and silently re-point every later case at the
+# no-PR branch. `ctx` is a function, so the prefix scopes it to this call.
+got="$(STUB_PR_NUMBER="" ctx "git push" "")"
 if [[ "$got" == *"No open PR"* ]]; then
   pass=$((pass + 1)); printf '  PASS  no PR yet still arms, noting the watcher polls\n'
 else

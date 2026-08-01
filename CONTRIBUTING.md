@@ -71,8 +71,10 @@ the push to land, waits for a PR to appear (which covers a later `gh pr create` 
 concludes, plus every new comment, review, and inline review thread.
 
 ```bash
-# follow the current branch's events; ends itself when the PR merges or closes
-.agents/watch/pr-watch-stream.sh "$(git rev-parse --git-path pr-watch)/$(git branch --show-current).jsonl"
+# follow the current branch's events; ends itself when the PR merges or closes.
+# `/` becomes `-` in the filename, so feature/foo logs to feature-foo.jsonl.
+branch="$(git branch --show-current)"
+.agents/watch/pr-watch-stream.sh "$(git rev-parse --git-path pr-watch)/${branch//\//-}.jsonl"
 
 # watch a specific PR in the foreground, without pushing
 .agents/watch/pr-watch.sh --pr 1234 --once

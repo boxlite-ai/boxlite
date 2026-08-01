@@ -15,11 +15,22 @@
 # Exits non-zero on any failure.
 set -uo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+# Resolve from THIS script's location, not the caller's cwd. Same reasoning as
+# .agents/hooks/post-remote-write-watch.test.sh: cwd-derived paths make a
+# two-side check silently exercise a different checkout's copy and report a pass.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WATCHER="$REPO_ROOT/.agents/watch/pr-watch.sh"
 PREPUSH="$REPO_ROOT/.githooks/pre-push"
 TMP="$(mktemp -d)"
-trap 'pkill -f "pr-watch.sh --branch" 2>/dev/null; rm -rf "$TMP"' EXIT
+# Match ONLY this suite's scratch watcher. A bare "pr-watch.sh --branch" pattern
+# also matches a real watcher following a real PR on this machine, so running the
+# tests would silently kill it. Set once $REPO exists; the trap reads it lazily.
+# The fallback matters: this trap is armed before $REPO is assigned, and an empty
+# pattern is never the cleanup being asked for. On this host (BSD pkill) it errors
+# with "empty (sub)expression"; do not rely on that being the failure mode
+# everywhere.
+watcher_pat() { printf '%s' "${REPO:-__pr_watch_no_repo__}/.agents/watch/pr-watch.sh"; }
+trap 'pkill -f "$(watcher_pat)" 2>/dev/null; rm -rf "$TMP"' EXIT
 
 pass=0
 fail=0
@@ -94,6 +105,27 @@ EOF
 write_fixtures
 
 run_watch() { (cd "$REPO" && bash "$WATCHER" "$@" 2>&1); }
+
+# Every blocking call below waits on the code under test deciding to exit. If
+# that decision regresses the suite would hang and CI would report a timeout
+# instead of a named failing assertion, so bound them and let the assertion fail.
+# macOS ships no coreutils `timeout`; a watchdog subshell is portable.
+with_deadline() {
+  local secs="$1"; shift
+  ( "$@" ) & local job=$!
+  # The watchdog MUST NOT inherit stdout. It is a background child of the same
+  # command substitution, so while it holds the write end open `$(…)` cannot
+  # return — every call would block for the full deadline even when the job
+  # finished immediately.
+  ( sleep "$secs"; kill -TERM "$job" 2>/dev/null ) >/dev/null 2>&1 & local dog=$!
+  # Report the JOB's status. Returning the watchdog's would mask every exit code
+  # with the 143 from killing it, so an exit-code assertion could never pass.
+  local rc=0
+  wait "$job" 2>/dev/null || rc=$?
+  kill "$dog" 2>/dev/null
+  wait "$dog" 2>/dev/null || true
+  return "$rc"
+}
 events_of() { grep "\"kind\":\"$1\"" <<<"$2" 2>/dev/null; }
 reset_state() { rm -rf "$REPO/.git/pr-watch"; }
 
@@ -150,6 +182,23 @@ echo "## Body handling"
 check "multi-line comment body survives as one JSON line with real newlines" \
   "$(events_of comment "$OUT" | jq -r '.body' | wc -l | tr -d ' ')" "2"
 
+# Backslashes, tabs and quotes must all survive verbatim. @tsv escaped only the
+# first two — quotes pass through it untouched — and the hand-written decoder
+# then corrupted a backslash followed by t, r or n, hence `C:\temp` and `C:\new`
+# in the fixture. Escaped, `C:\temp` is `C:\\temp`, and a left-to-right pass
+# reads the second backslash plus `t` as a tab. A backslash before any other
+# letter (`C:\dir`, `a\b`, `\d+`) round-tripped fine, so a fixture without
+# t/r/n would have passed against the buggy decoder. The quote still earns its
+# place: it crosses the raw-separator to JSON re-encode boundary.
+reset_state
+jq '.comments[0].body = "win C:\\temp and C:\\new plus a \"quote\" and\ttab"' \
+  "$FIXTURE_DIR/view.json" > "$FIXTURE_DIR/v.tmp" && mv "$FIXTURE_DIR/v.tmp" "$FIXTURE_DIR/view.json"
+OUTB="$(run_watch --pr 42 --once)"
+check "backslashes survive verbatim (no escape-decoding corruption)" \
+  "$(events_of comment "$OUTB" | jq -r '.body')" \
+  "$(printf 'win C:\\temp and C:\\new plus a "quote" and\ttab')"
+write_fixtures
+
 # ── 4. dedup + lock ──────────────────────────────────────────────────────────
 
 echo
@@ -165,11 +214,33 @@ OUT3="$(run_watch --pr 42 --once)"
 check "a newly-concluded check IS emitted after dedup" \
   "$(events_of check "$OUT3" | jq -r '.name')" "New Job"
 
+# A lock owned by a LIVE process must be obeyed. $$ is this suite, definitely alive.
 mkdir -p "$REPO/.git/pr-watch/pr-42.lock"
+printf '%s' "$$" > "$REPO/.git/pr-watch/pr-42.lock/pid"
 OUT4="$(run_watch --pr 42 --once)"
-check "held lock makes a second instance exit silently" \
+check "lock held by a LIVE owner makes a second instance exit silently" \
   "$(printf '%s' "$OUT4" | wc -c | tr -d ' ')" "0"
-rmdir "$REPO/.git/pr-watch/pr-42.lock"
+
+# SIGKILL/OOM/reboot leaves a lock no trap could clear. Obeying it forever would
+# silently suppress every future watcher for the branch.
+#
+# Earn a provably-dead PID instead of hardcoding a "big" one: PID ranges are
+# platform-specific (macOS tops out at 99999, Linux pid_max is often 4194304),
+# so no literal is portably unusable. Spawn, reap, then assert it is gone.
+( exit 0 ) & dead_pid=$!
+wait "$dead_pid" 2>/dev/null
+kill -0 "$dead_pid" 2>/dev/null && no "fixture: PID $dead_pid still alive" "cannot test stale lock"
+printf '%s' "$dead_pid" > "$REPO/.git/pr-watch/pr-42.lock/pid"
+OUT4b="$(run_watch --pr 42 --once)"
+check "STALE lock (dead owner) is reclaimed, not obeyed" \
+  "$(events_of watch_start "$OUT4b" | jq -r '.pr')" "42"
+
+# A lock dir with no pid file at all — e.g. written by an older version.
+rm -rf "$REPO/.git/pr-watch/pr-42.lock"; mkdir -p "$REPO/.git/pr-watch/pr-42.lock"
+OUT4c="$(run_watch --pr 42 --once)"
+check "lock with no owner recorded is reclaimed" \
+  "$(events_of watch_start "$OUT4c" | jq -r '.pr')" "42"
+rm -rf "$REPO/.git/pr-watch/pr-42.lock"
 
 # ── 5. terminal states ───────────────────────────────────────────────────────
 
@@ -182,11 +253,67 @@ OUT5="$(run_watch --pr 42 --once)"
 check "checks_done fires once all checks conclude" \
   "$(events_of checks_done "$OUT5" | jq -r '.failed')" "1"
 
+check "checks_done does not repeat for the same set" \
+  "$(events_of checks_done "$(run_watch --pr 42 --once)" | wc -l | tr -d ' ')" "0"
+
+# A CI re-run keeps the check COUNT identical but produces new job URLs. Keying
+# the summary on the count alone reported the first completion and then went
+# silent forever — including for a re-run that turned red.
+jq '[.[] | .link |= sub("/runs/"; "/runs/re-") | .bucket = "pass" | .state = "SUCCESS"]' \
+  "$FIXTURE_DIR/checks.json" > "$FIXTURE_DIR/checks.tmp" && mv "$FIXTURE_DIR/checks.tmp" "$FIXTURE_DIR/checks.json"
+OUT5b="$(run_watch --pr 42 --once)"
+# 5 concluded checks by now: the 4 from write_fixtures plus the "New Job" added
+# in the dedup section above. All flipped to pass, so 0 failed / 5 passed.
+check "checks_done re-fires after a re-run with the same check count" \
+  "$(events_of checks_done "$OUT5b" | jq -r '.failed + "/" + .passed')" "0/5"
+
 reset_state
 jq '.state = "MERGED"' "$FIXTURE_DIR/view.json" > "$FIXTURE_DIR/view.tmp" && mv "$FIXTURE_DIR/view.tmp" "$FIXTURE_DIR/view.json"
-OUT6="$(run_watch --pr 42)"     # no --once: must still exit, PR is MERGED
+OUT6="$(with_deadline 30 run_watch --pr 42)"   # no --once: must still exit, PR is MERGED
 check "merged PR ends the watch without --once" \
   "$(events_of watch_end "$OUT6" | jq -r '.reason')" "PR MERGED"
+
+write_fixtures
+
+# ── 5b. watch until merged, not until quiet ──────────────────────────────────
+#
+# The whole point of the watch is to still be running at merge time. A PR with
+# green CI awaiting human review produces NO new events for hours; an earlier
+# version measured "time since the last new event" and quit long before the
+# merge it existed to report.
+
+echo
+echo "## Runs until merged, not until quiet"
+
+# Everything already seen, PR open, nothing new will ever arrive: the classic
+# awaiting-review state. Must keep polling rather than call it idle.
+reset_state
+run_watch --pr 42 --once >/dev/null            # prime .seen so nothing is new
+QUIET="$(PR_WATCH_INTERVAL=1 PR_WATCH_IDLE_TIMEOUT=3 PR_WATCH_MAX_LIFETIME=6 with_deadline 40 run_watch --pr 42)"
+check "a quiet OPEN PR is not treated as idle" \
+  "$(events_of watch_end "$QUIET" | jq -r '.reason')" \
+  "max lifetime 6s reached before merge"
+
+# Same silence, but now the polls themselves fail: contact is genuinely lost.
+reset_state
+run_watch --pr 42 --once >/dev/null
+mv "$FIXTURE_DIR/view.json" "$FIXTURE_DIR/view.hidden"
+printf 'not json\n' > "$FIXTURE_DIR/view.json"
+LOST="$(PR_WATCH_INTERVAL=1 PR_WATCH_IDLE_TIMEOUT=2 PR_WATCH_MAX_LIFETIME=60 with_deadline 40 run_watch --pr 42)"
+check "lost contact DOES end the watch" \
+  "$(events_of watch_end "$LOST" | jq -r '.reason')" \
+  "no contact with PR for 2s"
+mv "$FIXTURE_DIR/view.hidden" "$FIXTURE_DIR/view.json"
+
+# A merge that lands mid-watch must still be reported, after the quiet stretch.
+reset_state
+run_watch --pr 42 --once >/dev/null
+( sleep 3; jq '.state = "MERGED"' "$FIXTURE_DIR/view.json" > "$FIXTURE_DIR/v.tmp" \
+    && mv "$FIXTURE_DIR/v.tmp" "$FIXTURE_DIR/view.json" ) &
+LATE="$(PR_WATCH_INTERVAL=1 PR_WATCH_IDLE_TIMEOUT=30 PR_WATCH_MAX_LIFETIME=60 with_deadline 40 run_watch --pr 42)"
+wait
+check "a merge after a quiet stretch is still reported" \
+  "$(events_of watch_end "$LATE" | jq -r '.reason')" "PR MERGED"
 
 write_fixtures
 
@@ -199,7 +326,7 @@ SLOG="$TMP/stream.jsonl"
 printf '%s\n' '{"kind":"watch_start"}' '{"kind":"check","bucket":"pass"}' > "$SLOG"
 ( sleep 2; printf '%s\n' '{"kind":"check","bucket":"fail"}' >> "$SLOG"
   sleep 2; printf '%s\n' '{"kind":"watch_end","reason":"PR MERGED"}' >> "$SLOG" ) &
-SOUT="$(bash "$STREAM" "$SLOG" 1)"
+SOUT="$(with_deadline 30 bash "$STREAM" "$SLOG" 1)"
 SRC=$?
 wait
 
@@ -228,13 +355,13 @@ SHA="1111111111111111111111111111111111111111"
 # only after the foreground child returns. Polling for actual absence keeps a
 # still-dying watcher from being misread as the NEXT case's arm.
 kill_watchers() {
-  pkill -f "pr-watch.sh --branch" 2>/dev/null
+  pkill -f "$(watcher_pat)" 2>/dev/null
   local deadline=$(( SECONDS + 15 ))
   while (( SECONDS < deadline )); do
-    pgrep -f "pr-watch.sh --branch" >/dev/null 2>&1 || return 0
+    pgrep -f "$(watcher_pat)" >/dev/null 2>&1 || return 0
     sleep 1
   done
-  pkill -9 -f "pr-watch.sh --branch" 2>/dev/null
+  pkill -9 -f "$(watcher_pat)" 2>/dev/null
   sleep 1
 }
 
@@ -247,16 +374,16 @@ term_kills_daemon() {
   ( cd "$REPO" && nohup bash "$SCRATCH_WATCHER" --branch termprobe --sha deadbeef \
       >/dev/null 2>&1 & )
   sleep 2
-  pgrep -f "pr-watch.sh --branch termprobe" >/dev/null 2>&1 || { echo "never-started"; return; }
-  pkill -TERM -f "pr-watch.sh --branch termprobe" 2>/dev/null
+  pgrep -f "$(watcher_pat) --branch termprobe" >/dev/null 2>&1 || { echo "never-started"; return; }
+  pkill -TERM -f "$(watcher_pat) --branch termprobe" 2>/dev/null
   # Generous: bash defers a trap until the foreground `sleep` returns.
   local deadline=$(( SECONDS + 20 ))
   while (( SECONDS < deadline )); do
-    pgrep -f "pr-watch.sh --branch termprobe" >/dev/null 2>&1 || { echo "died"; return; }
+    pgrep -f "$(watcher_pat) --branch termprobe" >/dev/null 2>&1 || { echo "died"; return; }
     sleep 1
   done
   echo "survived"
-  pkill -9 -f "pr-watch.sh --branch termprobe" 2>/dev/null
+  pkill -9 -f "$(watcher_pat) --branch termprobe" 2>/dev/null
 }
 
 arm() {
@@ -270,7 +397,7 @@ arm() {
       bash "$PREPUSH" origin "$TMP/origin.git" >/dev/null 2>&1)
   sleep 1
   local result
-  if pgrep -f "pr-watch.sh --branch" >/dev/null 2>&1; then result=armed; else result=idle; fi
+  if pgrep -f "$(watcher_pat)" >/dev/null 2>&1; then result=armed; else result=idle; fi
   kill_watchers
   printf '%s' "$result"
 }
@@ -304,6 +431,29 @@ mv "$SCRATCH_WATCHER" "$TMP/moved-watcher.sh"
   | env -u CLAUDECODE -u CODEX_SANDBOX -u AGENT_GATED bash "$PREPUSH" origin url >/dev/null 2>&1)
 check "absent watcher does not fail the push" "$?" "0"
 mv "$TMP/moved-watcher.sh" "$SCRATCH_WATCHER"
+
+# ── 8. argument parsing ──────────────────────────────────────────────────────
+#
+# `shift 2` on a flag with no value shifts nothing and leaves $1 in place, so the
+# same case branch matches forever — the process spins instead of erroring.
+
+echo
+echo "## Argument parsing"
+
+arg_result() {
+  local out
+  out="$(with_deadline 10 bash "$WATCHER" "$@" 2>&1)"
+  if printf '%s' "$out" | grep -q "requires a value"; then echo "rejected"
+  elif [[ -z "$out" ]]; then echo "hung-or-silent"
+  else echo "other"; fi
+}
+
+check "--branch with no value is rejected, not spun on" "$(arg_result --branch)" "rejected"
+check "--sha with no value is rejected"                 "$(arg_result --sha)"    "rejected"
+check "--pr with no value is rejected"                  "$(arg_result --pr)"     "rejected"
+
+check "--help prints the whole Env section, not a truncated one" \
+  "$(bash "$WATCHER" --help 2>&1 | grep -c 'PR_WATCH_INTERVAL\|PR_WATCH_IDLE_TIMEOUT\|PR_WATCH_MAX_LIFETIME')" "3"
 
 echo
 printf 'pr-watch: %d passed, %d failed\n' "$pass" "$fail"

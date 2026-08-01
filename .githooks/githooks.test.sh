@@ -14,7 +14,11 @@
 # Run with:  bash .githooks/githooks.test.sh
 set -uo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+# Resolve from THIS script's location, not the caller's cwd. `git rev-parse
+# --show-toplevel` returns whichever checkout the shell sits in, so running this
+# suite from another worktree silently tests THAT checkout's copy instead of the
+# one shipped beside these tests, and a two-side check reports a false pass.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 pass=0
 fail=0
