@@ -107,7 +107,7 @@ impl BaseDiskStore {
                 disk.created_at,
                 json,
             ],
-        ))?;
+        ), "base_disk insert(id={})", disk.id)?;
         Ok(())
     }
 
@@ -240,12 +240,16 @@ impl BaseDiskStore {
     /// Remove all refs for a box and return the affected base_disk_ids.
     ///
     /// Used during box deletion to know which bases may become orphaned.
+    /// The SELECT + DELETE are wrapped in a single transaction so that a
+    /// crash between the two operations cannot leave dangling refs.
     pub(crate) fn remove_all_refs_for_box(&self, box_id: &str) -> BoxliteResult<Vec<BaseDiskID>> {
-        let conn = self.db.conn();
+        let mut conn = self.db.conn();
+        let tx = db_err!(conn.transaction(), "remove_all_refs_for_box(box={box_id}): begin")?;
 
         // Collect affected base_disk_ids BEFORE deleting.
         let mut stmt =
-            db_err!(conn.prepare("SELECT base_disk_id FROM base_disk_ref WHERE box_id = ?1"))?;
+            db_err!(tx.prepare("SELECT base_disk_id FROM base_disk_ref WHERE box_id = ?1"),
+                "remove_all_refs_for_box(box={box_id}): select refs")?;
         let rows = db_err!(stmt.query_map(rusqlite::params![box_id], |row| { row.get(0) }))?;
         let mut ids = Vec::new();
         for row in rows {
@@ -259,10 +263,14 @@ impl BaseDiskStore {
             ids.push(id);
         }
 
-        db_err!(conn.execute(
+        drop(stmt);
+
+        db_err!(tx.execute(
             "DELETE FROM base_disk_ref WHERE box_id = ?1",
             rusqlite::params![box_id],
-        ))?;
+        ), "remove_all_refs_for_box(box={box_id}): delete")?;
+
+        db_err!(tx.commit(), "remove_all_refs_for_box(box={box_id}): commit")?;
 
         Ok(ids)
     }

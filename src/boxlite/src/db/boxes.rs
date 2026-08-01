@@ -16,6 +16,18 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::{Database, db_err};
 
+/// Deserialize a `BoxConfig` from its JSON blob.
+fn deserialize_config(json: &str) -> BoxliteResult<BoxConfig> {
+    serde_json::from_str(json)
+        .map_err(|e| BoxliteError::Database(format!("Failed to deserialize config: {e}")))
+}
+
+/// Deserialize a `BoxState` from its JSON blob.
+fn deserialize_state(json: &str) -> BoxliteResult<BoxState> {
+    serde_json::from_str(json)
+        .map_err(|e| BoxliteError::Database(format!("Failed to deserialize state: {e}")))
+}
+
 /// Box storage wrapping Database.
 ///
 /// Manages BoxConfig (immutable) and BoxState (mutable) tables.
@@ -56,12 +68,7 @@ impl BoxStore {
         )?;
 
         match json {
-            Some(j) => {
-                let config: BoxConfig = serde_json::from_str(&j).map_err(|e| {
-                    BoxliteError::Database(format!("Failed to deserialize config: {}", e))
-                })?;
-                Ok(Some(config))
-            }
+            Some(j) => Ok(Some(deserialize_config(&j)?)),
             None => Ok(None),
         }
     }
@@ -92,12 +99,7 @@ impl BoxStore {
         )?;
 
         match json {
-            Some(j) => {
-                let state: BoxState = serde_json::from_str(&j).map_err(|e| {
-                    BoxliteError::Database(format!("Failed to deserialize state: {}", e))
-                })?;
-                Ok(Some(state))
-            }
+            Some(j) => Ok(Some(deserialize_state(&j)?)),
             None => Ok(None),
         }
     }
@@ -115,7 +117,7 @@ impl BoxStore {
         let rows_affected = db_err!(conn.execute(
             "UPDATE box_state SET status = ?1, pid = ?2, json = ?3 WHERE id = ?4",
             params![state.status.as_str(), state.pid, json, box_id],
-        ))?;
+        ), "update_state(box={box_id})")?;
 
         // Podman pattern: verify rows were actually updated
         if rows_affected == 0 {
@@ -135,7 +137,7 @@ impl BoxStore {
     /// Follows Podman pattern of explicit transactions for multi-statement operations.
     pub fn save(&self, config: &BoxConfig, state: &BoxState) -> BoxliteResult<()> {
         let mut conn = self.db.conn();
-        let tx = db_err!(conn.transaction())?;
+        let tx = db_err!(conn.transaction(), "save(box={}): begin", config.id)?;
 
         // Serialize config
         let config_json = serde_json::to_string(config)
@@ -154,101 +156,79 @@ impl BoxStore {
                 config.created_at.timestamp(),
                 config_json
             ],
-        ))?;
+        ), "save(box={}): insert config", config.id)?;
 
         // Insert state
         db_err!(tx.execute(
             "INSERT INTO box_state (id, status, pid, json) VALUES (?1, ?2, ?3, ?4)",
             params![config.id, state.status.as_str(), state.pid, state_json],
-        ))?;
+        ), "save(box={}): insert state", config.id)?;
 
         // Commit transaction
-        db_err!(tx.commit())?;
+        db_err!(tx.commit(), "save(box={}): commit", config.id)?;
 
         Ok(())
     }
 
     /// Load both config and state for a box.
+    ///
+    /// Uses a single JOIN query instead of two separate lookups, halving
+    /// lock acquisitions from 2 to 1.
     #[allow(dead_code)] // API symmetry - currently unused but part of designed API
     pub fn load(&self, box_id: &str) -> BoxliteResult<Option<(BoxConfig, BoxState)>> {
-        let config = self.load_config(box_id)?;
-        let state = self.load_state(box_id)?;
-
-        match (config, state) {
-            (Some(c), Some(s)) => Ok(Some((c, s))),
-            _ => Ok(None),
+        let conn = self.db.conn();
+        let result = db_err!(
+            conn.query_row(
+                "SELECT c.json, s.json FROM box_config c
+                 JOIN box_state s ON c.id = s.id
+                 WHERE c.id = ?1",
+                params![box_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+        )?;
+        match result {
+            Some((config_json, state_json)) => Ok(Some((
+                deserialize_config(&config_json)?,
+                deserialize_state(&state_json)?,
+            ))),
+            None => Ok(None),
         }
+    }
+
+    /// Run a box query with an optional WHERE clause, returning
+    /// deserialized (config, state) pairs sorted by creation time.
+    fn query_boxes(&self, where_clause: &str) -> BoxliteResult<Vec<(BoxConfig, BoxState)>> {
+        let conn = self.db.conn();
+        let sql = format!(
+            "SELECT c.json, s.json FROM box_config c
+             JOIN box_state s ON c.id = s.id
+             {where_clause}
+             ORDER BY c.created_at DESC"
+        );
+        let mut stmt = db_err!(conn.prepare(&sql))?;
+        let rows = db_err!(stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }))?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            let (config_json, state_json) = db_err!(row)?;
+            result.push((deserialize_config(&config_json)?, deserialize_state(&state_json)?));
+        }
+        Ok(result)
     }
 
     /// List all boxes as (config, state) pairs.
     ///
     /// Returns boxes sorted by creation time (newest first).
     pub fn list_all(&self) -> BoxliteResult<Vec<(BoxConfig, BoxState)>> {
-        let conn = self.db.conn();
-
-        let mut stmt = db_err!(conn.prepare(
-            r#"
-            SELECT c.json as config_json, s.json as state_json
-            FROM box_config c
-            JOIN box_state s ON c.id = s.id
-            ORDER BY c.created_at DESC
-            "#
-        ))?;
-
-        let rows = db_err!(stmt.query_map([], |row| {
-            let config_json: String = row.get(0)?;
-            let state_json: String = row.get(1)?;
-            Ok((config_json, state_json))
-        }))?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            let (config_json, state_json) = db_err!(row)?;
-            let config: BoxConfig = serde_json::from_str(&config_json).map_err(|e| {
-                BoxliteError::Database(format!("Failed to deserialize config: {}", e))
-            })?;
-            let state: BoxState = serde_json::from_str(&state_json).map_err(|e| {
-                BoxliteError::Database(format!("Failed to deserialize state: {}", e))
-            })?;
-            result.push((config, state));
-        }
-
-        Ok(result)
+        self.query_boxes("")
     }
 
     /// List active boxes (Starting, Running, Detached).
     pub fn list_active(&self) -> BoxliteResult<Vec<(BoxConfig, BoxState)>> {
-        let conn = self.db.conn();
-
-        let mut stmt = db_err!(conn.prepare(
-            r#"
-            SELECT c.json as config_json, s.json as state_json
-            FROM box_config c
-            JOIN box_state s ON c.id = s.id
-            WHERE s.status IN ('starting', 'running', 'detached')
-            ORDER BY c.created_at DESC
-            "#
-        ))?;
-
-        let rows = db_err!(stmt.query_map([], |row| {
-            let config_json: String = row.get(0)?;
-            let state_json: String = row.get(1)?;
-            Ok((config_json, state_json))
-        }))?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            let (config_json, state_json) = db_err!(row)?;
-            let config: BoxConfig = serde_json::from_str(&config_json).map_err(|e| {
-                BoxliteError::Database(format!("Failed to deserialize config: {}", e))
-            })?;
-            let state: BoxState = serde_json::from_str(&state_json).map_err(|e| {
-                BoxliteError::Database(format!("Failed to deserialize state: {}", e))
-            })?;
-            result.push((config, state));
-        }
-
-        Ok(result)
+        self.query_boxes("WHERE s.status IN ('starting', 'running', 'detached')")
     }
 
     // ========================================================================
@@ -297,15 +277,47 @@ impl BoxStore {
     ///
     /// Called after reboot detection. VM rootfs is preserved, so boxes
     /// become Stopped (not Crashed) and can be restarted.
+    ///
+    /// All resets happen within a single transaction: either every active
+    /// box is reset or none are. This avoids the N+1 lock-acquisition +
+    /// autocommit pattern of the previous per-box `update_state` loop.
     pub fn reset_active_boxes_after_reboot(&self) -> BoxliteResult<Vec<BoxID>> {
-        let active = self.list_active()?;
-        let mut reset_ids = Vec::new();
+        let mut conn = self.db.conn();
+        let tx = db_err!(conn.transaction(), "reset_active_boxes_after_reboot: begin")?;
 
-        for (config, mut state) in active {
+        // Collect active boxes within the transaction.
+        let active: Vec<(String, String)> = {
+            let mut stmt = db_err!(tx.prepare(
+                "SELECT c.id, s.json FROM box_config c
+                 JOIN box_state s ON c.id = s.id
+                 WHERE s.status IN ('starting', 'running', 'detached')"
+            ), "reset_active_boxes_after_reboot: select active")?;
+            let rows = db_err!(stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }))?;
+            db_err!(rows.collect::<Result<Vec<_>, _>>(), "reset_active_boxes_after_reboot: collect rows")?
+        };
+
+        let mut reset_ids = Vec::new();
+        for (id_str, state_json) in active {
+            let mut state: BoxState = deserialize_state(&state_json)?;
             state.reset_for_reboot();
-            self.update_state(config.id.as_str(), &state)?;
-            reset_ids.push(config.id);
+            let new_json = serde_json::to_string(&state).map_err(|e| {
+                BoxliteError::Database(format!(
+                    "Failed to serialize state for box {id_str}: {e}"
+                ))
+            })?;
+            db_err!(tx.execute(
+                "UPDATE box_state SET status = ?1, pid = ?2, json = ?3 WHERE id = ?4",
+                params![state.status.as_str(), state.pid, new_json, id_str],
+            ), "reset_active_boxes_after_reboot: update box={id_str}")?;
+            let id = BoxID::parse(&id_str).ok_or_else(|| {
+                BoxliteError::Database(format!("Invalid box ID in database: {id_str}"))
+            })?;
+            reset_ids.push(id);
         }
+
+        db_err!(tx.commit(), "reset_active_boxes_after_reboot: commit")?;
 
         Ok(reset_ids)
     }
@@ -538,5 +550,89 @@ mod tests {
         let loaded = store.load_state(config.id.as_str()).unwrap().unwrap();
         assert_eq!(loaded.status, BoxStatus::Stopped);
         assert_eq!(loaded.pid, None);
+    }
+
+    #[test]
+    fn test_load_returns_both_config_and_state() {
+        let (store, _dir) = create_test_db();
+
+        let config = create_test_config(TEST_ID_1);
+        let mut state = BoxState::new();
+        state.set_status(BoxStatus::Running);
+        state.set_pid(Some(99999));
+        store.save(&config, &state).unwrap();
+
+        // load() should return both config and state via a single JOIN
+        let result = store.load(config.id.as_str()).unwrap();
+        assert!(result.is_some());
+        let (loaded_config, loaded_state) = result.unwrap();
+        assert_eq!(loaded_config.id, config.id);
+        assert_eq!(loaded_state.status, BoxStatus::Running);
+        assert_eq!(loaded_state.pid, Some(99999));
+    }
+
+    #[test]
+    fn test_load_returns_none_for_nonexistent() {
+        let (store, _dir) = create_test_db();
+        let result = store.load("nonexistent_id").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_reset_multiple_active_boxes_atomic() {
+        let (store, _dir) = create_test_db();
+
+        // Create 3 active boxes with different statuses
+        let configs: Vec<_> = [TEST_ID_1, TEST_ID_2, TEST_ID_3]
+            .iter()
+            .map(|id| {
+                let config = create_test_config(id);
+                let mut state = BoxState::new();
+                state.set_status(BoxStatus::Running);
+                state.set_pid(Some(1000));
+                store.save(&config, &state).unwrap();
+                config
+            })
+            .collect();
+
+        // Also create a stopped box that should NOT be reset
+        let stopped_config = create_test_config("01HJK4TNRPQSXYZ8WM6NCVT9R4");
+        let mut stopped_state = BoxState::new();
+        stopped_state.set_status(BoxStatus::Stopped);
+        store.save(&stopped_config, &stopped_state).unwrap();
+
+        // Reset all active boxes
+        let reset_ids = store.reset_active_boxes_after_reboot().unwrap();
+        assert_eq!(reset_ids.len(), 3);
+
+        // Verify all active boxes are now Stopped with no PID
+        for config in &configs {
+            let state = store.load_state(config.id.as_str()).unwrap().unwrap();
+            assert_eq!(state.status, BoxStatus::Stopped);
+            assert_eq!(state.pid, None);
+        }
+
+        // Stopped box should be untouched
+        let stopped = store.load_state(stopped_config.id.as_str()).unwrap().unwrap();
+        assert_eq!(stopped.status, BoxStatus::Stopped);
+    }
+
+    #[test]
+    fn test_reset_active_boxes_after_reboot_idempotent() {
+        let (store, _dir) = create_test_db();
+
+        let config = create_test_config(TEST_ID_1);
+        let mut state = BoxState::new();
+        state.set_status(BoxStatus::Running);
+        state.set_pid(Some(12345));
+        store.save(&config, &state).unwrap();
+
+        // First reset
+        let reset_ids = store.reset_active_boxes_after_reboot().unwrap();
+        assert_eq!(reset_ids.len(), 1);
+
+        // Second reset — no active boxes left
+        let reset_ids = store.reset_active_boxes_after_reboot().unwrap();
+        assert_eq!(reset_ids.len(), 0);
     }
 }

@@ -37,6 +37,33 @@ pub struct ImageIndexStore {
     db: Database,
 }
 
+/// Map a database row to a `CachedImage`.
+///
+/// Uses named-column access so the helper works regardless of column
+/// position in the SELECT list (e.g. `get` omits `reference` but
+/// `list_all` includes it).
+fn row_to_cached_image(row: &rusqlite::Row) -> rusqlite::Result<CachedImage> {
+    let manifest_digest: String = row.get("manifest_digest")?;
+    let config_digest: String = row.get("config_digest")?;
+    let layers_json: String = row.get("layers")?;
+    let cached_at: String = row.get("cached_at")?;
+    let complete: i32 = row.get("complete")?;
+    let layers: Vec<String> = serde_json::from_str(&layers_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            2, // layers column index
+            rusqlite::types::Type::Text,
+            Box::new(e),
+        )
+    })?;
+    Ok(CachedImage {
+        manifest_digest,
+        config_digest,
+        layers,
+        cached_at,
+        complete: complete != 0,
+    })
+}
+
 impl ImageIndexStore {
     /// Create a new ImageIndexStore from a Database.
     pub fn new(db: Database) -> Self {
@@ -48,31 +75,16 @@ impl ImageIndexStore {
     /// Returns None if image not in index.
     pub fn get(&self, reference: &str) -> BoxliteResult<Option<CachedImage>> {
         let conn = self.db.conn();
-
-        let row: Option<(String, String, String, String, i32)> = db_err!(
+        let result = db_err!(
             conn.query_row(
-                "SELECT manifest_digest, config_digest, layers, cached_at, complete FROM image_index WHERE reference = ?1",
+                "SELECT manifest_digest, config_digest, layers, cached_at, complete
+                 FROM image_index WHERE reference = ?1",
                 params![reference],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                row_to_cached_image,
             )
             .optional()
         )?;
-
-        match row {
-            Some((manifest_digest, config_digest, layers_json, cached_at, complete)) => {
-                let layers: Vec<String> = serde_json::from_str(&layers_json).map_err(|e| {
-                    BoxliteError::Database(format!("Failed to deserialize layers: {}", e))
-                })?;
-                Ok(Some(CachedImage {
-                    manifest_digest,
-                    config_digest,
-                    layers,
-                    cached_at,
-                    complete: complete != 0,
-                }))
-            }
-            None => Ok(None),
-        }
+        Ok(result)
     }
 
     /// Add or update cached image.
@@ -101,7 +113,7 @@ impl ImageIndexStore {
                 image.cached_at,
                 if image.complete { 1 } else { 0 }
             ],
-        ))?;
+        ), "image_index upsert(ref={reference})")?;
 
         Ok(())
     }
@@ -128,57 +140,33 @@ impl ImageIndexStore {
     /// Check if index is empty.
     #[allow(dead_code)]
     pub fn is_empty(&self) -> BoxliteResult<bool> {
-        Ok(self.len()? == 0)
+        let conn = self.db.conn();
+        let exists: bool = db_err!(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM image_index LIMIT 1)",
+            [],
+            |row| row.get(0),
+        ))?;
+        Ok(!exists)
     }
 
     /// List all cached images.
     pub fn list_all(&self) -> BoxliteResult<Vec<(String, CachedImage)>> {
         let conn = self.db.conn();
         let mut stmt = db_err!(conn.prepare(
-            r#"
-            SELECT reference, manifest_digest, config_digest, layers, cached_at, complete 
-            FROM image_index 
-            ORDER BY cached_at DESC
-            "#
+            "SELECT reference, manifest_digest, config_digest, layers, cached_at, complete
+             FROM image_index
+             ORDER BY cached_at DESC"
         ))?;
 
         let rows = db_err!(stmt.query_map([], |row| {
-            let reference: String = row.get(0)?;
-            let manifest_digest: String = row.get(1)?;
-            let config_digest: String = row.get(2)?;
-            let layers_json: String = row.get(3)?;
-            let cached_at: String = row.get(4)?;
-            let complete: i32 = row.get(5)?;
-            Ok((
-                reference,
-                manifest_digest,
-                config_digest,
-                layers_json,
-                cached_at,
-                complete,
-            ))
+            let reference: String = row.get("reference")?;
+            Ok((reference, row_to_cached_image(row)?))
         }))?;
 
         let mut result = Vec::new();
         for row in rows {
-            let (reference, manifest_digest, config_digest, layers_json, cached_at, complete) =
-                db_err!(row)?;
-            let layers: Vec<String> = serde_json::from_str(&layers_json).map_err(|e| {
-                BoxliteError::Database(format!("Failed to deserialize layers: {}", e))
-            })?;
-
-            result.push((
-                reference,
-                CachedImage {
-                    manifest_digest,
-                    config_digest,
-                    layers,
-                    cached_at,
-                    complete: complete != 0,
-                },
-            ));
+            result.push(db_err!(row)?);
         }
-
         Ok(result)
     }
 }

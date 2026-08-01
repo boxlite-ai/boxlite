@@ -69,14 +69,14 @@ impl Migration for PreservePublishedPorts {
             updates.push((id, json));
         }
 
-        let transaction = db_err!(conn.unchecked_transaction())?;
+        // Updates are executed within the outer migration transaction
+        // (see run_migrations); no separate transaction needed here.
         for (id, json) in &updates {
-            db_err!(transaction.execute(
+            db_err!(conn.execute(
                 "UPDATE box_config SET json = ?1 WHERE id = ?2",
                 rusqlite::params![json, id],
             ))?;
         }
-        db_err!(transaction.commit())?;
 
         if changed_mappings > 0 {
             tracing::warn!(

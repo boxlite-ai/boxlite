@@ -40,12 +40,23 @@ pub(crate) trait Migration {
 }
 
 /// Run all applicable migrations from `source_version` to the latest version.
+///
+/// All migrations and the final `schema_version` update are wrapped in a
+/// single transaction. If any migration fails, the entire batch rolls back
+/// so the database is left at `source_version` — the next startup will retry
+/// from the same point.
+///
+/// **Note**: migrations that perform filesystem operations (e.g. v6→v7 moves
+/// disk files) cannot be rolled back by the transaction. Those migrations are
+/// still responsible for their own filesystem-level idempotency.
 pub(crate) fn run_migrations(
     conn: &Connection,
     source_version: i32,
     home_dir: Option<&Path>,
 ) -> BoxliteResult<()> {
     let all = all_migrations();
+
+    let tx = db_err!(conn.unchecked_transaction(), "run_migrations(v{source_version}): begin")?;
 
     let mut current = source_version;
     for m in &all {
@@ -56,16 +67,18 @@ pub(crate) fn run_migrations(
                 m.target_version(),
                 m.description()
             );
-            m.run(conn, home_dir)?;
+            m.run(&tx, home_dir)?;
             current = m.target_version();
         }
     }
 
     let now = Utc::now().to_rfc3339();
-    db_err!(conn.execute(
+    db_err!(tx.execute(
         "UPDATE schema_version SET version = ?1, updated_at = ?2 WHERE id = 1",
         rusqlite::params![current, now],
-    ))?;
+    ), "run_migrations: update schema_version to v{current}")?;
+
+    db_err!(tx.commit(), "run_migrations(v{source_version} -> v{current}): commit")?;
 
     tracing::info!("Database migration complete, now at version {current}");
     Ok(())

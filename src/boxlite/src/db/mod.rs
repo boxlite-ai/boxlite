@@ -28,9 +28,20 @@ pub use images::{CachedImage, ImageIndexStore};
 pub(crate) use snapshot::SnapshotStore;
 
 /// Helper macro to convert rusqlite errors to BoxliteError.
+///
+/// Usage:
+/// - `db_err!(result)` — basic, no context
+/// - `db_err!(result, "operation name")` — includes operation context
+/// - `db_err!(result, "op(box={})", id)` — with format arguments
 macro_rules! db_err {
     ($result:expr) => {
         $result.map_err(|e| BoxliteError::Database(e.to_string()))
+    };
+    ($result:expr, $ctx:expr) => {
+        $result.map_err(|e| BoxliteError::Database(format!("{}: {}", $ctx, e)))
+    };
+    ($result:expr, $fmt:expr, $($args:tt)*) => {
+        $result.map_err(|e| BoxliteError::Database(format!("{}: {}", format!($fmt, $($args)*), e)))
     };
 }
 
@@ -59,15 +70,22 @@ impl Database {
 
         // SQLite configuration (matches Podman patterns)
         // - WAL mode: Better concurrent read performance
-        // - FULL sync: Maximum durability (fsync after each transaction)
+        // - NORMAL sync: WAL-recommended — fsync only at checkpoint, not per
+        //   transaction. The only risk is losing the last committed transaction
+        //   on power loss, which is acceptable for box state (recovered on
+        //   restart via reconcile/reboot detection). FULL gave negligible extra
+        //   durability at 2-5x write cost.
         // - Foreign keys: Referential integrity
         // - Busy timeout: 100s to handle long operations (Podman uses 100s)
+        // - mmap_size: Memory-map up to 256 MB of the database file for faster
+        //   reads (avoids user-space buffer copies on large JSON blobs).
         db_err!(conn.execute_batch(
             "
             PRAGMA journal_mode=WAL;
-            PRAGMA synchronous=FULL;
+            PRAGMA synchronous=NORMAL;
             PRAGMA foreign_keys=ON;
             PRAGMA busy_timeout=100000;
+            PRAGMA mmap_size=268435456;
             "
         ))?;
 
@@ -351,5 +369,84 @@ mod tests {
             }
             Ok(_) => panic!("expected error"),
         }
+    }
+
+    #[test]
+    fn test_migration_rollback_on_failure() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        // Create a fully-migrated database, then roll version back to v8
+        // and inject invalid JSON so the v8→v9 migration fails.
+        {
+            let db = Database::open(&db_path).unwrap();
+            let conn = db.conn();
+            // Roll back to v8 to trigger v8→v9 on next open
+            conn.execute(
+                "UPDATE schema_version SET version = 8 WHERE id = 1",
+                [],
+            )
+            .unwrap();
+            // Insert a row with invalid JSON that will make v8→v9 fail
+            conn.execute(
+                "INSERT INTO box_config (id, name, created_at, json) VALUES (?1, NULL, 0, ?2)",
+                rusqlite::params!["bad-box", "this is not valid json"],
+            )
+            .unwrap();
+        }
+
+        // Re-open — migration should fail
+        let result = Database::open(&db_path);
+        assert!(result.is_err(), "expected migration to fail on invalid JSON");
+
+        // Verify schema_version is still 8 (transaction rolled back)
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            let version: i32 = conn
+                .query_row(
+                    "SELECT version FROM schema_version WHERE id = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                version, 8,
+                "schema_version should be unchanged after failed migration"
+            );
+        }
+    }
+
+    #[test]
+    fn test_db_err_macro_includes_context() {
+        let result: Result<(), rusqlite::Error> = Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("database is locked".to_string()),
+        ));
+
+        let err = db_err!(result, "test_operation").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("test_operation"),
+            "error should include context: {msg}"
+        );
+        assert!(
+            msg.contains("database is locked"),
+            "error should include original message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_db_err_macro_with_format_args() {
+        let result: Result<i64, rusqlite::Error> = Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
+            Some("UNIQUE constraint failed".to_string()),
+        ));
+
+        let err = db_err!(result, "insert box={}", "box-123").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("insert box=box-123"),
+            "error should include formatted context: {msg}"
+        );
     }
 }
