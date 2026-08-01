@@ -11,6 +11,7 @@
     "sst": "node scripts/sst-with-cloudflare.mjs",
     "secrets": "node scripts/sst-with-cloudflare.mjs secret list",
     "runner:update": "node scripts/runner-update-binary.mjs",
+    "login": "node scripts/login.mjs",
     "bootstrap": "node scripts/bootstrap-environment.mjs",
     "verify-deploy-role": "node scripts/verify-deploy-role-boundary.mjs"
   },

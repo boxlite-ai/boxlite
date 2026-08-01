@@ -92,11 +92,13 @@ jobs:
         working-directory: apps/infra
         run: npm run --silent sst -- install --stage "$STAGE"
 
-      # Cloudflare's OAuth catalog has no DNS-edit scope for the wrangler
-      # client, so these stay hand-made scoped API tokens. Supplying them as
-      # Environment secrets is optional: scripts/sst-with-cloudflare.mjs
-      # prefers an already-set env var and otherwise reads SSM, so a stage
-      # seeded via SSM keeps working with these unset.
+      # These stay hand-made scoped API tokens. Cloudflare's `cf` CLI can mint
+      # an OAuth token carrying dns_records:edit, but it expires in about an
+      # hour and is renewed through a browser, which this unattended job has
+      # no way to complete. Supplying them as Environment secrets is optional:
+      # scripts/sst-with-cloudflare.mjs prefers an already-set env var and
+      # otherwise reads SSM, so a stage seeded via SSM keeps working with
+      # these unset.
       - name: Preview the full stack
         shell: bash
         working-directory: apps/infra

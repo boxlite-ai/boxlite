@@ -22,12 +22,12 @@ for any of them.
 
 | Prerequisite | How |
 | --- | --- |
-| **AWS credentials** | `aws login` — browser sign-in, AWS CLI 2.32.0+. No IAM user, no access keys, and no IAM Identity Center setup. Signing in as the account root works. |
+| **AWS credentials** | **auto** — `npm run login` runs `aws login` (browser sign-in, AWS CLI 2.32.0+). No IAM user, no access keys, and no IAM Identity Center setup. Signing in as the account root works. |
 | **AWS GitHub OIDC provider** | **auto** — created if the account doesn't already have one |
 | **Deployment role + permissions boundary** | **auto** — `ci/github-deploy-role.yaml` deployed via CloudFormation |
-| **GitHub Environment** (named exactly as the stage) with required reviewers | **auto** — `gh auth login` first. Protection rules need a public repo, or GitHub Pro/Team/Enterprise on a private one; without them the Environment is still created, unprotected. |
-| **An Auth0 tenant** (or any OIDC provider) | Tenant signup is manual — Auth0 has no API for it. Everything inside it (SPA app, custom API, post-login Action, logout discovery) is **auto** via `auth0 login` + `npm run bootstrap -- --provision-auth0`. |
-| **A Cloudflare-managed domain** | Manual. You must own the domain and delegate nameservers, and Cloudflare's `wrangler` OAuth catalog has no DNS-edit scope — so a hand-made API token with `Zone:Read` + `DNS:Edit` is required. See [Secrets & credentials](#secrets--credentials). |
+| **GitHub Environment** (named exactly as the stage) with required reviewers | **auto** — `npm run login` first. Protection rules need a public repo, or GitHub Pro/Team/Enterprise on a private one; without them the Environment is still created, unprotected. |
+| **An Auth0 tenant** (or any OIDC provider) | Tenant signup is manual — Auth0 has no API for it. Everything inside it (SPA app, custom API, post-login Action, logout discovery) is **auto** via `npm run login` + `npm run bootstrap -- --provision-auth0`. |
+| **A Cloudflare-managed domain** | Manual. You must own the domain and delegate nameservers, and Cloudflare documents only dashboard creation for a first API token. Create an **account-owned** token with `Zone:Read` + `DNS:Edit`. See [Cloudflare API token](#cloudflare-api-token). |
 | **An existing SST stack whose Runner inventory matches `RUNNERS`** | Manual — first-Runner provisioning is not implemented here. See [Deploying to your own AWS account](#deploying-to-your-own-aws-account). |
 | **AWS CLI + GitHub CLI** (and `auth0` CLI for `--provision-auth0`) | Installed by you; the bootstrap checks for them and fails with the exact fix. |
 
@@ -43,13 +43,11 @@ npm install
 cp .env.example .env        # stage config: STACK_DOMAIN, OIDC_ISSUER_BASE_URL, OIDC_AUDIENCE
 $EDITOR .env
 
-aws login                   # browser sign-in; no IAM user or access keys needed
-gh auth login               # if not already authenticated
+npm run login               # browser sign-in for AWS, GitHub, and Auth0
 npm run bootstrap -- --stage dev
 
 # Optional: also provision the Auth0 tenant's app/API/Action in one pass.
 # Not idempotent — Auth0 has no upsert, so rerunning creates duplicates.
-auth0 login
 npm run bootstrap -- --stage dev --provision-auth0
 ```
 
@@ -61,7 +59,7 @@ touch CloudFormation or its own IAM policy — see
 [Native AMD64 CI deployment](#native-amd64-ci-deployment)). In order it:
 
 1. checks the AWS CLI is ≥2.32.0 and that credentials resolve, pointing at
-   `aws login` if not;
+   `npm run login` if not;
 2. registers the GitHub OIDC provider if the account lacks one;
 3. creates/updates the GitHub Environment named after the stage, requiring the
    authenticated user as reviewer (`--reviewers 123,456` to override);
@@ -195,7 +193,7 @@ single laptop's `.env`:
 
 Grant each API token only the permissions and resources required for its
 documented use; the Cloudflare token needs `Zone:Read` and `DNS:Edit` for the
-managed zone. Rotate tokens regularly and immediately after suspected
+managed zone (see [Cloudflare API token](#cloudflare-api-token)). Rotate tokens regularly and immediately after suspected
 disclosure, updating the value in SSM or the SST secret store. Never put token
 values in command arguments, echo them, enable shell tracing around
 secret-handling commands, or copy secret-bearing logs or workflow output into
@@ -219,6 +217,78 @@ streams can contain provider credentials; SST state and non-secret diagnostics
 are left in place. If an existing event log is ever found to contain a provider
 token, rotate that token immediately, then run any wrapped SST command to remove
 the stale event log.
+
+### Cloudflare API token
+
+`npm run login` covers the AWS, GitHub, and Auth0 sessions with a browser
+sign-in; it cannot cover this one, so `npm run bootstrap` prompts for the value
+instead. Cloudflare states why directly:
+
+> "Before you can do this, you must create an API token in the Cloudflare
+> dashboard that can create subsequent tokens."
+>
+> "The API Token Template `Create additional tokens` must be used to generate
+> the token. The option for `API Tokens::Edit` is not available in any other
+> template or in the Custom Token builder."
+> — [Create tokens via API](https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/)
+
+So even the token-minting capability itself originates from a dashboard visit.
+
+Create it with this link, which pre-fills the permissions:
+
+[**Create the token →**](https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=%5B%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22edit%22%7D%5D&name=BoxLite%20deploy)
+
+It opens the **account** token form with `Zone:Read` + `DNS:Edit` already
+selected — you pick the zone and confirm. Cloudflare is explicit that this is
+still a human step: "Template URLs only pre-fill the token creation form. Users
+must still complete the token creation process in the dashboard."
+([Template URLs](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/))
+
+Account ownership is what Cloudflare recommends for exactly this use:
+
+> "Account API tokens allow you to set up durable integrations that can act as
+> service principals with their own specific set of permissions. This approach
+> is ideal for scenarios like CI/CD ... where it is important that the
+> integration continues working, even long after the user who configured the
+> integration may have left your organization altogether."
+> — [Account-owned tokens](https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/)
+
+Grant `Zone:Read` and `DNS:Edit`, restricted to the zone serving
+`STACK_DOMAIN`. The link carries no zone parameter by design — "Account token
+template URLs do not use `accountId` or `zoneId` parameters. Resource scoping
+for account tokens is configured during token creation in the dashboard" — so
+you pick the zone in the form. Creating an account-owned token requires Super
+Administrator on the account — though the template-URL page says "Super
+Administrator **or** Administrator", so the two Cloudflare pages disagree; try
+Administrator if that is the role you hold.
+
+`npm run bootstrap` prompts for the value once per stage and stores it in SSM,
+so this is a one-time step — the token is never pasted again.
+
+**Why the browser login used for AWS, GitHub, and Auth0 does not work here.**
+Cloudflare's `cf` CLI does grant `dns_records:edit` through a browser OAuth
+flow, and that token is accepted by the v4 API. It still cannot replace this
+token: the access token expires in about an hour, it is not permitted to manage API
+tokens, and refresh tokens are single-use: "Refresh tokens are single-use, so a
+long-lived process such as `wrangler dev` would otherwise send a stale value and
+get a 401 from the token endpoint"
+([`flow.ts`](https://github.com/cloudflare/workers-sdk/blob/main/packages/workers-auth/src/flow.ts)).
+A static CI secret cannot track that rotation, and two concurrent jobs sharing
+one refresh token would break the chain for both. Cloudflare also "does not
+support Client Credentials, Implicit, Resource Owner Password Credentials,
+Device Authorization, or other OAuth grant types for third-party clients"
+([OAuth clients](https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/)),
+so no machine-to-machine grant exists to sidestep the browser.
+
+Projects with the same unattended-DNS problem land in the same place:
+[cert-manager](https://cert-manager.io/docs/configuration/acme/dns01/cloudflare/)
+("API Tokens are recommended for higher security"),
+[external-dns](https://kubernetes-sigs.github.io/external-dns/latest/docs/tutorials/cloudflare/)
+("the token should be granted Zone `Read`, DNS `Edit` privileges, and access
+to `All zones`"), and
+[SST's own Cloudflare guide](https://sst.dev/docs/component/cloudflare/)
+("create an account token in the Cloudflare dashboard under Manage Account >
+API Tokens").
 
 ### App secrets
 

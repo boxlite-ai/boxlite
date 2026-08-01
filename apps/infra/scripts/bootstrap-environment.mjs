@@ -31,12 +31,13 @@
  *   --force      see decideSsmOverwrite() in environment-bootstrap.mjs
  *   --provision-auth0
  *                Create the Auth0 SPA app, custom API, and post-login Action
- *                (requires `auth0 login` first). NOT idempotent — Auth0 has no
+ *                (requires `npm run login` first). NOT idempotent — Auth0 has no
  *                upsert for apps or APIs, so rerunning creates duplicates.
  *
- * AWS credentials: run `aws login` (browser sign-in, AWS CLI 2.32.0+) — no IAM
- * user, access keys, or IAM Identity Center setup required. An existing profile
- * or SSO session is used as-is if one is already active.
+ * Sign-in: run `npm run login` first, which walks the browser sign-in for every
+ * provider this needs (AWS via `aws login`, AWS CLI 2.32.0+ — no IAM user,
+ * access keys, or IAM Identity Center setup required). An existing profile or
+ * SSO session is used as-is if one is already active.
  *
  * Non-interactive use (e.g. wiring this into a more-privileged automation
  * later): set CLOUDFLARE_API_TOKEN, CLOUDFLARE_DEFAULT_ACCOUNT_ID, and
@@ -48,6 +49,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { hasFlag, parseFlag } from './cli-flags.mjs'
 import { loadDeploymentEnvironment, resolveAwsRegion } from './deployment-environment.mjs'
 import {
   GITHUB_OIDC_PROVIDER_URL,
@@ -86,26 +88,16 @@ const SST_WRAPPER_PATH = join(INFRA_ROOT, 'scripts', 'sst-with-cloudflare.mjs')
 const ACTION_SOURCE_PATH = join(INFRA_ROOT, 'functions', 'auth0', 'setCustomClaims.onExecutePostLogin.js')
 
 const CLOUDFLARE_CREDENTIALS = [
-  { envVar: 'CLOUDFLARE_API_TOKEN', param: 'cloudflare-api-token', label: 'Cloudflare API token' },
+  {
+    envVar: 'CLOUDFLARE_API_TOKEN',
+    param: 'cloudflare-api-token',
+    // Cloudflare issues the first API token through the dashboard only, so
+    // this cannot be obtained by a browser login the way AWS/GitHub/Auth0 are.
+    // Account-owned keeps the integration working after the creator leaves.
+    label: 'Cloudflare API token (account-owned, Zone:Read + DNS:Edit)',
+  },
   { envVar: 'CLOUDFLARE_DEFAULT_ACCOUNT_ID', param: 'cloudflare-account-id', label: 'Cloudflare account ID' },
 ]
-
-function parseFlag(args, name) {
-  for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === `--${name}`) {
-      const value = args[index + 1]
-      if (!value || value.startsWith('-')) throw new Error(`--${name} requires a value`)
-      return value
-    }
-    const inline = args[index].match(new RegExp(`^--${name}=(.*)$`))?.[1]
-    if (inline !== undefined) return inline
-  }
-  return undefined
-}
-
-function hasFlag(args, name) {
-  return args.includes(`--${name}`)
-}
 
 function requireStageEnvFile() {
   if (!existsSync(ENV_PATH)) {
@@ -118,7 +110,7 @@ function requireGhAuthenticated() {
   try {
     execFileSync('gh', ['auth', 'status'], { stdio: 'ignore', timeout: 15_000, killSignal: 'SIGTERM' })
   } catch (cause) {
-    throw new Error('GitHub CLI is not authenticated; run `gh auth login` first', { cause })
+    throw new Error('GitHub CLI is not authenticated; run `npm run login` first', { cause })
   }
 }
 
@@ -177,7 +169,7 @@ function currentAwsIdentity(awsCliPath, region) {
     })
   } catch (cause) {
     throw new Error(
-      'no usable AWS credentials. Run `aws login` and complete the browser sign-in ' +
+      'no usable AWS credentials. Run `npm run login`, which opens the `aws login` browser sign-in ' +
         '(no IAM user or access keys needed; signing in as the account root works), then rerun this command. ' +
         'An existing profile or SSO session works too — this step only needs `sts:GetCallerIdentity` to succeed.',
       { cause },
@@ -413,7 +405,7 @@ function provisionAuth0({ stackDomain }) {
   try {
     execFileSync('auth0', ['tenants', 'list'], { stdio: 'ignore', timeout: 30_000, killSignal: 'SIGTERM' })
   } catch (cause) {
-    throw new Error('the auth0 CLI is not authenticated; run `auth0 login` and complete the browser consent', { cause })
+    throw new Error('the auth0 CLI is not authenticated; run `npm run login` and complete the browser consent', { cause })
   }
 
   const app = auth0Json(spaApplicationArgs({ stackDomain }))
