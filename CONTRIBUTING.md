@@ -60,6 +60,32 @@ Key test entry points:
 6. Open a Pull Request
 7. Sign the [BoxLite Contributor License Agreement](./docs/legal/CLA.md) when CLA Assistant asks you to do so
 
+### Watching CI and PR feedback
+
+Once the hooks are installed (`bash .githooks/install.sh` — once per clone or
+worktree), every `git push` arms a background watcher via
+[`.githooks/pre-push`](./.githooks/pre-push), so it
+runs the same for a human, Claude Code, Codex, or any other agent. It waits for
+the push to land, waits for a PR to appear (which covers a later `gh pr create` —
+`gh` has no hook system), then emits one JSON line per event: each check as it
+concludes, plus every new comment, review, and inline review thread.
+
+```bash
+# follow the current branch's events; ends itself when the PR merges or closes
+.agents/watch/pr-watch-stream.sh "$(git rev-parse --git-path pr-watch)/$(git branch --show-current).jsonl"
+
+# watch a specific PR in the foreground, without pushing
+.agents/watch/pr-watch.sh --pr 1234 --once
+```
+
+Events land under `$(git rev-parse --git-path pr-watch)/` — inside `.git/`, so
+they are per-worktree and never tracked. What an agent may fix unattended versus
+what needs a human is defined in
+[`.agents/watch/escalation-policy.md`](./.agents/watch/escalation-policy.md).
+
+Set `BOXLITE_PR_WATCH=0` to disable. It is best-effort by construction: a
+watcher that cannot start never fails your push.
+
 ### Commit & PR messages
 
 Write for a reviewer skimming in ~30 seconds. Describe the change, not the process that produced it.

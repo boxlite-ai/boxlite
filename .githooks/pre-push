@@ -123,6 +123,43 @@ if [[ "$is_agent" == 1 ]]; then
   cleanup_push_audit_context
 fi
 
+# Arm the CI + PR-comment watcher for every branch in this push.
+#
+# pre-push is the only choke point every agent AND every human passes through on
+# the way to the remote, and git has no post-push hook — so the watcher starts
+# here and waits for the push to land before polling. It also waits for a PR to
+# appear, which is what lets one arm cover a later `gh pr create` without hooking
+# `gh` (which has no hook system) at all.
+#
+# Deliberately NOT gated on $is_agent: a watch is informational, and a human
+# pushing deserves the same CI signal an agent gets.
+#
+# Best-effort by construction — every failure path returns 0. A watcher that
+# cannot start must never be the reason a push is rejected.
+arm_pr_watch() {
+  local watcher="$repo_root/.agents/watch/pr-watch.sh"
+  [[ -r "$watcher" ]] || return 0
+
+  local log_dir
+  log_dir="$(git -C "$repo_root" rev-parse --git-path pr-watch 2>/dev/null)" || return 0
+  [[ "$log_dir" != /* ]] && log_dir="$repo_root/$log_dir"
+  mkdir -p "$log_dir" 2>/dev/null || return 0
+
+  local local_ref local_sha remote_ref remote_sha branch
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    [[ -n "${remote_ref:-}" ]] || continue
+    is_zero_sha "$local_sha" && continue           # branch deletion — nothing to watch
+    branch="${remote_ref#refs/heads/}"
+    [[ "$branch" != "$remote_ref" ]] || continue   # tag/note ref, not a branch
+    # nohup + disown, not setsid: macOS ships no setsid. Redirecting both streams
+    # to a file keeps git from waiting on an inherited pipe.
+    nohup bash "$watcher" --branch "$branch" --sha "$local_sha" \
+      >> "$log_dir/${branch//\//-}.daemon.log" 2>&1 &
+    disown 2>/dev/null || true
+  done < "$stdin_file"
+}
+[[ "${BOXLITE_PR_WATCH:-1}" == "0" ]] || arm_pr_watch || true
+
 # --git-common-dir, not --git-path: see pre-commit (self-exec recursion).
 chained="$(git rev-parse --git-common-dir)/hooks/pre-push"
 if [[ -x "$chained" && "$(realpath "$chained" 2>/dev/null)" != "$(realpath "$0" 2>/dev/null)" ]]; then
