@@ -113,7 +113,8 @@ test('requires the OIDC client ID through the SST secret store', () => {
   assert.doesNotMatch(environmentExample, /^OIDC_CLIENT_ID=/m)
 
   const deploymentGuide = extractSection(readme, '## Deploy an existing stack', '## Secrets & credentials')
-  assert.match(deploymentGuide, /npm run sst -- secret set OIDC_CLIENT_ID/)
+  assert.match(deploymentGuide, /npm run bootstrap/)
+  assert.match(deploymentGuide, /OIDC_CLIENT_ID/)
   assert.doesNotMatch(deploymentGuide, /App secrets .* are optional/)
   for (const documentation of [readme, environmentExample]) {
     assert.doesNotMatch(documentation, /secret set (?:[A-Z_]+|<NAME>)\s+["']?<[^>\n]+>["']?\s+--stage/)

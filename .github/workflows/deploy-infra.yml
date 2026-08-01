@@ -73,6 +73,10 @@ jobs:
         working-directory: apps/infra
         run: npm test
 
+      - name: Verify deploy role IAM boundary permissions
+        working-directory: apps/infra
+        run: node scripts/verify-deploy-role-boundary.mjs
+
       - name: Materialize stage configuration
         shell: bash
         env:
@@ -88,9 +92,17 @@ jobs:
         working-directory: apps/infra
         run: npm run --silent sst -- install --stage "$STAGE"
 
+      # Cloudflare's OAuth catalog has no DNS-edit scope for the wrangler
+      # client, so these stay hand-made scoped API tokens. Supplying them as
+      # Environment secrets is optional: scripts/sst-with-cloudflare.mjs
+      # prefers an already-set env var and otherwise reads SSM, so a stage
+      # seeded via SSM keeps working with these unset.
       - name: Preview the full stack
         shell: bash
         working-directory: apps/infra
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           npm run --silent sst -- diff --stage "$STAGE" --policy . --json |
@@ -99,6 +111,9 @@ jobs:
       - name: Deploy the full stack
         if: ${{ inputs.apply }}
         working-directory: apps/infra
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
         run: npm run deploy -- --stage "$STAGE" --policy .
 
       - name: Remove materialized configuration

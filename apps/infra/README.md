@@ -16,12 +16,20 @@ and CloudFront.
 
 ## Prerequisites
 
-- A **Cloudflare-managed domain** (SST creates ACM certs + DNS records automatically)
-- An **Auth0 tenant** (or any OIDC provider — see `.env.example` for setup steps)
-- A protected GitHub **`dev` Environment** with required reviewers
-- An AWS GitHub OIDC provider and the deployment role described below
-- An existing SST stack whose Runner inventory exactly matches `RUNNERS`
-- **AWS CLI** and **GitHub CLI** for one-time CI bootstrap only
+`npm run bootstrap` (below) provisions everything marked **auto** — you only
+need to be logged in to each service; it does not need long-lived credentials
+for any of them.
+
+| Prerequisite | How |
+| --- | --- |
+| **AWS credentials** | `aws login` — browser sign-in, AWS CLI 2.32.0+. No IAM user, no access keys, and no IAM Identity Center setup. Signing in as the account root works. |
+| **AWS GitHub OIDC provider** | **auto** — created if the account doesn't already have one |
+| **Deployment role + permissions boundary** | **auto** — `ci/github-deploy-role.yaml` deployed via CloudFormation |
+| **GitHub Environment** (named exactly as the stage) with required reviewers | **auto** — `gh auth login` first. Protection rules need a public repo, or GitHub Pro/Team/Enterprise on a private one; without them the Environment is still created, unprotected. |
+| **An Auth0 tenant** (or any OIDC provider) | Tenant signup is manual — Auth0 has no API for it. Everything inside it (SPA app, custom API, post-login Action, logout discovery) is **auto** via `auth0 login` + `npm run bootstrap -- --provision-auth0`. |
+| **A Cloudflare-managed domain** | Manual. You must own the domain and delegate nameservers, and Cloudflare's `wrangler` OAuth catalog has no DNS-edit scope — so a hand-made API token with `Zone:Read` + `DNS:Edit` is required. See [Secrets & credentials](#secrets--credentials). |
+| **An existing SST stack whose Runner inventory matches `RUNNERS`** | Manual — first-Runner provisioning is not implemented here. See [Deploying to your own AWS account](#deploying-to-your-own-aws-account). |
+| **AWS CLI + GitHub CLI** (and `auth0` CLI for `--provision-auth0`) | Installed by you; the bootstrap checks for them and fails with the exact fix. |
 
 ## Deploy an existing stack
 
@@ -33,40 +41,49 @@ stage; that operation is not implemented in this repository yet.
 cd apps/infra
 npm install
 cp .env.example .env        # stage config: STACK_DOMAIN, OIDC_ISSUER_BASE_URL, OIDC_AUDIENCE
+$EDITOR .env
 
-# Cloudflare provider credentials live in SSM (per stage). Read each value
-# without terminal echo, then pass it through stdin instead of process argv:
-printf 'Cloudflare API token: ' >&2
-IFS= read -rs secret_value; printf '\n' >&2
-printf '%s' "$secret_value" | aws ssm put-parameter --region ap-southeast-1 \
-  --type SecureString --name /boxlite/dev/cloudflare-api-token --value file:///dev/stdin
-unset secret_value
-printf 'Cloudflare account ID: ' >&2
-IFS= read -rs secret_value; printf '\n' >&2
-printf '%s' "$secret_value" | aws ssm put-parameter --region ap-southeast-1 \
-  --type SecureString --name /boxlite/dev/cloudflare-account-id --value file:///dev/stdin
-unset secret_value
+aws login                   # browser sign-in; no IAM user or access keys needed
+gh auth login               # if not already authenticated
+npm run bootstrap -- --stage dev
 
-# Required application secret. There is no placeholder fallback because a wrong
-# client ID makes every interactive login fail. SST reads an omitted value from stdin.
-printf 'OIDC client ID: ' >&2
-IFS= read -rs secret_value; printf '\n' >&2
-printf '%s' "$secret_value" | npm run sst -- secret set OIDC_CLIENT_ID --stage dev
-unset secret_value
+# Optional: also provision the Auth0 tenant's app/API/Action in one pass.
+# Not idempotent — Auth0 has no upsert, so rerunning creates duplicates.
+auth0 login
+npm run bootstrap -- --stage dev --provision-auth0
+```
 
-# Bootstrap the short-lived GitHub OIDC role. The account's GitHub OIDC provider
-# already exists when the E2E CI setup has been run.
-aws cloudformation deploy --region ap-southeast-1 \
-  --stack-name boxlite-dev-github-deploy \
-  --template-file ci/github-deploy-role.yaml \
-  --capabilities CAPABILITY_NAMED_IAM
+`npm run bootstrap` (`scripts/bootstrap-environment.mjs`) is the one-time
+environment preparation step — safe to re-run, including to pick up a change to
+`ci/github-deploy-role.yaml` on an account that already has a stack. It signs in
+as **you**, not as the scoped role it provisions (that role deliberately can't
+touch CloudFormation or its own IAM policy — see
+[Native AMD64 CI deployment](#native-amd64-ci-deployment)). In order it:
 
-# In the protected GitHub `dev` Environment, configure:
-#   variable AWS_DEPLOY_ROLE_ARN = the stack's RoleArn output
-#   variable AWS_REGION          = ap-southeast-1
-#   secret   DEPLOY_ENV          = the contents of this .env file
-gh secret set DEPLOY_ENV --env dev < .env
+1. checks the AWS CLI is ≥2.32.0 and that credentials resolve, pointing at
+   `aws login` if not;
+2. registers the GitHub OIDC provider if the account lacks one;
+3. creates/updates the GitHub Environment named after the stage, requiring the
+   authenticated user as reviewer (`--reviewers 123,456` to override);
+4. optionally provisions Auth0 (`--provision-auth0`);
+5. seeds the Cloudflare credentials into SSM and `OIDC_CLIENT_ID` into the SST
+   secret store — prompting, or reading `CLOUDFLARE_API_TOKEN`,
+   `CLOUDFLARE_DEFAULT_ACCOUNT_ID`, `OIDC_CLIENT_ID` from the environment for a
+   non-interactive run;
+6. deploys the `ci/github-deploy-role.yaml` stack and writes its role ARN plus
+   `AWS_REGION` and `DEPLOY_ENV` into that Environment.
 
+Steps 1-3 and 6 are idempotent. Step 4 is **not** — Auth0 offers no upsert, so
+rerunning with `--provision-auth0` creates duplicate applications. In step 5 the
+two Cloudflare SSM parameters are skipped when already seeded (pass `--force` to
+replace them), while `OIDC_CLIENT_ID` is prompted for and rewritten every run
+unless it is supplied through the environment. See the header comment
+in `scripts/bootstrap-environment.mjs` for the full flag list — there's no
+`--help` flag, only the doc comment.
+
+Then trigger the deployment:
+
+```bash
 # The workflow is manual and accepts runs only from main. It updates an existing
 # stack; initial Runner provisioning is intentionally a separate operation.
 gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false
@@ -83,6 +100,31 @@ and the CloudFront domain.
 If a build fails on a transient registry or package-mirror error, rerun the
 workflow — SST resumes from the failed step.
 
+### Deploying to your own AWS account
+
+`npm run bootstrap` plus the steps above prepare the AWS/GitHub account
+layer — IAM role, runtime permissions boundary, SSM credentials, GitHub
+Environment wiring — for any AWS account, any stage name, and any fork (it
+resolves the GitHub repo from `gh repo view`, or `--repo owner/name`). The
+deploy workflow itself is stage-agnostic too — `stage` is a `workflow_dispatch`
+input threaded through the GitHub Environment, the IAM boundary check, and
+every `sst` command — but its `options` list is a deliberate allowlist, not
+free text, so a required-reviewers Environment can't be targeted by an
+unbootstrapped or misspelled stage name. Deploying a stage other than `dev`
+means bootstrapping it first (`npm run bootstrap -- --stage <name>`), then
+adding `<name>` to the `stage` input's `options` in
+`.github/workflows/deploy-infra.yml` before it's selectable.
+
+Preparing the account layer is necessary but not sufficient for a genuinely
+from-zero deployment: as stated above, this workflow only reconciles an
+**existing** stack whose Runner inventory already matches `RUNNERS`.
+First-Runner provisioning — the stateful EC2/KVM host,
+[protected against replacement](#runner-lifecycle) by design — is a
+separately designed and reviewed operation not implemented in this repository
+yet. Until it lands, standing up a stack in a brand-new account still needs
+that piece done by hand before the guarded workflow above has anything to
+reconcile.
+
 ## Native AMD64 CI deployment
 
 `.github/workflows/deploy-infra.yml` runs the deployment on GitHub's native
@@ -90,8 +132,9 @@ workflow — SST resumes from the failed step.
 run in CI; a developer Mac needs neither Docker Desktop nor the Docker CLI. The
 workflow checks both the kernel and Docker engine architecture before SST runs.
 
-The job is manual, serialized, restricted to `main`, and bound to the protected
-GitHub `dev` Environment. GitHub OIDC supplies short-lived AWS credentials; no
+The job is manual, serialized, restricted to `main`, and bound to the selected
+stage's protected GitHub Environment (`dev` today — see [Deploying to your own
+AWS account](#deploying-to-your-own-aws-account) for adding another). GitHub OIDC supplies short-lived AWS credentials; no
 AWS access keys are stored in GitHub. `DEPLOY_ENV` materializes the stage's
 gitignored `.env` only for the job and is deleted even if deployment fails.
 
@@ -121,22 +164,34 @@ The role template grants only the AWS control-plane actions used by this SST
 stack. IAM mutation is limited to `boxlite-*` roles, policies, and instance
 profiles. Every role created by SST must carry the stage's runtime permissions
 boundary, which excludes IAM mutation and limits workloads to the data-plane APIs
-they need. Its trust policy accepts only OIDC tokens for `boxlite-ai/boxlite`
-using the `dev` Environment. Redeploy the bootstrap stack whenever this policy or
-boundary changes. `IAM_PERMISSIONS_BOUNDARY_STAGE` must match both the SST stage
+they need. Its trust policy accepts only OIDC tokens for the bootstrapped repo
+using that stage's Environment (`boxlite-ai/boxlite`'s `dev` Environment,
+by default). Rerun `npm run bootstrap -- --stage dev` (from
+[Deploy an existing stack](#deploy-an-existing-stack)) whenever this policy or
+boundary changes — it's idempotent, so rerunning it when nothing changed is a
+no-op. `IAM_PERMISSIONS_BOUNDARY_STAGE` must match both the SST stage
 and the template's `GitHubEnvironment`; deployment fails before creating roles if
 they differ. Keep required reviewers enabled on that Environment.
+
+After the safety tests and before any AWS resource is touched, a
+`Verify deploy role IAM boundary permissions` step
+(`scripts/verify-deploy-role-boundary.mjs`) reads the assumed role's own IAM
+policies — using only the read-only actions already granted to it — and fails
+immediately with a pointer back to `npm run bootstrap` if they don't grant
+`iam:PutRolePermissionsBoundary` for the current stage's boundary. Without it,
+the same gap surfaces as a wall of duplicate `AccessDenied` errors from every
+role SST manages, and only at the final `Deploy the full stack` step.
 
 ## Secrets & credentials
 
 Three homes, one access gate — **AWS IAM**. Nothing secret lives in git or a
 single laptop's `.env`:
 
-| What                                                                                                                              | Where                                                                        | Set with                                                         |
-| --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| **App secrets** — SSH host/private keys, Auth0 Management API id + secret, `SVIX_AUTH_TOKEN`, `POSTHOG_API_KEY`, `OIDC_CLIENT_ID` | SST secret store (encrypted in SST state, per stage)                         | Non-echoing prompt + SST stdin procedure below                   |
-| **Cloudflare provider creds** — `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`                                           | AWS SSM (`SecureString`, per stage)                                          | Non-echoing prompt + AWS CLI `file:///dev/stdin` procedure above |
-| **Stage config** — `STACK_DOMAIN`, `OIDC_ISSUER_BASE_URL`, `OIDC_AUDIENCE`, toggles                                               | GitHub Environment secret `DEPLOY_ENV`; local `.env` is the bootstrap source | `gh secret set DEPLOY_ENV --env dev < .env`                      |
+| What                                                                                                                              | Where                                                                        | Set with                                                                     |
+| --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| **App secrets** — SSH host/private keys, Auth0 Management API id + secret, `SVIX_AUTH_TOKEN`, `POSTHOG_API_KEY`, `OIDC_CLIENT_ID` | SST secret store (encrypted in SST state, per stage)                         | `OIDC_CLIENT_ID`: `npm run bootstrap`. The rest: non-echoing prompt + SST stdin procedure below |
+| **Cloudflare provider creds** — `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`                                           | AWS SSM (`SecureString`, per stage); optionally GitHub Environment secrets, which the workflow exports and which take precedence | `npm run bootstrap` (see [Deploy an existing stack](#deploy-an-existing-stack)) |
+| **Stage config** — `STACK_DOMAIN`, `OIDC_ISSUER_BASE_URL`, `OIDC_AUDIENCE`, toggles                                               | GitHub Environment secret `DEPLOY_ENV`; local `.env` is the bootstrap source | `npm run bootstrap`, which runs `gh secret set DEPLOY_ENV --env <stage> < .env` |
 
 Grant each API token only the permissions and resources required for its
 documented use; the Cloudflare token needs `Zone:Read` and `DNS:Edit` for the

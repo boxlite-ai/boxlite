@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { DEFAULT_SCHEMA, Type, load } from 'js-yaml'
 
+import { verifyDeployRoleGrantsBoundaryPermission } from './deploy-role-boundary.mjs'
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SST_WRAPPER = join(REPO_ROOT, 'apps/infra/scripts/sst-with-cloudflare.mjs')
 const RUNNER_POLICY_PROJECT = join(REPO_ROOT, 'apps/infra/PulumiPolicy.yaml')
@@ -108,6 +110,9 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   const source = readFileSync(DEPLOY_WORKFLOW, 'utf8')
   const workflow = load(source)
   const safetyTestStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Run deployment safety tests')
+  const boundaryCheckStep = workflow.jobs.deploy.steps.find(
+    (step) => step.name === 'Verify deploy role IAM boundary permissions',
+  )
   const materializeStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Materialize stage configuration')
   const installStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Install SST providers')
   const previewStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Preview the full stack')
@@ -174,6 +179,12 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
     workflow.jobs.deploy.steps.indexOf(safetyTestStep) < workflow.jobs.deploy.steps.indexOf(previewStep),
     'Runner lifecycle contracts must be tested before the deployment preview',
   )
+  assert.ok(boundaryCheckStep, 'the IAM boundary preflight step is missing')
+  assert.ok(
+    workflow.jobs.deploy.steps.indexOf(safetyTestStep) < workflow.jobs.deploy.steps.indexOf(boundaryCheckStep) &&
+      workflow.jobs.deploy.steps.indexOf(boundaryCheckStep) < workflow.jobs.deploy.steps.indexOf(previewStep),
+    'The IAM boundary preflight must run after safety tests and before the deployment preview',
+  )
   assert.ok(
     workflow.jobs.deploy.steps.indexOf(materializeStep) < workflow.jobs.deploy.steps.indexOf(installStep) &&
       workflow.jobs.deploy.steps.indexOf(installStep) < workflow.jobs.deploy.steps.indexOf(previewStep),
@@ -181,6 +192,45 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   )
   assert.doesNotMatch(`${previewStep.run}\n${deployStep.run}`, /--(?:target|exclude)(?:[=\s]|$)/)
   assert.doesNotMatch(source, /setup-qemu/)
+})
+
+test('the checked-in deploy role satisfies the CI IAM boundary preflight', () => {
+  // The preflight gates every deploy, so the template it inspects must actually
+  // grant what it looks for. Reads the real ci/github-deploy-role.yaml rather
+  // than a hand-copied fixture, so template drift fails here instead of wedging
+  // CI on the next run.
+  const template = load(readFileSync(DEV_DEPLOY_ROLE, 'utf8'), { schema: CLOUDFORMATION_SCHEMA })
+  const accountId = '123456789012'
+  const stage = 'dev'
+  const policyDocuments = template.Resources.GitHubDeployRole.Properties.Policies.map(
+    (policy) => policy.PolicyDocument,
+  )
+
+  // `!Ref BoxLiteRuntimePermissionsBoundary` yields that ManagedPolicy's ARN at
+  // deploy time; the YAML parser leaves the logical id. Resolve it through the
+  // resource's declared ManagedPolicyName so renaming the policy — which would
+  // break the real grant — fails this test instead of passing vacuously.
+  const boundaryPolicyName = template.Resources.BoxLiteRuntimePermissionsBoundary.Properties.ManagedPolicyName.replace(
+    '${GitHubEnvironment}',
+    stage,
+  )
+  const boundaryArn = `arn:aws:iam::${accountId}:policy/${boundaryPolicyName}`
+
+  const resolved = JSON.parse(
+    JSON.stringify(policyDocuments)
+      .replaceAll('${AWS::Partition}', 'aws')
+      .replaceAll('${AWS::AccountId}', accountId)
+      .replaceAll('${GitHubEnvironment}', stage)
+      .replaceAll('"BoxLiteRuntimePermissionsBoundary"', JSON.stringify(boundaryArn)),
+  )
+
+  const { grants } = verifyDeployRoleGrantsBoundaryPermission({
+    callerArn: `arn:aws:sts::${accountId}:assumed-role/boxlite-${stage}-github-deploy/session`,
+    accountId,
+    stage,
+    policyDocuments: resolved,
+  })
+  assert.equal(grants, true, 'ci/github-deploy-role.yaml must grant iam:PutRolePermissionsBoundary for the stage boundary')
 })
 
 test('package scripts disable long-running SST dev for the stateful stack', () => {
