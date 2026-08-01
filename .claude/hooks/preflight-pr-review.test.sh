@@ -132,6 +132,11 @@ FIX_DEBUG_ONLY=$'## Call graph\n\nBefore\n  exec_box (BoxHandle · src/portal/ex
 # Each graph needs a hop of its own — one section cannot borrow the other's.
 AFTER_PROSE=$'## Call graph\n\nBefore\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)\n\nAfter\n  the same hops, but the socket is awaited first'
 BEFORE_PROSE=$'## Call graph\n\nBefore\n  exec_box calls open_console, which returns early\n\nAfter\n  exec_box (BoxHandle · src/portal/exec.rs:88)\n    open_console (Jailer · src/jailer/console.rs:41)'
+# Free-form prose that happens to name a file and line. A bare `file.ext:NN`
+# occurs mid-sentence all the time; only the parenthesised hop shape counts.
+PROSE_WITH_LOC=$'## Call graph\n\nBefore\nThis refactor touches exec_box.rs:88 and improves things...\n\nAfter\nThis refactor touches open_console.rs:41 and improves things...'
+# A Type half carrying its own parens is ordinary Rust, not a malformed hop.
+PARENS_IN_TYPE=$'## Call graph\n\nBefore\n  on_ready (fn(u32) -> u32 · src/portal/exec.rs:88)\n\nAfter\n  on_ready (fn(u32) -> Result<u32> · src/portal/exec.rs:91)'
 # Hops sit past the graphs, in a later section — neither graph gets credit.
 HOPS_OUTSIDE=$'## Call graph\n\nBefore\n  exec_box calls open_console\n\nAfter\n  exec_box awaits open_console\n\n## Changes\n- exec_box (BoxHandle · src/portal/exec.rs:88)\n- open_console (Jailer · src/jailer/console.rs:41)'
 # Graphs drawn in ``` fences, with `##` and `after` lines as graph content:
@@ -168,6 +173,7 @@ After
 run_body "prose-only After → deny"            "gh pr create $FEAT --body \"$AFTER_PROSE\""                  "deny"
 run_body "prose-only Before → deny"           "gh pr create $FEAT --body \"$BEFORE_PROSE\""                 "deny"
 run_body "hops outside both graphs → deny"    "gh pr create $FEAT --body \"$HOPS_OUTSIDE\""                 "deny"
+run_body "prose w/ incidental file:LOC → deny" "gh pr create $FEAT --body \"$PROSE_WITH_LOC\""              "deny"
 run_body "unfilled template → deny"           "gh pr create $FEAT --body-file $REPO_ROOT/.github/pull_request_template.md" "deny"
 run_body "--fill (no body of its own) → deny" "gh pr create $FEAT --fill"                                   "deny"
 run_body "fix: graph w/o BUG marker → deny"   "gh pr create $FIX --body \"$GRAPH\""                         "deny"
@@ -181,6 +187,7 @@ run_body "gh pr ready (no body flag) → allow" "gh pr ready 42"                
 run_body "valid graph body → allow"           "gh pr create $FEAT --body \"$GRAPH\""                        "passthrough"
 run_body "fenced graphs w/ '##' inside → allow" "gh pr create $FEAT --body \"$FENCED\""                     "passthrough"
 run_body "CONTRIBUTING.md's own example → allow" "gh pr create $FIX --body \"$CONTRIB_BODY\""                "passthrough"
+run_body "parens inside the Type half → allow" "gh pr create $FEAT --body \"$PARENS_IN_TYPE\""              "passthrough"
 run_body "--body-file with graph → allow"     "gh pr create $FEAT --body-file $TMP/body.md"                 "passthrough"
 run_body "fix: graph + BUG + issue → allow"   "gh pr create $FIX --body \"$FIX_GRAPH\""                     "passthrough"
 run_body "fix: ASCII '<- BUG:' → allow"       "gh pr create $FIX --body \"$FIX_ASCII\""                     "passthrough"

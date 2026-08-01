@@ -192,17 +192,35 @@ if (( body_supplied )); then
   before_graph="$(section "$before_re" "$after_re")"
   after_graph="$(section "$after_re" "$before_re")"
 
-  # Hops must be real: `fn_name (Type · path/file.ext:LOC)`, and each graph
-  # needs one of its own. A body-wide count lets a prose-only After ride along
-  # on Before's hops, which is not an end-to-end before/after graph. Counting
-  # per section is also what an unfilled template cannot fake — its labels are
-  # literal text, but its hop lines are HTML comments.
-  hop_re='[A-Za-z0-9_./-]+\.[A-Za-z]+:[0-9]+'
+  # Each graph needs a hop of its own, shaped like the documented
+  # `fn_name (Type · path/file.ext:LOC)`. Matching a bare `file.ext:LOC` was
+  # too loose — one occurs mid-sentence — so a paragraph mentioning a file in
+  # passing counted as a graph.
+  #
+  # What it actually requires: a `(` to the left of the reference and a `)` to
+  # the right. Not a balanced group, and neither side is stricter than the
+  # other. Being permissive is deliberate — a Type half carries its own
+  # parentheses in `(fn(u32) -> u32 · src/x.rs:5)`, and refusing to cross them
+  # denied a hop conforming to CONTRIBUTING.md's documented shape. The cost is
+  # that an unrelated parenthetical straddling the reference also satisfies it.
+  #
+  # So this only reaches "shaped like a hop". It cannot tell a real graph from
+  # a fabricated one, and no pattern here could — that judgment is left to the
+  # human on the typed `reviewed:` ack below.
+  #
+  # Per graph, not body-wide: a body-wide count lets a prose-only After ride
+  # along on Before's hops, which is not an end-to-end before/after graph. It
+  # is also what an unfilled template cannot fake — its labels are literal
+  # text, but its hop lines are HTML comments.
+  hop_re='\(.*[A-Za-z0-9_./-]+\.[A-Za-z]+:[0-9]+.*\)'
   before_hops="$(grep -cE "$hop_re" <<<"$before_graph" || true)"
   after_hops="$(grep -cE "$hop_re" <<<"$after_graph" || true)"
+  # Reports what is checked — a parenthesised reference — rather than naming
+  # parts (`fn_name`, `Type`) the pattern does not require; the canonical shape
+  # is printed in full below.
   (( before_hops >= 1 && after_hops >= 1 )) \
     || missing+="
-  - a hop line carrying 'path/file.ext:LOC' in each graph (found ${before_hops} in Before, ${after_hops} in After)"
+  - a hop line with a parenthesised 'path/file.ext:LOC' in each graph, shaped as below (found ${before_hops} in Before, ${after_hops} in After)"
 
   # Bug-fix extras — only decidable when --title was inspectable above.
   if [[ "$pr_title" =~ ^fix(\([^\)]+\))?!?: ]]; then
