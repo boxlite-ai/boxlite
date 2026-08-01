@@ -17,7 +17,7 @@ func findRegistry(registries []boxlite.ImageRegistry, host string) (boxlite.Imag
 
 // When ghcr creds are present, buildImageRegistries must add exactly one authenticated
 // ghcr.io HTTPS entry alongside the unchanged insecure registries. This is the runtime-scoped
-// auth that lets boxlite-core pull our private first-party images directly (no self-hosted
+// auth that lets boxlite-core pull private images directly (no self-hosted
 // mirror). The asserted data is produced by the production helper, not the test body.
 func TestBuildImageRegistries_GhcrAuthAddedWhenCredsPresent(t *testing.T) {
 	registries := buildImageRegistries([]string{"10.0.0.5:5000"}, "boxlite-ci", "ghp_secret")

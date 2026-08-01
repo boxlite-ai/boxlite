@@ -478,7 +478,8 @@ export default $config({
         DEFAULT_TEMPLATE: envOr('DEFAULT_TEMPLATE', 'boxlite/base'),
         // Box base images: the three *_IMAGE refs below are the built-in curated set the API
         // gates box creation to (apps/api curated-images.constant.ts); the runner pulls them
-        // straight from ghcr.io with its GHCR_TOKEN. BOXLITE_SYSTEM_IMAGES appends more images
+        // straight from ghcr.io, and these three are public so no GHCR_TOKEN is required.
+        // BOXLITE_SYSTEM_IMAGES appends more images
         // (comma-separated `name=ref`) without a code deploy — empty means built-ins only.
         // IMAGE_TAG and the SOURCE_REGISTRY_* block are inert Daytona-port residue (no consumer
         // — see apps/api configuration.ts), kept only as reserved names for a future registry path.
@@ -887,13 +888,16 @@ export default $config({
     })
 
     // ── Runner ghcr pull credential (private image access) ────────────────────
-    // Runners pull box images straight from private ghcr.io (the self-hosted
-    // registry was removed). The pull TOKEN is stored in Secrets Manager and
-    // fetched by each runner at boot via its instance-role — NOT baked into
-    // user-data/IMDS — so scaled-out runners pick it up automatically and a
-    // rotated token only needs a secret update + a runner restart. The username
-    // (a non-secret bot account) is baked directly. Env-gated: set GHCR_TOKEN
-    // (+ GHCR_USERNAME) in apps/infra/.env to enable; unset = no ghcr auth wired.
+    // Runners pull box images straight from ghcr.io (the self-hosted registry
+    // was removed). The curated defaults (BOXLITE_SYSTEM_*_IMAGE, above) are
+    // public, so this credential is needed only for a private ref — whether set
+    // there or appended through BOXLITE_SYSTEM_IMAGES. When
+    // set, the pull TOKEN is stored in Secrets Manager and fetched by each
+    // runner at boot via its instance-role — NOT baked into user-data/IMDS — so
+    // scaled-out runners pick it up automatically and a rotated token only needs
+    // a secret update + a runner restart. The username (a non-secret bot
+    // account) is baked directly. Env-gated: set GHCR_TOKEN (+ GHCR_USERNAME)
+    // in apps/infra/.env to enable; unset = no ghcr auth wired.
     const ghcrUsername = process.env.GHCR_USERNAME?.trim() || ''
     const ghcrToken = process.env.GHCR_TOKEN?.trim() || ''
     const ghcrSecret =

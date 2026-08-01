@@ -8,8 +8,8 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 
 /**
  * Curated-image gate: boxes may only boot from a fixed, operator-controlled set of images,
- * because the runner pulls with its own private-registry token and must never be handed an
- * arbitrary user-supplied image. The gate is deliberately thin and sits only at the request
+ * because the runner pulls with whatever registry credentials it was deployed with and must
+ * never be handed an arbitrary user-supplied image. The gate is deliberately thin and sits only at the request
  * boundary (BoxService create / warm-pool); everything downstream treats the resolved ref as
  * an opaque OCI ref. When per-org custom images land, delete this file and its call sites --
  * no other layer knows the curated set exists.

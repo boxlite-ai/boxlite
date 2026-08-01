@@ -4,9 +4,10 @@ and a no-op when its work is already done (or its tools are absent), so it is
 safe to call on every `up`.
 
 Why these exist (gaps `compose up` otherwise assumes are pre-handled):
-  • image pulls (L1 images + the box base) need registry auth or they hit the
-    anonymous Docker Hub rate limit / a private-ghcr 401 — the BoxLite puller
-    does NOT read ~/.docker/config.json, so creds must be threaded in.
+  • image pulls (L1 images, and any private box base) need registry auth or
+    they hit the anonymous Docker Hub rate limit / a private-ghcr 401 — the
+    BoxLite puller does NOT read ~/.docker/config.json, so creds must be
+    threaded in. The curated box base itself is public.
   • the maturin *editable* SDK build does not embed boxlite-guest/shim into the
     runtime cache, so box boot fails with "boxlite-guest not found".
   • the box base is pulled from the published multi-arch agent image
@@ -56,8 +57,9 @@ def dockerhub_creds() -> tuple[str | None, str | None]:
 
 
 def ghcr_creds() -> tuple[str | None, str | None]:
-    """(username, token) for ghcr.io, so the runner can pull the private
-    multi-arch agent image. Resolution order, each per-developer (no shared
+    """(username, token) for ghcr.io. The curated agent images are public, so
+    these are optional; they are required only for a private image ref.
+    Resolution order, each per-developer (no shared
     secret to distribute):
       1. explicit env (GHCR_USERNAME/GHCR_TOKEN or BOXLITE_GHCR_*)
       2. the GitHub CLI token (`gh auth token`) — its scope already covers
@@ -119,8 +121,8 @@ def export_dockerhub_env() -> None:
 
 def export_ghcr_env() -> None:
     """Thread ghcr.io creds into os.environ under the names the runner reads
-    (GHCR_USERNAME/GHCR_TOKEN via envconfig) so it can pull the private
-    multi-arch agent image. No-op if none resolve."""
+    (GHCR_USERNAME/GHCR_TOKEN via envconfig) so it can pull a private image
+    ref. No-op if none resolve."""
     u, t = ghcr_creds()
     if u and t:
         os.environ.setdefault("GHCR_USERNAME", u)
@@ -237,13 +239,12 @@ def resolve_agent_image() -> str | None:
 
     The published agent image is multi-arch (linux/arm64 included), so the
     runner pulls the host-matching arch straight from ghcr — no local build or
-    L1-registry push. Returns the remote ref when ghcr creds are available (the
-    runner needs them to pull a private image), else None so the caller leaves
-    the curated default in place — now the same multi-arch tag, so a missing-
-    creds failure surfaces as an explicit, logged pull error."""
+    L1-registry push. Returns the remote ref when ghcr creds are available, else
+    None so the caller leaves the curated default in place — which is the same
+    multi-arch tag, and public, so an anonymous pull still succeeds."""
     u, t = ghcr_creds()
     if not (u and t):
         print("  no ghcr.io creds (try `gh auth login` or `docker login ghcr.io`) — "
-              "runner can't pull the arm64 agent image; boxes won't boot")
+              "using the curated default, which is public and pulls anonymously")
         return None
     return REMOTE_AGENT_IMAGE

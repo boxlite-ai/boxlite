@@ -106,7 +106,7 @@ func boxRuntimeEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]stri
 
 // buildImageRegistries assembles the runtime-scoped OCI registry list handed to boxlite-core:
 // the existing insecure (HTTP, no-auth) registries, plus — when ghcr credentials are provided —
-// a single authenticated ghcr.io HTTPS entry so core can pull our private first-party images
+// a single authenticated ghcr.io HTTPS entry so core can pull private images
 // directly from ghcr (no self-hosted registry mirror required). Auth is runtime-scoped because
 // boxlite.Runtime.Create has no per-call credential parameter. When ghcrUsername/ghcrToken are
 // empty this is byte-for-byte the previous behavior (anonymous), so it is safe to ship dark.
