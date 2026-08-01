@@ -697,5 +697,7 @@ service, and the dashboard's configured API base URL.
 Figures are approximate (ap-southeast-1 on-demand). The **Runner and the load
 balancers dominate** — the NAT is ~$16, not a headline cost. Whole-stack removal
 requires a separate reviewed Proxy and Runner decommission runbook, which is not
-implemented here. S3 buckets and RDS snapshots are retained in production
-(`--stage production`) per SST's default.
+implemented here. S3 buckets and RDS snapshots are retained only on the `prod`
+stage (`--stage prod`): `sst.config.ts` sets `removal: 'retain'` for it and
+`'remove'` for every other stage. SST's own default is `retain` for all stages,
+so any stage other than `prod` is deliberately more disposable than stock SST.

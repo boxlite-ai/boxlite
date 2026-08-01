@@ -35,7 +35,7 @@ export function validateGitHubRepo(repo) {
 }
 
 // Mirrors sst.config.ts's own `${$app.name}-${$app.stage}-runtime-boundary`
-// interpolation (apps/infra/sst.config.ts:125) — this script and the SST run
+// interpolation (apps/infra/sst.config.ts:131) — this script and the SST run
 // must agree on the boundary policy name without either importing the other.
 export function runtimeBoundaryPolicyArn({ accountId, appName, stage }) {
   if (!accountId || !ACCOUNT_ID_PATTERN.test(accountId)) {

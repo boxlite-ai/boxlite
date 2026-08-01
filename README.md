@@ -143,7 +143,7 @@ Every CLI command also works against a running server with `--url`: `boxlite --u
 ```bash
 git clone https://github.com/boxlite-ai/boxlite && cd boxlite/apps/infra
 npm install
-npm run deploy -- --stage production
+npm run deploy -- --stage prod
 ```
 
 Needs an AWS account, a Cloudflare-managed domain, and Docker. Full guide → [`apps/infra/README.md`](./apps/infra/README.md).

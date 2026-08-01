@@ -18,6 +18,12 @@
 //   5. observability               10. runner (EC2 + nested KVM)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// The one stage that holds real user data. Both the `removal` policy and the
+// RDS deletion-protection/final-snapshot guards key off this exact name, so it
+// lives in one place rather than being spelled out at each use — a mismatch
+// between the two silently leaves the real stack unprotected.
+const PRODUCTION_STAGE = 'prod'
+
 // Container ports each service listens on internally
 const PORTS = {
   API: 3000,
@@ -87,7 +93,7 @@ export default $config({
 
     return {
       name: 'boxlite',
-      removal: input?.stage === 'production' ? 'retain' : 'remove',
+      removal: input?.stage === PRODUCTION_STAGE ? 'retain' : 'remove',
       home: 'aws',
       providers: {
         aws: {
@@ -224,11 +230,11 @@ export default $config({
     // Durable state survives accidental teardown the way the runner does (§10).
     // `removal: 'retain'` (above) already keeps prod resources on `sst remove`, but it
     // does NOT stop a targeted destroy, a replace-on-immutable-change, or an AWS-console
-    // delete — so production also gets RDS deletion-protection + a final snapshot.
+    // delete — so prod also gets RDS deletion-protection + a final snapshot.
     // S3 versioning is on in every stage: cheap, and the only guard against an
     // object-level overwrite/delete (which `removal` never covers). Redis is a
     // transient cache, so it needs neither.
-    const isProd = $app.stage === 'production'
+    const isProd = $app.stage === PRODUCTION_STAGE
     // Unique-but-stable suffix for the DB final snapshot: a fixed name would collide
     // with the snapshot a prior teardown of the same stage already created (RDS requires
     // unique final-snapshot ids). RandomId is stable across deploys (no drift) and is

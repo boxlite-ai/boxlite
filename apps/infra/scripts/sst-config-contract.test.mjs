@@ -121,6 +121,31 @@ test('requires the OIDC client ID through the SST secret store', () => {
   }
 })
 
+test('data-protection guards key off the stage that actually exists: prod', () => {
+  // SST state has app/boxlite/prod.json and no production.json — the real
+  // stage is `prod`. The deployed prod stack carries retainOnDelete and
+  // deletionProtection because it was deployed from a branch that already
+  // compared against 'prod'; main still said 'production', so deploying prod
+  // from main would have computed isProd === false and reset them. One
+  // constant, both call sites, so the two guards cannot drift apart again.
+  assert.match(source, /const PRODUCTION_STAGE = 'prod'/)
+  assert.match(source, /removal: input\?\.stage === PRODUCTION_STAGE \? 'retain' : 'remove'/)
+  assert.match(source, /const isProd = \$app\.stage === PRODUCTION_STAGE/)
+})
+
+test('no stage-name comparison hardcodes a bare production literal', () => {
+  // NODE_ENV / ENVIRONMENT: 'production' are Node runtime values, not stages,
+  // and must survive; a stage comparison against the string must not.
+  assert.doesNotMatch(source, /stage === 'production'/)
+  assert.doesNotMatch(source, /stage === "production"/)
+  assert.match(source, /NODE_ENV: 'production'/)
+})
+
+test('the prod stage keeps deletion protection and a final snapshot', () => {
+  assert.match(source, /args\.deletionProtection = isProd/)
+  assert.match(source, /args\.skipFinalSnapshot = !isProd/)
+})
+
 test('does not restore the removed SSH gateway deployment', () => {
   assert.doesNotMatch(source, /SshGateway|SSH_GATEWAY|SSH_PRIVATE_KEY_B64|SSH_HOST_KEY_B64/)
   assert.doesNotMatch(environmentExample, /SSH_GATEWAY|SSH_PRIVATE_KEY_B64|SSH_HOST_KEY_B64/)
