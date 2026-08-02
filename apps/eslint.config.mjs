@@ -9,7 +9,7 @@ export default [
   ...nx.configs['flat/javascript'],
   {
     // Workspace-wide ignores. Patterns are relative to this config (apps/).
-    // Adapted from upstream daytonaio/daytona (root-level config) for the
+    // Adapted from the upstream project's root-level config for the
     // BoxLite layout where lint scripts run with cwd=apps/ instead of root.
     ignores: [
       '**/dist',

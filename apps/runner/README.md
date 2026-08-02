@@ -315,7 +315,7 @@ transition and which entry point triggers each.
   one PTY would race on stdin and split stdout output unpredictably.
 - **Detach without kill** lets a client survive transient connection
   drops (LB idle timeout, network blip) without losing the running
-  process. Matches the E2B / Daytona model.
+  process. Matches the E2B model.
 - **Reap escalation (SIGHUP → SIGTERM → SIGKILL)** mirrors the standard
   Unix shutdown sequence used by systemd, Kubernetes, and Docker.
   Cooperative processes (`bash`, `python -i`, `psql`) clean up on SIGHUP.

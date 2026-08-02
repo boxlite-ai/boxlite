@@ -88,8 +88,8 @@ export function generateApiKeyValue(prefix: string, keyClass: ApiKeyClass): stri
  * computationally infeasible to brute-force regardless of hash speed.
  * Slow KDFs exist to defend *low-entropy human passwords*; they impose
  * latency on every auth request without adding security for random
- * high-entropy tokens. Matches the upstream `daytonaio/daytona`
- * implementation byte-for-byte and the documented pattern used by
+ * high-entropy tokens. Matches the upstream implementation
+ * byte-for-byte and the documented pattern used by
  * Stripe, GitHub, Doppler, and other API-key providers.
  */
 export function generateApiKeyHash(value: string): string {
@@ -99,7 +99,7 @@ export function generateApiKeyHash(value: string): string {
 /**
  * Non-secret prefix used for masked display (`blk_live_••••abc`). Returns the
  * `{prefix}_{class}_` head for current keys; for legacy single-segment values
- * (Daytona `dtn_…`) falls back to the first 3 characters, matching the
+ * (`dtn_…`) falls back to the first 3 characters, matching the
  * pre-existing stored `keyPrefix` so already-issued rows render unchanged.
  */
 export function extractKeyDisplayPrefix(value: string): string {

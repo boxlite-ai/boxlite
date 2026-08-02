@@ -62,7 +62,7 @@ describe('api-key', () => {
       expect(extractKeyDisplayPrefix(generateApiKeyValue('acme', 'svc'))).toBe('acme_svc_')
     })
 
-    it('falls back to the first 3 chars for legacy Daytona values (display unchanged)', () => {
+    it('falls back to the first 3 chars for legacy dtn_ values (display unchanged)', () => {
       expect(extractKeyDisplayPrefix('dtn_0000000000000000000000000000000000000000000000000000000000000000')).toBe(
         'dtn',
       )

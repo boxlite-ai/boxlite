@@ -73,7 +73,7 @@ const configuration = {
   dashboardUrl: process.env.DASHBOARD_URL,
   // Default to empty string - dashboard will then hit '/api'
   dashboardBaseApiUrl: process.env.DASHBOARD_BASE_API_URL || '',
-  // Currently unconsumed (Daytona-port residue): nothing reads `systemSourceRegistry`.
+  // Currently unconsumed (upstream-port residue): nothing reads `systemSourceRegistry`.
   // Box images are a fixed curated set of digest-pinned ghcr.io refs pulled directly by
   // the runner (see box/constants/curated-images.constant.ts), not mirrored from a source
   // registry. Kept as a reserved surface for a future per-org custom-image path.

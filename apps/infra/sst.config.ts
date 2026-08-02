@@ -481,7 +481,7 @@ export default $config({
         // straight from ghcr.io, and these three are public so no GHCR_TOKEN is required.
         // BOXLITE_SYSTEM_IMAGES appends more images
         // (comma-separated `name=ref`) without a code deploy — empty means built-ins only.
-        // IMAGE_TAG and the SOURCE_REGISTRY_* block are inert Daytona-port residue (no consumer
+        // IMAGE_TAG and the SOURCE_REGISTRY_* block are inert upstream-port residue (no consumer
         // — see apps/api configuration.ts), kept only as reserved names for a future registry path.
         BOXLITE_SYSTEM_IMAGE_TAG: envOr('BOXLITE_SYSTEM_IMAGE_TAG', 'v0.1.0'),
         BOXLITE_SYSTEM_BASE_IMAGE: envOr(
