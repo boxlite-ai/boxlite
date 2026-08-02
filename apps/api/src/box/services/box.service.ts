@@ -255,7 +255,7 @@ export class BoxService {
       if (createBoxDto.volumes !== undefined) {
         box.volumes = this.resolveVolumes(createBoxDto.volumes)
       }
-      // 启动参数必须随 Box 落库，不能只存在于首次发往 Runner 的请求中。
+      // Persist launch parameters with the Box instead of keeping them only in the initial Runner request.
       box.launchConfig = createBoxDto.launchConfig
 
       box.runnerId = runner.id

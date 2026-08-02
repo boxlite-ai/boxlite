@@ -65,7 +65,7 @@ export abstract class BoxAction {
     }
 
     const updateData: Partial<Box> = {
-      // 状态转换有时需要原子地修正 desiredState 等关联字段。
+      // Some state transitions must atomically update related fields such as desiredState.
       ...extraUpdateData,
       state,
     }

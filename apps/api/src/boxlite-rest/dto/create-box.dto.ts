@@ -72,7 +72,7 @@ export class CreateBoxDto {
   @Min(1)
   disk_size_gb?: number
 
-  // 以下字段定义主进程启动方式，并在请求入口处校验后交给控制面持久化。
+  // These fields define how the main process starts and are validated before the control plane persists them.
   @IsOptional()
   @IsString()
   working_dir?: string

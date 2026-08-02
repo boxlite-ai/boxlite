@@ -132,7 +132,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       memoryQuota: box.mem,
       storageQuota: box.disk,
       env: box.env,
-      // 启动配置写入异步任务载荷，Runner 重启并重放任务时仍可恢复。
+      // Store launch configuration in the async job payload so task replay survives Runner restarts.
       entrypoint: box.launchConfig?.entrypoint,
       cmd: box.launchConfig?.cmd,
       workingDir: box.launchConfig?.workingDir,

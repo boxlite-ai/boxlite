@@ -19,25 +19,25 @@ import {
 } from '../constants/box-lifecycle.constants'
 
 /**
- * Box 主进程的启动配置。
+ * Launch configuration for the Box main process.
  *
- * 远程前台运行不能只依赖创建请求中的临时参数：API 或 Runner 重启后，
- * 控制面仍需使用这些字段恢复“创建、附加、再启动”的完整流程。
+ * A remote foreground run cannot rely on transient create-request parameters. After an API
+ * or Runner restart, the control plane still needs these fields to resume the create-attach-start flow.
  */
 export interface BoxLaunchConfig {
-  /** 覆盖镜像默认入口程序。 */
+  /** Overrides the image's default entrypoint. */
   entrypoint?: string[]
-  /** 传给入口程序的命令及参数。 */
+  /** Command and arguments passed to the entrypoint. */
   cmd?: string[]
-  /** 主进程启动时使用的工作目录。 */
+  /** Working directory used when starting the main process. */
   workingDir?: string
-  /** 是否为主进程分配终端。 */
+  /** Whether to allocate a terminal for the main process. */
   tty?: boolean
-  /** 客户端是否要求与主进程分离。 */
+  /** Whether the client requests detachment from the main process. */
   detach?: boolean
-  /** 是否使用先附加输出流、再启动主进程的前台流程。 */
+  /** Whether to attach the output stream before starting the main process. */
   foreground?: boolean
-  /** 前台主进程退出后是否删除 Box，用于实现远程 `run --rm`。 */
+  /** Whether to delete the Box after the foreground process exits, implementing remote `run --rm`. */
   autoDeleteAfterExit?: boolean
 }
 
@@ -165,7 +165,7 @@ export class Box {
     type: 'jsonb',
     nullable: true,
   })
-  // 与 Box 一起持久化，保证控制面重启后仍能恢复前台启动语义。
+  // Persist with the Box so foreground launch semantics survive control-plane restarts.
   launchConfig?: BoxLaunchConfig
 
   @CreateDateColumn({

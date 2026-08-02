@@ -179,6 +179,6 @@ export class CreateBoxDto {
   })
   @IsOptional()
   @IsObject()
-  // 由 REST 边界完成字段校验和映射，服务层只负责持久化。
+  // The REST boundary validates and maps these fields; the service layer only persists them.
   launchConfig?: BoxLaunchConfig
 }

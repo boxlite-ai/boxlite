@@ -47,8 +47,8 @@ export interface RunnerAdapter {
 
   boxInfo(boxId: string): Promise<RunnerBoxInfo>
   /**
-   * 创建 Box；skipStart=true 时只准备运行环境，不启动主进程，
-   * 供远程前台流程完成输出流附加后再显式启动。
+   * Creates a Box. When skipStart=true, it prepares the runtime without starting the main process,
+   * allowing the remote foreground flow to attach the output stream before explicitly starting it.
    */
   createBox(
     box: Box,

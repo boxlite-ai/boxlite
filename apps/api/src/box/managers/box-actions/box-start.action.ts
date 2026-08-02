@@ -78,13 +78,14 @@ export class BoxStartAction extends BoxAction {
     }
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-    // 前台运行先创建 VM 和主进程配置，但延迟启动主进程，避免快速命令在附加前退出。
+    // Prepare the VM and main-process configuration first, delaying process start so fast commands
+    // cannot exit before the client attaches.
     const skipStart = box.launchConfig?.foreground === true
     await runnerAdapter.createBox(box, metadata, skipStart)
 
     if (skipStart && runner.apiVersion === '0') {
-      // V0 创建是同步调用；skipStart 成功返回时 Box 已存在但未运行。
-      // 同时修正 desiredState，避免状态同步器立即再次启动它。
+      // V0 creation is synchronous; when skipStart returns successfully, the Box exists but is not running.
+      // Update desiredState as well so the state reconciler does not immediately start it.
       await this.updateBoxState(
         box,
         BoxState.STOPPED,

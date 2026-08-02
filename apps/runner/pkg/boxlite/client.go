@@ -247,7 +247,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if len(boxDto.Entrypoint) > 0 {
 		opts = append(opts, boxlite.WithEntrypoint(boxDto.Entrypoint...))
 	}
-	// 将控制面的主进程配置转换为 Go SDK 选项；未提供的字段保留镜像默认值。
+	// Convert control-plane main-process settings into Go SDK options; unspecified fields retain image defaults.
 	if len(boxDto.Cmd) > 0 {
 		opts = append(opts, boxlite.WithCmd(boxDto.Cmd...))
 	}
@@ -258,7 +258,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithDetach(*boxDto.Detach))
 	}
 	if boxDto.TTY != nil && *boxDto.TTY {
-		// 当前 Go SDK 没有创建时的 TTY 选项，先明确记录能力缺口，避免静默忽略。
+		// The Go SDK does not yet expose a create-time TTY option, so log the capability gap explicitly.
 		c.logger.WarnContext(ctx, "main-process TTY was requested but the Go SDK does not expose a create-time TTY option yet", "box", boxDto.Id)
 	}
 

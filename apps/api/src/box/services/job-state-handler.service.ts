@@ -103,7 +103,7 @@ export class JobStateHandlerService {
 
       if (job.status === JobStatus.COMPLETED) {
         const payload = job.getPayload<{ skipStart?: boolean }>() ?? {}
-        // CREATE_BOX 完成只代表运行环境已创建；skipStart 任务的主进程尚未启动。
+        // CREATE_BOX completion only means the runtime exists; a skipStart job has not started its main process.
         const skippedStart = payload.skipStart === true
         this.logger.debug(
           `CREATE_BOX job ${job.id} completed successfully, marking box ${boxId} as ${
@@ -112,7 +112,7 @@ export class JobStateHandlerService {
         )
         updateData.state = skippedStart ? BoxState.STOPPED : BoxState.STARTED
         if (skippedStart) {
-          // 阻止状态协调器在客户端附加输出流之前自动拉起主进程。
+          // Prevent the state reconciler from starting the main process before the client attaches its output stream.
           updateData.desiredState = BoxDesiredState.STOPPED
         }
         updateData.errorReason = null

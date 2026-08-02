@@ -210,7 +210,7 @@ export class BoxDto {
     required: false,
   })
   @IsOptional()
-  // 返回持久化后的启动配置，便于后续前台附加与恢复流程读取。
+  // Return the persisted launch configuration for later foreground attach and recovery flows.
   launchConfig?: BoxLaunchConfig
 
   @ApiPropertyOptional({

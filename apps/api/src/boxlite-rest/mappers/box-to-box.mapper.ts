@@ -45,7 +45,7 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   createDto.autoPause = dto.auto_pause
   createDto.autoDelete = dto.auto_delete
   createDto.autoResume = dto.auto_resume
-  // 仅在请求显式携带启动参数时保存配置，避免改变普通创建请求的历史行为。
+  // Persist launch configuration only when explicitly supplied to preserve existing create behavior.
   const hasLaunchConfig =
     dto.entrypoint !== undefined ||
     dto.cmd !== undefined ||
@@ -59,9 +59,9 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
       workingDir: dto.working_dir,
       tty: dto.tty,
       detach: dto.detach,
-      // detach=false 表示 CLI 需要像本地运行一样持续接收主进程输出和退出码。
+      // detach=false means the CLI expects local-like streaming output and the main process exit code.
       foreground: dto.detach === false,
-      // 记录前台退出后的清理意图，实际删除由生命周期流程在进程退出后执行。
+      // Record cleanup intent; the lifecycle flow performs deletion after the foreground process exits.
       autoDeleteAfterExit: dto.detach === false && dto.auto_delete !== undefined && dto.auto_delete > 0,
     }
   }

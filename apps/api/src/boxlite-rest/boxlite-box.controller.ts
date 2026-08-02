@@ -92,8 +92,8 @@ export class BoxliteBoxController {
 
     let box = await this.boxService.create(createBoxDto, organization)
     if (dto.detach === false) {
-      // 前台模式会先创建一个未启动的 Box，输出流附加后再由后续流程启动。
-      // 此处不能等待 STARTED，否则会与“先附加、再启动”的顺序互相阻塞。
+      // Foreground mode creates a stopped Box first; a later flow starts it after attaching the output stream.
+      // Waiting for STARTED here would deadlock the attach-before-start sequence.
       return boxToBoxResponse(box)
     }
     if (box.state !== BoxState.STARTED) {

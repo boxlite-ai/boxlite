@@ -263,7 +263,8 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       memoryQuota: box.mem,
       storageQuota: box.disk,
       env: box.env,
-      // V0 同步接口也必须收到完整配置，保证混合版本部署时启动语义一致。
+      // The synchronous V0 API also needs the full configuration to preserve launch semantics
+      // during mixed-version deployments.
       entrypoint: box.launchConfig?.entrypoint,
       cmd: box.launchConfig?.cmd,
       workingDir: box.launchConfig?.workingDir,
