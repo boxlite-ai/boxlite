@@ -23,6 +23,8 @@ export const LOGIN_PROVIDERS = [
     statusArgs: ['sts', 'get-caller-identity'],
     loginArgs: ['login'],
     required: true,
+    // Formula name, not the binary name — `aws` ships as `awscli`.
+    install: { manager: 'brew', formula: 'awscli' },
   },
   {
     key: 'github',
@@ -31,6 +33,7 @@ export const LOGIN_PROVIDERS = [
     statusArgs: ['auth', 'status'],
     loginArgs: ['auth', 'login'],
     required: true,
+    install: { manager: 'brew', formula: 'gh' },
   },
   {
     key: 'auth0',
@@ -41,8 +44,34 @@ export const LOGIN_PROVIDERS = [
     statusArgs: ['tenants', 'list'],
     loginArgs: ['login'],
     required: false,
+    install: { manager: 'brew', formula: 'auth0' },
   },
 ]
+
+export const INSTALL_MANAGERS = {
+  brew: { command: 'brew', args: (formula) => ['install', formula], label: 'Homebrew' },
+}
+
+/**
+ * What to do about a provider whose CLI is absent.
+ *
+ *   'offer-install'  we know a recipe and its package manager is present, so
+ *                    the operator can be asked
+ *   'report'         no recipe, or the manager itself is missing — say how to
+ *                    get the CLI and move on rather than installing a package
+ *                    manager as a side effect of logging in
+ */
+export function decideMissingCliAction({ install, managerAvailable }) {
+  if (!install || !INSTALL_MANAGERS[install.manager]) return 'report'
+  return managerAvailable ? 'offer-install' : 'report'
+}
+
+/** The exact command line for a recipe, for both running and printing. */
+export function installCommand(install) {
+  const manager = INSTALL_MANAGERS[install?.manager]
+  if (!manager) return null
+  return { command: manager.command, args: manager.args(install.formula), label: manager.label }
+}
 
 export function selectProviders(requestedKeys) {
   if (!requestedKeys || requestedKeys.length === 0) return LOGIN_PROVIDERS

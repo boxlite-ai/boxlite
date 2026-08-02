@@ -61,6 +61,7 @@ import {
   hasGitHubOidcProvider,
   isAwsCliVersionAtLeast,
   ssmParameterName,
+  sstPlatformState,
   validateGitHubRepo,
 } from './environment-bootstrap.mjs'
 import {
@@ -88,6 +89,13 @@ const INFRA_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const TEMPLATE_PATH = join(INFRA_ROOT, 'ci', 'github-deploy-role.yaml')
 const ENV_PATH = join(INFRA_ROOT, '.env')
 const SST_WRAPPER_PATH = join(INFRA_ROOT, 'scripts', 'sst-with-cloudflare.mjs')
+// Generous but bounded: a healthy platform install completed in ~85s here.
+const SST_INSTALL_TIMEOUT_MS = 240_000
+// The cold attempt gets a shorter leash than that, because a recovery sits
+// behind it: giving up early costs at worst an npm install that would not have
+// been needed, while waiting the full budget on an install that is not
+// progressing costs four minutes of silence.
+const SST_COLD_INSTALL_TIMEOUT_MS = 90_000
 const ACTION_SOURCE_PATH = join(INFRA_ROOT, 'functions', 'auth0', 'setCustomClaims.onExecutePostLogin.js')
 
 const CLOUDFLARE_CREDENTIALS = [
@@ -111,9 +119,22 @@ function requireStageEnvFile() {
 
 function requireGhAuthenticated() {
   try {
-    execFileSync('gh', ['auth', 'status'], { stdio: 'ignore', timeout: 15_000, killSignal: 'SIGTERM' })
+    // Capture stderr rather than discarding it: `gh auth status` validates the
+    // token over the network, so it also exits non-zero when github.com is
+    // unreachable. Only gh's own text separates that from a missing session,
+    // and the advice below is right for just one of them.
+    execFileSync('gh', ['auth', 'status'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      encoding: 'utf8',
+      timeout: 15_000,
+      killSignal: 'SIGTERM',
+    })
   } catch (cause) {
-    throw new Error('GitHub CLI is not authenticated; run `npm run login` first', { cause })
+    const detail = cause.stderr?.trim()
+    throw new Error(
+      `GitHub CLI is not authenticated; run \`npm run login\` first${detail ? ` (gh said: ${detail})` : ''}`,
+      { cause },
+    )
   }
 }
 
@@ -293,22 +314,101 @@ async function ensureCloudflareCredentials({ awsCliPath, region, stage, force })
   }
 }
 
-// Routed through the same wrapper `npm run deploy`/`diff` use (not a bare sst
-// call) so this stays the one place that knows how to reach the sst binary —
-// see scripts/sst-with-cloudflare.mjs's own header comment for why.
+const SST_PLATFORM_DIR = join(INFRA_ROOT, '.sst', 'platform')
+
+/*
+ * Install SST's platform (pulumi, bun, ~560 provider packages) before anything
+ * that is timed tightly.
+ *
+ * On a clean checkout the first sst call of any kind pays this cost, and until
+ * this step existed that call was `secret set` a few lines below — a one-second
+ * operation whose timeout was sized accordingly, so the install was killed
+ * mid-flight and surfaced as a bare ETIMEDOUT with SST's real error buried in
+ * .sst/log/sst.log.
+ *
+ * The npm fallback below covers an install that starts and does not finish,
+ * leaving package.json written but node_modules empty — a state observed on
+ * this machine, where an `sst install` was still running after ten minutes
+ * while npm populated the same tree in 42s. The cause was never isolated: a
+ * later cold run completed through sst's own bun in 85s under the same proxy,
+ * so do not read this as "bun is broken". It is recovery from a stuck install,
+ * whatever stuck it. sst still has to run once first regardless, since it is
+ * what writes .sst/platform/package.json.
+ */
+function ensureSstPlatform(stage) {
+  if (sstPlatformState(SST_PLATFORM_DIR) === 'ready') {
+    runSst(['install', '--stage', stage], { timeout: SST_INSTALL_TIMEOUT_MS, label: 'install the SST platform' })
+    console.log(`[${SCRIPT_NAME}] SST platform ... ready`)
+    return
+  }
+
+  console.log(`[${SCRIPT_NAME}] SST platform ... installing (first run: pulumi + providers, a minute or two)`)
+  try {
+    runSst(['install', '--stage', stage], { timeout: SST_COLD_INSTALL_TIMEOUT_MS, label: 'install the SST platform' })
+  } catch (error) {
+    if (sstPlatformState(SST_PLATFORM_DIR) !== 'deps-missing') throw error
+    console.warn(
+      `[${SCRIPT_NAME}] SST platform ... sst's installer did not finish and left no deps; ` +
+        'retrying those with npm',
+    )
+    execFileSync('npm', ['install', '--no-audit', '--no-fund'], {
+      cwd: SST_PLATFORM_DIR,
+      stdio: ['ignore', 'inherit', 'inherit'],
+      timeout: SST_INSTALL_TIMEOUT_MS,
+      killSignal: 'SIGTERM',
+    })
+    runSst(['install', '--stage', stage], { timeout: SST_INSTALL_TIMEOUT_MS, label: 'install the SST platform' })
+  }
+  console.log(`[${SCRIPT_NAME}] SST platform ... ready`)
+}
+
+/*
+ * Every sst call goes through the wrapper `npm run deploy`/`diff` use (not a
+ * bare sst binary) so this stays the one place that knows how to reach it —
+ * see scripts/sst-with-cloudflare.mjs's own header comment for why.
+ *
+ * sst writes its own diagnosis to .sst/log/sst.log and prints only "Unexpected
+ * error occurred" to the terminal, so a failure here is worthless without that
+ * file's tail attached.
+ */
+function runSst(args, { input, timeout, label }) {
+  try {
+    execFileSync(process.execPath, [SST_WRAPPER_PATH, ...args], {
+      ...(input === undefined ? {} : { input }),
+      encoding: 'utf8',
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'inherit', 'inherit'],
+      timeout,
+      killSignal: 'SIGTERM',
+      cwd: INFRA_ROOT,
+    })
+  } catch (cause) {
+    const hint = cause.code === 'ETIMEDOUT' ? ` after ${Math.round(timeout / 1000)}s` : ''
+    throw new Error(`could not ${label}${hint}${sstLogTail()}`, { cause })
+  }
+}
+
+function sstLogTail(lines = 5) {
+  try {
+    const tail = readFileSync(join(INFRA_ROOT, '.sst', 'log', 'sst.log'), 'utf8').trimEnd().split('\n').slice(-lines)
+    return tail.length ? `\n  last lines of .sst/log/sst.log:\n${tail.map((line) => `    ${line}`).join('\n')}` : ''
+  } catch {
+    return '' // no log yet — the wrapper's own stderr is all there is
+  }
+}
+
 async function ensureOidcClientId(stage) {
   // `?.trim() || undefined` rather than `??`: an env var set to the empty
   // string is a misconfiguration, not a choice to store nothing, and `??` would
   // accept it and seed an empty secret that only fails at deploy time.
   const fromEnv = process.env.OIDC_CLIENT_ID?.trim() || undefined
   const value = requireNonEmptySecret('OIDC client ID', fromEnv ?? (await promptSecret('OIDC client ID: ')))
-  execFileSync(process.execPath, [SST_WRAPPER_PATH, 'secret', 'set', 'OIDC_CLIENT_ID', '--stage', stage], {
+  // 120s, not 60s: the platform is warm by now, but this still writes to the
+  // stage's secret store over the network and a slow link should not look like
+  // a broken one.
+  runSst(['secret', 'set', 'OIDC_CLIENT_ID', '--stage', stage], {
     input: value,
-    encoding: 'utf8',
-    stdio: ['pipe', 'inherit', 'inherit'],
-    timeout: 60_000,
-    killSignal: 'SIGTERM',
-    cwd: INFRA_ROOT,
+    timeout: 120_000,
+    label: 'set the OIDC_CLIENT_ID secret',
   })
   console.log(`[${SCRIPT_NAME}] OIDC_CLIENT_ID ... set${fromEnv ? ' from OIDC_CLIENT_ID env' : ''}`)
 }
@@ -531,9 +631,19 @@ function ghVariableSet({ repo, stage, name, value }) {
   })
 }
 
+/*
+ * The gh installed here (2.92.0) has no --body-file, and passing it makes gh
+ * print usage and exit non-zero. It takes --body, or reads the value from
+ * stdin when --body is omitted; --env-file is a different feature entirely
+ * (many secrets named by a dotenv file, not one secret whose value is that
+ * file). Passing the whole file on stdin is what stores DEPLOY_ENV as a single
+ * secret, and keeps the contents out of argv where other processes could read
+ * them.
+ */
 function ghSecretSetFromFile({ repo, stage, name, filePath }) {
-  execFileSync('gh', ['secret', 'set', name, '--repo', repo, '--env', stage, '--body-file', filePath], {
-    stdio: ['ignore', 'inherit', 'inherit'],
+  execFileSync('gh', ['secret', 'set', name, '--repo', repo, '--env', stage], {
+    input: readFileSync(filePath),
+    stdio: ['pipe', 'inherit', 'inherit'],
     timeout: 30_000,
     killSignal: 'SIGTERM',
   })
@@ -579,6 +689,8 @@ async function main() {
     provisionAuth0({ stackDomain })
   }
   await ensureCloudflareCredentials({ awsCliPath, region, stage, force })
+  // Before the first timed sst call, not inside it — see ensureSstPlatform.
+  ensureSstPlatform(stage)
   await ensureOidcClientId(stage)
   const roleArn = deployGithubDeployRoleStack({ awsCliPath, region, stage, repo })
   wireGithubEnvironment({ repo, stage, region, roleArn })
@@ -591,6 +703,14 @@ async function main() {
 try {
   await main()
 } catch (error) {
+  // Print the cause chain. Several checks here wrap a tool failure in advice
+  // ("GitHub CLI is not authenticated; run `npm run login` first"), and the
+  // advice is only right for one of the ways that tool can fail — `gh auth
+  // status` also exits non-zero when it cannot reach github.com. Without the
+  // cause an operator whose session is fine is sent to re-authenticate.
   console.error(`${SCRIPT_NAME}: ${error.message}`)
+  for (let cause = error.cause; cause; cause = cause.cause) {
+    console.error(`${SCRIPT_NAME}:   caused by: ${cause.message ?? cause}`)
+  }
   process.exit(1)
 }

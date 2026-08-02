@@ -233,6 +233,24 @@ test('the checked-in deploy role satisfies the CI IAM boundary preflight', () =>
   assert.equal(grants, true, 'ci/github-deploy-role.yaml must grant iam:PutRolePermissionsBoundary for the stage boundary')
 })
 
+test('the deploy role grants the CloudFront KeyValueStore prefix Router needs', () => {
+  // `cloudfront:*` does not reach `cloudfront-keyvaluestore:*` — an IAM
+  // wildcard never crosses the `service:` colon, and these are two service
+  // prefixes. sst.aws.Router stores its route table in a KeyValueStore, so
+  // without this grant every apply dies on DescribeKeyValueStore while every
+  // preview passes, because a preview makes no KV call.
+  const template = load(readFileSync(DEV_DEPLOY_ROLE, 'utf8'), { schema: CLOUDFORMATION_SCHEMA })
+  const actions = template.Resources.GitHubDeployRole.Properties.Policies.flatMap((policy) =>
+    policy.PolicyDocument.Statement.flatMap((statement) =>
+      Array.isArray(statement.Action) ? statement.Action : [statement.Action],
+    ),
+  )
+  assert.ok(
+    actions.includes('cloudfront-keyvaluestore:*'),
+    'ci/github-deploy-role.yaml must grant cloudfront-keyvaluestore:*; cloudfront:* does not cover it',
+  )
+})
+
 test('package scripts disable long-running SST dev for the stateful stack', () => {
   const packageJson = JSON.parse(readFileSync(join(REPO_ROOT, 'apps/infra/package.json'), 'utf8'))
 

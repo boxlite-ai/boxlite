@@ -3,6 +3,9 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import {
   GITHUB_OIDC_PROVIDER_URL,
@@ -15,6 +18,7 @@ import {
   parseAwsCliVersion,
   runtimeBoundaryPolicyArn,
   ssmParameterName,
+  sstPlatformState,
   validateGitHubRepo,
 } from './environment-bootstrap.mjs'
 
@@ -138,4 +142,22 @@ test('hasGitHubOidcProvider does not match a lookalike suffix', () => {
     false,
   )
   assert.equal(GITHUB_OIDC_PROVIDER_URL, 'https://token.actions.githubusercontent.com')
+})
+
+test('sstPlatformState tells a finished install from an interrupted one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sst-platform-'))
+  // sst has not run at all yet.
+  assert.equal(sstPlatformState(dir), 'absent')
+
+  // sst wrote package.json, then its bundled bun stalled before the deps
+  // landed. This is the state that must trigger the npm recovery rather than
+  // being reported as a working platform.
+  writeFileSync(join(dir, 'package.json'), '{}')
+  assert.equal(sstPlatformState(dir), 'deps-missing')
+
+  mkdirSync(join(dir, 'node_modules'))
+  assert.equal(sstPlatformState(dir), 'deps-missing', 'an empty node_modules is not a finished install')
+
+  mkdirSync(join(dir, 'node_modules', '@pulumi'))
+  assert.equal(sstPlatformState(dir), 'ready')
 })

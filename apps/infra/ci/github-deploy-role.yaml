@@ -128,6 +128,13 @@ Resources:
                   - application-autoscaling:*
                   - autoscaling:*
                   - cloudfront:*
+                  # Separate IAM service prefix, so `cloudfront:*` does not
+                  # reach it — a wildcard never crosses the `service:` colon.
+                  # sst.aws.Router keeps its route table in a CloudFront
+                  # KeyValueStore, so every apply calls DescribeKeyValueStore
+                  # and then the key writes. A preview never touches it, which
+                  # is why `apply=false` passes without this.
+                  - cloudfront-keyvaluestore:*
                   - cloudwatch:*
                   - ec2:*
                   - ecr:*

@@ -19,14 +19,64 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
+import { accessSync, constants } from 'node:fs'
+import { delimiter, join } from 'node:path'
+import { createInterface } from 'node:readline/promises'
 
 import { hasFlag, parseFlag } from './cli-flags.mjs'
-import { decideLoginAction, selectProviders, summarizeLoginResults } from './login-providers.mjs'
+import {
+  decideLoginAction,
+  decideMissingCliAction,
+  installCommand,
+  selectProviders,
+  summarizeLoginResults,
+} from './login-providers.mjs'
 
 const SCRIPT_NAME = 'login'
 
+// Walk PATH directly rather than shelling out to `command -v`. A shell here
+// meant either `shell: true` with concatenated args — which Node now warns
+// about as an injection risk (DEP0190) — or interpolating the name into a
+// `sh -c` string, which has the same shape. Neither is worth it to answer
+// "is this binary on PATH".
 function isCliInstalled(command) {
-  return spawnSync('command', ['-v', command], { shell: true, stdio: 'ignore' }).status === 0
+  return (process.env.PATH ?? '').split(delimiter).some((dir) => {
+    if (!dir) return false
+    try {
+      accessSync(join(dir, command), constants.X_OK)
+      return true
+    } catch {
+      return false
+    }
+  })
+}
+
+async function confirm(question) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    return /^y(es)?$/i.test((await rl.question(question)).trim())
+  } finally {
+    rl.close()
+  }
+}
+
+/*
+ * Offer to install a missing CLI, and report whether it is now present.
+ * Declining is not a failure: an optional provider is stepped over, and a
+ * required one still fails through the normal missing-cli path below.
+ */
+async function offerInstall(provider) {
+  const recipe = installCommand(provider.install)
+  const printable = `${recipe.command} ${recipe.args.join(' ')}`
+  if (!(await confirm(`        Install with ${recipe.label}? [y/N] `))) {
+    console.log(`[${SCRIPT_NAME}] ${provider.label} ... skipped (install it with \`${printable}\`)`)
+    return false
+  }
+  console.log(`        $ ${printable}`)
+  const { status } = spawnSync(recipe.command, recipe.args, { stdio: 'inherit' })
+  // Re-probe rather than trusting the exit status: a formula can report
+  // success while leaving nothing on PATH (a keg-only pour, for instance).
+  return status === 0 && isCliInstalled(provider.command)
 }
 
 function isAuthenticated(provider) {
@@ -53,7 +103,7 @@ function runLogin(provider) {
   return status === 0
 }
 
-function main() {
+async function main() {
   const args = process.argv.slice(2)
   const force = hasFlag(args, 'force')
   const only = parseFlag(args, 'only')
@@ -65,13 +115,27 @@ function main() {
 
   const results = []
   for (const provider of providers) {
-    const cliInstalled = isCliInstalled(provider.command)
+    let cliInstalled = isCliInstalled(provider.command)
+
+    if (!cliInstalled) {
+      const recipe = installCommand(provider.install)
+      const missing = decideMissingCliAction({
+        install: provider.install,
+        managerAvailable: Boolean(recipe) && isCliInstalled(recipe.command),
+      })
+      console.log(`[${SCRIPT_NAME}] ${provider.label} ... \`${provider.command}\` not installed`)
+      if (missing === 'offer-install') {
+        cliInstalled = await offerInstall(provider)
+      } else {
+        const how = recipe ? `install it with \`${recipe.command} ${recipe.args.join(' ')}\`` : 'install it, then rerun'
+        console.log(`[${SCRIPT_NAME}] ${provider.label} ... ${how}`)
+      }
+    }
+
     const authenticated = cliInstalled && isAuthenticated(provider)
     const action = decideLoginAction({ cliInstalled, authenticated, force })
 
     if (action === 'missing-cli') {
-      const detail = provider.required ? 'install it, then rerun' : 'only needed for --provision-auth0'
-      console.log(`[${SCRIPT_NAME}] ${provider.label} ... \`${provider.command}\` not installed (${detail})`)
       results.push({ ...provider, status: 'missing-cli' })
       continue
     }
@@ -101,7 +165,7 @@ function main() {
 }
 
 try {
-  main()
+  await main()
 } catch (error) {
   console.error(`${SCRIPT_NAME}: ${error.message}`)
   process.exit(1)

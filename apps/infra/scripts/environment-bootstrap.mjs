@@ -12,6 +12,9 @@
 // (githubDeployRoleStackName), and CloudFormation accepts only alphanumerics
 // and hyphens. Allowing `dev_blue` here would pass validation and then fail at
 // `cloudformation deploy`, after bootstrap had already made external changes.
+import { existsSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+
 const STAGE_LIKE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*$/
 const GITHUB_REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/
 const ACCOUNT_ID_PATTERN = /^\d{12}$/
@@ -141,4 +144,19 @@ export function hasGitHubOidcProvider(listOutput, url = GITHUB_OIDC_PROVIDER_URL
   const host = url.replace(/^https:\/\//, '')
   const providers = listOutput?.OpenIDConnectProviderList ?? []
   return providers.some(({ Arn }) => typeof Arn === 'string' && Arn.endsWith(`:oidc-provider/${host}`))
+}
+
+/*
+ * Whether sst's platform directory is usable. sst writes package.json on its
+ * first run and only then installs the deps, so "package.json but no
+ * node_modules" is the signature of an install that started and did not finish
+ * — which is exactly what a stalled bun leaves behind.
+ */
+export function sstPlatformState(dir) {
+  if (!existsSync(join(dir, 'package.json'))) return 'absent'
+  try {
+    return readdirSync(join(dir, 'node_modules')).length > 0 ? 'ready' : 'deps-missing'
+  } catch {
+    return 'deps-missing'
+  }
 }

@@ -146,6 +146,23 @@ test('no stage-name comparison hardcodes a bare production literal', () => {
   assert.match(source, /NODE_ENV: 'production'/)
 })
 
+test('every local Command pins dir, so it runs from the app root', () => {
+  // command.local.Command executes from the Pulumi process's cwd, which is
+  // .sst/platform — not the app root. A bare `node scripts/...` therefore
+  // resolves to .sst/platform/scripts and fails with "Cannot find module".
+  // Only an apply runs these, so a preview cannot catch a missing dir.
+  const commands = source.split(/new command\.local\.Command\(/).slice(1)
+  assert.ok(commands.length > 0, 'expected at least one command.local.Command in sst.config.ts')
+  for (const block of commands) {
+    const properties = block.slice(0, block.indexOf('triggers:'))
+    assert.match(
+      properties,
+      /dir: \$cli\.paths\.root/,
+      'each command.local.Command must set `dir: $cli.paths.root` or its script path resolves under .sst/platform',
+    )
+  }
+})
+
 test('the prod stage keeps deletion protection and a final snapshot', () => {
   assert.match(source, /args\.deletionProtection = isProd/)
   assert.match(source, /args\.skipFinalSnapshot = !isProd/)

@@ -4,7 +4,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { LOGIN_PROVIDERS, decideLoginAction, selectProviders, summarizeLoginResults } from './login-providers.mjs'
+import {
+  LOGIN_PROVIDERS,
+  decideLoginAction,
+  decideMissingCliAction,
+  installCommand,
+  selectProviders,
+  summarizeLoginResults,
+} from './login-providers.mjs'
 
 test('every provider is a browser sign-in with a status probe', () => {
   // A provider without a status probe would re-open a browser on every run.
@@ -37,6 +44,33 @@ test('selectProviders narrows to the requested providers in order', () => {
 
 test('selectProviders rejects an unknown provider instead of silently skipping it', () => {
   assert.throws(() => selectProviders(['cloudflare']), /unknown provider 'cloudflare'/)
+})
+
+test('decideMissingCliAction offers an install only when the manager is there', () => {
+  const install = { manager: 'brew', formula: 'auth0' }
+  assert.equal(decideMissingCliAction({ install, managerAvailable: true }), 'offer-install')
+  // Installing Homebrew itself is not something `npm run login` should do as a
+  // side effect, so without it the operator is told how instead.
+  assert.equal(decideMissingCliAction({ install, managerAvailable: false }), 'report')
+})
+
+test('decideMissingCliAction reports a provider it has no recipe for', () => {
+  assert.equal(decideMissingCliAction({ install: undefined, managerAvailable: true }), 'report')
+  assert.equal(decideMissingCliAction({ install: { manager: 'apt', formula: 'auth0' }, managerAvailable: true }), 'report')
+})
+
+test('installCommand names the formula, which differs from the binary', () => {
+  const aws = LOGIN_PROVIDERS.find((provider) => provider.key === 'aws')
+  assert.equal(aws.command, 'aws')
+  assert.deepEqual(installCommand(aws.install), { command: 'brew', args: ['install', 'awscli'], label: 'Homebrew' })
+  assert.equal(installCommand(undefined), null)
+})
+
+test('every provider carries an install recipe', () => {
+  // A missing recipe silently degrades the prompt back to "install it yourself".
+  for (const provider of LOGIN_PROVIDERS) {
+    assert.ok(installCommand(provider.install), `${provider.key} has no install recipe`)
+  }
 })
 
 test('decideLoginAction leaves a working session alone', () => {

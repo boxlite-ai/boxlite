@@ -1043,6 +1043,12 @@ export default $config({
       new command.local.Command(
         'RegisterExtraRunners',
         {
+          // `dir` is required: command.local.Command runs from the Pulumi
+          // process's cwd (.sst/platform), not the app root, so a bare
+          // `scripts/...` resolves to .sst/platform/scripts and fails with
+          // "Cannot find module". $cli.paths.root is the same anchor SST uses
+          // for user-relative paths (platform/src/components/component.ts).
+          dir: $cli.paths.root,
           create: 'node scripts/register-runners.mjs',
           update: 'node scripts/register-runners.mjs',
           environment: {
@@ -1089,6 +1095,7 @@ export default $config({
       previousUpgrade = new command.local.Command(
         `UpgradeRunnerBinary-${label}`,
         {
+          dir: $cli.paths.root, // see RegisterExtraRunners above
           create: 'node scripts/runner-update-binary.mjs',
           update: 'node scripts/runner-update-binary.mjs',
           environment: {
