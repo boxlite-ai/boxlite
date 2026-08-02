@@ -32,7 +32,7 @@ test('runtimeBoundaryPolicyArn rejects a malformed account id', () => {
   )
 })
 
-test('githubDeployRoleStackName matches the README manual bootstrap stack name', () => {
+test('githubDeployRoleStackName stays stable per stage so a re-run updates one stack', () => {
   assert.equal(githubDeployRoleStackName('dev'), 'boxlite-dev-github-deploy')
 })
 

@@ -46,9 +46,9 @@ export function runtimeBoundaryPolicyArn({ accountId, appName, stage }) {
   return `arn:aws:iam::${accountId}:policy/${appName}-${stage}-runtime-boundary`
 }
 
-// Matches the `--stack-name` used in apps/infra/README.md's manual bootstrap
-// procedure, so a stack deployed by hand before this script existed is
-// recognized (and updated in place) rather than duplicated.
+// CloudFormation stack name for the GitHub deploy role. Stable per stage so
+// `cloudformation deploy` updates the existing stack in place rather than
+// creating a second one; changing it would orphan whatever is already deployed.
 export function githubDeployRoleStackName(stage) {
   requireStageLike('stage', stage)
   return `boxlite-${stage}-github-deploy`
