@@ -3,7 +3,6 @@
 use std::net::SocketAddr;
 
 use anyhow::{Context, Result, anyhow};
-use boxlite::litebox::BoxEndpoint;
 use clap::Args;
 
 use crate::cli::GlobalFlags;
@@ -33,14 +32,9 @@ pub async fn execute(args: TunnelArgs, global: &GlobalFlags) -> Result<()> {
         .network()
         .tunnel(SocketAddr::new(guest_ip, args.port))
         .await?;
-    let url = match tunnel.endpoint() {
-        BoxEndpoint::Uri(uri) => uri,
-        BoxEndpoint::FileDescriptor(_) => {
-            return Err(anyhow!(
-                "boxlite network tunnel requires a remote REST profile (--url or --profile)"
-            ));
-        }
-    };
+    let url = tunnel.uri().ok_or_else(|| {
+        anyhow!("local boxes have no public URL; point boxlite at a remote service with --url or --profile")
+    })?;
     println!("{url}");
     Ok(())
 }

@@ -26,9 +26,9 @@ async function requestOverTunnel(
   readDelay = 0,
 ): Promise<Buffer> {
   const tunnel = await box.network.tunnel(port)
-  const endpoint = tunnel.endpoint()
-  if (typeof endpoint !== 'string') {
-    throw new Error('expected REST tunnel endpoint URL for the cloud box')
+  const uri = tunnel.uri()
+  if (uri === null) {
+    throw new Error('expected a public tunnel URL for the cloud box')
   }
   const socket = await tunnel.connect()
   const chunks: Buffer[] = []

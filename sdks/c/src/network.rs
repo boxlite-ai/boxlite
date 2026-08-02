@@ -2,23 +2,21 @@
 
 use std::ffi::CString;
 use std::net::SocketAddr;
-use std::os::fd::{BorrowedFd, IntoRawFd};
+use std::os::fd::IntoRawFd;
 use std::os::raw::c_char;
 use std::ptr;
 use std::sync::Arc;
 
 use tokio::runtime::Runtime as TokioRuntime;
 
-use boxlite::litebox::{
-    BoxEndpoint, BoxTunnel as CoreBoxTunnel, NetworkHandle as CoreNetworkHandle,
-};
+use boxlite::litebox::{BoxTunnel as CoreBoxTunnel, NetworkHandle as CoreNetworkHandle};
 use boxlite::{BoxConnection, BoxliteError};
 
 use crate::error::{BoxliteErrorCode, error_to_code, null_pointer_error, write_error};
 use crate::{CBoxHandle, CBoxNetworkHandle, CBoxTunnelHandle, CBoxliteError};
 
 async fn connection_fd(
-    mut connection: Box<dyn BoxConnection>,
+    mut connection: BoxConnection,
 ) -> Result<std::os::fd::OwnedFd, BoxliteError> {
     let (sdk, mut bridge) = tokio::net::UnixStream::pair()
         .map_err(|error| BoxliteError::Network(format!("create SDK socket bridge: {error}")))?;
@@ -40,14 +38,6 @@ pub struct BoxNetworkHandle {
 pub struct BoxTunnelHandle {
     handle: Option<CoreBoxTunnel>,
     tokio_rt: Arc<TokioRuntime>,
-}
-
-/// The kind of endpoint exposed by a box tunnel.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BoxliteEndpointType {
-    BoxliteEndpointTypeUri = 0,
-    BoxliteEndpointTypeFileDescriptor = 1,
 }
 
 /// Borrow the box's network capability into a new owned handle.
@@ -160,19 +150,17 @@ pub unsafe extern "C" fn boxlite_tunnel_free(tunnel: *mut CBoxTunnelHandle) {
     }
 }
 
-/// Inspect a prepared tunnel without transferring ownership.
+/// Read the public URL of a remotely served tunnel, without consuming it.
 ///
-/// `out_type` selects the valid output: URI returns an allocated `*out_uri`
-/// that the caller must release with `boxlite_free_string`; FileDescriptor
-/// returns a borrowed `*out_fd` valid only while the tunnel remains alive.
-/// Unused outputs are initialized to NULL and -1. Errors are returned as a
+/// On success `*out_uri` is an allocated string the caller must release with
+/// `boxlite_free_string`, or NULL for a local tunnel — a local descriptor is
+/// already a live connection, so it has no address; use
+/// `boxlite_tunnel_connect` for those. Errors are returned as a
 /// `BoxliteErrorCode` and described through `out_error` when provided.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_tunnel_endpoint(
+pub unsafe extern "C" fn boxlite_tunnel_uri(
     tunnel: *mut CBoxTunnelHandle,
-    out_type: *mut BoxliteEndpointType,
     out_uri: *mut *mut c_char,
-    out_fd: *mut i32,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     unsafe {
@@ -180,48 +168,31 @@ pub unsafe extern "C" fn boxlite_tunnel_endpoint(
             write_error(out_error, null_pointer_error("tunnel"));
             return BoxliteErrorCode::InvalidArgument;
         }
-        if out_type.is_null() {
-            write_error(out_error, null_pointer_error("out_type"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
         if out_uri.is_null() {
             write_error(out_error, null_pointer_error("out_uri"));
             return BoxliteErrorCode::InvalidArgument;
         }
-        if out_fd.is_null() {
-            write_error(out_error, null_pointer_error("out_fd"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
-        *out_type = BoxliteEndpointType::BoxliteEndpointTypeUri;
         *out_uri = ptr::null_mut();
-        *out_fd = -1;
 
         let tunnel_ref = &*tunnel;
         match tunnel_ref.handle.as_ref() {
             Some(handle) => {
-                match handle.endpoint() {
-                    BoxEndpoint::Uri(uri) => {
-                        let uri = match CString::new(uri) {
-                            Ok(uri) => uri,
-                            Err(_) => {
-                                write_error(
-                                    out_error,
-                                    BoxliteError::Internal(
-                                        "tunnel endpoint contains a NUL byte".into(),
-                                    ),
-                                );
-                                return BoxliteErrorCode::Internal;
-                            }
-                        };
-                        *out_type = BoxliteEndpointType::BoxliteEndpointTypeUri;
+                let Some(uri) = handle.uri() else {
+                    return BoxliteErrorCode::Ok;
+                };
+                match CString::new(uri) {
+                    Ok(uri) => {
                         *out_uri = uri.into_raw();
+                        BoxliteErrorCode::Ok
                     }
-                    BoxEndpoint::FileDescriptor(fd) => {
-                        *out_type = BoxliteEndpointType::BoxliteEndpointTypeFileDescriptor;
-                        *out_fd = fd;
+                    Err(_) => {
+                        write_error(
+                            out_error,
+                            BoxliteError::Internal("tunnel URI contains a NUL byte".into()),
+                        );
+                        BoxliteErrorCode::Internal
                     }
                 }
-                BoxliteErrorCode::Ok
             }
             None => {
                 let error = BoxliteError::InvalidState(
@@ -265,40 +236,25 @@ pub unsafe extern "C" fn boxlite_tunnel_connect(
             write_error(out_error, error);
             return code;
         };
-        if let BoxEndpoint::FileDescriptor(fd) = handle.endpoint() {
-            // The local descriptor is already the tunnel. Duplicate it for the
-            // caller instead of inserting another socket pair and copy task.
-            let fd = BorrowedFd::borrow_raw(fd)
-                .try_clone_to_owned()
-                .map_err(|error| {
-                    BoxliteError::Network(format!("duplicate local tunnel descriptor: {error}"))
-                });
-            drop(handle);
-            return match fd {
-                Ok(fd) => {
-                    *out_fd = fd.into_raw_fd();
-                    BoxliteErrorCode::Ok
-                }
-                Err(error) => {
-                    let code = error_to_code(&error);
-                    write_error(out_error, error);
-                    code
-                }
-            };
-        }
+        // `connect` registers the descriptor with the reactor, so it needs the
+        // runtime even though it is not itself async.
+        let owned_fd = tunnel_ref.tokio_rt.block_on(async {
+            let connection = handle.connect()?;
+            // A socket-backed connection already owns exactly the descriptor
+            // the caller wants, so surrender it instead of inserting another
+            // socket pair and copy task. Only the in-memory remote transport
+            // needs that bridge.
+            match connection.raw_fd() {
+                Some(_) => connection.into_fd(),
+                None => connection_fd(connection).await,
+            }
+        });
 
-        match handle.connect() {
-            Ok(connection) => match tunnel_ref.tokio_rt.block_on(connection_fd(connection)) {
-                Ok(fd) => {
-                    *out_fd = fd.into_raw_fd();
-                    BoxliteErrorCode::Ok
-                }
-                Err(error) => {
-                    let code = error_to_code(&error);
-                    write_error(out_error, error);
-                    code
-                }
-            },
+        match owned_fd {
+            Ok(fd) => {
+                *out_fd = fd.into_raw_fd();
+                BoxliteErrorCode::Ok
+            }
             Err(error) => {
                 let code = error_to_code(&error);
                 write_error(out_error, error);

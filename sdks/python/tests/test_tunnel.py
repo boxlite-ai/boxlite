@@ -21,12 +21,12 @@ class _FakeConnection:
 
 
 class _FakeTunnel:
-    def __init__(self, connections: list[_FakeConnection], endpoint: str | int) -> None:
+    def __init__(self, connections: list[_FakeConnection], uri: str | None) -> None:
         self.connections = connections
-        self.endpoint_value = endpoint
+        self.uri_value = uri
 
-    def endpoint(self) -> str | int:
-        return self.endpoint_value
+    def uri(self) -> str | None:
+        return self.uri_value
 
     async def connect(self) -> _FakeConnection:
         return self.connections.pop(0)
@@ -78,14 +78,24 @@ async def test_info_rejects_when_box_is_not_started():
 
 
 @pytest.mark.asyncio
-async def test_endpoint_returns_local_file_descriptor():
+async def test_uri_returns_remote_url_without_consuming_the_tunnel():
     box = SimpleBox.__new__(SimpleBox)
     box._started = True
-    box._box = _FakeBox(_FakeTunnel([], 42))
+    box._box = _FakeBox(_FakeTunnel([], "https://3000-box.proxy.example.test"))
 
     tunnel = await box.network.tunnel(3000)
-    assert tunnel.endpoint() == 42
+    assert tunnel.uri() == "https://3000-box.proxy.example.test"
     assert box._box.network.ports == [3000]
+
+
+@pytest.mark.asyncio
+async def test_uri_is_none_for_a_local_tunnel():
+    box = SimpleBox.__new__(SimpleBox)
+    box._started = True
+    box._box = _FakeBox(_FakeTunnel([], None))
+
+    tunnel = await box.network.tunnel(3000)
+    assert tunnel.uri() is None
 
 
 @pytest.mark.asyncio

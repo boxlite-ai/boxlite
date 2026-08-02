@@ -36,9 +36,9 @@ class BoxTunnel:
         """Consume the tunnel and return its bidirectional byte stream."""
         return await self._tunnel.connect()
 
-    def endpoint(self) -> str | int:
-        """Return the cloud URI or borrowed local file descriptor."""
-        return self._tunnel.endpoint()
+    def uri(self) -> str | None:
+        """Return the public URL of a remote tunnel, or ``None`` for a local one."""
+        return self._tunnel.uri()
 
 
 class NetworkHandle:

@@ -76,12 +76,6 @@ typedef enum BoxlitePortProtocol {
   BoxlitePortProtocolUdp = 1,
 } BoxlitePortProtocol;
 
-// The kind of endpoint exposed by a box tunnel.
-typedef enum BoxliteEndpointType {
-  BoxliteEndpointTypeUri = 0,
-  BoxliteEndpointTypeFileDescriptor = 1,
-} BoxliteEndpointType;
-
 typedef enum BoxliteRegistryTransport {
   BoxliteRegistryTransportHttps = 0,
   BoxliteRegistryTransportHttp = 1,
@@ -684,18 +678,16 @@ enum BoxliteErrorCode boxlite_network_tunnel(CBoxNetworkHandle *network,
 // Release a tunnel handle and any unconsumed connection. Accepts NULL.
 void boxlite_tunnel_free(CBoxTunnelHandle *tunnel);
 
-// Inspect a prepared tunnel without transferring ownership.
+// Read the public URL of a remotely served tunnel, without consuming it.
 //
-// `out_type` selects the valid output: URI returns an allocated `*out_uri`
-// that the caller must release with `boxlite_free_string`; FileDescriptor
-// returns a borrowed `*out_fd` valid only while the tunnel remains alive.
-// Unused outputs are initialized to NULL and -1. Errors are returned as a
+// On success `*out_uri` is an allocated string the caller must release with
+// `boxlite_free_string`, or NULL for a local tunnel — a local descriptor is
+// already a live connection, so it has no address; use
+// `boxlite_tunnel_connect` for those. Errors are returned as a
 // `BoxliteErrorCode` and described through `out_error` when provided.
-enum BoxliteErrorCode boxlite_tunnel_endpoint(CBoxTunnelHandle *tunnel,
-                                              enum BoxliteEndpointType *out_type,
-                                              char **out_uri,
-                                              int32_t *out_fd,
-                                              CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_tunnel_uri(CBoxTunnelHandle *tunnel,
+                                         char **out_uri,
+                                         CBoxliteError *out_error);
 
 // Consume a tunnel's single connection and return its owned file descriptor.
 //

@@ -19,9 +19,9 @@ class SyncBoxTunnel:
         """Consume the tunnel and return its bidirectional byte stream."""
         return self._box._sync(self._tunnel.connect())
 
-    def endpoint(self):
-        """Return the cloud URI or borrowed local file descriptor."""
-        return self._tunnel.endpoint()
+    def uri(self):
+        """Return the public URL of a remote tunnel, or ``None`` for a local one."""
+        return self._tunnel.uri()
 
 
 class SyncNetworkHandle:

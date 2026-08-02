@@ -298,9 +298,9 @@ export class BoxTunnel {
   /** Wrap the native tunnel handle for a box service port. */
   constructor(private readonly tunnel: NativeBoxTunnel) {}
 
-  /** Return the public endpoint for this service. */
-  endpoint(): string | number {
-    return this.tunnel.endpoint();
+  /** Public URL of a remotely served tunnel, or null for a local one. */
+  uri(): string | null {
+    return this.tunnel.uri();
   }
 
   /** Consume the tunnel and return its bidirectional byte stream. */

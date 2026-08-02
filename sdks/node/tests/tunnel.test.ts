@@ -14,10 +14,10 @@ describe("SimpleBox", () => {
     vi.restoreAllMocks();
   });
 
-  test("endpoint returns the prepared local file descriptor", async () => {
+  test("uri returns the remote URL without consuming the tunnel", async () => {
     const { SimpleBox } = await import("../lib/simplebox.js");
-    const endpoint = vi.fn(() => 42);
-    const nativeTunnel = { endpoint, connect: vi.fn() };
+    const uri = vi.fn(() => "https://3000-box.proxy.example.test");
+    const nativeTunnel = { uri, connect: vi.fn() };
     const tunnelNative = vi.fn(async () => nativeTunnel);
     const box = new SimpleBox({ image: "alpine:latest" }) as SimpleBox & {
       _box: { network: { tunnel: typeof tunnelNative } };
@@ -25,9 +25,22 @@ describe("SimpleBox", () => {
     box._box = { network: { tunnel: tunnelNative } };
 
     const tunnel = await box.network.tunnel(3000);
-    expect(tunnel.endpoint()).toBe(42);
+    expect(tunnel.uri()).toBe("https://3000-box.proxy.example.test");
     expect(tunnelNative).toHaveBeenCalledWith(3000);
     expect(nativeTunnel.connect).not.toHaveBeenCalled();
+  });
+
+  test("uri is null for a local tunnel, which is reached by connecting", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const nativeTunnel = { uri: vi.fn(() => null), connect: vi.fn() };
+    const tunnelNative = vi.fn(async () => nativeTunnel);
+    const box = new SimpleBox({ image: "alpine:latest" }) as SimpleBox & {
+      _box: { network: { tunnel: typeof tunnelNative } };
+    };
+    box._box = { network: { tunnel: tunnelNative } };
+
+    const tunnel = await box.network.tunnel(3000);
+    expect(tunnel.uri()).toBeNull();
   });
 
   test("connect consumes the tunnel once", async () => {
@@ -39,7 +52,7 @@ describe("SimpleBox", () => {
       .mockRejectedValueOnce(
         new Error("tunnel connection has already been consumed"),
       );
-    const nativeTunnel = { endpoint: vi.fn(), connect };
+    const nativeTunnel = { uri: vi.fn(), connect };
     const box = new SimpleBox({ image: "alpine:latest" }) as SimpleBox & {
       _box: { network: { tunnel: () => Promise<typeof nativeTunnel> } };
     };

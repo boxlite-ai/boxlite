@@ -291,7 +291,8 @@ Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.network`.
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
 | Prepare | `await box.network.tunnel(port) -> BoxTunnel` | Prepare one connection to a TCP service in the box |
-| Inspect | `tunnel.endpoint() -> str \| int` | Return the remote URI or borrowed local file descriptor |
+| Inspect | `tunnel.uri() -> str \| None` | Public URL of a remotely served tunnel; `None` for a local one |
+| Descriptor | `connection.fileno() -> int` | Borrowed fd, as `socket.fileno()`; raises when remotely served |
 | Connect | `await tunnel.connect() -> BoxConnection` | Consume the tunnel and return its bidirectional byte stream |
 | Read/write | `await connection.read(max_bytes)`, `await connection.write(data)` | Exchange bytes with the service |
 | Close | `await connection.close()` | Close the connection |

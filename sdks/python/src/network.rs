@@ -2,15 +2,15 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use boxlite::LiteBox;
-use boxlite::litebox::{BoxEndpoint, BoxTunnel};
+use boxlite::litebox::BoxTunnel;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::util::map_err;
 
-type ConnectionReader = tokio::io::ReadHalf<Box<dyn boxlite::BoxConnection>>;
-type ConnectionWriter = tokio::io::WriteHalf<Box<dyn boxlite::BoxConnection>>;
+type ConnectionReader = boxlite::BoxReader;
+type ConnectionWriter = boxlite::BoxWriter;
 
 /// Handle for network operations on a box.
 #[pyclass(name = "NetworkHandle")]
@@ -29,6 +29,12 @@ pub(crate) struct PyBoxTunnel {
 pub(crate) struct PyBoxConnection {
     reader: Arc<tokio::sync::Mutex<Option<ConnectionReader>>>,
     writer: Arc<tokio::sync::Mutex<Option<ConnectionWriter>>>,
+    /// Borrowed from the halves, which close it; `None` for a remote pipe.
+    /// Cleared by `close` so a closed connection never reports a descriptor
+    /// the kernel may since have handed to someone else.
+    raw_fd: Arc<Mutex<Option<i32>>>,
+    /// Whether this transport ever had one, to tell "closed" from "no fd".
+    has_fd: bool,
 }
 
 #[pymethods]
@@ -54,8 +60,9 @@ impl PyNetworkHandle {
 
 #[pymethods]
 impl PyBoxTunnel {
-    fn endpoint(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let endpoint = self
+    /// Public URL of a remotely served tunnel, or `None` for a local one.
+    fn uri(&self) -> PyResult<Option<String>> {
+        Ok(self
             .handle
             .lock()
             .map_err(|_| {
@@ -69,11 +76,8 @@ impl PyBoxTunnel {
                     "tunnel connection has already been consumed".into(),
                 ))
             })?
-            .endpoint();
-        match endpoint {
-            BoxEndpoint::Uri(uri) => Ok(uri.into_pyobject(py)?.into_any().unbind()),
-            BoxEndpoint::FileDescriptor(fd) => Ok(fd.into_pyobject(py)?.into_any().unbind()),
-        }
+            .uri()
+            .map(str::to_owned))
     }
 
     fn connect<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -93,10 +97,13 @@ impl PyBoxTunnel {
                     ))
                 })?;
             let connection = tunnel.connect().map_err(map_err)?;
-            let (reader, writer) = tokio::io::split(connection);
+            let raw_fd = connection.raw_fd();
+            let (reader, writer) = connection.into_split();
             Ok(PyBoxConnection {
                 reader: Arc::new(tokio::sync::Mutex::new(Some(reader))),
                 writer: Arc::new(tokio::sync::Mutex::new(Some(writer))),
+                raw_fd: Arc::new(Mutex::new(raw_fd)),
+                has_fd: raw_fd.is_some(),
             })
         })
     }
@@ -104,6 +111,26 @@ impl PyBoxTunnel {
 
 #[pymethods]
 impl PyBoxConnection {
+    /// Borrowed descriptor, as `socket.fileno()`. The connection still owns
+    /// and closes it. Raises for a remotely served connection, which is an
+    /// in-memory pipe rather than a socket.
+    fn fileno(&self) -> PyResult<i32> {
+        if !self.has_fd {
+            return Err(map_err(boxlite::BoxliteError::Unsupported(
+                "a remotely served connection has no local descriptor".into(),
+            )));
+        }
+        (*self
+            .raw_fd
+            .lock()
+            .map_err(|_| map_err(boxlite::BoxliteError::Internal("fd lock poisoned".into())))?)
+        .ok_or_else(|| {
+            map_err(boxlite::BoxliteError::InvalidState(
+                "connection is closed".into(),
+            ))
+        })
+    }
+
     fn read<'py>(&self, py: Python<'py>, max_bytes: usize) -> PyResult<Bound<'py, PyAny>> {
         if max_bytes == 0 {
             return Err(pyo3::exceptions::PyValueError::new_err(
@@ -150,14 +177,15 @@ impl PyBoxConnection {
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let reader = Arc::clone(&self.reader);
         let writer = Arc::clone(&self.writer);
+        let raw_fd = Arc::clone(&self.raw_fd);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            // Drop the number before the halves close it.
+            if let Ok(mut cached) = raw_fd.lock() {
+                *cached = None;
+            }
             let mut writer = writer.lock().await;
             if let Some(mut stream) = writer.take() {
-                stream.shutdown().await.map_err(|error| {
-                    map_err(boxlite::BoxliteError::Network(format!(
-                        "close tunnel connection: {error}"
-                    )))
-                })?;
+                stream.shutdown().await.map_err(map_err)?;
             }
             reader.lock().await.take();
             Ok(())
@@ -169,11 +197,7 @@ impl PyBoxConnection {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut writer = writer.lock().await;
             if let Some(stream) = writer.as_mut() {
-                stream.shutdown().await.map_err(|error| {
-                    map_err(boxlite::BoxliteError::Network(format!(
-                        "shut down tunnel writer: {error}"
-                    )))
-                })?;
+                stream.shutdown().await.map_err(map_err)?;
             }
             Ok(())
         })

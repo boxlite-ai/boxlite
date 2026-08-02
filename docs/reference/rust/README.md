@@ -365,8 +365,12 @@ pub struct BoxState {
 |-----------|-----------|-------------|
 | Get handle | `LiteBox::network(&self) -> NetworkHandle` | Get box-scoped network operations |
 | Prepare | `async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>` | Prepare one TCP connection |
-| Inspect | `BoxTunnel::endpoint(&self) -> BoxEndpoint` | Return `Uri` for remote or a borrowed `FileDescriptor` for local |
-| Connect | `BoxTunnel::connect(self) -> BoxliteResult<Box<dyn BoxConnection>>` | Consume the tunnel into its bidirectional byte stream |
+| Inspect | `BoxTunnel::uri(&self) -> Option<&str>` | Public URL of a remotely served tunnel; `None` for a local one |
+| Descriptor | `BoxConnection::raw_fd(&self) -> Option<RawFd>` | Borrowed fd; `None` for a remotely served connection |
+| Take fd | `BoxConnection::into_fd(self) -> BoxliteResult<OwnedFd>` | Consume the connection and own its descriptor |
+| Connect | `BoxTunnel::connect(self) -> BoxliteResult<BoxConnection>` | Consume the tunnel into its bidirectional byte stream |
+| Split | `BoxConnection::into_split(self) -> (BoxReader, BoxWriter)` | Halves that read and write concurrently |
+| Half-close | `BoxWriter::shutdown(&mut self) -> BoxliteResult<()>` | Signal EOF; a peer that already hung up is success, not an error |
 
 `BoxTunnel` represents exactly one connection; its consuming `connect(self)`
 enforces that at the type boundary. Request another tunnel for each additional

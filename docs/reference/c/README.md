@@ -709,11 +709,9 @@ BoxliteErrorCode boxlite_network_tunnel(
     CBoxTunnelHandle** out_tunnel,
     CBoxliteError* out_error
 );
-BoxliteErrorCode boxlite_tunnel_endpoint(
+BoxliteErrorCode boxlite_tunnel_uri(
     CBoxTunnelHandle* tunnel,
-    BoxliteEndpointType* out_type,
     char** out_uri,
-    int32_t* out_fd,
     CBoxliteError* out_error
 );
 BoxliteErrorCode boxlite_tunnel_connect(
@@ -729,9 +727,10 @@ Each `CBoxTunnelHandle` owns exactly one connection.
 descriptor that the caller must close; a second call returns `InvalidState`.
 Release the tunnel handle with `boxlite_tunnel_free()` after connecting or when
 discarding an unconsumed tunnel.
-`boxlite_tunnel_endpoint()` returns either an allocated remote URI or a borrowed
-local descriptor. Free the URI with `boxlite_free_string()`, and keep the tunnel
-alive while using a borrowed descriptor.
+`boxlite_tunnel_uri()` reports where a remotely served tunnel can be reached, as
+an allocated string the caller frees with `boxlite_free_string()`. It writes NULL
+for a local tunnel, whose descriptor is already a live connection rather than an
+address — reach those with `boxlite_tunnel_connect()`.
 
 Create another tunnel handle for each additional or concurrent connection.
 This differs from `boxlite_options_add_port()`, which creates a persistent,

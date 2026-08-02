@@ -24,8 +24,8 @@ func TestBoxNetworkRejectsClosedHandle(t *testing.T) {
 
 func TestTunnelMethodsRejectClosedHandle(t *testing.T) {
 	var tunnel *BoxTunnel
-	if _, err := tunnel.Endpoint(); !errors.Is(err, ErrRuntimeClosed) {
-		t.Fatalf("Endpoint() error = %v, want ErrRuntimeClosed", err)
+	if _, err := tunnel.URI(); !errors.Is(err, ErrRuntimeClosed) {
+		t.Fatalf("URI() error = %v, want ErrRuntimeClosed", err)
 	}
 	if _, err := tunnel.Connect(context.Background()); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("Connect() error = %v, want ErrRuntimeClosed", err)

@@ -121,7 +121,7 @@ The same one-connection workflow works with local and remote runtimes:
 
 - `box.Network() (*Network, error)` returns box-scoped network operations.
 - `network.Tunnel(ctx, port) (*BoxTunnel, error)` prepares one TCP connection.
-- `tunnel.Endpoint() (BoxEndpoint, error)` returns a remote URI or borrowed local file descriptor.
+- `tunnel.URI() (string, error)` returns the public URL of a remotely served tunnel, or an empty string for a local one.
 - `tunnel.Connect(ctx) (net.Conn, error)` consumes the tunnel's single connection.
 
 Call `Tunnel` again for each additional or concurrent connection, and close the

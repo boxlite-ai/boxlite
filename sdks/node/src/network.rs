@@ -2,15 +2,15 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use boxlite::LiteBox;
-use boxlite::litebox::{BoxEndpoint, BoxTunnel};
+use boxlite::litebox::BoxTunnel;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::util::map_err;
 
-type ConnectionReader = tokio::io::ReadHalf<Box<dyn boxlite::BoxConnection>>;
-type ConnectionWriter = tokio::io::WriteHalf<Box<dyn boxlite::BoxConnection>>;
+type ConnectionReader = boxlite::BoxReader;
+type ConnectionWriter = boxlite::BoxWriter;
 
 /// Handle for network operations on a box.
 #[napi]
@@ -28,6 +28,12 @@ pub struct JsBoxTunnel {
 pub struct JsBoxConnection {
     reader: Arc<tokio::sync::Mutex<Option<ConnectionReader>>>,
     writer: Arc<tokio::sync::Mutex<Option<ConnectionWriter>>>,
+    /// Borrowed from the halves, which close it; `None` for a remote pipe.
+    /// Cleared by `close` so a closed connection never reports a descriptor
+    /// the kernel may since have handed to someone else.
+    raw_fd: Arc<Mutex<Option<i32>>>,
+    /// Whether this transport ever had one, to tell "closed" from "no fd".
+    has_fd: bool,
 }
 
 #[napi]
@@ -54,8 +60,9 @@ impl JsNetworkHandle {
 
 #[napi]
 impl JsBoxTunnel {
+    /// Public URL of a remotely served tunnel, or `null` for a local one.
     #[napi]
-    pub fn endpoint(&self) -> Result<Either<String, i32>> {
+    pub fn uri(&self) -> Result<Option<String>> {
         let handle = self
             .handle
             .lock()
@@ -63,10 +70,7 @@ impl JsBoxTunnel {
         let tunnel = handle
             .as_ref()
             .ok_or_else(|| Error::from_reason("tunnel connection has already been consumed"))?;
-        match tunnel.endpoint() {
-            BoxEndpoint::Uri(uri) => Ok(Either::A(uri)),
-            BoxEndpoint::FileDescriptor(fd) => Ok(Either::B(fd)),
-        }
+        Ok(tunnel.uri().map(str::to_owned))
     }
 
     #[napi]
@@ -78,16 +82,36 @@ impl JsBoxTunnel {
             .take()
             .ok_or_else(|| Error::from_reason("tunnel connection has already been consumed"))?;
         let connection = tunnel.connect().map_err(map_err)?;
-        let (reader, writer) = tokio::io::split(connection);
+        let raw_fd = connection.raw_fd();
+        let (reader, writer) = connection.into_split();
         Ok(JsBoxConnection {
             reader: Arc::new(tokio::sync::Mutex::new(Some(reader))),
             writer: Arc::new(tokio::sync::Mutex::new(Some(writer))),
+            raw_fd: Arc::new(Mutex::new(raw_fd)),
+            has_fd: raw_fd.is_some(),
         })
     }
 }
 
 #[napi]
 impl JsBoxConnection {
+    /// Borrowed descriptor, like a `net.Socket`'s fd. The connection still
+    /// owns and closes it. Throws for a remotely served connection, which is
+    /// an in-memory pipe rather than a socket.
+    #[napi]
+    pub fn fileno(&self) -> Result<i32> {
+        if !self.has_fd {
+            return Err(Error::from_reason(
+                "a remotely served connection has no local descriptor",
+            ));
+        }
+        (*self
+            .raw_fd
+            .lock()
+            .map_err(|_| Error::from_reason("fd lock poisoned"))?)
+        .ok_or_else(|| Error::from_reason("connection is closed"))
+    }
+
     #[napi]
     pub async fn read(&self, max_bytes: u32) -> Result<Buffer> {
         if max_bytes == 0 {
@@ -121,12 +145,13 @@ impl JsBoxConnection {
 
     #[napi]
     pub async fn close(&self) -> Result<()> {
+        // Drop the number before the halves close it.
+        if let Ok(mut cached) = self.raw_fd.lock() {
+            *cached = None;
+        }
         let mut writer = self.writer.lock().await;
         if let Some(mut stream) = writer.take() {
-            stream
-                .shutdown()
-                .await
-                .map_err(|error| Error::from_reason(format!("close tunnel connection: {error}")))?;
+            stream.shutdown().await.map_err(map_err)?;
         }
         self.reader.lock().await.take();
         Ok(())
@@ -136,10 +161,7 @@ impl JsBoxConnection {
     pub async fn shutdown_write(&self) -> Result<()> {
         let mut writer = self.writer.lock().await;
         if let Some(stream) = writer.as_mut() {
-            stream
-                .shutdown()
-                .await
-                .map_err(|error| Error::from_reason(format!("shut down tunnel writer: {error}")))?;
+            stream.shutdown().await.map_err(map_err)?;
         }
         Ok(())
     }

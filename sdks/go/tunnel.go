@@ -13,21 +13,6 @@ import (
 	"os"
 )
 
-// BoxEndpointType identifies how clients can reach a box service tunnel.
-type BoxEndpointType int
-
-const (
-	BoxEndpointTypeURI BoxEndpointType = iota
-	BoxEndpointTypeFileDescriptor
-)
-
-// BoxEndpoint describes the URI or prepared descriptor for a box service tunnel.
-type BoxEndpoint struct {
-	Type BoxEndpointType
-	URI  string
-	FD   int
-}
-
 // Network is a box-scoped handle for network operations.
 type Network struct {
 	handle *C.CBoxNetworkHandle
@@ -63,7 +48,7 @@ func (n *Network) Close() error {
 	return nil
 }
 
-// Tunnel prepares a one-shot endpoint for a service port inside the box.
+// Tunnel prepares a one-shot connection target for a service port inside the box.
 func (n *Network) Tunnel(ctx context.Context, port uint16) (*BoxTunnel, error) {
 	if n == nil || n.handle == nil {
 		return nil, ErrRuntimeClosed
@@ -93,30 +78,25 @@ func (t *BoxTunnel) Close() error {
 	return nil
 }
 
-// Endpoint returns the remote URI or borrowed local file descriptor.
-func (t *BoxTunnel) Endpoint() (BoxEndpoint, error) {
+// URI returns the public URL of a remotely served tunnel. It is empty for a
+// local tunnel, whose descriptor is already a live connection rather than an
+// address — use Connect for those.
+func (t *BoxTunnel) URI() (string, error) {
 	if t == nil || t.handle == nil {
-		return BoxEndpoint{}, ErrRuntimeClosed
+		return "", ErrRuntimeClosed
 	}
 
-	var endpointType C.enum_BoxliteEndpointType
 	var uri *C.char
-	var fd C.int32_t
 	var cerr C.CBoxliteError
-	code := C.boxlite_tunnel_endpoint(t.handle, &endpointType, &uri, &fd, &cerr)
+	code := C.boxlite_tunnel_uri(t.handle, &uri, &cerr)
 	if code != C.Ok {
-		return BoxEndpoint{}, freeError(&cerr)
+		return "", freeError(&cerr)
 	}
-
-	switch endpointType {
-	case C.BoxliteEndpointTypeUri:
-		defer C.boxlite_free_string(uri)
-		return BoxEndpoint{Type: BoxEndpointTypeURI, URI: C.GoString(uri), FD: -1}, nil
-	case C.BoxliteEndpointTypeFileDescriptor:
-		return BoxEndpoint{Type: BoxEndpointTypeFileDescriptor, FD: int(fd)}, nil
-	default:
-		return BoxEndpoint{}, fmt.Errorf("boxlite returned unknown endpoint type %d", endpointType)
+	if uri == nil {
+		return "", nil
 	}
+	defer C.boxlite_free_string(uri)
+	return C.GoString(uri), nil
 }
 
 // Connect consumes the tunnel's single raw byte stream.

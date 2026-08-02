@@ -261,7 +261,8 @@ live binding data yet, so box, get, or list info may report
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
 | Prepare | `await box.network.tunnel(port)` | Return a `JsBoxTunnel` or `BoxTunnel` for one TCP connection |
-| Inspect | `tunnel.endpoint(): string \| number` | Return the remote URI or borrowed local file descriptor |
+| Inspect | `tunnel.uri(): string \| null` | Public URL of a remotely served tunnel; `null` for a local one |
+| Descriptor | `connection.fileno(): number` | Borrowed fd, as on a `net.Socket`; throws when remotely served |
 | Connect | `await tunnel.connect()` | Consume the tunnel and return its bidirectional connection |
 | Read/write | `await connection.read(maxBytes)`, `await connection.write(data)` | Exchange bytes with the service |
 | Close | `await connection.close()` | Close the connection |
