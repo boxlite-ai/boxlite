@@ -137,7 +137,7 @@ Multiple profiles coexist in one file via `--profile <name>` (or `BOXLITE_PROFIL
 # Browser OIDC against a control plane (default for `auth login` on a TTY).
 # Requires the IdP admin to have registered `http://127.0.0.1:5555/callback`
 # in the SPA application's Allowed Callback URLs — see apps/infra/README.md
-# "OIDC provider setup" for the one-time setup.
+# "Callback URL mismatch" for the one-time setup.
 boxlite --profile cloud auth login --url https://<your-control-plane>/api
 
 # Same target, headless (SSH / no browser): prints a code + URL to type into
@@ -231,7 +231,7 @@ echo "$KEY" | boxlite --profile local auth login --url http://localhost:8100 --a
 
 Browser and device flows fail with "Callback URL mismatch" until the IdP
 knows about the CLI's loopback URL. For Auth0 see
-`apps/infra/README.md` "OIDC provider setup" — add
+`apps/infra/README.md` "Callback URL mismatch" — add
 `http://127.0.0.1:5555/callback` to the SPA Application's
 **Allowed Callback URLs**. For Dex see `apps/dex/config.yaml` — the same
 URL goes under the `boxlite` static client's `redirectURIs`, plus

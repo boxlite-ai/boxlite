@@ -3,8 +3,8 @@
 
 /*
  * Pure argument/payload construction for provisioning an Auth0 tenant through
- * the `auth0` CLI, replacing the six manual dashboard steps in
- * apps/infra/README.md's "OIDC provider setup" section.
+ * the `auth0` CLI, replacing the manual dashboard steps a fresh tenant would
+ * otherwise need. Reached through `npm run bootstrap -- --provision-auth0`.
  *
  * The device-code token minted by `auth0 login` already carries the scopes all
  * of this needs (create:clients, create:resource_servers, create:actions,
