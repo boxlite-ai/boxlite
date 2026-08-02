@@ -121,11 +121,11 @@ function requireHostname(name, value) {
  * Reject a malformed entry here, where it costs nothing, rather than after SST
  * has begun mutating the stack.
  *
- * The parsed images are deliberately not returned: nothing downstream compares
- * them to the running API, because /api/config does not advertise an image list
- * (apps/api/src/config/dto/configuration.dto.ts has no such field, and never
- * has). A post-deploy check against it asserted a contract the API does not
- * implement and failed every apply that set this variable.
+ * The parsed images are deliberately not returned. A post-deploy check compared
+ * them to /api/config, which carries no image list yet: that field is the
+ * acceptance criterion for #1045, and the check landed ahead of the API work it
+ * tests, so every apply that set this variable failed (#1119). Reinstate the
+ * comparison together with #1045, not before.
  */
 function validateConfiguredSystemImages(rawImages) {
   for (const entry of (rawImages ?? '')
