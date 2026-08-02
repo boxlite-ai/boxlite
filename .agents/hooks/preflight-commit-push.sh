@@ -163,7 +163,11 @@ write_command_handoff() {
     --arg command_hash "$command_hash" \
     '{branch:$branch, head:$head, command_kind:$command_kind, diff_hash:$diff_hash, command_hash:$command_hash}' \
     > "$handoff_file"
-  mirror_to_legacy "$handoff_file" "$legacy_handoff_file"
+  # `|| true` is load-bearing: this is the last command in the function, and the
+  # defer path calls the function unguarded under `set -e`. Without it a mirror
+  # that cannot be written makes the whole hook exit 1 instead of 0. The mirror
+  # is a transition convenience — never a reason to fail the gate.
+  mirror_to_legacy "$handoff_file" "$legacy_handoff_file" || true
 }
 
 valid_handoff_command_hash() {

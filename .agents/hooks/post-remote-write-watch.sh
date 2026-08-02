@@ -120,7 +120,10 @@ When an event arrives:
   * a new comment or review    -> summarize it for the user; apply the same
     policy before acting on it.
   * send a PushNotification for a failing required check ('Lint (conclusion)',
-    'Test (conclusion)') or a new human review — not for routine passes.
+    'Test (conclusion)') AND for every new comment,
+    review, or inline review thread — bots included. Reviewers are why the
+    watch exists; an unread bot finding is the failure mode it is meant to
+    prevent. Routine passing checks stay silent.
 
 If the user asked you not to watch this one, skip the Monitor and say so."
 

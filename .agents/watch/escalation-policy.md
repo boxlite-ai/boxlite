@@ -28,6 +28,8 @@ agent may edit your code unattended. Same convention as the ack-instruction
 block in .agents/hooks/preflight-pr-review.sh:116.
 
 Below is a DRAFT default. Replace it with your rule. Things worth deciding:
+(Decided: NOTIFICATION is separate from action — every comment and review is
+notified, bots included. What follows is only about what may be FIXED.)
 
   • Infra/flaky failures (cache miss, network, runner OOM, timeout) — is
     `gh run rerun --failed` allowed automatically, or is any rerun your call?

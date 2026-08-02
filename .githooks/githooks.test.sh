@@ -749,7 +749,12 @@ check_eq "kept audit reaches the legacy path a pre-move commit-msg reads" "$r" "
 check_eq "kept audit also stays where a later keep-stage looks" "$r" "yes"
 rm -rf "$M"
 
-for legacy in .claude/.last-audit.json .claude/.last-audit-handoff.json; do
+# Every legacy marker location, not just the two the gate mirrors: a checkout
+# from before the move still writes the other four, and an unignored marker
+# perturbs the tree hash the verdict dossier is keyed to.
+for legacy in .claude/.last-audit.json .claude/.last-audit-handoff.json \
+              .claude/.last-verdict.json .claude/.pr-reviewed.json \
+              .claude/.verdict-last-uuid .claude/.verdict-decisions.log; do
   git -C "$REPO_ROOT" check-ignore -q "$legacy" && r=yes || r=no
   check_eq "legacy mirror $legacy stays gitignored (tree hash must not move)" "$r" "yes"
 done

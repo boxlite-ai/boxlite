@@ -502,6 +502,31 @@ if [[ "$handoff" == "written" ]]; then
 else
   fail=$((fail + 1)); printf '  FAIL  handoff is written when the state dir does not exist yet  (got=%s)\n' "$handoff"
 fi
+
+# The legacy mirror is a transition convenience, so a legacy location that cannot
+# be written must not fail the gate. mirror_to_legacy returns non-zero on failure
+# and is the LAST command in write_command_handoff, which the defer path calls
+# unguarded under `set -e` — so without a guard the whole hook exits 1 instead of
+# 0. Note this asserts the EXIT STATUS: the case above discards it, which is how
+# the bug stayed invisible while the suite was green.
+# Make the mirror deterministically impossible: a FILE where .claude/ must be a
+# directory, so mirror_to_legacy's `mkdir -p` fails. chmod 500 on the directory
+# is not enough — the earlier case already created a writable
+# .claude/.last-audit-handoff.json, and overwriting an existing writable file
+# needs no write permission on its parent, so the mirror would still succeed and
+# the test would pass with the guard removed.
+rm -rf "$STATE_REPO/.claude"
+printf '' > "$STATE_REPO/.claude"
+( cd "$STATE_REPO" && printf '%s' 'git commit -m x' | jq -Rs '{tool_input:{command:.}}' \
+     | CLAUDE_PROJECT_DIR="$STATE_REPO" CLAUDECODE=1 bash "$STATE_REPO/.agents/hooks/$(basename "$HOOK")" >/dev/null 2>&1 )
+mirror_rc=$?
+rm -f "$STATE_REPO/.claude"
+[[ -r "$STATE_REPO/.agents/state/last-audit-handoff.json" ]] && real_marker=written || real_marker=MISSING
+if [[ "$mirror_rc" == "0" && "$real_marker" == "written" ]]; then
+  pass=$((pass + 1)); printf '  PASS  an unwritable legacy mirror does not fail the gate\n'
+else
+  fail=$((fail + 1)); printf '  FAIL  an unwritable legacy mirror does not fail the gate  (rc=%s real_marker=%s)\n' "$mirror_rc" "$real_marker"
+fi
 rm -rf "$STATE_REPO"
 
 echo
