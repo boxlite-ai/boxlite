@@ -19,7 +19,7 @@
 # * Matcher scope: PreToolUse/PostToolUse matchers are tool-name-only, so this
 #   registers on the broad `Bash` matcher and does its own filtering, exiting 0
 #   immediately on unrelated commands. Same shape as
-#   .claude/hooks/preflight-commit-push.sh:55 and preflight-pr-review.sh:52 —
+#   .agents/hooks/preflight-commit-push.sh:55 and preflight-pr-review.sh:52 —
 #   segment-anchored so `echo "git push"` does not match, newline-normalized so
 #   a verb on line 2 does.
 #

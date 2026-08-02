@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for .claude/hooks/preflight-pr-review.sh
+# Tests for .agents/hooks/preflight-pr-review.sh
 #
 # Covers:
 #   1. Command matcher: gh pr create / edit / ready vs. unrelated bash,
@@ -7,7 +7,7 @@
 #   2. Gate logic: missing / mismatched / stale / malformed-message /
 #      consumed marker paths.
 #
-# Run with:  bash .claude/hooks/preflight-pr-review.test.sh
+# Run with:  bash .agents/hooks/preflight-pr-review.test.sh
 # Exits non-zero on any failure.
 set -uo pipefail
 
@@ -16,12 +16,12 @@ set -uo pipefail
 # suite from another worktree silently tests THAT checkout's copy instead of the
 # one shipped beside these tests, and a two-side check reports a false pass.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/preflight-pr-review.sh"
+HOOK="$REPO_ROOT/.agents/hooks/preflight-pr-review.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 export CLAUDE_PROJECT_DIR="$TMP"
-mkdir -p "$TMP/.claude"
+mkdir -p "$TMP/.agents/state"
 
 BRANCH="$(git -C "$REPO_ROOT" branch --show-current)"
 HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
@@ -50,11 +50,11 @@ write_marker() {
   local message="$1"
   jq -nc --arg b "$BRANCH" --arg h "$HEAD_SHA" --arg m "$message" \
         '{branch:$b, head:$h, message:$m}' \
-        > "$TMP/.claude/.pr-reviewed.json"
+        > "$TMP/.agents/state/pr-reviewed.json"
 }
 
 echo "## Matcher: should pass through (not a gated gh pr invocation)"
-rm -f "$TMP/.claude/.pr-reviewed.json"
+rm -f "$TMP/.agents/state/pr-reviewed.json"
 run "ls"                                "ls"                                "passthrough"
 run "gh pr list (different subcmd)"     "gh pr list"                        "passthrough"
 run "gh pr view (different subcmd)"     "gh pr view 123"                    "passthrough"
@@ -99,18 +99,18 @@ run "empty message → deny"              "gh pr create -t foo"               "d
 
 write_marker "reviewed: stale"
 jq --arg h "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" '.head=$h' \
-   "$TMP/.claude/.pr-reviewed.json" > "$TMP/.claude/x.json" \
-   && mv "$TMP/.claude/x.json" "$TMP/.claude/.pr-reviewed.json"
+   "$TMP/.agents/state/pr-reviewed.json" > "$TMP/.agents/state/x.json" \
+   && mv "$TMP/.agents/state/x.json" "$TMP/.agents/state/pr-reviewed.json"
 run "HEAD mismatch → deny"              "gh pr create -t foo"               "deny"
 
 write_marker "reviewed: branch test"
 jq --arg b "some-other-branch" '.branch=$b' \
-   "$TMP/.claude/.pr-reviewed.json" > "$TMP/.claude/x.json" \
-   && mv "$TMP/.claude/x.json" "$TMP/.claude/.pr-reviewed.json"
+   "$TMP/.agents/state/pr-reviewed.json" > "$TMP/.agents/state/x.json" \
+   && mv "$TMP/.agents/state/x.json" "$TMP/.agents/state/pr-reviewed.json"
 run "branch mismatch → deny"            "gh pr create -t foo"               "deny"
 
 write_marker "reviewed: old"
-touch -t 202001010000 "$TMP/.claude/.pr-reviewed.json"
+touch -t 202001010000 "$TMP/.agents/state/pr-reviewed.json"
 run "stale mtime (>max_age) → deny"     "gh pr create -t foo"               "deny"
 
 echo

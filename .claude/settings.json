@@ -8,7 +8,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/rule-recency.sh"
+            "command": "$CLAUDE_PROJECT_DIR/.agents/hooks/rule-recency.sh"
           }
         ]
       }
@@ -19,11 +19,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/preflight-commit-push.sh"
+            "command": "$CLAUDE_PROJECT_DIR/.agents/hooks/preflight-commit-push.sh"
           },
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/preflight-pr-review.sh"
+            "command": "$CLAUDE_PROJECT_DIR/.agents/hooks/preflight-pr-review.sh"
           }
         ]
       }
@@ -45,7 +45,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/preflight-verdict-check.sh",
+            "command": "$CLAUDE_PROJECT_DIR/.agents/hooks/preflight-verdict-check.sh",
             "timeout": 60
           }
         ]

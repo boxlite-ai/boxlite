@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for .claude/hooks/preflight-commit-push.sh
+# Tests for .agents/hooks/preflight-commit-push.sh
 #
 # Covers the two areas CLAUDE.md flags for required tests on this change:
 #   1. Command matcher (parsing + branching): direct invocation vs. chain
@@ -7,7 +7,7 @@
 #   2. Gate logic (branching + boundary validation): missing / mismatched /
 #      stale / FAIL / consumed audit-file paths.
 #
-# Run with:  bash .claude/hooks/preflight-commit-push.test.sh
+# Run with:  bash .agents/hooks/preflight-commit-push.test.sh
 # Exits non-zero on any failure.
 set -uo pipefail
 
@@ -16,15 +16,15 @@ set -uo pipefail
 # suite from another worktree silently tests THAT checkout's copy instead of the
 # one shipped beside these tests, and a two-side check reports a false pass.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/preflight-commit-push.sh"
+HOOK="$REPO_ROOT/.agents/hooks/preflight-commit-push.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Redirect the hook's audit-file lookup into TMP so tests don't touch the real
-# .claude/.last-audit.json. The hook still uses git from the real repo for
+# .agents/state/last-audit.json. The hook still uses git from the real repo for
 # branch/HEAD detection — that's fine, we read the same values for assertions.
 export CLAUDE_PROJECT_DIR="$TMP"
-mkdir -p "$TMP/.claude"
+mkdir -p "$TMP/.agents/state"
 unset CODEX_SANDBOX CLAUDECODE AGENT_GATED
 
 BRANCH="$(git -C "$REPO_ROOT" branch --show-current)"
@@ -102,14 +102,14 @@ write_audit() {
         --arg csh "$(subject_hash_for "$command")" \
         --argjson f "$findings_json" \
         '{branch:$b, head:$h, command_kind:$k, diff_hash:$dh, command_hash:$ch, commit_subject_hash:$csh, verdict:$v, findings:$f}' \
-        > "$TMP/.claude/.last-audit.json"
+        > "$TMP/.agents/state/last-audit.json"
 }
 
 GC='git commit'
 GP='git push'
 
 echo "## Matcher: should pass through (not a git commit/push invocation)"
-rm -f "$TMP/.claude/.last-audit.json"
+rm -f "$TMP/.agents/state/last-audit.json"
 run "ls"                                "ls"                          "passthrough"
 run "echo with literal mention"         "echo \"$GC\""                "passthrough"
 run "grep with literal mention"         "grep \"$GC\" file"           "passthrough"
@@ -143,12 +143,12 @@ run "FAIL verdict → deny"               "$GC -m foo"                  "deny"
 write_audit "PASS" "[]" "commit"
 # Mutate head field to simulate a stale-by-HEAD audit
 jq --arg h "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" '.head=$h' \
-   "$TMP/.claude/.last-audit.json" > "$TMP/.claude/x.json" \
-   && mv "$TMP/.claude/x.json" "$TMP/.claude/.last-audit.json"
+   "$TMP/.agents/state/last-audit.json" > "$TMP/.agents/state/x.json" \
+   && mv "$TMP/.agents/state/x.json" "$TMP/.agents/state/last-audit.json"
 run "HEAD mismatch → deny"              "$GC -m foo"                  "deny"
 
 write_audit "PASS" "[]" "commit"
-touch -t 202001010000 "$TMP/.claude/.last-audit.json"
+touch -t 202001010000 "$TMP/.agents/state/last-audit.json"
 run "stale mtime (>max_age) → deny"     "$GC -m foo"                  "deny"
 
 write_audit "PASS" "[]" "commit"
@@ -156,8 +156,8 @@ run "kind mismatch (commit vs push)"    "$GP origin main"             "deny"
 
 write_audit "PASS" "[]" "commit"
 jq '.diff_hash="0000000000000000000000000000000000000000000000000000000000000000"' \
-   "$TMP/.claude/.last-audit.json" > "$TMP/.claude/x.json" \
-   && mv "$TMP/.claude/x.json" "$TMP/.claude/.last-audit.json"
+   "$TMP/.agents/state/last-audit.json" > "$TMP/.agents/state/x.json" \
+   && mv "$TMP/.agents/state/x.json" "$TMP/.agents/state/last-audit.json"
 run "diff hash mismatch → deny"         "$GC -m foo"                  "deny"
 
 write_audit "PASS" "[]" "commit" "$GC -m other"
@@ -166,14 +166,14 @@ run "command hash mismatch → deny"      "$GC -m foo"                  "deny"
 pushed_hash="1111111111111111111111111111111111111111111111111111111111111111"
 write_audit "PASS" "[]" "push" "$GP origin main"
 jq --arg dh "$pushed_hash" '.diff_hash=$dh' \
-   "$TMP/.claude/.last-audit.json" > "$TMP/.claude/x.json" \
-   && mv "$TMP/.claude/x.json" "$TMP/.claude/.last-audit.json"
+   "$TMP/.agents/state/last-audit.json" > "$TMP/.agents/state/x.json" \
+   && mv "$TMP/.agents/state/x.json" "$TMP/.agents/state/last-audit.json"
 jq -nc --arg b "$BRANCH" --arg h "$HEAD_SHA" \
       --arg k "push" \
       --arg dh "$pushed_hash" \
       --arg ch "$(command_hash_for "$GP origin main")" \
       '{branch:$b, head:$h, command_kind:$k, diff_hash:$dh, command_hash:$ch}' \
-      > "$TMP/.claude/.last-audit-handoff.json"
+      > "$TMP/.agents/state/last-audit-handoff.json"
 synthetic_push="$GP --pre-push-hook remote=origin remote_url_sha256=0000000000000000000000000000000000000000000000000000000000000000 ref_updates_sha256=0000000000000000000000000000000000000000000000000000000000000000 pushed_diff_sha256=$pushed_hash"
 out=$(printf '%s' "$synthetic_push" | jq -Rs '{tool_input:{command:.}}' | GITHOOK_DELEGATED=1 "$HOOK")
 decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision' 2>/dev/null || echo "parse_error")
@@ -184,7 +184,7 @@ else
   fail=$((fail + 1))
   printf '  FAIL  delegated push ignores generic handoff hash  (got=%s expected=deny)\n' "$decision"
 fi
-rm -f "$TMP/.claude/.last-audit-handoff.json"
+rm -f "$TMP/.agents/state/last-audit-handoff.json"
 
 echo
 echo "## Codex: local deterministic audit writes the required artifact"
@@ -192,21 +192,21 @@ CODEX_REPO="$(mktemp -d)"
 git -C "$CODEX_REPO" init -q
 git -C "$CODEX_REPO" config user.email t@t.test
 git -C "$CODEX_REPO" config user.name tester
-mkdir -p "$CODEX_REPO/.claude/hooks"
-cp "$HOOK" "$REPO_ROOT/.claude/hooks/run-commit-push-audit.sh" "$CODEX_REPO/.claude/hooks/"
+mkdir -p "$CODEX_REPO/.agents/hooks" "$CODEX_REPO/.agents/state"
+cp "$HOOK" "$REPO_ROOT/.agents/hooks/run-commit-push-audit.sh" "$CODEX_REPO/.agents/hooks/"
 printf 'base\n' > "$CODEX_REPO/f"
 git -C "$CODEX_REPO" add -A
 git -C "$CODEX_REPO" commit -qm base
 printf 'change\n' >> "$CODEX_REPO/f"
 git -C "$CODEX_REPO" add -A
 out="$(printf '{"tool_input":{"command":"git commit -m '\''test(net): cover hook audit'\''"}}' \
-      | ( cd "$CODEX_REPO" && CLAUDE_PROJECT_DIR="$CODEX_REPO" CODEX_SANDBOX=seatbelt CODEX_COMMIT_PUSH_AUDIT_MODE=local bash "$CODEX_REPO/.claude/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
-if [[ -z "$out" && ! -e "$CODEX_REPO/.claude/.last-audit.json" ]]; then
+      | ( cd "$CODEX_REPO" && CLAUDE_PROJECT_DIR="$CODEX_REPO" CODEX_SANDBOX=seatbelt CODEX_COMMIT_PUSH_AUDIT_MODE=local bash "$CODEX_REPO/.agents/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
+if [[ -z "$out" && ! -e "$CODEX_REPO/.agents/state/last-audit.json" ]]; then
   pass=$((pass + 1))
   printf '  PASS  Codex local audit allows and is consumed\n'
 else
   fail=$((fail + 1))
-  printf '  FAIL  Codex local audit allows and is consumed  (out=%s audit_exists=%s)\n' "${out:-EMPTY}" "$([[ -e "$CODEX_REPO/.claude/.last-audit.json" ]] && echo yes || echo no)"
+  printf '  FAIL  Codex local audit allows and is consumed  (out=%s audit_exists=%s)\n' "${out:-EMPTY}" "$([[ -e "$CODEX_REPO/.agents/state/last-audit.json" ]] && echo yes || echo no)"
 fi
 rm -rf "$CODEX_REPO"
 
@@ -216,11 +216,11 @@ AGENTIC_REPO="$(mktemp -d)"
 git -C "$AGENTIC_REPO" init -q
 git -C "$AGENTIC_REPO" config user.email t@t.test
 git -C "$AGENTIC_REPO" config user.name tester
-mkdir -p "$AGENTIC_REPO/.claude/hooks" "$AGENTIC_REPO/bin"
+mkdir -p "$AGENTIC_REPO/.agents/hooks" "$AGENTIC_REPO/.agents/state" "$AGENTIC_REPO/bin"
 cp "$HOOK" \
-   "$REPO_ROOT/.claude/hooks/run-commit-push-audit.sh" \
-   "$REPO_ROOT/.claude/hooks/commit-push-audit.schema.json" \
-   "$AGENTIC_REPO/.claude/hooks/"
+   "$REPO_ROOT/.agents/hooks/run-commit-push-audit.sh" \
+   "$REPO_ROOT/.agents/hooks/commit-push-audit.schema.json" \
+   "$AGENTIC_REPO/.agents/hooks/"
 printf 'base\n' > "$AGENTIC_REPO/f"
 git -C "$AGENTIC_REPO" add -A
 git -C "$AGENTIC_REPO" commit -qm base
@@ -287,10 +287,10 @@ FAKE_CODEX
 chmod +x "$AGENTIC_REPO/bin/codex"
 
 out="$(printf '{"tool_input":{"command":"git commit -m '\''test(hooks): codex audit'\''"}}' \
-      | ( cd "$AGENTIC_REPO" && CLAUDE_PROJECT_DIR="$AGENTIC_REPO" CODEX_SANDBOX=seatbelt CODEX_BIN="$AGENTIC_REPO/bin/codex" bash "$AGENTIC_REPO/.claude/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
+      | ( cd "$AGENTIC_REPO" && CLAUDE_PROJECT_DIR="$AGENTIC_REPO" CODEX_SANDBOX=seatbelt CODEX_BIN="$AGENTIC_REPO/bin/codex" bash "$AGENTIC_REPO/.agents/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
 check_agentic=yes
 [[ -z "$out" ]] || check_agentic=no
-[[ ! -e "$AGENTIC_REPO/.claude/.last-audit.json" ]] || check_agentic=no
+[[ ! -e "$AGENTIC_REPO/.agents/state/last-audit.json" ]] || check_agentic=no
 grep -q '^approval=never$' "$AGENTIC_REPO/fake-codex.args" || check_agentic=no
 grep -q '^exec_seen=yes$' "$AGENTIC_REPO/fake-codex.args" || check_agentic=no
 grep -q '^disable_hooks=yes$' "$AGENTIC_REPO/fake-codex.args" || check_agentic=no
@@ -324,10 +324,10 @@ BAD_REPO="$(mktemp -d)"
 git -C "$BAD_REPO" init -q
 git -C "$BAD_REPO" config user.email t@t.test
 git -C "$BAD_REPO" config user.name tester
-mkdir -p "$BAD_REPO/.claude/hooks" "$BAD_REPO/bin"
-cp "$REPO_ROOT/.claude/hooks/run-commit-push-audit.sh" \
-   "$REPO_ROOT/.claude/hooks/commit-push-audit.schema.json" \
-   "$BAD_REPO/.claude/hooks/"
+mkdir -p "$BAD_REPO/.agents/hooks" "$BAD_REPO/.agents/state" "$BAD_REPO/bin"
+cp "$REPO_ROOT/.agents/hooks/run-commit-push-audit.sh" \
+   "$REPO_ROOT/.agents/hooks/commit-push-audit.schema.json" \
+   "$BAD_REPO/.agents/hooks/"
 printf 'base\n' > "$BAD_REPO/f"
 git -C "$BAD_REPO" add -A
 git -C "$BAD_REPO" commit -qm base
@@ -357,10 +357,10 @@ jq -nc '{branch:1, verdict:"PASS", findings:"not an array"}' > "$output"
 BAD_FAKE_CODEX
 chmod +x "$BAD_REPO/bin/codex"
 
-( cd "$BAD_REPO" && CLAUDE_PROJECT_DIR="$BAD_REPO" CODEX_BIN="$BAD_REPO/bin/codex" CODEX_COMMIT_PUSH_AUDIT_MODE=agentic bash "$BAD_REPO/.claude/hooks/run-commit-push-audit.sh" commit "git commit -m 'test(hooks): reject bad audit'" >/dev/null 2>"$BAD_REPO/err.txt" )
+( cd "$BAD_REPO" && CLAUDE_PROJECT_DIR="$BAD_REPO" CODEX_BIN="$BAD_REPO/bin/codex" CODEX_COMMIT_PUSH_AUDIT_MODE=agentic bash "$BAD_REPO/.agents/hooks/run-commit-push-audit.sh" commit "git commit -m 'test(hooks): reject bad audit'" >/dev/null 2>"$BAD_REPO/err.txt" )
 bad_rc=$?
-bad_verdict="$(jq -r '.verdict' "$BAD_REPO/.claude/.last-audit.json" 2>/dev/null || echo missing)"
-bad_finding="$(jq -r '.findings[0] // ""' "$BAD_REPO/.claude/.last-audit.json" 2>/dev/null || echo missing)"
+bad_verdict="$(jq -r '.verdict' "$BAD_REPO/.agents/state/last-audit.json" 2>/dev/null || echo missing)"
+bad_finding="$(jq -r '.findings[0] // ""' "$BAD_REPO/.agents/state/last-audit.json" 2>/dev/null || echo missing)"
 if [[ "$bad_rc" != 0 && "$bad_verdict" == "FAIL" && "$bad_finding" == *"malformed JSON"* ]]; then
   pass=$((pass + 1))
   printf '  PASS  malformed Codex audit output fails closed\n'
@@ -376,10 +376,10 @@ KEY_REPO="$(mktemp -d)"
 git -C "$KEY_REPO" init -q
 git -C "$KEY_REPO" config user.email t@t.test
 git -C "$KEY_REPO" config user.name tester
-mkdir -p "$KEY_REPO/.claude/hooks"
-cp "$REPO_ROOT/.claude/hooks/run-commit-push-audit.sh" \
-   "$REPO_ROOT/.claude/hooks/commit-push-audit.schema.json" \
-   "$KEY_REPO/.claude/hooks/"
+mkdir -p "$KEY_REPO/.agents/hooks" "$KEY_REPO/.agents/state"
+cp "$REPO_ROOT/.agents/hooks/run-commit-push-audit.sh" \
+   "$REPO_ROOT/.agents/hooks/commit-push-audit.schema.json" \
+   "$KEY_REPO/.agents/hooks/"
 printf 'base\n' > "$KEY_REPO/f"
 git -C "$KEY_REPO" add -A
 git -C "$KEY_REPO" commit -qm base
@@ -393,10 +393,10 @@ key_end+='PRIVATE KEY-----'
   printf '%s\n' "$key_end"
 } > "$KEY_REPO/key.pem"
 git -C "$KEY_REPO" add -A
-( cd "$KEY_REPO" && CLAUDE_PROJECT_DIR="$KEY_REPO" CODEX_COMMIT_PUSH_AUDIT_MODE=agentic bash "$KEY_REPO/.claude/hooks/run-commit-push-audit.sh" commit "git commit -m 'test(hooks): reject private key'" >/dev/null 2>"$KEY_REPO/err.txt" )
+( cd "$KEY_REPO" && CLAUDE_PROJECT_DIR="$KEY_REPO" CODEX_COMMIT_PUSH_AUDIT_MODE=agentic bash "$KEY_REPO/.agents/hooks/run-commit-push-audit.sh" commit "git commit -m 'test(hooks): reject private key'" >/dev/null 2>"$KEY_REPO/err.txt" )
 key_rc=$?
-key_verdict="$(jq -r '.verdict' "$KEY_REPO/.claude/.last-audit.json" 2>/dev/null || echo missing)"
-key_finding="$(jq -r '.findings[0] // ""' "$KEY_REPO/.claude/.last-audit.json" 2>/dev/null || echo missing)"
+key_verdict="$(jq -r '.verdict' "$KEY_REPO/.agents/state/last-audit.json" 2>/dev/null || echo missing)"
+key_finding="$(jq -r '.findings[0] // ""' "$KEY_REPO/.agents/state/last-audit.json" 2>/dev/null || echo missing)"
 if [[ "$key_rc" != 0 && "$key_verdict" == "FAIL" && "$key_finding" == *"secret-like token"* ]]; then
   pass=$((pass + 1))
   printf '  PASS  private key diff fails local precheck\n'
@@ -410,10 +410,10 @@ AUTH_REPO="$(mktemp -d)"
 git -C "$AUTH_REPO" init -q
 git -C "$AUTH_REPO" config user.email t@t.test
 git -C "$AUTH_REPO" config user.name tester
-mkdir -p "$AUTH_REPO/.claude/hooks"
-cp "$REPO_ROOT/.claude/hooks/run-commit-push-audit.sh" \
-   "$REPO_ROOT/.claude/hooks/commit-push-audit.schema.json" \
-   "$AUTH_REPO/.claude/hooks/"
+mkdir -p "$AUTH_REPO/.agents/hooks" "$AUTH_REPO/.agents/state"
+cp "$REPO_ROOT/.agents/hooks/run-commit-push-audit.sh" \
+   "$REPO_ROOT/.agents/hooks/commit-push-audit.schema.json" \
+   "$AUTH_REPO/.agents/hooks/"
 printf 'base\n' > "$AUTH_REPO/f"
 git -C "$AUTH_REPO" add -A
 git -C "$AUTH_REPO" commit -qm base
@@ -426,10 +426,10 @@ bearer+='rawbearervalue123'
   printf 'Authorization: %s\n' "$bearer"
 } > "$AUTH_REPO/auth.txt"
 git -C "$AUTH_REPO" add -A
-( cd "$AUTH_REPO" && CLAUDE_PROJECT_DIR="$AUTH_REPO" CODEX_COMMIT_PUSH_AUDIT_MODE=agentic bash "$AUTH_REPO/.claude/hooks/run-commit-push-audit.sh" commit "git commit -m 'test(hooks): reject auth secret'" >/dev/null 2>"$AUTH_REPO/err.txt" )
+( cd "$AUTH_REPO" && CLAUDE_PROJECT_DIR="$AUTH_REPO" CODEX_COMMIT_PUSH_AUDIT_MODE=agentic bash "$AUTH_REPO/.agents/hooks/run-commit-push-audit.sh" commit "git commit -m 'test(hooks): reject auth secret'" >/dev/null 2>"$AUTH_REPO/err.txt" )
 auth_rc=$?
-auth_verdict="$(jq -r '.verdict' "$AUTH_REPO/.claude/.last-audit.json" 2>/dev/null || echo missing)"
-auth_finding="$(jq -r '.findings[0] // ""' "$AUTH_REPO/.claude/.last-audit.json" 2>/dev/null || echo missing)"
+auth_verdict="$(jq -r '.verdict' "$AUTH_REPO/.agents/state/last-audit.json" 2>/dev/null || echo missing)"
+auth_finding="$(jq -r '.findings[0] // ""' "$AUTH_REPO/.agents/state/last-audit.json" 2>/dev/null || echo missing)"
 if [[ "$auth_rc" != 0 && "$auth_verdict" == "FAIL" && "$auth_finding" == *"secret-like token"* ]]; then
   pass=$((pass + 1))
   printf '  PASS  auth credential diff fails local precheck\n'
@@ -449,10 +449,10 @@ git -C "$PUSH_REPO" config user.name tester
 git -C "$PUSH_REPO" branch -M main
 git init -q --bare "$PUSH_REMOTE"
 git -C "$PUSH_REPO" remote add origin "$PUSH_REMOTE"
-mkdir -p "$PUSH_REPO/.claude/hooks" "$PUSH_REPO/bin"
-cp "$REPO_ROOT/.claude/hooks/run-commit-push-audit.sh" \
-   "$REPO_ROOT/.claude/hooks/commit-push-audit.schema.json" \
-   "$PUSH_REPO/.claude/hooks/"
+mkdir -p "$PUSH_REPO/.agents/hooks" "$PUSH_REPO/.agents/state" "$PUSH_REPO/bin"
+cp "$REPO_ROOT/.agents/hooks/run-commit-push-audit.sh" \
+   "$REPO_ROOT/.agents/hooks/commit-push-audit.schema.json" \
+   "$PUSH_REPO/.agents/hooks/"
 printf 'base\n' > "$PUSH_REPO/f"
 git -C "$PUSH_REPO" add -A
 git -C "$PUSH_REPO" commit -qm "test(hooks): seed push repo"
@@ -460,11 +460,11 @@ git -C "$PUSH_REPO" push -q origin main
 printf 'change\n' >> "$PUSH_REPO/f"
 git -C "$PUSH_REPO" add -A
 git -C "$PUSH_REPO" commit -qm "test(hooks): exercise push audit"
-( cd "$PUSH_REPO" && CLAUDE_PROJECT_DIR="$PUSH_REPO" CODEX_COMMIT_PUSH_AUDIT_MODE=agentic bash "$PUSH_REPO/.claude/hooks/run-commit-push-audit.sh" push "git push origin main" >/dev/null 2>"$PUSH_REPO/err.txt" )
+( cd "$PUSH_REPO" && CLAUDE_PROJECT_DIR="$PUSH_REPO" CODEX_COMMIT_PUSH_AUDIT_MODE=agentic bash "$PUSH_REPO/.agents/hooks/run-commit-push-audit.sh" push "git push origin main" >/dev/null 2>"$PUSH_REPO/err.txt" )
 push_rc=$?
-push_verdict="$(jq -r '.verdict' "$PUSH_REPO/.claude/.last-audit.json" 2>/dev/null || echo missing)"
-push_kind="$(jq -r '.command_kind' "$PUSH_REPO/.claude/.last-audit.json" 2>/dev/null || echo missing)"
-push_finding="$(jq -r '.findings[0] // ""' "$PUSH_REPO/.claude/.last-audit.json" 2>/dev/null || echo missing)"
+push_verdict="$(jq -r '.verdict' "$PUSH_REPO/.agents/state/last-audit.json" 2>/dev/null || echo missing)"
+push_kind="$(jq -r '.command_kind' "$PUSH_REPO/.agents/state/last-audit.json" 2>/dev/null || echo missing)"
+push_finding="$(jq -r '.findings[0] // ""' "$PUSH_REPO/.agents/state/last-audit.json" 2>/dev/null || echo missing)"
 if [[ "$push_rc" != 0 && "$push_verdict" == "FAIL" && "$push_kind" == "push" && "$push_finding" == *"synthetic pre-push command"* ]]; then
   pass=$((pass + 1))
   printf '  PASS  non-synthetic push audit fails closed\n'
@@ -473,6 +473,36 @@ else
   printf '  FAIL  non-synthetic push audit fails closed  (rc=%s verdict=%s kind=%s finding=%s)\n' "$push_rc" "$push_verdict" "$push_kind" "$push_finding"
 fi
 rm -rf "$PUSH_REPO" "$PUSH_REMOTE"
+
+echo
+echo "## handoff marker in a tree without the state dir"
+# .agents/state/ is gitignored, so a fresh clone does not have it. Before the
+# marker moved this could not bite: the old parent, .claude/, is always present.
+# Now the writer has to create it, or the redirect fails and the commit path
+# loses its handoff silently.
+STATE_REPO="$(mktemp -d)"
+git init -q "$STATE_REPO"
+git -C "$STATE_REPO" config user.email t@t.test
+git -C "$STATE_REPO" config user.name tester
+mkdir -p "$STATE_REPO/.agents/hooks" "$STATE_REPO/.githooks"
+cp "$HOOK" "$STATE_REPO/.agents/hooks/"
+cp "$REPO_ROOT/.githooks/pre-commit" "$STATE_REPO/.githooks/"
+printf 'x\n' > "$STATE_REPO/f"
+git -C "$STATE_REPO" add -A
+git -C "$STATE_REPO" commit -qm base >/dev/null 2>&1
+printf 'y\n' >> "$STATE_REPO/f"; git -C "$STATE_REPO" add -A
+# No .agents/state/ anywhere — exactly a fresh clone.
+rm -rf "$STATE_REPO/.agents/state"
+( cd "$STATE_REPO" && git config core.hooksPath .githooks \
+  && printf '%s' 'git commit -m x' | jq -Rs '{tool_input:{command:.}}' \
+     | CLAUDE_PROJECT_DIR="$STATE_REPO" CLAUDECODE=1 bash "$STATE_REPO/.agents/hooks/$(basename "$HOOK")" >/dev/null 2>&1 )
+[[ -r "$STATE_REPO/.agents/state/last-audit-handoff.json" ]] && handoff=written || handoff=MISSING
+if [[ "$handoff" == "written" ]]; then
+  pass=$((pass + 1)); printf '  PASS  handoff is written when the state dir does not exist yet\n'
+else
+  fail=$((fail + 1)); printf '  FAIL  handoff is written when the state dir does not exist yet  (got=%s)\n' "$handoff"
+fi
+rm -rf "$STATE_REPO"
 
 echo
 echo "RESULT: $pass passed, $fail failed"

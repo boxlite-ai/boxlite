@@ -176,12 +176,14 @@ Cargo.lock
 /runner
 .claude/scheduled_tasks.lock
 .claude/worktrees/
+.agents/state/
+# Transition mirrors written by .agents/hooks/preflight-commit-push.sh so a
+# commit-msg from before the move still finds its audit. Must stay ignored:
+# the verdict gate keys its dossier to a tree hash that skips ignored paths, so
+# an unignored marker would self-invalidate the audit that just passed. Drop
+# these two lines together with mirror_to_legacy.
 .claude/.last-audit.json
 .claude/.last-audit-handoff.json
-.claude/.last-verdict.json
-.claude/.pr-reviewed.json
-.claude/.verdict-last-uuid
-.claude/.verdict-decisions.log
 
 # ============================================================================
 # Local dev artifacts (apps/infra-local + dashboard E2E session)

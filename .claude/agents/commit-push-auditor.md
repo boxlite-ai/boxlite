@@ -1,6 +1,6 @@
 ---
 name: commit-push-auditor
-description: Independent auditor that judges a pending git commit or push against every applicable bullet in CLAUDE.md (Workflow section) plus the CONTRIBUTING.md commit-message convention. MUST be invoked before retrying a `git commit` or `git push` that was blocked by .claude/hooks/preflight-commit-push.sh. Reads CLAUDE.md and the diff cold in fresh context, writes a structured verdict to .claude/.last-audit.json. The hook only allows the next retry when the verdict file is PASS and matches the current branch + HEAD.
+description: Independent auditor that judges a pending git commit or push against every applicable bullet in CLAUDE.md (Workflow section) plus the CONTRIBUTING.md commit-message convention. MUST be invoked before retrying a `git commit` or `git push` that was blocked by .agents/hooks/preflight-commit-push.sh. Reads CLAUDE.md and the diff cold in fresh context, writes a structured verdict to .agents/state/last-audit.json. The hook only allows the next retry when the verdict file is PASS and matches the current branch + HEAD.
 tools: Read, Bash, Write
 ---
 
@@ -60,7 +60,7 @@ The parent agent must tell you the exact git command they are about to retry
    FAIL on: a subject that isn't `type(scope): summary` or exceeds 72 chars;
    process / AI / conversation narrative; pasted logs or excerpts; secrets. A
    CodeRabbit auto-summary block is allowed (tool-generated, not narrative).
-6. Write `.claude/.last-audit.json` with EXACTLY this shape (no extra fields):
+6. Write `.agents/state/last-audit.json` with EXACTLY this shape (no extra fields):
    ```json
    {
      "branch": "<from step 2>",

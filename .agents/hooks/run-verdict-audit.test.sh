@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for .claude/hooks/run-verdict-audit.sh (the harness-neutral audit runner).
+# Tests for .agents/hooks/run-verdict-audit.sh (the harness-neutral audit runner).
 #
 # Contract:
 #   - resolves VERDICT_AUDITOR_CMD first (stdin = audit prompt), else claude CLI
@@ -8,7 +8,7 @@
 #   - exit 2 when no runner is available / no transcript arg
 #   - a pre-existing dossier does not count as success (freshness check)
 #
-# Run with:  bash .claude/hooks/run-verdict-audit.test.sh
+# Run with:  bash .agents/hooks/run-verdict-audit.test.sh
 set -uo pipefail
 
 # Resolve from THIS script's location, not the caller's cwd. `git rev-parse
@@ -16,7 +16,7 @@ set -uo pipefail
 # suite from another worktree silently tests THAT checkout's copy instead of the
 # one shipped beside these tests, and a two-side check reports a false pass.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-RUNNER="$REPO_ROOT/.claude/hooks/run-verdict-audit.sh"
+RUNNER="$REPO_ROOT/.agents/hooks/run-verdict-audit.sh"
 
 pass=0
 fail=0
@@ -27,10 +27,10 @@ setup() {
   git -C "$d" config user.email t@t.test
   git -C "$d" config user.name tester
   printf 'x\n' > "$d/f"
-  printf '.claude/.last-verdict.json\n' > "$d/.gitignore"
+  printf '.agents/state/last-verdict.json\n' > "$d/.gitignore"
   git -C "$d" add -A
   git -C "$d" commit -qm base
-  mkdir -p "$d/.claude"
+  mkdir -p "$d/.agents/state"
   printf '{"type":"assistant","message":{"content":[{"type":"text","text":"tests pass"}]}}\n' > "$d/transcript.jsonl"
   printf '%s' "$d"
 }
@@ -45,13 +45,13 @@ check_eq() {  # desc  got  want
 }
 
 # Stub that writes a plausible dossier (what a real auditor leaves behind).
-DOSSIER_STUB='cat >/dev/null; mkdir -p "$CLAUDE_PROJECT_DIR/.claude"; printf "{\"branch\":\"main\",\"head\":\"h\",\"tree_hash\":\"t\",\"verdict\":\"PASS\",\"proof\":[],\"findings\":[]}" > "$CLAUDE_PROJECT_DIR/.claude/.last-verdict.json"'
+DOSSIER_STUB='cat >/dev/null; mkdir -p "$CLAUDE_PROJECT_DIR/.agents/state"; printf "{\"branch\":\"main\",\"head\":\"h\",\"tree_hash\":\"t\",\"verdict\":\"PASS\",\"proof\":[],\"findings\":[]}" > "$CLAUDE_PROJECT_DIR/.agents/state/last-verdict.json"'
 
 echo "## Runner resolution and success criteria"
 R="$(setup)"
 ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_AUDITOR_CMD="$DOSSIER_STUB" bash "$RUNNER" "$R/transcript.jsonl" >/dev/null 2>&1 )
 check_eq "stub writes dossier → exit 0"                      "$?" 0
-dossier_state="missing"; [[ -s "$R/.claude/.last-verdict.json" ]] && dossier_state="present"
+dossier_state="missing"; [[ -s "$R/.agents/state/last-verdict.json" ]] && dossier_state="present"
 check_eq "dossier present after run"                         "$dossier_state" "present"
 rm -rf "$R"
 
@@ -62,8 +62,8 @@ rm -rf "$R"
 
 # A leftover dossier from an earlier audit must NOT satisfy the freshness check.
 R="$(setup)"
-printf '{"branch":"main","head":"h","tree_hash":"t","verdict":"PASS","proof":[],"findings":[]}' > "$R/.claude/.last-verdict.json"
-touch -t 202001010000 "$R/.claude/.last-verdict.json"
+printf '{"branch":"main","head":"h","tree_hash":"t","verdict":"PASS","proof":[],"findings":[]}' > "$R/.agents/state/last-verdict.json"
+touch -t 202001010000 "$R/.agents/state/last-verdict.json"
 ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_AUDITOR_CMD='cat >/dev/null' bash "$RUNNER" "$R/transcript.jsonl" >/dev/null 2>&1 )
 check_eq "stale pre-existing dossier does not count → exit 1" "$?" 1
 rm -rf "$R"

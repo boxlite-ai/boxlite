@@ -1,6 +1,6 @@
 ---
 name: verdict-auditor
-description: Independent auditor that checks whether the agent's stated verdict — claims like "the fix works", "tests pass", "root cause is X", "deploy is healthy", "found N issues" / "no issues", "<thing> is removed/unused", "done" — is backed by concrete, re-runnable proof rather than prose. MUST be invoked when .claude/hooks/preflight-verdict-check.sh blocks the agent from ending its turn. Reads the agent's FINAL TURN — every assistant message since the last real user message (the claims) — and the working-tree diff (the work) cold, judges proof against CLAUDE.md's Test/Verify rules, and writes a structured dossier to .claude/.last-verdict.json. The Stop hook lets a verdict-shaped turn end only on a fresh PASS (or IN_PROGRESS) dossier matching the current branch + HEAD + working-tree hash; a mismatched or stale dossier is discarded and the turn re-detected, and a FAIL keeps blocking until a re-audit passes.
+description: Independent auditor that checks whether the agent's stated verdict — claims like "the fix works", "tests pass", "root cause is X", "deploy is healthy", "found N issues" / "no issues", "<thing> is removed/unused", "done" — is backed by concrete, re-runnable proof rather than prose. MUST be invoked when .agents/hooks/preflight-verdict-check.sh blocks the agent from ending its turn. Reads the agent's FINAL TURN — every assistant message since the last real user message (the claims) — and the working-tree diff (the work) cold, judges proof against CLAUDE.md's Test/Verify rules, and writes a structured dossier to .agents/state/last-verdict.json. The Stop hook lets a verdict-shaped turn end only on a fresh PASS (or IN_PROGRESS) dossier matching the current branch + HEAD + working-tree hash; a mismatched or stale dossier is discarded and the turn re-detected, and a FAIL keeps blocking until a re-audit passes.
 tools: Read, Bash, Write
 ---
 
@@ -88,7 +88,7 @@ a JSONL file). If it didn't, ask for it before proceeding.
      something), set the whole dossier `"verdict":"IN_PROGRESS"` and list what remains
      in `findings`.
 
-6. **Write** `.claude/.last-verdict.json` with EXACTLY this shape (no extra fields):
+6. **Write** `.agents/state/last-verdict.json` with EXACTLY this shape (no extra fields):
    ```json
    {
      "branch": "<from step 2>",

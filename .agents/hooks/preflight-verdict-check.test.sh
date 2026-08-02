@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for .claude/hooks/preflight-verdict-check.sh (the Stop-stage verdict gate).
+# Tests for .agents/hooks/preflight-verdict-check.sh (the Stop-stage verdict gate).
 #
 # The hook is DETECTION-TRIGGERED, with finding-driven loops only:
 #   - no dossier + the turn asserts a verdict ("root cause is X",
@@ -19,7 +19,7 @@
 # human-only triage announcement (the model never sees it; documented hook
 # contract). decide() treats any non-block output as allow.
 #
-# Run with:  bash .claude/hooks/preflight-verdict-check.test.sh
+# Run with:  bash .agents/hooks/preflight-verdict-check.test.sh
 # Exits non-zero on any failure.
 set -uo pipefail
 
@@ -38,7 +38,7 @@ export VERDICT_CLASSIFIER_CMD='false'
 # suite from another worktree silently tests THAT checkout's copy instead of the
 # one shipped beside these tests, and a two-side check reports a false pass.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/preflight-verdict-check.sh"
+HOOK="$REPO_ROOT/.agents/hooks/preflight-verdict-check.sh"
 
 pass=0
 fail=0
@@ -54,7 +54,7 @@ setup() {
   # Mirror the real repo: the dossier is gitignored, so it never enters the
   # working-tree hash. Without this the hook's `git add -A` would fold the
   # dossier into the hash and never match what the auditor computed.
-  printf '.claude/.last-verdict.json\n' > "$d/.gitignore"
+  printf '.agents/state/last-verdict.json\n' > "$d/.gitignore"
   git -C "$d" add -A
   git -C "$d" commit -qm base
   printf '%s' "$d"
@@ -134,10 +134,10 @@ append_tool_result_string() {
 write_verdict() {
   local repo="$1" verdict="$2" findings="$3" tree="${4:-$(tree_hash_of "$1")}"
   local br hd; br="$(git -C "$repo" branch --show-current)"; hd="$(git -C "$repo" rev-parse HEAD)"
-  mkdir -p "$repo/.claude"
+  mkdir -p "$repo/.agents/state"
   jq -nc --arg b "$br" --arg h "$hd" --arg t "$tree" --arg v "$verdict" --argjson f "$findings" \
     '{branch:$b, head:$h, tree_hash:$t, verdict:$v, proof:[], findings:$f}' \
-    > "$repo/.claude/.last-verdict.json"
+    > "$repo/.agents/state/last-verdict.json"
 }
 
 # Run the hook inside repo and classify the decision. Uses the repo's fake
@@ -170,29 +170,29 @@ check() {  # desc  repo  expect
 # Assert the dossier file is gone (consumed on allow, or discarded on mismatch).
 check_gone() {  # desc  repo
   local desc="$1" repo="$2"
-  if [[ ! -e "$repo/.claude/.last-verdict.json" ]]; then
+  if [[ ! -e "$repo/.agents/state/last-verdict.json" ]]; then
     pass=$((pass + 1)); printf '  PASS  %s\n' "$desc"
   else
     fail=$((fail + 1)); printf '  FAIL  %s  (dossier still present)\n' "$desc"
   fi
 }
 
-# ── Real-repo invariant: every gate-written .claude/ state file is gitignored ──
+# ── Real-repo invariant: every gate-written .agents/state/ file is gitignored ──
 # compute_tree_hash() folds the whole working tree into the dossier binding via
 # `git add -A`, which SKIPS gitignored paths. So every file the gates write under
-# .claude/ MUST be gitignored — otherwise writing it perturbs the very tree hash
-# the dossier is keyed to and self-invalidates a just-passed audit (the class of
-# bug that hit .pr-reviewed.json: a fresh PASS discarded as "stale" the instant
-# the PR-review ack was written). setup() emulates this per synthetic repo (only
-# .last-verdict.json); this case guards the REAL .gitignore for the whole class,
-# so a new marker added without a matching ignore line fails here.
+# .agents/state/ MUST be gitignored — otherwise writing it perturbs the very tree
+# hash the dossier is keyed to and self-invalidates a just-passed audit (the
+# class of bug that hit pr-reviewed.json: a fresh PASS discarded as "stale" the
+# instant the PR-review ack was written). setup() emulates this per synthetic
+# repo (only last-verdict.json); this case guards the REAL .gitignore for the
+# whole class, so a new marker added without a matching ignore line fails here.
 echo "## Invariant: gate state files are gitignored (never enter the tree hash)"
 for f in \
-  .claude/.last-audit.json \
-  .claude/.last-verdict.json \
-  .claude/.pr-reviewed.json \
-  .claude/.verdict-last-uuid \
-  .claude/.verdict-decisions.log; do
+  .agents/state/last-audit.json \
+  .agents/state/last-verdict.json \
+  .agents/state/pr-reviewed.json \
+  .agents/state/verdict-last-uuid \
+  .agents/state/verdict-decisions.log; do
   if git -C "$REPO_ROOT" check-ignore -q "$f"; then
     pass=$((pass + 1)); printf '  PASS  %s gitignored\n' "$f"
   else
@@ -276,13 +276,13 @@ check "tree moved + verdict ending → block (fresh audit)"         "$R" "block"
 check_gone "mismatched dossier discarded before re-detect"        "$R"; rm -rf "$R"
 
 R="$(setup)"; write_transcript "$R" "Thanks, ending here."; write_verdict "$R" "FAIL" '["x"]'
-jq '.head="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"' "$R/.claude/.last-verdict.json" > "$R/.claude/x" \
-  && mv "$R/.claude/x" "$R/.claude/.last-verdict.json"
+jq '.head="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"' "$R/.agents/state/last-verdict.json" > "$R/.agents/state/x" \
+  && mv "$R/.agents/state/x" "$R/.agents/state/last-verdict.json"
 check "HEAD-mismatched FAIL + chat ending → allow (discarded)"    "$R" "allow"
 check_gone "HEAD-mismatched dossier discarded"                    "$R"; rm -rf "$R"
 
 R="$(setup)"; write_transcript "$R" "Deploy is healthy."; write_verdict "$R" "PASS" "[]"
-touch -t 202001010000 "$R/.claude/.last-verdict.json"
+touch -t 202001010000 "$R/.agents/state/last-verdict.json"
 check "stale-mtime PASS + verdict ending → block (re-detect)"     "$R" "block"; rm -rf "$R"
 
 echo
@@ -326,13 +326,13 @@ echo "## Flush-race guard: never judge a message that was already judged"
 # records the identity it judged (checksum of the text — harness-agnostic);
 # seeing the same identity again → allow, never re-block.
 R="$(setup)"; write_transcript "$R" "Fix verified; tests pass."   # verdict-shaped
-mkdir -p "$R/.claude"; cksum_of "Fix verified; tests pass." > "$R/.claude/.verdict-last-uuid"
+mkdir -p "$R/.agents/state"; cksum_of "Fix verified; tests pass." > "$R/.agents/state/verdict-last-uuid"
 check "stale transcript (identity already judged) → allow"       "$R" "allow"; rm -rf "$R"
 
 # Normal path records the judged identity so the NEXT stale sighting is recognized.
 R="$(setup)"; write_transcript "$R" "Deploy is healthy."
 got="$(decide "$R")"
-recorded="$(cat "$R/.claude/.verdict-last-uuid" 2>/dev/null || echo MISSING)"
+recorded="$(cat "$R/.agents/state/verdict-last-uuid" 2>/dev/null || echo MISSING)"
 if [[ "$got" == "block" && "$recorded" == "$(cksum_of "Deploy is healthy.")" ]]; then
   pass=$((pass+1)); printf '  PASS  %s\n' "detection block records the judged identity"
 else
@@ -341,7 +341,7 @@ fi; rm -rf "$R"
 
 R="$(setup)"; write_transcript "$R" "Anything else to adjust?"
 got="$(decide "$R")"
-recorded="$(cat "$R/.claude/.verdict-last-uuid" 2>/dev/null || echo MISSING)"
+recorded="$(cat "$R/.agents/state/verdict-last-uuid" 2>/dev/null || echo MISSING)"
 if [[ "$got" == "allow" && "$recorded" == "$(cksum_of "Anything else to adjust?")" ]]; then
   pass=$((pass+1)); printf '  PASS  %s\n' "detection allow records the judged identity"
 else
@@ -421,7 +421,7 @@ echo
 echo "## Harness-agnostic extraction: conventions, not schema lists"
 R="$(setup)"; write_codex_transcript "$R" "Root cause is the missing bind mount; all tests pass now."
 check "codex rollout schema, verdict → block"                    "$R" "block"
-recorded="$(cat "$R/.claude/.verdict-last-uuid" 2>/dev/null || echo MISSING)"
+recorded="$(cat "$R/.agents/state/verdict-last-uuid" 2>/dev/null || echo MISSING)"
 if [[ "$recorded" == cksum-* ]]; then
   pass=$((pass+1)); printf '  PASS  %s\n' "codex record (no id) → checksum identity recorded"
 else
@@ -433,7 +433,7 @@ check "codex rollout schema, chat → allow"                       "$R" "allow";
 
 # Race guard on content identity: same text → same checksum → stale.
 R="$(setup)"; write_codex_transcript "$R" "Deploy is healthy."
-mkdir -p "$R/.claude"; cksum_of "Deploy is healthy." > "$R/.claude/.verdict-last-uuid"
+mkdir -p "$R/.agents/state"; cksum_of "Deploy is healthy." > "$R/.agents/state/verdict-last-uuid"
 check "codex stale (identity already judged) → allow"            "$R" "allow"; rm -rf "$R"
 
 # The acceptance test for "all kinds of coding agents": a schema NO harness uses
@@ -466,26 +466,26 @@ echo
 echo "## Decision log: every Stop decision leaves one greppable line"
 R="$(setup)"; write_transcript "$R" "Deploy is healthy."
 decide "$R" >/dev/null
-if grep -q ' regex match-block$' "$R/.claude/.verdict-decisions.log" 2>/dev/null; then
+if grep -q ' regex match-block$' "$R/.agents/state/verdict-decisions.log" 2>/dev/null; then
   pass=$((pass+1)); printf '  PASS  %s\n' "block decision logged (rung + outcome)"
 else
-  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "block logged" "$(cat "$R/.claude/.verdict-decisions.log" 2>/dev/null || echo MISSING)"
+  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "block logged" "$(cat "$R/.agents/state/verdict-decisions.log" 2>/dev/null || echo MISSING)"
 fi; rm -rf "$R"
 
 R="$(setup)"; write_transcript "$R" "Anything else to adjust?"
 decide "$R" >/dev/null
-if grep -q ' regex none-allow$' "$R/.claude/.verdict-decisions.log" 2>/dev/null; then
+if grep -q ' regex none-allow$' "$R/.agents/state/verdict-decisions.log" 2>/dev/null; then
   pass=$((pass+1)); printf '  PASS  %s\n' "allow decision logged"
 else
-  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "allow logged" "$(cat "$R/.claude/.verdict-decisions.log" 2>/dev/null || echo MISSING)"
+  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "allow logged" "$(cat "$R/.agents/state/verdict-decisions.log" 2>/dev/null || echo MISSING)"
 fi; rm -rf "$R"
 
 R="$(setup)"; write_transcript "$R" "Fix verified; tests pass."; write_verdict "$R" "PASS" "[]"
 decide "$R" >/dev/null
-if grep -q ' dossier PASS-allow$' "$R/.claude/.verdict-decisions.log" 2>/dev/null; then
+if grep -q ' dossier PASS-allow$' "$R/.agents/state/verdict-decisions.log" 2>/dev/null; then
   pass=$((pass+1)); printf '  PASS  %s\n' "dossier consumption logged"
 else
-  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "dossier logged" "$(cat "$R/.claude/.verdict-decisions.log" 2>/dev/null || echo MISSING)"
+  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "dossier logged" "$(cat "$R/.agents/state/verdict-decisions.log" 2>/dev/null || echo MISSING)"
 fi; rm -rf "$R"
 
 echo

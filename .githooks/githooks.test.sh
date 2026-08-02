@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for the agent-agnostic git-hook gate layer (.githooks/pre-commit,
 # .githooks/pre-push) and the PreToolUse delegation guard in
-# .claude/hooks/preflight-commit-push.sh.
+# .agents/hooks/preflight-commit-push.sh.
 #
 # Contract under test:
 #   - agent marker present (CLAUDECODE / CODEX_SANDBOX / AGENT_GATED) + no audit -> commit/push rejected
@@ -133,12 +133,12 @@ setup() {
   git -C "$d" init -q
   git -C "$d" config user.email t@t.test
   git -C "$d" config user.name tester
-  mkdir -p "$d/.githooks" "$d/.claude/hooks"
+  mkdir -p "$d/.githooks" "$d/.agents/hooks" "$d/.agents/state"
   cp "$REPO_ROOT/.githooks/pre-commit" "$REPO_ROOT/.githooks/pre-push" "$REPO_ROOT/.githooks/commit-msg" "$d/.githooks/"
-  cp "$REPO_ROOT/.claude/hooks/preflight-commit-push.sh" \
-     "$REPO_ROOT/.claude/hooks/run-commit-push-audit.sh" \
-     "$REPO_ROOT/.claude/hooks/commit-push-audit.schema.json" \
-     "$d/.claude/hooks/"
+  cp "$REPO_ROOT/.agents/hooks/preflight-commit-push.sh" \
+     "$REPO_ROOT/.agents/hooks/run-commit-push-audit.sh" \
+     "$REPO_ROOT/.agents/hooks/commit-push-audit.schema.json" \
+     "$d/.agents/hooks/"
   printf 'x\n' > "$d/f"
   git -C "$d" add -A
   git -C "$d" commit -qm base
@@ -167,7 +167,7 @@ write_audit() {  # repo kind [push_local_ref push_remote_ref]
     --arg ch "$(command_hash_for "$command")" \
     --arg csh "$(subject_hash_for "$subject")" \
     '{branch:$b, head:$h, command_kind:$k, diff_hash:$dh, command_hash:$ch, commit_subject_hash:$csh, verdict:"PASS", findings:[]}' \
-    > "$repo/.claude/.last-audit.json"
+    > "$repo/.agents/state/last-audit.json"
 }
 
 write_handoff_audit() {  # repo kind command
@@ -178,11 +178,11 @@ write_handoff_audit() {  # repo kind command
   jq -nc --arg b "$br" --arg h "$hd" --arg k "$kind" \
     --arg dh "$dh" --arg ch "$ch" \
     '{branch:$b, head:$h, command_kind:$k, diff_hash:$dh, command_hash:$ch, commit_subject_hash:"", verdict:"PASS", findings:[]}' \
-    > "$repo/.claude/.last-audit.json"
+    > "$repo/.agents/state/last-audit.json"
   jq -nc --arg b "$br" --arg h "$hd" --arg k "$kind" \
     --arg dh "$dh" --arg ch "$ch" \
     '{branch:$b, head:$h, command_kind:$k, diff_hash:$dh, command_hash:$ch}' \
-    > "$repo/.claude/.last-audit-handoff.json"
+    > "$repo/.agents/state/last-audit-handoff.json"
 }
 
 stage_change() {
@@ -208,20 +208,20 @@ write_broken_preflight() {  # repo exit|invalid
   local repo="$1" mode="$2"
   case "$mode" in
     exit)
-      cat > "$repo/.claude/hooks/preflight-commit-push.sh" <<'BROKEN_PREFLIGHT'
+      cat > "$repo/.agents/hooks/preflight-commit-push.sh" <<'BROKEN_PREFLIGHT'
 #!/usr/bin/env bash
 printf 'boom from delegated preflight\n' >&2
 exit 7
 BROKEN_PREFLIGHT
       ;;
     invalid)
-      cat > "$repo/.claude/hooks/preflight-commit-push.sh" <<'BROKEN_PREFLIGHT'
+      cat > "$repo/.agents/hooks/preflight-commit-push.sh" <<'BROKEN_PREFLIGHT'
 #!/usr/bin/env bash
 printf 'not-json\n'
 BROKEN_PREFLIGHT
       ;;
   esac
-  chmod +x "$repo/.claude/hooks/preflight-commit-push.sh"
+  chmod +x "$repo/.agents/hooks/preflight-commit-push.sh"
 }
 
 try_commit() {  # repo  agent|human
@@ -244,7 +244,7 @@ rm -rf "$R"
 
 R="$(setup)"; stage_change "$R"; write_audit "$R" commit
 check_eq "agent + PASS audit → commit allowed"      "$(run_commit "$R" agent)" 0
-[[ -e "$R/.claude/.last-audit.json" ]] && consumed=no || consumed=yes
+[[ -e "$R/.agents/state/last-audit.json" ]] && consumed=no || consumed=yes
 check_eq "audit consumed by the git-level gate"     "$consumed" "yes"
 rm -rf "$R"
 
@@ -253,14 +253,14 @@ check_eq "agent + audited subject mismatch → commit rejected" "$(run_commit "$
 rm -rf "$R"
 
 R="$(setup)"; stage_change "$R"; write_audit "$R" commit
-jq '.commit_subject_hash=""' "$R/.claude/.last-audit.json" > "$R/.claude/x.json" \
-  && mv "$R/.claude/x.json" "$R/.claude/.last-audit.json"
+jq '.commit_subject_hash=""' "$R/.agents/state/last-audit.json" > "$R/.agents/state/x.json" \
+  && mv "$R/.agents/state/x.json" "$R/.agents/state/last-audit.json"
 check_eq "agent + unaudited bad subject → commit rejected" "$(run_commit "$R" agent bad)" 1
 rm -rf "$R"
 
 R="$(setup)"; stage_change "$R"; write_audit "$R" commit
-jq '.commit_subject_hash=""' "$R/.claude/.last-audit.json" > "$R/.claude/x.json" \
-  && mv "$R/.claude/x.json" "$R/.claude/.last-audit.json"
+jq '.commit_subject_hash=""' "$R/.agents/state/last-audit.json" > "$R/.agents/state/x.json" \
+  && mv "$R/.agents/state/x.json" "$R/.agents/state/last-audit.json"
 check_eq "agent + missing audited subject → commit rejected" "$(run_commit "$R" agent "test: good")" 1
 rm -rf "$R"
 
@@ -336,7 +336,7 @@ grep -q 'pushed_diff_sha256=' "$R/err.txt" && synthetic_named=yes || synthetic_n
 check_eq "push rejection names synthetic audit command" "$synthetic_named" "yes"
 context_path="$(git -C "$R" rev-parse --git-path codex-audit/last-push-audit-context.diff)"
 [[ "$context_path" != /* ]] && context_path="$R/$context_path"
-[[ -e "$context_path" && "$context_path" != "$R/.claude/"* ]] && context_retained=yes || context_retained=no
+[[ -e "$context_path" && "$context_path" != "$R/.agents/state/"* ]] && context_retained=yes || context_retained=no
 check_eq "rejected push keeps git-private diff context" "$context_retained" "yes"
 rm -rf "$R" "$B"
 
@@ -528,8 +528,8 @@ B="$(mktemp -d)"; git init -q --bare "$B"; git -C "$R" remote add origin "$B"
 branch_ref="$(current_branch_ref "$R")"
 write_audit "$R" push
 jq --arg ch "$(command_hash_for "git push --different-command")" '.command_hash=$ch' \
-  "$R/.claude/.last-audit.json" > "$R/.claude/x.json" \
-  && mv "$R/.claude/x.json" "$R/.claude/.last-audit.json"
+  "$R/.agents/state/last-audit.json" > "$R/.agents/state/x.json" \
+  && mv "$R/.agents/state/x.json" "$R/.agents/state/last-audit.json"
 ( cd "$R" && env -i PATH="$PATH" HOME="$HOME" CLAUDECODE=1 git push -q origin "$branch_ref:$branch_ref" >/dev/null 2>"$R/err.txt" )
 check_eq "agent + push command hash mismatch → push rejected" "$?" 1
 rm -rf "$R" "$B"
@@ -555,10 +555,10 @@ branch_ref="$(current_branch_ref "$R")"
 write_handoff_audit "$R" push "git push mirror $branch_ref"
 handoff_diff_hash="$(pre_push_command_for "$R" origin "$branch_ref" "$branch_ref")"
 handoff_diff_hash="${handoff_diff_hash##* pushed_diff_sha256=}"
-jq --arg dh "$handoff_diff_hash" '.diff_hash=$dh' "$R/.claude/.last-audit.json" > "$R/.claude/x.json" \
-  && mv "$R/.claude/x.json" "$R/.claude/.last-audit.json"
-jq --arg dh "$handoff_diff_hash" '.diff_hash=$dh' "$R/.claude/.last-audit-handoff.json" > "$R/.claude/x.json" \
-  && mv "$R/.claude/x.json" "$R/.claude/.last-audit-handoff.json"
+jq --arg dh "$handoff_diff_hash" '.diff_hash=$dh' "$R/.agents/state/last-audit.json" > "$R/.agents/state/x.json" \
+  && mv "$R/.agents/state/x.json" "$R/.agents/state/last-audit.json"
+jq --arg dh "$handoff_diff_hash" '.diff_hash=$dh' "$R/.agents/state/last-audit-handoff.json" > "$R/.agents/state/x.json" \
+  && mv "$R/.agents/state/x.json" "$R/.agents/state/last-audit-handoff.json"
 ( cd "$R" && env -i PATH="$PATH" HOME="$HOME" CLAUDECODE=1 git push -q origin "$branch_ref:$branch_ref" >/dev/null 2>"$R/err.txt" )
 check_eq "agent + push audit bound only to handoff → push rejected" "$?" 1
 rm -rf "$R" "$B" "$M"
@@ -596,7 +596,7 @@ echo "## delegation guard: exactly one consumer of the audit artifact"
 # no deny) even when a commit would otherwise be rejected...
 R="$(setup)"
 out="$(printf '{"tool_input":{"command":"git commit -m x"}}' \
-      | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$R/.claude/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
+      | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$R/.agents/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
 check_eq "PreToolUse defers when .githooks installed"  "${out:-EMPTY}" "EMPTY"
 rm -rf "$R"
 
@@ -635,28 +635,47 @@ jq -nc --arg b "$branch" --arg h "$head" --arg dh "$diff_hash" --arg ch "$comman
   > "$output"
 FAKE_CODEX
 chmod +x "$R/bin/codex"
+# The contract is that the audit SURVIVES for commit-msg, not that it sits at a
+# particular path: the gate copies it to the legacy location so a commit-msg
+# from before the move can read it too. Reachable at either location counts;
+# absent from both means commit-msg will block a commit that was audited.
+audit_reachable() {
+  local root="$1"
+  if [[ -e "$root/.agents/state/last-audit.json" || -e "$root/.claude/.last-audit.json" ]]; then
+    printf 'yes'
+  else
+    printf 'no'
+  fi
+}
+handoff_reachable() {
+  local root="$1" n=0
+  [[ -e "$root/.agents/state/last-audit-handoff.json" ]] && n=$((n+1))
+  [[ -e "$root/.claude/.last-audit-handoff.json" ]] && n=$((n+1))
+  case "$n" in 0) printf 'no' ;; *) printf 'yes' ;; esac
+}
+
 out="$(printf '{"tool_input":{"command":"git commit -m '\''test(hooks): codex keep audit'\''"}}' \
-      | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" CODEX_SANDBOX=seatbelt CODEX_BIN="$R/bin/codex" bash "$R/.claude/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
-[[ -e "$R/.claude/.last-audit.json" ]] && kept=yes || kept=no
-[[ -e "$R/.claude/.last-audit-handoff.json" ]] && handoff=yes || handoff=no
+      | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" CODEX_SANDBOX=seatbelt CODEX_BIN="$R/bin/codex" bash "$R/.agents/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
+kept="$(audit_reachable "$R")"
+handoff="$(handoff_reachable "$R")"
 check_eq "Codex PreToolUse validates and keeps audit for .githooks" "${out:-EMPTY}:$kept:$handoff" "EMPTY:yes:yes"
 out="$(printf '{"tool_input":{"command":"git commit"}}' \
-      | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" GITHOOK_DELEGATED=1 GITHOOK_KEEP_AUDIT=1 bash "$R/.claude/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
-[[ -e "$R/.claude/.last-audit.json" ]] && kept_after_precommit=yes || kept_after_precommit=no
-[[ -e "$R/.claude/.last-audit-handoff.json" ]] && handoff_after_precommit=yes || handoff_after_precommit=no
+      | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" GITHOOK_DELEGATED=1 GITHOOK_KEEP_AUDIT=1 bash "$R/.agents/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
+kept_after_precommit="$(audit_reachable "$R")"
+handoff_after_precommit="$(handoff_reachable "$R")"
 check_eq "delegated pre-commit keeps Codex audit for commit-msg" "${out:-EMPTY}:$kept_after_precommit:$handoff_after_precommit" "EMPTY:yes:yes"
 printf 'test(hooks): codex keep audit\n' > "$R/msg.txt"
 ( cd "$R" && CLAUDECODE=1 "$R/.githooks/commit-msg" "$R/msg.txt" >/dev/null 2>"$R/err.txt" )
 commit_msg_rc=$?
-[[ -e "$R/.claude/.last-audit.json" ]] && consumed=no || consumed=yes
-[[ -e "$R/.claude/.last-audit-handoff.json" ]] && handoff_consumed=no || handoff_consumed=yes
+[[ -e "$R/.agents/state/last-audit.json" ]] && consumed=no || consumed=yes
+[[ -e "$R/.agents/state/last-audit-handoff.json" ]] && handoff_consumed=no || handoff_consumed=yes
 check_eq "delegated commit-msg consumes Codex audit" "$commit_msg_rc:$consumed:$handoff_consumed" "0:yes:yes"
 rm -rf "$R"
 
 R="$(setup)"
 # ...but the call coming FROM the git-level gate must still be judged.
 out="$(printf '{"tool_input":{"command":"git commit -m x"}}' \
-      | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" GITHOOK_DELEGATED=1 bash "$R/.claude/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
+      | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" GITHOOK_DELEGATED=1 bash "$R/.agents/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
 printf '%s' "$out" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1 && denied=yes || denied=no
 check_eq "GITHOOK_DELEGATED call still judged (deny)"  "$denied" "yes"
 rm -rf "$R"
@@ -666,7 +685,7 @@ rm -rf "$R"
 # down — the PreToolUse layer must gate itself (fail closed).
 R="$(setup)"; rm "$R/.githooks/pre-commit"
 out="$(printf '{"tool_input":{"command":"git commit -m x"}}' \
-      | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$R/.claude/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
+      | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$R/.agents/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
 printf '%s' "$out" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1 && denied=yes || denied=no
 check_eq "hooksPath set, delegate missing → fail closed (deny)" "$denied" "yes"
 rm -rf "$R"
@@ -674,10 +693,67 @@ rm -rf "$R"
 # Without hooksPath, the PreToolUse layer gates as before (no regression).
 R="$(setup)"; git -C "$R" config --unset core.hooksPath
 out="$(printf '{"tool_input":{"command":"git commit -m x"}}' \
-      | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$R/.claude/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
+      | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$R/.agents/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
 printf '%s' "$out" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1 && denied=yes || denied=no
 check_eq "no hooksPath → PreToolUse still gates"       "$denied" "yes"
 rm -rf "$R"
+
+echo
+echo "## transition compat: hooks and trees on either side of the .agents move"
+# Where core.hooksPath is configured absolute rather than the relative value
+# install.sh sets, ONE installed hook runs for every worktree whatever commit it
+# sits on. Both directions must keep working,
+# and neither may ever run unguarded.
+COMPAT="$(mktemp -d)"
+# Used by the resolve_* bodies eval'd below, which reference $compat_root.
+# shellcheck disable=SC2034
+compat_root="$COMPAT"
+# shellcheck disable=SC1090
+eval "$(sed -n '/^resolve_gate() {/,/^}/p' "$REPO_ROOT/.githooks/pre-push" | sed 's|\$repo_root|\$compat_root|g')"
+eval "$(sed -n '/^  resolve_marker() {/,/^  }/p' "$REPO_ROOT/.githooks/commit-msg" | sed 's/^  //; s|\$repo_root|\$compat_root|g')"
+
+mkdir -p "$COMPAT/.claude/hooks"; : > "$COMPAT/.claude/hooks/preflight-commit-push.sh"
+case "$(resolve_gate || echo NONE)" in *"/.claude/hooks/"*) r=legacy ;; *) r=other ;; esac
+check_eq "gate resolves in a pre-move tree" "$r" "legacy"
+
+mkdir -p "$COMPAT/.agents/hooks"; : > "$COMPAT/.agents/hooks/preflight-commit-push.sh"
+case "$(resolve_gate || echo NONE)" in *"/.agents/hooks/"*) r=current ;; *) r=other ;; esac
+check_eq "gate prefers .agents when both exist" "$r" "current"
+
+rm -rf "$COMPAT/.claude/hooks" "$COMPAT/.agents/hooks"
+check_eq "gate is unresolvable when absent from both (fails closed)" "$(resolve_gate || echo NONE)" "NONE"
+
+mkdir -p "$COMPAT/.claude" "$COMPAT/.agents/state"
+: > "$COMPAT/.claude/.last-audit.json"
+case "$(resolve_marker last-audit.json)" in *"/.claude/.last-audit.json") r=legacy ;; *) r=other ;; esac
+check_eq "marker resolves in a pre-move tree" "$r" "legacy"
+
+: > "$COMPAT/.agents/state/last-audit.json"
+case "$(resolve_marker last-audit.json)" in *"/.agents/state/last-audit.json") r=current ;; *) r=other ;; esac
+check_eq "marker prefers .agents/state when both exist" "$r" "current"
+
+# BEHAVIOUR, not a grep for the helper's name: a name-presence check survives
+# deleting every call site. Drive the gate on the KEEP path (what a delegated
+# git hook takes) with an audit at the new location only, then look at where the
+# marker actually ended up.
+M="$(setup)"
+write_audit "$M" commit
+( cd "$M" && printf '%s' 'git commit -m x' | jq -Rs '{tool_input:{command:.}}' \
+  | CLAUDE_PROJECT_DIR="$M" CLAUDECODE=1 GITHOOK_DELEGATED=1 GITHOOK_KEEP_AUDIT=1 \
+    bash "$M/.agents/hooks/preflight-commit-push.sh" >/dev/null 2>&1 )
+[[ -r "$M/.claude/.last-audit.json" ]] && r=yes || r=no
+check_eq "kept audit reaches the legacy path a pre-move commit-msg reads" "$r" "yes"
+# The new location must survive too: more than one stage takes the keep path,
+# and handing the marker over would leave the second with nothing.
+[[ -r "$M/.agents/state/last-audit.json" ]] && r=yes || r=no
+check_eq "kept audit also stays where a later keep-stage looks" "$r" "yes"
+rm -rf "$M"
+
+for legacy in .claude/.last-audit.json .claude/.last-audit-handoff.json; do
+  git -C "$REPO_ROOT" check-ignore -q "$legacy" && r=yes || r=no
+  check_eq "legacy mirror $legacy stays gitignored (tree hash must not move)" "$r" "yes"
+done
+rm -rf "$COMPAT"
 
 echo
 echo "RESULT: $pass passed, $fail failed"

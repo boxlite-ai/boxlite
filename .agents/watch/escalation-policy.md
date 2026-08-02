@@ -25,7 +25,7 @@ check or a review comment **without asking a human first**.
 <!-- ─────────────────────────────────────────────────────────────────────────
 TODO(user, learning-mode): this list is the actual contract — it decides when an
 agent may edit your code unattended. Same convention as the ack-instruction
-block in .claude/hooks/preflight-pr-review.sh:116.
+block in .agents/hooks/preflight-pr-review.sh:116.
 
 Below is a DRAFT default. Replace it with your rule. Things worth deciding:
 

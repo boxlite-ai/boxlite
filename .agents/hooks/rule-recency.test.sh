@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for .claude/hooks/rule-recency.sh
+# Tests for .agents/hooks/rule-recency.sh
 #
 # Covers the areas CLAUDE.md flags for required tests on this change:
 #   1. Parsing + branching: the bare-acknowledgement filter — an exact ack skips;
@@ -11,7 +11,7 @@
 #      — that is what makes it work out-of-the-box under any agent.
 #   4. Content: the emitted reminder points to CLAUDE.md's Workflow (where research-before-design lives).
 #
-# Run with:  bash .claude/hooks/rule-recency.test.sh
+# Run with:  bash .agents/hooks/rule-recency.test.sh
 # Exits non-zero on any failure.
 set -uo pipefail
 
@@ -20,7 +20,7 @@ set -uo pipefail
 # suite from another worktree silently tests THAT checkout's copy instead of the
 # one shipped beside these tests, and a two-side check reports a false pass.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-HOOK="$REPO_ROOT/.claude/hooks/rule-recency.sh"
+HOOK="$REPO_ROOT/.agents/hooks/rule-recency.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 

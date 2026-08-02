@@ -13,8 +13,20 @@ fi
 
 if [[ "$is_agent" == 1 ]]; then
   repo_root="$(git rev-parse --show-toplevel)"
-  audit_file="$repo_root/.claude/.last-audit.json"
-  handoff_file="$repo_root/.claude/.last-audit-handoff.json"
+  # Same reason as resolve_gate in pre-commit/pre-push: where core.hooksPath is
+  # configured absolute rather than the relative value install.sh sets, this one
+  # hook can run for worktrees on either side of the marker move. Take whichever
+  # location the gate that just ran actually wrote to. Absent from both still
+  # means no audit, which still blocks.
+  resolve_marker() {
+    local name="$1" candidate
+    for candidate in "$repo_root/.agents/state/$name" "$repo_root/.claude/.$name"; do
+      [[ -r "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+    done
+    printf '%s' "$repo_root/.agents/state/$name"
+  }
+  audit_file="$(resolve_marker last-audit.json)"
+  handoff_file="$(resolve_marker last-audit-handoff.json)"
   if [[ ! -r "$audit_file" ]]; then
     printf 'No commit audit remained for commit-msg validation.\n' >&2
     exit 1
