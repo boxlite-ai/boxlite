@@ -571,29 +571,25 @@ test('rejects a public API config from a stale release', async () => {
   )
 })
 
-test('rejects a public API config that omits or changes a configured image', async () => {
-  const expectedSupportedImages = [
-    { name: 'sandbaseai-hermes', ref: 'sam2026go/hermes-agent:boxlite-noexpose-20260726' },
-  ]
-  const apiConfig = (supportedImages) => ({
-    version: '0.9.7',
-    oidc: { issuer: 'https://auth.dev.boxlite.ai/' },
-    proxyTemplateUrl: 'https://proxy.dev.boxlite.ai',
-    ...(supportedImages === undefined ? {} : { supportedImages }),
+test('verifies a public API config that does not advertise an image list', async () => {
+  // /api/config has no supportedImages field and never has, so comparing one
+  // against it failed every apply that set BOXLITE_SYSTEM_IMAGES. The images
+  // below are what that variable used to resolve to; passing them must not
+  // reintroduce an assertion on a field the API does not implement.
+  const verification = await verifyPublicDeployment({
+    ...publicDeploymentOptions(async (url) =>
+      url.includes('/health')
+        ? jsonResponse(200, { status: 'ok' })
+        : jsonResponse(200, {
+            version: '0.9.7',
+            oidc: { issuer: 'https://auth.dev.boxlite.ai/' },
+            proxyTemplateUrl: 'https://proxy.dev.boxlite.ai',
+          }),
+    ),
+    expectedSupportedImages: [{ name: 'sandbaseai-hermes', ref: 'sam2026go/hermes-agent:boxlite-noexpose-20260726' }],
   })
-  const verifyImages = (supportedImages) =>
-    verifyPublicDeployment({
-      ...publicDeploymentOptions(async (url) =>
-        url.includes('/health') ? jsonResponse(200, { status: 'ok' }) : jsonResponse(200, apiConfig(supportedImages)),
-      ),
-      expectedSupportedImages,
-    })
 
-  await assert.rejects(verifyImages(undefined), /supported images.*sandbaseai-hermes.*missing/i)
-  await assert.rejects(
-    verifyImages([{ name: 'sandbaseai-hermes', ref: 'sam2026go/hermes-agent:old' }]),
-    /image sandbaseai-hermes.*sam2026go\/hermes-agent:old.*boxlite-noexpose-20260726/i,
-  )
+  assert.equal(verification.version, '0.9.7')
 })
 
 test('retries public deployment probes a bounded number of times', async () => {

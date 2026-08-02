@@ -115,10 +115,6 @@ test('derives the public deployment probes from the same deployment environment'
       expectedOidcIssuer: 'https://auth.dev.boxlite.ai/',
       expectedProxyTemplateUrl: 'https://preview.dev.boxlite.ai',
       expectedVersion: '0.9.7',
-      expectedSupportedImages: [
-        { name: 'sandbaseai-hermes', ref: 'sam2026go/hermes-agent:boxlite-noexpose-20260726' },
-        { name: 'tools', ref: 'example.test/tools:1' },
-      ],
     },
   )
 })

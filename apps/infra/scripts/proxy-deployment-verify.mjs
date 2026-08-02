@@ -264,7 +264,6 @@ export async function verifyPublicDeployment({
   expectedOidcIssuer,
   expectedProxyTemplateUrl,
   expectedVersion,
-  expectedSupportedImages = [],
   fetchImpl = globalThis.fetch,
   requestTimeoutMs = 15_000,
 }) {
@@ -286,22 +285,6 @@ export async function verifyPublicDeployment({
   const expectedProxyTemplate = parseAbsoluteHttpsUrl(expectedProxyTemplateUrl, 'Expected Proxy template URL')
   if (typeof expectedVersion !== 'string' || expectedVersion.trim() === '') {
     throw new Error('Expected API version is required')
-  }
-  if (!Array.isArray(expectedSupportedImages)) {
-    throw new Error('Expected supported images must be an array')
-  }
-  for (const image of expectedSupportedImages) {
-    if (
-      !image ||
-      typeof image !== 'object' ||
-      Array.isArray(image) ||
-      typeof image.name !== 'string' ||
-      image.name === '' ||
-      typeof image.ref !== 'string' ||
-      image.ref === ''
-    ) {
-      throw new Error('Each expected supported image must contain a non-empty name and ref')
-    }
   }
 
   const proxyHealth = await fetchJson(fetchImpl, proxyHealthUrl, 'Public Proxy health check', requestTimeoutMs)
@@ -347,25 +330,6 @@ export async function verifyPublicDeployment({
   const actualVersion = apiConfig?.version
   if (actualVersion !== expectedVersion) {
     throw new Error(`Public API version ${actualVersion ?? 'missing'} does not match expected ${expectedVersion}`)
-  }
-
-  if (expectedSupportedImages.length > 0) {
-    const actualSupportedImages = apiConfig?.supportedImages
-    if (!Array.isArray(actualSupportedImages)) {
-      const expectedNames = expectedSupportedImages.map(({ name }) => name).join(', ')
-      throw new Error(`Public API supported images ${expectedNames} are missing`)
-    }
-    for (const expectedImage of expectedSupportedImages) {
-      const actualImage = actualSupportedImages.find((image) => image?.name === expectedImage.name)
-      if (!actualImage) {
-        throw new Error(`Public API supported images are missing ${expectedImage.name}`)
-      }
-      if (actualImage.ref !== expectedImage.ref) {
-        throw new Error(
-          `Public API image ${expectedImage.name} ref ${actualImage.ref ?? 'missing'} does not match expected ${expectedImage.ref}`,
-        )
-      }
-    }
   }
 
   return {

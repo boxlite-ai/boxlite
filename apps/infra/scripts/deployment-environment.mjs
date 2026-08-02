@@ -117,20 +117,28 @@ function requireHostname(name, value) {
   return url.hostname
 }
 
-function parseExpectedSupportedImages(rawImages) {
-  return (rawImages ?? '')
+/*
+ * Reject a malformed entry here, where it costs nothing, rather than after SST
+ * has begun mutating the stack.
+ *
+ * The parsed images are deliberately not returned: nothing downstream compares
+ * them to the running API, because /api/config does not advertise an image list
+ * (apps/api/src/config/dto/configuration.dto.ts has no such field, and never
+ * has). A post-deploy check against it asserted a contract the API does not
+ * implement and failed every apply that set this variable.
+ */
+function validateConfiguredSystemImages(rawImages) {
+  for (const entry of (rawImages ?? '')
     .split(',')
     .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const separator = entry.indexOf('=')
-      const name = separator > 0 ? entry.slice(0, separator).trim() : ''
-      const ref = separator > 0 ? entry.slice(separator + 1).trim() : ''
-      if (!name || !ref) {
-        throw new Error(`Invalid BOXLITE_SYSTEM_IMAGES entry '${entry}', expected 'name=ref'`)
-      }
-      return { name, ref }
-    })
+    .filter(Boolean)) {
+    const separator = entry.indexOf('=')
+    const name = separator > 0 ? entry.slice(0, separator).trim() : ''
+    const ref = separator > 0 ? entry.slice(separator + 1).trim() : ''
+    if (!name || !ref) {
+      throw new Error(`Invalid BOXLITE_SYSTEM_IMAGES entry '${entry}', expected 'name=ref'`)
+    }
+  }
 }
 
 export function resolvePublicDeploymentConfig(environment = process.env, workspaceVersion = readWorkspaceVersion()) {
@@ -165,7 +173,7 @@ export function resolvePublicDeploymentConfig(environment = process.env, workspa
   const expectedOidcIssuer = optionalPublicOidcIssuer(environment) ?? requireOidcIssuer(environment)
   const proxyTemplateOrigin = proxyTemplateUrl.origin
   const releaseVersion = resolveReleaseVersion(workspaceVersion, environment)
-  const expectedSupportedImages = parseExpectedSupportedImages(environment.BOXLITE_SYSTEM_IMAGES)
+  validateConfiguredSystemImages(environment.BOXLITE_SYSTEM_IMAGES)
 
   return {
     stackDomain,
@@ -179,6 +187,5 @@ export function resolvePublicDeploymentConfig(environment = process.env, workspa
     expectedOidcIssuer,
     expectedProxyTemplateUrl: proxyTemplateOrigin,
     expectedVersion: releaseVersion,
-    expectedSupportedImages,
   }
 }
