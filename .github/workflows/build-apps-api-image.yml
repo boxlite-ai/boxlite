@@ -1,0 +1,223 @@
+name: Build apps/api image
+
+# Release counterpart to the dev checkout build, for apps/api only.
+#
+# Named per service because it is one of three the stack builds from source — apps/proxy and
+# apps/otel-collector are the others (sst.config.ts) and have no published-image path yet, so a
+# release deploy still compiles them from the deployed checkout. A sibling workflow per service
+# is the intended shape; jaeger/pgadmin/maildev need none, they run pinned public tags.
+#
+# The image is built once into the dev repository, then promoted: promotion copies that exact
+# manifest registry-side, addressed by digest, and verifies the digest survived — it never
+# rebuilds and never round-trips the image through a local daemon. The per-stage repositories are
+# provisioned by apps/infra/ci/github-deploy-role.yaml so a fresh release-mode stack can consume
+# its image without first having to create its own input.
+#
+# `build` is dispatched from main rather than triggered by the release event. A release event
+# runs on a tag ref, and the deployment Environments that hold the AWS role are branch-scoped, so
+# a tag-triggered job is blocked before it can obtain credentials. Dispatching from main also
+# keeps the same main-only rule the two deploy workflows enforce.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'build the released image into dev, or promote it to another stage.'
+        required: true
+        default: build
+        type: choice
+        options: [build, promote]
+      # Allowlists for the same reason deploy-release.yml uses one: these select the protected
+      # Environment that holds the AWS role.
+      stage:
+        description: 'Target stage. Must be dev when building.'
+        required: false
+        default: dev
+        type: choice
+        options:
+          - dev
+          - prod
+      source_stage:
+        description: 'Stage that already contains this exact image (promote only).'
+        required: false
+        default: dev
+        type: choice
+        options:
+          - dev
+          - prod
+      version:
+        description: 'Stable X.Y.Z, matching the release tag being published.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: build-apps-api-image-${{ inputs.stage || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build apps/api image
+    if: github.ref == 'refs/heads/main'
+    environment: ${{ inputs.stage || 'dev' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+      OPERATION: ${{ inputs.operation }}
+      TARGET_STAGE: ${{ inputs.stage || 'dev' }}
+      SOURCE_STAGE: ${{ inputs.source_stage || 'dev' }}
+      INPUT_VERSION: ${{ inputs.version }}
+
+    steps:
+      # The release tag, not main's tip: a build must contain exactly the released source.
+      - name: Checkout the released tag
+        if: inputs.operation == 'build'
+        uses: actions/checkout@v5
+        with:
+          ref: refs/tags/v${{ inputs.version }}
+          persist-credentials: false
+
+      - name: Verify native AMD64 Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "x86_64"
+          test "$(docker info --format '{{.Architecture}}')" = "x86_64"
+
+      - name: Resolve publish operation
+        id: artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_STAGE" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { echo "invalid target stage '$TARGET_STAGE'" >&2; exit 1; }
+          [[ "$SOURCE_STAGE" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { echo "invalid source stage '$SOURCE_STAGE'" >&2; exit 1; }
+
+          operation="$OPERATION"
+          version="$INPUT_VERSION"
+          case "$operation" in build | promote) ;; *) echo "invalid operation '$operation'" >&2; exit 1 ;; esac
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "version must be a stable X.Y.Z (got '$version')" >&2
+            exit 1
+          }
+          if [ "$operation" = build ]; then
+            # The checked-out tag must actually declare this version, otherwise the immutable
+            # tag would name bytes built from different source.
+            cargo_version=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+            [ "$cargo_version" = "$version" ] || {
+              echo "tag v$version declares Cargo.toml version $cargo_version" >&2
+              exit 1
+            }
+            [ "$TARGET_STAGE" = dev ] || {
+              echo "builds always land in dev; use operation=promote to reach $TARGET_STAGE" >&2
+              exit 1
+            }
+          fi
+          if [ "$operation" = promote ] && [ "$SOURCE_STAGE" = "$TARGET_STAGE" ]; then
+            echo "source_stage and stage must differ for a promotion" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "operation=$operation" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: build-apps-api-image-${{ github.run_id }}
+
+      - name: Log in to ECR
+        id: ecr
+        shell: bash
+        run: |
+          set -euo pipefail
+          registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com"
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry"
+          echo "target=${registry}/boxlite-${TARGET_STAGE}-api" >> "$GITHUB_OUTPUT"
+          echo "source=${registry}/boxlite-${SOURCE_STAGE}-api" >> "$GITHUB_OUTPUT"
+
+      - name: Verify bootstrap repositories and target tag
+        id: target
+        shell: bash
+        env:
+          VERSION: ${{ steps.artifact.outputs.version }}
+          OPERATION: ${{ steps.artifact.outputs.operation }}
+        run: |
+          set -euo pipefail
+          target_name="boxlite-${TARGET_STAGE}-api"
+          aws ecr describe-repositories --region "$AWS_REGION" --repository-names "$target_name" >/dev/null || {
+            echo "ECR repository $target_name is missing; update apps/infra/ci/github-deploy-role.yaml for $TARGET_STAGE first" >&2
+            exit 1
+          }
+          source_digest=""
+          if [ "$OPERATION" = promote ]; then
+            source_name="boxlite-${SOURCE_STAGE}-api"
+            source_digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$source_name" \
+              --image-ids "imageTag=$VERSION" --query 'imageDetails[0].imageDigest' --output text) || {
+                echo "$source_name:$VERSION has not been published" >&2
+                exit 1
+              }
+          fi
+          target_digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$target_name" \
+            --image-ids "imageTag=$VERSION" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)
+          if [ -n "$target_digest" ] && [ "$target_digest" != None ]; then
+            if [ "$OPERATION" = promote ] && [ "$target_digest" != "$source_digest" ]; then
+              echo "$target_name:$VERSION exists with digest $target_digest, not source digest $source_digest" >&2
+              exit 1
+            fi
+            echo "$target_name:$VERSION is already published; leaving it untouched"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "source_digest=$source_digest" >> "$GITHUB_OUTPUT"
+          echo "target_repository=$target_name" >> "$GITHUB_OUTPUT"
+
+      - name: Build released image once
+        if: steps.target.outputs.needed == 'true' && steps.artifact.outputs.operation == 'build'
+        shell: bash
+        env:
+          VERSION: ${{ steps.artifact.outputs.version }}
+          TARGET: ${{ steps.ecr.outputs.target }}
+        run: |
+          set -euo pipefail
+          docker build --file apps/api/Dockerfile --build-arg "VERSION=$VERSION" --tag "$TARGET:$VERSION" .
+          docker push "$TARGET:$VERSION"
+
+      - name: Promote the exact published image
+        if: steps.target.outputs.needed == 'true' && steps.artifact.outputs.operation == 'promote'
+        shell: bash
+        env:
+          VERSION: ${{ steps.artifact.outputs.version }}
+          SOURCE: ${{ steps.ecr.outputs.source }}
+          TARGET: ${{ steps.ecr.outputs.target }}
+          TARGET_REPOSITORY: ${{ steps.target.outputs.target_repository }}
+          SOURCE_DIGEST: ${{ steps.target.outputs.source_digest }}
+        run: |
+          set -euo pipefail
+          # Registry-side manifest copy. pull + tag + push round-trips the image through the local
+          # daemon and re-uploads it, which can land a different digest — the one thing this step
+          # promises not to do, and what the deploy then resolves by tag.
+          #
+          # --prefer-index=false is required, not cosmetic: it defaults to true, and with a single
+          # non-index source — which the build step's plain "docker build" then "docker push"
+          # produces — the default wraps that manifest in a newly minted index carrying a new
+          # digest instead of copying it. That would fail the check below only after the wrong
+          # digest was already published under the target tag, where the guard in the previous
+          # step then refuses every retry.
+          #
+          # The source is addressed by digest for the same reason the copy must not re-serialize:
+          # the tag could move between the check above and this copy.
+          docker buildx imagetools create --prefer-index=false \
+            --tag "$TARGET:$VERSION" "$SOURCE@$SOURCE_DIGEST"
+          promoted=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$TARGET_REPOSITORY" \
+            --image-ids "imageTag=$VERSION" --query 'imageDetails[0].imageDigest' --output text)
+          if [ "$promoted" != "$SOURCE_DIGEST" ]; then
+            echo "promotion changed the digest ($SOURCE_DIGEST -> $promoted); the image is not the published one" >&2
+            exit 1
+          fi
+          echo "promoted $SOURCE_DIGEST unchanged"

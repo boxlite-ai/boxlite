@@ -15,20 +15,59 @@
 # Triggers:
 # - release: When a GitHub release is published
 # - workflow_dispatch: Manual trigger for testing
+# - workflow_call: A deploy building a selected commit (deploy-infra.yml)
 name: Build C SDK
 
 on:
   release:
     types: [ published ]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Full commit SHA to build. Defaults to the event commit.'
+        required: false
+        default: ''
+        type: string
+      linux_x64_only:
+        description: 'Build only the C archive the Linux AMD64 Runner consumes.'
+        required: false
+        default: false
+        type: boolean
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
 
+# Least privilege by default; upload-to-release raises its own job to contents: write, which is
+# the only job here that writes anything back to the repository.
+permissions:
+  contents: read
+
 jobs:
   config:
     uses: ./.github/workflows/config.yml
+
+  resolve-ref:
+    name: Resolve build commit
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate build commit
+        id: ref
+        shell: bash
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          candidate="${INPUT_REF:-$GITHUB_SHA}"
+          [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be a full commit SHA" >&2; exit 1; }
+          git cat-file -e "$candidate^{commit}"
+          echo "sha=$candidate" >> "$GITHUB_OUTPUT"
 
   # ============================================================================
   # BUILD
@@ -48,16 +87,17 @@ jobs:
   # ============================================================================
   build:
     name: Build (${{ matrix.target }})
-    needs: config
+    needs: [ config, resolve-ref ]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.config.outputs.platforms) }}
+        include: ${{ fromJson(inputs.linux_x64_only && '[{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"}]' || needs.config.outputs.platforms) }}
 
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.resolve-ref.outputs.sha }}
           submodules: recursive
 
       - name: Set up Rust

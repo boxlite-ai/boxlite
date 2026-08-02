@@ -107,8 +107,80 @@ A deploy takes 10–15 minutes and prints the service URLs. On a transient
 registry error, just rerun — SST resumes from the failed step.
 
 **Adding a stage:** run `npm run bootstrap -- --stage <name>`, then add `<name>`
-to the `stage` input's `options` in `.github/workflows/deploy-infra.yml`. That
-list is an allowlist, so a typo cannot target a protected Environment.
+to the `options` of whichever Environment-selecting inputs should reach it —
+`stage` in `.github/workflows/deploy-infra.yml` and `deploy-release.yml`, and
+both `stage` and `source_stage` in `build-apps-api-image.yml` (a stage absent from
+`source_stage` can never be promoted *from*). Those lists are allowlists, so a
+typo cannot target a protected Environment, and they are deliberately
+independent: see [.github/workflows/README.md](../../.github/workflows/README.md)
+for which path currently reaches which stage.
+
+## Symmetric artifact deployment
+
+Both deployable components use one source selector:
+
+| Mode      | API                                                       | Runner                                                           |
+| --------- | --------------------------------------------------------- | ---------------------------------------------------------------- |
+| `build`   | SST builds `apps/api/Dockerfile` from the selected commit | CI builds that commit and stages a private S3 tarball + checksum |
+| `release` | immutable `boxlite-<stage>-api:<version>` in ECR          | GitHub Release tarball + checksum for the same `<version>`       |
+
+`.github/workflows/deploy-infra.yml` is the normal path. It accepts the full SHA
+of any commit already on `main` (current `main` by default), builds the Linux x64
+C SDK and Runner, stages the commit-keyed Runner object, then has SST build the
+API from the same checkout. The Runner reports `<workspace-version>+<sha>` so two
+commits with the same Cargo version are still distinct upgrade targets.
+
+`.github/workflows/deploy-release.yml` is the release path. It sets one stable
+`VERSION=X.Y.Z` for both components and compiles neither. The deploy wrapper
+verifies the ECR image and Runner release assets before invoking SST.
+
+`build-apps-api-image.yml` builds a released API image once into dev (checking out
+the release tag), then promotes it by copying that exact manifest registry-side,
+addressed by digest, rather than rebuilding. Both operations are dispatched from
+`main`: a release event runs on a tag ref, and the deployment Environments that
+hold the AWS role are branch-scoped, so a tag-triggered job never reaches its
+credentials.
+
+Either path first runs deployment safety tests that require every Runner to
+retain `protect: true` and the AMI/user-data ignore rules. The build path then
+runs a full `sst diff --json` and passes the structured plan through
+`scripts/deployment-preview.mjs`. The gate rejects creating, replacing, or
+deleting a Runner instance and any in-place Runner change other than provider
+association or tags. Workflow dispatch defaults to a preview-only run; set
+`apply=true` only after reviewing it. An apply run repeats the same guarded
+preview before the full-stack deploy:
+
+```bash
+npm run deploy -- --stage dev
+```
+
+Both commands deliberately avoid `--target` and `--exclude`. Pulumi treats both
+as partial updates, which cannot safely migrate a provider while omitted
+resources still reference the old provider. Full reconciliation also avoids
+silently accumulating stack drift. The deployment wrapper rejects partial
+deploy selectors; targeted `diff` remains available for read-only inspection.
+The Runner EC2 identity and binary remain stable through the controls under
+[Operating rules](#operating-rules), and the matching artifact preflight always
+runs before deployment.
+
+The workflows are manual/serialized, restricted to `main`, and bound to protected
+GitHub Environments. GitHub OIDC supplies short-lived AWS credentials; no AWS
+access keys are stored in GitHub. `DEPLOY_ENV` materializes the stage's gitignored
+`.env` only for the job and is deleted even if deployment fails.
+
+`ci/github-deploy-role.yaml` bootstraps three things that must exist **before** an
+SST deploy: the OIDC role, the immutable stage ECR repository, and the private
+Runner artifact bucket. That bucket expires only superseded object versions —
+first boot re-fetches the commit-keyed tarball at every instance launch, so
+expiring the current object would make a later replacement fail to boot. The role
+grants only the AWS control-plane actions
+used by this SST stack. IAM mutation is limited to `boxlite-*` roles, policies, and
+instance profiles. Every role created by SST must carry the stage's runtime
+permissions boundary, which excludes IAM mutation and limits workloads to the
+data-plane APIs they need. Redeploy that CloudFormation stack whenever its policy
+or resources change. `IAM_PERMISSIONS_BOUNDARY_STAGE` must match both the SST stage
+and the template's `GitHubEnvironment`; deployment fails before creating roles if
+they differ. Keep required reviewers enabled on each Environment.
 
 ## Secrets & credentials
 
@@ -153,6 +225,14 @@ all require the same manual token.
 ## Common commands
 
 ```bash
+# Preview a specific commit already on main instead of current main.
+gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false -f ref=<full-main-commit-sha>
+
+gh workflow run build-apps-api-image.yml --ref main -f operation=build -f version=0.9.8
+gh workflow run build-apps-api-image.yml --ref main -f operation=promote -f stage=prod -f version=0.9.8
+gh workflow run deploy-release.yml --ref main -f stage=prod -f version=0.9.8
+npm run runner:build-artifact -- --stage dev # local linux/amd64 build + private S3 stage
+
 npm run sst -- diff --stage dev      # preview changes
 npm run sst -- unlock --stage dev    # recover from "concurrent update detected"
 npm run sst -- shell --stage dev     # shell with SST-linked env vars
@@ -173,13 +253,20 @@ separate reviewed operations that this repository does not implement.
 
 **Version bumps reach the fleet by rolling upgrade, not replacement.** A deploy
 runs `scripts/runner-update-binary.mjs` per host over SSM, chained so hosts
-upgrade one at a time. Each host verifies the release checksum before stopping
-its service, and restores its backup if the new binary fails to report healthy.
+upgrade one at a time. Each host verifies the selected artifact's checksum before
+stopping its service, and restores its backup if the new binary fails to report
+healthy.
 
 **Runners cache image refs exactly.** `BOXLITE_SYSTEM_IMAGES` (comma-separated
 `name=ref`) adds box images without a code deploy, but publish updated bytes
 under a new tag or digest — repushing a mutable tag leaves already-cached
 Runners serving the old image.
+
+**A Runner's version is its artifact's identity.** On the release path it is
+`Cargo.toml`'s `version` at the repo root; on the build path it is that version
+plus the deployed commit, so two commits sharing a Cargo version stay distinct
+upgrade targets. The accidental-downgrade guard applies only to the release
+path — commit builds have no meaningful older/newer ordering.
 
 **Proxy topology is protected.** The NLB, TLS listener, and target group refuse
 replacement. A deliberate migration is two deploys: first set the three Proxy

@@ -3,13 +3,14 @@
 
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { DEFAULT_SCHEMA, Type, load } from 'js-yaml'
 
 import { verifyDeployRoleGrantsBoundaryPermission } from './deploy-role-boundary.mjs'
+import { liveText } from './live-source.mjs'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SST_WRAPPER = join(REPO_ROOT, 'apps/infra/scripts/sst-with-cloudflare.mjs')
@@ -17,6 +18,10 @@ const RUNNER_POLICY_PROJECT = join(REPO_ROOT, 'apps/infra/PulumiPolicy.yaml')
 const RUNNER_POLICY_ENTRY = join(REPO_ROOT, 'apps/infra/policies/runner/index.js')
 const RUNNER_POLICY_DEFINITIONS = join(REPO_ROOT, 'apps/infra/policies/runner/definitions.cjs')
 const DEPLOY_WORKFLOW = join(REPO_ROOT, '.github/workflows/deploy-infra.yml')
+const RELEASE_DEPLOY_WORKFLOW = join(REPO_ROOT, '.github/workflows/deploy-release.yml')
+const API_IMAGE_BUILD_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-apps-api-image.yml')
+const BUILD_C_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-c.yml')
+const BUILD_RUNNER_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-runner-binary.yml')
 const LINT_WORKFLOW = join(REPO_ROOT, '.github/workflows/lint.yml')
 const DEV_DEPLOY_ROLE = join(REPO_ROOT, 'apps/infra/ci/github-deploy-role.yaml')
 const CLOUDFORMATION_SCHEMA = DEFAULT_SCHEMA.extend([
@@ -35,9 +40,19 @@ const CLOUDFORMATION_SCHEMA = DEFAULT_SCHEMA.extend([
 ])
 const requireFromTest = createRequire(import.meta.url)
 
+// One decision per artifact kind, made where the text is read (see live-source.mjs).
+const liveShell = (run) => liveText('shell', run)
+const assertShellLine = (run, pattern, message) =>
+  assert.match(liveShell(run), pattern, message ?? `missing live shell: ${pattern}`)
+const assertLiveLine = (text, pattern, message) =>
+  assert.match(liveText('script', text), pattern, message ?? `missing live line: ${pattern}`)
+
+function readDeployTemplate() {
+  return load(readFileSync(DEV_DEPLOY_ROLE, 'utf8'), { schema: CLOUDFORMATION_SCHEMA })
+}
+
 function readRuntimeBoundaryStatements() {
-  const template = load(readFileSync(DEV_DEPLOY_ROLE, 'utf8'), { schema: CLOUDFORMATION_SCHEMA })
-  return template.Resources.BoxLiteRuntimePermissionsBoundary.Properties.PolicyDocument.Statement
+  return readDeployTemplate().Resources.BoxLiteRuntimePermissionsBoundary.Properties.PolicyDocument.Statement
 }
 
 function findStatement(statements, sid) {
@@ -46,15 +61,20 @@ function findStatement(statements, sid) {
   return statement
 }
 
-test('SST deploy verifies Runner release assets before invoking SST', () => {
+test('SST deploy verifies the selected Runner artifact before invoking SST', () => {
   const source = readFileSync(SST_WRAPPER, 'utf8')
-  const preflightIndex = source.indexOf('await verifyRunnerReleaseAssets(')
+  const preflightIndex = source.indexOf('await verifyRunnerArtifact(')
   const sstIndex = source.indexOf('await withPulumiEventLogCleanup(')
 
-  assert.match(source, /import \{ verifyRunnerReleaseAssets \} from '\.\/runner-release-assets\.mjs'/)
-  assert.notEqual(preflightIndex, -1, 'the Runner release preflight is missing')
+  assert.match(source, /requireCheckoutMatchesArtifactRef, resolveArtifactSource \} from '\.\/artifact-source\.mjs'/)
+  // The import is not the behavior: commenting the call out leaves the import, and a build deploy
+  // would then ship the Api from this checkout while the Runner is addressed by a stale ref.
+  assertLiveLine(source, /requireCheckoutMatchesArtifactRef\(apiSource\.ref\)/)
+  assert.match(source, /verifyRunnerArtifact \} from '\.\/runner-artifact\.mjs'/)
+  assert.match(source, /const runnerSource = resolveArtifactSource\('runner'/)
+  assert.notEqual(preflightIndex, -1, 'the Runner artifact preflight is missing')
   assert.notEqual(sstIndex, -1, 'the guarded SST invocation is missing')
-  assert.ok(preflightIndex < sstIndex, 'SST may run before Runner release availability is known')
+  assert.ok(preflightIndex < sstIndex, 'SST may run before Runner artifact availability is known')
   assert.doesNotMatch(source, /isSstComponentExcluded/)
   assert.match(source, /requireFullStackDeploy\(sstArgs\)/)
   assert.match(source, /withRequiredRunnerPolicy\(sstArgs\)/)
@@ -86,6 +106,18 @@ test('preview and deploy use the mandatory local Runner policy', () => {
   assert.equal(requireFromTest.resolve(join(REPO_ROOT, 'apps/infra')), RUNNER_POLICY_ENTRY)
   assert.equal(packageJson.devDependencies['@pulumi/policy'], '1.21.0')
   assert.equal(packageLock.packages[''].devDependencies['@pulumi/policy'], '1.21.0')
+})
+
+test('SST deploy verifies a selected API release image before invoking SST', () => {
+  // Over live source: unlike the Runner preflight, nothing executes this path in a test, so a
+  // commented-out call would otherwise leave both indices and the ordering intact.
+  const source = liveText('script', readFileSync(SST_WRAPPER, 'utf8'))
+  const preflightIndex = source.indexOf('const image = verifyApiReleaseImage(')
+  const sstIndex = source.indexOf('await withPulumiEventLogCleanup(')
+
+  assert.match(source, /const apiSource = resolveArtifactSource\('api'\)/)
+  assert.notEqual(preflightIndex, -1, 'the API release image preflight is missing')
+  assert.ok(preflightIndex < sstIndex, 'SST may run before the selected API image is known to exist')
 })
 
 test('SST deploy does not depend on a laptop-managed remote builder', () => {
@@ -128,12 +160,57 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
     type: 'boolean',
   })
   assert.equal(workflow.on.workflow_dispatch.inputs.runner_create_allowlist, undefined)
-  assert.match(source, /if: github\.ref == 'refs\/heads\/main'/)
   assert.match(source, /environment: \$\{\{ inputs\.stage \}\}/)
-  assert.match(source, /id-token: write/)
-  assert.match(source, /runs-on: ubuntu-24\.04/)
-  assert.match(source, /uname -m[\s\S]*x86_64/)
-  assert.match(source, /docker info[\s\S]*x86_64/)
+  assert.equal(workflow.permissions['id-token'], 'write')
+  assert.equal(workflow.jobs.deploy['runs-on'], 'ubuntu-24.04')
+
+  // `if:` restricts the workflow ref, not the dispatched `ref` input — this shell guard is the
+  // only thing binding the built commit to main. Read the step it lives in, since demoting the
+  // line to a comment leaves it greppable while the guard is gone.
+  const refGuardStep = workflow.jobs['resolve-ref'].steps.find(
+    (step) => step.name === 'Require a commit already on main',
+  )
+  assert.ok(refGuardStep, 'the main-ancestry guard step is missing')
+  // Anchored per line with no leading `#`: a parsed read still hands back the whole shell body,
+  // so commenting the guard out leaves it matchable while it no longer runs.
+  assert.match(refGuardStep.run, /^\s*git merge-base --is-ancestor "\$candidate" origin\/main/m)
+  assert.match(refGuardStep.run, /^\s*\[\[ "\$candidate" =~ \^\[0-9a-f\]\{40\}\$ \]\]/m)
+  assert.match(refGuardStep.run, /^\s*set -euo pipefail/m)
+
+  // The reusable builds and what they are told to build: `with:` values decide which commit and
+  // which C SDK the Runner links, and build-runner-binary.yml defaults libboxlite_source to the
+  // published release, so an absent input silently links the wrong artifact.
+  assert.equal(workflow.jobs['build-c'].uses, './.github/workflows/build-c.yml')
+  assert.equal(workflow.jobs['build-c'].with.linux_x64_only, true)
+  assert.equal(workflow.jobs['build-c'].with.ref, '${{ needs.resolve-ref.outputs.sha }}')
+  assert.equal(workflow.jobs['build-runner'].uses, './.github/workflows/build-runner-binary.yml')
+  assert.equal(workflow.jobs['build-runner'].with.libboxlite_source, 'artifact')
+  assert.equal(workflow.jobs['build-runner'].with.ref, '${{ needs.resolve-ref.outputs.sha }}')
+
+  // Both components resolve to the one commit the build jobs actually produced. The stage secret
+  // cannot redirect that: deploy-environment-validation.mjs rejects the selector keys outright.
+  for (const selector of ['BOXLITE_ARTIFACT_SOURCE', 'API_ARTIFACT_SOURCE', 'RUNNER_ARTIFACT_SOURCE']) {
+    assert.equal(workflow.jobs.deploy.env[selector], 'build', `${selector} must be set on the deploy job`)
+  }
+  assert.equal(workflow.jobs.deploy.env.BOXLITE_ARTIFACT_REF, '${{ needs.resolve-ref.outputs.sha }}')
+  assert.deepEqual(workflow.jobs.deploy.needs, ['resolve-ref', 'build-runner'])
+  const versionStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Resolve commit version')
+  assert.ok(versionStep, 'the commit-version step is missing')
+  assertShellLine(versionStep.run, /echo "VERSION=\$version" >> "\$GITHUB_ENV"/)
+
+  // Staging decides over the ref, not per key: completing a half-published ref would pair a
+  // freshly built (non-byte-identical) manifest with the already-stored tarball, and write-once
+  // makes that unrepairable. runner-artifact-build.mjs refuses the same case locally.
+  const stageStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Stage commit Runner artifact')
+  assert.ok(stageStep, 'the artifact staging step is missing')
+  assertShellLine(stageStep.run, /if \[ "\$present" -eq 2 \]; then/)
+  assertShellLine(stageStep.run, /elif \[ "\$present" -eq 1 \]; then/)
+  assertShellLine(stageStep.run, /is partially published; delete the objects under it and rerun/)
+  assertShellLine(stageStep.run, /--if-none-match '\*'/)
+  const archStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Verify native AMD64 Docker')
+  assert.ok(archStep, 'the native-arch guard step is missing')
+  assertShellLine(archStep.run, /test "\$\(uname -m\)" = "x86_64"/)
+  assertShellLine(archStep.run, /test "\$\(docker info --format '\{\{\.Architecture\}\}'\)" = "x86_64"/)
   assert.match(source, /aws-actions\/configure-aws-credentials@/)
   assert.match(source, /role-to-assume: \$\{\{ vars\.AWS_DEPLOY_ROLE_ARN \}\}/)
   assert.match(source, /secrets\.DEPLOY_ENV/)
@@ -147,8 +224,9 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.ok(safetyTestStep, 'the deployment safety test step is missing')
   assert.equal(safetyTestStep.run, 'npm test')
   assert.ok(materializeStep, 'the stage configuration step is missing')
-  const materializeConfigIndex = materializeStep.run.indexOf('printf \'%s\\n\' "$DEPLOY_ENV" > apps/infra/.env')
-  const validateConfigIndex = materializeStep.run.indexOf(
+  const liveMaterialize = liveShell(materializeStep.run)
+  const materializeConfigIndex = liveMaterialize.indexOf('printf \'%s\\n\' "$DEPLOY_ENV" > apps/infra/.env')
+  const validateConfigIndex = liveMaterialize.indexOf(
     'node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env',
   )
   assert.notEqual(materializeConfigIndex, -1, 'the stage configuration is not materialized')
@@ -202,9 +280,7 @@ test('the checked-in deploy role satisfies the CI IAM boundary preflight', () =>
   const template = load(readFileSync(DEV_DEPLOY_ROLE, 'utf8'), { schema: CLOUDFORMATION_SCHEMA })
   const accountId = '123456789012'
   const stage = 'dev'
-  const policyDocuments = template.Resources.GitHubDeployRole.Properties.Policies.map(
-    (policy) => policy.PolicyDocument,
-  )
+  const policyDocuments = template.Resources.GitHubDeployRole.Properties.Policies.map((policy) => policy.PolicyDocument)
 
   // `!Ref BoxLiteRuntimePermissionsBoundary` yields that ManagedPolicy's ARN at
   // deploy time; the YAML parser leaves the logical id. Resolve it through the
@@ -230,7 +306,11 @@ test('the checked-in deploy role satisfies the CI IAM boundary preflight', () =>
     stage,
     policyDocuments: resolved,
   })
-  assert.equal(grants, true, 'ci/github-deploy-role.yaml must grant iam:PutRolePermissionsBoundary for the stage boundary')
+  assert.equal(
+    grants,
+    true,
+    'ci/github-deploy-role.yaml must grant iam:PutRolePermissionsBoundary for the stage boundary',
+  )
 })
 
 test('the deploy role grants the CloudFront KeyValueStore prefix Router needs', () => {
@@ -255,6 +335,227 @@ test('package scripts disable long-running SST dev for the stateful stack', () =
   const packageJson = JSON.parse(readFileSync(join(REPO_ROOT, 'apps/infra/package.json'), 'utf8'))
 
   assert.equal(packageJson.scripts.dev, undefined)
+})
+
+test('commit Runner builds consume the C SDK artifact from the same reusable run', () => {
+  const cSource = readFileSync(BUILD_C_WORKFLOW, 'utf8')
+  const runnerSource = readFileSync(BUILD_RUNNER_WORKFLOW, 'utf8')
+  const cWorkflow = load(cSource)
+  const runnerWorkflow = load(runnerSource)
+
+  // deploy-infra.yml calls both by `uses:`, so the reusable entrypoint and the inputs it passes
+  // are contract, not prose. Read them off the parsed trigger — a commented-out `workflow_call:`
+  // still satisfies a substring match while making every caller dead.
+  assert.ok(cWorkflow.on.workflow_call, 'build-c.yml is no longer callable as a reusable workflow')
+  assert.ok(cWorkflow.on.workflow_call.inputs.linux_x64_only, 'build-c.yml dropped the linux_x64_only input')
+  assert.ok(cWorkflow.on.workflow_call.inputs.ref, 'build-c.yml dropped the ref input')
+  assert.ok(runnerWorkflow.on.workflow_call, 'build-runner-binary.yml is no longer callable')
+  assert.ok(runnerWorkflow.on.workflow_call.inputs.libboxlite_source, 'the C SDK source input is gone')
+  assert.ok(runnerWorkflow.on.workflow_call.inputs.ref, 'build-runner-binary.yml dropped the ref input')
+
+  // The upload/download names are the handshake between the two runs: build-c publishes
+  // c-sdk-<target>, build-runner consumes c-sdk-linux-x64-gnu. Compare parsed values so a legal
+  // requoting does not fail and a commented-out `name:` does not pass.
+  const uploadName = (workflow, jobName) =>
+    Object.values(workflow.jobs)
+      .flatMap((job) => job.steps ?? [])
+      .find((step) => typeof step.uses === 'string' && step.uses.startsWith(jobName))?.with?.name
+  assert.equal(uploadName(cWorkflow, 'actions/upload-artifact'), 'c-sdk-${{ matrix.target }}')
+  assert.equal(uploadName(runnerWorkflow, 'actions/download-artifact'), 'c-sdk-linux-x64-gnu')
+  // Scope to the `artifact)` case arm, not the file or even the step: build-runner-binary.yml
+  // branches on libboxlite_source, and both arms set identity/archive — so a wider match still
+  // passes when the commit-keyed names are moved under the `release)` label.
+  const runnerStepRun = (name) =>
+    Object.values(runnerWorkflow.jobs)
+      .flatMap((job) => job.steps ?? [])
+      .find((step) => step.name === name)?.run
+  const identityRun = runnerStepRun('Resolve artifact identity')
+  assert.ok(identityRun, 'the artifact-identity step is missing')
+  const commitArm =
+    liveShell(identityRun)
+      .split(/^\s*artifact\)\s*$/m)[1]
+      ?.split(';;')[0] ?? ''
+  assert.ok(commitArm, 'the commit-build case arm is missing')
+  assert.match(commitArm, /identity="\$\{VERSION\}\+\$\{BUILD_SHA\}"/)
+  assert.match(commitArm, /archive="boxlite-runner-v\$\{VERSION\}-\$\{BUILD_SHA\}-linux-amd64\.tar\.gz"/)
+  assertShellLine(
+    runnerStepRun('Build runner'),
+    /github\.com\/boxlite-ai\/runner\/internal\.Version=\$\{VERSION_IDENTITY\}/,
+  )
+})
+
+test('release deployment consumes one published version for both components', () => {
+  const source = readFileSync(RELEASE_DEPLOY_WORKFLOW, 'utf8')
+  const workflow = load(source)
+  const deployStep = workflow.jobs.deploy.steps.find(
+    (step) => step.name === 'Deploy published API and Runner artifacts',
+  )
+
+  // Read the parsed job env, not the file: these three must be on the *job* for the deploy step
+  // to inherit them. Moved onto any single step they still match a substring search, while the
+  // deploy silently falls back to COMPONENT_DEFAULT_KINDS and rebuilds the API from the checkout.
+  for (const selector of ['BOXLITE_ARTIFACT_SOURCE', 'API_ARTIFACT_SOURCE', 'RUNNER_ARTIFACT_SOURCE']) {
+    assert.equal(workflow.jobs.deploy.env[selector], 'release', `${selector} must be set on the deploy job`)
+  }
+  // Off unless asked for: the API has no downgrade guard, so an older VERSION deployed without
+  // this moves the API back while the Runner refuses, and the workflow still reports success.
+  // The unanchored source match would have accepted `default: true` plus any later false.
+  assert.equal(workflow.on.workflow_dispatch.inputs.allow_downgrade.default, false)
+  assert.equal(workflow.on.workflow_dispatch.inputs.allow_downgrade.type, 'boolean')
+  // These two carry the inputs into the deploy job; commented out, the defaults above become
+  // decoration. Read the parsed job env rather than the file.
+  assert.equal(workflow.jobs.deploy.env.ALLOW_DOWNGRADE, "${{ inputs.allow_downgrade && '1' || '' }}")
+  assert.equal(workflow.jobs.deploy.env.VERSION, '${{ inputs.version }}')
+  assert.match(source, /environment: \$\{\{ inputs\.stage \}\}/)
+  // `stage` picks the protected Environment holding the AWS role, so it must be untypable
+  // rather than merely wrong — the same allowlist rule deploy-infra.yml follows.
+  assert.equal(workflow.on.workflow_dispatch.inputs.stage.type, 'choice')
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.stage.options, ['dev', 'prod'])
+  assert.ok(deployStep)
+  // The same guarded wrapper and the same pre-deploy gates the build path uses: a release
+  // deploy reconciles the identical stack, so it owes the identical safety checks.
+  assert.equal(deployStep.run, 'npm run deploy -- --stage "$STAGE" --policy .')
+  assert.ok(workflow.jobs.deploy.steps.find((step) => step.name === 'Run deployment safety tests'))
+  const boundaryStep = workflow.jobs.deploy.steps.find(
+    (step) => step.name === 'Verify deploy role IAM boundary permissions',
+  )
+  assert.ok(boundaryStep, 'the release deploy skips the IAM boundary preflight')
+  assert.ok(
+    workflow.jobs.deploy.steps.indexOf(boundaryStep) < workflow.jobs.deploy.steps.indexOf(deployStep),
+    'the boundary preflight must run before the deploy it protects',
+  )
+})
+
+test('the deployment workflows cap the token they hand their jobs', () => {
+  // CodeQL actions/missing-workflow-permissions: without a top-level block a job inherits the
+  // repository default, which can be write. Scoped to the workflows this change owns — ten
+  // others in the directory predate it and are not this commit's to re-scope.
+  for (const entry of [
+    'build-apps-api-image.yml',
+    'build-c.yml',
+    'build-runner-binary.yml',
+    'deploy-infra.yml',
+    'deploy-release.yml',
+  ]) {
+    const workflow = load(readFileSync(join(REPO_ROOT, '.github/workflows', entry), 'utf8'))
+    assert.equal(workflow.permissions?.contents, 'read', `${entry} must default its token to contents: read`)
+
+    // A job may raise its own, but only deliberately: pin who does and why.
+    for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
+      if (!job.permissions) continue
+      const raised = Object.entries(job.permissions).filter(([, level]) => level === 'write')
+      assert.ok(
+        raised.length === 0 || ['upload-to-release', 'deploy', 'publish'].includes(jobName),
+        `${entry} job '${jobName}' raises ${JSON.stringify(raised)} without being an expected writer`,
+      )
+    }
+  }
+})
+
+test('every workflow that selects a deployment Environment does so from an allowlist', () => {
+  // The rule is stated once in .github/workflows/README.md and enforced here across every
+  // workflow file, so a fourth deploy workflow cannot quietly reintroduce a free-text stage that
+  // reaches a required-reviewers Environment through a typo. Read `environment` off the parsed
+  // job rather than matching source text: GitHub accepts both the bare string and the
+  // `{ name, url }` object, and the object form is what you write to surface a deployment URL —
+  // so a text matcher would miss exactly the workflows most likely to use it.
+  const workflowDirectory = join(REPO_ROOT, '.github/workflows')
+  const environmentInput = /^\$\{\{\s*(?:github\.event\.)?inputs\.([A-Za-z_][A-Za-z0-9_-]*)\s*(?:\|\||\}\})/
+  const swept = new Set()
+
+  for (const entry of readdirSync(workflowDirectory)) {
+    if (!/\.ya?ml$/.test(entry)) continue
+    const workflow = load(readFileSync(join(workflowDirectory, entry), 'utf8'))
+    const inputs = workflow.on?.workflow_dispatch?.inputs ?? {}
+
+    for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
+      const environment = typeof job.environment === 'string' ? job.environment : job.environment?.name
+      if (!environment) continue
+      const where = `${entry} job '${jobName}'`
+
+      // Fail closed on any indirection. `needs.*.outputs.*`, `env.*`, and `vars.*` all reach an
+      // Environment through a value this test cannot follow, so requiring the direct input is
+      // the only form that stays checkable — an indirect one must be made explicit here first.
+      const selected = environment.match(environmentInput)
+      assert.ok(
+        selected || !environment.includes('${{'),
+        `${where} selects an Environment through an expression this guard cannot follow: ${environment}`,
+      )
+      if (selected) {
+        const declared = inputs[selected[1]]
+        assert.ok(declared, `${where} selects an Environment from an undeclared input '${selected[1]}'`)
+        assert.equal(declared.type, 'choice', `${where} input '${selected[1]}' must be an allowlist`)
+        assert.ok(declared.options?.length > 0, `${where} input '${selected[1]}' has an empty allowlist`)
+      }
+
+      // The same job that reaches a protected Environment reaches the AWS role behind it, so
+      // the main-only rule is asserted here rather than as a bare substring per workflow.
+      assert.match(job.if ?? '', /github\.ref == 'refs\/heads\/main'/, `${where} is not restricted to main`)
+      swept.add(entry)
+    }
+  }
+
+  assert.deepEqual(
+    [...swept].sort(),
+    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml'],
+    'the swept set no longer matches the deployment workflows',
+  )
+})
+
+test('API publishing builds once and promotes that exact image without rebuilding', () => {
+  const source = readFileSync(API_IMAGE_BUILD_WORKFLOW, 'utf8')
+  const workflow = load(source)
+
+  for (const input of ['stage', 'source_stage']) {
+    assert.equal(workflow.on.workflow_dispatch.inputs[input].type, 'choice', `${input} must be an allowlist`)
+    assert.deepEqual(workflow.on.workflow_dispatch.inputs[input].options, ['dev', 'prod'])
+  }
+
+  // A release event runs on a tag ref, which the branch-scoped deployment Environments block
+  // before the job can reach its AWS role — so publishing is dispatched from main instead.
+  // Read the parsed trigger: `on:` and `"on":` are the same key, and only one is greppable.
+  assert.equal(workflow.on.release, undefined, 'publishing must not trigger on a release event')
+  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch'])
+  // The build must compile the release tag, not whatever main points at now — read it off the
+  // parsed step, since a commented-out `ref:` still satisfies a substring match.
+  const releaseCheckout = workflow.jobs.publish.steps.find((step) => step.name === 'Checkout the released tag')
+  assert.ok(releaseCheckout, 'the released-tag checkout step is missing')
+  assert.equal(releaseCheckout.with.ref, 'refs/tags/v${{ inputs.version }}')
+  // This workflow compiles the released image, so it owes the same native-arch guard the deploy
+  // path has — a second copy of the step means pinning it in deploy-infra.yml says nothing here.
+  const publishArch = workflow.jobs.publish.steps.find((step) => step.name === 'Verify native AMD64 Docker')
+  assert.ok(publishArch, 'the native-arch guard step is missing')
+  assertShellLine(publishArch.run, /test "\$\(uname -m\)" = "x86_64"/)
+  assertShellLine(publishArch.run, /test "\$\(docker info --format '\{\{\.Architecture\}\}'\)" = "x86_64"/)
+
+  const resolveRun = workflow.jobs.publish.steps.find((step) => step.name === 'Resolve publish operation')?.run ?? ''
+  assertShellLine(resolveRun, /tag v\$version declares Cargo\.toml version/)
+  assertShellLine(resolveRun, /builds always land in dev/)
+  // "builds once and promotes that exact image" is a property of *which step* compiles. Matched
+  // against the whole file, moving `docker build` into the promote step reads as unchanged.
+  const stepRun = (name) => workflow.jobs.publish.steps.find((step) => step.name === name)?.run ?? ''
+  const buildRun = stepRun('Build released image once')
+  const promoteRun = stepRun('Promote the exact published image')
+  assertShellLine(buildRun, /docker build --file apps\/api\/Dockerfile/)
+  // A registry-side manifest copy, not a daemon round-trip: pull + tag + push re-uploads the
+  // image and can change its digest, which is exactly what "promotes that exact image" denies.
+  // By digest, not by tag: the source tag can move between the check above and this copy, and a
+  // comparison afterwards would only notice once the wrong image was already published.
+  assertShellLine(promoteRun, /docker buildx imagetools create --prefer-index=false/)
+  assertShellLine(promoteRun, /--tag "\$TARGET:\$VERSION" "\$SOURCE@\$SOURCE_DIGEST"/)
+  // Over the live shell: the comment above the copy names the `docker build`/`docker push` pair
+  // it exists to explain, and a mention in a comment is not a rebuild. Both intervening tokens
+  // are spelled out rather than excluded by a trailing space — the step already invokes `docker
+  // buildx`, and `docker image push|tag` is the management-command form of the same verbs, so
+  // either is a plausible way a rebuild returns. `imagetools create` stays exempt because it is
+  // none of build/pull/push/tag (and `\b` keeps `build` from matching inside `buildx`).
+  assert.doesNotMatch(
+    liveShell(promoteRun),
+    /docker (?:buildx |image )?(?:build|pull|push|tag)\b/,
+    'promotion must copy, never rebuild or re-upload',
+  )
+  // And it proves preservation rather than assuming it.
+  assertShellLine(promoteRun, /if \[ "\$promoted" != "\$SOURCE_DIGEST" \]; then/)
 })
 
 test('infrastructure tests cannot persist or write with the workflow token', () => {
@@ -330,14 +631,67 @@ test('dev deploy role trusts only the repository GitHub Environment identity', (
   })
 })
 
-test('SST preflights the workspace Runner artifact even when VERSION overrides the public API version', () => {
+test('the stage bootstrap owns artifact stores needed before an SST deploy can start', () => {
+  const template = readDeployTemplate()
+  const resources = template.Resources
+
+  assert.deepEqual(template.Parameters.GitHubEnvironment, {
+    Type: 'String',
+    Default: 'dev',
+    MinLength: 1,
+    MaxLength: 32,
+    AllowedPattern: '^[a-z0-9][a-z0-9-]*$',
+  })
+  assert.deepEqual(resources.ApiImagesRepository, {
+    Type: 'AWS::ECR::Repository',
+    DeletionPolicy: 'Retain',
+    UpdateReplacePolicy: 'Retain',
+    Properties: {
+      RepositoryName: 'boxlite-${GitHubEnvironment}-api',
+      ImageTagMutability: 'IMMUTABLE',
+      ImageScanningConfiguration: { ScanOnPush: true },
+      EncryptionConfiguration: { EncryptionType: 'AES256' },
+    },
+  })
+  assert.deepEqual(resources.RunnerArtifactsBucket, {
+    Type: 'AWS::S3::Bucket',
+    DeletionPolicy: 'Retain',
+    UpdateReplacePolicy: 'Retain',
+    Properties: {
+      BucketName: 'boxlite-${GitHubEnvironment}-artifacts-${AWS::AccountId}',
+      BucketEncryption: {
+        ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }],
+      },
+      VersioningConfiguration: { Status: 'Enabled' },
+      PublicAccessBlockConfiguration: {
+        BlockPublicAcls: true,
+        BlockPublicPolicy: true,
+        IgnorePublicAcls: true,
+        RestrictPublicBuckets: true,
+      },
+      LifecycleConfiguration: {
+        Rules: [
+          {
+            Id: 'expire-superseded-runner-builds',
+            Prefix: 'runner/',
+            Status: 'Enabled',
+            NoncurrentVersionExpiration: { NoncurrentDays: 30 },
+          },
+        ],
+      },
+    },
+  })
+})
+
+test('one release selector resolves the API and Runner to the same published version', () => {
   const source = readFileSync(SST_WRAPPER, 'utf8')
 
   assert.match(source, /const workspaceVersion = readWorkspaceVersion\(\)/)
   assert.match(source, /resolvePublicDeploymentConfig\(process\.env, workspaceVersion\)/)
-  assert.match(
-    source,
-    /await verifyRunnerReleaseAssets\(workspaceVersion, \{ signal: runnerReleasePreflightAbortController\.signal \}\)/,
-  )
+  // resolveArtifactSource uses the same resolveReleaseVersion(workspace, env) contract as the
+  // public deployment config. VERSION therefore selects both artifacts instead of producing an
+  // API/Runner split-brain release.
+  assert.match(source, /const runnerSource = resolveArtifactSource\('runner'\)/)
+  assert.match(source, /await verifyRunnerArtifact\(runnerSource/)
   assert.doesNotMatch(source, /verifyRunnerReleaseAssets\(publicDeploymentConfig\.releaseVersion\)/)
 })

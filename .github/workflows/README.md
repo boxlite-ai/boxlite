@@ -161,11 +161,15 @@ is enabled. The workflow is dormant until repository variable
 
 ### `deploy-infra.yml`
 
-Previews or deploys the full stack from `main` on a native AMD64 GitHub
-runner, for a `workflow_dispatch`-selected `stage` (an allowlisted `choice`
-input, `dev` today). Deployment safety tests first enforce the Runner lifecycle
-options. Dispatch defaults to preview-only; `apply=true` repeats the full
-structured preview and deploys only when the Runner safety gate accepts the
+Previews or deploys the full stack from one commit already on `main` (current
+`main` by default) on a native AMD64 GitHub runner, for a
+`workflow_dispatch`-selected `stage` (an allowlisted `choice` input, `dev`
+today). The reusable C/Runner workflows produce a Linux AMD64 Runner with
+`<workspace-version>+<sha>` identity and stage it in the stage's private
+commit-keyed S3 path; SST builds the API from the same checkout. Deployment
+safety tests first enforce the Runner lifecycle options. Dispatch defaults to
+preview-only; `apply=true` repeats the full structured preview and deploys only
+when the Runner safety gate accepts the
 plan. Routine control-plane deployment rejects every Runner create, delete,
 replacement, or protected-property change; the routine workflow does not
 provision Runners. The job rejects partial `--target`/`--exclude` deploys so
@@ -176,7 +180,23 @@ or public SSH builder participates.
 
 The `stage` input is an allowlist rather than free text, so a
 required-reviewers Environment cannot be targeted by an unbootstrapped or
-misspelled name. Adding a stage means adding it to that `options` list.
+misspelled name. Every workflow that binds `environment:` to an input follows
+this rule, and each list is independent — it names the stages *that* path is
+meant to reach. Today the commit-build path (`deploy-infra.yml`) lists `dev`,
+while the release path (`deploy-release.yml`, and `build-apps-api-image.yml`'s
+`stage` and `source_stage`) lists `dev` and `prod`. Bootstrapping a stage means
+adding it to whichever of those lists should reach it.
+
+### `build-apps-api-image.yml` / `deploy-release.yml`
+
+`build-apps-api-image.yml` builds the immutable API image once into dev ECR from the
+released tag, then promotes it into another stage by copying that exact manifest
+registry-side, addressed by digest; it never rebuilds. Both operations are
+dispatched from `main`, because a release event runs on a tag ref that the
+branch-scoped deployment Environments block before the job can obtain AWS
+credentials. `deploy-release.yml` accepts one stable `X.Y.Z` for both that API
+image and the matching Runner GitHub Release assets, verifies both before SST
+runs, and compiles neither component.
 
 Required Environment configuration (per stage):
 
@@ -184,10 +204,10 @@ Required Environment configuration (per stage):
 - Variable `AWS_REGION` (defaults to `ap-southeast-1`)
 - Secret `DEPLOY_ENV` containing the stage's dotenv configuration
 
-Bootstrap the scoped role and runtime permissions boundary with
-`apps/infra/ci/github-deploy-role.yaml`, then require reviewers on the GitHub
-Environment before enabling deployments. Redeploy that CloudFormation stack
-when its policy changes.
+Bootstrap the scoped role, runtime permissions boundary, immutable API ECR
+repository, and private Runner artifact bucket with
+`apps/infra/ci/github-deploy-role.yaml`. Redeploy that CloudFormation stack when
+its policy/resources change, then require reviewers before enabling deployments.
 
 ### `e2e-local.yml`
 

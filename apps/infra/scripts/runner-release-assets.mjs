@@ -164,8 +164,18 @@ export async function verifyRunnerReleaseAssets(
       'checksum',
     )
   ).trim()
-  const checksum = checksumContents.match(/^([0-9a-f]{64})[ \t]+\*?([^\r\n]+)$/i)
-  if (!checksum || checksum[2] !== assets.tarballName) {
+  // Lowercase only. Both preflight arms feed host-side checks that compare against a lowercase
+  // `sha256sum`, and buildRunnerUserData additionally asserts the shape, so an uppercase digest
+  // accepted here fails at first boot instead — the failure a preflight exists to move forward
+  // onto the deployer.
+  const checksum = checksumContents.match(/^([0-9a-f]{64})[ \t]+\*?([^\r\n]+)$/)
+  if (!checksum) {
+    throw new Error(
+      `Runner release checksum manifest must be one '<lowercase sha256>  ${assets.tarballName}' ` +
+        'line, in the form the host re-checks it against',
+    )
+  }
+  if (checksum[2] !== assets.tarballName) {
     throw new Error(`Runner release checksum manifest must name exactly '${assets.tarballName}'`)
   }
 

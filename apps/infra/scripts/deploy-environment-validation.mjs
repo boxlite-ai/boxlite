@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { parse } from 'dotenv'
 
 const FORBIDDEN_DEPLOYMENT_KEYS = new Set([
+  'ALLOW_DOWNGRADE',
+  'API_ARTIFACT_SOURCE',
   'AWS_ACCESS_KEY_ID',
   'AWS_CLI_PATH',
   'AWS_CONFIG_FILE',
@@ -20,7 +22,21 @@ const FORBIDDEN_DEPLOYMENT_KEYS = new Set([
   'AWS_SHARED_CREDENTIALS_FILE',
   'AWS_SESSION_TOKEN',
   'AWS_WEB_IDENTITY_TOKEN_FILE',
+  // The workflow picks which artifact a deploy installs, and CI has already staged or published
+  // exactly that one. A stage secret redirecting the selector — or quietly re-enabling the
+  // downgrade escape hatch the dispatcher left off — would deploy something the run never
+  // approved. (VERSION stays allowed: it is the documented local knob, and the workflow's own
+  // value already wins over .env.)
+  'BOXLITE_ARTIFACT_REF',
+  'BOXLITE_ARTIFACT_SOURCE',
   'BUILDX_BUILDER',
+  // Listed for the same defense-in-depth reason as the AWS keys above, which the workflow also
+  // already sets: every current consumer assigns this after spreading process.env, so a stage
+  // secret cannot win today. It earns its place because of what it would buy if one ever stopped
+  // — requireBuildLocation derives the tarball URL *and* its checksum URL from this single value,
+  // so redirecting it verifies an attacker-chosen artifact against an attacker-chosen manifest.
+  'RUNNER_ARTIFACT_BUCKET',
+  'RUNNER_ARTIFACT_SOURCE',
   'RUNNER_CREATE_ALLOWLIST',
   'SST_BIN_PATH',
 ])

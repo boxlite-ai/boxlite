@@ -116,7 +116,11 @@ export default $config({
     const { optionalPublicOidcIssuer, requireOidcIssuer } = await import('./scripts/oidc-issuer.mjs')
     const { resolveRunnerInventory } = (await import('./scripts/runner-inventory.cjs')).default
     const { requireIamPermissionsBoundaryStage } = await import('./scripts/sst-stage.mjs')
+    const { apiImageReference } = await import('./scripts/api-artifact.mjs')
+    const { resolveArtifactSource } = await import('./scripts/artifact-source.mjs')
+    const { resolveRunnerArtifact, runnerArtifactsBucketName } = await import('./scripts/runner-artifact.mjs')
     const REGION = resolveAwsRegion()
+    const { accountId } = await aws.getCallerIdentity()
     const workspaceVersion = readWorkspaceVersion()
     const deploymentConfig = resolvePublicDeploymentConfig(process.env, workspaceVersion)
     const { stackDomain, proxyDomain, proxyProtocol, proxyTemplateUrl, releaseVersion } = deploymentConfig
@@ -390,13 +394,30 @@ export default $config({
     const otelCollectorOtlpHttpUrl = stripTrailingSlash(otelCollector.url).apply((url) => `${url}:${PORTS.OTLP_HTTP}`)
 
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────
+    // Where the Api image comes from. `build` — the default, and everything this stack did
+    // before — has SST build apps/api/Dockerfile from the deployed checkout. `release` deploys
+    // the image published for a version instead, so a release promotes the exact artifact that
+    // was tested rather than rebuilding one that merely shares its commit. SST hands an image
+    // string straight to the task definition (normalizeImage, sst/platform fargate component),
+    // so the two modes differ only in this expression.
+    //
+    // The stage bootstrap template (ci/github-deploy-role.yaml) owns the immutable repository:
+    // an image has to be published before a fresh release-mode stack can consume it, so the
+    // consumer cannot also be responsible for creating its input.
+    const apiArtifact = resolveArtifactSource('api')
     const api = new sst.aws.Service('Api', {
       cluster,
       wait: true,
-      image: {
-        context: '../..',
-        dockerfile: 'apps/api/Dockerfile',
-      },
+      image:
+        apiArtifact.kind === 'release'
+          ? apiImageReference({
+              app: $app.name,
+              stage: $app.stage,
+              accountId,
+              region: REGION,
+              version: apiArtifact.version,
+            })
+          : { context: '../..', dockerfile: 'apps/api/Dockerfile' },
       loadBalancer: {
         domain: serviceDomain('api'),
         rules: [{ listen: '443/https', forward: `${PORTS.API}/http` }],
@@ -810,8 +831,28 @@ export default $config({
     router.route('/', api.url)
 
     // ─── 10. RUNNER (EC2 with nested KVM) ────────────────────────────────────
-    // Boots an Ubuntu EC2 that runs the prebuilt runner binary (downloaded from
-    // GitHub Releases) under systemd, with nested KVM enabled for box VMs.
+    // Boots an Ubuntu EC2 that runs the prebuilt runner binary under systemd, with nested KVM
+    // enabled for box VMs.
+    //
+    // Where that binary comes from is the mirror of the Api's choice above. `release` — the
+    // default, and all this stack could do before — installs the published GitHub Release asset
+    // for a version. `build` installs a binary produced from the deployed commit and staged in
+    // the bucket below, which is what makes an unreleased Runner change testable at all.
+    //
+    // Both install paths (user-data at first boot, SSM for a live host) take the same
+    // URL + checksum pair, so the source only changes where the two URLs point and which
+    // command fetches them — see scripts/runner-artifact.mjs.
+    //
+    // The stage bootstrap template owns this private bucket for the same ordering reason
+    // it owns the API repository: CI stages the object before this stack can consume it. The name
+    // is derived in one helper shared with the preflight and the staging command.
+    const artifactsBucketName = runnerArtifactsBucketName({ app: $app.name, stage: $app.stage, accountId })
+    const runnerArtifactSource = resolveArtifactSource('runner')
+    const runnerArtifact = resolveRunnerArtifact(runnerArtifactSource, {
+      ...process.env,
+      RUNNER_ARTIFACT_BUCKET: artifactsBucketName,
+    })
+
     const ubuntuAmi = aws.ec2.getAmi({
       mostRecent: true,
       owners: [RUNNER.ubuntuOwnerId],
@@ -848,6 +889,22 @@ export default $config({
             Effect: 'Allow',
             Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload'],
             Resource: ['arn:aws:s3:::boxlite-volume-*/*'],
+          },
+        ],
+      }),
+    })
+    const runnerArtifactPolicy = new aws.iam.RolePolicy('RunnerArtifactS3Policy', {
+      role: runnerRole.name,
+      // Read-only, and only under the prefix build-mode Runner binaries are staged in. This is
+      // how a host installs a binary that was never published; nothing else in the bucket is
+      // reachable, and the Runner can never write here.
+      policy: JSON.stringify({
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Action: ['s3:GetObject'],
+            Resource: `arn:aws:s3:::${artifactsBucketName}/runner/*`,
           },
         ],
       }),
@@ -933,7 +990,7 @@ export default $config({
         token,
         otelEndpoint,
         awsRegion: REGION,
-        runnerVersion: workspaceVersion,
+        artifact: runnerArtifact,
         ghcrSecretArn: ghcrSecretArn || undefined,
         ghcrUsername,
       }),
@@ -983,6 +1040,12 @@ export default $config({
         {
           ignoreChanges: ['ami', 'userDataBase64'],
           protect: true,
+          // First boot reads the staged artifact with this role. The grant is a sibling of the
+          // instance under runnerRole, not an ancestor, so without this edge Pulumi may create
+          // the host first and its user-data dies on AccessDenied — permanently, because
+          // protect + ignoreChanges('userDataBase64') mean it never runs again. Same edge the
+          // UpgradeRunnerBinary commands declare for the SSM path.
+          dependsOn: [runnerArtifactPolicy],
         },
       )
 
@@ -1024,7 +1087,7 @@ export default $config({
               token,
               otelEndpoint,
               awsRegion: REGION,
-              runnerVersion: workspaceVersion,
+              artifact: runnerArtifact,
               ghcrSecretArn: ghcrSecretArn || undefined,
               ghcrUsername,
             }),
@@ -1086,7 +1149,15 @@ export default $config({
     // SendCommand being rejected until the SSM agent registers — is handled by a bounded
     // retry in the script, since no host-side guard can see it.
     //
+    // In build mode the version string does not move between two commits, so what re-runs the
+    // command is the commit itself; the script's convergence guard compares the same identity.
+    //
     // Typed as a bare Resource because the chain only needs something to depend on.
+    const runnerTargetVersion = runnerArtifactSource.version
+    const runnerArtifactTrigger =
+      runnerArtifactSource.kind === 'build'
+        ? `build:${runnerArtifactSource.version}:${runnerArtifactSource.ref}`
+        : `release:${runnerArtifactSource.version}`
     let previousUpgrade: $util.Resource | undefined
     for (const { label, instance } of [
       { label: 'default', instance: defaultRunner },
@@ -1101,12 +1172,23 @@ export default $config({
           environment: {
             AWS_REGION: REGION,
             INSTANCE_IDS: instance.id,
-            RUNNER_VERSION: workspaceVersion,
+            RUNNER_VERSION: runnerTargetVersion,
             RUNNER_PORT: String(PORTS.RUNNER),
+            // The source selection, not the resolved URLs: the script runs the same resolver, so
+            // `npm run runner:update` out of band lands the identical artifact.
+            RUNNER_ARTIFACT_SOURCE: runnerArtifactSource.kind,
+            RUNNER_ARTIFACT_BUCKET: artifactsBucketName,
+            BOXLITE_ARTIFACT_REF: runnerArtifactSource.kind === 'build' ? runnerArtifactSource.ref : '',
           },
-          triggers: [workspaceVersion, instance.id],
+          triggers: [runnerArtifactTrigger, instance.id],
         },
-        { dependsOn: previousUpgrade ? [instance, previousUpgrade] : [instance] },
+        {
+          // The artifact policy is a hard prerequisite, not a sibling: in build mode the payload
+          // reads S3 with the instance role, so an upgrade started before the grant exists fails
+          // AccessDenied and stops the roll. Pulumi has no implicit edge — the bucket reaches the
+          // command as a plain string — so it is declared here.
+          dependsOn: [instance, runnerArtifactPolicy, ...(previousUpgrade ? [previousUpgrade] : [])],
+        },
       )
     }
   },
@@ -1120,27 +1202,30 @@ async function buildRunnerUserData(input: {
   token: string
   otelEndpoint: string
   awsRegion: string
-  runnerVersion: string
+  artifact: { tarballName: string; tarballUrl: string; checksumUrl: string; fetch: 'https' | 's3' }
   ghcrSecretArn?: string
   ghcrUsername?: string
 }): Promise<string> {
-  const RUNNER_VERSION = input.runnerVersion
+  const { artifactFetchCommand } = await import('./scripts/runner-artifact.mjs')
+  const tarballPath = `/tmp/${input.artifact.tarballName}`
+  const fetchTarball = artifactFetchCommand(input.artifact, input.artifact.tarballUrl, tarballPath, input.awsRegion)
+  const fetchChecksum = artifactFetchCommand(
+    input.artifact,
+    input.artifact.checksumUrl,
+    '/tmp/runner.sha256',
+    input.awsRegion,
+  )
 
-  // ghcr pull credential delivery (option B, rotation-capable): install AWS CLI v2
-  // and write a start-wrapper that re-fetches the TOKEN from Secrets Manager on
-  // EVERY service start — so `systemctl restart` picks up a rotated token — and is
-  // fail-CLOSED (refuses to run with anonymous pulls) with a bounded retry for
-  // instance-profile IAM propagation at first boot. The wrapper is exec'd as
-  // ExecStart; username + secret ARN + region come from the unit's Environment=.
-  // Only emitted when a ghcr secret is wired; the TOKEN is never baked into user-data.
+  // ghcr pull credential delivery (option B, rotation-capable): write a start-wrapper
+  // that re-fetches the TOKEN from Secrets Manager on EVERY service start — so
+  // `systemctl restart` picks up a rotated token — and is fail-CLOSED (refuses to run
+  // with anonymous pulls) with a bounded retry for instance-profile IAM propagation at
+  // first boot. The wrapper is exec'd as ExecStart; username + secret ARN + region come
+  // from the unit's Environment=. Only emitted when a ghcr secret is wired; the TOKEN is
+  // never baked into user-data. The AWS CLI it needs is installed unconditionally above.
   const ghcrBlock = input.ghcrSecretArn
     ? `
-# ── ghcr pull credential setup: AWS CLI v2 + fail-closed start-wrapper ────────
-curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
-apt-get install -y unzip
-unzip -q /tmp/awscliv2.zip -d /tmp
-/tmp/aws/install --update
-rm -rf /tmp/awscliv2.zip /tmp/aws
+# ── ghcr pull credential setup: fail-closed start-wrapper ────────────────────
 cat > /usr/local/bin/boxlite-runner-start.sh << 'STARTWRAP'
 #!/bin/bash
 # Re-fetch the ghcr pull token on every start (rotation), fail-closed (no anonymous
@@ -1185,20 +1270,30 @@ curl -fsSL "https://s3.amazonaws.com/mountpoint-s3-release/\${MOUNT_S3_VERSION}/
 apt-get install -y /tmp/mount-s3.deb
 rm -f /tmp/mount-s3.deb
 
-# Download the prebuilt runner binary, then verify its SHA-256 against the
-# checksum published next to the release asset before installing (it runs as
-# root). A missing, malformed, or mismatched checksum is fatal.
-RUNNER_BASE="https://github.com/boxlite-ai/boxlite/releases/download/v${RUNNER_VERSION}"
-RUNNER_TARBALL="boxlite-runner-v${RUNNER_VERSION}-linux-amd64.tar.gz"
-curl -fsSL "\${RUNNER_BASE}/\${RUNNER_TARBALL}" -o "/tmp/\${RUNNER_TARBALL}"
-curl -fsSL "\${RUNNER_BASE}/\${RUNNER_TARBALL}.sha256" -o /tmp/runner.sha256
-EXPECTED=\$(awk 'NR == 1 {print \$1}' /tmp/runner.sha256)
+# AWS CLI v2. Needed unconditionally rather than only by the paths that use it here: a host
+# created while the stack pointed at a published release can later be upgraded to a binary
+# staged in S3, and that upgrade runs over SSM with no chance to install anything first.
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+apt-get install -y unzip
+unzip -q /tmp/awscliv2.zip -d /tmp
+/tmp/aws/install --update
+rm -rf /tmp/awscliv2.zip /tmp/aws
+
+# Download the runner binary, then verify its SHA-256 against the checksum published
+# alongside it before installing (it runs as root). A missing, malformed, or mismatched
+# checksum is fatal. Where the two come from — a published release or a build staged in the
+# stack's artifacts bucket — is decided by scripts/runner-artifact.mjs, not here.
+RUNNER_TARBALL="${input.artifact.tarballName}"
+${fetchTarball}
+${fetchChecksum}
+EXPECTED=\$(awk -v name="\$RUNNER_TARBALL" '\$2 == name || \$2 == "*" name {print \$1}' /tmp/runner.sha256)
+[ -n "\$EXPECTED" ] || { echo "FATAL: checksum manifest does not name \$RUNNER_TARBALL" >&2; exit 1; }
 [[ "\$EXPECTED" =~ ^[0-9a-f]{64}\$ ]] || { echo "FATAL: invalid runner checksum file" >&2; exit 1; }
-ACTUAL=\$(sha256sum "/tmp/\${RUNNER_TARBALL}" | awk '{print \$1}')
+ACTUAL=\$(sha256sum "${tarballPath}" | awk '{print \$1}')
 [ "\$EXPECTED" = "\$ACTUAL" ] || { echo "FATAL: runner checksum mismatch (want \$EXPECTED got \$ACTUAL)" >&2; exit 1; }
 echo "runner tarball checksum verified (\$ACTUAL)"
-tar -xzf "/tmp/\${RUNNER_TARBALL}" -C /usr/local/bin/
-rm -f "/tmp/\${RUNNER_TARBALL}" /tmp/runner.sha256
+tar -xzf "${tarballPath}" -C /usr/local/bin/
+rm -f "${tarballPath}" /tmp/runner.sha256
 chmod +x /usr/local/bin/boxlite-runner
 
 # Get host IP via IMDSv2

@@ -1,8 +1,8 @@
 # Build the runner Go binary for Linux amd64.
 #
-# Self-contained workflow that downloads the prebuilt libboxlite.a from
-# GitHub Releases, builds the runner with plain `go build`, and uploads the
-# runner binary to GitHub Releases.
+# Builds against either the libboxlite.a published for a release or the Linux x64 C SDK artifact
+# produced from the same commit in the current workflow run. The latter is the dev path: the
+# Runner binary and its embedded runtime come from the exact checkout the API is deploying.
 #
 # The runner binary is fully self-contained: it links libboxlite.a, which
 # auto-extracts the embedded runtime at startup.
@@ -10,6 +10,7 @@
 # Triggers:
 # - workflow_run: After "Build C SDK" completes (ensures libboxlite.a exists)
 # - workflow_dispatch: Manual trigger for testing
+# - workflow_call: A deploy building a selected commit (deploy-infra.yml)
 name: Build Runner Binary
 
 on:
@@ -17,6 +18,21 @@ on:
     workflows: ["Build C SDK"]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Full commit SHA to build against its published C SDK version.'
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      libboxlite_source:
+        required: false
+        default: release
+        type: string
+      ref:
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -28,9 +44,31 @@ jobs:
   config:
     uses: ./.github/workflows/config.yml
 
+  resolve-ref:
+    name: Resolve build commit
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate build commit
+        id: ref
+        shell: bash
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+          WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          candidate="${INPUT_REF:-${WORKFLOW_RUN_SHA:-$GITHUB_SHA}}"
+          [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be a full commit SHA" >&2; exit 1; }
+          git cat-file -e "$candidate^{commit}"
+          echo "sha=$candidate" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build Runner (linux-amd64)
-    needs: config
+    needs: [config, resolve-ref]
     if: >-
       github.event_name != 'workflow_run' ||
       github.event.workflow_run.conclusion == 'success'
@@ -40,6 +78,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-ref.outputs.sha }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -49,22 +89,65 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev
 
-      - name: Determine version
-        id: version
-        run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Download prebuilt libboxlite.a
+      - name: Resolve artifact identity
+        id: artifact
+        shell: bash
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_SHA: ${{ needs.resolve-ref.outputs.sha }}
+          INPUT_SOURCE: ${{ inputs.libboxlite_source }}
+        run: |
+          set -euo pipefail
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          SOURCE="${INPUT_SOURCE:-release}"
+          case "$SOURCE" in
+            release)
+              identity="$VERSION"
+              archive="boxlite-runner-v${VERSION}-linux-amd64.tar.gz"
+              ;;
+            artifact)
+              identity="${VERSION}+${BUILD_SHA}"
+              archive="boxlite-runner-v${VERSION}-${BUILD_SHA}-linux-amd64.tar.gz"
+              ;;
+            *) echo "libboxlite_source must be release or artifact" >&2; exit 1 ;;
+          esac
+          {
+            echo "version=$VERSION"
+            echo "source=$SOURCE"
+            echo "identity=$identity"
+            echo "archive=$archive"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download published libboxlite.a
+        if: steps.artifact.outputs.source == 'release'
+        env:
+          VERSION: ${{ steps.artifact.outputs.version }}
           GH_REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
           ARCHIVE="boxlite-c-v${VERSION}-linux-x64-gnu.tar.gz"
           URL="https://github.com/${GH_REPO}/releases/download/v${VERSION}/${ARCHIVE}"
           echo "Downloading $URL"
-          curl -fsSL "${URL}" | tar xz -C /tmp/
+          curl -fsSL "$URL" | tar xz -C /tmp/
           cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a" sdks/go/libboxlite.a
+
+      - name: Download commit libboxlite.a
+        if: steps.artifact.outputs.source == 'artifact'
+        uses: actions/download-artifact@v4
+        with:
+          name: c-sdk-linux-x64-gnu
+          path: /tmp/c-sdk
+
+      - name: Extract commit libboxlite.a
+        if: steps.artifact.outputs.source == 'artifact'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=$(find /tmp/c-sdk -maxdepth 1 -name 'boxlite-c-v*-linux-x64-gnu.tar.gz' -print -quit)
+          test -n "$archive"
+          tar xzf "$archive" -C /tmp/
+          library=$(find /tmp -path '*/lib/libboxlite.a' -print -quit)
+          test -n "$library"
+          cp "$library" sdks/go/libboxlite.a
 
       - name: Rewrite go.work for minimal modules
         run: |
@@ -78,35 +161,36 @@ jobs:
 
       - name: Build runner
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_IDENTITY: ${{ steps.artifact.outputs.identity }}
         run: |
+          set -euo pipefail
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
-            -ldflags "-X 'github.com/boxlite-ai/runner/internal.Version=${VERSION}'" \
+            -ldflags "-X 'github.com/boxlite-ai/runner/internal.Version=${VERSION_IDENTITY}'" \
             -o /tmp/boxlite-runner \
             ./runner/cmd/runner/
 
       - name: Package runner binary
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          ARCHIVE: ${{ steps.artifact.outputs.archive }}
         run: |
-          tar czf "boxlite-runner-v${VERSION}-linux-amd64.tar.gz" -C /tmp boxlite-runner
-          # Integrity manifest the runner's user-data verifies before installing
-          # the binary (apps/infra/sst.config.ts buildRunnerUserData).
-          sha256sum "boxlite-runner-v${VERSION}-linux-amd64.tar.gz" > "boxlite-runner-v${VERSION}-linux-amd64.tar.gz.sha256"
+          set -euo pipefail
+          tar czf "$ARCHIVE" -C /tmp boxlite-runner
+          # Integrity manifest both user-data and the in-place updater verify before installing.
+          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: runner-linux-amd64
           path: |
-            boxlite-runner-v*-linux-amd64.tar.gz
-            boxlite-runner-v*-linux-amd64.tar.gz.sha256
+            boxlite-runner-*-linux-amd64.tar.gz
+            boxlite-runner-*-linux-amd64.tar.gz.sha256
           if-no-files-found: error
           retention-days: ${{ needs.config.outputs.artifact-retention-days }}
 
   upload-to-release:
     name: Upload to GitHub Release
-    needs: [config, build]
+    needs: [config, resolve-ref, build]
     if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'release'
     runs-on: ubuntu-latest
     permissions:
@@ -114,6 +198,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-ref.outputs.sha }}
 
       - name: Determine version
         id: version

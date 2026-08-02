@@ -92,6 +92,14 @@ test('rejects a missing or mismatched Runner release before deployment', async (
     /checksum manifest.*exactly/i,
   )
 
+  // Both preflight arms feed host-side checks that compare against a lowercase `sha256sum`, so
+  // an uppercase digest accepted here would fail at first boot instead of on the deployer.
+  const upperCase = createFakeCurl(t, { checksum: `${DIGEST.toUpperCase()}  ${TARBALL}\n` })
+  await assert.rejects(
+    verifyRunnerReleaseAssets(VERSION, { curlPath: upperCase.curlPath, timeoutMs: 5_000 }),
+    /must be one '<lowercase sha256>/,
+  )
+
   const missingTarball = createFakeCurl(t, { tarballExit: 22 })
   await assert.rejects(
     verifyRunnerReleaseAssets(VERSION, { curlPath: missingTarball.curlPath, timeoutMs: 5_000 }),

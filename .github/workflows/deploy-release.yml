@@ -1,0 +1,128 @@
+name: Deploy release
+
+# Deploys the published Api image and Runner artifact for one VERSION; it compiles neither.
+#
+# It does NOT make the whole stack artifact-based. apps/proxy and apps/otel-collector still build
+# from the deployed checkout (their `image:` in sst.config.ts has no release branch), so only the
+# two components with a published artifact are pinned by VERSION.
+#
+# Before using this workflow:
+#   1. the GitHub release must contain the Runner tarball + checksum;
+#   2. Build apps/api image must have built (dev) or promoted (another stage) the same X.Y.Z.
+#
+# sst-with-cloudflare.mjs verifies both artifacts before invoking SST.
+
+on:
+  workflow_dispatch:
+    inputs:
+      # An allowlist, not free text: this input selects the protected Environment holding the
+      # AWS role, so a misspelling must be untypable rather than merely unbootstrapped. Adding a
+      # stage means adding it to every such list — see .github/workflows/README.md.
+      stage:
+        description: 'SST stage to deploy (must already be bootstrapped).'
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - prod
+      version:
+        description: 'Published stable X.Y.Z for both API and Runner.'
+        required: true
+        type: string
+      allow_downgrade:
+        description: 'Roll back: permit replacing a Runner that serves something newer.'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-release-${{ inputs.stage }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.stage }} release
+    if: github.ref == 'refs/heads/main'
+    environment: ${{ inputs.stage }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+      STAGE: ${{ inputs.stage }}
+      VERSION: ${{ inputs.version }}
+      BOXLITE_ARTIFACT_SOURCE: release
+      API_ARTIFACT_SOURCE: release
+      RUNNER_ARTIFACT_SOURCE: release
+      # Off by default so the Runner's accidental-downgrade guard still means something here. The
+      # API has no such guard, so deploying an older VERSION without this leaves the fleet split:
+      # the API moves back, the Runner refuses and the deploy still succeeds. Set it to roll back
+      # both together — deliberately, which is the only way a rollback should happen.
+      ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade && '1' || '' }}
+
+    steps:
+      - name: Checkout main deployment configuration
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Validate release selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$STAGE" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { echo "invalid artifact stage '$STAGE'" >&2; exit 1; }
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "version must be a stable X.Y.Z (got '$VERSION')" >&2
+            exit 1
+          }
+          echo "IAM_PERMISSIONS_BOUNDARY_STAGE=$STAGE" >> "$GITHUB_ENV"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-release-${{ github.run_id }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/infra/package-lock.json
+
+      - name: Install deployment dependencies
+        working-directory: apps/infra
+        run: npm ci
+
+      - name: Run deployment safety tests
+        working-directory: apps/infra
+        run: npm test
+
+      - name: Verify deploy role IAM boundary permissions
+        working-directory: apps/infra
+        run: node scripts/verify-deploy-role-boundary.mjs
+
+      - name: Materialize stage configuration
+        shell: bash
+        env:
+          DEPLOY_ENV: ${{ secrets.DEPLOY_ENV }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_ENV"
+          umask 077
+          printf '%s\n' "$DEPLOY_ENV" > apps/infra/.env
+          node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env
+
+      - name: Deploy published API and Runner artifacts
+        working-directory: apps/infra
+        run: npm run deploy -- --stage "$STAGE" --policy .
+
+      - name: Remove materialized configuration
+        if: always()
+        run: rm -f apps/infra/.env

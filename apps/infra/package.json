@@ -13,7 +13,8 @@
     "runner:update": "node scripts/runner-update-binary.mjs",
     "login": "node scripts/login.mjs",
     "bootstrap": "node scripts/bootstrap-environment.mjs",
-    "verify-deploy-role": "node scripts/verify-deploy-role-boundary.mjs"
+    "verify-deploy-role": "node scripts/verify-deploy-role-boundary.mjs",
+    "runner:build-artifact": "node scripts/runner-artifact-build.mjs"
   },
   "devDependencies": {
     "@pulumi/aws": "^7.24.0",

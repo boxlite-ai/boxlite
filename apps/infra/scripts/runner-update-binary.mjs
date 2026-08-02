@@ -19,12 +19,20 @@
  * Cordoning through the admin API needs a control-plane runner id, an operator key, and
  * the organization-infrastructure flag, none of which the deploy path has.
  *
+ * The binary comes from whichever source scripts/artifact-source.mjs selects: the published
+ * release for a version, or a build of one commit staged in the stack's artifacts bucket. Only
+ * the two URLs and the command that fetches them differ — the verify/swap/rollback below is the
+ * same either way.
+ *
  * Usage:
- *   npm run runner:update                  # version from Cargo.toml, every running runner
- *   npm run runner:update -- 0.9.5         # explicit version
+ *   npm run runner:update                  # source from the environment, every running runner
+ *   npm run runner:update -- 0.9.5         # explicit version, always a release
  *   INSTANCE_IDS=i-abc npm run runner:update
  *
  * Env:
+ *   RUNNER_ARTIFACT_SOURCE  release|build (see artifact-source.mjs; default release)
+ *   BOXLITE_ARTIFACT_REF    commit a build-mode binary was produced from
+ *   RUNNER_ARTIFACT_BUCKET  bucket a build-mode binary is staged in
  *   RUNNER_VERSION   target version (argv[2] wins; falls back to the workspace version)
  *   INSTANCE_IDS     comma-separated EC2 ids; unset = discover by tag:Name=boxlite-runner-*
  *   AWS_REGION       default ap-southeast-1
@@ -36,17 +44,39 @@ import { spawnSync } from 'node:child_process'
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
+import { resolveArtifactSource } from './artifact-source.mjs'
 import { readWorkspaceVersion } from './deployment-environment.mjs'
-import { resolveRunnerReleaseAssets } from './runner-release-assets.mjs'
+import { artifactFetchCommand, resolveRunnerArtifact } from './runner-artifact.mjs'
 
 const REGION = process.env.AWS_REGION || 'ap-southeast-1'
 const RUNNER_PORT = process.env.RUNNER_PORT || '3003'
 const NAME_TAG_PATTERN = 'boxlite-runner-*'
 // ~5 min at 10s apart — covers SSM agent registration on a freshly created instance.
 const SSM_REGISTRATION_ATTEMPTS = 30
-// ~10 min at 5s apart — comfortably above the payload's own worst case (release download
-// plus the 60s readiness gate), so a slow host is never mistaken for a failed one.
-const SSM_COMPLETION_ATTEMPTS = 120
+// ~30 min at 5s apart. This has to stay above the payload's own worst case: giving up first
+// would be worse than slow — nothing cancels an accepted SSM command, so the deployer would
+// report failure while the host went on to stop and swap the unit anyway. The bound the payload
+// can actually reach is derived below rather than guessed, so raising a fetch timeout that
+// crosses this line fails a test instead of stranding a fleet.
+const SSM_POLL_INTERVAL_SECONDS = 5
+const SSM_COMPLETION_ATTEMPTS = 360
+
+// The payload's bounded steps, in seconds, taken from the timeouts it is actually emitted with.
+// Exported so the supervision budget above is checked against them rather than assumed.
+//
+// This is a floor, not the true worst case: the payload also runs apt-get, unzip and the AWS CLI
+// installer, none of which take a timeout, plus tar/sha256sum/systemctl. The window above keeps
+// roughly seventeen minutes of slack over this floor to cover them. Read it as "supervision must
+// exceed everything we can bound, with room for what we cannot".
+export const PAYLOAD_WORST_CASE_SECONDS = {
+  awsCliInstall: 120,
+  tarballFetch: 300,
+  checksumFetch: 300,
+  readinessGate: 60,
+}
+export const ssmSupervisionSeconds = () => SSM_COMPLETION_ATTEMPTS * SSM_POLL_INTERVAL_SECONDS
+export const payloadWorstCaseSeconds = () =>
+  Object.values(PAYLOAD_WORST_CASE_SECONDS).reduce((total, seconds) => total + seconds, 0)
 
 // ── aws CLI ──────────────────────────────────────────────────────────────────
 // Shelling out to the CLI (rather than adding an @aws-sdk dependency) matches
@@ -111,12 +141,43 @@ export function resolveVersion(argv = process.argv, environment = process.env) {
   return explicit ? explicit.trim().replace(/^v/, '') : readWorkspaceVersion()
 }
 
+// What this run should land, and the identity the host must report once it has. Named for the
+// artifact, not the hosts — resolveTargets above answers the other half (which instances).
+export function resolveUpgrade(
+  argv = process.argv,
+  environment = process.env,
+  { readVersion = readWorkspaceVersion } = {},
+) {
+  // An explicit version on the command line names a release whatever the environment selects:
+  // `npm run runner:update -- 0.9.5` has only ever meant one thing.
+  const explicitVersion = argv[2] ? resolveVersion(argv, environment) : undefined
+  const source = explicitVersion
+    ? { kind: 'release', version: explicitVersion }
+    : resolveArtifactSource('runner', environment, { readVersion })
+  // RUNNER_VERSION is the legacy release-only out-of-band override. Otherwise a release uses the
+  // same VERSION selector as the API. A build always uses source.version: it came from the checkout
+  // that determines the versioned S3 filename, so reconstructing it from a different deploy
+  // checkout could fetch one valid binary while waiting forever for another identity.
+  const version =
+    explicitVersion ??
+    (source.kind === 'build'
+      ? source.version
+      : environment.RUNNER_VERSION
+        ? resolveVersion(['node', 'script'], environment)
+        : source.version)
+  const artifact = resolveRunnerArtifact(source.kind === 'release' ? { kind: 'release', version } : source, environment)
+  // A build carries its commit as semver build metadata. Without it two builds of the same
+  // checkout are indistinguishable on the wire, and the "already current" guard below would skip
+  // every dev deploy after the first — the exact failure that makes a dev Runner untestable.
+  const expectedVersion = source.kind === 'build' ? `${version}+${source.ref}` : version
+  return { kind: source.kind, version, ref: source.ref, expectedVersion, artifact }
+}
+
 // ── remote upgrade script ────────────────────────────────────────────────────
 
-export function buildRemoteScript(version, { runnerPort = RUNNER_PORT, allowDowngrade = false } = {}) {
-  // Shared with the deploy-time preflight, so a target with no usable release is
-  // rejected here too rather than 404-ing on the host.
-  const { tarballUrl, checksumUrl, tarballName } = resolveRunnerReleaseAssets(version)
+export function buildRemoteScript(upgrade, { runnerPort = RUNNER_PORT, allowDowngrade = false, region = REGION } = {}) {
+  const { artifact, expectedVersion } = upgrade
+  const { tarballUrl, checksumUrl, tarballName } = artifact
   // The port reaches the remote script body verbatim, so reject a malformed one here
   // rather than letting it fail obscurely inside a curl on the host.
   if (!/^[0-9]+$/.test(String(runnerPort))) {
@@ -126,10 +187,77 @@ export function buildRemoteScript(version, { runnerPort = RUNNER_PORT, allowDown
   // name must be escaped — otherwise they are wildcards and a differently-named asset
   // could satisfy the check.
   const tarballPattern = tarballName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const fetchTarball = artifactFetchCommand(artifact, tarballUrl, '$WORK/runner.tar.gz', region)
+  const fetchChecksum = artifactFetchCommand(artifact, checksumUrl, '$WORK/runner.sha256', region)
+
+  // SSM is the only channel that reaches a long-lived Runner: its user-data carries
+  // ignoreChanges, so a host created before the AWS CLI became an unconditional part of the
+  // bootstrap never receives it. Before this, the CLI was installed only when a ghcr pull
+  // credential was wired — a supported deployment can therefore have no `aws` at all, and an
+  // S3-sourced upgrade would die on `command not found` on its very first build deploy.
+  const ensureAwsCli =
+    artifact.fetch === 's3'
+      ? `# Install the AWS CLI if this host predates the unconditional bootstrap install.
+if ! command -v aws >/dev/null 2>&1; then
+  echo "aws CLI missing (host predates the unconditional install); installing it now"
+  CLI_WORK=$(mktemp -d)
+  # set -e aborts the whole payload on a failed curl/unzip/install, so the removal below would
+  # never run and each failed upgrade would leave a directory on a long-lived host.
+  trap 'rm -rf "$CLI_WORK"' EXIT
+  curl --fail --silent --show-error --location --connect-timeout 10 --max-time 120 \\
+    --retry 3 --retry-delay 2 --retry-connrefused \\
+    "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "$CLI_WORK/awscliv2.zip"
+  command -v unzip >/dev/null 2>&1 || { apt-get update && apt-get install -y unzip; }
+  unzip -q "$CLI_WORK/awscliv2.zip" -d "$CLI_WORK"
+  "$CLI_WORK/aws/install" --update
+  rm -rf "$CLI_WORK"
+  trap - EXIT
+  command -v aws >/dev/null 2>&1 || { echo "FATAL: aws CLI still unavailable" >&2; exit 1; }
+fi
+`
+      : ''
+
+  // Ordering only means something between releases. Two commits of the same checkout version are
+  // neither older nor newer than each other, so in build mode the only sane reading of "install
+  // this commit" is to install it — and a build is never a hand-install worth protecting.
+  const downgradeGuard =
+    upgrade.kind === 'release'
+      ? `# Is the live version newer than the target? \`sort -V\` orders release cores correctly
+# (0.9.10 above 0.9.9, 1.0.0 above 0.9.99) but gets prereleases backwards — it calls
+# 0.9.8-alpha newer than 0.9.8 — so cores are compared with sort -V and semver's
+# "a prerelease precedes its release" is applied by hand. TARGET is always a stable
+# X.Y.Z (the shared resolver rejects anything else), so only the live side can carry a
+# prerelease suffix or the +commit a build-mode install leaves behind. Semver ignores
+# build metadata for precedence, so it is stripped too — otherwise a release deploy would
+# read 0.9.7+abc as newer than 0.9.7 and refuse to replace a dev build. A blank CURRENT
+# (not serving) is never newer, so an unhealthy runner still gets repaired below.
+live_is_newer() {
+  cur_core=\${CURRENT%%-*}
+  cur_core=\${cur_core%%+*}
+  tgt_core=\${TARGET%%-*}
+  if [ "$cur_core" != "$tgt_core" ]; then
+    [ "$(printf '%s\\n%s\\n' "$cur_core" "$tgt_core" | sort -V | tail -1)" = "$cur_core" ]
+    return $?
+  fi
+  # Same core, so live is either the identical release (handled above), a prerelease of it,
+  # or a build of it — all of which semver puts first, meaning they are due this upgrade.
+  return 1
+}
+
+# Never move a runner backwards by accident. One serving something newer than the declared
+# version is usually a deliberate hand-install, and silently reverting it during an
+# unrelated deploy is a nasty surprise; a real rollback sets ALLOW_DOWNGRADE=1.
+if [ "\${ALLOW_DOWNGRADE:-}" != "1" ] && live_is_newer; then
+  echo "WARNING: live $CURRENT is newer than target $TARGET; refusing to downgrade (set ALLOW_DOWNGRADE=1 to force)"
+  exit 0
+fi
+`
+      : `# Build mode: no version ordering to guard, the requested commit is the requested commit.
+`
 
   return `set -euo pipefail
 
-TARGET="${version}"
+TARGET="${expectedVersion}"
 HEALTH="http://127.0.0.1:${runnerPort}/"
 ALLOW_DOWNGRADE="${allowDowngrade ? '1' : ''}"
 
@@ -169,40 +297,14 @@ if [ "$CURRENT" = "$TARGET" ]; then
   exit 0
 fi
 
-# Is the live version newer than the target? \`sort -V\` orders release cores correctly
-# (0.9.10 above 0.9.9, 1.0.0 above 0.9.99) but gets prereleases backwards — it calls
-# 0.9.8-alpha newer than 0.9.8 — so cores are compared with sort -V and semver's
-# "a prerelease precedes its release" is applied by hand. TARGET is always a stable
-# X.Y.Z (the shared resolver rejects anything else), so only the live side can carry a
-# prerelease suffix. A blank CURRENT (not serving) is never newer, so an unhealthy
-# runner still gets repaired below.
-live_is_newer() {
-  cur_core=\${CURRENT%%-*}
-  tgt_core=\${TARGET%%-*}
-  if [ "$cur_core" != "$tgt_core" ]; then
-    [ "$(printf '%s\\n%s\\n' "$cur_core" "$tgt_core" | sort -V | tail -1)" = "$cur_core" ]
-    return $?
-  fi
-  # Same core, so live is either the identical release (handled above) or a prerelease
-  # of it — which semver puts first, meaning it is due this upgrade.
-  return 1
-}
-
-# Never move a runner backwards by accident. One serving something newer than the declared
-# version is usually a deliberate hand-install, and silently reverting it during an
-# unrelated deploy is a nasty surprise; a real rollback sets ALLOW_DOWNGRADE=1.
-if [ "\${ALLOW_DOWNGRADE:-}" != "1" ] && live_is_newer; then
-  echo "WARNING: live $CURRENT is newer than target $TARGET; refusing to downgrade (set ALLOW_DOWNGRADE=1 to force)"
-  exit 0
-fi
-
+${downgradeGuard}
 # Download and verify BEFORE stopping the unit, so a failed or corrupt fetch never takes
 # the runner down. Fail closed: the checksum sidecar is required, and must name exactly
 # the tarball we fetched — same contract the deploy-time preflight enforces.
-WORK=$(mktemp -d)
+${ensureAwsCli}WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-curl -fsSL "${tarballUrl}" -o "$WORK/runner.tar.gz"
-curl -fsSL "${checksumUrl}" -o "$WORK/runner.sha256"
+${fetchTarball}
+${fetchChecksum}
 EXPECTED=$(awk '$2 ~ /^\\*?${tarballPattern}$/ {print $1}' "$WORK/runner.sha256")
 [ -n "$EXPECTED" ] || { echo "FATAL: checksum manifest does not name ${tarballName}" >&2; exit 1; }
 ACTUAL=$(sha256sum "$WORK/runner.tar.gz" | awk '{print $1}')
@@ -326,26 +428,26 @@ export function waitForTerminalStatus(invocation, instanceId, { run = runAws, sl
       if (TERMINAL_SSM_STATUSES.has(stdout)) return stdout
       lastStatus = stdout
       // Cleared on recovery: InvocationDoesNotExist right after send-command is expected,
-      // and a stale one would otherwise outrank ten minutes of later InProgress polls and
-      // blame a failure that had already resolved.
+      // and a stale one would otherwise outrank the whole supervision window of later
+      // InProgress polls and blame a failure that had already resolved.
       lastFailure = ''
     } else {
       lastFailure = stderr || '(no stderr)'
     }
-    sleep(5)
+    sleep(SSM_POLL_INTERVAL_SECONDS)
   }
   const why = lastFailure ? `last polling error: ${lastFailure}` : `last status: ${lastStatus || 'unknown'}`
   throw new Error(
-    `${instanceId}: SSM command still not terminal after ${(SSM_COMPLETION_ATTEMPTS * 5) / 60} minutes (${why})`,
+    `${instanceId}: SSM command still not terminal after ${ssmSupervisionSeconds() / 60} minutes (${why})`,
   )
 }
 
-function upgradeOne(instanceId, version) {
+function upgradeOne(instanceId, upgrade) {
   // Hand the payload to SSM base64-encoded rather than quote-escaped: it becomes a
   // single token with no shell metacharacters, sidestepping the brittle escaping of a
   // multi-line script inside the commands=[...] shorthand.
-  const script = buildRemoteScript(version, { allowDowngrade: process.env.ALLOW_DOWNGRADE === '1' })
-  const commandId = sendCommand(instanceId, version, Buffer.from(script).toString('base64'))
+  const script = buildRemoteScript(upgrade, { allowDowngrade: process.env.ALLOW_DOWNGRADE === '1' })
+  const commandId = sendCommand(instanceId, upgrade.expectedVersion, Buffer.from(script).toString('base64'))
   console.log(`    command:  ${commandId}`)
 
   const invocation = [
@@ -370,13 +472,17 @@ function upgradeOne(instanceId, version) {
 // ── roll ─────────────────────────────────────────────────────────────────────
 
 function main() {
-  const version = resolveVersion()
+  const upgrade = resolveUpgrade()
   const targets = resolveTargets()
 
-  console.log(`==> Rolling boxlite-runner to v${version} across ${targets.length} instance(s) in ${REGION}`)
+  console.log(
+    `==> Rolling boxlite-runner to ${upgrade.expectedVersion} (${upgrade.kind}) ` +
+      `across ${targets.length} instance(s) in ${REGION}`,
+  )
+  console.log(`==> artifact: ${upgrade.artifact.tarballUrl}`)
   targets.forEach((instanceId, i) => {
     console.log(`==> [${i + 1}/${targets.length}] ${instanceId}`)
-    upgradeOne(instanceId, version)
+    upgradeOne(instanceId, upgrade)
   })
   // Deliberately does not assert the fleet is at the target: a host can be skipped as
   // already-current, left alone as still-bootstrapping, or refused as a downgrade. The

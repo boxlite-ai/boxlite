@@ -9,9 +9,61 @@ Parameters:
   GitHubEnvironment:
     Type: String
     Default: dev
-    AllowedPattern: '^[A-Za-z0-9_.-]+$'
+    MinLength: 1
+    MaxLength: 32
+    AllowedPattern: '^[a-z0-9][a-z0-9-]*$'
 
 Resources:
+  # Artifact stores belong to the stage's deployment bootstrap, not to the SST stack that
+  # consumes them. CI has to push an API image or Runner tarball *before* a release/build deploy
+  # starts, so making the deploy create its own input would be circular on a fresh stage.
+  ApiImagesRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub boxlite-${GitHubEnvironment}-api
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+
+  RunnerArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub boxlite-${GitHubEnvironment}-artifacts-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          # Superseded versions only. buildRunnerUserData re-fetches the tarball and its checksum
+          # on EVERY instance launch under `set -euo pipefail`, and the launch template keeps the
+          # commit-keyed URL, so expiring current objects would make any replacement after the
+          # window fail to boot — including for the stage that is currently deployed. A lifecycle
+          # rule cannot tell which key is live, so it must not delete live ones.
+          #
+          # Two consequences, both deliberate. Staged builds accumulate: roughly 30MB per deployed
+          # commit, to be pruned by hand when a stage is retired. And because staging is write-once
+          # on both paths, a noncurrent version only appears if someone deletes and re-uploads a
+          # key, so this rule is a backstop for that case rather than routine garbage collection.
+          - Id: expire-superseded-runner-builds
+            Prefix: runner/
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+
   BoxLiteRuntimePermissionsBoundary:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -233,3 +285,7 @@ Outputs:
     Value: !GetAtt GitHubDeployRole.Arn
   RuntimePermissionsBoundaryArn:
     Value: !Ref BoxLiteRuntimePermissionsBoundary
+  ApiImagesRepositoryUri:
+    Value: !GetAtt ApiImagesRepository.RepositoryUri
+  RunnerArtifactsBucketName:
+    Value: !Ref RunnerArtifactsBucket

@@ -1,6 +1,14 @@
 name: Deploy stack
 run-name: Deploy ${{ inputs.stage }} stack
 
+# A build deploy sources both deployable components from one commit on main:
+#
+#   Api    → SST builds apps/api/Dockerfile from that checkout
+#   Runner → Build C SDK → Build Runner Binary → private per-commit S3 object
+#
+# The final deploy sets one BOXLITE_ARTIFACT_SOURCE=build selector for both. A release deploy uses
+# the other selector and consumes the API image / Runner tarball published for VERSION instead.
+
 on:
   workflow_dispatch:
     inputs:
@@ -16,6 +24,10 @@ on:
         required: true
         default: false
         type: boolean
+      ref:
+        description: 'Full SHA of any commit already on main. Defaults to current main.'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -26,8 +38,54 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve-ref:
+    name: Resolve main commit
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+    steps:
+      - name: Checkout main history
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a commit already on main
+        id: ref
+        shell: bash
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          candidate="${INPUT_REF:-$GITHUB_SHA}"
+          [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be a full commit SHA" >&2; exit 1; }
+          git cat-file -e "$candidate^{commit}"
+          git merge-base --is-ancestor "$candidate" origin/main || {
+            echo "$candidate is not a commit on main" >&2
+            exit 1
+          }
+          echo "sha=$candidate" >> "$GITHUB_OUTPUT"
+
+  build-c:
+    name: Build commit C SDK
+    needs: resolve-ref
+    uses: ./.github/workflows/build-c.yml
+    with:
+      ref: ${{ needs.resolve-ref.outputs.sha }}
+      linux_x64_only: true
+
+  build-runner:
+    name: Build commit Runner
+    needs: [resolve-ref, build-c]
+    uses: ./.github/workflows/build-runner-binary.yml
+    with:
+      ref: ${{ needs.resolve-ref.outputs.sha }}
+      libboxlite_source: artifact
+
   deploy:
     name: Deploy ${{ inputs.stage }} stack
+    needs: [resolve-ref, build-runner]
     if: github.ref == 'refs/heads/main'
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-24.04
@@ -37,11 +95,16 @@ jobs:
       AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
       STAGE: ${{ inputs.stage }}
       IAM_PERMISSIONS_BOUNDARY_STAGE: ${{ inputs.stage }}
+      BOXLITE_ARTIFACT_SOURCE: build
+      API_ARTIFACT_SOURCE: build
+      RUNNER_ARTIFACT_SOURCE: build
+      BOXLITE_ARTIFACT_REF: ${{ needs.resolve-ref.outputs.sha }}
 
     steps:
-      - name: Checkout main
+      - name: Checkout selected main commit
         uses: actions/checkout@v5
         with:
+          ref: ${{ needs.resolve-ref.outputs.sha }}
           persist-credentials: false
 
       - name: Verify native AMD64 Docker
@@ -51,12 +114,68 @@ jobs:
           test "$(uname -m)" = "x86_64"
           test "$(docker info --format '{{.Architecture}}')" = "x86_64"
 
+      - name: Resolve commit version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: deploy-${{ inputs.stage }}-stack-${{ github.run_id }}
+
+      - name: Download commit Runner artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: runner-linux-amd64
+          path: dist/runner
+
+      - name: Stage commit Runner artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          account_id=$(aws sts get-caller-identity --query Account --output text)
+          bucket="boxlite-${STAGE}-artifacts-${account_id}"
+          archive="boxlite-runner-v${VERSION}-${BOXLITE_ARTIFACT_REF}-linux-amd64.tar.gz"
+          test -f "dist/runner/$archive"
+          test -f "dist/runner/$archive.sha256"
+          if ! aws s3api head-bucket --bucket "$bucket" >/dev/null 2>&1; then
+            echo "artifact bucket $bucket is missing; bootstrap $STAGE from apps/infra/ci/github-deploy-role.yaml first" >&2
+            exit 1
+          fi
+          # Write-once: the Pulumi trigger and the host's health-route comparison treat
+          # version+ref as an identity, so republishing different bytes under it would strand
+          # already-installed hosts on the old build. S3 returns 412 rather than overwriting.
+          #
+          # Decided over the ref as a whole, never per key — the same rule
+          # apps/infra/scripts/runner-artifact-build.mjs applies locally. A fully published ref is
+          # the desired end state. A half-published one is not completed here: the rebuild is not
+          # byte-identical (tar czf alone stamps a gzip mtime), so writing the absent manifest
+          # would describe bytes that are not the ones stored, and write-once then makes that
+          # unrepairable while every host fails the digest check.
+          prefix="runner/${BOXLITE_ARTIFACT_REF}"
+          present=0
+          for name in "$archive" "$archive.sha256"; do
+            if aws s3api head-object --bucket "$bucket" --key "$prefix/$name" >/dev/null 2>&1; then
+              present=$((present + 1))
+            fi
+          done
+          if [ "$present" -eq 2 ]; then
+            echo "$prefix/ is already published; leaving it untouched"
+          elif [ "$present" -eq 1 ]; then
+            echo "$prefix/ is partially published; delete the objects under it and rerun" >&2
+            exit 1
+          else
+            for name in "$archive" "$archive.sha256"; do
+              aws s3api put-object --bucket "$bucket" --key "$prefix/$name" \
+                --body "dist/runner/$name" --if-none-match '*' >/dev/null
+            done
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
