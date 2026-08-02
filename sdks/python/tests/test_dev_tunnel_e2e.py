@@ -304,30 +304,6 @@ async def test_local_box_tunnel_uri_and_one_shot_connects(shared_runtime):
         )
 
 
-async def test_local_connection_fileno_is_cleared_by_close(shared_runtime):
-    """A closed connection must not keep reporting its descriptor.
-
-    The halves close the socket, so the kernel is free to hand that number to
-    something else; returning it afterwards would point callers at whatever
-    took its place.
-    """
-    async with boxlite.SimpleBox(
-        image=LOCAL_IMAGE,
-        runtime=shared_runtime,
-        memory_mib=512,
-        cpus=1,
-    ) as box:
-        tunnel = await box.network.tunnel(LOCAL_PORT)
-        connection = await tunnel.connect()
-
-        fd = connection.fileno()
-        assert isinstance(fd, int) and fd >= 0
-
-        await connection.close()
-        with pytest.raises(RuntimeError, match="closed"):
-            connection.fileno()
-
-
 @pytest.mark.integration
 async def test_local_box_tunnel_binary_integrity(shared_runtime):
     async with boxlite.SimpleBox(

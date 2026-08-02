@@ -352,8 +352,6 @@ export interface NativeBoxTunnel {
 }
 
 export interface NativeBoxConnection {
-  /** Borrowed descriptor; the connection still owns and closes it. */
-  fileno(): number;
   read(maxBytes: number): Promise<Buffer>;
   write(data: Buffer): Promise<number>;
   shutdownWrite(): Promise<void>;

@@ -358,7 +358,7 @@ impl ApiClient {
     pub(crate) async fn connect_box_network_tunnel(
         &self,
         uri: &str,
-    ) -> BoxliteResult<tokio::io::DuplexStream> {
+    ) -> BoxliteResult<hyper_util::rt::TokioIo<hyper::upgrade::Upgraded>> {
         use http_body_util::Empty;
         use hyper::{Method, Request, Uri};
         use hyper_util::rt::TokioIo;
@@ -399,12 +399,11 @@ impl ApiClient {
         let upgraded = hyper::upgrade::on(response)
             .await
             .map_err(|e| BoxliteError::Network(format!("CONNECT upgrade failed: {e}")))?;
-        let (local, mut pump_end) = tokio::io::duplex(64 * 1024);
-        let mut remote = TokioIo::new(upgraded);
-        tokio::spawn(async move {
-            let _ = tokio::io::copy_bidirectional(&mut pump_end, &mut remote).await;
-        });
-        Ok(local)
+        // The upgraded stream is already AsyncRead + AsyncWrite, so hand it
+        // over directly. Bridging it through `tokio::io::duplex` would only buy
+        // a concrete type we already have, at the cost of a buffer, a pump task
+        // and a copy of every byte in both directions.
+        Ok(TokioIo::new(upgraded))
     }
 
     /// Prepare a box service tunnel and return its public descriptor.
@@ -710,6 +709,19 @@ mod tests {
         let mut response = [0; 4];
         stream.read_exact(&mut response).await.unwrap();
         assert_eq!(&response, b"ping");
+
+        // A remotely served connection has no descriptor to lend or surrender:
+        // hyper owns the socket and may hold already-read tunnel bytes.
+        let connection = crate::litebox::BoxConnection::new(stream);
+        assert_eq!(connection.raw_fd(), None);
+        let error = connection
+            .into_fd()
+            .expect_err("an upgraded remote stream has no descriptor");
+        assert!(
+            error.to_string().contains("no local descriptor"),
+            "unexpected error: {error}"
+        );
+
         server.await.unwrap();
     }
 

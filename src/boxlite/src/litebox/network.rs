@@ -66,16 +66,20 @@ impl Transport for tokio::net::UnixStream {
     }
 }
 
+/// The remote transport: an HTTP CONNECT stream hyper has upgraded.
+///
+/// Its descriptor is unreachable by construction — hyper owns the socket, it
+/// may be TLS-framed, and `Upgraded` can hold already-read tunnel bytes that no
+/// descriptor would carry. So both fd accessors decline.
 #[cfg(feature = "rest")]
-impl Transport for tokio::io::DuplexStream {
+impl Transport for hyper_util::rt::TokioIo<hyper::upgrade::Upgraded> {
     fn into_split(self: Box<Self>) -> (Box<dyn ReadTransport>, Box<dyn WriteTransport>) {
-        // No native split on an in-memory pipe, so this one pays the mutex.
+        // No native split, so this one pays `tokio::io::split`'s mutex.
         let (reader, writer) = tokio::io::split(*self);
         (Box::new(reader), Box::new(writer))
     }
 
     fn raw_fd(&self) -> Option<std::os::fd::RawFd> {
-        // In-memory pipe: there is no descriptor.
         None
     }
 
@@ -122,9 +126,9 @@ impl BoxConnection {
 
     /// The descriptor behind this connection, borrowed.
     ///
-    /// `None` for a remotely served connection, which is an in-memory pipe
-    /// rather than a socket. The connection retains ownership and closes it,
-    /// matching `socket.fileno()`.
+    /// `None` for a remotely served connection: hyper owns that socket and it
+    /// may be TLS-framed, so no descriptor of ours carries its bytes. The
+    /// connection retains ownership and closes it, matching `socket.fileno()`.
     pub fn raw_fd(&self) -> Option<std::os::fd::RawFd> {
         self.inner.raw_fd()
     }
@@ -368,24 +372,6 @@ mod tests {
             };
             assert!(result.is_ok(), "split={split} should tolerate ENOTCONN");
         }
-    }
-
-    /// The transport used for real remote tunnels — an in-memory duplex pipe —
-    /// reports no descriptor and refuses to surrender one.
-    #[cfg(feature = "rest")]
-    #[tokio::test]
-    async fn duplex_backed_connection_reports_and_refuses_a_descriptor() {
-        let (local, _peer) = tokio::io::duplex(64);
-        let connection = BoxConnection::new(local);
-
-        assert_eq!(connection.raw_fd(), None);
-        let error = connection
-            .into_fd()
-            .expect_err("an in-memory pipe has no descriptor");
-        assert!(
-            error.to_string().contains("no local descriptor"),
-            "unexpected error: {error}"
-        );
     }
 
     #[tokio::test]

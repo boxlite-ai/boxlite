@@ -607,6 +607,7 @@ dependencies = [
  "cbindgen",
  "futures",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -21,7 +21,11 @@ async fn connection_fd(
     let (sdk, mut bridge) = tokio::net::UnixStream::pair()
         .map_err(|error| BoxliteError::Network(format!("create SDK socket bridge: {error}")))?;
     tokio::spawn(async move {
-        let _ = tokio::io::copy_bidirectional(&mut connection, &mut bridge).await;
+        // The relay is detached, so a failure here has nowhere to be returned;
+        // the caller only sees EOF on its half. Log it so it is diagnosable.
+        if let Err(error) = tokio::io::copy_bidirectional(&mut connection, &mut bridge).await {
+            tracing::debug!(%error, "box tunnel bridge relay ended");
+        }
     });
     sdk.into_std()
         .map(std::os::fd::OwnedFd::from)
@@ -242,8 +246,8 @@ pub unsafe extern "C" fn boxlite_tunnel_connect(
             let connection = handle.connect()?;
             // A socket-backed connection already owns exactly the descriptor
             // the caller wants, so surrender it instead of inserting another
-            // socket pair and copy task. Only the in-memory remote transport
-            // needs that bridge.
+            // socket pair and copy task. Only the remote transport, whose
+            // socket belongs to the HTTP client, needs that bridge.
             match connection.raw_fd() {
                 Some(_) => connection.into_fd(),
                 None => connection_fd(connection).await,
