@@ -5,7 +5,7 @@
 //! These exercise the cross-process contract between the core-side
 //! `GvproxyBackend` control client and a real shim-side `GvproxyInstance`.
 
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
@@ -175,6 +175,66 @@ async fn live_gvproxy_backend_expose_list_unexpose_roundtrip() {
     assert!(
         !has_local(&backend.list_forwards().await.unwrap()),
         "forward should be absent after unexpose"
+    );
+}
+
+/// A host port the OS refuses on permission grounds must surface gvproxy's own
+/// bind failure through `/services/forwarder/expose`, not a synthesized
+/// conflict string. Companion to the CLI suite's busy-port test, which covers
+/// the EADDRINUSE half of the same contract.
+///
+/// This has to live here rather than in the CLI suite: `-p` cannot request a
+/// specific host address, leaving `PortSpec::host_ip` unset, which resolves to
+/// the wildcard — and Darwin applies the reserved-port check only to a named
+/// address, so a wildcard bind of port 80 succeeds there. Naming an address is
+/// refused on Darwin, and on any host that restricts privileged ports whatever
+/// the address, so this is where the permission path stays reachable; the
+/// guard below skips wherever the bind is permitted.
+#[tokio::test]
+async fn live_gvproxy_backend_expose_privileged_port_surfaces_permission_denied() {
+    // The premise is "binding a privileged port is refused here". Root, a
+    // CAP_NET_BIND_SERVICE binary, or a lowered `ip_unprivileged_port_start`
+    // removes it and would leave the test asserting against a successful bind.
+    if TcpListener::bind("127.0.0.1:80").is_ok() {
+        eprintln!(
+            "SKIP live_gvproxy_backend_expose_privileged_port_surfaces_permission_denied: \
+             host allows binding 127.0.0.1:80 (root / CAP_NET_BIND_SERVICE / \
+             low ip_unprivileged_port_start)"
+        );
+        return;
+    }
+
+    let dir = tempfile::Builder::new()
+        .prefix("bl-live-gvproxy-privport-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let (_instance, backend, _, control_sock) = backend_for(&dir);
+    wait_for_services(&backend, control_sock).await;
+
+    let local = "127.0.0.1:80";
+    let error = backend
+        .expose(local, "192.168.127.2:80", TransportProtocol::Tcp)
+        .await
+        .expect_err("a privileged host port must not publish");
+
+    let error = format!("{error}");
+    assert!(
+        error.contains("/services/forwarder/expose"),
+        "error should name the endpoint that failed: {error}"
+    );
+    assert!(
+        error.to_ascii_lowercase().contains("permission denied"),
+        "error should carry the OS bind failure verbatim, not a generic \
+         conflict string: {error}"
+    );
+    assert!(
+        !backend
+            .list_forwards()
+            .await
+            .expect("list forwards")
+            .iter()
+            .any(|forward| forward.local == local),
+        "a refused expose must not leave a forward registered"
     );
 }
 

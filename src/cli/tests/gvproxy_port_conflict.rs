@@ -119,11 +119,18 @@ fn gvproxy_privileged_port_fails_fast_with_named_error() {
     // sysctl `net.ipv4.ip_unprivileged_port_start` lowered). The test
     // premise is "bind privileged port fails"; without that, the test
     // is meaningless.
-    if TcpListener::bind("127.0.0.1:80").is_ok() {
+    //
+    // Probe the wildcard, because that is what publication binds: `-p 80:80`
+    // leaves `PortSpec::host_ip` unset, which resolves to 0.0.0.0. Darwin
+    // applies the reserved-port check only to a named address, so `0.0.0.0:80`
+    // succeeds there while every specific address returns EACCES — probing
+    // 127.0.0.1 would report the premise as holding when it does not, and the
+    // test would then fail against a box that published port 80 correctly.
+    if TcpListener::bind("0.0.0.0:80").is_ok() || TcpListener::bind("[::]:80").is_ok() {
         eprintln!(
             "SKIP gvproxy_privileged_port_fails_fast_with_named_error: \
-             host allows binding port 80 (root / CAP_NET_BIND_SERVICE / \
-             low ip_unprivileged_port_start)"
+             host allows binding port 80 on the wildcard address (Darwin / root / \
+             CAP_NET_BIND_SERVICE / low ip_unprivileged_port_start)"
         );
         return;
     }
