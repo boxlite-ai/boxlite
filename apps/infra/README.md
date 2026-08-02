@@ -75,15 +75,15 @@ flowchart TB
 
 ## Prerequisites
 
-`npm run login` and `npm run bootstrap` set up everything except three things
-you bring yourself:
+`npm run login` and `npm run bootstrap` set up everything except the accounts
+and the stack itself:
 
 | You provide | Notes |
 | --- | --- |
 | An AWS account | `npm run login` runs `aws login` — no IAM user, no access keys |
 | A GitHub repo | `npm run login` runs `gh auth login` |
 | A Cloudflare domain + API token | One manual step — see [Cloudflare API token](#cloudflare-api-token) |
-| An OIDC tenant (Auth0 or any compliant IdP) | Signup is manual; the app, API, and Action are automated |
+| An OIDC tenant | Signup is always manual. `--provision-auth0` creates the app, API, and post-login Action **only on Auth0**; any other compliant IdP needs those created by hand |
 | An existing stack whose Runner count matches `RUNNERS` | First-Runner provisioning is not implemented here |
 
 ## Deploy an existing stack
@@ -119,9 +119,12 @@ list is an allowlist, so a typo cannot target a protected Environment.
 
 ## Secrets & credentials
 
-Nothing secret lives in git. Access is **AWS IAM only** — anyone who can deploy
-can read every secret, so onboard by granting AWS access and offboard by
-revoking it. Secrets are per-stage; seed each stage you run.
+Nothing secret lives in git, but there are **two** control planes, and
+offboarding means revoking both. Most secrets live in AWS, where anyone who can
+deploy can read them. The rest are GitHub Environment secrets (see the table
+below), reachable by anyone who can administer the repository or run the
+workflow — revoking AWS access does not touch those. Secrets are per-stage; seed
+each stage you run.
 
 | What | Stored in | Set by |
 | --- | --- | --- |
@@ -193,8 +196,11 @@ reviewed migration. Never combine them.
 **Deploys self-verify.** After a successful deploy the wrapper checks that the
 NLB listener forwards to the Proxy service's target group with healthy targets,
 probes `/health` over both the base and a wildcard hostname, and confirms
-`/api/config` reports the expected issuer, version, and Proxy host. A failed
-check exits nonzero without mutating anything.
+`/api/config` reports the expected issuer, version, and Proxy host. The check is
+read-only and exits nonzero on failure — it does **not** roll back. By the time
+it runs the deploy has already applied its changes, so a failure means the stack
+is live in the state that failed the check; recover by fixing forward or
+redeploying a known-good revision.
 
 **`/api/*` bypasses CloudFront on purpose.** CloudFront caps WebSockets at 10
 minutes, which would kill `exec`/`attach` sessions. Use

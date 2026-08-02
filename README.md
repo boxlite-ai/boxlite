@@ -143,6 +143,8 @@ Every CLI command also works against a running server with `--url`: `boxlite --u
 ```bash
 git clone https://github.com/boxlite-ai/boxlite && cd boxlite/apps/infra
 npm install
+npm run login                          # browser sign-in: AWS, GitHub, Auth0
+npm run bootstrap -- --stage prod      # IAM role, GitHub Environment, secrets
 npm run deploy -- --stage prod
 ```
 

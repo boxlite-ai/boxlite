@@ -6,6 +6,7 @@
 
 mod common;
 
+use std::io::ErrorKind;
 use std::net::TcpListener;
 use std::process::Command;
 use std::time::Instant;
@@ -126,13 +127,32 @@ fn gvproxy_privileged_port_fails_fast_with_named_error() {
     // succeeds there while every specific address returns EACCES — probing
     // 127.0.0.1 would report the premise as holding when it does not, and the
     // test would then fail against a box that published port 80 correctly.
-    if TcpListener::bind("0.0.0.0:80").is_ok() || TcpListener::bind("[::]:80").is_ok() {
-        eprintln!(
-            "SKIP gvproxy_privileged_port_fails_fast_with_named_error: \
-             host allows binding port 80 on the wildcard address (Darwin / root / \
-             CAP_NET_BIND_SERVICE / low ip_unprivileged_port_start)"
-        );
-        return;
+    //
+    // Only an explicit PermissionDenied establishes the premise. A wildcard :80
+    // held by another process fails with AddrInUse, which is a conflict rather
+    // than a refusal — running on that would assert a permission error the box
+    // cannot produce.
+    for address in ["0.0.0.0:80", "[::]:80"] {
+        match TcpListener::bind(address) {
+            Err(error) if error.kind() == ErrorKind::PermissionDenied => {}
+            Ok(_) => {
+                eprintln!(
+                    "SKIP gvproxy_privileged_port_fails_fast_with_named_error: \
+                     host allows binding {address} (Darwin / root / \
+                     CAP_NET_BIND_SERVICE / low ip_unprivileged_port_start)"
+                );
+                return;
+            }
+            Err(error) => {
+                eprintln!(
+                    "SKIP gvproxy_privileged_port_fails_fast_with_named_error: \
+                     probing {address} failed with {:?} ({error}), not PermissionDenied, \
+                     so the premise cannot be established",
+                    error.kind()
+                );
+                return;
+            }
+        }
     }
 
     let ctx = common::boxlite();

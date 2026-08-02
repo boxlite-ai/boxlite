@@ -81,6 +81,9 @@ import { resolveAwsCliPath } from './proxy-deployment-verify.mjs'
 import { resolveSstStage } from './sst-stage.mjs'
 
 const SCRIPT_NAME = 'bootstrap-environment'
+// The one stage that must never end up with an unreviewed deploy path. Matches
+// PRODUCTION_STAGE in sst.config.ts, which gates retain-on-removal.
+const PROTECTED_STAGE = 'prod'
 const INFRA_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const TEMPLATE_PATH = join(INFRA_ROOT, 'ci', 'github-deploy-role.yaml')
 const ENV_PATH = join(INFRA_ROOT, '.env')
@@ -182,6 +185,14 @@ function currentAwsIdentity(awsCliPath, region) {
   return identity
 }
 
+// A blank answer at the prompt, or an env var set to '', would otherwise be
+// stored as a real secret and only surface as an auth failure at deploy time.
+function requireNonEmptySecret(label, value) {
+  const trimmed = value?.trim()
+  if (!trimmed) throw new Error(`${label} cannot be empty`)
+  return trimmed
+}
+
 // No native masked-input in node:readline — a minimal raw-mode reader avoids
 // pulling in a prompt dependency for two secrets. TTY-gated: a non-interactive
 // caller (CI, a script) must supply the value through the matching env var
@@ -202,26 +213,37 @@ function promptSecret(label) {
       stdin.pause()
       stdin.removeListener('data', onData)
     }
-    const onData = (char) => {
-      switch (char) {
-        case '\n':
-        case '\r':
-        case '\u0004':
-          cleanup()
-          process.stdout.write('\n')
-          resolvePrompt(value)
-          break
-        case '\u0003':
-          cleanup()
-          process.stdout.write('\n')
-          reject(new Error('interrupted'))
-          break
-        case '\u007f':
-        case '\b':
-          value = value.slice(0, -1)
-          break
-        default:
-          value += char
+    // Raw mode delivers a chunk, not a keystroke: a pasted token arrives as one
+    // string, usually with its terminator attached. Comparing the chunk itself
+    // sends the whole paste to `default`, so the secret keeps the trailing
+    // control character and the prompt never resolves. Step through characters,
+    // and stop at the first terminator so anything typed after it is ignored.
+    let settled = false
+    const onData = (chunk) => {
+      for (const char of chunk) {
+        if (settled) return
+        switch (char) {
+          case '\n':
+          case '\r':
+          case '\u0004':
+            settled = true
+            cleanup()
+            process.stdout.write('\n')
+            resolvePrompt(value)
+            break
+          case '\u0003':
+            settled = true
+            cleanup()
+            process.stdout.write('\n')
+            reject(new Error('interrupted'))
+            break
+          case '\u007f':
+          case '\b':
+            value = value.slice(0, -1)
+            break
+          default:
+            value += char
+        }
       }
     }
     stdin.on('data', onData)
@@ -252,7 +274,7 @@ function putSsmSecureParameter(awsCliPath, region, name, value) {
 async function ensureCloudflareCredentials({ awsCliPath, region, stage, force }) {
   for (const { envVar, param, label } of CLOUDFLARE_CREDENTIALS) {
     const name = ssmParameterName(stage, param)
-    const fromEnv = process.env[envVar]
+    const fromEnv = process.env[envVar]?.trim()
     if (fromEnv) {
       putSsmSecureParameter(awsCliPath, region, name, fromEnv)
       console.log(`[${SCRIPT_NAME}] ${label} ... set from ${envVar}`)
@@ -265,7 +287,7 @@ async function ensureCloudflareCredentials({ awsCliPath, region, stage, force })
       continue
     }
 
-    const value = await promptSecret(`${label}: `)
+    const value = requireNonEmptySecret(label, await promptSecret(`${label}: `))
     putSsmSecureParameter(awsCliPath, region, name, value)
     console.log(`[${SCRIPT_NAME}] ${label} ... set`)
   }
@@ -275,8 +297,11 @@ async function ensureCloudflareCredentials({ awsCliPath, region, stage, force })
 // call) so this stays the one place that knows how to reach the sst binary —
 // see scripts/sst-with-cloudflare.mjs's own header comment for why.
 async function ensureOidcClientId(stage) {
-  const fromEnv = process.env.OIDC_CLIENT_ID
-  const value = fromEnv ?? (await promptSecret('OIDC client ID: '))
+  // `?.trim() || undefined` rather than `??`: an env var set to the empty
+  // string is a misconfiguration, not a choice to store nothing, and `??` would
+  // accept it and seed an empty secret that only fails at deploy time.
+  const fromEnv = process.env.OIDC_CLIENT_ID?.trim() || undefined
+  const value = requireNonEmptySecret('OIDC client ID', fromEnv ?? (await promptSecret('OIDC client ID: ')))
   execFileSync(process.execPath, [SST_WRAPPER_PATH, 'secret', 'set', 'OIDC_CLIENT_ID', '--stage', stage], {
     input: value,
     encoding: 'utf8',
@@ -359,6 +384,19 @@ function ensureGithubEnvironment({ repo, stage, reviewerIds }) {
   } catch (error) {
     const stderr = error.stderr?.toString() ?? ''
     if (!isProtectionUnavailableError(stderr) || reviewerIds.length === 0) throw error
+
+    // Fail closed on the protected stage. Everywhere else an unprotected
+    // environment is a downgrade worth taking to keep bootstrap moving; for
+    // prod it would silently produce the thing the reviewers exist to prevent
+    // — a stage anyone who can run the workflow can deploy unreviewed.
+    if (stage === PROTECTED_STAGE) {
+      throw new Error(
+        `refusing to create the GitHub '${stage}' environment without required reviewers: ` +
+          'deployment protection rules need a public repository, or GitHub Pro/Team/Enterprise ' +
+          'on a private one. Enable protection for this repository, then rerun.',
+        { cause: error },
+      )
+    }
 
     // Protection rules need a public repo, or a paid plan on a private one.
     // The environment itself still has to exist for vars/secrets to land, so

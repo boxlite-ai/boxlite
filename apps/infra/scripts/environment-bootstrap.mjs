@@ -8,7 +8,11 @@
  * covered by unit tests instead of only being exercised against live AWS.
  */
 
-const STAGE_LIKE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
+// No underscore: the stage is interpolated into a CloudFormation stack name
+// (githubDeployRoleStackName), and CloudFormation accepts only alphanumerics
+// and hyphens. Allowing `dev_blue` here would pass validation and then fail at
+// `cloudformation deploy`, after bootstrap had already made external changes.
+const STAGE_LIKE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*$/
 const GITHUB_REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/
 const ACCOUNT_ID_PATTERN = /^\d{12}$/
 

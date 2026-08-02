@@ -42,6 +42,20 @@ function iamPatternToRegExp(pattern) {
 }
 
 /*
+ * IAM treats condition *key names* case-insensitively, so a policy written with
+ * `iam:PermissionsBoundary` must match a lookup for `IAM:PermissionsBoundary`.
+ * Only the key is folded — the values `StringEquals` compares stay
+ * case-sensitive, which is why the caller still uses an exact `includes`.
+ */
+function stringEqualsValues(condition, conditionKey) {
+  const stringEquals = condition?.StringEquals
+  if (!stringEquals) return undefined
+  const wanted = conditionKey.toLowerCase()
+  const match = Object.keys(stringEquals).find((key) => key.toLowerCase() === wanted)
+  return match === undefined ? undefined : stringEquals[match]
+}
+
+/*
  * Recognizes the `Condition.StringEquals` operator the actual template uses
  * (SetBoxLiteRoleBoundary in ci/github-deploy-role.yaml). A statement with no
  * condition on `conditionKey` is an unconditional — and therefore sufficient
@@ -55,7 +69,7 @@ export function policyDocumentsAllow(policyDocuments, { action, resource, condit
       if (!asArray(statement.Action).some((pattern) => iamPatternToRegExp(pattern).test(action))) continue
       if (!asArray(statement.Resource).some((pattern) => iamPatternToRegExp(pattern).test(resource))) continue
 
-      const requiredValues = statement.Condition?.StringEquals?.[conditionKey]
+      const requiredValues = stringEqualsValues(statement.Condition, conditionKey)
       if (requiredValues === undefined || asArray(requiredValues).includes(conditionValue)) return true
     }
   }

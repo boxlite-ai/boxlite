@@ -136,8 +136,13 @@ test('data-protection guards key off the stage that actually exists: prod', () =
 test('no stage-name comparison hardcodes a bare production literal', () => {
   // NODE_ENV / ENVIRONMENT: 'production' are Node runtime values, not stages,
   // and must survive; a stage comparison against the string must not.
-  assert.doesNotMatch(source, /stage === 'production'/)
-  assert.doesNotMatch(source, /stage === "production"/)
+  //
+  // Match any comparison operator and any quote form. Pinning `stage ===
+  // 'production'` alone let the inverse, loose equality, and a template
+  // literal through — a guard could compare against the wrong stage name and
+  // this test would still pass, which is exactly what it exists to prevent.
+  assert.doesNotMatch(source, /\bstage\b\s*(?:===|!==|==|!=)\s*(?:'production'|"production"|`production`)/)
+  assert.doesNotMatch(source, /(?:'production'|"production"|`production`)\s*(?:===|!==|==|!=)\s*\bstage\b/)
   assert.match(source, /NODE_ENV: 'production'/)
 })
 

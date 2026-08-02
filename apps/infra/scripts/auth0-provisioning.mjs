@@ -79,8 +79,12 @@ export function deployActionArgs(actionId) {
  */
 export function bindActionArgs({ actionId, displayName = 'boxlite-custom-claims', existingBindings = [] }) {
   if (!actionId) throw new Error('actionId is required to bind an Action')
+  // Require action.id in the filter, not just a mismatch: a binding without an
+  // `action` object passes an inequality test and then throws in the map. A
+  // binding whose Action has been deleted is the shape to expect, and losing
+  // the whole rebind to one of those is worse than dropping it.
   const preserved = existingBindings
-    .filter((binding) => binding?.action?.id !== actionId && binding?.display_name !== displayName)
+    .filter((binding) => binding?.action?.id && binding.action.id !== actionId && binding.display_name !== displayName)
     .map((binding) => ({
       ref: { type: 'action_id', value: binding.action.id },
       display_name: binding.display_name,

@@ -71,6 +71,21 @@ test('bindActionArgs preserves other bindings already on the flow', () => {
   ])
 })
 
+test('bindActionArgs skips a binding whose Action is gone instead of throwing', () => {
+  // A binding can arrive with no `action` object once the Action behind it is
+  // gone. Dereferencing that while rebuilding the list throws before the PATCH
+  // is built, so bootstrap dies with the new Action deployed but never bound —
+  // nothing is unbound, but the stage is left half-provisioned.
+  const args = bindActionArgs({
+    actionId: 'act_new',
+    existingBindings: [{ display_name: 'legacy-orphan' }, { action: { id: 'act_other' }, display_name: 'keeper' }],
+  })
+  assert.deepEqual(JSON.parse(valueAfter(args, '--data')).bindings, [
+    { ref: { type: 'action_id', value: 'act_other' }, display_name: 'keeper' },
+    { ref: { type: 'action_id', value: 'act_new' }, display_name: 'boxlite-custom-claims' },
+  ])
+})
+
 test('bindActionArgs does not duplicate itself when already bound', () => {
   const args = bindActionArgs({
     actionId: 'act_123',

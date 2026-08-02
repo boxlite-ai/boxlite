@@ -5,6 +5,7 @@
 //! These exercise the cross-process contract between the core-side
 //! `GvproxyBackend` control client and a real shim-side `GvproxyInstance`.
 
+use std::io::ErrorKind;
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::sync::mpsc::RecvTimeoutError;
@@ -192,16 +193,31 @@ async fn live_gvproxy_backend_expose_list_unexpose_roundtrip() {
 /// guard below skips wherever the bind is permitted.
 #[tokio::test]
 async fn live_gvproxy_backend_expose_privileged_port_surfaces_permission_denied() {
-    // The premise is "binding a privileged port is refused here". Root, a
-    // CAP_NET_BIND_SERVICE binary, or a lowered `ip_unprivileged_port_start`
-    // removes it and would leave the test asserting against a successful bind.
-    if TcpListener::bind("127.0.0.1:80").is_ok() {
-        eprintln!(
-            "SKIP live_gvproxy_backend_expose_privileged_port_surfaces_permission_denied: \
-             host allows binding 127.0.0.1:80 (root / CAP_NET_BIND_SERVICE / \
-             low ip_unprivileged_port_start)"
-        );
-        return;
+    // The premise is "binding a privileged port is refused *on permission
+    // grounds*". Root, a CAP_NET_BIND_SERVICE binary, or a lowered
+    // `ip_unprivileged_port_start` removes it. So does an unrelated failure:
+    // if something already holds :80 the bind fails with AddrInUse, and
+    // treating that as the premise would assert a permission error gvproxy is
+    // never going to produce. Proceed only on an explicit PermissionDenied.
+    match TcpListener::bind("127.0.0.1:80") {
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => {}
+        Ok(_) => {
+            eprintln!(
+                "SKIP live_gvproxy_backend_expose_privileged_port_surfaces_permission_denied: \
+                 host allows binding 127.0.0.1:80 (root / CAP_NET_BIND_SERVICE / \
+                 low ip_unprivileged_port_start)"
+            );
+            return;
+        }
+        Err(error) => {
+            eprintln!(
+                "SKIP live_gvproxy_backend_expose_privileged_port_surfaces_permission_denied: \
+                 probing 127.0.0.1:80 failed with {:?} ({error}), not PermissionDenied, \
+                 so the premise cannot be established",
+                error.kind()
+            );
+            return;
+        }
     }
 
     let dir = tempfile::Builder::new()

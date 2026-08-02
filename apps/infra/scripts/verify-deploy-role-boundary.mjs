@@ -119,6 +119,12 @@ function main() {
 try {
   main()
 } catch (error) {
+  // Print the cause chain: failures here are wrapped with `{ cause }`, and the
+  // wrapper text alone ("could not read the deploy role's IAM policies") does
+  // not say whether the ARN was the wrong shape or the AWS CLI itself failed.
   console.error(`${SCRIPT_NAME}: ${error.message}`)
+  for (let cause = error.cause; cause; cause = cause.cause) {
+    console.error(`${SCRIPT_NAME}:   caused by: ${cause.message ?? cause}`)
+  }
   process.exit(1)
 }

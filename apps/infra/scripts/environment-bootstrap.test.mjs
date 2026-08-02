@@ -32,6 +32,15 @@ test('runtimeBoundaryPolicyArn rejects a malformed account id', () => {
   )
 })
 
+test('githubDeployRoleStackName rejects a stage CloudFormation cannot name', () => {
+  // CloudFormation stack names allow only alphanumerics and hyphens. An
+  // underscore has to be refused up front: bootstrap makes external changes
+  // before it ever calls `cloudformation deploy`, so accepting `dev_blue` here
+  // means failing partway through with a half-provisioned stage.
+  assert.throws(() => githubDeployRoleStackName('dev_blue'), /must match/)
+  assert.equal(githubDeployRoleStackName('dev-blue'), 'boxlite-dev-blue-github-deploy')
+})
+
 test('githubDeployRoleStackName stays stable per stage so a re-run updates one stack', () => {
   assert.equal(githubDeployRoleStackName('dev'), 'boxlite-dev-github-deploy')
 })
