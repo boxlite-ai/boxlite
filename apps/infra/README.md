@@ -1,12 +1,5 @@
 # BoxLite Infra (SST on AWS)
 
-> **Based on [Daytona](https://github.com/daytonaio/daytona)** by Daytona
-> Platforms Inc., licensed under AGPL-3.0. This infrastructure configuration is
-> a modified derivative of that work. See `apps/infra/LICENSE`,
-> `apps/LICENSES/AGPL-3.0.txt`, and individual source file headers for full
-> license terms. (The repository root `LICENSE` is Apache-2.0 and covers other
-> components; `apps/NOTICE` maps which license applies where.)
-
 Deploys the BoxLite control plane: ECS Fargate services, an EC2 Runner with
 nested KVM, RDS Postgres, ElastiCache Redis, S3, and CloudFront.
 
