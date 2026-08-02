@@ -138,7 +138,11 @@ allow_with_note() { jq -nc --arg m "$1" '{continue:true, systemMessage:$m}'; exi
 # (VERDICT_GATE_HARD_BLOCK=0) demotes them to a user-visible nudge the MODEL never
 # sees — rollback/telemetry only, see design notes.
 block() {
-  if [[ "${VERDICT_GATE_HARD_BLOCK:-0}" == "1" ]]; then
+  # Default HARD, matching the two doc sites above. Defaulting to soft meant only
+  # Claude Code was gated: it is the sole caller that sets this, via settings.json
+  # env, so the Codex registration in .codex/hooks.json and any direct invocation
+  # got a non-blocking note instead. Set VERDICT_GATE_HARD_BLOCK=0 to roll back.
+  if [[ "${VERDICT_GATE_HARD_BLOCK:-1}" != "0" ]]; then
     jq -nc --arg r "$1" '{decision:"block", reason:$r}'
   else
     jq -nc --arg r "$1" '{continue:true, systemMessage:("[verdict-gate] " + $r)}'

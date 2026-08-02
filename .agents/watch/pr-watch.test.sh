@@ -15,6 +15,11 @@
 # Exits non-zero on any failure.
 set -uo pipefail
 
+# The watcher's opt-out, same as post-remote-write-watch.test.sh. Inherited it
+# disarms every arm case and takes this suite to 18/22; the case that covers the
+# opt-out sets it per-invocation.
+unset BOXLITE_PR_WATCH
+
 # Resolve from THIS script's location, not the caller's cwd. Same reasoning as
 # .agents/hooks/post-remote-write-watch.test.sh: cwd-derived paths make a
 # two-side check silently exercise a different checkout's copy and report a pass.

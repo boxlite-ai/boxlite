@@ -25,7 +25,11 @@ trap 'rm -rf "$TMP"' EXIT
 # branch/HEAD detection — that's fine, we read the same values for assertions.
 export CLAUDE_PROJECT_DIR="$TMP"
 mkdir -p "$TMP/.agents/state"
-unset CODEX_SANDBOX CLAUDECODE AGENT_GATED
+# GITHOOK_DELEGATED and GITHOOK_KEEP_AUDIT are the git-level gate's handshake with
+# this hook. Inherited from the caller they rewrite the answer wholesale — set,
+# they took the suite to 30/5 and 32/3, including cases that assert the opposite.
+# Nothing sets them in a developer shell, but neither does anything stop it.
+unset CODEX_SANDBOX CLAUDECODE AGENT_GATED GITHOOK_DELEGATED GITHOOK_KEEP_AUDIT
 
 BRANCH="$(git -C "$REPO_ROOT" branch --show-current)"
 HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
@@ -69,9 +73,23 @@ subject_hash_for() {
   fi
 }
 
+# Every gating case below asks what the PreToolUse layer decides on its own. Of
+# what the hook reads from its ambient environment, two survive the suite-level
+# unset above: the repo `git rev-parse` resolves, and `core.hooksPath` — and it
+# deliberately steps aside when the git-level gate is installed. Left ambient,
+# these cases answer differently depending on whether the caller ran install.sh: in
+# a hooksPath-configured clone all 23 returned `passthrough`, so every one of the 17
+# expecting a decision failed — the layer they name never ran at all. Pin both so
+# they mean one thing everywhere; deferral has its own cases below.
+hook_ungated() {
+  ( cd "$REPO_ROOT" \
+    && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0='' \
+       "$HOOK" )
+}
+
 run() {
   local desc="$1" cmd="$2" expect="$3" out decision
-  out=$(printf '%s' "$cmd" | jq -Rs '{tool_input:{command:.}}' | "$HOOK")
+  out=$(printf '%s' "$cmd" | jq -Rs '{tool_input:{command:.}}' | hook_ungated)
   if [[ -z "$out" ]]; then
     decision="passthrough"
   else
@@ -187,6 +205,53 @@ fi
 rm -f "$TMP/.agents/state/last-audit-handoff.json"
 
 echo
+echo "## Delegation to the git-level gate"
+# The cases above pin core.hooksPath off. These are the other side of that pin:
+# with the git-level gate installed the PreToolUse layer must step aside so the
+# audit artifact keeps a single consumer — but only when the delegate is really
+# there. git skips a missing hook silently, so configured-but-absent has to gate
+# here, or both layers stand down and the change goes out unaudited.
+DELEG_REPO="$(mktemp -d)"
+git -C "$DELEG_REPO" init -q
+git -C "$DELEG_REPO" config user.email t@t.test
+git -C "$DELEG_REPO" config user.name tester
+mkdir -p "$DELEG_REPO/.agents/hooks" "$DELEG_REPO/.agents/state" "$DELEG_REPO/.githooks"
+cp "$REPO_ROOT/.agents/hooks/preflight-commit-push.sh" "$DELEG_REPO/.agents/hooks/"
+printf 'base\n' > "$DELEG_REPO/f"
+git -C "$DELEG_REPO" add -A
+git -C "$DELEG_REPO" commit -qm base
+git -C "$DELEG_REPO" config core.hooksPath .githooks
+
+deleg_decision() {  # -> passthrough | allow | deny | parse_error
+  local out
+  out=$(printf 'git commit -m x' | jq -Rs '{tool_input:{command:.}}' \
+        | ( cd "$DELEG_REPO" && CLAUDE_PROJECT_DIR="$DELEG_REPO" \
+            bash "$DELEG_REPO/.agents/hooks/preflight-commit-push.sh" ) 2>/dev/null)
+  if [[ -z "$out" ]]; then printf 'passthrough'; return; fi
+  printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision' 2>/dev/null \
+    || printf 'parse_error'
+}
+
+# Configured, delegate absent: nothing downstream will gate, so this layer must.
+got="$(deleg_decision)"
+if [[ "$got" == "deny" ]]; then
+  pass=$((pass + 1)); printf '  PASS  hooksPath set but delegate missing still gates here\n'
+else
+  fail=$((fail + 1)); printf '  FAIL  hooksPath set but delegate missing still gates here  (got=%s)\n' "$got"
+fi
+
+# Configured and present: the git-level gate owns it, this layer steps aside.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$DELEG_REPO/.githooks/pre-commit"
+chmod +x "$DELEG_REPO/.githooks/pre-commit"
+got="$(deleg_decision)"
+if [[ "$got" == "passthrough" ]]; then
+  pass=$((pass + 1)); printf '  PASS  hooksPath set with the delegate present defers\n'
+else
+  fail=$((fail + 1)); printf '  FAIL  hooksPath set with the delegate present defers  (got=%s)\n' "$got"
+fi
+rm -rf "$DELEG_REPO"
+
+echo
 echo "## Codex: local deterministic audit writes the required artifact"
 CODEX_REPO="$(mktemp -d)"
 git -C "$CODEX_REPO" init -q
@@ -287,7 +352,7 @@ FAKE_CODEX
 chmod +x "$AGENTIC_REPO/bin/codex"
 
 out="$(printf '{"tool_input":{"command":"git commit -m '\''test(hooks): codex audit'\''"}}' \
-      | ( cd "$AGENTIC_REPO" && CLAUDE_PROJECT_DIR="$AGENTIC_REPO" CODEX_SANDBOX=seatbelt CODEX_BIN="$AGENTIC_REPO/bin/codex" bash "$AGENTIC_REPO/.agents/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
+      | ( cd "$AGENTIC_REPO" && CLAUDE_PROJECT_DIR="$AGENTIC_REPO" CODEX_SANDBOX=seatbelt CODEX_COMMIT_PUSH_AUDIT_MODE=agentic CODEX_BIN="$AGENTIC_REPO/bin/codex" bash "$AGENTIC_REPO/.agents/hooks/preflight-commit-push.sh" ) 2>/dev/null)"
 check_agentic=yes
 [[ -z "$out" ]] || check_agentic=no
 [[ ! -e "$AGENTIC_REPO/.agents/state/last-audit.json" ]] || check_agentic=no
@@ -369,6 +434,82 @@ else
   printf '  FAIL  malformed Codex audit output fails closed  (rc=%s verdict=%s finding=%s)\n' "$bad_rc" "$bad_verdict" "$bad_finding"
 fi
 rm -rf "$BAD_REPO"
+
+echo
+echo "## Codex: the audit temp dir survives no exit path"
+# run_agentic_audit stages the Codex stderr log — and, once Codex writes one, its
+# verdict artifact — in `mktemp -d`. A RETURN trap does not fire on `exit`, so
+# the write_fail paths downstream of that mktemp used to leave the directory
+# behind, one per failed audit. (The prompt carrying the diff goes to Codex on
+# stdin and is never written there.) mktemp on macOS ignores TMPDIR (it honours
+# _CS_DARWIN_USER_TEMP_DIR), so the directory cannot be redirected into TMP for
+# the check: locate it where mktemp actually puts it and identify it by the
+# runner's own file names.
+audit_tmp_leaks() {
+  local sys_tmp
+  sys_tmp="$(dirname "$(mktemp -d -u)")"
+  find "$sys_tmp" -maxdepth 1 -type d -name 'tmp.*' \
+       -exec test -e '{}/codex-stderr.log' ';' -print 2>/dev/null | sort
+}
+
+LEAK_REPO="$(mktemp -d)"
+git -C "$LEAK_REPO" init -q
+git -C "$LEAK_REPO" config user.email t@t.test
+git -C "$LEAK_REPO" config user.name tester
+mkdir -p "$LEAK_REPO/.agents/hooks" "$LEAK_REPO/.agents/state" "$LEAK_REPO/bin"
+cp "$REPO_ROOT/.agents/hooks/run-commit-push-audit.sh" \
+   "$REPO_ROOT/.agents/hooks/commit-push-audit.schema.json" \
+   "$LEAK_REPO/.agents/hooks/"
+printf 'base\n' > "$LEAK_REPO/f"
+git -C "$LEAK_REPO" add -A
+git -C "$LEAK_REPO" commit -qm base
+printf 'change\n' >> "$LEAK_REPO/f"
+git -C "$LEAK_REPO" add -A
+# Answers --version so find_codex_bin accepts it, then fails the exec so the
+# runner takes write_fail — the `exit` path a RETURN trap never reaches.
+# The sentinel marks that the exec was actually reached: the runner creates its
+# scratch dir immediately before invoking codex, so "stub ran" is what proves
+# the probe got past `mktemp -d`. A non-zero exit does not — three write_fail
+# sites (missing schema, no codex binary, bad audit mode) fire before it, and
+# the probe would then be asserting nothing while still looking green.
+cat > "$LEAK_REPO/bin/codex" <<LEAK_FAKE_CODEX
+#!/usr/bin/env bash
+[[ "\${1:-}" == "--version" ]] && { printf 'codex-cli fake\n'; exit 0; }
+cat >/dev/null
+: > "$LEAK_REPO/stub-ran"
+printf 'stub failure\n' >&2
+exit 1
+LEAK_FAKE_CODEX
+chmod +x "$LEAK_REPO/bin/codex"
+
+leak_before="$(audit_tmp_leaks)"
+( cd "$LEAK_REPO" && CLAUDE_PROJECT_DIR="$LEAK_REPO" CODEX_BIN="$LEAK_REPO/bin/codex" \
+    CODEX_COMMIT_PUSH_AUDIT_MODE=agentic \
+    bash "$LEAK_REPO/.agents/hooks/run-commit-push-audit.sh" commit \
+    "git commit -m 'test(hooks): leak probe'" >/dev/null 2>&1 )
+leak_rc=$?
+leak_after="$(audit_tmp_leaks)"
+new_leaks="$(comm -13 <(printf '%s\n' "$leak_before") <(printf '%s\n' "$leak_after"))"
+# comm emits a blank line when either side is empty; strip whitespace only to
+# decide emptiness. A real hit is an absolute path, so this can never blank one
+# out — report from the unstripped list.
+new_leaks_squashed="${new_leaks//[[:space:]]/}"
+
+if [[ ! -e "$LEAK_REPO/stub-ran" || "$leak_rc" == 0 ]]; then
+  fail=$((fail + 1))
+  printf '  FAIL  leak probe never reached the scratch dir  (rc=%s, probe is inert)\n' "$leak_rc"
+elif [[ -z "$new_leaks_squashed" ]]; then
+  pass=$((pass + 1))
+  printf '  PASS  a failed agentic audit leaves no temp dir behind\n'
+else
+  # Report the path, never delete it. This scans the shared system temp dir, so
+  # a concurrent agentic audit can land in the diff — removing it would destroy
+  # a live run's scratch on the strength of a suspicion.
+  fail=$((fail + 1))
+  printf '  FAIL  a failed agentic audit leaves no temp dir behind  (leaked:%s)\n' \
+    "$(printf '%s' "$new_leaks" | tr '\n' ' ' | sed 's/  */ /g')"
+fi
+rm -rf "$LEAK_REPO"
 
 echo
 echo "## Codex: private key diffs fail before agentic prompt"

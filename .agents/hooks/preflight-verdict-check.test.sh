@@ -23,15 +23,19 @@
 # Exits non-zero on any failure.
 set -uo pipefail
 
-# Hermetic baseline: neutralize any ambient VERDICT_GATE_HARD_BLOCK so the soft-mode
-# cases below see it absent regardless of the caller's environment. Hard-mode cases
-# set it explicitly in decide().
+# Hermetic baseline: drop any ambient VERDICT_GATE_HARD_BLOCK so absence is the
+# starting point regardless of the caller's environment. Absent now means HARD, so
+# every case that wants soft mode sets VERDICT_GATE_HARD_BLOCK=0 explicitly rather
+# than relying on the unset — see the unset⇒block case below, which pins that.
 unset VERDICT_GATE_HARD_BLOCK
 
 # Hermetic triage: force the classifier into UNKNOWN (command fails) so every case
 # below exercises the deterministic regex fallback unless a case overrides the stub.
 # Without this, a machine with the `claude` CLI would call a live model mid-suite.
 export VERDICT_CLASSIFIER_CMD='false'
+# Its matched seam. Left ambient it replaces the text every case asserts on, so the
+# suite grades a transcript it never wrote — 29/25 with `true`, 46/8 with `cat`.
+unset VERDICT_EXTRACTOR_CMD
 
 # Resolve from THIS script's location, not the caller's cwd. `git rev-parse
 # --show-toplevel` returns whichever checkout the shell sits in, so running this
@@ -489,10 +493,14 @@ else
 fi; rm -rf "$R"
 
 echo
-echo "## Soft mode (VERDICT_GATE_HARD_BLOCK unset/0): block conditions become nudges"
+echo "## Soft mode (VERDICT_GATE_HARD_BLOCK=0 ONLY): block conditions become nudges"
+# Soft is an EXPLICIT opt-out, not the default. It used to be reached by leaving the
+# variable unset, which meant only Claude Code — the sole caller that sets it, via
+# settings.json env — was ever gated; the Codex registration and any direct
+# invocation silently got a nudge. The unset case is asserted to BLOCK below.
 R="$(setup)"; write_transcript "$R" "The root cause is the stale index."
 soft_out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
-  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$HOOK" ) 2>/dev/null)"
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=0 bash "$HOOK" ) 2>/dev/null)"
 if printf '%s' "$soft_out" | jq -e '(.decision // "") != "block" and .continue == true and (.systemMessage | type) == "string"' >/dev/null 2>&1; then
   pass=$((pass + 1)); printf '  PASS  %s\n' "detected verdict → nudge in soft mode, not block"
 else
@@ -500,21 +508,39 @@ else
 fi
 rm -rf "$R"
 
-R="$(setup)"; write_transcript "$R" "Anything else you want changed?"
-soft_chat="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
-  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$HOOK" ) 2>/dev/null)"
-hard_chat="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
-  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 bash "$HOOK" ) 2>/dev/null)"
-chat_ok=yes
-for o in "$soft_chat" "$hard_chat"; do
-  if [[ -n "$o" ]] && printf '%s' "$o" | jq -e '(.decision // "") == "block"' >/dev/null 2>&1; then chat_ok=no; fi
-done
-if [[ "$chat_ok" == "yes" ]]; then
-  pass=$((pass + 1)); printf '  PASS  %s\n' "chat turn → allow (never blocks) in soft AND hard"
+R="$(setup)"; write_transcript "$R" "The root cause is the stale index."
+unset_out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && env -u VERDICT_GATE_HARD_BLOCK CLAUDE_PROJECT_DIR="$R" bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$unset_out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass + 1)); printf '  PASS  %s\n' "unset VERDICT_GATE_HARD_BLOCK blocks (documented default is hard)"
 else
-  fail=$((fail + 1)); printf '  FAIL  %s  (soft=%s hard=%s)\n' "chat allow" "$soft_chat" "$hard_chat"
+  fail=$((fail + 1)); printf '  FAIL  %s  (out=%.120s)\n' "unset VERDICT_GATE_HARD_BLOCK blocks (documented default is hard)" "$unset_out"
 fi
 rm -rf "$R"
+
+# One repo per mode. Both calls used to share one, and the first writes
+# verdict-last-uuid, so the second returned "transcript unchanged since last
+# judgment" without ever consulting its mode — this case named two modes and
+# exercised one. Rejecting that short-circuit is part of the assertion: it is an
+# allow like any other, so "neither blocked" alone would still pass on it.
+chat_ok=yes
+chat_detail=""
+for chat_mode in 0 1; do
+  R="$(setup)"; write_transcript "$R" "Anything else you want changed?"
+  chat_out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+    | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK="$chat_mode" bash "$HOOK" ) 2>/dev/null)"
+  if [[ -n "$chat_out" ]] && printf '%s' "$chat_out" | jq -e '(.decision // "") == "block"' >/dev/null 2>&1; then
+    chat_ok=no
+  fi
+  printf '%s' "$chat_out" | grep -q 'transcript unchanged' && chat_ok=no
+  chat_detail="$chat_detail mode=$chat_mode:$(printf '%.60s' "$chat_out")"
+  rm -rf "$R"
+done
+if [[ "$chat_ok" == "yes" ]]; then
+  pass=$((pass + 1)); printf '  PASS  %s\n' "chat turn → allow via triage in soft AND hard"
+else
+  fail=$((fail + 1)); printf '  FAIL  %s (%s)\n' "chat turn → allow via triage in soft AND hard" "$chat_detail"
+fi
 
 echo
 echo "RESULT: $pass passed, $fail failed"

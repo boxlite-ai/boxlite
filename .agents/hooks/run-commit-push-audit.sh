@@ -13,6 +13,12 @@ command="${2:-}"
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 project_dir="${CLAUDE_PROJECT_DIR:-$repo_root}"
 audit_file="$project_dir/.agents/state/last-audit.json"
+# Script level, not `local`: an EXIT trap runs after the frame is gone, and reading
+# a `local` there aborts the trap under `set -u`. The empty init is what makes the
+# trap a no-op on paths that never create a dir; the `:-` only guards that init
+# being dropped later.
+audit_tmp_dir=""
+trap 'rm -rf "${audit_tmp_dir:-}"' EXIT
 schema_file="$repo_root/.agents/hooks/commit-push-audit.schema.json"
 mkdir -p "$(dirname "$audit_file")"
 
@@ -481,11 +487,16 @@ run_agentic_audit() {
     write_fail "Internal: working Codex CLI not found; set CODEX_BIN to the Codex binary"
   fi
 
-  local tmp_dir raw_file log_file
-  tmp_dir="$(mktemp -d)"
-  raw_file="$tmp_dir/audit.json"
-  log_file="$tmp_dir/codex-stderr.log"
-  trap 'rm -rf "$tmp_dir"' RETURN
+  local raw_file log_file
+  # EXIT, not RETURN: write_fail and normalize_agentic_output call `exit`, and a
+  # RETURN trap never fires on exit, so audit.json and the Codex stderr log
+  # survived those paths.
+  # The directory is a script GLOBAL because an EXIT trap runs after the function
+  # has returned — reading a `local` there is an unbound variable, which under
+  # `set -u` aborts the trap and leaks the very directory it exists to remove.
+  audit_tmp_dir="$(mktemp -d)"
+  raw_file="$audit_tmp_dir/audit.json"
+  log_file="$audit_tmp_dir/codex-stderr.log"
 
   if ! build_prompt | CODEX_AUDIT_HOOK=1 "$codex_bin" \
       --ask-for-approval never \

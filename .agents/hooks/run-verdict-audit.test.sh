@@ -82,6 +82,37 @@ names_seam="no"; printf '%s' "$out" | grep -q VERDICT_AUDITOR_CMD && names_seam=
 check_eq "exit-2 message names VERDICT_AUDITOR_CMD"          "$names_seam" "yes"
 rm -rf "$R"
 
+# A no-runner invocation exits 2 WITHOUT auditing, so it must not destroy a dossier
+# on its way out. The freshness removal therefore sits inside each runner branch.
+D="$(mktemp -d)"; mkdir -p "$D/.agents/state"
+printf '{"verdict":"PASS","branch":"b","tree_hash":"t"}' > "$D/.agents/state/last-verdict.json"
+printf 'x' > "$D/t.jsonl"
+( cd "$D" && env -u VERDICT_AUDITOR_CMD CLAUDE_PROJECT_DIR="$D" PATH=/usr/bin:/bin \
+    bash "$RUNNER" "$D/t.jsonl" >/dev/null 2>&1 )
+if [[ -f "$D/.agents/state/last-verdict.json" ]]; then
+  pass=$((pass + 1)); printf '  PASS  a no-runner invocation leaves an existing dossier intact\n'
+else
+  fail=$((fail + 1)); printf '  FAIL  a no-runner invocation leaves an existing dossier intact\n'
+fi
+rm -rf "$D"
+
+# Freshness is proven by existence, so an auditor that rewrites within one second is
+# still accepted — mtime comparison rejected it, and a fast stub hits that window.
+D="$(mktemp -d)"; mkdir -p "$D/.agents/state"
+printf '{"verdict":"STALE","branch":"b","tree_hash":"t"}' > "$D/.agents/state/last-verdict.json"
+printf 'x' > "$D/t.jsonl"
+( cd "$D" && CLAUDE_PROJECT_DIR="$D" \
+    VERDICT_AUDITOR_CMD='cat >/dev/null; printf "{\"verdict\":\"PASS\",\"branch\":\"b\",\"tree_hash\":\"t\"}" > "$CLAUDE_PROJECT_DIR/.agents/state/last-verdict.json"' \
+    bash "$RUNNER" "$D/t.jsonl" >/dev/null 2>&1 )
+rc=$?
+got="$(jq -r '.verdict' "$D/.agents/state/last-verdict.json" 2>/dev/null)"
+if [[ "$rc" == "0" && "$got" == "PASS" ]]; then
+  pass=$((pass + 1)); printf '  PASS  a same-second rewrite is accepted as fresh\n'
+else
+  fail=$((fail + 1)); printf '  FAIL  a same-second rewrite is accepted as fresh  (rc=%s verdict=%s)\n' "$rc" "$got"
+fi
+rm -rf "$D"
+
 echo
 echo "RESULT: $pass passed, $fail failed"
 exit $(( fail > 0 ? 1 : 0 ))

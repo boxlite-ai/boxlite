@@ -33,6 +33,24 @@ EOF
 chmod +x "$STUB/gh"
 export PATH="$STUB:$PATH"
 
+# The hook's opt-out, and the one knob CONTRIBUTING tells developers to export.
+# Inherited from the caller it silences every arm case, giving the same 17/14 the
+# detached-cwd bug did — loud, but attributed to the wrong thing: 14 arm cases fail
+# for a reason that is nowhere in the diff being tested. The dedicated case below
+# sets it explicitly.
+unset BOXLITE_PR_WATCH
+
+# Hermetic repo. The hook reads `git branch --show-current` from its cwd and exits
+# 0 when that is empty, so run from a detached worktree every "should arm" case
+# reported passthrough and the suite scored 17/14 instead of 31/0. Pin the branch
+# and the remote here, so that together with the unset above the suite gives the
+# same answer wherever it is invoked from.
+REPO="$TMP/repo"
+git init -q -b harness-branch "$REPO"
+git -C "$REPO" remote add origin git@github.com:acme/widget.git
+git -C "$REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+cd "$REPO" || exit 1
+
 pass=0
 fail=0
 

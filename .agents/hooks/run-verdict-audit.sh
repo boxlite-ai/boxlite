@@ -21,19 +21,6 @@
 # Exit codes: 0 dossier written · 1 audit ran but no dossier · 2 no runner available.
 set -uo pipefail
 
-file_mtime_epoch() {
-  local path="$1" mtime
-  if mtime="$(stat -c '%Y' "$path" 2>/dev/null)" && [[ "$mtime" =~ ^[0-9]+$ ]]; then
-    printf '%s' "$mtime"
-    return
-  fi
-  if mtime="$(stat -f '%m' "$path" 2>/dev/null)" && [[ "$mtime" =~ ^[0-9]+$ ]]; then
-    printf '%s' "$mtime"
-    return
-  fi
-  printf '0'
-}
-
 transcript_path="${1:-}"
 if [[ -z "$transcript_path" ]]; then
   echo "usage: run-verdict-audit.sh <transcript_path>" >&2
@@ -55,13 +42,18 @@ files/logs. A claim backed only by guessing or indirect inference is NOT proven.
 turn that asserts nothing verifiable is a PASS. Follow your procedure and write the
 dossier to ${verdict_file}. transcript_path: ${transcript_path}"
 
-# The audit must be attributable to a fresh run, not a leftover dossier.
-before_mtime="$(file_mtime_epoch "$verdict_file")"
-
+# The audit must be attributable to a fresh run, not a leftover dossier, so each
+# runner removes any existing one first and EXISTENCE alone then proves freshness.
+# Comparing mtimes instead cannot: they are whole seconds, so an auditor that
+# rewrites the dossier within the same second looks unchanged and a genuine run is
+# rejected. The removal sits inside each branch, not above them: the no-runner path
+# below exits 2 without auditing, and must not destroy a dossier on its way out.
 if [[ -n "${VERDICT_AUDITOR_CMD:-}" ]]; then
+  rm -f "$verdict_file"
   printf '%s' "$audit_prompt" | bash -c "$VERDICT_AUDITOR_CMD" || true
 elif command -v claude >/dev/null 2>&1 && [[ -r "$spec_file" ]]; then
   # Frontmatter (--- ... ---) is subagent wiring, not instructions — strip it.
+  rm -f "$verdict_file"
   spec_body="$(awk 'BEGIN{fm=0} NR==1 && /^---$/{fm=1; next} fm==1 && /^---$/{fm=2; next} fm!=1' "$spec_file")"
   # perl alarm = portable timeout; disableAllHooks so the audit run cannot recurse
   # into this repo's own gates.
@@ -82,8 +74,7 @@ EOF
   exit 2
 fi
 
-after_mtime="$(file_mtime_epoch "$verdict_file")"
-if [[ -r "$verdict_file" && "$after_mtime" != "$before_mtime" ]] \
+if [[ -r "$verdict_file" ]] \
    && jq -e '.verdict and .branch and .tree_hash' "$verdict_file" >/dev/null 2>&1; then
   echo "audit complete: $(jq -r '.verdict' "$verdict_file") → $verdict_file"
   exit 0

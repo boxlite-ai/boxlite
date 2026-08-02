@@ -22,31 +22,12 @@ check or a review comment **without asking a human first**.
 
 ## Stop and ask a human
 
-<!-- ─────────────────────────────────────────────────────────────────────────
-TODO(user, learning-mode): this list is the actual contract — it decides when an
-agent may edit your code unattended. Same convention as the ack-instruction
-block in .agents/hooks/preflight-pr-review.sh:116.
+Notification is separate from action: every comment and review is notified,
+bots included. This section is only about what may be CHANGED without asking.
 
-Below is a DRAFT default. Replace it with your rule. Things worth deciding:
-(Decided: NOTIFICATION is separate from action — every comment and review is
-notified, bots included. What follows is only about what may be FIXED.)
+Each line is a condition, checkable from the event and the diff.
 
-  • Infra/flaky failures (cache miss, network, runner OOM, timeout) — is
-    `gh run rerun --failed` allowed automatically, or is any rerun your call?
-  • A fix that would touch files outside the PR's own diff — scope creep. Ask,
-    or allow when the fix is obviously local to the failure?
-  • Review comments from `boxlite-agent` / `coderabbitai` — auto-address the
-    mechanical ones (typos, missing null-check), ask on design calls? Or never
-    auto-address review feedback at all?
-  • `e2e-local` / `e2e-cloud` — label-gated `pull_request_target` workflows,
-    expensive and slow. Auto-retry, or always ask?
-  • Anything touching .githooks/, .claude/, or .agents/ — the gate machinery
-    itself. Auto-fix, or always ask?
-
-Keep it to conditions, not prose. Each line should be checkable.
-──────────────────────────────────────────────────────────────────────────── -->
-
-Draft default — escalate rather than act when **any** of these hold:
+Escalate rather than act when **any** of these hold:
 
 1. The failure has no code signal: runner OOM, network error, cache miss,
    timeout, or a job that never started. Report it and name the run; do not
@@ -63,3 +44,21 @@ Draft default — escalate rather than act when **any** of these hold:
    original diagnosis was wrong.
 
 Otherwise: fix it, push, and report what changed and why.
+
+## Review comments
+
+Review findings are triaged before they are fixed, because a reviewer that sees
+a renamed file reports the whole file as new:
+
+1. Establish which findings the change actually introduced. Compare the file
+   against the merge base with paths normalised; a file that differs by zero
+   lines carries no finding of yours.
+2. Fix the ones you introduced, in the same PR.
+3. Leave the pre-existing ones. Say so in the PR rather than bundling them —
+   a rename PR carrying unrelated bug fixes stops being reviewable.
+4. Never resolve a finding you did not fix without saying why. Resolved-and-
+   unfixed is worse than open, because it removes the reviewer's signal.
+
+A bot finding is a claim, not a verdict. Reproduce it before fixing it, and
+before dismissing it — on this repo a reviewer has been right where a prior
+audit had waved the same line through.

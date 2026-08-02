@@ -23,6 +23,11 @@ trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_PROJECT_DIR="$TMP"
 mkdir -p "$TMP/.agents/state"
 
+# The hook resolves its repo from the AMBIENT cwd, while the marker below is
+# keyed to REPO_ROOT's branch and HEAD. Invoked from anywhere else the two
+# disagree, every marker looks stale, and the suite reports 42/12 instead of
+# 54/0 — green-looking from here, wrong from there. Pin cwd so they match.
+cd "$REPO_ROOT" || exit 1
 BRANCH="$(git -C "$REPO_ROOT" branch --show-current)"
 HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 

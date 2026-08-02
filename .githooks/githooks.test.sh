@@ -14,6 +14,23 @@
 # Run with:  bash .githooks/githooks.test.sh
 set -uo pipefail
 
+# The harness markers and the gate's own handshake, cleared for the whole suite.
+#
+# The leak is not in the cases — it is in the FIXTURES. setup() points core.hooksPath
+# at the fixture's own .githooks, and every plain `git -C "$R" commit -qm` after that
+# point runs without `env -i`. An ambient marker therefore makes the fixture's own
+# setup commit look like an unaudited agent, the gate under test correctly rejects
+# it, the commit never lands, and each later case grades a repo that was never
+# built. Measured on its own, each marker cost: CLAUDECODE 7 of 63 — and every
+# Claude Code session exports it — AGENT_GATED 7, CODEX_SANDBOX 8,
+# GITHOOK_DELEGATED 4.
+#
+# So: any fixture commit added here runs under `env -i`, or the marker stays clear.
+# Cases that mean to exercise an agent set the marker on their own invocation, and
+# that coverage is untouched by this.
+unset CODEX_SANDBOX CLAUDECODE AGENT_GATED GITHOOK_DELEGATED GITHOOK_KEEP_AUDIT \
+      CODEX_COMMIT_PUSH_AUDIT_MODE
+
 # Resolve from THIS script's location, not the caller's cwd. `git rev-parse
 # --show-toplevel` returns whichever checkout the shell sits in, so running this
 # suite from another worktree silently tests THAT checkout's copy instead of the

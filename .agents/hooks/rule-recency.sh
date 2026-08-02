@@ -15,9 +15,38 @@
 # Cadence: emit on the first prompt of a session, then every Nth. Override N with
 # RULE_RECENCY_INTERVAL (default 5). Best-effort — never blocks a prompt, always exits 0.
 
+# Same treatment as the counter below, and for the same reason: this reaches an
+# arithmetic context (`count % interval`), so a non-numeric value is evaluated as
+# an expression and zero divides. Either one recurs on every prompt, and the header
+# above promises this hook never blocks one.
 interval="${RULE_RECENCY_INTERVAL:-5}"
-state_dir="${TMPDIR:-/tmp}/rule-recency"
-mkdir -p "$state_dir" 2>/dev/null || true
+case "$interval" in ''|*[!0123456789]*) interval=5 ;; esac
+interval=$((10#$interval))
+[ "$interval" -gt 0 ] || interval=5
+# Per-user private state. A shared /tmp/rule-recency lets two users collide on one
+# counter; the uid suffix separates them, and -m 700 makes the directory private
+# from birth.
+#
+# Mode at creation, never `chmod` afterwards. That is the whole security property:
+# the name is as guessable as the old one, so anything able to write $TMPDIR can
+# pre-plant a symlink here, and a `chmod` would follow it. Ownership is no defence
+# — it is the reason it works: chmod through a link to root-owned /usr just fails
+# EPERM, while a link to ~/.ssh succeeds, because that one IS ours. `-m` acts only
+# when mkdir creates the path, so a pre-planted one keeps the mode it had.
+#
+# Its mode only. What lands inside is inherited and accepted: the counter write, and
+# the day-old prune below, which reaches into a pre-created real directory (though
+# not through a symlink — find is not given -L, and does not descend one it is
+# handed). Both predate this change; the payload is an integer prompt counter.
+#
+# Dropping `-p` is separate and NOT what closes that hole (`-p -m` is equally safe):
+# it is SC2174 — with `-p`, `-m` skips any parent mkdir creates. The parent is
+# $TMPDIR, so there is nothing to create; already-exists falls into the `|| true`.
+#
+# What the redirect can still do is bounded at the point of use, not here: the
+# counter read below is validated before it reaches arithmetic.
+state_dir="${TMPDIR:-/tmp}/rule-recency-$(id -u)"
+mkdir -m 700 "$state_dir" 2>/dev/null || true
 find "$state_dir" -type f -mtime +1 -delete 2>/dev/null || true   # prune stale sessions
 
 # UserPromptSubmit delivers JSON on stdin: {session_id, prompt, ...}. Key the counter
@@ -37,10 +66,29 @@ case " $ack " in
     exit 0 ;;   # trivial ack -> no inject, no cadence advance
 esac
 
-state_file="$state_dir/$session"
+# Hash the session rather than trusting it as a path component. The value comes
+# straight from the harness payload, so a session_id of `../../…` would redirect
+# the read and the write outside state_dir. (Prompt text cannot reach here: the
+# scrape is greedy and an escaped `\"session_id\"` inside a JSON string does not
+# match.) A hash is fixed-length, path-safe, and still one file per session.
+session_key="$(printf '%s' "$session" | shasum -a 256 2>/dev/null | awk '{print $1}')"
+[ -z "$session_key" ] && session_key=default
+state_file="$state_dir/$session_key"
 count=0
 [ -f "$state_file" ] && count="$(cat "$state_file" 2>/dev/null || echo 0)"
-count=$((count + 1))
+# Validate before the arithmetic, not after: $(( )) re-evaluates its operand, so a
+# state file holding `a[$(cmd)]` runs cmd. The file is reachable by anyone who can
+# pre-plant the directory above.
+#
+# Digits alone are not enough — $(( )) reads a leading zero as octal, so a planted
+# `010` counts as 8 and `08` is a hard error that leaves the value unchanged, so it
+# recurs on every prompt forever. 10# forces base ten.
+#
+# The class is spelled out rather than ranged: `[0-9]` is a collation range, and
+# under ja_JP/hi_IN/fa_*/ar_* it admits non-ASCII digits, which then wedge 10# with
+# the same never-clearing error. Only this literal set reaches the arithmetic.
+case "$count" in ''|*[!0123456789]*) count=0 ;; esac
+count=$((10#$count + 1))
 printf '%s' "$count" > "$state_file" 2>/dev/null || true
 
 { [ "$count" -eq 1 ] || [ $((count % interval)) -eq 0 ]; } || exit 0
