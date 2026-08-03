@@ -117,6 +117,17 @@ Run:
 pytest scripts/test/e2e/cases/ -v --timeout=120
 ```
 
+Before a release, run the focused error-contract matrix:
+
+```bash
+make test:e2e:error-contracts
+```
+
+This checks create failures through the raw API and Python, Node, Go, and C
+SDKs, plus CLI command-not-found and non-zero-exit behavior. Run it on the
+Linux release-validation host after building every SDK artifact. A skipped
+SDK case means the matrix is incomplete, not that the SDK passed.
+
 For CI, store `BOXLITE_E2E_API_KEY` as a repository secret and pass it
 as an environment variable. No local bootstrap, Postgres, or runner
 services are needed — the remote stack provides everything.

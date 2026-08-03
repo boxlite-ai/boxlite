@@ -410,6 +410,9 @@ test\:e2e\:setup:
 test\:e2e:
 	@cd scripts/test/e2e && python3 -m pytest cases/ -v
 
+test\:e2e\:error-contracts:
+	@cd scripts/test/e2e && python3 run_error_contracts.py
+
 test\:e2e\:two-sided:
 	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash scripts/test/e2e/two_sided.sh
 
