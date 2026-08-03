@@ -233,8 +233,8 @@ async def test_network_curl(box):
     ex = await box.exec(
         "sh", ["-c",
                "curl -fsS --max-time 10 -o /dev/null -w '%{http_code}' "
-               "https://httpbin.org/get 2>/dev/null || "
-               "wget -q --timeout=10 -O /dev/null https://httpbin.org/get 2>&1 && echo 200"],
+               "https://httpbingo.org/get 2>/dev/null || "
+               "wget -q --timeout=10 -O /dev/null https://httpbingo.org/get 2>&1 && echo 200"],
     )
     out, err = await drain(ex)
     rc = await asyncio.wait_for(ex.wait(), timeout=30)
