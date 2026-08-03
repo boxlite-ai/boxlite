@@ -17,7 +17,8 @@ describe("SimpleBox", () => {
   test("uri returns the remote URL without consuming the tunnel", async () => {
     const { SimpleBox } = await import("../lib/simplebox.js");
     const uri = vi.fn(() => "https://3000-box.proxy.example.test");
-    const nativeTunnel = { uri, connect: vi.fn() };
+    const connection = { read: vi.fn(), write: vi.fn(), close: vi.fn() };
+    const nativeTunnel = { uri, connect: vi.fn(async () => connection) };
     const tunnelNative = vi.fn(async () => nativeTunnel);
     const box = new SimpleBox({ image: "alpine:latest" }) as SimpleBox & {
       _box: { network: { tunnel: typeof tunnelNative } };
@@ -28,6 +29,9 @@ describe("SimpleBox", () => {
     expect(tunnel.uri()).toBe("https://3000-box.proxy.example.test");
     expect(tunnelNative).toHaveBeenCalledWith(3000);
     expect(nativeTunnel.connect).not.toHaveBeenCalled();
+
+    // Reading the address must leave the tunnel usable, not consume it.
+    await expect(tunnel.connect()).resolves.toBe(connection);
   });
 
   test("uri is null for a local tunnel, which is reached by connecting", async () => {

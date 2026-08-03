@@ -79,13 +79,19 @@ async def test_info_rejects_when_box_is_not_started():
 
 @pytest.mark.asyncio
 async def test_uri_returns_remote_url_without_consuming_the_tunnel():
+    connection = _FakeConnection()
     box = SimpleBox.__new__(SimpleBox)
     box._started = True
-    box._box = _FakeBox(_FakeTunnel([], "https://3000-box.proxy.example.test"))
+    box._box = _FakeBox(
+        _FakeTunnel([connection], "https://3000-box.proxy.example.test")
+    )
 
     tunnel = await box.network.tunnel(3000)
     assert tunnel.uri() == "https://3000-box.proxy.example.test"
     assert box._box.network.ports == [3000]
+
+    # Reading the address must leave the tunnel usable, not consume it.
+    assert await tunnel.connect() is connection
 
 
 @pytest.mark.asyncio

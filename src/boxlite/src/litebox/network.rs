@@ -441,10 +441,41 @@ mod tests {
         }
     }
 
+    impl AsyncRead for FailingShutdown {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            _: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(())) // immediate EOF; these tests only drive shutdown
+        }
+    }
+
+    impl Transport for FailingShutdown {
+        fn into_split(self: Box<Self>) -> (Box<dyn ReadTransport>, Box<dyn WriteTransport>) {
+            let (reader, writer) = tokio::io::split(*self);
+            (Box::new(reader), Box::new(writer))
+        }
+
+        fn raw_fd(&self) -> Option<std::os::fd::RawFd> {
+            None
+        }
+
+        fn into_fd(self: Box<Self>) -> BoxliteResult<OwnedFd> {
+            Err(BoxliteError::Unsupported("test double".into()))
+        }
+    }
+
     fn writer_failing_with(kind: ErrorKind) -> BoxWriter {
         BoxWriter {
             inner: Box::new(FailingShutdown(kind)),
         }
+    }
+
+    /// The unsplit type has its own `poll_shutdown`, so it needs its own
+    /// injection: the real-socket test above cannot pin it on Linux.
+    fn connection_failing_with(kind: ErrorKind) -> BoxConnection {
+        BoxConnection::new(FailingShutdown(kind))
     }
 
     /// The #1110 fix: a peer that already hung up ends a one-shot tunnel
@@ -453,6 +484,9 @@ mod tests {
     async fn shutdown_treats_an_already_disconnected_peer_as_success() {
         let mut writer = writer_failing_with(ErrorKind::NotConnected);
         assert!(writer.shutdown().await.is_ok());
+
+        let mut connection = connection_failing_with(ErrorKind::NotConnected);
+        assert!(AsyncWriteExt::shutdown(&mut connection).await.is_ok());
     }
 
     /// The guard must stay narrow — it is not a blanket swallow.
@@ -471,6 +505,11 @@ mod tests {
                 error.to_string().contains("shut down tunnel writer"),
                 "{kind:?} should surface as a network error, got: {error}"
             );
+
+            let error = AsyncWriteExt::shutdown(&mut connection_failing_with(kind))
+                .await
+                .expect_err("only NotConnected is tolerated");
+            assert_eq!(error.kind(), kind, "the unsplit type must stay as narrow");
         }
     }
 
