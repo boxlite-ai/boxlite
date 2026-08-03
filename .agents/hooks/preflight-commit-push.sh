@@ -67,7 +67,7 @@ project_dir="${CLAUDE_PROJECT_DIR:-$repo_root}"
 audit_file="$project_dir/.agents/state/last-audit.json"
 handoff_file="$project_dir/.agents/state/last-audit-handoff.json"
 # Transition mirrors. Where core.hooksPath is configured absolute rather than the
-# relative value install.sh sets, one installed hook serves every worktree, so a
+# relative value `make setup` sets, one installed hook serves every worktree, so a
 # commit-msg from BEFORE this move can be the one that runs while this gate —
 # reached through the .claude/hooks symlink — is the one that writes. That hook
 # reads the legacy paths and cannot be taught the new ones, so this gate leaves

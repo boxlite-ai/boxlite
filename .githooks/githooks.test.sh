@@ -701,7 +701,7 @@ rm -rf "$R"
 echo
 echo "## transition compat: hooks and trees on either side of the .agents move"
 # Where core.hooksPath is configured absolute rather than the relative value
-# install.sh sets, ONE installed hook runs for every worktree whatever commit it
+# `make setup` sets, ONE installed hook runs for every worktree whatever commit it
 # sits on. Both directions must keep working,
 # and neither may ever run unguarded.
 COMPAT="$(mktemp -d)"
@@ -759,6 +759,130 @@ for legacy in .claude/.last-audit.json .claude/.last-audit-handoff.json \
   check_eq "legacy mirror $legacy stays gitignored (tree hash must not move)" "$r" "yes"
 done
 rm -rf "$COMPAT"
+
+echo
+echo "## installer: make setup points git at this layer"
+# The hooks above only run once core.hooksPath names .githooks. Nothing in the
+# repo can ship that — it is per-clone config, not content — so `make setup` sets
+# it, and this asserts the one line that arms everything else in this file.
+#
+# NOT wrapped in a subshell: check_eq increments pass/fail, and a subshell would
+# discard both, leaving these cases unable to fail the suite.
+# SCRIPT_DIR must be EMPTY, not preset: setup-common.sh only sources common.sh
+# when SCRIPT_DIR is unset-or-empty, and common.sh is where command_exists lives.
+# Presetting it left command_exists undefined, so `! command_exists prek` was
+# always true, prek was never reached, and the cases that depend on it silently
+# graded a path that had not run. The assertion below fails first and by name.
+# shellcheck disable=SC2034  # consumed by setup-common.sh
+SCRIPT_DIR=""
+# shellcheck source=/dev/null
+source "$REPO_ROOT/scripts/setup/setup-common.sh" >/dev/null 2>&1
+check_eq "the installer's own dependencies are loaded (else the cases below are inert)" \
+  "$(type -t command_exists)" "function"
+
+install_probe() {  # dir [PATH override] -> the configured value, or empty
+  # PATH is passed as a variable, not via `env`: install_git_hooks_best_effort is
+  # a shell function, and `env` cannot invoke one.
+  local dir="$1" probe_path="${2:-$PATH}"
+  # Belt to the fixture assertion's braces: PROJECT_ROOT="" falls back to
+  # $SCRIPT_DIR/.. inside the installer — the developer's real clone. The section
+  # guard above is what actually covers every case; this catches a future caller
+  # that passes an unset variable.
+  [ -n "$dir" ] || { printf 'install_probe: empty target refused\n' >&2; return 1; }
+  ( PROJECT_ROOT="$dir" CI="" PATH="$probe_path" install_git_hooks_best_effort ) >/dev/null 2>&1
+  git -C "$dir" config --local core.hooksPath
+}
+
+INST="$(mktemp -d)"
+# Assert the fixture before anything can use it, because an empty INST is not
+# inert: `git -C ""` is a NO-OP -C, not an error, so every git call below silently
+# targets the shell's cwd — the developer's clone. Measured consequences of that,
+# not hypothesised: local user.name/user.email written into the shared .git/config,
+# a real commit landed on their current branch, and core.hooksPath unset, all while
+# the suite printed green. The PROJECT_ROOT="" -> $SCRIPT_DIR/.. fallback inside the
+# installer is a second route to the same clone.
+# At the fixture, not at each call site: the git calls immediately below run before
+# any installer call, and two cases invoke the installer directly.
+case "$INST" in
+  /tmp/*|/private/var/folders/*|/var/folders/*) ;;
+  *) printf 'installer fixture refused: INST=[%s]\n' "$INST" >&2; exit 1 ;;
+esac
+git -C "$INST" init -q
+git -C "$INST" config user.email t@t.test
+git -C "$INST" config user.name tester
+mkdir -p "$INST/.githooks"
+printf 'repos: []\n' > "$INST/.pre-commit-config.yaml"
+git -C "$INST" add -A
+git -C "$INST" commit -qm base
+
+# Relative, so each worktree resolves it to its own checkout. An absolute value
+# would make one installed copy serve every worktree whatever commit it sits on —
+# the situation resolve_gate() in pre-commit/pre-push exists to survive.
+check_eq "make setup sets core.hooksPath to a relative .githooks" \
+  "$(install_probe "$INST")" ".githooks"
+
+# A linked worktree's .git is a FILE, not a directory. Testing for a directory
+# named .git skipped installation in every worktree; ask git instead.
+git -C "$INST" worktree add -q "$INST-wt" -b installer-wt
+mkdir -p "$INST-wt/.githooks"
+printf 'repos: []\n' > "$INST-wt/.pre-commit-config.yaml"
+git -C "$INST" config --unset core.hooksPath
+wt_dot_git="dir"; [ -f "$INST-wt/.git" ] && wt_dot_git="file"
+check_eq "a linked worktree's .git is a file (the case the guard must survive)" \
+  "$wt_dot_git" "file"
+check_eq "make setup installs from inside a linked worktree" \
+  "$(install_probe "$INST-wt")" ".githooks"
+
+# Order is load-bearing: prek refuses to install while core.hooksPath is set, and
+# the gate chains into the hooks prek writes. Setting the gate first left
+# .git/hooks empty, so pre-commit chained into a file that did not exist and
+# lint-fix silently stopped running. Assert BOTH ends survive one run.
+git -C "$INST" config --unset core.hooksPath
+rm -f "$INST/.git/hooks/pre-commit" "$INST/.git/hooks/pre-push"
+prek_hooks_before="$(find "$INST/.git/hooks" -maxdepth 1 -type f ! -name '*.sample' 2>/dev/null | wc -l | tr -d ' ')"
+check_eq "fixture starts with no framework hooks" "$prek_hooks_before" "0"
+inst_gate="$(install_probe "$INST")"
+prek_hook_state="missing"; [ -f "$INST/.git/hooks/pre-commit" ] && prek_hook_state="present"
+check_eq "one run leaves BOTH the gate and the hooks it chains into" \
+  "$inst_gate:$prek_hook_state" ".githooks:present"
+
+# Re-running must not regress either end — the unset-then-reset is what makes it
+# idempotent, since prek would otherwise refuse on the second pass.
+inst_gate2="$(install_probe "$INST")"
+prek_hook_state2="missing"; [ -f "$INST/.git/hooks/pre-commit" ] && prek_hook_state2="present"
+check_eq "a second run is idempotent" \
+  "$inst_gate2:$prek_hook_state2" ".githooks:present"
+
+# The gate does not depend on prek, so it must still install where prek is absent.
+git -C "$INST" config --unset core.hooksPath
+check_eq "core.hooksPath is set even with prek unavailable" \
+  "$(install_probe "$INST" /usr/bin:/bin)" ".githooks"
+
+# A core.hooksPath in the user's GLOBAL config makes prek refuse just the same,
+# and clearing it is not ours to do — so the run has to name that case instead of
+# reporting a generic failure. GIT_CONFIG_GLOBAL redirects the global file for
+# this probe only; the real ~/.gitconfig is never read or written.
+git -C "$INST" config --unset core.hooksPath
+GLOBAL_CFG="$(mktemp)"
+printf '[core]\n\thooksPath = /nonexistent-global-hooks\n' > "$GLOBAL_CFG"
+global_warn="$( GIT_CONFIG_GLOBAL="$GLOBAL_CFG" PROJECT_ROOT="$INST" CI="" \
+                install_git_hooks_best_effort 2>&1 )"
+global_named=no
+case "$global_warn" in *"set globally to '/nonexistent-global-hooks'"*) global_named=yes ;; esac
+check_eq "a global core.hooksPath is diagnosed by name, not left generic" \
+  "$global_named" "yes"
+check_eq "the user's global config is never modified" \
+  "$(git config --file "$GLOBAL_CFG" core.hooksPath)" "/nonexistent-global-hooks"
+rm -f "$GLOBAL_CFG"
+
+# CI is deliberately exempt: runners carry no agent marker, so gating is moot and
+# a push there must not arm a watcher.
+git -C "$INST" config --unset core.hooksPath
+( PROJECT_ROOT="$INST" CI=true install_git_hooks_best_effort ) >/dev/null 2>&1
+check_eq "CI=true installs nothing" "$(git -C "$INST" config --local core.hooksPath)" ""
+
+git -C "$INST" worktree remove --force "$INST-wt"
+rm -rf "$INST"
 
 echo
 echo "RESULT: $pass passed, $fail failed"

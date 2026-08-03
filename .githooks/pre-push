@@ -14,7 +14,7 @@ is_agent=0
 repo_root="$(git rev-parse --show-toplevel)"
 
 # Resolve the delegated gate. A worktree checked out at a pre-migration commit
-# has no .agents/hooks/, yet it can still be THIS hook that runs. install.sh
+# has no .agents/hooks/, yet it can still be THIS hook that runs. `make setup`
 # sets core.hooksPath RELATIVE, where each worktree uses its own copy and this
 # cannot happen; a clone configured with an ABSOLUTE path has one installed hook
 # serving every worktree, whatever commit each sits on, and then it can.

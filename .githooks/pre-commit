@@ -2,8 +2,8 @@
 # Universal (agent-agnostic) commit gate: enforces the same audited-dossier
 # contract as .agents/hooks/preflight-commit-push.sh, but from git's own hook
 # interface — it fires for ANY process that runs `git commit`, whichever coding
-# agent drives it, including agents with no hook system of their own. Install:
-# .githooks/install.sh (sets core.hooksPath). The PreToolUse gate detects the
+# agent drives it, including agents with no hook system of their own. Installed
+# by `make setup` (sets core.hooksPath). The PreToolUse gate detects the
 # installation and delegates, so the audit artifact keeps exactly one consumer.
 #
 # Humans are not gated: enforcement binds only when a harness marker is present
@@ -27,7 +27,7 @@ is_agent=0
 repo_root="$(git rev-parse --show-toplevel)"
 
 # Resolve the delegated gate. A worktree checked out at a pre-migration commit
-# has no .agents/hooks/, yet it can still be THIS hook that runs. install.sh
+# has no .agents/hooks/, yet it can still be THIS hook that runs. `make setup`
 # sets core.hooksPath RELATIVE, where each worktree uses its own copy and this
 # cannot happen; a clone configured with an ABSOLUTE path has one installed hook
 # serving every worktree, whatever commit each sits on, and then it can.

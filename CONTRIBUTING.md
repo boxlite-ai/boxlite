@@ -62,8 +62,8 @@ Key test entry points:
 
 ### Watching CI and PR feedback
 
-Once the hooks are installed (`bash .githooks/install.sh` — once per clone or
-worktree), every `git push` arms a background watcher via
+Once the hooks are installed (`make setup`, once per clone),
+every `git push` arms a background watcher via
 [`.githooks/pre-push`](./.githooks/pre-push), so it
 runs the same for a human, Claude Code, Codex, or any other agent. It waits for
 the push to land, waits for a PR to appear (which covers a later `gh pr create` —

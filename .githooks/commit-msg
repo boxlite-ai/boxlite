@@ -14,7 +14,7 @@ fi
 if [[ "$is_agent" == 1 ]]; then
   repo_root="$(git rev-parse --show-toplevel)"
   # Same reason as resolve_gate in pre-commit/pre-push: where core.hooksPath is
-  # configured absolute rather than the relative value install.sh sets, this one
+  # configured absolute rather than the relative value `make setup` sets, this one
   # hook can run for worktrees on either side of the marker move. Take whichever
   # location the gate that just ran actually wrote to. Absent from both still
   # means no audit, which still blocks.
