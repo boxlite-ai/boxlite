@@ -45,55 +45,52 @@
 # account needs provisioning work on the dev stack that nothing else
 # currently needs.
 #
-# Triggers mirror e2e-local: push on main, a label-gated PR trigger, and
-# manual dispatch. The `e2e-cloud` label is the cost gate — every run
-# consumes dev-stack capacity, so PRs opt in rather than run by default.
+# Triggers: exactly two, and both require write access to the repo.
 #
-# Fork PRs: DENIED, and this is the one place the model diverges from
-# e2e-local. There, untrusted code runs in a job holding no secrets, so a
-# maintainer label is purely a cost decision. Here the suite needs the
-# API key in the same job that builds and runs the PR's own code, and
-# GitHub has no secret-safe way to hand a credential from a privileged
-# job to an unprivileged one — job outputs are plaintext. So a labeled
-# fork run would hand arbitrary code a live maintainer credential for
-# the dev stack; a conftest.py is enough to exfiltrate it. Same-repo PRs
-# are allowed because their authors already have write access.
+#   workflow_call      deploy-infra.yml, after it applies a stack, on the
+#                      commit it just deployed (the `ref` input).
+#   workflow_dispatch  a human, against whatever is deployed right now.
 #
-# The event is still pull_request_target with head-SHA pinning so the
-# trigger surface matches e2e-local. Enabling forks needs more than
-# relaxing `should-run`: the run would first have to mint a scoped,
-# short-lived key (CreateApiKeyDto takes `permissions` and `expiresAt`)
-# and pass only that to the test step.
+# Nothing fires on its own any more. Push-on-main and the label-gated
+# pull_request_target trigger both ran the suite against a dev stack
+# whose deployed commit was unrelated to the commit under test, so a red
+# run said as much about how stale the stack was as about the change.
+# Hanging the suite off a deploy makes client and server the same commit;
+# every other run is someone asking for one.
 #
-# Runbook: docs/ci/e2e-local.md covers the shared label/gate mechanics.
+# The corollary is that untrusted code no longer reaches this workflow —
+# which is what makes it safe for the job that builds and runs the tree
+# to also hold the API key. There is no fork path left to defend:
+# dispatch needs write access, and deploy-infra is itself dispatch-only
+# and refuses to run off main. Restoring any PR trigger would mean
+# restoring that exposure — a labeled fork run hands arbitrary code a
+# live dev credential, and a conftest.py is enough to exfiltrate it — so
+# it would first have to mint a scoped, short-lived key (CreateApiKeyDto
+# takes `permissions` and `expiresAt`) and pass only that to the tests.
 
 name: E2E cloud
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'src/boxlite/**'
-      - 'src/shared/**'
-      - 'src/cli/**'
-      - 'src/guest/**'
-      - 'sdks/**'
-      - 'apps/e2e/**'
-      - '**/Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/e2e-cloud.yml'
-  pull_request_target:
-    types: [labeled, synchronize]
-    branches: [main]
-    paths:
-      - 'src/boxlite/**'
-      - 'src/shared/**'
-      - 'src/cli/**'
-      - 'src/guest/**'
-      - 'sdks/**'
-      - 'apps/e2e/**'
-      - '**/Cargo.toml'
-      - 'Cargo.lock'
+  workflow_call:
+    inputs:
+      ref:
+        # The commit the caller deployed. Without it the suite would build
+        # its SDKs from whatever main points at now, while the stack under
+        # test runs the commit deploy-infra selected — deploy-infra takes an
+        # arbitrary main commit, so those are not always the same thing.
+        description: 'Full commit SHA to build the SDKs and CLI from.'
+        required: true
+        type: string
+    secrets:
+      BOXLITE_DEV_API_KEY:
+        # Named rather than inherited. `inherit` passes every secret the
+        # caller holds, which for deploy-infra means DEPLOY_ENV and the
+        # Cloudflare API token as well — none of the suite's business.
+        # Its AWS access is not a secret and so was never at stake here;
+        # that comes from OIDC, and `permissions` below is what withholds
+        # it.
+        description: 'Dev-stack boxlite API key for profile p1.'
+        required: true
   workflow_dispatch:
     inputs:
       api_url:
@@ -104,24 +101,36 @@ on:
         # always non-empty on a dispatch run, so BOXLITE_DEV_API_URL
         # would be silently ignored exactly when someone is trying to
         # dispatch against the configured stack.
+        #
+        # No `ref` here either: a dispatch already chooses its own ref in
+        # the UI, and github.sha follows it.
 
-# pull_request_target's default token is write-capable — keep the
-# inherited token read-only, as e2e-local does.
+# A called workflow inherits the caller's token, and per GitHub's reuse
+# docs permissions "can only be maintained or reduced — not elevated".
+# Declaring the floor here is therefore what keeps deploy-infra's
+# `id-token: write` — its AWS entry — out of the job that builds and runs
+# the tree. Widening this hands that job the deploy role.
 permissions:
   contents: read
 
 # Single global group: every run targets the same dev stack, so two in
 # flight would race over shared boxes.
 #
-# A newer push queues behind the in-progress run instead of cancelling
-# it. The `box` fixture's teardown is the only thing that deletes the
-# boxes a run creates: auto_remove is a no-op over REST (see
+# A later run queues behind the in-progress one instead of cancelling it.
+# The `box` fixture's teardown is the only thing that deletes the boxes a
+# run creates: auto_remove is a no-op over REST (see
 # deprecated_auto_remove_does_not_change_rest_lifecycle_defaults) and the
 # API defaults autoDelete to disabled, so a run killed mid-suite strands
 # every box it had open — they auto-stop after 15 min but are never
 # deleted. Note this bounds the damage rather than eliminating it:
 # GitHub retains only the newest *pending* run per group, so intermediate
-# queued pushes are still superseded before they ever start.
+# queued runs are still superseded before they ever start.
+#
+# Unverified for the call path: GitHub's reuse-workflows doc says nothing
+# either way about workflow-level concurrency inside a called workflow,
+# and this is the repo's only reusable workflow that declares it. If a
+# deploy turns out not to queue behind a suite already running against
+# the stack it just replaced, this is why.
 concurrency:
   group: e2e-cloud
   cancel-in-progress: false
@@ -134,52 +143,20 @@ env:
   API_URL: ${{ inputs.api_url || vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai/api' }}
 
 jobs:
-  # =========================================================================
-  # Gate: PRs require the 'e2e-cloud' label (only maintainers can add it).
-  # Same-repo PRs re-run while labeled. Fork PRs never run — see the header:
-  # this workflow's only job holds a live dev API key.
-  # =========================================================================
-  should-run:
-    runs-on: ubuntu-latest
-    outputs:
-      run: ${{ steps.check.outputs.run }}
-    steps:
-      - name: Check trigger conditions
-        id: check
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
-        run: |
-          if [ "$EVENT_NAME" != "pull_request_target" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"   # push / workflow_dispatch
-            exit 0
-          fi
-          if ! echo "$LABELS" | jq -e 'index("e2e-cloud")' > /dev/null 2>&1; then
-            echo "run=false" >> "$GITHUB_OUTPUT"  # label is the cost gate
-            exit 0
-          fi
-          if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Fork PRs cannot run E2E cloud: the suite needs a live dev API key in the same job that runs the PR's code. Use workflow_dispatch from a maintainer branch instead."
-          fi
-
+  # No trigger gate: workflow_dispatch needs write access and
+  # workflow_call only reaches here from deploy-infra, which is itself
+  # dispatch-only. There is no untrusted event left to filter.
   e2e:
     name: E2E suite (cloud)
-    needs: should-run
-    if: needs.should-run.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
         with:
-          # pull_request_target resolves to the BASE branch by default,
-          # which would silently test main instead of the PR. Pin the head
-          # SHA the maintainer approved when labeling; push/dispatch keep
-          # github.sha. Same-repo heads only — see `should-run`.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # On a call, the commit the caller deployed. On a dispatch,
+          # inputs.ref is undefined and github.sha is the ref chosen in the
+          # UI — the same commit either way, never the caller's default.
+          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
       # ── Health check ──────────────────────────────────────────────

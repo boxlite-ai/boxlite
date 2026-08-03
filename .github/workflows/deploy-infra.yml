@@ -8,6 +8,8 @@ run-name: Deploy ${{ inputs.stage }} stack
 #
 # The final deploy sets one BOXLITE_ARTIFACT_SOURCE=build selector for both. A release deploy uses
 # the other selector and consumes the API image / Runner tarball published for VERSION instead.
+#
+# An applied deploy then runs E2E cloud against the stack it just wrote, from that same commit.
 
 on:
   workflow_dispatch:
@@ -252,3 +254,24 @@ jobs:
       - name: Remove materialized configuration
         if: always()
         run: rm -f apps/infra/.env
+
+  # E2E cloud has no automatic trigger of its own; a deploy is the one
+  # event that makes running it meaningful, because only here are the
+  # deployed stack and the SDKs under test the same commit.
+  #
+  # Gated on `apply`: without it the deploy job only previews, so the
+  # stack is whatever it already was and the suite would just spend dev
+  # capacity re-testing it. The `if` carries no status check function, so
+  # the default success() still applies and a failed deploy skips this.
+  #
+  # The stage is always `dev`, so the suite's own BOXLITE_DEV_API_URL
+  # default is the right target and no api_url is passed.
+  e2e:
+    name: E2E suite against ${{ inputs.stage }}
+    needs: [resolve-ref, deploy]
+    if: ${{ inputs.apply }}
+    uses: ./.github/workflows/e2e-cloud.yml
+    with:
+      ref: ${{ needs.resolve-ref.outputs.sha }}
+    secrets:
+      BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
