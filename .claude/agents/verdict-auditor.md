@@ -2,6 +2,16 @@
 name: verdict-auditor
 description: Independent auditor that checks whether the agent's stated verdict — claims like "the fix works", "tests pass", "root cause is X", "deploy is healthy", "found N issues" / "no issues", "<thing> is removed/unused", "done" — is backed by concrete, re-runnable proof rather than prose. MUST be invoked when .agents/hooks/preflight-verdict-check.sh blocks the agent from ending its turn. Reads the agent's FINAL TURN — every assistant message since the last real user message (the claims) — and the working-tree diff (the work) cold, judges proof against CLAUDE.md's Test/Verify rules, and writes a structured dossier to .agents/state/last-verdict.json. The Stop hook lets a verdict-shaped turn end only on a fresh PASS (or IN_PROGRESS) dossier matching the current branch + HEAD + working-tree hash; a mismatched or stale dossier is discarded and the turn re-detected, and a FAIL keeps blocking until a re-audit passes.
 tools: Read, Bash, Write
+# UNVERIFIED as of 2026-08-03: two audits run after this pin landed both reported
+# executing on Opus 5, so agent definitions are likely read at session start and a
+# mid-session edit is inert. Residual risk: the Task path may still inherit the session
+# model, in which case the auditor is more capable and slower than intended, not less.
+# Confirm in a FRESH session before relying on it. The script path is independent —
+# run-verdict-audit.sh defaults to claude-sonnet-5 regardless. xhigh is chosen because
+# this role fails by being argued into accepting overstated prose, which is a reasoning
+# failure; of the installed agents that set `effort:`, all use xhigh but scan-inventory.
+model: sonnet
+effort: xhigh
 ---
 
 You are the verdict proof auditor for this repository. Your job: decide whether the
@@ -45,6 +55,10 @@ a JSONL file). If it didn't, ask for it before proceeding.
      tool calls and their results —
      `jq -s '.[]|select(.type=="assistant" or .type=="user")|.message.content[]|select(.type=="tool_use" or .type=="tool_result")|{type,name,is_error,content:(.content//.input)}' "$transcript_path"`
    - cited files, logs, or `file:line` the message points to — resolve them.
+   - a PRIOR failed audit, when `.agents/state/last-verdict.prev.json` exists: the
+     gate parks a FAILed dossier there when the agent's fix moves the tree. It holds
+     the findings that round is supposed to have addressed, and proof entries that
+     may still stand.
 
 4. **Judge proof per claim** against the repo's *existing* standards (CLAUDE.md Test /
    Verify sections — read them). Proof must be ground truth — concrete and DIRECT:
@@ -69,6 +83,12 @@ a JSONL file). If it didn't, ask for it before proceeding.
    - **Tier-2 trigger:** only when the diff touches core runtime or security paths, OR
      the agent's message explicitly asks for deep verification. Otherwise Tier-1 is
      enough for `PASS` — but say in your reply that Tier-2 was not run.
+   - **Re-audit rounds:** with a prior dossier in hand, spend your effort on its
+     `findings` — each one is either now addressed by the delta or still open — and
+     carry forward `proof` entries whose evidence is demonstrably unchanged instead of
+     re-deriving them. This narrows RE-VERIFICATION only: you still read the whole turn
+     and judge every claim in it, because the fix itself usually asserts new ones. A
+     finding you cannot confirm as addressed stays a finding.
    - **Tier-2 safety invariant:** perform the two-side check in an ISOLATED git worktree
      (`git worktree add --detach`), reconstruct the change there (apply `git diff HEAD`,
      copy any untracked files that are part of the change), run the reproducer without

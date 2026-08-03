@@ -114,5 +114,38 @@ fi
 rm -rf "$D"
 
 echo
+echo "## Frontmatter stripping: subagent wiring must never reach the model"
+# strip_frontmatter() is only called from the claude-CLI branch, so every other case in
+# this file leaves it uncovered — the keys it parses (name/tools/model/effort) decide
+# what the auditor is told, and one of them arriving as an instruction would be silent.
+# Fake `claude` on PATH so the REAL branch runs against the REAL shipped spec, and
+# capture exactly what would have been sent as the system prompt.
+R="$(setup)"
+mkdir -p "$R/.claude/agents"
+cp "$REPO_ROOT/.claude/agents/verdict-auditor.md" "$R/.claude/agents/verdict-auditor.md"
+BIN="$(mktemp -d)"; CAP="$R/captured-system-prompt.txt"
+cat > "$BIN/claude" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null                      # consume the audit prompt on stdin
+prev=""
+for a in "$@"; do
+  [[ "$prev" == "--append-system-prompt" ]] && printf '%s' "$a" > "$SPEC_CAPTURE"
+  prev="$a"
+done
+mkdir -p "$CLAUDE_PROJECT_DIR/.agents/state"
+printf '{"branch":"main","head":"h","tree_hash":"t","verdict":"PASS","proof":[],"findings":[]}' \
+  > "$CLAUDE_PROJECT_DIR/.agents/state/last-verdict.json"
+FAKE
+chmod +x "$BIN/claude"
+( cd "$R" && CLAUDE_PROJECT_DIR="$R" SPEC_CAPTURE="$CAP" PATH="$BIN:$PATH" \
+    env -u VERDICT_AUDITOR_CMD bash "$RUNNER" "$R/transcript.jsonl" >/dev/null 2>&1 )
+# grep -c PRINTS 0 and EXITS 1 on no-match, so `|| echo 0` would append a second zero.
+leaked="$(grep -cE '^(name|description|tools|model|effort):' "$CAP" 2>/dev/null || true)"
+check_eq "no frontmatter key reaches the system prompt"      "$leaked" "0"
+body_ok="no"; grep -q '^## Procedure' "$CAP" 2>/dev/null && body_ok="yes"
+check_eq "...while the procedure body survives"              "$body_ok" "yes"
+rm -rf "$R" "$BIN"
+
+echo
 echo "RESULT: $pass passed, $fail failed"
 exit $(( fail > 0 ? 1 : 0 ))

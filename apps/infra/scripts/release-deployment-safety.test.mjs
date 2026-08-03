@@ -22,6 +22,7 @@ const RELEASE_DEPLOY_WORKFLOW = join(REPO_ROOT, '.github/workflows/deploy-releas
 const API_IMAGE_BUILD_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-apps-api-image.yml')
 const BUILD_C_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-c.yml')
 const BUILD_RUNNER_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-runner-binary.yml')
+const E2E_CLOUD_WORKFLOW = join(REPO_ROOT, '.github/workflows/e2e-cloud.yml')
 const LINT_WORKFLOW = join(REPO_ROOT, '.github/workflows/lint.yml')
 const DEV_DEPLOY_ROLE = join(REPO_ROOT, 'apps/infra/ci/github-deploy-role.yaml')
 const CLOUDFORMATION_SCHEMA = DEFAULT_SCHEMA.extend([
@@ -200,6 +201,19 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // The Api leg links against nothing the C SDK produces. Adding build-c to its `needs` would
   // still deploy the right bytes, just serialized behind a Rust compile it never reads.
   assert.deepEqual(workflow.jobs['build-api'].needs, 'resolve-ref')
+
+  // The suite that proves the deploy is the third call of that shape, and the two values that
+  // make it worth running are just as much contract. Drop `with.ref` and it builds its SDKs from
+  // tip-of-main against whatever commit was deployed; drop the apply gate and it spends dev-stack
+  // capacity re-testing a stack the run only previewed.
+  assert.equal(workflow.jobs.e2e.uses, './.github/workflows/e2e-cloud.yml')
+  assert.equal(workflow.jobs.e2e.with.ref, '${{ needs.resolve-ref.outputs.sha }}')
+  assert.equal(workflow.jobs.e2e.if, '${{ inputs.apply }}')
+  // Named, not `inherit` — which would also hand the suite DEPLOY_ENV and the Cloudflare token.
+  assert.equal(workflow.jobs.e2e.secrets.BOXLITE_DEV_API_KEY, '${{ secrets.BOXLITE_DEV_API_KEY }}')
+  // `needs` carries the ordering the `if` relies on: no status-check function appears in that
+  // expression, so the default success() is what stops the suite running behind a failed deploy.
+  assert.deepEqual(workflow.jobs.e2e.needs, ['resolve-ref', 'deploy'])
 
   // Both components resolve to the one commit the build jobs actually produced. The stage secret
   // cannot redirect that: deploy-environment-validation.mjs rejects the selector keys outright.
@@ -410,6 +424,37 @@ test('commit Runner builds consume the C SDK artifact from the same reusable run
   assert.doesNotMatch(liveShell(extractRun), /find \/tmp\b(?!\/c-sdk)/, 'the library must not be searched for under /tmp')
 })
 
+test('the cloud E2E suite is reachable only from a deploy or a human', () => {
+  const workflow = load(readFileSync(E2E_CLOUD_WORKFLOW, 'utf8'))
+
+  // The whole point of the trigger surface: this job builds and runs the tree in the same job
+  // that holds a live dev API key, so no event may reach it that an outsider can raise. Compare
+  // the parsed trigger keys as a set rather than asserting the two we want are present — the
+  // failure to catch is a *re-added* `pull_request_target`, which every presence check passes.
+  assert.deepEqual(Object.keys(workflow.on).sort(), ['workflow_call', 'workflow_dispatch'])
+
+  // Read the callee's own declarations: a commented-out `workflow_call:` still satisfies a
+  // substring match while making deploy-infra's call dead.
+  assert.ok(workflow.on.workflow_call, 'e2e-cloud.yml is no longer callable as a reusable workflow')
+  assert.equal(workflow.on.workflow_call.inputs.ref.required, true)
+  assert.equal(workflow.on.workflow_call.secrets.BOXLITE_DEV_API_KEY.required, true)
+
+  // A callee inherits the caller's token and may only narrow it, so this line — not anything in
+  // deploy-infra.yml — is what keeps `id-token: write`, the deploy role's entry, away from a job
+  // that executes the checked-out tree.
+  assert.equal(workflow.permissions?.contents, 'read')
+  assert.equal(workflow.permissions?.['id-token'], undefined)
+
+  // The checkout has to follow the caller's commit. Falling back to github.sha alone would test
+  // the tip of whatever ref the *caller* ran from, which for a re-deploy of an older commit is
+  // not the commit now on the stack.
+  const checkout = workflow.jobs.e2e.steps.find(
+    (step) => typeof step.uses === 'string' && step.uses.startsWith('actions/checkout'),
+  )
+  assert.ok(checkout, 'the e2e job no longer checks out a ref')
+  assert.equal(checkout.with.ref, '${{ inputs.ref || github.sha }}')
+})
+
 test('release deployment consumes one published version for both components', () => {
   const source = readFileSync(RELEASE_DEPLOY_WORKFLOW, 'utf8')
   const workflow = load(source)
@@ -462,6 +507,9 @@ test('the deployment workflows cap the token they hand their jobs', () => {
     'build-runner-binary.yml',
     'deploy-infra.yml',
     'deploy-release.yml',
+    // The deploy path's third reusable callee. Its cap does more work than the others': it is
+    // what narrows the inherited deploy token, so it belongs under the same guard.
+    'e2e-cloud.yml',
   ]) {
     const workflow = load(readFileSync(join(REPO_ROOT, '.github/workflows', entry), 'utf8'))
     assert.equal(workflow.permissions?.contents, 'read', `${entry} must default its token to contents: read`)
