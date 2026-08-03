@@ -4,8 +4,8 @@ import { createHash, randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { ApiKeyCredential, BoxliteRestOptions, JsBoxlite, SimpleBox } from '../../../../../sdks/node'
-import { DEFAULT_BOX_IMAGE } from '../../../image.js'
+import { ApiKeyCredential, BoxliteRestOptions, JsBoxlite, SimpleBox } from '../../../../sdks/node'
+import { DEFAULT_BOX_IMAGE } from '../../../../scripts/test/image.js'
 
 const SERVICES = [
   { port: 18081, marker: 'node-sdk-tunnel-e2e-a' },

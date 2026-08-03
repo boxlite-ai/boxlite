@@ -7,7 +7,7 @@ from pathlib import Path
 
 REGISTRY = "ghcr.io/boxlite-ai"
 IMAGE_ENV_VAR = "BOXLITE_E2E_IMAGE"
-VERSION_FILE = Path(__file__).resolve().parents[4] / "apps/box-images/VERSION"
+VERSION_FILE = Path(__file__).resolve().parents[3] / "apps/box-images/VERSION"
 
 
 def base_image_ref() -> str:

@@ -27,7 +27,7 @@ const outJson = path.join(outDir, 'rest-inventory.json')
 const httpMethods = new Set(['get', 'put', 'post', 'patch', 'delete', 'options', 'head', 'trace'])
 
 const scanRoots = [
-  'scripts/test/e2e/cases',
+  'apps/e2e/cases',
   'scripts/test/rest',
   'src/cli/tests',
   'apps/api/src/boxlite-rest',

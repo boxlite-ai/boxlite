@@ -17,9 +17,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from e2e_auth import auth_context
 from images import default_image
 
-REPO = Path(__file__).resolve().parents[4]
+REPO = Path(__file__).resolve().parents[3]
 NODE_SDK = REPO / "sdks/node"
-DRIVER = REPO / "scripts/test/e2e/sdks/node/e2e_comprehensive.ts"
+DRIVER = REPO / "apps/e2e/sdks/node/e2e_comprehensive.ts"
 IMAGE = default_image()
 
 

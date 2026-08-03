@@ -21,6 +21,7 @@ on:
       - 'src/guest/**'
       - 'sdks/**'
       - 'apps/**'
+      - '!apps/e2e/**' # Stack e2e runs in e2e-stack.yml / e2e-cloud.yml, not this unit matrix.
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/test.yml'
@@ -79,7 +80,14 @@ jobs:
             go:
               - 'sdks/go/**'
             apps:
-              - 'apps/**'
+              # paths-filter ORs its rules, so a '!apps/e2e/**' rule would make
+              # this filter true for everything outside apps/e2e. Carve the stack
+              # e2e suite out inside a single pattern instead; 'apps/*' keeps
+              # top-level files (package.json, nx.json) in scope. Note !(e2e)
+              # compiles to a segment-prefix negative lookahead, so a future
+              # apps/e2e-<something> sibling would drop out of this filter too.
+              - 'apps/*'
+              - 'apps/!(e2e)/**'
 
   # Rust unit tests (boxlite-shared only - boxlite requires native libs not available in CI)
   rust:

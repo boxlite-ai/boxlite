@@ -12,6 +12,13 @@ only surfaces on the REST → API → runner chain (e.g. #563's exec-stdout drop
 #627's attach re-drain) will pass those tests and reach production. This suite
 exists to catch those.
 
+It sits under `apps/` because the stack it drives — `apps/api`, `apps/runner`,
+`apps/proxy` — does. It is **not** an Nx project: there is no `project.json` or
+Jest config for Nx to infer, and pytest invokes its polyglot SDK drivers. It is
+also **not** what `npm run e2e:local` starts — that command brings up the local
+Dex environment for the dashboard. Drive this suite through the
+`make test:e2e*` targets.
+
 ## What the suite verifies
 
 Every test in `cases/` uses the REST-mode runtime built by `conftest.py::rt`.
@@ -29,7 +36,7 @@ case in this suite is using the same fixtures and the same path.
 Set up via the bootstrap script (one-time per machine):
 
 ```bash
-scripts/test/e2e/bootstrap.sh
+apps/e2e/bootstrap.sh
 ```
 
 This installs / starts:
@@ -43,7 +50,7 @@ This installs / starts:
 
 First run is slow (~5–10 min, mostly the Rust release build). Subsequent runs are incremental.
 
-Tear down with `scripts/test/e2e/teardown.sh` (basic), `--wipe-data`
+Tear down with `apps/e2e/teardown.sh` (basic), `--wipe-data`
 (also drops the DB and `/var/lib/boxlite`), or `--full` (also drops
 the persistent secrets file so the next bootstrap mints fresh keys).
 Postgres + Redis + Node are kept around — they're cheap to leave and
@@ -59,7 +66,7 @@ keys. If you ever need to rotate, run `teardown.sh --full`.
 Then run the fixture setup (idempotent — re-running is safe):
 
 ```bash
-python3 scripts/test/e2e/fixture_setup.py
+python3 apps/e2e/fixture_setup.py
 ```
 
 This:
@@ -114,7 +121,7 @@ it empty or set `BOXLITE_E2E_PREFIX` explicitly if discovery fails.
 Run:
 
 ```bash
-pytest scripts/test/e2e/cases/ -v --timeout=120
+pytest apps/e2e/cases/ -v --timeout=120
 ```
 
 For CI, store `BOXLITE_E2E_API_KEY` as a repository secret and pass it
@@ -125,16 +132,16 @@ services are needed — the remote stack provides everything.
 
 ```bash
 # Everything (after bootstrap + fixture_setup):
-scripts/test/e2e/run.sh
+apps/e2e/run.sh
 
 # Or via pytest directly:
-pytest scripts/test/e2e/cases/
+pytest apps/e2e/cases/
 
 # Just one case:
-pytest scripts/test/e2e/cases/test_p0_6_exec_stdout_race.py -v
+pytest apps/e2e/cases/test_p0_6_exec_stdout_race.py -v
 
 # Two-sided (proves the suite detects the bug and the PR fixes it):
-PR_REF=<branch>  scripts/test/e2e/two_sided.sh
+PR_REF=<branch>  apps/e2e/two_sided.sh
 ```
 
 The reusable REST auth matrix entry is:
@@ -157,7 +164,7 @@ The Python SDK REST path does run under both auth modes because its
 ## Layout
 
 ```
-scripts/test/e2e/
+apps/e2e/
 ├── README.md
 ├── bootstrap.sh             # Install services (local stack only)
 ├── fixture_setup.py         # Register snapshots / quota / profile (local stack only)

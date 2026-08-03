@@ -19,7 +19,7 @@ IMAGES_MODULE = E2E_DIR / "lib/images.py"
 class ImageResolutionTest(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp())
-        e2e_dir = self.root / "scripts/test/e2e"
+        e2e_dir = self.root / "apps/e2e"
         (e2e_dir / "lib").mkdir(parents=True)
         shutil.copy(RUN_SCRIPT, e2e_dir / "run.sh")
         shutil.copy(IMAGES_MODULE, e2e_dir / "lib/images.py")
@@ -66,7 +66,7 @@ class ImageResolutionTest(unittest.TestCase):
         else:
             env["BOXLITE_E2E_IMAGE"] = image
         return subprocess.run(
-            ["bash", str(self.root / "scripts/test/e2e/run.sh")],
+            ["bash", str(self.root / "apps/e2e/run.sh")],
             env=env,
             capture_output=True,
             text=True,
@@ -81,7 +81,7 @@ class ImageResolutionTest(unittest.TestCase):
         self.assertIn("cannot read box image version", result.stderr)
 
     def test_empty_resolver_output_stops(self) -> None:
-        (self.root / "scripts/test/e2e/lib/images.py").write_text("")
+        (self.root / "apps/e2e/lib/images.py").write_text("")
 
         result = self._run()
 

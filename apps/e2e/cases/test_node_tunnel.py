@@ -15,9 +15,9 @@ from e2e_auth import auth_context
 from images import default_image
 
 
-REPO = Path(__file__).resolve().parents[4]
+REPO = Path(__file__).resolve().parents[3]
 NODE_SDK = REPO / "sdks/node"
-DRIVER = REPO / "scripts/test/e2e/sdks/node/e2e_tunnel.ts"
+DRIVER = REPO / "apps/e2e/sdks/node/e2e_tunnel.ts"
 
 
 def _has_node_napi_build() -> bool:

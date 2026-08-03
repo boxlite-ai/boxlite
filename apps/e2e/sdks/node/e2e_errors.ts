@@ -3,7 +3,7 @@
 
 import {
   JsBoxlite, BoxliteRestOptions, ApiKeyCredential,
-} from '../../../../../sdks/node';
+} from '../../../../sdks/node';
 
 function env(k: string, def: string): string {
   const v = process.env[k];

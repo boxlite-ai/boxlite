@@ -16,14 +16,14 @@
 # 127.0.0.1:5000. The API's S3-backed VolumeManager early-returns when
 # S3_ENDPOINT is empty (apps/api/src/box/managers/volume.manager.ts:47).
 #
-# Tear down with scripts/test/e2e/teardown.sh.
+# Tear down with apps/e2e/teardown.sh.
 
 set -euo pipefail
 
 # REPO autodetects via the script's own location — works regardless of
 # where the user cloned to. The previous $HOME/ws/boxlite default broke
 # every other layout.
-REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 APPS="$REPO/apps"
 ENV_FILE="${ENV_FILE:-/etc/boxlite-api.env}"
 SECRETS_FILE="${SECRETS_FILE:-/etc/boxlite-secrets.env}"
@@ -376,12 +376,12 @@ if ! echo "$ME_JSON" | grep -q '"sub"'; then
     # match the existing admin user's stored hash. That happens when
     # someone deleted $SECRETS_FILE without also dropping the DB. The
     # DB has the OLD admin user with the OLD key; the env has a NEW
-    # key. Fix: scripts/test/e2e/teardown.sh --wipe-data + re-run.
+    # key. Fix: apps/e2e/teardown.sh --wipe-data + re-run.
     if echo "$ME_JSON" | grep -q 'error code: 401\|"statusCode":401\|HTTP 401'; then
         echo "" >&2
         echo "  HINT: 401 here usually means \$SECRETS_FILE was deleted" >&2
         echo "  but the DB still has an admin user from a previous mint." >&2
-        echo "  Run: scripts/test/e2e/teardown.sh --wipe-data && re-run bootstrap" >&2
+        echo "  Run: apps/e2e/teardown.sh --wipe-data && re-run bootstrap" >&2
     fi
     exit 1
 fi
@@ -392,4 +392,4 @@ echo "api:    $(systemctl is-active boxlite-api)    :3000"
 echo "runner: $(systemctl is-active boxlite-runner) :8080"
 echo "admin api key:  $ADMIN_API_KEY    (also in $SECRETS_FILE)"
 echo ""
-echo "Next:  python3 scripts/test/e2e/fixture_setup.py"
+echo "Next:  python3 apps/e2e/fixture_setup.py"

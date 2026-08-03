@@ -67,8 +67,7 @@
       "plugin": "@nx/jest/plugin",
       "options": {
         "targetName": "test"
-      },
-      "exclude": ["apps/boxlite-e2e/**/*"]
+      }
     },
     {
       "plugin": "@nx/vite/plugin",

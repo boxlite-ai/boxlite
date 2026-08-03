@@ -17,10 +17,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from e2e_auth import auth_context
 from images import default_image
 
-REPO = Path(__file__).resolve().parents[4]
+REPO = Path(__file__).resolve().parents[3]
 HDR = REPO / "sdks/c/include"
 LIB_DIR = REPO / "target/release"
-DRIVERS = REPO / "scripts/test/e2e/sdks/c"
+DRIVERS = REPO / "apps/e2e/sdks/c"
 IMAGE = default_image()
 
 

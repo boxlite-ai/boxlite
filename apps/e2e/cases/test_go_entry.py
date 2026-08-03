@@ -1,4 +1,4 @@
-"""Go SDK entry-point e2e: builds and runs scripts/test/e2e/sdks/go/e2e_basic.go,
+"""Go SDK entry-point e2e: builds and runs apps/e2e/sdks/go/e2e_basic.go,
 asserts a successful box round-trip + runner journal contains the box id.
 """
 from __future__ import annotations
@@ -17,8 +17,8 @@ from e2e_auth import auth_context
 from images import default_image
 from path_verification import runner_journal_seek, runner_hits_for_box
 
-REPO = Path(__file__).resolve().parents[4]
-SRC = REPO / "scripts/test/e2e/sdks/go/e2e_basic.go"
+REPO = Path(__file__).resolve().parents[3]
+SRC = REPO / "apps/e2e/sdks/go/e2e_basic.go"
 # Each driver is its own `package main`, so the shared image constant has to be
 # named on the build line rather than picked up from the directory.
 SHARED = SRC.parent / "e2e_image.go"

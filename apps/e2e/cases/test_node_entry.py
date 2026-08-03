@@ -1,4 +1,4 @@
-"""Node SDK entry-point e2e: builds and runs scripts/test/e2e/sdks/node/e2e_basic.ts
+"""Node SDK entry-point e2e: builds and runs apps/e2e/sdks/node/e2e_basic.ts
 against the local @boxlite-ai/boxlite napi build, asserts a successful box
 round-trip + runner journal contains the box id.
 
@@ -21,8 +21,8 @@ from e2e_auth import auth_context
 from images import default_image
 from path_verification import runner_journal_seek, runner_hits_for_box
 
-REPO = Path(__file__).resolve().parents[4]
-SRC = REPO / "scripts/test/e2e/sdks/node/e2e_basic.ts"
+REPO = Path(__file__).resolve().parents[3]
+SRC = REPO / "apps/e2e/sdks/node/e2e_basic.ts"
 NODE_SDK = REPO / "sdks/node"
 BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
 

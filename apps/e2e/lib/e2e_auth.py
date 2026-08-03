@@ -34,7 +34,7 @@ def load_profile(name: str | None = None, *, required: bool = True) -> dict[str,
     if not path.exists():
         if required:
             raise RuntimeError(
-                f"{path} missing; run scripts/test/e2e/fixture_setup.py first"
+                f"{path} missing; run apps/e2e/fixture_setup.py first"
             )
         return {}
     data = tomllib.loads(path.read_text())

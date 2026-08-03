@@ -13,7 +13,7 @@ Runs N iterations, computes p50/p90/p99/mean/stdev, and emits a
 JSON report compatible with the bench harness schema (PR #592).
 
 Usage:
-    .venv/bin/python3 scripts/test/e2e/bench_rest_startup.py [--runs N] [--warmup M]
+    .venv/bin/python3 apps/e2e/bench_rest_startup.py [--runs N] [--warmup M]
 
 Requires BOXLITE_E2E_API_URL + BOXLITE_E2E_API_KEY env vars or
 a configured ~/.boxlite/credentials.toml profile.

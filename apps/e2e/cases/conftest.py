@@ -2,7 +2,7 @@
 
 Every fixture here forces the **REST** path. There is no `Boxlite.default()`
 fixture in this file by design — local-FFI tests belong under
-`sdks/python/tests/`, not `scripts/test/e2e/`.
+`sdks/python/tests/`, not `apps/e2e/`.
 
 The autouse fixture `verify_runner_saw_all_boxes` proves per-test that
 every box the test created actually reached the runner via the API. If a
@@ -126,7 +126,7 @@ async def verify_runner_saw_all_boxes(rt):
         f"box(es) created in this test never reached the runner journal: "
         f"{missing}. Either the SDK degraded to local FFI, the API did not "
         f"forward to the runner, or journalctl access broke. See "
-        f"scripts/test/e2e/README.md for the chain spec."
+        f"apps/e2e/README.md for the chain spec."
     )
 
 

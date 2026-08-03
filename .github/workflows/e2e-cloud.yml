@@ -15,7 +15,7 @@
 # Authentication: one boxlite API key, in the repo secret
 # `BOXLITE_DEV_API_KEY`. That is the whole of it — the suite reads
 # [profiles.p1] from ~/.boxlite/credentials.toml and every request is
-# `Authorization: Bearer <token>` (scripts/test/e2e/lib/e2e_auth.py).
+# `Authorization: Bearer <token>` (apps/e2e/lib/e2e_auth.py).
 # `path_prefix` is derived from the same key via /v1/me, not a second
 # credential. No AWS, no OIDC.
 #
@@ -78,7 +78,7 @@ on:
       - 'src/cli/**'
       - 'src/guest/**'
       - 'sdks/**'
-      - 'scripts/test/e2e/**'
+      - 'apps/e2e/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/e2e-cloud.yml'
@@ -91,7 +91,7 @@ on:
       - 'src/cli/**'
       - 'src/guest/**'
       - 'sdks/**'
-      - 'scripts/test/e2e/**'
+      - 'apps/e2e/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
   workflow_dispatch:
@@ -190,7 +190,7 @@ jobs:
           echo "::notice::${API_URL}/health returned 2xx"
 
       # ── Configure pytest credentials ─────────────────────────────
-      # Written here rather than by scripts/test/e2e/fixture_setup.py,
+      # Written here rather than by apps/e2e/fixture_setup.py,
       # which the local entry points (make test:e2e:setup, run.sh) use.
       # That script talks to the stack's Postgres directly — `psql -h
       # localhost -d boxlite_dev` for snapshot state, and an
@@ -307,13 +307,13 @@ jobs:
           BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
           BOXLITE_E2E_PROFILE: p1
         run: |
-          timeout 35m python3 -m pytest scripts/test/e2e/cases/ \
-              --ignore=scripts/test/e2e/cases/test_c_entry.py \
-              --ignore=scripts/test/e2e/cases/test_c_coverage.py \
-              --ignore=scripts/test/e2e/cases/test_go_entry.py \
-              --ignore=scripts/test/e2e/cases/test_go_coverage.py \
-              --ignore=scripts/test/e2e/cases/test_node_entry.py \
-              --ignore=scripts/test/e2e/cases/test_exec_timeout.py \
+          timeout 35m python3 -m pytest apps/e2e/cases/ \
+              --ignore=apps/e2e/cases/test_c_entry.py \
+              --ignore=apps/e2e/cases/test_c_coverage.py \
+              --ignore=apps/e2e/cases/test_go_entry.py \
+              --ignore=apps/e2e/cases/test_go_coverage.py \
+              --ignore=apps/e2e/cases/test_node_entry.py \
+              --ignore=apps/e2e/cases/test_exec_timeout.py \
               -v -s --tb=short --no-header -p no:cacheprovider \
               --timeout=180 --timeout-method=thread \
               --junit-xml=pytest-junit.xml

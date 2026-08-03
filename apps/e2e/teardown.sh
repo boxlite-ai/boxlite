@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 ENV_FILE="${ENV_FILE:-/etc/boxlite-api.env}"
 SECRETS_FILE="${SECRETS_FILE:-/etc/boxlite-secrets.env}"
 
@@ -75,7 +75,7 @@ echo ""
 case "$mode" in
     basic)
         echo "Postgres role/db, /var/lib/boxlite, and secrets file are KEPT."
-        echo "Re-run scripts/test/e2e/bootstrap.sh to bring things back up."
+        echo "Re-run apps/e2e/bootstrap.sh to bring things back up."
         echo "Use --wipe-data to also drop DB + box state."
         ;;
     wipe)

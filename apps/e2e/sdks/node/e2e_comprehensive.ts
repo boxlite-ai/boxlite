@@ -11,12 +11,12 @@
 
 import {
   JsBoxlite, BoxliteRestOptions, ApiKeyCredential,
-} from '../../../../../sdks/node';
+} from '../../../../sdks/node';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { DEFAULT_BOX_IMAGE } from '../../../image.js';
+import { DEFAULT_BOX_IMAGE } from '../../../../scripts/test/image.js';
 
 function env(k: string, def: string): string {
   const v = process.env[k];

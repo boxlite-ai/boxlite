@@ -390,7 +390,7 @@ test\:rest\:cli:
 	@bash scripts/test/rest/run_cli_matrix.sh "$${AUTH:-oidc}" "$${SCOPE:-smoke}"
 
 test\:rest\:e2e:
-	@cd scripts/test/e2e && BOXLITE_E2E_AUTH=$${AUTH:-api-key} python3 -m pytest cases/ -v $(PYTEST_FILTER)
+	@cd apps/e2e && BOXLITE_E2E_AUTH=$${AUTH:-api-key} python3 -m pytest cases/ -v $(PYTEST_FILTER)
 
 test\:rest\:report:
 	@python3 scripts/test/rest/report.py
@@ -404,14 +404,14 @@ test\:install-script:
 
 # ─── E2E: SDK → API → Runner → VM ───────────────────────────────────────────
 test\:e2e\:setup:
-	@scripts/test/e2e/bootstrap.sh
-	@python3 scripts/test/e2e/fixture_setup.py
+	@apps/e2e/bootstrap.sh
+	@python3 apps/e2e/fixture_setup.py
 
 test\:e2e:
-	@cd scripts/test/e2e && python3 -m pytest cases/ -v
+	@cd apps/e2e && python3 -m pytest cases/ -v
 
 test\:e2e\:two-sided:
-	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash scripts/test/e2e/two_sided.sh
+	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash apps/e2e/two_sided.sh
 
 # ─── Stress: deployed REST API ─────────────────────────────────────────────
 test\:stress\:api-read:

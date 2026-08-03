@@ -1,4 +1,4 @@
-"""C SDK entry-point e2e: compiles and runs scripts/test/e2e/sdks/c/e2e_basic.c
+"""C SDK entry-point e2e: compiles and runs apps/e2e/sdks/c/e2e_basic.c
 against libboxlite.so, asserts a successful box round-trip + runner journal
 contains the box id.
 
@@ -22,8 +22,8 @@ from e2e_auth import auth_context
 from images import default_image
 from path_verification import runner_journal_seek, runner_hits_for_box
 
-REPO = Path(__file__).resolve().parents[4]
-SRC = REPO / "scripts/test/e2e/sdks/c/e2e_basic.c"
+REPO = Path(__file__).resolve().parents[3]
+SRC = REPO / "apps/e2e/sdks/c/e2e_basic.c"
 HDR = REPO / "sdks/c/include"
 LIB_DIR = REPO / "target/release"
 BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")

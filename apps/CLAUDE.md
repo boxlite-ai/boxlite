@@ -23,3 +23,8 @@ selected API: login uses whatever OIDC issuer that API's `/api/config` reports.
   log in through Dex when redirected and should not depend on cached cookies.
 - `dev:dex` and `e2e:local` require Docker Desktop and create/reuse
   `boxlite-local-postgres`, `boxlite-local-redis`, and `boxlite-local-dex`.
+
+`apps/e2e/` is a different thing from `npm run e2e:local`: it is the pytest
+stack suite (SDK/CLI → API → runner → microVM), run from the **repository
+root** via `make test:e2e:setup` / `make test:e2e`. It is not an Nx project:
+it has no `project.json` or Jest config for Nx to infer. See `apps/e2e/README.md`.
