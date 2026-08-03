@@ -7,6 +7,17 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm'
 import { BoxClass } from '../enums/box-class.enum'
 
+export interface ScheduleWindow {
+  days?: number[] // 0=Sun..6=Sat, omit = every day
+  startHour?: number // 0-23, omit = all day
+  endHour?: number // 0-23, wraps midnight if startHour > endHour
+  pool: number
+}
+
+export interface ScheduleConfig {
+  windows: ScheduleWindow[]
+}
+
 @Entity()
 @Index('warm_pool_find_idx', ['image', 'target', 'class', 'cpu', 'mem', 'disk', 'gpu', 'osUser', 'env'])
 export class WarmPool {
@@ -49,6 +60,12 @@ export class WarmPool {
 
   @Column({ nullable: true })
   errorReason?: string
+
+  @Column({ type: 'jsonb', nullable: true })
+  scheduleConfig: ScheduleConfig | null
+
+  @Column({ default: 'UTC' })
+  timezone: string
 
   @Column({
     type: 'simple-json',

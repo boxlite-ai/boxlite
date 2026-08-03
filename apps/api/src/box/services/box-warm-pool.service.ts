@@ -12,7 +12,9 @@ import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
 import { Box } from '../entities/box.entity'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import { WarmPool } from '../entities/warm-pool.entity'
+import { ScheduleConfig, WarmPool } from '../entities/warm-pool.entity'
+import { resolveWarmPoolTarget } from './warm-pool-schedule'
+import { BoxConflictError } from '../errors/box-conflict.error'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxOrganizationUpdatedEvent } from '../events/box-organization-updated.event'
@@ -134,6 +136,38 @@ export class BoxWarmPoolService {
     return null
   }
 
+  async listWarmPools(): Promise<WarmPool[]> {
+    return this.warmPoolRepository.find()
+  }
+
+  async findWarmPool(id: string): Promise<WarmPool | null> {
+    return this.warmPoolRepository.findOne({ where: { id } })
+  }
+
+  async updateSchedule(
+    id: string,
+    scheduleConfig: ScheduleConfig | null | undefined,
+    timezone: string | undefined,
+  ): Promise<WarmPool> {
+    // Both fields are independently optional: omitting one leaves it unchanged,
+    // so a caller can retune the schedule without restating the timezone.
+    const patch: Partial<WarmPool> = {}
+    if (scheduleConfig !== undefined) {
+      patch.scheduleConfig = scheduleConfig
+    }
+    if (timezone !== undefined) {
+      patch.timezone = timezone
+    }
+    if (Object.keys(patch).length > 0) {
+      await this.warmPoolRepository.update(id, patch)
+    }
+    return this.warmPoolRepository.findOneOrFail({ where: { id } })
+  }
+
+  private computeTargetPoolSize(item: WarmPool): number {
+    return resolveWarmPoolTarget(item.scheduleConfig, item.timezone, item.pool, new Date())
+  }
+
   //  todo: make frequency configurable or more efficient
   @Cron(CronExpression.EVERY_10_SECONDS, { name: 'warm-pool-check' })
   @LogExecution('warm-pool-check')
@@ -148,39 +182,91 @@ export class BoxWarmPoolService {
           return
         }
 
-        const boxCount = await this.boxRepository.count({
-          where: {
-            organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
-            image: warmPoolItem.image,
-            class: warmPoolItem.class,
-            osUser: warmPoolItem.osUser,
-            env: warmPoolItem.env,
-            region: warmPoolItem.target,
-            cpu: warmPoolItem.cpu,
-            gpu: warmPoolItem.gpu,
-            mem: warmPoolItem.mem,
-            disk: warmPoolItem.disk,
-            desiredState: BoxDesiredState.STARTED,
-            state: Not(In([BoxState.ERROR])),
-          },
-        })
+        try {
+          const boxCount = await this.boxRepository.count({
+            where: {
+              organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+              image: warmPoolItem.image,
+              class: warmPoolItem.class,
+              osUser: warmPoolItem.osUser,
+              env: warmPoolItem.env,
+              region: warmPoolItem.target,
+              cpu: warmPoolItem.cpu,
+              gpu: warmPoolItem.gpu,
+              mem: warmPoolItem.mem,
+              disk: warmPoolItem.disk,
+              desiredState: BoxDesiredState.STARTED,
+              state: Not(In([BoxState.ERROR])),
+            },
+          })
 
-        const missingCount = warmPoolItem.pool - boxCount
-        if (missingCount > 0) {
-          const promises = []
-          this.logger.debug(`Creating ${missingCount} boxes for warm pool id ${warmPoolItem.id}`)
+          const target = this.computeTargetPoolSize(warmPoolItem)
+          const missingCount = target - boxCount
+          if (missingCount > 0) {
+            const promises = []
+            this.logger.debug(`Creating ${missingCount} boxes for warm pool id ${warmPoolItem.id}`)
 
-          for (let i = 0; i < missingCount; i++) {
-            promises.push(
-              this.eventEmitter.emitAsync(WarmPoolEvents.TOPUP_REQUESTED, new WarmPoolTopUpRequested(warmPoolItem)),
-            )
+            for (let i = 0; i < missingCount; i++) {
+              promises.push(
+                this.eventEmitter.emitAsync(WarmPoolEvents.TOPUP_REQUESTED, new WarmPoolTopUpRequested(warmPoolItem)),
+              )
+            }
+
+            // Wait for all promises to settle before releasing the lock. Otherwise, another worker could start creating boxes
+            await Promise.allSettled(promises)
           }
 
-          // Wait for all promises to settle before releasing the lock. Otherwise, another worker could start creating boxes
-          await Promise.allSettled(promises)
-        }
+          const excessCount = boxCount - target
+          if (excessCount > 0) {
+            const candidates = await this.boxRepository.find({
+              where: {
+                organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+                image: warmPoolItem.image,
+                class: warmPoolItem.class,
+                cpu: warmPoolItem.cpu,
+                mem: warmPoolItem.mem,
+                disk: warmPoolItem.disk,
+                gpu: warmPoolItem.gpu,
+                osUser: warmPoolItem.osUser,
+                env: warmPoolItem.env,
+                region: warmPoolItem.target,
+                state: BoxState.STARTED,
+                desiredState: BoxDesiredState.STARTED,
+              },
+              take: excessCount,
+            })
 
-        await this.redisLockProvider.unlock(lockKey)
+            this.logger.debug(`Scaling down ${candidates.length} excess boxes for warm pool id ${warmPoolItem.id}`)
+
+            for (const box of candidates) {
+              // Distinct name from the outer warm-pool tick lock (`lockKey`) to
+              // avoid shadowing. Held for its full 30s TTL (not released here):
+              // that window blocks a concurrent user claim from grabbing a box
+              // we've just marked for destruction. Same key `fetchWarmPoolBox`
+              // uses, so claim and scale-down are mutually exclusive.
+              const boxLockKey = `box-warm-pool-${box.id}`
+              if (!(await this.redisLockProvider.lock(boxLockKey, 30))) {
+                continue // being claimed right now, skip
+              }
+              try {
+                await this.boxRepository.update(box.id, {
+                  updateData: { desiredState: BoxDesiredState.DESTROYED, pending: true },
+                })
+              } catch (error) {
+                // The box changed between our .find() snapshot and the update
+                // (claimed/destroyed under us). Skip it rather than abort the
+                // other candidates or reject the cron's Promise.all — matches
+                // the per-candidate handling in BoxManager's reconcile loop.
+                if (error instanceof BoxConflictError) {
+                  continue
+                }
+                throw error
+              }
+            }
+          }
+        } finally {
+          await this.redisLockProvider.unlock(lockKey)
+        }
       }),
     )
   }
@@ -225,12 +311,15 @@ export class BoxWarmPoolService {
       },
     })
 
-    if (warmPoolItem.pool <= boxCount) {
+    // Use the schedule-aware target, matching warmPoolCheck(). Comparing against
+    // the static pool here would fight the cron: when a schedule window sets a
+    // higher/lower target, the claim fast-path would top up to the wrong size and
+    // churn against scale-up/scale-down on the next tick.
+    const target = this.computeTargetPoolSize(warmPoolItem)
+    if (target <= boxCount) {
       return
     }
 
-    if (warmPoolItem) {
-      this.eventEmitter.emit(WarmPoolEvents.TOPUP_REQUESTED, new WarmPoolTopUpRequested(warmPoolItem))
-    }
+    this.eventEmitter.emit(WarmPoolEvents.TOPUP_REQUESTED, new WarmPoolTopUpRequested(warmPoolItem))
   }
 }
