@@ -440,16 +440,79 @@ test('the deployment workflows cap the token they hand their jobs', () => {
     const workflow = load(readFileSync(join(REPO_ROOT, '.github/workflows', entry), 'utf8'))
     assert.equal(workflow.permissions?.contents, 'read', `${entry} must default its token to contents: read`)
 
-    // A job may raise its own, but only deliberately: pin who does and why.
+    // A job may raise its own, but only deliberately. Two reasons appear here:
+    //   upload-to-release — actually writes (uploads release assets)
+    //   build-c / build-runner — write nothing; they call a workflow whose release-upload job
+    //     declares contents: write (see the caller-grant test below). Granting per job rather
+    //     than at the top keeps `deploy` at contents: read.
+    const expectedWriters = new Set(['upload-to-release', 'build-c', 'build-runner'])
     for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
       if (!job.permissions) continue
       const raised = Object.entries(job.permissions).filter(([, level]) => level === 'write')
       assert.ok(
-        raised.length === 0 || ['upload-to-release', 'deploy', 'publish'].includes(jobName),
+        raised.length === 0 || expectedWriters.has(jobName),
         `${entry} job '${jobName}' raises ${JSON.stringify(raised)} without being an expected writer`,
       )
     }
   }
+})
+
+test('a job calling a reusable workflow grants at least what that workflow asks for', () => {
+  // Documented: "permissions can only be maintained or reduced—not elevated—throughout the
+  // chain" — https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows
+  //
+  // Measured: dispatching deploy-infra at 32cfa5c3, where the build-c job granted less than
+  // build-c.yml asks for, produced a startup_failure with zero jobs, zero logs and zero
+  // annotations — GitHub said only "a workflow file issue". actionlint exits 0 on that file.
+  //
+  // Inferred: that the elevation is what rejected the run. The docs describe the ceiling, not
+  // what happens when a callee asks past it, and GitHub never named a cause. If a dispatch
+  // shows the callee simply running with a reduced token instead, revisit this comment.
+  const directory = join(REPO_ROOT, '.github/workflows')
+  const LOCAL = './.github/workflows/'
+  const RANK = { none: 0, read: 1, write: 2 }
+  const readWorkflow = (file) => load(readFileSync(join(directory, file), 'utf8'))
+
+  // The widest permission any job in the callee asks for, following nested calls.
+  const required = (file, seen = new Set()) => {
+    if (seen.has(file)) return {}
+    seen.add(file)
+    const workflow = readWorkflow(file)
+    const widest = {}
+    const merge = (permissions) => {
+      if (!permissions || typeof permissions !== 'object') return
+      for (const [scope, level] of Object.entries(permissions)) {
+        if ((RANK[level] ?? 0) > (RANK[widest[scope]] ?? 0)) widest[scope] = level
+      }
+    }
+    merge(workflow.permissions)
+    for (const job of Object.values(workflow.jobs ?? {})) {
+      merge(job.permissions)
+      if (typeof job.uses === 'string' && job.uses.startsWith(LOCAL)) {
+        merge(required(job.uses.slice(LOCAL.length), seen))
+      }
+    }
+    return widest
+  }
+
+  let checked = 0
+  for (const entry of readdirSync(directory).filter((file) => /\.ya?ml$/.test(file))) {
+    const workflow = readWorkflow(entry)
+    for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
+      if (typeof job.uses !== 'string' || !job.uses.startsWith(LOCAL)) continue
+      // A job-level block replaces the workflow-level one rather than merging with it.
+      const granted = job.permissions ?? workflow.permissions ?? {}
+      for (const [scope, level] of Object.entries(required(job.uses.slice(LOCAL.length)))) {
+        assert.ok(
+          (RANK[granted[scope]] ?? 0) >= (RANK[level] ?? 0),
+          `${entry} job '${jobName}' grants ${scope}: ${granted[scope] ?? 'none'} but ` +
+            `${job.uses.slice(LOCAL.length)} needs ${level}`,
+        )
+      }
+      checked += 1
+    }
+  }
+  assert.ok(checked >= 11, `expected every local reusable call to be swept, saw ${checked}`)
 })
 
 test('every workflow that selects a deployment Environment does so from an allowlist', () => {

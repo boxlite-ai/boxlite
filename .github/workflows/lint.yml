@@ -20,10 +20,7 @@ on:
       - 'make/quality.mk'
       - 'make/test.mk'
       - '.pre-commit-config.yaml'
-      - '.github/workflows/lint.yml'
-      - '.github/workflows/config.yml'
-      - '.github/workflows/build-runtime.yml'
-      - '.github/workflows/deploy-infra.yml'
+      - '.github/workflows/**'
       - 'apps/infra/**'
       - 'scripts/release/**'
   # No path filter on pull_request: the `Lint (conclusion)` job is a required
@@ -85,7 +82,11 @@ jobs:
               - '.github/workflows/lint.yml'
             infra:
               - 'apps/infra/**'
-              - '.github/workflows/deploy-infra.yml'
+              # Every workflow, not just deploy-infra.yml: the infra suite asserts across the
+              # whole directory (caller/callee permissions, Environment allowlists, the staging
+              # step), so a change to any workflow can break it. Naming one file here meant
+              # editing a reusable workflow skipped the suite that guards it.
+              - '.github/workflows/**'
               - 'make/test.mk'
             install_script:
               - 'scripts/release/**'

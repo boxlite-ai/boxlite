@@ -70,6 +70,12 @@ jobs:
   build-c:
     name: Build commit C SDK
     needs: resolve-ref
+    # The called workflow's release-upload job declares contents: write, and a callee cannot go
+    # past what its caller grants (see the caller-grant test in release-deployment-safety.test.mjs
+    # for what is documented and what is inferred). Granted here rather than at workflow level so
+    # the deploy job below keeps contents: read.
+    permissions:
+      contents: write
     uses: ./.github/workflows/build-c.yml
     with:
       ref: ${{ needs.resolve-ref.outputs.sha }}
@@ -78,6 +84,12 @@ jobs:
   build-runner:
     name: Build commit Runner
     needs: [resolve-ref, build-c]
+    # The called workflow's release-upload job declares contents: write, and a callee cannot go
+    # past what its caller grants (see the caller-grant test in release-deployment-safety.test.mjs
+    # for what is documented and what is inferred). Granted here rather than at workflow level so
+    # the deploy job below keeps contents: read.
+    permissions:
+      contents: write
     uses: ./.github/workflows/build-runner-binary.yml
     with:
       ref: ${{ needs.resolve-ref.outputs.sha }}
