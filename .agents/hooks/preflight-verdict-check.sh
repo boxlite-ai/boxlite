@@ -24,12 +24,32 @@
 #        "the binding moved" is not a finding, and blocking on it was the
 #        meaningless-loop class (e.g. a commit moving HEAD out from under a
 #        dossier written seconds earlier).
-#   3. No dossier: TRIAGE the turn text — "does it state facts, findings, or outcomes
-#      that should be double-checked before anyone relies on them?" A fast model
-#      (haiku) answers YES/NO; when no model is reachable the static pattern list
-#      below decides (deterministic fallback, e.g. sessions without a model CLI).
-#      YES -> block with the audit instruction; NO -> allow (announced to the human
-#      via systemMessage, invisible to the model). No transcript -> allow.
+#   3. No dossier: TRIAGE the turn text through a three-tier cascade, cheapest first,
+#      so the 5-10s model round-trip is spent only where it actually decides anything:
+#        A. harness noise (0ms)  — the assistant slot holds only text the HARNESS
+#           wrote (API errors, quota notices, interruption markers). No model produced
+#           it, so it cannot be a claim -> allow. 14.4% of real turns.
+#        B. assertion-only (0ms) — a high-precision SUBSET of the fallback list below,
+#           limited to forms that report an observation ("173/173 tests pass", a
+#           whole-line "done.", a line-initial "Verified …") -> block. 10.7% of turns.
+#        C. the model (5-10s)    — everything else. "Does it state facts, findings, or
+#           outcomes that should be double-checked before anyone relies on them?" A
+#           fast model (haiku) answers YES/NO; when no model is reachable the static
+#           pattern list below decides (deterministic fallback, e.g. sessions without
+#           a model CLI). YES -> block with the audit instruction; NO -> allow
+#           (announced to the human via systemMessage, invisible to the model).
+#      No transcript (absent / unreadable / zero bytes) -> allow; nothing to judge.
+#      A transcript WITH content but no assistant text is NOT that case — the hook
+#      could not SEE the turn (unflushed final message, or a torn write jq could not
+#      parse). It waits up to 2s for the text, then fails open under a `blind-allow`
+#      rung so the log distinguishes "quiet session" from "gate never looked".
+#
+#      Tiers A and B are latency work ONLY — neither loosens the gate. A stays sound by
+#      requiring EVERY non-empty line to be harness text, so a turn that errored and
+#      retried still reaches B/C. B stays sound by leaving every prose-ambiguous
+#      phrasing ("tests pass", "root cause is", "deploy is healthy") to the model:
+#      removing the static false positives is the whole reason the model is primary,
+#      and a turn merely DISCUSSING verdict phrasing must still be allowed.
 #   4. Flush-race guard: the harness can fire Stop before appending the turn's final
 #      message, leaving the PREVIOUS (already-gated) message last in the transcript.
 #      The hook records the uuid it judged; if the newest uuid equals it, the hook
@@ -110,6 +130,9 @@ project_dir="${CLAUDE_PROJECT_DIR:-$repo_root}"
 branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || echo '?')"
 head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo '?')"
 verdict_file="$project_dir/.agents/state/last-verdict.json"
+# A FAILed dossier is parked here when the agent's fix moves the tree and invalidates
+# the binding, so the next audit re-checks known findings instead of starting cold.
+prev_verdict_file="$project_dir/.agents/state/last-verdict.prev.json"
 last_uuid_file="$project_dir/.agents/state/verdict-last-uuid"
 decision_log="$project_dir/.agents/state/verdict-decisions.log"
 max_age_seconds=600
@@ -224,6 +247,50 @@ strip_code() {
   awk 'BEGIN{fence=0} /^[[:space:]]*```/{fence=!fence; next} !fence' | sed -E 's/`[^`]*`//g'
 }
 
+# ── Tier A: harness text sitting in the assistant slot ───────────────────────
+# The assistant slot also carries text the HARNESS wrote, not the model: API errors,
+# quota notices, interruption markers. It asserts nothing — no model produced it — so
+# it can never be a verdict, and spending a 5-10s model round-trip to learn that is
+# pure latency. Measured on this repo's transcripts: 81 of 563 real turns (14.4%) are
+# exactly this, led by "API Error: 400 Your input exceeds the context window" (x43)
+# and "No response requested." (x15).
+#
+# EVERY non-empty line must match — that is the soundness property, and it is why
+# this is not a heuristic about content. Anchoring only the FIRST line would leak a
+# real verdict whenever the model hit a transient error and then retried inside the
+# same turn ("API Error: Overloaded" followed by "Root cause is X. All 53 tests
+# pass."). Both variants catch the same 81 turns, so the strict one costs nothing.
+harness_patterns='^[[:space:]]*(API Error'
+harness_patterns+='|No response requested\.'
+harness_patterns+='|Your organization has disabled'
+harness_patterns+="|You've hit your (weekly|usage) limit"
+harness_patterns+='|Credit balance is too low'
+harness_patterns+='|Claude Code is unable'
+harness_patterns+='|\[?Request (was )?(aborted|interrupted)'
+harness_patterns+=')'
+is_harness_noise() {  # $1 = stripped turn text
+  local total matched
+  total="$(printf '%s\n' "$1" | grep -c '[^[:space:]]' 2>/dev/null || true)"
+  [[ "${total:-0}" -gt 0 ]] || return 1
+  matched="$(printf '%s\n' "$1" | grep -Eic "$harness_patterns" 2>/dev/null || true)"
+  [[ "${matched:-0}" -eq "$total" ]]
+}
+
+# ── Tier B: assertion-only claims, decidable without the model ───────────────
+# A deliberately SMALL subset of the fallback list below: forms that REPORT an
+# observation rather than name one — a concrete count ("173/173 tests pass"), a
+# whole-line "done.", a line-initial "Verified …". Prose that merely DISCUSSES
+# verdict phrasing ("people write things like tests pass or root cause is X") cannot
+# take these shapes, so promoting them ahead of the classifier does not resurrect the
+# static false positives the classifier exists to remove — which is why the ambiguous
+# majority ("tests pass", "root cause is", "deploy is healthy") stays with the model.
+# "deploy is healthy" is in the ambiguous group on purpose: "once the deploy is
+# healthy, we proceed" is discussion, not a claim.
+# Measured: 60/563 turns (10.7%), zero false blocks across 21 model-labelled hits.
+assertion_patterns='[0-9]+ */ *[0-9]+ +(tests?|checks?|suites?|cases?)? *(pass(ed|ing|es)?|green)'
+assertion_patterns+='|^[[:space:]]*done[.! ]*$'
+assertion_patterns+='|^[[:space:]]*(verified|confirmed)[[:space:]]+[a-z]'
+
 # Triage: ask a small fast model whether the turn states facts, findings, or
 # outcomes that should be double-checked before anyone relies on them.
 # Echoes YES / NO / UNKNOWN. UNKNOWN (no CLI, timeout, garbage) → regex fallback.
@@ -287,8 +354,23 @@ verdict_patterns+='|(部署|服务|线上)(正常|健康|稳定)'
 #     entry (with residual risk) if proof genuinely can't be produced in this env.
 #   • After the auditor reports, end the turn again; this hook re-checks.
 #
+#   • When a prior audit FAILED on this same work, hand its findings to the auditor so
+#     round N+1 re-checks them against the delta instead of re-deriving every claim
+#     from cold. A function, not a string, so the prior-dossier note reflects state as
+#     it is at BLOCK time rather than at definition time.
+#
 # Variables available: ${transcript_path} ${branch} ${head} ${verdict_file}
-verdict_instruction="Audit before ending — run the audit SYNCHRONOUSLY (the dossier
+verdict_instruction() {
+  local prior=""
+  [[ -r "$prev_verdict_file" ]] && prior="
+
+A PRIOR audit of this same work FAILED; its findings are in ${prev_verdict_file}.
+Re-check THOSE findings against what changed and carry forward the proof entries
+whose evidence still holds, rather than re-deriving every claim from scratch. Still
+read the WHOLE turn — narrowing applies to re-verification only, never to finding
+claims, so anything the fix newly asserts is still caught."
+  cat <<EOF
+Audit before ending — run the audit SYNCHRONOUSLY (the dossier
 must exist before you end), via WHICHEVER of these your harness supports:
 
 Claude Code:
@@ -308,8 +390,26 @@ Any other agent (no Task tool):
 The AUDITOR — not you — writes ${verdict_file}; do not write it yourself. If you are
 pausing or asking the user something, have it record IN_PROGRESS with what remains;
 if a claim genuinely cannot be proven here, it can mark that proof 'blocked' with the
-residual risk. Then end your turn again."
+residual risk. Then end your turn again.${prior}
+EOF
+}
 # ─────────────────────────────────────────────────────────────────────────────
+
+# A parked FAIL is only useful to the NEXT audit of the SAME round. If nobody ever
+# claimed it — the round was abandoned, the user changed topic, no re-audit ran — it must
+# not be handed to an auditor judging unrelated work. That is the identical hazard the
+# park-side age gate closes, one site over: gating only the write bounds staleness at
+# park time, while this file is read on every later block. Left unexpired it manufactures
+# findings about dead work, and since the auditor is told "a finding you cannot confirm as
+# addressed stays a finding", those become a FAIL — re-entering the meaningless-loop class
+# item 2 of this header exists to eliminate.
+expire_stale_prev() {
+  [[ -r "$prev_verdict_file" ]] || return 0
+  local parked_age=$(( $(date +%s) - $(file_mtime_epoch "$prev_verdict_file") ))
+  (( parked_age > max_age_seconds )) && rm -f "$prev_verdict_file"
+  return 0
+}
+expire_stale_prev
 
 # ── Present dossier → validate the binding, then the verdict decides ─────────
 if [[ -r "$verdict_file" ]]; then
@@ -333,18 +433,39 @@ if [[ -r "$verdict_file" ]]; then
     # and fall through to detection. The current turn's OWN text decides
     # below whether a FRESH audit is demanded; the mismatch itself never blocks.
     log_decision dossier discard-stale
-    rm -f "$verdict_file"
+    # A FAILed dossier is the one worth keeping across the discard: the binding almost
+    # always moved because the agent was FIXING those findings, and the observed cycle
+    # (FAIL-block -> fix -> discard-stale -> re-detect -> block) then paid a full COLD
+    # re-audit every round. Parking it lets round N+1 re-check known findings against
+    # the delta. PASS/IN_PROGRESS that merely aged out carry nothing to re-check.
+    # ...but ONLY while it is still fresh. The discard fires for four reasons, and just
+    # one of them means a round is in flight: the tree moved because the agent was
+    # fixing these findings. An AGE-OUT means the opposite — nobody acted on them and
+    # the round is over, so parking it hands the next audit findings about unrelated
+    # work. Observed live: a FAIL from 04:46 was still being parked at 05:37 and
+    # offered to an auditor judging a different task entirely.
+    if [[ "$v_verdict" == "FAIL" ]] && (( age <= max_age_seconds )); then
+      # `touch` after the move on purpose: mv preserves the ORIGINAL write time, but the
+      # read side needs to know how long this has sat unclaimed, not how old the verdict
+      # was. Parking is the event that starts that clock.
+      mv -f "$verdict_file" "$prev_verdict_file" 2>/dev/null && touch "$prev_verdict_file" \
+        || rm -f "$verdict_file"
+    else
+      rm -f "$verdict_file"
+    fi
   else
     case "$v_verdict" in
       PASS)
         log_decision dossier PASS-allow
-        rm -f "$verdict_file"   # consume; the next verdict re-audits
+        # The parked FAIL goes too: the cycle it belonged to just ended clean, and a
+        # surviving prev would point the next audit at findings already resolved.
+        rm -f "$verdict_file" "$prev_verdict_file"   # consume; the next verdict re-audits
         allow_with_note "[verdict-gate] dossier PASS → consumed, turn ends"
         ;;
       IN_PROGRESS)
         remaining="$(jq -r '.findings[]? | "  - " + .' "$verdict_file" 2>/dev/null || echo '')"
         log_decision dossier IN_PROGRESS-allow
-        rm -f "$verdict_file"
+        rm -f "$verdict_file" "$prev_verdict_file"
         allow_with_note "Verdict: IN_PROGRESS — proof deferred, work not yet complete:
 ${remaining}"
         ;;
@@ -360,7 +481,7 @@ ${remaining}"
 ${findings}
 
 Address each finding, then re-audit. This block persists until a re-audit passes.
-${verdict_instruction}"
+$(verdict_instruction)"
         ;;
     esac
   fi
@@ -368,6 +489,31 @@ fi
 
 # ── No (usable) dossier → triage: does the turn assert a verdict? ───────────
 extract_final_message
+# An empty extraction has two very different causes, and collapsing them into one exit
+# let real turns end UNJUDGED in silence:
+#   * no transcript — absent, unreadable, or zero bytes. Nothing to judge, and no
+#     amount of waiting will produce anything -> allow immediately.
+#   * a transcript WITH content that yields no assistant text — the hook could not SEE
+#     the turn. Either the harness had not flushed this turn's final message yet, or a
+#     torn mid-append write left the JSONL briefly unparseable (jq's failure above is
+#     swallowed, so it is indistinguishable from "no text"). That is a real turn about
+#     to slip past the gate, so give it the SAME bounded wait the identity guard below
+#     uses before failing open. Observed live: a turn whose text record landed 0.1s
+#     after this hook read the file logged `extract empty-allow` and was never triaged.
+if [[ -z "$FINAL_TEXT" && -s "$transcript_path" ]]; then
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 0.2
+    extract_final_message
+    [[ -n "$FINAL_TEXT" ]] && break
+  done
+  # Still blind after the wait: fail open (never trap on absent state), but under a rung
+  # that says so. Logging this as `empty` would leave `tail`ing the log unable to tell a
+  # quiet session from a gate that never looked, which is how this went unnoticed.
+  if [[ -z "$FINAL_TEXT" ]]; then
+    log_decision extract blind-allow
+    allow_with_note "[verdict-gate] transcript has content but no assistant text after 2s → allowing UNJUDGED"
+  fi
+fi
 if [[ -z "$FINAL_TEXT" ]]; then
   log_decision extract empty-allow
   allow
@@ -394,6 +540,25 @@ stripped="$(printf '%s\n' "$FINAL_TEXT" | strip_code)"
 mkdir -p "$(dirname "$last_uuid_file")" 2>/dev/null || true
 printf '%s' "$FINAL_ID" > "$last_uuid_file" 2>/dev/null || true   # judged now, allow or block
 
+# ── Tier A (0ms): harness text asserts nothing → allow without a model call ──
+# Placed AFTER the identity write so this allow path records what it judged, exactly
+# like every other one.
+if is_harness_noise "$stripped"; then
+  log_decision harness noise-allow
+  allow_with_note "[verdict-gate] harness/API text only, no assistant claim → allow"
+fi
+
+# ── Tier B (0ms): assertion-only claim → block without a model call ──────────
+# Only the forms that report an observation (see assertion_patterns). Everything the
+# classifier is better at judging falls through to tier C untouched.
+asserted="$(printf '%s\n' "$stripped" | grep -Eio "$assertion_patterns" 2>/dev/null | head -n1 || true)"
+if [[ -n "$asserted" ]]; then
+  log_decision assertion match-block
+  block "This turn asserts a verdict (\"${asserted}\") but no audited
+dossier backs it. A claim stated as established needs proof attached.
+$(verdict_instruction)"
+fi
+
 triage="$(should_audit "$stripped")"
 if [[ "$triage" == "NO" ]]; then
   log_decision triage NO-allow
@@ -403,7 +568,7 @@ if [[ "$triage" == "YES" ]]; then
   log_decision triage YES-block
   block "This turn asserts a verdict (triage: YES) but no audited
 dossier backs it. A claim stated as established needs proof attached.
-${verdict_instruction}"
+$(verdict_instruction)"
 fi
 
 # Triage UNKNOWN (no model reachable) → deterministic pattern fallback.
@@ -416,4 +581,4 @@ fi
 log_decision regex match-block
 block "This turn asserts a verdict (matched: \"${matched}\") but no audited
 dossier backs it. A claim stated as established needs proof attached.
-${verdict_instruction}"
+$(verdict_instruction)"

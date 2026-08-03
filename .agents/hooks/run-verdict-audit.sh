@@ -34,6 +34,16 @@ verdict_file="$project_dir/.agents/state/last-verdict.json"
 audit_timeout_seconds="${VERDICT_AUDITOR_TIMEOUT:-600}"
 auditor_model="${VERDICT_AUDITOR_MODEL:-claude-sonnet-5}"
 
+# Frontmatter (--- ... ---) is subagent WIRING — name, tools, and now the model and
+# reasoning effort the Task path launches with. None of it is instruction, so none of it
+# may reach the model as part of the procedure. Named rather than inlined at the call
+# site because that call site sits in the claude-CLI branch, which the suite can only
+# enter by faking `claude` on PATH; as an inline awk this parse had zero coverage while
+# quietly deciding what the auditor is told.
+strip_frontmatter() {  # $1 = spec file
+  awk 'BEGIN{fm=0} NR==1 && /^---$/{fm=1; next} fm==1 && /^---$/{fm=2; next} fm!=1' "$1"
+}
+
 audit_prompt="Audit the final turn in the session transcript — every assistant
 message since the last real user message: each claim
 it presents as established must have concrete, direct proof in the evidence — the
@@ -52,9 +62,8 @@ if [[ -n "${VERDICT_AUDITOR_CMD:-}" ]]; then
   rm -f "$verdict_file"
   printf '%s' "$audit_prompt" | bash -c "$VERDICT_AUDITOR_CMD" || true
 elif command -v claude >/dev/null 2>&1 && [[ -r "$spec_file" ]]; then
-  # Frontmatter (--- ... ---) is subagent wiring, not instructions — strip it.
   rm -f "$verdict_file"
-  spec_body="$(awk 'BEGIN{fm=0} NR==1 && /^---$/{fm=1; next} fm==1 && /^---$/{fm=2; next} fm!=1' "$spec_file")"
+  spec_body="$(strip_frontmatter "$spec_file")"
   # perl alarm = portable timeout; disableAllHooks so the audit run cannot recurse
   # into this repo's own gates.
   printf '%s' "$audit_prompt" \

@@ -55,10 +55,12 @@ setup() {
   git -C "$d" config user.name tester
   mkdir -p "$d/src"
   printf 'pub fn base() {}\n' > "$d/src/lib.rs"
-  # Mirror the real repo: the dossier is gitignored, so it never enters the
-  # working-tree hash. Without this the hook's `git add -A` would fold the
-  # dossier into the hash and never match what the auditor computed.
-  printf '.agents/state/last-verdict.json\n' > "$d/.gitignore"
+  # Mirror the real repo, which ignores the whole state dir: gate-written state must
+  # never enter the working-tree hash, or `git add -A` folds it into the very hash the
+  # dossier is keyed to and self-invalidates a just-passed audit. Ignoring the
+  # directory (not one file) keeps this true for every marker the gates write —
+  # last-verdict.prev.json, verdict-last-uuid, verdict-decisions.log.
+  printf '.agents/state/\n' > "$d/.gitignore"
   git -C "$d" add -A
   git -C "$d" commit -qm base
   printf '%s' "$d"
@@ -194,6 +196,7 @@ echo "## Invariant: gate state files are gitignored (never enter the tree hash)"
 for f in \
   .agents/state/last-audit.json \
   .agents/state/last-verdict.json \
+  .agents/state/last-verdict.prev.json \
   .agents/state/pr-reviewed.json \
   .agents/state/verdict-last-uuid \
   .agents/state/verdict-decisions.log; do
@@ -247,6 +250,49 @@ check "verdict phrases only inside code → allow"                  "$R" "allow"
 R="$(setup)"  # no transcript at all (payload points at /dev/null)
 check "no transcript → allow (fail-open)"                         "$R" "allow"; rm -rf "$R"
 
+# ── The gate must never end a turn it could not SEE ──────────────────────────
+# A zero-byte/absent transcript is genuinely nothing to judge → allow at once, and the
+# rung must say `empty` so it stays distinguishable from being blind.
+R="$(setup)"
+decide "$R" >/dev/null
+if grep -q ' extract empty-allow$' "$R/.agents/state/verdict-decisions.log" 2>/dev/null; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "no transcript → allow logged as empty (not blind)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "no-transcript rung" \
+    "$(cat "$R/.agents/state/verdict-decisions.log" 2>/dev/null || echo MISSING)"
+fi; rm -rf "$R"
+
+# THE REPRODUCER. A transcript WITH content but no assistant text means the hook read
+# the file before the harness flushed the turn — the text lands moments later and the
+# turn must still be judged on it. Observed live at 06:06:18Z: the text record's own
+# timestamp was 0.1s after the hook's read, the turn logged `extract empty-allow`, and
+# a verdict-shaped turn ended completely untriaged.
+R="$(setup)"
+jq -nc '{type:"user", message:{content:[{type:"text",text:"go"}]}}' > "$R/transcript.jsonl"
+( sleep 0.6
+  jq -nc '{type:"assistant", uuid:"uuid-last", message:{content:[{type:"text",
+     text:"Root cause is the stale index; 12/12 tests pass."}]}}' >> "$R/transcript.jsonl" ) &
+late_writer=$!
+got="$(decide "$R")"
+wait "$late_writer" 2>/dev/null
+if [[ "$got" == "block" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "text flushed mid-wait → turn is judged, not skipped"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (got=%s — the turn ended unjudged)\n' "late-flush turn judged" "$got"
+fi; rm -rf "$R"
+
+# Content present but the turn genuinely never produces assistant text: still fail open
+# (never trap on absent state), but under a rung that ADMITS the gate was blind.
+R="$(setup)"
+jq -nc '{type:"user", message:{content:[{type:"text",text:"go"}]}}' > "$R/transcript.jsonl"
+got="$(decide "$R")"
+if [[ "$got" == "allow" ]] && grep -q ' extract blind-allow$' "$R/.agents/state/verdict-decisions.log" 2>/dev/null; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "still no assistant text after the wait → allow, logged blind"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (got=%s log=%s)\n' "blind rung" "$got" \
+    "$(cat "$R/.agents/state/verdict-decisions.log" 2>/dev/null || echo MISSING)"
+fi; rm -rf "$R"
+
 echo
 echo "## Present dossier, fresh + matching → the verdict decides"
 R="$(setup)"; write_transcript "$R" "Fix verified; tests pass."; write_verdict "$R" "PASS" "[]"
@@ -288,6 +334,212 @@ check_gone "HEAD-mismatched dossier discarded"                    "$R"; rm -rf "
 R="$(setup)"; write_transcript "$R" "Deploy is healthy."; write_verdict "$R" "PASS" "[]"
 touch -t 202001010000 "$R/.agents/state/last-verdict.json"
 check "stale-mtime PASS + verdict ending → block (re-detect)"     "$R" "block"; rm -rf "$R"
+
+echo
+echo "## Tier A: harness text in the assistant slot decides without a model call"
+# The assistant slot also carries text the HARNESS wrote — API errors, quota notices,
+# interruption markers. No model produced it, so it asserts nothing and can never be a
+# verdict. 81 of 563 real turns in this repo's transcripts (14.4%) are exactly this,
+# and each one used to buy a 5-10s classifier round-trip to be told "NO".
+# A classifier stub that RECORDS its own invocation. Tiers A and B are latency work,
+# so what has to be asserted is that the 5-10s round-trip was genuinely SKIPPED — not
+# merely that its answer agreed. The stub also answers the OPPOSITE of the tier under
+# test, so a run without the tier reaches the model and lands on the wrong decision.
+cls_stub()      { printf "cat >/dev/null; touch '%s/CLASSIFIER_RAN'; echo %s" "$1" "$2"; }
+classifier_ran() { [[ -e "$1/CLASSIFIER_RAN" ]] && echo yes || echo no; }
+run_hook() {  # repo  classifier-answer
+  jq -nc --arg p "$1/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+    | ( cd "$1" && CLAUDE_PROJECT_DIR="$1" VERDICT_GATE_HARD_BLOCK=1 \
+        VERDICT_CLASSIFIER_CMD="$(cls_stub "$1" "$2")" bash "$HOOK" ) 2>/dev/null
+}
+
+R="$(setup)"; write_transcript "$R" "API Error: 400 Your input exceeds the context window of this model."
+out="$(run_hook "$R" YES)"
+if printf '%s' "$out" | jq -e '(.decision // "") != "block"' >/dev/null 2>&1 && [[ ! -e "$R/CLASSIFIER_RAN" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "harness API error only → allow, classifier never invoked"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s classifier_ran=%s)\n' "tier A skips the model" "$out" "$(classifier_ran "$R")"
+fi; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "No response requested."
+out="$(run_hook "$R" YES)"
+if printf '%s' "$out" | jq -e '(.decision // "") != "block"' >/dev/null 2>&1 && [[ ! -e "$R/CLASSIFIER_RAN" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "harness 'No response requested.' → allow, classifier never invoked"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s classifier_ran=%s)\n' "tier A on quota//status text" "$out" "$(classifier_ran "$R")"
+fi; rm -rf "$R"
+
+# SOUNDNESS — why EVERY non-empty line must match, not just the first. A turn that did
+# real work and then hit an error still owes proof... The stub says NO, so a tier A that
+# wrongly swallowed these would allow, and so would a hook with no tiers at all.
+R="$(setup)"; write_transcript "$R" "Root cause is the stale socket path; 12/12 tests pass."
+append_assistant "$R" "API Error: Overloaded"
+out="$(run_hook "$R" NO)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "real verdict THEN harness error → block (not swallowed)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "trailing harness error swallowed the verdict" "$out"
+fi; rm -rf "$R"
+
+# ...and so does the reverse order, which is exactly what a first-line-only anchor
+# leaks: a transient error, then a retry that states the verdict in the same turn.
+R="$(setup)"; write_transcript "$R" "API Error: Overloaded"
+append_assistant "$R" "Root cause is the stale socket path; 12/12 tests pass."
+out="$(run_hook "$R" NO)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "harness error THEN real verdict → block (not swallowed)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "leading harness error swallowed the verdict" "$out"
+fi; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "API Error: Overloaded"
+decide "$R" >/dev/null
+if grep -q ' harness noise-allow$' "$R/.agents/state/verdict-decisions.log" 2>/dev/null; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "tier A decision logged (rung + outcome)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "tier A logged" "$(cat "$R/.agents/state/verdict-decisions.log" 2>/dev/null || echo MISSING)"
+fi; rm -rf "$R"
+
+echo
+echo "## Tier B: assertion-only claims block without consulting the model"
+# Stub answers NO throughout, so a hook without tier B reaches the model and allows.
+R="$(setup)"; write_transcript "$R" "Reran the suite: 173/173 tests pass on the hook harness."
+out="$(run_hook "$R" NO)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1 && [[ ! -e "$R/CLASSIFIER_RAN" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "'173/173 tests pass' → block, classifier never invoked"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s classifier_ran=%s)\n' "tier B skips the model" \
+    "$out" "$([[ -e "$R/CLASSIFIER_RAN" ]] && echo yes || echo no)"
+fi; rm -rf "$R"
+
+# PRECISION — the entire reason the promoted set is a small subset. A turn merely
+# DISCUSSING verdict wording must still reach the classifier and be allowed; that is
+# what the ambiguous majority ("tests pass", "root cause is", "deploy is healthy")
+# stays behind the model for. Reaching the stub proves tier B declined.
+R="$(setup)"; write_transcript "$R" "In prose people write things like tests pass or root cause is X or deploy is healthy."
+out="$(run_hook "$R" NO)"
+if printf '%s' "$out" | jq -e '(.decision // "") != "block"' >/dev/null 2>&1 && [[ -e "$R/CLASSIFIER_RAN" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "discussion of verdict wording → reaches the model, allowed"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s classifier_ran=%s)\n' "tier B precision" \
+    "$out" "$(classifier_ran "$R")"
+fi; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "Verified the socket path resolves under the jailer."
+out="$(run_hook "$R" NO)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1 && [[ ! -e "$R/CLASSIFIER_RAN" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "line-initial 'Verified …' → block, classifier never invoked"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s classifier_ran=%s)\n' "tier B line-initial form" \
+    "$out" "$(classifier_ran "$R")"
+fi; rm -rf "$R"
+
+R="$(setup)"; write_transcript "$R" "26/26 tests pass."
+decide "$R" >/dev/null
+if grep -q ' assertion match-block$' "$R/.agents/state/verdict-decisions.log" 2>/dev/null; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "tier B decision logged (rung + outcome)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (log=%s)\n' "tier B logged" "$(cat "$R/.agents/state/verdict-decisions.log" 2>/dev/null || echo MISSING)"
+fi; rm -rf "$R"
+
+echo
+echo "## Slow path: a FAILed dossier survives the fix that invalidates its binding"
+# Observed cycle before this: FAIL-block → agent fixes → tree moves → discard-stale →
+# re-detect → block → a full COLD re-audit, every round. Parking the FAIL lets round
+# N+1 re-check known findings against the delta instead of re-deriving everything.
+R="$(setup)"; write_transcript "$R" "The root cause is the stale index."
+write_verdict "$R" "FAIL" '["tests-pass: no re-runnable command named"]' "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+decide "$R" >/dev/null
+if jq -e '.verdict == "FAIL"' "$R/.agents/state/last-verdict.prev.json" >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "FAIL dossier parked as prev when the binding goes stale"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (prev=%s)\n' "FAIL parked as prev" \
+    "$(cat "$R/.agents/state/last-verdict.prev.json" 2>/dev/null || echo MISSING)"
+fi
+check_gone "…live dossier still discarded (re-detect, never block on bookkeeping)" "$R"; rm -rf "$R"
+
+# An AGED-OUT FAIL means nobody acted on those findings and the round is over. Parking
+# it would hand the next audit findings about unrelated work — observed live, a FAIL
+# from 04:46 still being offered at 05:37 to an auditor judging a different task.
+R="$(setup)"; write_transcript "$R" "The root cause is the stale index."
+write_verdict "$R" "FAIL" '["tests-pass: no re-runnable command named"]'
+touch -t 202001010000 "$R/.agents/state/last-verdict.json"
+decide "$R" >/dev/null
+if [[ ! -e "$R/.agents/state/last-verdict.prev.json" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "aged-out FAIL is dropped, not parked"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (prev=%s)\n' "aged-out FAIL wrongly parked" \
+    "$(cat "$R/.agents/state/last-verdict.prev.json" 2>/dev/null)"
+fi; rm -rf "$R"
+
+# A PASS/IN_PROGRESS that merely aged out carries nothing to re-check — it must not
+# masquerade as a failed round.
+R="$(setup)"; write_transcript "$R" "The root cause is the stale index."
+write_verdict "$R" "PASS" '[]' "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+decide "$R" >/dev/null
+if [[ ! -e "$R/.agents/state/last-verdict.prev.json" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "stale PASS is dropped, not parked"
+else
+  fail=$((fail+1)); printf '  FAIL  %s\n' "stale PASS wrongly parked as a failed round"
+fi; rm -rf "$R"
+
+# Parking is inert unless the findings actually reach the auditor.
+R="$(setup)"; write_transcript "$R" "The root cause is the stale index."
+mkdir -p "$R/.agents/state"
+printf '{"verdict":"FAIL","findings":["tests-pass: no command named"]}' > "$R/.agents/state/last-verdict.prev.json"
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.reason | test("last-verdict.prev.json")' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "block instruction hands the prior findings to the auditor"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "prior findings reach the auditor" "$out"
+fi; rm -rf "$R"
+
+# An UNCLAIMED park expires too. Age-gating only the write bounds staleness at park time,
+# but this file is read on every later block — so an abandoned round (user changed topic,
+# no re-audit ever ran) would keep feeding dead findings to an auditor judging unrelated
+# work, and "a finding you cannot confirm as addressed stays a finding" turns those into a
+# manufactured FAIL.
+R="$(setup)"; write_transcript "$R" "The root cause is the stale index."
+mkdir -p "$R/.agents/state"
+printf '{"verdict":"FAIL","findings":["stale round, never claimed"]}' > "$R/.agents/state/last-verdict.prev.json"
+touch -t 202001010000 "$R/.agents/state/last-verdict.prev.json"
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 bash "$HOOK" ) 2>/dev/null)"
+if ! printf '%s' "$out" | jq -e '.reason | test("last-verdict.prev.json")' >/dev/null 2>&1 \
+   && [[ ! -e "$R/.agents/state/last-verdict.prev.json" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "unclaimed parked FAIL expires, never reaches the next audit"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (prev_still_there=%s)\n' "stale park expired" \
+    "$([[ -e "$R/.agents/state/last-verdict.prev.json" ]] && echo yes || echo no)"
+fi; rm -rf "$R"
+
+# ...but a freshly parked one is still offered, so expiry cannot swallow the live case.
+# The second turn must carry DIFFERENT text: a real round writes a new turn after the fix,
+# and reusing the first one trips the flush-race guard instead of reaching the park.
+R="$(setup)"; write_transcript "$R" "The root cause is the stale index."
+write_verdict "$R" "FAIL" '["tests-pass: no re-runnable command named"]' "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+decide "$R" >/dev/null                       # parks it
+write_transcript "$R" "Reworked the index guard; the root cause is addressed."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.reason | test("last-verdict.prev.json")' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "a just-parked FAIL still reaches the next audit"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "fresh park survives expiry" "$out"
+fi; rm -rf "$R"
+
+# The cycle ended clean: a surviving prev would aim the next audit at resolved findings.
+R="$(setup)"; write_transcript "$R" "Fix verified; tests pass."
+mkdir -p "$R/.agents/state"
+printf '{"verdict":"FAIL","findings":["x"]}' > "$R/.agents/state/last-verdict.prev.json"
+write_verdict "$R" "PASS" "[]"
+decide "$R" >/dev/null
+if [[ ! -e "$R/.agents/state/last-verdict.prev.json" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "PASS consumption clears the parked FAIL"
+else
+  fail=$((fail+1)); printf '  FAIL  %s\n' "parked FAIL outlives the PASS that resolved it"
+fi; rm -rf "$R"
 
 echo
 echo "## Triage (intelligent trigger): classifier decides; regex is the fallback"
