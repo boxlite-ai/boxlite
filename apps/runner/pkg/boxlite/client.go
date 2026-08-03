@@ -332,9 +332,8 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 	}
 	err = bx.Stop(ctx)
 
-	c.mu.Lock()
-	delete(c.boxes, boxId)
-	c.mu.Unlock()
+	// The stopped box's handle is spent either way, so drop it from the cache.
+	c.evictBox(boxId, bx)
 
 	return err
 }
@@ -361,8 +360,15 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 }
 
 // GetBoxState returns the current state of a box.
+//
+// It reads through the runtime rather than the handle cache. The box sync loop
+// calls this for every box on a 10s ticker (services/box_sync.go), and a state
+// read needs no bootable handle — only the persisted record. Routing it through
+// getOrFetchBox would evict and re-fetch a handle for every non-running box on
+// every tick, and eviction cannot free the old one (see evictBox), so the
+// runner would accumulate dead handles for as long as it ran.
 func (c *Client) GetBoxState(ctx context.Context, boxId string) (enums.BoxState, error) {
-	bx, err := c.getOrFetchBox(ctx, boxId)
+	info, err := c.runtime.GetInfo(ctx, boxId)
 	if err != nil {
 		if boxlite.IsNotFound(err) {
 			return enums.BoxStateUnknown, nil
@@ -370,20 +376,36 @@ func (c *Client) GetBoxState(ctx context.Context, boxId string) (enums.BoxState,
 		return enums.BoxStateUnknown, err
 	}
 
-	info, err := bx.Info(ctx)
-	if err != nil {
-		return enums.BoxStateUnknown, err
-	}
+	return apiStateFromCore(info.State), nil
+}
 
-	switch info.State {
+// apiStateFromCore maps a core box status onto the control-plane state, one arm
+// per BoxStatus the runtime can report.
+//
+// Unknown is not a neutral default here: the API counts it as compute-consuming
+// (BOX_STATES_CONSUMING_COMPUTE), while Error is not. Falling through left a
+// Failed box billed as if it were still running, and a Stopping box reported as
+// Unknown even though the control plane has that exact state.
+func apiStateFromCore(state boxlite.State) enums.BoxState {
+	switch state {
 	case boxlite.StateRunning:
-		return enums.BoxStateStarted, nil
+		return enums.BoxStateStarted
+	case boxlite.StatePaused:
+		// vCPUs frozen for a snapshot's point-in-time consistency. The VM is up,
+		// so the control plane should keep seeing the box as started.
+		return enums.BoxStateStarted
+	case boxlite.StateStopping:
+		return enums.BoxStateStopping
 	case boxlite.StateStopped:
-		return enums.BoxStateStopped, nil
+		return enums.BoxStateStopped
 	case boxlite.StateConfigured:
-		return enums.BoxStateCreating, nil
+		// Persisted but never booted. The control plane has no "configured" of
+		// its own, so this stays folded into Creating.
+		return enums.BoxStateCreating
+	case boxlite.StateFailed:
+		return enums.BoxStateError
 	default:
-		return enums.BoxStateUnknown, nil
+		return enums.BoxStateUnknown
 	}
 }
 
@@ -478,13 +500,37 @@ func (c *Client) GetBox(ctx context.Context, boxId string) (*boxlite.Box, error)
 }
 
 // getOrFetchBox retrieves a box handle from cache or fetches it from the runtime.
+//
+// A cached handle is only good while its box is up. A box can stop *itself* —
+// its main command exits and the guest powers the VM off — and such a handle is
+// spent: it holds the dead VM and can never boot another. Stop evicts its own
+// handle, but nothing was clearing this entry on a self-stop, so every later
+// Start, exec, copy or metrics call on that box was answered with the corpse,
+// forever. The core invalidates its own cache from the exit watcher; this one
+// is ours.
+//
+// So a box that is no longer running gets a fresh handle, which *can* boot it.
+// That is the auto-restart the control plane depends on: its reaper stops idle
+// boxes and the next call is expected to bring them back.
 func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box, error) {
 	c.mu.RLock()
-	bx, ok := c.boxes[boxId]
+	cached, ok := c.boxes[boxId]
 	c.mu.RUnlock()
 
 	if ok {
-		return bx, nil
+		// Info reads persisted state — it never boots the box, so it is safe to
+		// ask a spent handle.
+		info, err := cached.Info(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// Paused counts as up: the VM is frozen for a snapshot's point-in-time
+		// consistency, not stopped, and its handle still drives a live machine.
+		// The Rust sibling gates on the same pair via BoxStatus::is_active.
+		if info.State == boxlite.StateRunning || info.State == boxlite.StatePaused {
+			return cached, nil
+		}
+		c.evictBox(boxId, cached)
 	}
 
 	bx, err := c.runtime.Get(ctx, boxId)
@@ -497,6 +543,29 @@ func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box,
 	c.mu.Unlock()
 
 	return bx, nil
+}
+
+// evictBox unmaps a handle so the next lookup fetches a fresh one, and only
+// while it is still the cached one — a concurrent Create or fetch may already
+// have replaced it, and unmapping the winner would drop a live entry.
+//
+// It deliberately does not Close the handle. getOrFetchBox hands the same
+// *boxlite.Box to every caller and the runner serializes nothing per box, so
+// freeing here would pull the FFI handle out from under a goroutine mid-call.
+// An unmapped handle is instead leaked for the process lifetime — Close only
+// frees what is still in the map. The cost is one handle per request that finds
+// its box down: calls that go on to boot it stop there, while ones that refuse a
+// stopped box (metrics, a guest-port dial) pay it again on every retry. That is
+// affordable only because it tracks request volume — which is why GetBoxState,
+// run for every box on a timer, deliberately does not come through here.
+// Ref-counting the wrapper is the real fix, and it belongs in the SDK.
+func (c *Client) evictBox(boxId string, stale *boxlite.Box) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if current, ok := c.boxes[boxId]; ok && current == stale {
+		delete(c.boxes, boxId)
+	}
 }
 
 // ExecResult holds the output of a command execution.
