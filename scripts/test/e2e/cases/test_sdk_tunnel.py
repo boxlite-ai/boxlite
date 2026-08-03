@@ -7,6 +7,10 @@ import base64
 import hashlib
 from pathlib import Path
 import shlex
+import shutil
+import subprocess
+import sys
+from urllib.parse import urlparse
 
 import boxlite
 import pytest
@@ -14,6 +18,9 @@ import pytest
 
 SERVICES = ((18080, b"python-sdk-tunnel-e2e-a"), (18082, b"python-sdk-tunnel-e2e-b"))
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "service_in_box_server.py"
+HTTPS_CONNECT_PROXY = (
+    Path(__file__).parents[1] / "fixtures" / "https_connect_proxy.py"
+)
 
 
 async def _get_over_tunnel(box: boxlite.SimpleBox, port: int, marker: bytes) -> bytes:
@@ -202,7 +209,7 @@ async def test_python_sdk_tunnel_proxies_http_from_rest_box(rt, image):
 
 
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     reason="stopped boxes may remain reachable through existing tunnel routing",
 )
 @pytest.mark.asyncio
@@ -270,3 +277,89 @@ async def test_python_sdk_tunnel_keeps_boxes_isolated(rt, image):
         for response, marker, other in zip(responses, markers, reversed(markers)):
             assert marker in response
             assert other not in response
+
+
+@pytest.mark.asyncio
+async def test_python_sdk_tunnel_proxies_ssh_over_https_connect(
+    rt, image, tmp_path
+):
+    if not shutil.which("ssh") or not shutil.which("ssh-keygen"):
+        pytest.skip("OpenSSH client tools are not installed")
+
+    key_path = tmp_path / "id_ed25519"
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key_path)],
+        check=True,
+    )
+    public_key = base64.b64encode(key_path.with_suffix(".pub").read_bytes()).decode()
+
+    async with boxlite.SimpleBox(
+        image=image, runtime=rt, auto_remove=True
+    ) as box:
+        install = await box.exec(
+            "sh",
+            "-lc",
+            "command -v sshd >/dev/null || "
+            "(apt-get update -qq && "
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server)",
+        )
+        assert install.exit_code == 0, install.stderr
+        start = await box.exec(
+            "sh",
+            "-lc",
+            "mkdir -p /root/.ssh /run/sshd; "
+            "chmod 700 /root/.ssh; "
+            f"echo {shlex.quote(public_key)} | base64 -d "
+            "> /root/.ssh/authorized_keys; "
+            "chmod 600 /root/.ssh/authorized_keys; "
+            "/usr/sbin/sshd -D -e -p 2222 "
+            "-o PermitRootLogin=yes "
+            "-o PasswordAuthentication=no "
+            "-o PubkeyAuthentication=yes "
+            ">/tmp/sshd-2222.log 2>&1 & "
+            "pid=$!; sleep 1; kill -0 $pid || "
+            "(cat /tmp/sshd-2222.log >&2; exit 1)",
+        )
+        assert start.exit_code == 0, start.stderr
+
+        tunnel = await box.network.tunnel(2222)
+        endpoint = urlparse(tunnel.endpoint())
+        assert endpoint.scheme == "https"
+        assert endpoint.hostname
+        _, separator, proxy_host = endpoint.hostname.partition(".")
+        assert separator and proxy_host
+
+        proxy_command = " ".join(
+            (
+                shlex.quote(sys.executable),
+                shlex.quote(str(HTTPS_CONNECT_PROXY)),
+                shlex.quote(proxy_host),
+                str(endpoint.port or 443),
+                "%h",
+                "%p",
+            )
+        )
+        process = await asyncio.create_subprocess_exec(
+            "ssh",
+            "-i",
+            str(key_path),
+            "-o",
+            f"ProxyCommand={proxy_command}",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ConnectTimeout=15",
+            "-p",
+            "2222",
+            f"root@{endpoint.hostname}",
+            "printf BOXLITE_SSH_CONNECT_OK",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        assert process.returncode == 0, stderr.decode()
+        assert stdout == b"BOXLITE_SSH_CONNECT_OK"

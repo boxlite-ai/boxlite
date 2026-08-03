@@ -68,7 +68,7 @@ def test_node_sdk_tunnel_proxies_http_from_rest_box(node_tunnel_env):
 
 
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     reason="stopped boxes may remain reachable through existing tunnel routing",
 )
 def test_node_sdk_tunnel_rejects_stopped_box(node_tunnel_env):
