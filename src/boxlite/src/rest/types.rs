@@ -127,7 +127,7 @@ pub(crate) struct CreateBoxRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub advanced: Option<CreateBoxAdvancedOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub auto_pause: Option<u32>,
+    pub auto_stop: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_delete: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -190,7 +190,7 @@ impl CreateBoxRequest {
             // The deprecated remove-on-stop flag was never applied by the cloud
             // control-plane mapper. Keep remote defaults unchanged and only send
             // the modern lifecycle fields when callers explicitly configure them.
-            auto_pause: options.auto_pause,
+            auto_stop: options.auto_stop,
             auto_delete: options.auto_delete,
             auto_resume: options.auto_resume,
         }
@@ -261,8 +261,8 @@ pub(crate) struct BoxResponse {
     /// honest answer when it cannot say.
     #[serde(default)]
     pub exit_code: Option<i32>,
-    #[serde(default = "default_auto_pause")]
-    pub auto_pause: u32,
+    #[serde(default = "default_auto_stop")]
+    pub auto_stop: u32,
     #[serde(default = "default_auto_delete")]
     pub auto_delete: u32,
     #[serde(default = "default_auto_resume")]
@@ -306,7 +306,7 @@ impl BoxResponse {
             // from a locally verified, resolved-empty publication list.
             network: None,
             labels: self.labels.clone(),
-            auto_pause: self.auto_pause,
+            auto_stop: self.auto_stop,
             auto_delete: self.auto_delete,
             auto_resume: self.auto_resume,
             health_status: crate::litebox::HealthStatus::new(), // REST API doesn't provide health status
@@ -315,7 +315,7 @@ impl BoxResponse {
     }
 }
 
-fn default_auto_pause() -> u32 {
+fn default_auto_stop() -> u32 {
     900
 }
 
@@ -604,7 +604,7 @@ mod tests {
             }]),
             detach: None,
             advanced: None,
-            auto_pause: Some(900),
+            auto_stop: Some(900),
             auto_delete: Some(604800),
             auto_resume: None,
         };
@@ -638,7 +638,7 @@ mod tests {
                 hosts: vec!["api.openai.com".into()],
                 placeholder: "<BOXLITE_SECRET:openai>".into(),
             }],
-            auto_pause: Some(1800),
+            auto_stop: Some(1800),
             auto_delete: Some(604800),
             ..Default::default()
         };
@@ -657,7 +657,7 @@ mod tests {
             Some(vec!["api.openai.com".into()])
         );
         assert_eq!(req.secrets.as_ref().map(Vec::len), Some(1));
-        assert_eq!(req.auto_pause, Some(1800));
+        assert_eq!(req.auto_stop, Some(1800));
         assert_eq!(req.auto_delete, Some(604800));
         assert_eq!(
             req.secrets.as_ref().unwrap()[0].placeholder,
@@ -704,18 +704,18 @@ mod tests {
                 ..Default::default()
             };
             let req = CreateBoxRequest::from_options(&opts, None);
-            assert_eq!(req.auto_pause, None);
+            assert_eq!(req.auto_stop, None);
             assert_eq!(req.auto_delete, None);
         }
 
         let modern = BoxOptions {
             auto_remove: true,
-            auto_pause: Some(900),
+            auto_stop: Some(900),
             auto_delete: Some(3600),
             ..Default::default()
         };
         let req = CreateBoxRequest::from_options(&modern, None);
-        assert_eq!(req.auto_pause, Some(900));
+        assert_eq!(req.auto_stop, Some(900));
         assert_eq!(req.auto_delete, Some(3600));
     }
 
@@ -788,7 +788,7 @@ mod tests {
         assert_eq!(resp.status, "running");
         assert_eq!(resp.pid, Some(1234));
         assert_eq!(resp.cpus, 2);
-        assert_eq!(resp.auto_pause, 900);
+        assert_eq!(resp.auto_stop, 900);
         assert_eq!(resp.auto_delete, 0);
     }
 
@@ -806,7 +806,7 @@ mod tests {
             memory_mib: 512,
             labels: HashMap::new(),
             exit_code: None,
-            auto_pause: 1800,
+            auto_stop: 1800,
             auto_delete: 604800,
             auto_resume: true,
         };
@@ -816,7 +816,7 @@ mod tests {
         assert_eq!(info.cpus, 2);
         assert_eq!(info.memory_mib, 512);
         assert!(info.network.is_none());
-        assert_eq!(info.auto_pause, 1800);
+        assert_eq!(info.auto_stop, 1800);
         assert_eq!(info.auto_delete, 604800);
     }
 
@@ -836,7 +836,7 @@ mod tests {
             memory_mib: 256,
             labels: HashMap::new(),
             exit_code: None,
-            auto_pause: 900,
+            auto_stop: 900,
             auto_delete: 0,
             auto_resume: true,
         };
@@ -864,7 +864,7 @@ mod tests {
             memory_mib: 256,
             labels: HashMap::new(),
             exit_code: None,
-            auto_pause: 900,
+            auto_stop: 900,
             auto_delete: 0,
             auto_resume: true,
         };
@@ -936,7 +936,7 @@ mod tests {
             memory_mib: 512,
             labels: HashMap::new(),
             exit_code: None,
-            auto_pause: 900,
+            auto_stop: 900,
             auto_delete: 0,
             auto_resume: true,
         };

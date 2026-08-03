@@ -76,8 +76,8 @@ import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import {
   AUTO_DELETE_DISABLED,
-  AUTO_PAUSE_DISABLED,
-  DEFAULT_AUTO_PAUSE_SECONDS,
+  AUTO_STOP_DISABLED,
+  DEFAULT_AUTO_STOP_SECONDS,
   DEFAULT_AUTO_RESUME,
 } from '../constants/box-lifecycle.constants'
 
@@ -246,11 +246,11 @@ export class BoxService {
       }
 
       const lifecyclePolicy = this.resolveLifecyclePolicy({
-        autoPause: createBoxDto.autoPause,
+        autoStop: createBoxDto.autoStop,
         autoDelete: createBoxDto.autoDelete,
         autoResume: createBoxDto.autoResume,
       })
-      box.autoPause = lifecyclePolicy.autoPause
+      box.autoStop = lifecyclePolicy.autoStop
       box.autoDelete = lifecyclePolicy.autoDelete
       box.autoResume = lifecyclePolicy.autoResume
 
@@ -307,11 +307,11 @@ export class BoxService {
     }
 
     const lifecyclePolicy = this.resolveLifecyclePolicy({
-      autoPause: createBoxDto.autoPause,
+      autoStop: createBoxDto.autoStop,
       autoDelete: createBoxDto.autoDelete,
       autoResume: createBoxDto.autoResume,
     })
-    updateData.autoPause = lifecyclePolicy.autoPause
+    updateData.autoStop = lifecyclePolicy.autoStop
     updateData.autoDelete = lifecyclePolicy.autoDelete
     updateData.autoResume = lifecyclePolicy.autoResume
 
@@ -1206,7 +1206,7 @@ export class BoxService {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
     const updateData: Partial<Box> = {
-      autoPause: this.minutesToSeconds(interval),
+      autoStop: this.minutesToSeconds(interval),
     }
 
     return await this.boxRepository.update(box.id, { updateData, entity: box })
@@ -1375,26 +1375,26 @@ export class BoxService {
     return interval * 60
   }
 
-  private resolveLifecyclePolicy(input: { autoPause?: number; autoDelete?: number; autoResume?: boolean }): {
-    autoPause: number
+  private resolveLifecyclePolicy(input: { autoStop?: number; autoDelete?: number; autoResume?: boolean }): {
+    autoStop: number
     autoDelete: number
     autoResume: boolean
   } {
-    const autoPause = input.autoPause ?? DEFAULT_AUTO_PAUSE_SECONDS
+    const autoStop = input.autoStop ?? DEFAULT_AUTO_STOP_SECONDS
     const autoDelete = input.autoDelete ?? AUTO_DELETE_DISABLED
     const autoResume = input.autoResume ?? DEFAULT_AUTO_RESUME
 
-    if (!Number.isInteger(autoPause) || autoPause < AUTO_PAUSE_DISABLED) {
-      throw new BadRequestError('Auto-pause interval must be a non-negative integer number of seconds')
+    if (!Number.isInteger(autoStop) || autoStop < AUTO_STOP_DISABLED) {
+      throw new BadRequestError('Auto-stop interval must be a non-negative integer number of seconds')
     }
     if (!Number.isInteger(autoDelete) || autoDelete < AUTO_DELETE_DISABLED) {
       throw new BadRequestError('Auto-delete interval must be a non-negative integer number of seconds')
     }
-    if (autoDelete > 0 && autoDelete <= autoPause) {
-      throw new BadRequestError('Auto-delete interval must be greater than auto-pause interval')
+    if (autoDelete > 0 && autoDelete <= autoStop) {
+      throw new BadRequestError('Auto-delete interval must be greater than auto-stop interval')
     }
 
-    return { autoPause, autoDelete, autoResume }
+    return { autoStop, autoDelete, autoResume }
   }
 
   private resolveNetworkAllowList(networkAllowList: string): string {

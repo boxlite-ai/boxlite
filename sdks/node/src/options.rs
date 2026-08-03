@@ -199,15 +199,15 @@ pub struct JsBoxOptions {
     /// @deprecated Use autoDelete.
     pub auto_remove: Option<bool>,
 
-    /// Idle time in seconds before AutoPause; 0 disables AutoPause.
-    #[napi(js_name = "autoPause")]
-    pub auto_pause: Option<u32>,
+    /// Idle time in seconds before AutoStop; 0 disables AutoStop.
+    #[napi(js_name = "autoStop")]
+    pub auto_stop: Option<u32>,
 
     /// Time in seconds after stop before AutoDelete; 0 disables AutoDelete.
     #[napi(js_name = "autoDelete")]
     pub auto_delete: Option<u32>,
 
-    /// Whether the box automatically resumes when accessed after AutoPause.
+    /// Whether the box automatically resumes when accessed after AutoStop.
     #[napi(js_name = "autoResume")]
     pub auto_resume: Option<bool>,
 
@@ -468,7 +468,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
                 health_check,
                 ..Default::default()
             },
-            auto_pause: js_opts.auto_pause,
+            auto_stop: js_opts.auto_stop,
             auto_delete,
             auto_resume: js_opts.auto_resume,
             detach: js_opts.detach.unwrap_or(false),
@@ -756,7 +756,7 @@ mod tests {
             }),
             ports: None,
             auto_remove: None,
-            auto_pause: None,
+            auto_stop: None,
             auto_delete: None,
             auto_resume: None,
             detach: None,
@@ -820,7 +820,7 @@ mod tests {
             network: None,
             ports: None,
             auto_remove: None,
-            auto_pause: None,
+            auto_stop: None,
             auto_delete: None,
             auto_resume: None,
             detach: None,

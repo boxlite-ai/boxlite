@@ -1,4 +1,4 @@
-# AutoPause, AutoResume, and AutoDelete
+# AutoStop, AutoResume, and AutoDelete
 
 The BoxLite cloud REST runtime can automatically stop a box after it becomes idle, and restart it on the next user operation. This reuses the existing `Stop` / `Start` lifecycle, does not create memory snapshots, and does not introduce a new `Paused` state.
 
@@ -10,7 +10,7 @@ Lifecycle intervals are always in seconds:
 
 | Field | Default | Disable Value | Meaning |
 |---|---:|---:|---|
-| `auto_pause` | `900` | `0` | Wait time before Stop after the last valid activity |
+| `auto_stop` | `900` | `0` | Wait time before Stop after the last valid activity |
 | `auto_delete` | `0` | `0` | Wait time before deletion after the box successfully stops |
 
 You can set the policy when creating a box:
@@ -18,21 +18,21 @@ You can set the policy when creating a box:
 ```json
 {
   "image": "python:3.13",
-  "auto_pause": 900,
+  "auto_stop": 900,
   "auto_delete": 604800
 }
 ```
 
-Setting `auto_pause: 0` disables AutoPause; setting `auto_delete: 0` disables AutoDelete. When both are enabled, `auto_delete` must be greater than `auto_pause`.
+Setting `auto_stop: 0` disables AutoStop; setting `auto_delete: 0` disables AutoDelete. When both are enabled, `auto_delete` must be greater than `auto_stop`.
 
 The Python, Node.js, C, and Go SDKs can pass both fields at creation time. Box info returns the currently effective second-level values.
 
 ## Lifecycle Behavior
 
-AutoPause behaves as follows:
+AutoStop behaves as follows:
 
 1. The box is in `STARTED` and has no pending state transition.
-2. The last valid activity is older than `auto_pause`.
+2. The last valid activity is older than `auto_stop`.
 3. The control plane submits `STOPPED` as the desired state and follows the normal Stop flow.
 4. After the VM stops, the box enters the existing `STOPPED` state.
 
@@ -61,7 +61,7 @@ Metrics and port traffic are considered observability or external service traffi
 
 ## What Is Preserved After Stop
 
-AutoPause does not preserve runtime memory. After Stop:
+AutoStop does not preserve runtime memory. After Stop:
 
 - Persistent disk and mounted volumes are preserved;
 - Memory, processes, and background tasks are not preserved;
@@ -72,7 +72,7 @@ Data that must survive Stop must be written to persistent disk or volumes. Do no
 
 ## Billing Model
 
-The purpose of AutoPause is to stop compute resources when idle. Billing still uses the platform's existing metered dimensions:
+The purpose of AutoStop is to stop compute resources when idle. Billing still uses the platform's existing metered dimensions:
 
 - CPU
 - RAM
@@ -85,16 +85,16 @@ Running compute resources and persistent storage kept after Stop are different d
 
 ### Why does accessing Metrics not automatically start the box?
 
-This is expected. Metrics are not considered user workload activity; otherwise monitoring systems would prevent AutoPause.
+This is expected. Metrics are not considered user workload activity; otherwise monitoring systems would prevent AutoStop.
 
 ### Why did the port service stop?
 
-Port proxies do not count as activity. If a service needs to stay running, disable AutoPause or manage the lifecycle through real Exec / Files / attach workflows.
+Port proxies do not count as activity. If a service needs to stay running, disable AutoStop or manage the lifecycle through real Exec / Files / attach workflows.
 
 ### Will AutoResume restore the previous shell or process?
 
 No. AutoResume is a Start, not a memory restore. Applications must be able to restart normally.
 
-### Can AutoDelete be used after disabling AutoPause?
+### Can AutoDelete be used after disabling AutoStop?
 
 Yes. In that case AutoDelete will not actively stop a running box, but a manually stopped box will still be deleted according to `auto_delete`.

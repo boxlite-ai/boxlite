@@ -8,7 +8,7 @@ import { BoxDto } from '../../box/dto/box.dto'
 import { BoxState } from '../../box/enums/box-state.enum'
 import {
   AUTO_DELETE_DISABLED,
-  DEFAULT_AUTO_PAUSE_SECONDS,
+  DEFAULT_AUTO_STOP_SECONDS,
   DEFAULT_AUTO_RESUME,
 } from '../../box/constants/box-lifecycle.constants'
 import { BoxResponseDto } from '../dto/box-response.dto'
@@ -26,7 +26,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     cpus: box.cpu || 1,
     memory_mib: (box.memory || 1) * 1024,
     labels: box.labels || {},
-    auto_pause: box.autoPause ?? DEFAULT_AUTO_PAUSE_SECONDS,
+    auto_stop: box.autoStop ?? DEFAULT_AUTO_STOP_SECONDS,
     auto_delete: box.autoDelete ?? AUTO_DELETE_DISABLED,
     auto_resume: box.autoResume ?? DEFAULT_AUTO_RESUME,
   }
@@ -42,7 +42,7 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   createDto.memory = dto.memory_mib ? Math.ceil(dto.memory_mib / 1024) : undefined
   createDto.disk = dto.disk_size_gb
   createDto.target = target
-  createDto.autoPause = dto.auto_pause
+  createDto.autoStop = dto.auto_stop
   createDto.autoDelete = dto.auto_delete
   createDto.autoResume = dto.auto_resume
   if (dto.network) {

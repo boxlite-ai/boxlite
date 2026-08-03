@@ -49,7 +49,7 @@ type BoxInfo struct {
 	CPUs       int
 	MemoryMiB  int
 	Network    *NetworkInfo
-	AutoPause  uint32
+	AutoStop   uint32
 	AutoDelete uint32
 	AutoResume bool
 	CreatedAt  time.Time
@@ -151,7 +151,7 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 		CPUs:       int(info.cpus),
 		MemoryMiB:  int(info.memory_mib),
 		Network:    cNetworkInfoToGo(info.network),
-		AutoPause:  uint32(info.auto_pause),
+		AutoStop:   uint32(info.auto_stop),
 		AutoDelete: uint32(info.auto_delete),
 		AutoResume: info.auto_resume != 0,
 		CreatedAt:  time.Unix(int64(info.created_at), 0),

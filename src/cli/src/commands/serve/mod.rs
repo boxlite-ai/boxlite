@@ -710,7 +710,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         cpus: info.cpus,
         memory_mib: info.memory_mib,
         labels: info.labels.clone(),
-        auto_pause: info.auto_pause,
+        auto_stop: info.auto_stop,
         auto_delete: info.auto_delete,
         auto_resume: info.auto_resume,
         exit_code: info.exit_code,
@@ -773,7 +773,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
             },
             ..Default::default()
         },
-        auto_pause: req.auto_pause,
+        auto_stop: req.auto_stop,
         auto_delete: Some(auto_delete),
         auto_resume: req.auto_resume,
         // Preserve the serve API's historical detached default for persistent
@@ -1349,11 +1349,11 @@ mod tests {
     #[test]
     fn build_box_options_carries_lifecycle_policy_and_uses_compatible_detach_default() {
         let req: super::types::CreateBoxRequest = serde_json::from_str(
-            r#"{"auto_pause": 900, "auto_delete": 3600, "auto_resume": false}"#,
+            r#"{"auto_stop": 900, "auto_delete": 3600, "auto_resume": false}"#,
         )
         .expect("lifecycle body must deserialize");
         let opts = build_box_options(&req).expect("build lifecycle options");
-        assert_eq!(opts.auto_pause, Some(900));
+        assert_eq!(opts.auto_stop, Some(900));
         assert_eq!(opts.auto_delete, Some(3600));
         assert_eq!(opts.auto_resume, Some(false));
         assert!(!opts.detach, "remove-on-stop must not default to detached");

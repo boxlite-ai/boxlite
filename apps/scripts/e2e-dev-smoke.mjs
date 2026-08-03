@@ -137,7 +137,7 @@ async function runBoxIdFlow() {
         labels: {
           'boxlite.io/e2e': 'box-id',
         },
-        autoPauseInterval: 300,
+        autoStopInterval: 300,
         autoDeleteInterval: 3600,
       }),
     })

@@ -2,7 +2,7 @@
 
 ## Lifecycle
 
-- [AutoPause、AutoResume 与 AutoDelete](./auto-pause-resume.md)
+- [AutoStop、AutoResume 与 AutoDelete](./auto-stop-resume.md)
 
 ## Building from Source
 

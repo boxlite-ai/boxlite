@@ -148,11 +148,11 @@ export interface JsBoxOptions {
    */
   autoRemove?: boolean;
   detach?: boolean;
-  /** Idle time in seconds before AutoPause; 0 disables AutoPause. */
-  autoPause?: number;
+  /** Idle time in seconds before AutoStop; 0 disables AutoStop. */
+  autoStop?: number;
   /** Time in seconds after stop before AutoDelete; 0 disables AutoDelete. */
   autoDelete?: number;
-  /** Whether access automatically resumes an auto-paused box. */
+  /** Whether access automatically resumes an auto-stopped box. */
   autoResume?: boolean;
   entrypoint?: string[];
   cmd?: string[];
@@ -251,7 +251,7 @@ export interface JsBoxInfo {
   cpus: number;
   memoryMib: number;
   network: JsNetworkInfo | null;
-  autoPause: number;
+  autoStop: number;
   autoDelete: number;
   autoResume: boolean;
   healthStatus: JsHealthStatus;

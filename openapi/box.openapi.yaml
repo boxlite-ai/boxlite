@@ -1549,11 +1549,11 @@ components:
           additionalProperties:
             type: string
           description: User-defined key-value labels
-        auto_pause:
+        auto_stop:
           type: integer
           minimum: 0
           default: 900
-          description: Idle time in seconds before AutoPause; 0 disables AutoPause
+          description: Idle time in seconds before AutoStop; 0 disables AutoStop
         auto_delete:
           type: integer
           minimum: 0
@@ -1562,7 +1562,7 @@ components:
         auto_resume:
           type: boolean
           default: true
-          description: Whether the box automatically resumes when accessed after AutoPause
+          description: Whether the box automatically resumes when accessed after AutoStop
 
     BoxStatus:
       type: string
@@ -1670,11 +1670,11 @@ components:
           type: boolean
           description: Box survives parent process exit
           default: false
-        auto_pause:
+        auto_stop:
           type: integer
           minimum: 0
           default: 900
-          description: Idle time in seconds before AutoPause; 0 disables AutoPause
+          description: Idle time in seconds before AutoStop; 0 disables AutoStop
         auto_delete:
           type: integer
           minimum: 0
@@ -1683,7 +1683,7 @@ components:
         auto_resume:
           type: boolean
           default: true
-          description: Whether the box automatically resumes when accessed after AutoPause
+          description: Whether the box automatically resumes when accessed after AutoStop
 
     CreateBoxAdvancedOptions:
       type: object

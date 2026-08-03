@@ -182,7 +182,7 @@ type boxConfig struct {
 	entrypoint []string
 	cmd        []string
 	autoRemove *bool
-	autoPause  *uint32
+	autoStop   *uint32
 	autoDelete *uint32
 	autoResume *bool
 	detach     *bool
@@ -296,10 +296,10 @@ func WithSecret(secret Secret) BoxOption {
 	}
 }
 
-// WithAutoPauseInterval configures the cloud AutoPause idle TTL in seconds.
-// A value of 0 disables AutoPause. Local runtimes return Unsupported.
-func WithAutoPauseInterval(seconds uint32) BoxOption {
-	return func(c *boxConfig) { c.autoPause = &seconds }
+// WithAutoStopInterval configures the cloud AutoStop idle TTL in seconds.
+// A value of 0 disables AutoStop. Local runtimes return Unsupported.
+func WithAutoStopInterval(seconds uint32) BoxOption {
+	return func(c *boxConfig) { c.autoStop = &seconds }
 }
 
 // WithAutoDeleteInterval configures the cloud AutoDelete TTL in seconds.
@@ -309,7 +309,7 @@ func WithAutoDeleteInterval(seconds uint32) BoxOption {
 }
 
 // WithAutoResumeEnabled configures whether the box automatically resumes when
-// accessed after AutoPause. Defaults to true to preserve existing behavior.
+// accessed after AutoStop. Defaults to true to preserve existing behavior.
 func WithAutoResumeEnabled(enabled bool) BoxOption {
 	return func(c *boxConfig) { c.autoResume = &enabled }
 }
@@ -484,8 +484,8 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		C.free(unsafe.Pointer(cValue))
 		C.free(unsafe.Pointer(cPlaceholder))
 	}
-	if cfg.autoPause != nil {
-		C.boxlite_options_set_auto_pause_interval(cOpts, C.uint32_t(*cfg.autoPause))
+	if cfg.autoStop != nil {
+		C.boxlite_options_set_auto_stop_interval(cOpts, C.uint32_t(*cfg.autoStop))
 	}
 	if cfg.autoRemove != nil {
 		C.boxlite_options_set_auto_remove(cOpts, boolToCInt(*cfg.autoRemove))

@@ -114,12 +114,12 @@ impl RuntimeBackend for RestRuntime {
         validate_remote_box_options(&options)?;
         reject_remote_experimental_options(&options)?;
 
-        // Validate only the caller's requested policy. An unset auto_pause means
-        // "no auto-pause", so it must not borrow the server's default here —
+        // Validate only the caller's requested policy. An unset auto_stop means
+        // "no auto-stop", so it must not borrow the server's default here —
         // otherwise a plain remove-on-stop box (`--rm` → auto_delete=1) is
         // wrongly rejected by the ordering check before the request is even sent.
         crate::runtime::types::BoxLifecyclePolicy {
-            auto_pause: options.auto_pause.unwrap_or(0),
+            auto_stop: options.auto_stop.unwrap_or(0),
             auto_delete: options.auto_delete.unwrap_or(0),
             auto_resume: options.auto_resume.unwrap_or(true),
         }
@@ -357,9 +357,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_allows_remove_on_stop_without_autopause() {
-        // `run --rm` maps to auto_delete=1 with no auto_pause. The client must
-        // validate only the caller's requested policy — not the server's auto_pause
+    async fn create_allows_remove_on_stop_without_autostop() {
+        // `run --rm` maps to auto_delete=1 with no auto_stop. The client must
+        // validate only the caller's requested policy — not the server's auto_stop
         // default — so a remove-on-stop box is not rejected before the request is
         // sent. With the server unreachable, a passing validation surfaces as a
         // connection error, never the lifecycle-ordering error.
@@ -377,8 +377,8 @@ mod tests {
 
         assert!(
             !err.to_string()
-                .contains("auto_delete must be greater than auto_pause"),
-            "remove-on-stop without auto_pause must pass client validation; got: {err}"
+                .contains("auto_delete must be greater than auto_stop"),
+            "remove-on-stop without auto_stop must pass client validation; got: {err}"
         );
     }
 

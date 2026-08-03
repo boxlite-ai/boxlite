@@ -27,7 +27,7 @@ const SUPPORTED_BOX_IMAGES = [
   { id: 'node', name: 'Node.js', ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0', isDefault: false },
 ] as const
 
-const DEFAULTS = { cpu: 1, memory: 1, disk: 10, autoPauseIntervalSeconds: 900, autoDelete: 0 }
+const DEFAULTS = { cpu: 1, memory: 1, disk: 10, autoStopIntervalSeconds: 900, autoDelete: 0 }
 
 const SUPPORT_EMAIL = 'support@boxlite.ai'
 
@@ -225,7 +225,7 @@ export const CreateBoxDialog = ({
   const [cpu, setCpu] = useState(initialCpu)
   const [memory, setMemory] = useState(initialMemory)
   const [disk, setDisk] = useState(initialDisk)
-  const [autoPauseIntervalSeconds, setAutoPauseIntervalSeconds] = useState(DEFAULTS.autoPauseIntervalSeconds)
+  const [autoStopIntervalSeconds, setAutoStopIntervalSeconds] = useState(DEFAULTS.autoStopIntervalSeconds)
   const [autoDelete, setAutoDeleteInterval] = useState(DEFAULTS.autoDelete)
   const [autoResume, setAutoResumeEnabled] = useState(true)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -249,7 +249,7 @@ export const CreateBoxDialog = ({
     setCpu(initialCpu)
     setMemory(initialMemory)
     setDisk(initialDisk)
-    setAutoPauseIntervalSeconds(DEFAULTS.autoPauseIntervalSeconds)
+    setAutoStopIntervalSeconds(DEFAULTS.autoStopIntervalSeconds)
     setAutoDeleteInterval(DEFAULTS.autoDelete)
     setAutoResumeEnabled(true)
     setAdvancedOpen(false)
@@ -277,7 +277,7 @@ export const CreateBoxDialog = ({
 
   const selectedImage = SUPPORTED_BOX_IMAGES.find((i) => i.ref === imageRef) ?? defaultImage
   const nameValid = !name || NAME_REGEX.test(name)
-  const lifecycleError = validateLifecyclePolicy({ autoPauseIntervalSeconds, autoDelete })
+  const lifecycleError = validateLifecyclePolicy({ autoStopIntervalSeconds, autoDelete })
 
   const handleCreate = async () => {
     if (!selectedOrganization?.id) {
@@ -299,7 +299,7 @@ export const CreateBoxDialog = ({
         image: imageRef || defaultImage.ref,
         network: { mode: 'enabled' },
         resources: { cpu, memory, disk },
-        autoPauseIntervalSeconds,
+        autoStopIntervalSeconds,
         autoDelete,
         autoResume,
       })
@@ -392,7 +392,7 @@ export const CreateBoxDialog = ({
               Advanced Options
               {!advancedOpen && (
                 <span className="basis-full pl-5 font-mono text-[11px] normal-case tracking-normal text-muted-foreground/80 sm:basis-auto sm:pl-0">
-                  · {cpu} vCPU · {memory} GiB · {disk} GiB · pause {autoPauseIntervalSeconds}s
+                  · {cpu} vCPU · {memory} GiB · {disk} GiB · stop {autoStopIntervalSeconds}s
                 </span>
               )}
             </button>
@@ -434,14 +434,14 @@ export const CreateBoxDialog = ({
                 <div className="grid grid-cols-1 gap-[14px] border-t border-dashed border-border pt-[14px] sm:grid-cols-2">
                   <label className="flex flex-col gap-[9px]">
                     <span className="font-mono text-[10px] uppercase tracking-[1px]">
-                      Auto-pause <span className="text-muted-foreground">(seconds, 0 disables)</span>
+                      Auto-stop <span className="text-muted-foreground">(seconds, 0 disables)</span>
                     </span>
                     <input
                       type="number"
                       min={0}
                       step={1}
-                      value={autoPauseIntervalSeconds}
-                      onChange={(event) => setAutoPauseIntervalSeconds(Number(event.target.value))}
+                      value={autoStopIntervalSeconds}
+                      onChange={(event) => setAutoStopIntervalSeconds(Number(event.target.value))}
                       className="border border-border bg-card px-3 py-[9px] font-mono text-[13px] outline-none focus:border-brand"
                     />
                   </label>

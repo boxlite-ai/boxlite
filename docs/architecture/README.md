@@ -1,6 +1,6 @@
 # Architecture
 
-Related design: [AutoPause / AutoResume / AutoDelete](./auto-pause-resume-design.md)
+Related design: [AutoStop / AutoResume / AutoDelete](./auto-stop-resume-design.md)
 
 Container security design: [Linux capability API](./container-capabilities.md)
 

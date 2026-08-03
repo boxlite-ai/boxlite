@@ -1200,7 +1200,7 @@ mod owned_ffi_ptr_nested_leak_tests {
                 }]),
             })),
             created_at: 0,
-            auto_pause: 900,
+            auto_stop: 900,
             auto_delete: 0,
             auto_resume: 1,
         });
@@ -1271,7 +1271,7 @@ mod owned_ffi_ptr_nested_leak_tests {
             memory_mib: 512,
             network: std::ptr::null_mut(),
             created_at: 0,
-            auto_pause: 900,
+            auto_stop: 900,
             auto_delete: 0,
             auto_resume: 1,
         }];

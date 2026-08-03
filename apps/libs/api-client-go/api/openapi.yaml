@@ -2097,7 +2097,7 @@ paths:
           type: string
         style: simple
       - description: Auto-stop interval in minutes (0 to disable). Converted to seconds
-          and stored as auto-pause interval.
+          and stored as auto-stop interval.
         explode: false
         in: path
         name: interval
@@ -6136,7 +6136,7 @@ components:
         desiredState: destroyed
         errorReason: The box is not running
         recoverable: true
-        autoPause: 900
+        autoStop: 900
         autoDelete: 604800
         autoResume: true
         volumes:
@@ -6238,8 +6238,8 @@ components:
           description: Whether the box error is recoverable.
           example: true
           type: boolean
-        autoPause:
-          description: Auto-pause interval in seconds (0 means disabled)
+        autoStop:
+          description: Auto-stop interval in seconds (0 means disabled)
           example: 900
           type: integer
         autoDelete:
@@ -6324,7 +6324,7 @@ components:
           desiredState: destroyed
           errorReason: The box is not running
           recoverable: true
-          autoPause: 900
+          autoStop: 900
           autoDelete: 604800
           autoResume: true
           volumes:
@@ -6361,7 +6361,7 @@ components:
           desiredState: destroyed
           errorReason: The box is not running
           recoverable: true
-          autoPause: 900
+          autoStop: 900
           autoDelete: 604800
           autoResume: true
           volumes:

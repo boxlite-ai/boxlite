@@ -22,7 +22,7 @@ export type BoxApiNetworkSpec = {
 }
 
 export type LifecyclePolicy = {
-  autoPauseIntervalSeconds: number
+  autoStopIntervalSeconds: number
   autoDelete: number
   autoResume?: boolean
 }
@@ -34,7 +34,7 @@ export type CreateBoxParams = {
   envVars?: Record<string, string>
   network?: BoxApiNetworkSpec
   resources?: Resources
-  autoPauseIntervalSeconds?: number
+  autoStopIntervalSeconds?: number
   autoDelete?: number
   autoResume?: boolean
 }
@@ -49,7 +49,7 @@ export type BoxApiCreateRequest = {
   env?: Record<string, string>
   user?: string
   network?: BoxApiNetworkSpec
-  auto_pause?: number
+  auto_stop?: number
   auto_delete?: number
   auto_resume?: boolean
 }
@@ -64,7 +64,7 @@ export type BoxApiBoxResponse = {
   cpus: number
   memory_mib: number
   labels: Record<string, string>
-  auto_pause: number
+  auto_stop: number
   auto_delete: number
   auto_resume?: boolean
 }
@@ -81,21 +81,21 @@ export function toBoxApiCreateRequest(params?: CreateBoxParams): BoxApiCreateReq
     memory_mib: p.resources?.memory !== undefined ? p.resources.memory * 1024 : undefined,
     disk_size_gb: p.resources?.disk,
     network: p.network,
-    auto_pause: p.autoPauseIntervalSeconds,
+    auto_stop: p.autoStopIntervalSeconds,
     auto_delete: p.autoDelete,
     auto_resume: p.autoResume ?? true,
   }
 }
 
 export function validateLifecyclePolicy(policy: LifecyclePolicy): string | null {
-  if (!Number.isInteger(policy.autoPauseIntervalSeconds) || policy.autoPauseIntervalSeconds < 0) {
-    return 'Auto-pause must be a non-negative integer number of seconds.'
+  if (!Number.isInteger(policy.autoStopIntervalSeconds) || policy.autoStopIntervalSeconds < 0) {
+    return 'Auto-stop must be a non-negative integer number of seconds.'
   }
   if (!Number.isInteger(policy.autoDelete) || policy.autoDelete < 0) {
     return 'Auto-delete must be 0 (disabled) or a positive integer number of seconds.'
   }
-  if (policy.autoDelete > 0 && policy.autoDelete <= policy.autoPauseIntervalSeconds) {
-    return 'Auto-delete must be greater than auto-pause.'
+  if (policy.autoDelete > 0 && policy.autoDelete <= policy.autoStopIntervalSeconds) {
+    return 'Auto-delete must be greater than auto-stop.'
   }
   return null
 }

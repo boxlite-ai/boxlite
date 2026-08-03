@@ -288,19 +288,19 @@ impl AsRef<str> for ContainerID {
 /// Second-based lifecycle policy for an existing box.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoxLifecyclePolicy {
-    /// Idle time before AutoPause; `0` disables AutoPause.
-    pub auto_pause: u32,
+    /// Idle time before AutoStop; `0` disables AutoStop.
+    pub auto_stop: u32,
     /// Stopped time before AutoDelete; `0` disables AutoDelete.
     pub auto_delete: u32,
-    /// Whether the box should automatically resume when accessed after AutoPause.
+    /// Whether the box should automatically resume when accessed after AutoStop.
     pub auto_resume: bool,
 }
 
 impl BoxLifecyclePolicy {
     pub fn validate(&self) -> boxlite_shared::errors::BoxliteResult<()> {
-        if self.auto_delete > 0 && self.auto_delete <= self.auto_pause {
+        if self.auto_delete > 0 && self.auto_delete <= self.auto_stop {
             return Err(boxlite_shared::errors::BoxliteError::Config(
-                "auto_delete must be greater than auto_pause".into(),
+                "auto_delete must be greater than auto_stop".into(),
             ));
         }
         Ok(())
@@ -385,13 +385,13 @@ pub struct BoxInfo {
     /// User-defined labels for filtering and organization.
     pub labels: HashMap<String, String>,
 
-    /// Idle time in seconds before AutoPause. `0` disables AutoPause.
-    pub auto_pause: u32,
+    /// Idle time in seconds before AutoStop. `0` disables AutoStop.
+    pub auto_stop: u32,
 
     /// Time in seconds after a successful stop before AutoDelete. `0` disables it.
     pub auto_delete: u32,
 
-    /// Whether the box should automatically resume when accessed after AutoPause.
+    /// Whether the box should automatically resume when accessed after AutoStop.
     pub auto_resume: bool,
 
     /// Health status.
@@ -431,7 +431,7 @@ impl BoxInfo {
             labels: HashMap::new(),
             // Local runtimes do not sweep lifecycle deadlines, but metadata keeps
             // the configured values so callers can inspect the effective policy.
-            auto_pause: config.options.auto_pause.unwrap_or(0),
+            auto_stop: config.options.auto_stop.unwrap_or(0),
             auto_delete: config.options.effective_auto_delete(),
             auto_resume: config.options.auto_resume.unwrap_or(true),
             health_status: state.health_status,
@@ -451,7 +451,7 @@ impl PartialEq for BoxInfo {
             && self.memory_mib == other.memory_mib
             && self.network == other.network
             && self.labels == other.labels
-            && self.auto_pause == other.auto_pause
+            && self.auto_stop == other.auto_stop
             && self.auto_delete == other.auto_delete
             && self.auto_resume == other.auto_resume
             && self.health_status == other.health_status
@@ -559,7 +559,7 @@ mod tests {
     fn lifecycle_policy_enforces_public_sentinels_and_ordering() {
         assert!(
             BoxLifecyclePolicy {
-                auto_pause: 0,
+                auto_stop: 0,
                 auto_delete: 0,
                 auto_resume: true,
             }
@@ -568,7 +568,7 @@ mod tests {
         );
         assert!(
             BoxLifecyclePolicy {
-                auto_pause: 900,
+                auto_stop: 900,
                 auto_delete: 0,
                 auto_resume: true,
             }
@@ -577,7 +577,7 @@ mod tests {
         );
         assert!(
             BoxLifecyclePolicy {
-                auto_pause: 900,
+                auto_stop: 900,
                 auto_delete: 900,
                 auto_resume: true,
             }
@@ -586,7 +586,7 @@ mod tests {
         );
         assert!(
             BoxLifecyclePolicy {
-                auto_pause: 900,
+                auto_stop: 900,
                 auto_delete: 901,
                 auto_resume: true,
             }

@@ -42,7 +42,7 @@ describe('CreateBoxDto resource minimums', () => {
 
 describe('CreateBoxDto lifecycle policy', () => {
   it('accepts second-based lifecycle fields', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { auto_pause: 900, auto_delete: 604800 }))
+    const errors = await validate(plainToInstance(CreateBoxDto, { auto_stop: 900, auto_delete: 604800 }))
 
     expect(errors).toHaveLength(0)
   })
@@ -60,7 +60,7 @@ describe('CreateBoxDto lifecycle policy', () => {
   })
 
   it.each([
-    ['auto_pause', -1],
+    ['auto_stop', -1],
     ['auto_delete', -2],
   ])('rejects invalid %s values', async (field, value) => {
     const errors = await validate(plainToInstance(CreateBoxDto, { [field]: value }))

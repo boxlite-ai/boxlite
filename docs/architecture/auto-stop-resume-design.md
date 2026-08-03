@@ -1,4 +1,4 @@
-# AutoPause / AutoResume / AutoDelete Design
+# AutoStop / AutoResume / AutoDelete Design
 
 ## Scope
 
@@ -11,14 +11,14 @@ The feature is implemented by the cloud control plane. The REST backend forwards
 The public wire fields are unified as:
 
 ```text
-auto_pause:  integer seconds, 0 disables
+auto_stop:  integer seconds, 0 disables
 auto_delete: integer seconds, 0 disables
-auto_resume: boolean, default true; user operations resume an auto-paused box when enabled
+auto_resume: boolean, default true; user operations resume an auto-stopped box when enabled
 ```
 
-The default `auto_pause` is `900` seconds, the default `auto_delete` is `0`, and the default `auto_resume` is `true`. Create and read APIs and the Rust, Python, Node.js, C, and Go SDK boundaries use these same modern lifecycle semantics. AutoResume is implemented by the cloud control plane; the embedded local runtime has no paused state to resume. SDKs continue to accept deprecated `auto_remove` for embedded remove-on-stop compatibility, and explicit `auto_delete` takes precedence there. The REST API does not expose `auto_remove`; leaving `auto_delete` unset preserves the remote server's default instead of translating the deprecated field to a timer.
+The default `auto_stop` is `900` seconds, the default `auto_delete` is `0`, and the default `auto_resume` is `true`. Create and read APIs and the Rust, Python, Node.js, C, and Go SDK boundaries use these same modern lifecycle semantics. AutoResume is implemented by the cloud control plane; the embedded local runtime has no auto-stopped state to resume. SDKs continue to accept deprecated `auto_remove` for embedded remove-on-stop compatibility, and explicit `auto_delete` takes precedence there. The REST API does not expose `auto_remove`; leaving `auto_delete` unset preserves the remote server's default instead of translating the deprecated field to a timer.
 
-The internal database columns are `autoPause`, `autoDelete`, `autoResume`, and `lastActivityAt`. Public names remain stable.
+The internal database columns are `autoStop`, `autoDelete`, `autoResume`, and `lastActivityAt`. Public names remain stable.
 
 ## State Machine
 
@@ -30,12 +30,12 @@ STARTED -- idle deadline --> STOPPING --> STOPPED
 STOPPED -- delete deadline --> DESTROYING --> DESTROYED
 ```
 
-AutoPause only selects boxes that satisfy all of the following:
+AutoStop only selects boxes that satisfy all of the following:
 
 - `state = STARTED`
 - `desiredState = STARTED`
 - `pending = false`
-- `autoPause > 0`
+- `autoStop > 0`
 - The last activity time is older than the configured interval in seconds
 
 AutoDelete only selects boxes that satisfy all of the following:
@@ -46,7 +46,7 @@ AutoDelete only selects boxes that satisfy all of the following:
 - `autoDelete > 0`
 - `lastActivityAt` is older than the configured interval in seconds
 
-`lastActivityAt` is the shared timing source for both AutoPause and AutoDelete. It is updated on box creation, state transitions, and organization changes; therefore AutoDelete starts counting from when the box actually entered `STOPPED` (or from the last event considered activity after stopping), not from when the Stop request was issued.
+`lastActivityAt` is the shared timing source for both AutoStop and AutoDelete. It is updated on box creation, state transitions, and organization changes; therefore AutoDelete starts counting from when the box actually entered `STOPPED` (or from the last event considered activity after stopping), not from when the Stop request was issued.
 
 `auto_delete = 0` means disabled; the legacy `-1` disable semantics and the "delete immediately on stop" semantics are no longer supported.
 
@@ -82,20 +82,20 @@ The distributed lock carries a random owner token and is released through a Redi
 
 ## Sweeper and Concurrency Safety
 
-AutoPause and AutoDelete run every 10 seconds and each uses a global worker lock. Candidate boxes must also acquire a per-box state lock.
+AutoStop and AutoDelete run every 10 seconds and each uses a global worker lock. Candidate boxes must also acquire a per-box state lock.
 
-Activity is written to Redis first and flushed to the database in batches. AutoPause re-reads the Redis-preferred latest time via `BoxActivityService.getLastActivityAt` after acquiring the per-box lock; if there has been recent activity, it skips the box. AutoDelete intentionally uses the persisted SQL timestamp selected under the stopped-box policy.
+Activity is written to Redis first and flushed to the database in batches. AutoStop re-reads the Redis-preferred latest time via `BoxActivityService.getLastActivityAt` after acquiring the per-box lock; if there has been recent activity, it skips the box. AutoDelete intentionally uses the persisted SQL timestamp selected under the stopped-box policy.
 
 State writes use conditional updates:
 
-- AutoPause compares `pending`, `state`, `desiredState`, and the `autoPause` value at selection time.
+- AutoStop compares `pending`, `state`, `desiredState`, and the `autoStop` value at selection time.
 - AutoDelete compares `pending`, `state`, `desiredState`, and `autoDelete`.
 
 Therefore, if a user changes the policy, manually starts or stops the box, or another worker commits a state change after the candidate query, the stale candidate cannot overwrite the new state.
 
 ## Legacy Fields and Endpoints
 
-- Legacy minute database columns `autoStopInterval` and `autoDeleteInterval` are migrated to second-based `autoPause` and `autoDelete`.
+- Legacy minute database columns `autoStopInterval` and `autoDeleteInterval` are migrated to second-based `autoStop` and `autoDelete`.
 - `POST /box/{boxIdOrName}/autostop/{interval}` and `POST /box/{boxIdOrName}/autodelete/{interval}` remain supported as deprecated compatibility endpoints. Their path parameter remains minutes and is converted to seconds internally.
 
 ## Backend and SDK Boundary
@@ -109,10 +109,10 @@ The local runtime:
 
 - Preserves the historical `auto_remove` remove-on-stop behavior when `auto_delete` is unset;
 - Uses `auto_delete=0` to keep a stopped box and a positive value for immediate local remove-on-stop;
-- Returns `Unsupported` when AutoPause is explicitly configured, because it has no lifecycle sweeper;
-- Does not implement cloud AutoResume because local boxes do not enter an AutoPaused state.
+- Returns `Unsupported` when AutoStop is explicitly configured, because it has no lifecycle sweeper;
+- Does not implement cloud AutoResume because local boxes do not enter an AutoStopped state.
 
-The C ABI uses `uint32_t` for `auto_pause` and `uint32_t` for `auto_delete`, with `0` meaning disabled in both cases. The Go bridge, Python, and Node bindings use corresponding non-negative integer types.
+The C ABI uses `uint32_t` for `auto_stop` and `uint32_t` for `auto_delete`, with `0` meaning disabled in both cases. The Go bridge, Python, and Node bindings use corresponding non-negative integer types.
 
 ## Observability and Failure Semantics
 

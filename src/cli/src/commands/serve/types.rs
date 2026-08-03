@@ -45,7 +45,7 @@ pub(super) struct CreateBoxRequest {
     #[serde(default)]
     pub network: Option<NetworkSpec>,
     #[serde(default)]
-    pub auto_pause: Option<u32>,
+    pub auto_stop: Option<u32>,
     #[serde(default)]
     pub auto_delete: Option<u32>,
     #[serde(default)]
@@ -95,7 +95,7 @@ pub(super) struct BoxResponse {
     pub cpus: u8,
     pub memory_mib: u32,
     pub labels: HashMap<String, String>,
-    pub auto_pause: u32,
+    pub auto_stop: u32,
     pub auto_delete: u32,
     pub auto_resume: bool,
     /// The status the box's main command exited with, once it has. `None`

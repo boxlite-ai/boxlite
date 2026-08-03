@@ -227,7 +227,7 @@ export class BoxliteProxyController {
     if (policy.activity) {
       // Persist activity before the readiness gate. The lifecycle sweeper rechecks
       // this Redis-buffered timestamp after taking its state lock, closing the
-      // request-vs-AutoPause race without holding a lock through cold start.
+      // request-vs-AutoStop race without holding a lock through cold start.
       await this.boxService
         .updateLastActivityAt(box.id, new Date())
         .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))

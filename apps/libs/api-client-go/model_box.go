@@ -59,8 +59,8 @@ type Box struct {
 	ErrorReason *string `json:"errorReason,omitempty"`
 	// Whether the box error is recoverable.
 	Recoverable *bool `json:"recoverable,omitempty"`
-	// Auto-pause interval in seconds (0 means disabled)
-	AutoPause *int32 `json:"autoPause,omitempty"`
+	// Auto-stop interval in seconds (0 means disabled)
+	AutoStop *int32 `json:"autoStop,omitempty"`
 	// Auto-delete interval in seconds (0 means disabled)
 	AutoDelete *int32 `json:"autoDelete,omitempty"`
 	// Whether the box should be automatically resumed on proxy access
@@ -620,36 +620,36 @@ func (o *Box) SetRecoverable(v bool) {
 	o.Recoverable = &v
 }
 
-// GetAutoPause returns the AutoPause field value if set, zero value otherwise.
-func (o *Box) GetAutoPause() int32 {
-	if o == nil || IsNil(o.AutoPause) {
+// GetAutoStop returns the AutoStop field value if set, zero value otherwise.
+func (o *Box) GetAutoStop() int32 {
+	if o == nil || IsNil(o.AutoStop) {
 		var ret int32
 		return ret
 	}
-	return *o.AutoPause
+	return *o.AutoStop
 }
 
-// GetAutoPauseOk returns a tuple with the AutoPause field value if set, nil otherwise
+// GetAutoStopOk returns a tuple with the AutoStop field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *Box) GetAutoPauseOk() (*int32, bool) {
-	if o == nil || IsNil(o.AutoPause) {
+func (o *Box) GetAutoStopOk() (*int32, bool) {
+	if o == nil || IsNil(o.AutoStop) {
 		return nil, false
 	}
-	return o.AutoPause, true
+	return o.AutoStop, true
 }
 
-// HasAutoPause returns a boolean if a field has been set.
-func (o *Box) HasAutoPause() bool {
-	if o != nil && !IsNil(o.AutoPause) {
+// HasAutoStop returns a boolean if a field has been set.
+func (o *Box) HasAutoStop() bool {
+	if o != nil && !IsNil(o.AutoStop) {
 		return true
 	}
 
 	return false
 }
 
-// SetAutoPause gets a reference to the given int32 and assigns it to the AutoPause field.
-func (o *Box) SetAutoPause(v int32) {
-	o.AutoPause = &v
+// SetAutoStop gets a reference to the given int32 and assigns it to the AutoStop field.
+func (o *Box) SetAutoStop(v int32) {
+	o.AutoStop = &v
 }
 
 // GetAutoDelete returns the AutoDelete field value if set, zero value otherwise.
@@ -976,8 +976,8 @@ func (o Box) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Recoverable) {
 		toSerialize["recoverable"] = o.Recoverable
 	}
-	if !IsNil(o.AutoPause) {
-		toSerialize["autoPause"] = o.AutoPause
+	if !IsNil(o.AutoStop) {
+		toSerialize["autoStop"] = o.AutoStop
 	}
 	if !IsNil(o.AutoDelete) {
 		toSerialize["autoDelete"] = o.AutoDelete
@@ -1079,7 +1079,7 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "desiredState")
 		delete(additionalProperties, "errorReason")
 		delete(additionalProperties, "recoverable")
-		delete(additionalProperties, "autoPause")
+		delete(additionalProperties, "autoStop")
 		delete(additionalProperties, "autoDelete")
 		delete(additionalProperties, "autoResume")
 		delete(additionalProperties, "volumes")

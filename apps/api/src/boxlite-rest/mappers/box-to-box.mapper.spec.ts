@@ -9,12 +9,12 @@ import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 describe('BoxLite lifecycle policy mapper', () => {
   it('maps second-based create fields into the control-plane DTO', () => {
     const mapped = createBoxToCreateBox({
-      auto_pause: 1800,
+      auto_stop: 1800,
       auto_delete: 604800,
       auto_resume: false,
     })
 
-    expect(mapped.autoPause).toBe(1800)
+    expect(mapped.autoStop).toBe(1800)
     expect(mapped.autoDelete).toBe(604800)
     expect(mapped.autoResume).toBe(false)
   })
@@ -25,12 +25,12 @@ describe('BoxLite lifecycle policy mapper', () => {
       name: 'demo',
       state: BoxState.STARTED,
       labels: {},
-      autoPause: 1800,
+      autoStop: 1800,
       autoDelete: 604800,
       autoResume: false,
     } as any)
 
-    expect(response.auto_pause).toBe(1800)
+    expect(response.auto_stop).toBe(1800)
     expect(response.auto_delete).toBe(604800)
     expect(response.auto_resume).toBe(false)
   })

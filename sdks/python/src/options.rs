@@ -387,7 +387,7 @@ pub(crate) struct PyBoxOptions {
     #[pyo3(get, set)]
     pub(crate) auto_remove: Option<bool>,
     #[pyo3(get, set)]
-    pub(crate) auto_pause: Option<u32>,
+    pub(crate) auto_stop: Option<u32>,
     #[pyo3(get, set)]
     pub(crate) auto_delete: Option<u32>,
     #[pyo3(get, set)]
@@ -432,7 +432,7 @@ impl PyBoxOptions {
         network=None,
         ports=vec![],
         auto_remove=None,
-        auto_pause=None,
+        auto_stop=None,
         auto_delete=None,
         auto_resume=None,
         detach=None,
@@ -455,7 +455,7 @@ impl PyBoxOptions {
         network: Option<PyNetworkSpec>,
         ports: Vec<PyPortSpec>,
         auto_remove: Option<bool>,
-        auto_pause: Option<u32>,
+        auto_stop: Option<u32>,
         auto_delete: Option<u32>,
         auto_resume: Option<bool>,
         detach: Option<bool>,
@@ -477,7 +477,7 @@ impl PyBoxOptions {
             network,
             ports,
             auto_remove,
-            auto_pause,
+            auto_stop,
             auto_delete,
             auto_resume,
             detach,
@@ -539,7 +539,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             volumes,
             network,
             ports,
-            auto_pause: py_opts.auto_pause,
+            auto_stop: py_opts.auto_stop,
             auto_delete,
             auto_resume: py_opts.auto_resume,
             entrypoint: py_opts.entrypoint,

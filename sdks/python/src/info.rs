@@ -293,7 +293,7 @@ pub(crate) struct PyBoxInfo {
     #[pyo3(get)]
     pub(crate) network: Option<PyNetworkInfo>,
     #[pyo3(get)]
-    pub(crate) auto_pause: u32,
+    pub(crate) auto_stop: u32,
     #[pyo3(get)]
     pub(crate) auto_delete: u32,
     #[pyo3(get)]
@@ -318,7 +318,7 @@ impl PyBoxInfo {
             "cpus": self.cpus,
             "memory_mib": self.memory_mib,
             "network": network,
-            "auto_pause": self.auto_pause,
+            "auto_stop": self.auto_stop,
             "auto_delete": self.auto_delete,
             "auto_resume": self.auto_resume,
             "created_at": self.created_at,
@@ -350,7 +350,7 @@ impl From<BoxInfo> for PyBoxInfo {
             cpus: info.cpus,
             memory_mib: info.memory_mib,
             network: info.network.map(PyNetworkInfo::from),
-            auto_pause: info.auto_pause,
+            auto_stop: info.auto_stop,
             auto_delete: info.auto_delete,
             auto_resume: info.auto_resume,
             health_status,
@@ -383,7 +383,7 @@ mod tests {
             memory_mib: 512,
             network,
             labels: HashMap::new(),
-            auto_pause: 0,
+            auto_stop: 0,
             auto_delete: 0,
             auto_resume: true,
             health_status: HealthStatus::default(),

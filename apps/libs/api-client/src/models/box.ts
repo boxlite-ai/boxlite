@@ -101,9 +101,9 @@ export interface Box {
      */
     'recoverable'?: boolean;
     /**
-     * Auto-pause interval in seconds (0 means disabled)
+     * Auto-stop interval in seconds (0 means disabled)
      */
-    'autoPause'?: number;
+    'autoStop'?: number;
     /**
      * Auto-delete interval in seconds (0 means disabled)
      */

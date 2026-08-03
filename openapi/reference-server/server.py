@@ -171,7 +171,7 @@ class CreateBoxRequest(BaseModel):
     volumes: Optional[list[dict]] = None
     network: Optional[NetworkSpec] = None
     secrets: Optional[list[SecretSpec]] = None
-    auto_pause: Optional[int] = Field(default=None, ge=0)
+    auto_stop: Optional[int] = Field(default=None, ge=0)
     auto_delete: Optional[int] = Field(default=None, ge=0)
     auto_resume: Optional[bool] = None
     detach: Optional[bool] = False
@@ -423,8 +423,8 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
             )
             for secret in req.secrets
         ]
-    if req.auto_pause is not None:
-        kwargs["auto_pause"] = req.auto_pause
+    if req.auto_stop is not None:
+        kwargs["auto_stop"] = req.auto_stop
     if req.auto_delete is not None:
         kwargs["auto_delete"] = req.auto_delete
     if req.auto_resume is not None:

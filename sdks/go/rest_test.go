@@ -134,7 +134,7 @@ func TestRestBoxInfoFetchesCurrentMetadata(t *testing.T) {
 			"box_id":"box1","name":"service","status":"stopped",
 			"created_at":"2026-07-14T00:00:00Z","updated_at":"2026-07-15T00:00:00Z",
 			"pid":null,"image":"alpine:3.21","cpus":2,"memory_mib":768,
-			"auto_pause":42,"auto_delete":7,"auto_resume":false
+			"auto_stop":42,"auto_delete":7,"auto_resume":false
 		}`)
 	}))
 	defer server.Close()
@@ -182,10 +182,10 @@ func TestRestBoxInfoFetchesCurrentMetadata(t *testing.T) {
 			info.MemoryMiB,
 		)
 	}
-	if info.AutoPause != 42 || info.AutoDelete != 7 || info.AutoResume {
+	if info.AutoStop != 42 || info.AutoDelete != 7 || info.AutoResume {
 		t.Errorf(
-			"lifecycle: got AutoPause=%d AutoDelete=%d AutoResume=%v",
-			info.AutoPause,
+			"lifecycle: got AutoStop=%d AutoDelete=%d AutoResume=%v",
+			info.AutoStop,
 			info.AutoDelete,
 			info.AutoResume,
 		)

@@ -196,15 +196,15 @@ pub struct JsBoxInfo {
     /// Network configuration and resolved local publications, when available.
     pub network: Either<JsNetworkInfo, Null>,
 
-    /// Idle time in seconds before AutoPause; 0 disables it.
-    #[napi(js_name = "autoPause")]
-    pub auto_pause: u32,
+    /// Idle time in seconds before AutoStop; 0 disables it.
+    #[napi(js_name = "autoStop")]
+    pub auto_stop: u32,
 
     /// Stopped time in seconds before AutoDelete; 0 disables it.
     #[napi(js_name = "autoDelete")]
     pub auto_delete: u32,
 
-    /// Whether the box automatically resumes when accessed after AutoPause.
+    /// Whether the box automatically resumes when accessed after AutoStop.
     #[napi(js_name = "autoResume")]
     pub auto_resume: bool,
 
@@ -233,7 +233,7 @@ impl From<BoxInfo> for JsBoxInfo {
                 Some(network) => Either::A(JsNetworkInfo::from(network)),
                 None => Either::B(Null),
             },
-            auto_pause: info.auto_pause,
+            auto_stop: info.auto_stop,
             auto_delete: info.auto_delete,
             auto_resume: info.auto_resume,
             health_status,
@@ -268,7 +268,7 @@ mod tests {
             memory_mib: 512,
             network,
             labels: HashMap::new(),
-            auto_pause: 0,
+            auto_stop: 0,
             auto_delete: 0,
             auto_resume: true,
             health_status: HealthStatus::default(),

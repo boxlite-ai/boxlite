@@ -460,8 +460,7 @@ export class BoxController {
   })
   @ApiParam({
     name: 'interval',
-    description:
-      'Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-pause interval.',
+    description: 'Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval.',
     type: 'number',
   })
   @ApiResponse({

@@ -99,7 +99,7 @@ export class CreateBoxDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
-  auto_pause?: number
+  auto_stop?: number
 
   @IsOptional()
   @IsNumber()

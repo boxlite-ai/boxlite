@@ -246,7 +246,7 @@ mod tests {
             memory_mib: 512,
             network: None,
             labels: HashMap::new(),
-            auto_pause: 0,
+            auto_stop: 0,
             auto_delete: 0,
             auto_resume: true,
             health_status: HealthStatus::new(),
