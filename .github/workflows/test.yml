@@ -21,7 +21,7 @@ on:
       - 'src/guest/**'
       - 'sdks/**'
       - 'apps/**'
-      - '!apps/e2e/**' # Stack e2e runs in e2e-stack.yml / e2e-cloud.yml, not this unit matrix.
+      - '!apps/e2e/**' # Stack e2e runs in e2e-cloud.yml, not this unit matrix.
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/test.yml'
