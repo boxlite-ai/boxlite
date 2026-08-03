@@ -145,9 +145,12 @@ jobs:
           archive=$(find /tmp/c-sdk -maxdepth 1 -name 'boxlite-c-v*-linux-x64-gnu.tar.gz' -print -quit)
           test -n "$archive"
           tar xzf "$archive" -C /tmp/
-          library=$(find /tmp -path '*/lib/libboxlite.a' -print -quit)
-          test -n "$library"
-          cp "$library" sdks/go/libboxlite.a
+          # Derived, not searched. build-c.yml packages a single top-level directory named after
+          # the archive, which is what the release branch above already assumes. Searching /tmp
+          # instead walks root-owned siblings (snap-private-tmp, systemd-private-*), and find then
+          # returns non-zero for the permission errors even when it matched — which under `set -e`
+          # failed this step with the library sitting right there.
+          cp "/tmp/$(basename "$archive" .tar.gz)/lib/libboxlite.a" sdks/go/libboxlite.a
 
       - name: Rewrite go.work for minimal modules
         run: |

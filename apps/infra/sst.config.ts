@@ -394,28 +394,37 @@ export default $config({
     const otelCollectorOtlpHttpUrl = stripTrailingSlash(otelCollector.url).apply((url) => `${url}:${PORTS.OTLP_HTTP}`)
 
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────
-    // Where the Api image comes from. `build` — the default, and everything this stack did
-    // before — has SST build apps/api/Dockerfile from the deployed checkout. `release` deploys
-    // the image published for a version instead, so a release promotes the exact artifact that
-    // was tested rather than rebuilding one that merely shares its commit. SST hands an image
-    // string straight to the task definition (normalizeImage, sst/platform fargate component),
-    // so the two modes differ only in this expression.
+    // Where the Api image comes from. `release` deploys the image published for a version, so a
+    // release promotes the exact artifact that was tested rather than rebuilding one that merely
+    // shares its commit. `build` deploys the image its own CI job built for the selected commit —
+    // the Runner has always worked that way, and doing it here too means a build deploy installs
+    // bytes that were built once and can be pointed at again, rather than bytes this particular
+    // deploy happened to compile.
+    //
+    // A build with no Api ref means nothing published an Api image for this checkout, so SST
+    // builds apps/api/Dockerfile the way it always did. That is a plain local `npm run deploy`,
+    // and also `npm run runner:build-artifact`, which stages a Runner and sets only the Runner's
+    // ref. deploy-infra.yml publishes both and sets the global one.
+    //
+    // SST hands an image string straight to the task definition (normalizeImage, sst/platform
+    // fargate component), so the modes differ only in this expression.
     //
     // The stage bootstrap template (ci/github-deploy-role.yaml) owns the immutable repository:
-    // an image has to be published before a fresh release-mode stack can consume it, so the
-    // consumer cannot also be responsible for creating its input.
+    // an image has to be published before a fresh stack can consume one, so the consumer cannot
+    // also be responsible for creating its input.
     const apiArtifact = resolveArtifactSource('api')
     const api = new sst.aws.Service('Api', {
       cluster,
       wait: true,
       image:
-        apiArtifact.kind === 'release'
+        apiArtifact.kind === 'release' || apiArtifact.ref
           ? apiImageReference({
               app: $app.name,
               stage: $app.stage,
               accountId,
               region: REGION,
               version: apiArtifact.version,
+              ref: apiArtifact.kind === 'release' ? undefined : apiArtifact.ref,
             })
           : { context: '../..', dockerfile: 'apps/api/Dockerfile' },
       loadBalancer: {

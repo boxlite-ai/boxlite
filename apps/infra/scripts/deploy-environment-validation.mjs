@@ -8,6 +8,7 @@ import { parse } from 'dotenv'
 
 const FORBIDDEN_DEPLOYMENT_KEYS = new Set([
   'ALLOW_DOWNGRADE',
+  'API_ARTIFACT_REF',
   'API_ARTIFACT_SOURCE',
   'AWS_ACCESS_KEY_ID',
   'AWS_CLI_PATH',
@@ -27,6 +28,8 @@ const FORBIDDEN_DEPLOYMENT_KEYS = new Set([
   // downgrade escape hatch the dispatcher left off — would deploy something the run never
   // approved. (VERSION stays allowed: it is the documented local knob, and the workflow's own
   // value already wins over .env.)
+  // The per-component keys win over the global one, so blocking only the global would leave the
+  // redirect this entry exists to prevent wide open.
   'BOXLITE_ARTIFACT_REF',
   'BOXLITE_ARTIFACT_SOURCE',
   'BUILDX_BUILDER',
@@ -36,6 +39,7 @@ const FORBIDDEN_DEPLOYMENT_KEYS = new Set([
   // — requireBuildLocation derives the tarball URL *and* its checksum URL from this single value,
   // so redirecting it verifies an attacker-chosen artifact against an attacker-chosen manifest.
   'RUNNER_ARTIFACT_BUCKET',
+  'RUNNER_ARTIFACT_REF',
   'RUNNER_ARTIFACT_SOURCE',
   'RUNNER_CREATE_ALLOWLIST',
   'SST_BIN_PATH',

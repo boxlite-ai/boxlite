@@ -1,13 +1,14 @@
 name: Deploy stack
 run-name: Deploy ${{ inputs.stage }} stack
 
-# A build deploy sources both deployable components from one commit on main:
+# A build deploy sources both deployable components from one commit on main, each in its own job:
 #
-#   Api    → SST builds apps/api/Dockerfile from that checkout
-#   Runner → Build C SDK → Build Runner Binary → private per-commit S3 object
+#   Api    → Build commit Api image ───────────────→ per-commit ECR tag
+#   Runner → Build C SDK → Build Runner Binary ────→ private per-commit S3 object
 #
-# The final deploy sets one BOXLITE_ARTIFACT_SOURCE=build selector for both. A release deploy uses
-# the other selector and consumes the API image / Runner tarball published for VERSION instead.
+# The two legs share only resolve-ref, so they run side by side. The final deploy sets one
+# BOXLITE_ARTIFACT_SOURCE=build selector for both and compiles neither. A release deploy uses the
+# other selector and consumes the Api image / Runner tarball published for VERSION instead.
 
 on:
   workflow_dispatch:
@@ -67,6 +68,20 @@ jobs:
           }
           echo "sha=$candidate" >> "$GITHUB_OUTPUT"
 
+  build-api:
+    name: Build commit Api image
+    needs: resolve-ref
+    # Nothing here depends on the C SDK, so this runs beside build-c rather than behind it.
+    # The called workflow reaches ECR through OIDC, and a job-level block replaces the
+    # workflow-level one rather than merging with it, so contents: read is restated.
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/build-apps-api-image.yml
+    with:
+      stage: ${{ inputs.stage }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
+
   build-c:
     name: Build commit C SDK
     needs: resolve-ref
@@ -97,7 +112,7 @@ jobs:
 
   deploy:
     name: Deploy ${{ inputs.stage }} stack
-    needs: [resolve-ref, build-runner]
+    needs: [resolve-ref, build-api, build-runner]
     if: github.ref == 'refs/heads/main'
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-24.04

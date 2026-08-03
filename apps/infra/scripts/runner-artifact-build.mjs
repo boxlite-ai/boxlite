@@ -246,8 +246,10 @@ async function main() {
   const options = parseArgs(process.argv)
   const result = await new RunnerArtifactBuilder().execute(options)
   console.log(`staged ${result.archive} (${result.identity}) at ${result.prefix}`)
+  // Runner-scoped, not the global pair: this staged a Runner and nothing else, so the Api keeps
+  // building from the checkout. The global key would point it at a commit image only CI publishes.
   console.log(
-    `BOXLITE_ARTIFACT_SOURCE=build BOXLITE_ARTIFACT_REF=${result.ref} ` + `npm run deploy -- --stage ${result.stage}`,
+    `RUNNER_ARTIFACT_SOURCE=build RUNNER_ARTIFACT_REF=${result.ref} ` + `npm run deploy -- --stage ${result.stage}`,
   )
 }
 

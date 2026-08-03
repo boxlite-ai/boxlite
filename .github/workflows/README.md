@@ -164,10 +164,13 @@ is enabled. The workflow is dormant until repository variable
 Previews or deploys the full stack from one commit already on `main` (current
 `main` by default) on a native AMD64 GitHub runner, for a
 `workflow_dispatch`-selected `stage` (an allowlisted `choice` input, `dev`
-today). The reusable C/Runner workflows produce a Linux AMD64 Runner with
-`<workspace-version>+<sha>` identity and stage it in the stage's private
-commit-keyed S3 path; SST builds the API from the same checkout. Deployment
-safety tests first enforce the Runner lifecycle options. Dispatch defaults to
+today). Each component is built by its own job, and the two legs share only
+`resolve-ref`, so they run side by side: the reusable C/Runner workflows produce
+a Linux AMD64 Runner with `<workspace-version>+<sha>` identity and stage it in
+the stage's private commit-keyed S3 path, while `build-api` calls
+`build-apps-api-image.yml` for the same commit and pushes
+`boxlite-<stage>-api:v<version>-<sha>`. The deploy itself compiles neither.
+Deployment safety tests first enforce the Runner lifecycle options. Dispatch defaults to
 preview-only; `apply=true` repeats the full structured preview and deploys only
 when the Runner safety gate accepts the
 plan. Routine control-plane deployment rejects every Runner create, delete,
@@ -189,14 +192,27 @@ adding it to whichever of those lists should reach it.
 
 ### `build-apps-api-image.yml` / `deploy-release.yml`
 
-`build-apps-api-image.yml` builds the immutable API image once into dev ECR from the
-released tag, then promotes it into another stage by copying that exact manifest
-registry-side, addressed by digest; it never rebuilds. Both operations are
-dispatched from `main`, because a release event runs on a tag ref that the
-branch-scoped deployment Environments block before the job can obtain AWS
-credentials. `deploy-release.yml` accepts one stable `X.Y.Z` for both that API
-image and the matching Runner GitHub Release assets, verifies both before SST
-runs, and compiles neither component.
+`build-apps-api-image.yml` has three operations, all writing immutable tags into
+`boxlite-<stage>-api`:
+
+| Operation | Entry point                | Checks out    | Tag                  | Target        |
+| --------- | -------------------------- | ------------- | -------------------- | ------------- |
+| `commit`  | `workflow_call` only       | the given SHA | `v<version>-<sha>`   | caller's stage |
+| `build`   | dispatch                   | `v<version>`  | `<version>`          | `dev` only    |
+| `promote` | dispatch                   | nothing       | `<version>`          | another stage |
+
+`commit` is how `deploy-infra.yml` builds the API for the commit it deploys; the
+`ref` input is call-only, so no dispatch can tag an image for a commit the
+main-ancestry guard never saw. The two tag shapes cannot collide, which matters
+because the repository is `IMMUTABLE` and a collision would be unrepairable.
+`promote` copies an exact manifest registry-side, addressed by digest, and
+verifies the digest survived; it never rebuilds. The dispatched operations run
+from `main`, because a release event runs on a tag ref that the branch-scoped
+deployment Environments block before the job can obtain AWS credentials.
+
+`deploy-release.yml` accepts one stable `X.Y.Z` for both that API image and the
+matching Runner GitHub Release assets, verifies both before SST runs, and
+compiles neither component.
 
 Required Environment configuration (per stage):
 

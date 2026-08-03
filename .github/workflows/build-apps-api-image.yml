@@ -1,17 +1,22 @@
 name: Build apps/api image
 
-# Release counterpart to the dev checkout build, for apps/api only.
+# Builds the apps/api image, for apps/api only. Three operations:
+#
+#   commit  — called by deploy-infra.yml for the commit being deployed, tagged v<version>-<ref>
+#   build   — dispatched for a release, tagged <version>, into dev
+#   promote — copies a released tag from one stage's repository to another
 #
 # Named per service because it is one of three the stack builds from source — apps/proxy and
 # apps/otel-collector are the others (sst.config.ts) and have no published-image path yet, so a
 # release deploy still compiles them from the deployed checkout. A sibling workflow per service
 # is the intended shape; jaeger/pgadmin/maildev need none, they run pinned public tags.
 #
-# The image is built once into the dev repository, then promoted: promotion copies that exact
-# manifest registry-side, addressed by digest, and verifies the digest survived — it never
-# rebuilds and never round-trips the image through a local daemon. The per-stage repositories are
-# provisioned by apps/infra/ci/github-deploy-role.yaml so a fresh release-mode stack can consume
-# its image without first having to create its own input.
+# A released image is built once into the dev repository, then promoted: promotion copies that
+# exact manifest registry-side, addressed by digest, and verifies the digest survived — it never
+# rebuilds and never round-trips the image through a local daemon. A commit build has nothing to
+# promote; it writes straight into the stage being deployed. The per-stage repositories are
+# provisioned by apps/infra/ci/github-deploy-role.yaml so a fresh stack can consume an image
+# without first having to create its own input.
 #
 # `build` is dispatched from main rather than triggered by the release event. A release event
 # runs on a tag ref, and the deployment Environments that hold the AWS role are branch-scoped, so
@@ -19,6 +24,19 @@ name: Build apps/api image
 # keeps the same main-only rule the two deploy workflows enforce.
 
 on:
+  # How deploy-infra.yml builds the Api for the commit it is deploying, as a job beside build-c
+  # rather than as work buried inside `sst deploy`. Same repository, same immutable-tag rules; the
+  # tag carries the ref, so a commit build can never collide with what a release promotes.
+  workflow_call:
+    inputs:
+      stage:
+        description: 'Stage whose repository receives the image.'
+        required: true
+        type: string
+      ref:
+        description: 'Full SHA to build. Selects commit mode; tags the image v<version>-<ref>.'
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       operation:
@@ -67,10 +85,12 @@ jobs:
     timeout-minutes: 60
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
-      OPERATION: ${{ inputs.operation }}
+      # `ref` is the workflow_call-only input, so its presence is what selects commit mode.
+      OPERATION: ${{ inputs.ref && 'commit' || inputs.operation }}
       TARGET_STAGE: ${{ inputs.stage || 'dev' }}
       SOURCE_STAGE: ${{ inputs.source_stage || 'dev' }}
       INPUT_VERSION: ${{ inputs.version }}
+      INPUT_REF: ${{ inputs.ref }}
 
     steps:
       # The release tag, not main's tip: a build must contain exactly the released source.
@@ -79,6 +99,15 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: refs/tags/v${{ inputs.version }}
+          persist-credentials: false
+
+      # The caller resolved this and proved it is a commit on main (deploy-infra.yml resolve-ref);
+      # the operation guard below re-checks its shape rather than trusting the input's provenance.
+      - name: Checkout the selected commit
+        if: inputs.ref != ''
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       - name: Verify native AMD64 Docker
@@ -97,8 +126,24 @@ jobs:
           [[ "$SOURCE_STAGE" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { echo "invalid source stage '$SOURCE_STAGE'" >&2; exit 1; }
 
           operation="$OPERATION"
-          version="$INPUT_VERSION"
-          case "$operation" in build | promote) ;; *) echo "invalid operation '$operation'" >&2; exit 1 ;; esac
+          case "$operation" in
+            build | promote | commit) ;;
+            *) echo "invalid operation '$operation'" >&2; exit 1 ;;
+          esac
+
+          if [ "$operation" = commit ]; then
+            # A commit build carries the version its own source declares — there is no input to
+            # disagree with, and the tag has to name the Cargo version that commit compiled for
+            # the same reason the Runner's tarball name does.
+            [[ "$INPUT_REF" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "ref must be a full lowercase commit sha (got '$INPUT_REF')" >&2
+              exit 1
+            }
+            version=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          else
+            version="$INPUT_VERSION"
+          fi
+
           [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
             echo "version must be a stable X.Y.Z (got '$version')" >&2
             exit 1
@@ -120,8 +165,19 @@ jobs:
             echo "source_stage and stage must differ for a promotion" >&2
             exit 1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "operation=$operation" >> "$GITHUB_OUTPUT"
+
+          # The one identity everything downstream addresses. Must equal apiImageTag() in
+          # apps/infra/scripts/api-artifact.mjs, which is what the deploy resolves to.
+          if [ "$operation" = commit ]; then
+            tag="v${version}-${INPUT_REF}"
+          else
+            tag="$version"
+          fi
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "operation=$operation"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v4
@@ -144,7 +200,7 @@ jobs:
         id: target
         shell: bash
         env:
-          VERSION: ${{ steps.artifact.outputs.version }}
+          TAG: ${{ steps.artifact.outputs.tag }}
           OPERATION: ${{ steps.artifact.outputs.operation }}
         run: |
           set -euo pipefail
@@ -157,19 +213,21 @@ jobs:
           if [ "$OPERATION" = promote ]; then
             source_name="boxlite-${SOURCE_STAGE}-api"
             source_digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$source_name" \
-              --image-ids "imageTag=$VERSION" --query 'imageDetails[0].imageDigest' --output text) || {
-                echo "$source_name:$VERSION has not been published" >&2
+              --image-ids "imageTag=$TAG" --query 'imageDetails[0].imageDigest' --output text) || {
+                echo "$source_name:$TAG has not been published" >&2
                 exit 1
               }
           fi
           target_digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$target_name" \
-            --image-ids "imageTag=$VERSION" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)
+            --image-ids "imageTag=$TAG" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)
           if [ -n "$target_digest" ] && [ "$target_digest" != None ]; then
             if [ "$OPERATION" = promote ] && [ "$target_digest" != "$source_digest" ]; then
-              echo "$target_name:$VERSION exists with digest $target_digest, not source digest $source_digest" >&2
+              echo "$target_name:$TAG exists with digest $target_digest, not source digest $source_digest" >&2
               exit 1
             fi
-            echo "$target_name:$VERSION is already published; leaving it untouched"
+            # Re-running a build deploy for a commit already published is the normal case, not an
+            # error: the tag is immutable, so the bytes under it are the ones this deploy wants.
+            echo "$target_name:$TAG is already published; leaving it untouched"
             echo "needed=false" >> "$GITHUB_OUTPUT"
           else
             echo "needed=true" >> "$GITHUB_OUTPUT"
@@ -177,22 +235,23 @@ jobs:
           echo "source_digest=$source_digest" >> "$GITHUB_OUTPUT"
           echo "target_repository=$target_name" >> "$GITHUB_OUTPUT"
 
-      - name: Build released image once
-        if: steps.target.outputs.needed == 'true' && steps.artifact.outputs.operation == 'build'
+      - name: Build the image once
+        if: steps.target.outputs.needed == 'true' && steps.artifact.outputs.operation != 'promote'
         shell: bash
         env:
           VERSION: ${{ steps.artifact.outputs.version }}
+          TAG: ${{ steps.artifact.outputs.tag }}
           TARGET: ${{ steps.ecr.outputs.target }}
         run: |
           set -euo pipefail
-          docker build --file apps/api/Dockerfile --build-arg "VERSION=$VERSION" --tag "$TARGET:$VERSION" .
-          docker push "$TARGET:$VERSION"
+          docker build --file apps/api/Dockerfile --build-arg "VERSION=$VERSION" --tag "$TARGET:$TAG" .
+          docker push "$TARGET:$TAG"
 
       - name: Promote the exact published image
         if: steps.target.outputs.needed == 'true' && steps.artifact.outputs.operation == 'promote'
         shell: bash
         env:
-          VERSION: ${{ steps.artifact.outputs.version }}
+          TAG: ${{ steps.artifact.outputs.tag }}
           SOURCE: ${{ steps.ecr.outputs.source }}
           TARGET: ${{ steps.ecr.outputs.target }}
           TARGET_REPOSITORY: ${{ steps.target.outputs.target_repository }}
@@ -213,9 +272,9 @@ jobs:
           # The source is addressed by digest for the same reason the copy must not re-serialize:
           # the tag could move between the check above and this copy.
           docker buildx imagetools create --prefer-index=false \
-            --tag "$TARGET:$VERSION" "$SOURCE@$SOURCE_DIGEST"
+            --tag "$TARGET:$TAG" "$SOURCE@$SOURCE_DIGEST"
           promoted=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$TARGET_REPOSITORY" \
-            --image-ids "imageTag=$VERSION" --query 'imageDetails[0].imageDigest' --output text)
+            --image-ids "imageTag=$TAG" --query 'imageDetails[0].imageDigest' --output text)
           if [ "$promoted" != "$SOURCE_DIGEST" ]; then
             echo "promotion changed the digest ($SOURCE_DIGEST -> $promoted); the image is not the published one" >&2
             exit 1

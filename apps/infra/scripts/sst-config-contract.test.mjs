@@ -243,6 +243,10 @@ test('the Api deploys either a published image or a build of the deployed checko
 
   assert.match(liveConfig, /const \{ resolveArtifactSource \} = await import\('\.\/scripts\/artifact-source\.mjs'\)/)
   assert.match(apiService, /apiArtifact\.kind === 'release'/)
+  // Three outcomes, not two: a release tag, a commit tag, and — only when no ref was resolved —
+  // the local build context. Losing the `|| apiArtifact.ref` arm would silently put CI back to
+  // compiling the Api inside `sst deploy` while its build job still published an image.
+  assert.match(apiService, /apiArtifact\.kind === 'release' \|\| apiArtifact\.ref/)
   // The reference is built by the shared helper, which validates the repository name, rather
   // than re-derived here where a bad stage would only surface as an AWS error mid-deploy.
   assert.match(liveConfig, /const \{ apiImageReference \} = await import\('\.\/scripts\/api-artifact\.mjs'\)/)
@@ -255,6 +259,9 @@ test('the Api deploys either a published image or a build of the deployed checko
     /accountId/,
     /region: REGION/,
     /version: apiArtifact\.version/,
+    // A release names a bare version; passing its ref through would look up a tag that only a
+    // commit build ever pushes, and the preflight would refuse a perfectly good release.
+    /ref: apiArtifact\.kind === 'release' \? undefined : apiArtifact\.ref/,
   ]) {
     assert.match(imageReference, argument)
   }

@@ -66,10 +66,14 @@ test('SST deploy verifies the selected Runner artifact before invoking SST', () 
   const preflightIndex = source.indexOf('await verifyRunnerArtifact(')
   const sstIndex = source.indexOf('await withPulumiEventLogCleanup(')
 
-  assert.match(source, /requireCheckoutMatchesArtifactRef, resolveArtifactSource \} from '\.\/artifact-source\.mjs'/)
+  assert.match(source, /requireCheckoutMatchesArtifactRefs, resolveArtifactSource \} from '\.\/artifact-source\.mjs'/)
   // The import is not the behavior: commenting the call out leaves the import, and a build deploy
-  // would then ship the Api from this checkout while the Runner is addressed by a stale ref.
-  assertLiveLine(source, /requireCheckoutMatchesArtifactRef\(apiSource\.ref\)/)
+  // would then ship the Proxy and the OtelCollector from this checkout while the Api and the
+  // Runner are addressed by a ref that names a different commit.
+  //
+  // Both sources, not one: a Runner-only build addresses no Api ref, so passing `apiSource` alone
+  // would skip the check for exactly the deploy `npm run runner:build-artifact` produces.
+  assertLiveLine(source, /requireCheckoutMatchesArtifactRefs\(\[apiSource, runnerSource\]\)/)
   assert.match(source, /verifyRunnerArtifact \} from '\.\/runner-artifact\.mjs'/)
   assert.match(source, /const runnerSource = resolveArtifactSource\('runner'/)
   assert.notEqual(preflightIndex, -1, 'the Runner artifact preflight is missing')
@@ -108,16 +112,19 @@ test('preview and deploy use the mandatory local Runner policy', () => {
   assert.equal(packageLock.packages[''].devDependencies['@pulumi/policy'], '1.21.0')
 })
 
-test('SST deploy verifies a selected API release image before invoking SST', () => {
+test('SST deploy verifies the selected API image before invoking SST', () => {
   // Over live source: unlike the Runner preflight, nothing executes this path in a test, so a
   // commented-out call would otherwise leave both indices and the ordering intact.
   const source = liveText('script', readFileSync(SST_WRAPPER, 'utf8'))
-  const preflightIndex = source.indexOf('const image = verifyApiReleaseImage(')
+  const preflightIndex = source.indexOf('const image = verifyApiImage(')
   const sstIndex = source.indexOf('await withPulumiEventLogCleanup(')
 
   assert.match(source, /const apiSource = resolveArtifactSource\('api'\)/)
-  assert.notEqual(preflightIndex, -1, 'the API release image preflight is missing')
+  assert.notEqual(preflightIndex, -1, 'the API image preflight is missing')
   assert.ok(preflightIndex < sstIndex, 'SST may run before the selected API image is known to exist')
+  // Both published sources go through it. Gating on release alone would let a build deploy name a
+  // commit tag nothing ever pushed, and discover it when the ECS task fails to pull.
+  assertLiveLine(source, /if \(apiSource\.kind === 'release' \|\| apiSource\.ref\) \{/)
 })
 
 test('SST deploy does not depend on a laptop-managed remote builder', () => {
@@ -186,6 +193,13 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.equal(workflow.jobs['build-runner'].uses, './.github/workflows/build-runner-binary.yml')
   assert.equal(workflow.jobs['build-runner'].with.libboxlite_source, 'artifact')
   assert.equal(workflow.jobs['build-runner'].with.ref, '${{ needs.resolve-ref.outputs.sha }}')
+  assert.equal(workflow.jobs['build-api'].uses, './.github/workflows/build-apps-api-image.yml')
+  assert.equal(workflow.jobs['build-api'].with.ref, '${{ needs.resolve-ref.outputs.sha }}')
+  assert.equal(workflow.jobs['build-api'].with.stage, '${{ inputs.stage }}')
+
+  // The Api leg links against nothing the C SDK produces. Adding build-c to its `needs` would
+  // still deploy the right bytes, just serialized behind a Rust compile it never reads.
+  assert.deepEqual(workflow.jobs['build-api'].needs, 'resolve-ref')
 
   // Both components resolve to the one commit the build jobs actually produced. The stage secret
   // cannot redirect that: deploy-environment-validation.mjs rejects the selector keys outright.
@@ -193,7 +207,9 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
     assert.equal(workflow.jobs.deploy.env[selector], 'build', `${selector} must be set on the deploy job`)
   }
   assert.equal(workflow.jobs.deploy.env.BOXLITE_ARTIFACT_REF, '${{ needs.resolve-ref.outputs.sha }}')
-  assert.deepEqual(workflow.jobs.deploy.needs, ['resolve-ref', 'build-runner'])
+  // Both build legs, not just the Runner's. Dropping build-api would let the deploy resolve a
+  // commit image tag whose build had not finished — or never ran — and fail on the pull.
+  assert.deepEqual(workflow.jobs.deploy.needs, ['resolve-ref', 'build-api', 'build-runner'])
   const versionStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Resolve commit version')
   assert.ok(versionStep, 'the commit-version step is missing')
   assertShellLine(versionStep.run, /echo "VERSION=\$version" >> "\$GITHUB_ENV"/)
@@ -382,6 +398,16 @@ test('commit Runner builds consume the C SDK artifact from the same reusable run
     runnerStepRun('Build runner'),
     /github\.com\/boxlite-ai\/runner\/internal\.Version=\$\{VERSION_IDENTITY\}/,
   )
+
+  // The extracted library is addressed, not hunted for. Searching /tmp walks root-owned siblings
+  // (snap-private-tmp, systemd-private-*); find then reports those permission errors in its exit
+  // status even when it matched, and `set -e` failed the step with the library already on disk.
+  // build-c.yml packages one top-level directory named after the archive, which is the same
+  // assumption the `release` branch of this step has always made.
+  const extractRun = runnerStepRun('Extract commit libboxlite.a')
+  assert.ok(extractRun, 'the commit libboxlite.a extraction step is missing')
+  assertShellLine(extractRun, /cp "\/tmp\/\$\(basename "\$archive" \.tar\.gz\)\/lib\/libboxlite\.a" sdks\/go\/libboxlite\.a/)
+  assert.doesNotMatch(liveShell(extractRun), /find \/tmp\b(?!\/c-sdk)/, 'the library must not be searched for under /tmp')
 })
 
 test('release deployment consumes one published version for both components', () => {
@@ -440,19 +466,29 @@ test('the deployment workflows cap the token they hand their jobs', () => {
     const workflow = load(readFileSync(join(REPO_ROOT, '.github/workflows', entry), 'utf8'))
     assert.equal(workflow.permissions?.contents, 'read', `${entry} must default its token to contents: read`)
 
-    // A job may raise its own, but only deliberately. Two reasons appear here:
+    // A job may raise its own, but only deliberately, and only the scope it has a reason for —
+    // by scope rather than by job, so a job that already has one reason to raise cannot pick up
+    // an unrelated second one unnoticed:
     //   upload-to-release — actually writes (uploads release assets)
     //   build-c / build-runner — write nothing; they call a workflow whose release-upload job
     //     declares contents: write (see the caller-grant test below). Granting per job rather
     //     than at the top keeps `deploy` at contents: read.
-    const expectedWriters = new Set(['upload-to-release', 'build-c', 'build-runner'])
+    //   build-api — calls a workflow that assumes an AWS role through OIDC. A job-level block
+    //     replaces the workflow-level one, so it restates id-token rather than inheriting it.
+    const expectedWriters = {
+      'upload-to-release': ['contents'],
+      'build-c': ['contents'],
+      'build-runner': ['contents'],
+      'build-api': ['id-token'],
+    }
     for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
       if (!job.permissions) continue
-      const raised = Object.entries(job.permissions).filter(([, level]) => level === 'write')
-      assert.ok(
-        raised.length === 0 || expectedWriters.has(jobName),
-        `${entry} job '${jobName}' raises ${JSON.stringify(raised)} without being an expected writer`,
-      )
+      const raised = Object.entries(job.permissions)
+        .filter(([, level]) => level === 'write')
+        .map(([scope]) => scope)
+      const allowed = expectedWriters[jobName] ?? []
+      const unexpected = raised.filter((scope) => !allowed.includes(scope))
+      assert.deepEqual(unexpected, [], `${entry} job '${jobName}' raises ${JSON.stringify(unexpected)} without a reason`)
     }
   }
 })
@@ -578,7 +614,18 @@ test('API publishing builds once and promotes that exact image without rebuildin
   // before the job can reach its AWS role — so publishing is dispatched from main instead.
   // Read the parsed trigger: `on:` and `"on":` are the same key, and only one is greppable.
   assert.equal(workflow.on.release, undefined, 'publishing must not trigger on a release event')
-  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch'])
+  assert.deepEqual(Object.keys(workflow.on), ['workflow_call', 'workflow_dispatch'])
+
+  // Commit mode: how deploy-infra.yml builds the Api for the commit it deploys. `ref` is what
+  // selects it, so it has to be call-only — a dispatch that could set it would let someone tag an
+  // image for a commit the main-ancestry guard never saw.
+  assert.deepEqual(Object.keys(workflow.on.workflow_call.inputs).sort(), ['ref', 'stage'])
+  assert.equal(workflow.on.workflow_dispatch.inputs.ref, undefined)
+  assert.equal(workflow.on.workflow_call.inputs.ref.required, true)
+  assert.equal(workflow.on.workflow_call.inputs.stage.required, true)
+  const commitCheckout = workflow.jobs.publish.steps.find((step) => step.name === 'Checkout the selected commit')
+  assert.ok(commitCheckout, 'the commit checkout step is missing')
+  assert.equal(commitCheckout.with.ref, '${{ inputs.ref }}')
   // The build must compile the release tag, not whatever main points at now — read it off the
   // parsed step, since a commented-out `ref:` still satisfies a substring match.
   const releaseCheckout = workflow.jobs.publish.steps.find((step) => step.name === 'Checkout the released tag')
@@ -594,10 +641,16 @@ test('API publishing builds once and promotes that exact image without rebuildin
   const resolveRun = workflow.jobs.publish.steps.find((step) => step.name === 'Resolve publish operation')?.run ?? ''
   assertShellLine(resolveRun, /tag v\$version declares Cargo\.toml version/)
   assertShellLine(resolveRun, /builds always land in dev/)
+  // The one string the deploy has to agree with. apiImageTag() in api-artifact.mjs derives the
+  // reference SST is handed; if these two drift the deploy resolves a tag nothing ever pushed and
+  // only finds out when the ECS task fails to pull. api-artifact.test.mjs pins the other half.
+  assertShellLine(resolveRun, /tag="v\$\{version\}-\$\{INPUT_REF\}"/)
+  // A ref that is not a full lowercase sha would tag an image nobody can address again.
+  assertShellLine(resolveRun, /\[\[ "\$INPUT_REF" =~ \^\[0-9a-f\]\{40\}\$ \]\]/)
   // "builds once and promotes that exact image" is a property of *which step* compiles. Matched
   // against the whole file, moving `docker build` into the promote step reads as unchanged.
   const stepRun = (name) => workflow.jobs.publish.steps.find((step) => step.name === name)?.run ?? ''
-  const buildRun = stepRun('Build released image once')
+  const buildRun = stepRun('Build the image once')
   const promoteRun = stepRun('Promote the exact published image')
   assertShellLine(buildRun, /docker build --file apps\/api\/Dockerfile/)
   // A registry-side manifest copy, not a daemon round-trip: pull + tag + push re-uploads the
@@ -605,7 +658,7 @@ test('API publishing builds once and promotes that exact image without rebuildin
   // By digest, not by tag: the source tag can move between the check above and this copy, and a
   // comparison afterwards would only notice once the wrong image was already published.
   assertShellLine(promoteRun, /docker buildx imagetools create --prefer-index=false/)
-  assertShellLine(promoteRun, /--tag "\$TARGET:\$VERSION" "\$SOURCE@\$SOURCE_DIGEST"/)
+  assertShellLine(promoteRun, /--tag "\$TARGET:\$TAG" "\$SOURCE@\$SOURCE_DIGEST"/)
   // Over the live shell: the comment above the copy names the `docker build`/`docker push` pair
   // it exists to explain, and a mention in a comment is not a rebuild. Both intervening tokens
   // are spelled out rather than excluded by a trailing space — the step already invokes `docker

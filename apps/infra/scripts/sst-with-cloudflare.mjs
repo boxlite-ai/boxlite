@@ -46,8 +46,8 @@ import {
   verifyProxyDeploymentWithRetry,
   verifyPublicDeploymentWithRetry,
 } from './proxy-deployment-verify.mjs'
-import { verifyApiReleaseImage } from './api-artifact.mjs'
-import { requireCheckoutMatchesArtifactRef, resolveArtifactSource } from './artifact-source.mjs'
+import { verifyApiImage } from './api-artifact.mjs'
+import { requireCheckoutMatchesArtifactRefs, resolveArtifactSource } from './artifact-source.mjs'
 import { resolveAwsAccountId, runnerArtifactsBucketName, verifyRunnerArtifact } from './runner-artifact.mjs'
 import { readRunnerStateBaseline } from './runner-policy-baseline.mjs'
 import { resolveSstExecutable } from './sst-executable.mjs'
@@ -222,26 +222,32 @@ if (sstArgs[0] === 'deploy') {
     const signal = artifactPreflightAbortController.signal
 
     const apiSource = resolveArtifactSource('api')
-    if (apiSource.kind === 'release') {
-      const image = verifyApiReleaseImage(
-        { app: APP, stage, region: REGION, version: apiSource.version },
+    const runnerSource = resolveArtifactSource('runner')
+    // Across both components, before either is verified. The Proxy and the OtelCollector are built
+    // from this checkout on every path, so any ref that is not the checkout deploys two commits —
+    // and nothing downstream would notice: the staged Runner object still verifies and the
+    // post-deploy check only reads X.Y.Z. Checking one component's ref would miss the deploy that
+    // addresses only the other, which is what `npm run runner:build-artifact` produces.
+    requireCheckoutMatchesArtifactRefs([apiSource, runnerSource])
+
+    if (apiSource.kind === 'release' || apiSource.ref) {
+      const image = verifyApiImage(
+        {
+          app: APP,
+          stage,
+          region: REGION,
+          version: apiSource.version,
+          ref: apiSource.kind === 'release' ? undefined : apiSource.ref,
+        },
         { awsCliPath: resolveAwsCliPath() },
       )
       console.log(
-        `sst-with-cloudflare: Api release image verified (${image.repository}:${apiSource.version}, ${image.digest})`,
+        `sst-with-cloudflare: Api ${apiSource.kind} image verified (${image.repository}:${image.tag}, ${image.digest})`,
       )
-    } else if (apiSource.ref) {
-      // A build deploy promises one commit for both components, but SST builds the Api image
-      // from this checkout while the Runner is addressed by ref. Nothing downstream compares
-      // them: the staged object still verifies, and the post-deploy check only reads X.Y.Z. So
-      // a ref staged before an unrelated checkout switch would silently deploy two commits.
-      requireCheckoutMatchesArtifactRef(apiSource.ref)
     }
-
     // Verify whichever artifact this deploy actually resolved to, not always the published
     // release: a build-mode deploy 404-ing on the host is the failure this preflight exists to
     // prevent, and it would sail straight through a release-only check.
-    const runnerSource = resolveArtifactSource('runner')
     const artifactEnvironment =
       runnerSource.kind === 'build'
         ? {

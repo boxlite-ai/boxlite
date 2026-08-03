@@ -36,6 +36,10 @@ test('rejects every forbidden workflow override', () => {
     'API_ARTIFACT_SOURCE=release',
     'BOXLITE_ARTIFACT_REF=0123456789abcdef0123456789abcdef01234567',
     'BOXLITE_ARTIFACT_SOURCE=release',
+    // The per-component refs win over the global one, so blocking only BOXLITE_ARTIFACT_REF
+    // would leave a stage secret able to redirect the very selector that entry protects.
+    'API_ARTIFACT_REF=0123456789abcdef0123456789abcdef01234567',
+    'RUNNER_ARTIFACT_REF=0123456789abcdef0123456789abcdef01234567',
     'RUNNER_ARTIFACT_BUCKET=attacker-controlled-bucket',
     'RUNNER_ARTIFACT_SOURCE=release',
     'BUILDX_BUILDER=laptop-builder',

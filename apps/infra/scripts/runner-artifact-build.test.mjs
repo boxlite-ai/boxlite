@@ -2,7 +2,7 @@
 // Copyright (c) 2026 BoxLite AI
 
 import assert from 'node:assert/strict'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
@@ -169,4 +169,15 @@ test('the repository root is resolved from this module, not the caller working d
   // The anchor itself, not merely "some cwd": process.cwd() would satisfy a truthiness check
   // while reintroducing exactly the nested-repository hazard this pins.
   assert.equal(toplevel.options.cwd, fileURLToPath(new URL('.', import.meta.url)))
+})
+
+test('the printed next step scopes the ref to the Runner it just staged', () => {
+  // This stages a Runner and nothing else. Printing the global BOXLITE_ARTIFACT_REF would also
+  // point the Api at boxlite-<stage>-api:v<version>-<sha> — a tag only deploy-infra.yml pushes —
+  // and the deploy would be refused at preflight with no image the developer could produce.
+  // Read from source: main() runs only as a script, so nothing here can execute it.
+  const source = readFileSync(fileURLToPath(new URL('./runner-artifact-build.mjs', import.meta.url)), 'utf8')
+  const printed = source.slice(source.indexOf('console.log(\n'))
+  assert.match(printed, /RUNNER_ARTIFACT_SOURCE=build RUNNER_ARTIFACT_REF=\$\{result\.ref\}/)
+  assert.doesNotMatch(printed, /BOXLITE_ARTIFACT_(SOURCE|REF)/)
 })

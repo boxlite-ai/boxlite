@@ -119,26 +119,39 @@ for which path currently reaches which stage.
 
 Both deployable components use one source selector:
 
-| Mode      | API                                                       | Runner                                                           |
-| --------- | --------------------------------------------------------- | ---------------------------------------------------------------- |
-| `build`   | SST builds `apps/api/Dockerfile` from the selected commit | CI builds that commit and stages a private S3 tarball + checksum |
-| `release` | immutable `boxlite-<stage>-api:<version>` in ECR          | GitHub Release tarball + checksum for the same `<version>`       |
+| Mode      | API                                                        | Runner                                                           |
+| --------- | ---------------------------------------------------------- | ---------------------------------------------------------------- |
+| `build`   | immutable `boxlite-<stage>-api:v<version>-<sha>` in ECR    | CI builds that commit and stages a private S3 tarball + checksum |
+| `release` | immutable `boxlite-<stage>-api:<version>` in ECR           | GitHub Release tarball + checksum for the same `<version>`       |
+
+Both modes hand SST an image reference, so no deploy compiles the API. The one
+exception is a build with no API ref — set neither `BOXLITE_ARTIFACT_REF` nor
+`API_ARTIFACT_REF` and nothing was published for that checkout, so SST builds
+`apps/api/Dockerfile` as before. That is a plain local `npm run deploy`, and also
+`npm run runner:build-artifact`, which stages a Runner and sets only the Runner's
+ref. Whatever refs *are* set must equal the checkout: the Proxy and the
+OtelCollector are built from it on every path, so a ref naming another commit
+would deploy two.
 
 `.github/workflows/deploy-infra.yml` is the normal path. It accepts the full SHA
-of any commit already on `main` (current `main` by default), builds the Linux x64
-C SDK and Runner, stages the commit-keyed Runner object, then has SST build the
-API from the same checkout. The Runner reports `<workspace-version>+<sha>` so two
-commits with the same Cargo version are still distinct upgrade targets.
+of any commit already on `main` (current `main` by default) and builds each
+component in its own job — the Linux x64 C SDK and Runner on one leg, the API
+image on the other, sharing only the ref resolution — then stages the
+commit-keyed Runner object and deploys both. The Runner reports
+`<workspace-version>+<sha>` so two commits with the same Cargo version are still
+distinct upgrade targets; the API tag carries the same pair.
 
 `.github/workflows/deploy-release.yml` is the release path. It sets one stable
 `VERSION=X.Y.Z` for both components and compiles neither. The deploy wrapper
 verifies the ECR image and Runner release assets before invoking SST.
 
-`build-apps-api-image.yml` builds a released API image once into dev (checking out
-the release tag), then promotes it by copying that exact manifest registry-side,
-addressed by digest, rather than rebuilding. Both operations are dispatched from
-`main`: a release event runs on a tag ref, and the deployment Environments that
-hold the AWS role are branch-scoped, so a tag-triggered job never reaches its
+`build-apps-api-image.yml` is where every API image is built. `deploy-infra.yml`
+calls it for the commit being deployed (`v<version>-<sha>`, into that stage);
+dispatching it with `operation=build` builds a released tag once into dev, and
+`operation=promote` copies that exact manifest registry-side, addressed by
+digest, rather than rebuilding. The dispatched operations run from `main`: a
+release event runs on a tag ref, and the deployment Environments that hold the
+AWS role are branch-scoped, so a tag-triggered job never reaches its
 credentials.
 
 Either path first runs deployment safety tests that require every Runner to

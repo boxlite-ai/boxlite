@@ -23,6 +23,13 @@
  *   API_ARTIFACT_SOURCE       release|build, Api only — wins over the global
  *   RUNNER_ARTIFACT_SOURCE    release|build, Runner only — wins over the global
  *   BOXLITE_ARTIFACT_REF      the commit build-mode artifacts were produced from
+ *   API_ARTIFACT_REF          that commit, Api only — wins over the global
+ *   RUNNER_ARTIFACT_REF       that commit, Runner only — wins over the global
+ *
+ * A ref is per-component for the same reason a source is: publishing is not atomic across the
+ * two. CI publishes both for one commit and sets the global key; `npm run runner:build-artifact`
+ * stages only a Runner, so it sets the Runner key and leaves the Api building from the checkout.
+ * A build with no ref at all is a plain local deploy with nothing published for either.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -32,12 +39,17 @@ import { readWorkspaceVersion, resolveReleaseVersion } from './deployment-enviro
 
 const COMPONENT_SOURCE_KEYS = { api: 'API_ARTIFACT_SOURCE', runner: 'RUNNER_ARTIFACT_SOURCE' }
 
-// Today's behaviour, component by component: the Api has only ever been built from the deployed
-// checkout, the Runner has only ever been installed from a published release.
+// The default each component started with: the Api from the deployed commit, the Runner from a
+// published release. Both are still what an unconfigured deploy gets.
 const COMPONENT_DEFAULT_KINDS = { api: 'build', runner: 'release' }
 
 const GLOBAL_SOURCE_KEY = 'BOXLITE_ARTIFACT_SOURCE'
 const REF_KEY = 'BOXLITE_ARTIFACT_REF'
+// The same component-wins-over-global rule the source keys follow. It exists because the two
+// components' build artifacts are produced by different things: CI publishes both for one commit
+// and sets the global key, while `npm run runner:build-artifact` stages only a Runner and has to
+// say so — otherwise the Api would resolve a commit image that local build never pushed.
+const COMPONENT_REF_KEYS = { api: 'API_ARTIFACT_REF', runner: 'RUNNER_ARTIFACT_REF' }
 const ARTIFACT_KINDS = ['release', 'build']
 // Full Git object names only. CI and the local builder key objects by `git rev-parse HEAD`; accepting
 // an abbreviation here would address a different S3 key even when it names the same commit.
@@ -52,15 +64,20 @@ function readKind(key, environment) {
   return configured
 }
 
-export function readArtifactRef(environment = process.env) {
-  const configured = environment[REF_KEY]?.trim()
-  if (!configured) return undefined
+// The ref and the key it came from. Callers report the key, so an operator edits the variable
+// that is actually set rather than the global one they may never have touched.
+function artifactRefEntry(environment, component) {
+  const componentKey = component ? COMPONENT_REF_KEYS[component] : undefined
+  const key = componentKey && environment[componentKey]?.trim() ? componentKey : REF_KEY
+  const configured = environment[key]?.trim()
+  if (!configured) return { key, ref: undefined }
   const ref = configured.toLowerCase()
   if (!COMMIT_REF.test(ref)) {
-    throw new Error(`${REF_KEY} must be a full git commit sha (40 hex characters), got '${configured}'`)
+    throw new Error(`${key} must be a full git commit sha (40 hex characters), got '${configured}'`)
   }
-  return ref
+  return { key, ref }
 }
+
 
 // Anchored to this module, not the process working directory: run from a nested repository or a
 // submodule, a bare `git rev-parse HEAD` answers for that repository and the guard below would
@@ -85,21 +102,34 @@ export function requireCleanCheckoutRef({ run = git } = {}) {
   return run(['rev-parse', 'HEAD'], root)
 }
 
-// A build deploy promises one commit for both components, but only the Runner is addressed by
-// ref — SST builds the Api image from whatever this checkout contains. Nothing downstream can
-// catch a mismatch: the staged Runner object still verifies, and the post-deploy check only
-// compares X.Y.Z. So the checkout has to BE the ref, and that is asserted here.
-export function requireCheckoutMatchesArtifactRef(ref, { readHead = requireCleanCheckoutRef } = {}) {
+// A build deploy promises one commit for the whole stack, but only some of it is addressed by
+// ref: the Proxy and the OtelCollector are always built from whatever this checkout contains, and
+// which of the Api and the Runner are ref-addressed depends on which keys are set. Nothing
+// downstream can catch a mismatch — the staged Runner object still verifies, and the post-deploy
+// check only compares X.Y.Z. So every ref this deploy resolved has to BE the checkout.
+//
+// Takes the sources rather than one ref because the caller must not have to decide which
+// component's ref stands in for the rest. Gating on a single component's is what let a
+// Runner-only local deploy install a binary from one commit beside services built from another.
+export function requireCheckoutMatchesArtifactRefs(sources, { readHead = requireCleanCheckoutRef } = {}) {
+  const addressed = sources.filter((source) => source?.ref)
+  if (addressed.length === 0) return
+
   let head
   try {
     head = readHead()
   } catch (error) {
-    throw new Error(`could not read the deployed commit to compare with ${REF_KEY}: ${error.message}`, { cause: error })
+    // No key named here: the refs being compared may have come from any of the three, and this
+    // path does not yet know which one will disagree.
+    throw new Error(`could not read the deployed commit to compare the build refs against: ${error.message}`, {
+      cause: error,
+    })
   }
-  if (head !== ref) {
+  for (const { ref, refKey = REF_KEY } of addressed) {
+    if (head === ref) continue
     throw new Error(
-      `${REF_KEY} is ${ref} but this checkout is ${head}; a build deploy installs the Api from the ` +
-        'checkout and the Runner from the ref, so they must be the same commit',
+      `${refKey} is ${ref} but this checkout is ${head}; a build deploy installs ref-addressed ` +
+        'artifacts and builds the rest of the stack from the checkout, so they must be the same commit',
     )
   }
 }
@@ -127,11 +157,14 @@ export function resolveArtifactSource(
   // it in the S3 filename makes a cross-version ref fail during preflight instead of installing a
   // valid binary whose health identity can never equal the deployer's reconstructed target.
   //
-  // The ref stays optional here because SST builds the Api image straight from the checkout; only
-  // the Runner needs to address an object. resolveRunnerArtifact requires it at that boundary.
+  // The ref stays optional here because a local `npm run deploy` has nothing published to address
+  // and falls back to building the Api from the checkout. Each component requires it at its own
+  // boundary instead: resolveRunnerArtifact always, api-artifact only once a ref is present.
+  const { key: refKey, ref } = artifactRefEntry(environment, component)
   return {
     kind,
-    ref: readArtifactRef(environment),
+    ref,
+    refKey,
     version: resolveReleaseVersion(readVersion(), {}),
   }
 }
