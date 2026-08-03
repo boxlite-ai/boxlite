@@ -247,6 +247,9 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if len(boxDto.Entrypoint) > 0 {
 		opts = append(opts, boxlite.WithEntrypoint(boxDto.Entrypoint...))
 	}
+	if len(boxDto.Cmd) > 0 {
+		opts = append(opts, boxlite.WithCmd(boxDto.Cmd...))
+	}
 
 	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
 	if err != nil {

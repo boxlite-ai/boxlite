@@ -45,6 +45,8 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   createDto.autoPause = dto.auto_pause
   createDto.autoDelete = dto.auto_delete
   createDto.autoResume = dto.auto_resume
+  createDto.entrypoint = dto.entrypoint
+  createDto.cmd = dto.cmd
   if (dto.network) {
     const allowNet = dto.network.allow_net?.map((entry) => entry.trim()).filter(Boolean)
     createDto.networkBlockAll = dto.network.mode === 'disabled'

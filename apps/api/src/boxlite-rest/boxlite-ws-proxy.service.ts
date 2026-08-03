@@ -22,10 +22,11 @@ type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunnerBoxId?: string
 }
 
-// Matches /api/v1/boxes/<id>/executions/<id>/attach and the
-// /api/v1/<tenant>/boxes/<id>/executions/<id>/attach shape with optional query string.
+// Matches both the main-session and execution attach paths, with or without a
+// routing prefix and with an optional query string.
 // Named groups: `tenant` (optional org id / path prefix) and `boxId`.
-const ATTACH_PATH = /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
+const ATTACH_PATH =
+  /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)(?:\/executions\/[^/]+)?\/attach(?:\?.*)?$/
 
 /**
  * Singleton WebSocket proxy for `/attach` upgrades.

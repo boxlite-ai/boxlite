@@ -90,6 +90,8 @@ describe('BoxliteWsProxyService', () => {
     expect(pathRewrite('/api/v1/default/boxes/public-box/executions/exec-1/attach?x=1', req)).toBe(
       '/v1/boxes/box-uuid/executions/exec-1/attach?x=1',
     )
+    expect(pathRewrite('/api/v1/boxes/public-box/attach', req)).toBe('/v1/boxes/box-uuid/attach')
+    expect(pathRewrite('/api/v1/default/boxes/public-box/attach?x=1', req)).toBe('/v1/boxes/box-uuid/attach?x=1')
   })
 
   it('does not upgrade the websocket when strict AutoResume fails', async () => {

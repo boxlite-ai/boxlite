@@ -20,6 +20,50 @@ import pytest
 from conftest import drain
 
 
+async def _get_service_body(box, port: int) -> str:
+    tunnel = await box.network.tunnel(port)
+    connection = await tunnel.connect()
+    try:
+        await connection.write(
+            f"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".encode()
+        )
+        response = bytearray()
+        while chunk := await connection.read(64 * 1024):
+            response.extend(chunk)
+        return response.decode()
+    finally:
+        await connection.close()
+
+
+async def _wait_for_service(box, port: int, marker: str) -> str:
+    deadline = asyncio.get_running_loop().time() + 30
+    last_error = "service did not answer"
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            response = await _get_service_body(box, port)
+            if marker in response:
+                return response
+            last_error = f"marker missing from response: {response[:200]!r}"
+        except (ConnectionError, OSError, RuntimeError, TimeoutError) as error:
+            last_error = f"{type(error).__name__}: {error}"
+        await asyncio.sleep(0.5)
+    raise AssertionError(f"in-box service did not become ready: {last_error}")
+
+
+async def _start_http_service(box, port: int) -> None:
+    result = await box.exec(
+        "sh",
+        [
+            "-lc",
+            f"python3 -u -m http.server {port} --bind 0.0.0.0 "
+            f">/tmp/http-{port}.log 2>&1 & echo $!",
+        ],
+    )
+    _, stderr = await drain(result)
+    status = await result.wait()
+    assert status.exit_code == 0, stderr
+
+
 # ── stop / start preserves data ────────────────────────────────────
 
 
@@ -50,6 +94,37 @@ async def test_stop_start_preserves_rootfs(rt, image):
         rc = await asyncio.wait_for(ex.wait(), timeout=30)
         assert rc.exit_code == 0
         assert "persist-me" in out, f"rootfs data lost after stop/start: {out!r}"
+    finally:
+        try:
+            await rt.remove(b.id, force=True)
+        except Exception:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_stop_start_restarts_main_service(rt, image):
+    """A main-process HTTP service must be reachable again after stop/start."""
+    port = 18083
+    b = await rt.create(
+        boxlite.BoxOptions(
+            image=image,
+            auto_remove=False,
+        )
+    )
+    try:
+        await b.start()
+        await _start_http_service(b, port)
+        first = await _wait_for_service(b, port, "Directory listing")
+        assert "Directory listing" in first
+
+        await b.stop()
+        await asyncio.sleep(2)
+        restarted = await rt.get(b.id)
+        assert restarted is not None
+        await restarted.start()
+
+        second = await _wait_for_service(restarted, port, "Directory listing")
+        assert "Directory listing" in second
     finally:
         try:
             await rt.remove(b.id, force=True)

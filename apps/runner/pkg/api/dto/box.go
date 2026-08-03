@@ -16,6 +16,7 @@ type CreateBoxDTO struct {
 	Env              map[string]string `json:"env,omitempty"`
 	Registry         *RegistryDTO      `json:"registry,omitempty"`
 	Entrypoint       []string          `json:"entrypoint,omitempty"`
+	Cmd              []string          `json:"cmd,omitempty"`
 	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
 	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
 	NetworkAllowList *string           `json:"networkAllowList,omitempty"`

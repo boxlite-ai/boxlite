@@ -228,6 +228,8 @@ export class BoxService {
       box.osUser = createBoxDto.user || 'boxlite'
       box.env = createBoxDto.env || {}
       box.labels = createBoxDto.labels || {}
+      box.entrypoint = createBoxDto.entrypoint
+      box.cmd = createBoxDto.cmd
 
       box.image = image
       box.cpu = cpu
@@ -302,6 +304,8 @@ export class BoxService {
     const updateData: Partial<Box> = {
       public: createBoxDto.public ?? true,
       labels: createBoxDto.labels || {},
+      entrypoint: createBoxDto.entrypoint,
+      cmd: createBoxDto.cmd,
       organizationId: organization.id,
       createdAt: now,
     }

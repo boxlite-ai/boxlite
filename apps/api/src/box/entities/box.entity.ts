@@ -120,6 +120,12 @@ export class Box {
   @Column('jsonb', { nullable: true })
   labels: { [key: string]: string }
 
+  @Column('jsonb', { nullable: true })
+  entrypoint?: string[]
+
+  @Column('jsonb', { nullable: true })
+  cmd?: string[]
+
   @Column({ type: 'int', default: 2 })
   cpu = 2
 

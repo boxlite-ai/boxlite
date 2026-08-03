@@ -259,6 +259,8 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       memoryQuota: box.mem,
       storageQuota: box.disk,
       env: box.env,
+      entrypoint: box.entrypoint,
+      cmd: box.cmd,
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
       metadata,

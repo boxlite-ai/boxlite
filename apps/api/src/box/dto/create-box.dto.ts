@@ -11,6 +11,16 @@ import { BoxVolume } from './box.dto'
 
 @ApiSchema({ name: 'CreateBox' })
 export class CreateBoxDto {
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  entrypoint?: string[]
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  cmd?: string[]
+
   @ApiPropertyOptional({
     description: 'The name of the box. If not provided, the box ID will be used as the name',
     example: 'MyBox',

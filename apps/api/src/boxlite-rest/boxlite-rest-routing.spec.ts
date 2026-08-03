@@ -106,6 +106,11 @@ describe('BoxLite REST routing', () => {
       boxId: 'box-1',
       tenant: 'default',
     })
+    expect(service.matchAttachPath('/api/v1/boxes/box-1/attach')).toEqual({ boxId: 'box-1' })
+    expect(service.matchAttachPath('/api/v1/default/boxes/box-1/attach')).toEqual({
+      boxId: 'box-1',
+      tenant: 'default',
+    })
   })
 
   it('does not route HTTP duplex tunnels through the websocket proxy', () => {
