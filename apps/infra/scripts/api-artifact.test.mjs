@@ -21,10 +21,10 @@ const fakeCli = (result) => {
 }
 
 test('the image reference is the bootstrapped repository, not one the deploy invents', () => {
-  assert.equal(apiImageRepository({ app: 'boxlite', stage: 'dev' }), 'boxlite-dev-api')
+  assert.equal(apiImageRepository({ app: 'boxlite', stage: 'dev' }), 'boxlite-app-dev-api')
   assert.equal(
     apiImageReference({ ...STAGE, accountId: '123456789012' }),
-    '123456789012.dkr.ecr.ap-southeast-1.amazonaws.com/boxlite-dev-api:1.2.3',
+    '123456789012.dkr.ecr.ap-southeast-1.amazonaws.com/boxlite-app-dev-api:1.2.3',
   )
   assert.throws(
     () => apiImageRepository({ app: 'boxlite', stage: 'Feature One' }),
@@ -42,7 +42,7 @@ test('a release names a version and a build names a commit, in the same reposito
   assert.notEqual(apiImageTag({ version: '1.2.3', ref: REF }), apiImageTag({ version: '1.2.3' }))
   assert.equal(
     apiImageReference({ ...STAGE, accountId: '123456789012', ref: REF }),
-    `123456789012.dkr.ecr.ap-southeast-1.amazonaws.com/boxlite-dev-api:v1.2.3-${REF}`,
+    `123456789012.dkr.ecr.ap-southeast-1.amazonaws.com/boxlite-app-dev-api:v1.2.3-${REF}`,
   )
   assert.throws(() => apiImageTag({ version: '1.2.3 4', ref: REF }), /does not produce a valid image tag/)
 })
@@ -50,7 +50,7 @@ test('a release names a version and a build names a commit, in the same reposito
 test('a published tag is confirmed by digest before SST is allowed to run', () => {
   const { calls, run } = fakeCli(`${DIGEST}\n`)
   assert.deepEqual(verifyApiImage(STAGE, { awsCliPath: '/fake/aws', run }), {
-    repository: 'boxlite-dev-api',
+    repository: 'boxlite-app-dev-api',
     tag: '1.2.3',
     digest: DIGEST,
   })
@@ -58,7 +58,7 @@ test('a published tag is confirmed by digest before SST is allowed to run', () =
   assert.equal(calls.length, 1)
   const { args } = calls[0]
   assert.deepEqual(args.slice(0, 2), ['ecr', 'describe-images'])
-  assert.equal(args[args.indexOf('--repository-name') + 1], 'boxlite-dev-api')
+  assert.equal(args[args.indexOf('--repository-name') + 1], 'boxlite-app-dev-api')
   assert.equal(args[args.indexOf('--image-ids') + 1], 'imageTag=1.2.3')
   assert.equal(args[args.indexOf('--region') + 1], 'ap-southeast-1')
 })
@@ -68,7 +68,7 @@ test('a commit image is looked up by its own tag, not the bare version', () => {
   // confirm an image that exists and deploy a different one that may not.
   const { calls, run } = fakeCli(`${DIGEST}\n`)
   assert.deepEqual(verifyApiImage({ ...STAGE, ref: REF }, { awsCliPath: '/fake/aws', run }), {
-    repository: 'boxlite-dev-api',
+    repository: 'boxlite-app-dev-api',
     tag: `v1.2.3-${REF}`,
     digest: DIGEST,
   })
@@ -81,7 +81,7 @@ test('an absent tag is refused even though the CLI exits zero', () => {
   for (const empty of ['None\n', '', '   ']) {
     assert.throws(
       () => verifyApiImage(STAGE, { awsCliPath: '/fake/aws', run: fakeCli(empty).run }),
-      /boxlite-dev-api:1\.2\.3 is unavailable: no image digest was returned/,
+      /boxlite-app-dev-api:1\.2\.3 is unavailable: no image digest was returned/,
     )
   }
 })
@@ -90,10 +90,10 @@ test('a failed lookup names the repository and tag it could not resolve', () => 
   const denied = Object.assign(new Error('exited 254'), { stderr: 'AccessDeniedException' })
   assert.throws(
     () => verifyApiImage(STAGE, { awsCliPath: '/fake/aws', run: fakeCli(denied).run }),
-    /Api image boxlite-dev-api:1\.2\.3 is unavailable: AccessDeniedException/,
+    /Api image boxlite-app-dev-api:1\.2\.3 is unavailable: AccessDeniedException/,
   )
   assert.throws(
     () => verifyApiImage({ ...STAGE, ref: REF }, { awsCliPath: '/fake/aws', run: fakeCli(denied).run }),
-    new RegExp(`Api image boxlite-dev-api:v1\\.2\\.3-${REF} is unavailable: AccessDeniedException`),
+    new RegExp(`Api image boxlite-app-dev-api:v1\\.2\\.3-${REF} is unavailable: AccessDeniedException`),
   )
 })

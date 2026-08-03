@@ -98,7 +98,7 @@ test('a component ref wins over the global one, the way its source key does', ()
 
 test('staging only a Runner locally leaves the Api building from the checkout', () => {
   // What `npm run runner:build-artifact` prints. Reading the global ref for the Api here would
-  // resolve boxlite-<stage>-api:v<version>-<sha> — a tag only deploy-infra.yml ever pushes — and
+  // resolve boxlite-app-<stage>-api:v<version>-<sha> — a tag only deploy-infra.yml ever pushes — and
   // refuse the deploy at preflight, with no published image the developer could point at.
   const local = { RUNNER_ARTIFACT_SOURCE: 'build', RUNNER_ARTIFACT_REF: REF }
   assert.deepEqual(resolve('runner', local), { kind: 'build', ref: REF, refKey: 'RUNNER_ARTIFACT_REF', version: '1.2.3' })

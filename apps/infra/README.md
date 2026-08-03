@@ -121,8 +121,8 @@ Both deployable components use one source selector:
 
 | Mode      | API                                                        | Runner                                                           |
 | --------- | ---------------------------------------------------------- | ---------------------------------------------------------------- |
-| `build`   | immutable `boxlite-<stage>-api:v<version>-<sha>` in ECR    | CI builds that commit and stages a private S3 tarball + checksum |
-| `release` | immutable `boxlite-<stage>-api:<version>` in ECR           | GitHub Release tarball + checksum for the same `<version>`       |
+| `build`   | immutable `boxlite-app-<stage>-api:v<version>-<sha>` in ECR    | CI builds that commit and stages a private S3 tarball + checksum |
+| `release` | immutable `boxlite-app-<stage>-api:<version>` in ECR           | GitHub Release tarball + checksum for the same `<version>`       |
 
 Both modes hand SST an image reference, so no deploy compiles the API. The one
 exception is a build with no API ref — set neither `BOXLITE_ARTIFACT_REF` nor

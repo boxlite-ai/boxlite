@@ -17,11 +17,14 @@
  * there would make the local path depend on the remote one.
  *
  * The repository is named rather than looked up: the stage bootstrap
- * (ci/github-deploy-role.yaml) creates `<app>-<stage>-api` because CI has to push into it before
- * any deploy can read it, so the consumer cannot be the thing that creates it.
+ * (ci/github-deploy-role.yaml) creates it because CI has to push into it before any deploy can
+ * read it, so the consumer cannot be the thing that creates it. Both sides spell the name through
+ * the same grammar — see resource-name.mjs.
  */
 
 import { execFileSync } from 'node:child_process'
+
+import { awsResourceName } from './resource-name.mjs'
 
 // ECR's own rule, minus the uppercase it never allows: a stage that cannot name a repository
 // should fail here rather than as an opaque AWS validation error mid-deploy.
@@ -30,7 +33,7 @@ const REPOSITORY_NAME = /^[a-z0-9][a-z0-9._/-]{1,255}$/
 const IMAGE_TAG = /^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$/
 
 export function apiImageRepository({ app, stage }) {
-  const repository = `${app}-${stage}-api`
+  const repository = awsResourceName({ app, stage, name: 'api' })
   if (!REPOSITORY_NAME.test(repository)) {
     throw new Error(`Api stage '${stage}' does not produce a valid ECR repository name`)
   }

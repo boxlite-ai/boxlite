@@ -22,7 +22,9 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      RepositoryName: !Sub boxlite-${GitHubEnvironment}-api
+      # <namespace>-<workload>-<stage>-<name>, the grammar scripts/resource-name.mjs composes.
+      # This side declares the name; apiImageRepository resolves it. Both are pinned by tests.
+      RepositoryName: !Sub boxlite-app-${GitHubEnvironment}-api
       ImageTagMutability: IMMUTABLE
       ImageScanningConfiguration:
         ScanOnPush: true
@@ -34,7 +36,8 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub boxlite-${GitHubEnvironment}-artifacts-${AWS::AccountId}
+      # Same grammar; the account id is the attribute S3's global namespace requires.
+      BucketName: !Sub boxlite-app-${GitHubEnvironment}-artifacts-${AWS::AccountId}
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -133,7 +136,12 @@ Resources:
               - s3:ListBucketVersions
               - s3:PutBucketTagging
             Resource:
+              # Both the legacy boxlite-<stage>-* shape and the boxlite-app-<stage>-* grammar
+              # scripts/resource-name.mjs composes. The boundary intersects with every identity
+              # policy, so a bucket outside these prefixes is denied no matter what SST grants —
+              # which is how a rename escapes the boundary silently.
               - !Sub arn:${AWS::Partition}:s3:::boxlite-${GitHubEnvironment}-*
+              - !Sub arn:${AWS::Partition}:s3:::boxlite-app-${GitHubEnvironment}-*
               - !Sub arn:${AWS::Partition}:s3:::boxlite-volume-*
           - Sid: BoxLiteBucketObjects
             Effect: Allow
@@ -144,7 +152,10 @@ Resources:
               - s3:GetObject
               - s3:PutObject
             Resource:
+              # The Runner reads its own binary from boxlite-app-<stage>-artifacts-<acct>/runner/*
+              # under the instance profile, at boot and on every SSM upgrade.
               - !Sub arn:${AWS::Partition}:s3:::boxlite-${GitHubEnvironment}-*/*
+              - !Sub arn:${AWS::Partition}:s3:::boxlite-app-${GitHubEnvironment}-*/*
               - !Sub arn:${AWS::Partition}:s3:::boxlite-volume-*/*
           - Sid: AssumeBoxLiteRuntimeRoles
             Effect: Allow

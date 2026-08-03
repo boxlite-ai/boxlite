@@ -24,6 +24,7 @@ import { promisify } from 'node:util'
 import { resolveAwsRegion } from './deployment-environment.mjs'
 import { resolveAwsCliPath } from './proxy-deployment-verify.mjs'
 import { resolveRunnerReleaseAssets, verifyRunnerReleaseAssets } from './runner-release-assets.mjs'
+import { awsResourceName } from './resource-name.mjs'
 
 const BUILD_ARTIFACT_BUCKET_KEY = 'RUNNER_ARTIFACT_BUCKET'
 // The S3 naming rules that matter here: lowercase, no underscores, 3-63 characters. Anything
@@ -37,7 +38,10 @@ const execFileAsync = promisify(execFile)
 // deploy that installs it — no stack output to read first. Derived in one place because two
 // callers need the same answer: the stack that creates it, and the preflight that reads it.
 export function runnerArtifactsBucketName({ app, stage, accountId }) {
-  const bucket = `${app}-${stage}-artifacts-${accountId}`
+  // The account id is an attribute, not part of the name: S3's namespace is global, so the
+  // bucket needs a qualifier no other account can claim. ECR is scoped per account and region
+  // already, which is why apiImageRepository takes none.
+  const bucket = awsResourceName({ app, stage, name: 'artifacts', attributes: [accountId] })
   if (!BUCKET_NAME.test(bucket)) {
     throw new Error(`artifact stage '${stage}' does not produce a valid S3 bucket name`)
   }

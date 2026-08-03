@@ -193,8 +193,8 @@ jobs:
           set -euo pipefail
           registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com"
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry"
-          echo "target=${registry}/boxlite-${TARGET_STAGE}-api" >> "$GITHUB_OUTPUT"
-          echo "source=${registry}/boxlite-${SOURCE_STAGE}-api" >> "$GITHUB_OUTPUT"
+          echo "target=${registry}/boxlite-app-${TARGET_STAGE}-api" >> "$GITHUB_OUTPUT"
+          echo "source=${registry}/boxlite-app-${SOURCE_STAGE}-api" >> "$GITHUB_OUTPUT"
 
       - name: Verify bootstrap repositories and target tag
         id: target
@@ -204,14 +204,14 @@ jobs:
           OPERATION: ${{ steps.artifact.outputs.operation }}
         run: |
           set -euo pipefail
-          target_name="boxlite-${TARGET_STAGE}-api"
+          target_name="boxlite-app-${TARGET_STAGE}-api"
           aws ecr describe-repositories --region "$AWS_REGION" --repository-names "$target_name" >/dev/null || {
             echo "ECR repository $target_name is missing; update apps/infra/ci/github-deploy-role.yaml for $TARGET_STAGE first" >&2
             exit 1
           }
           source_digest=""
           if [ "$OPERATION" = promote ]; then
-            source_name="boxlite-${SOURCE_STAGE}-api"
+            source_name="boxlite-app-${SOURCE_STAGE}-api"
             source_digest=$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$source_name" \
               --image-ids "imageTag=$TAG" --query 'imageDetails[0].imageDigest' --output text) || {
                 echo "$source_name:$TAG has not been published" >&2

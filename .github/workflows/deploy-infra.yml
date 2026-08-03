@@ -167,7 +167,7 @@ jobs:
         run: |
           set -euo pipefail
           account_id=$(aws sts get-caller-identity --query Account --output text)
-          bucket="boxlite-${STAGE}-artifacts-${account_id}"
+          bucket="boxlite-app-${STAGE}-artifacts-${account_id}"
           archive="boxlite-runner-v${VERSION}-${BOXLITE_ARTIFACT_REF}-linux-amd64.tar.gz"
           test -f "dist/runner/$archive"
           test -f "dist/runner/$archive.sha256"

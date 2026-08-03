@@ -11,6 +11,8 @@ import { DEFAULT_SCHEMA, Type, load } from 'js-yaml'
 
 import { verifyDeployRoleGrantsBoundaryPermission } from './deploy-role-boundary.mjs'
 import { liveText } from './live-source.mjs'
+import { apiImageRepository } from './api-artifact.mjs'
+import { runnerArtifactsBucketName } from './runner-artifact.mjs'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SST_WRAPPER = join(REPO_ROOT, 'apps/infra/scripts/sst-with-cloudflare.mjs')
@@ -781,6 +783,7 @@ test('dev deploy role trusts only the repository GitHub Environment identity', (
     ],
     Resource: [
       'arn:${AWS::Partition}:s3:::boxlite-${GitHubEnvironment}-*',
+      'arn:${AWS::Partition}:s3:::boxlite-app-${GitHubEnvironment}-*',
       'arn:${AWS::Partition}:s3:::boxlite-volume-*',
     ],
   })
@@ -790,6 +793,7 @@ test('dev deploy role trusts only the repository GitHub Environment identity', (
     Action: ['s3:AbortMultipartUpload', 's3:DeleteObject', 's3:DeleteObjectVersion', 's3:GetObject', 's3:PutObject'],
     Resource: [
       'arn:${AWS::Partition}:s3:::boxlite-${GitHubEnvironment}-*/*',
+      'arn:${AWS::Partition}:s3:::boxlite-app-${GitHubEnvironment}-*/*',
       'arn:${AWS::Partition}:s3:::boxlite-volume-*/*',
     ],
   })
@@ -811,7 +815,7 @@ test('the stage bootstrap owns artifact stores needed before an SST deploy can s
     DeletionPolicy: 'Retain',
     UpdateReplacePolicy: 'Retain',
     Properties: {
-      RepositoryName: 'boxlite-${GitHubEnvironment}-api',
+      RepositoryName: 'boxlite-app-${GitHubEnvironment}-api',
       ImageTagMutability: 'IMMUTABLE',
       ImageScanningConfiguration: { ScanOnPush: true },
       EncryptionConfiguration: { EncryptionType: 'AES256' },
@@ -822,7 +826,7 @@ test('the stage bootstrap owns artifact stores needed before an SST deploy can s
     DeletionPolicy: 'Retain',
     UpdateReplacePolicy: 'Retain',
     Properties: {
-      BucketName: 'boxlite-${GitHubEnvironment}-artifacts-${AWS::AccountId}',
+      BucketName: 'boxlite-app-${GitHubEnvironment}-artifacts-${AWS::AccountId}',
       BucketEncryption: {
         ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }],
       },
@@ -858,4 +862,50 @@ test('one release selector resolves the API and Runner to the same published ver
   assert.match(source, /const runnerSource = resolveArtifactSource\('runner'\)/)
   assert.match(source, /await verifyRunnerArtifact\(runnerSource/)
   assert.doesNotMatch(source, /verifyRunnerReleaseAssets\(publicDeploymentConfig\.releaseVersion\)/)
+})
+
+test('every hand-written spelling of an artifact name agrees with the composer', () => {
+  // The defect this guards: the name is declared in CloudFormation, resolved in JS, and written
+  // by hand in the workflow that produces the artifact. Renaming the first two and not the last
+  // two leaves a bootstrap that creates boxlite-app-dev-api and a build that pushes to
+  // boxlite-dev-api — the workflow's own "repository is missing" guard fires and the deploy
+  // fails, with every unit test still green. CloudFormation and bash cannot import
+  // awsResourceName, so agreement is asserted here instead.
+  const template = readDeployTemplate()
+  const apiWorkflow = readFileSync(API_IMAGE_BUILD_WORKFLOW, 'utf8')
+  const deployWorkflow = readFileSync(DEPLOY_WORKFLOW, 'utf8')
+
+  const declaredRepository = template.Resources.ApiImagesRepository.Properties.RepositoryName
+  const declaredBucket = template.Resources.RunnerArtifactsBucket.Properties.BucketName
+  assert.equal(declaredRepository, 'boxlite-app-${GitHubEnvironment}-api')
+  assert.equal(declaredBucket, 'boxlite-app-${GitHubEnvironment}-artifacts-${AWS::AccountId}')
+
+  // Resolved: the same grammar, through the composer the deploy actually calls.
+  assert.equal(apiImageRepository({ app: 'boxlite', stage: 'dev' }), 'boxlite-app-dev-api')
+  assert.equal(
+    runnerArtifactsBucketName({ app: 'boxlite', stage: 'dev', accountId: '123456789012' }),
+    'boxlite-app-dev-artifacts-123456789012',
+  )
+
+  // Written by hand, in the two producers. Anchored per line so a commented-out spelling cannot
+  // satisfy the match, and the old shape is refused outright rather than merely not found.
+  assertShellLine(apiWorkflow, /boxlite-app-\$\{TARGET_STAGE\}-api/)
+  assertShellLine(apiWorkflow, /boxlite-app-\$\{SOURCE_STAGE\}-api/)
+  assertShellLine(deployWorkflow, /bucket="boxlite-app-\$\{STAGE\}-artifacts-\$\{account_id\}"/)
+  assert.doesNotMatch(liveShell(apiWorkflow), /boxlite-\$\{(TARGET|SOURCE)_STAGE\}-api/)
+  assert.doesNotMatch(liveShell(deployWorkflow), /boxlite-\$\{STAGE\}-artifacts/)
+})
+
+test('the runtime boundary admits the bucket the Runner is actually pointed at', () => {
+  // The boundary intersects with every identity policy SST writes, so a bucket outside its
+  // prefixes is denied however generous the grant. Renaming the bucket without widening the
+  // boundary denied the Runner its own binary — at boot and on every SSM upgrade — while every
+  // other test stayed green, because CI pushes with the deploy role's s3:* rather than the
+  // instance profile. Derive the name, do not spell it.
+  const bucket = runnerArtifactsBucketName({ app: 'boxlite', stage: 'dev', accountId: '123456789012' })
+  const prefixes = findStatement(readRuntimeBoundaryStatements(), 'BoxLiteBucketObjects').Resource.map((arn) =>
+    arn.replace('arn:${AWS::Partition}:s3:::', '').replace('${GitHubEnvironment}', 'dev'),
+  )
+  const admits = prefixes.some((pattern) => new RegExp(`^${pattern.replace(/\*/g, '.*')}$`).test(`${bucket}/runner/x`))
+  assert.ok(admits, `no BoxLiteBucketObjects prefix admits ${bucket}/runner/*; prefixes: ${prefixes.join(', ')}`)
 })

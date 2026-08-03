@@ -76,7 +76,7 @@ esac`,
 test('the bootstrap, deploy preflight, and local stager derive one bucket name', () => {
   assert.equal(
     runnerArtifactsBucketName({ app: 'boxlite', stage: 'dev', accountId: '123456789012' }),
-    'boxlite-dev-artifacts-123456789012',
+    'boxlite-app-dev-artifacts-123456789012',
   )
   assert.throws(
     () => runnerArtifactsBucketName({ app: 'boxlite', stage: 'Feature_One', accountId: '123456789012' }),

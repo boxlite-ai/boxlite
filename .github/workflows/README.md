@@ -169,7 +169,7 @@ today). Each component is built by its own job, and the two legs share only
 a Linux AMD64 Runner with `<workspace-version>+<sha>` identity and stage it in
 the stage's private commit-keyed S3 path, while `build-api` calls
 `build-apps-api-image.yml` for the same commit and pushes
-`boxlite-<stage>-api:v<version>-<sha>`. The deploy itself compiles neither.
+`boxlite-app-<stage>-api:v<version>-<sha>`. The deploy itself compiles neither.
 Deployment safety tests first enforce the Runner lifecycle options. Dispatch defaults to
 preview-only; `apply=true` repeats the full structured preview and deploys only
 when the Runner safety gate accepts the
@@ -193,7 +193,7 @@ adding it to whichever of those lists should reach it.
 ### `build-apps-api-image.yml` / `deploy-release.yml`
 
 `build-apps-api-image.yml` has three operations, all writing immutable tags into
-`boxlite-<stage>-api`:
+`boxlite-app-<stage>-api`:
 
 | Operation | Entry point                | Checks out    | Tag                  | Target        |
 | --------- | -------------------------- | ------------- | -------------------- | ------------- |

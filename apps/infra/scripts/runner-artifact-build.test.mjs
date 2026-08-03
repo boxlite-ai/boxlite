@@ -52,8 +52,8 @@ test('builds Linux AMD64 with the commit in both the version and archive identit
 
   assert.equal(result.identity, `${VERSION}+${REF}`)
   assert.equal(result.archive, ARCHIVE)
-  assert.equal(result.bucket, `boxlite-dev-artifacts-${ACCOUNT}`)
-  assert.equal(result.prefix, `s3://boxlite-dev-artifacts-${ACCOUNT}/runner/${REF}`)
+  assert.equal(result.bucket, `boxlite-app-dev-artifacts-${ACCOUNT}`)
+  assert.equal(result.prefix, `s3://boxlite-app-dev-artifacts-${ACCOUNT}/runner/${REF}`)
   assert.equal(existsSync(result.outputDirectory), false, 'the temporary build output is removed after staging')
 
   const docker = calls.find((call) => call.command === 'docker')
@@ -173,7 +173,7 @@ test('the repository root is resolved from this module, not the caller working d
 
 test('the printed next step scopes the ref to the Runner it just staged', () => {
   // This stages a Runner and nothing else. Printing the global BOXLITE_ARTIFACT_REF would also
-  // point the Api at boxlite-<stage>-api:v<version>-<sha> — a tag only deploy-infra.yml pushes —
+  // point the Api at boxlite-app-<stage>-api:v<version>-<sha> — a tag only deploy-infra.yml pushes —
   // and the deploy would be refused at preflight with no image the developer could produce.
   // Read from source: main() runs only as a script, so nothing here can execute it.
   const source = readFileSync(fileURLToPath(new URL('./runner-artifact-build.mjs', import.meta.url)), 'utf8')
