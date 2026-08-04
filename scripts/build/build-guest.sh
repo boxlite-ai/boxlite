@@ -7,10 +7,9 @@
 #   - musllinux: scripts/setup/setup-musllinux.sh
 #
 # Usage:
-#   ./build-guest.sh [--dest-dir DIR] [--profile PROFILE]
+#   ./build-guest.sh [--profile PROFILE]
 #
 # Options:
-#   --dest-dir DIR      Directory to copy the guest binary to
 #   --profile PROFILE   Build profile: release or debug (default: release)
 
 set -e
@@ -22,27 +21,19 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/setup/setup-common.sh"
 
-# Capture original working directory before any cd commands
-ORIG_DIR="$(pwd)"
-
 # Parse command-line arguments
 parse_args() {
-    DEST_DIR_ARG=""
     PROFILE="release"
 
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --dest-dir)
-                DEST_DIR_ARG="$2"
-                shift 2
-                ;;
             --profile)
                 PROFILE="$2"
                 shift 2
                 ;;
             *)
                 echo "Unknown option: $1"
-                echo "Usage: $0 [--dest-dir DIR] [--profile PROFILE]"
+                echo "Usage: $0 [--profile PROFILE]"
                 exit 1
                 ;;
         esac
@@ -53,18 +44,6 @@ parse_args() {
         echo "Invalid profile: $PROFILE"
         echo "Run with --profile release or --profile debug"
         exit 1
-    fi
-
-    # Resolve destination path to absolute path
-    if [ -n "$DEST_DIR_ARG" ]; then
-        # If relative, make it absolute relative to original working directory
-        if [[ "$DEST_DIR_ARG" != /* ]]; then
-            DEST_DIR="$ORIG_DIR/$DEST_DIR_ARG"
-        else
-            DEST_DIR="$DEST_DIR_ARG"
-        fi
-    else
-        DEST_DIR=""
     fi
 }
 
@@ -153,32 +132,14 @@ build_guest_binary() {
     fi
 }
 
-# Copy binary to destination
-copy_to_destination() {
-    if [ -z "$DEST_DIR" ]; then
-        echo "✅ Guest binary built successfully (no destination specified)"
-        echo "Binary location: $PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/boxlite-guest"
-        return 0
-    fi
-
-    # Relative paths are relative to caller's working directory (already correct behavior)
-    # Absolute paths are used as-is
-    echo "📦 Copying to destination: $DEST_DIR"
-    mkdir -p "$DEST_DIR"
-    cp "$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/boxlite-guest" "$DEST_DIR/"
-
-    echo "✅ Guest binary built and copied to $DEST_DIR"
-    echo "Binary info:"
-    ls -lh "$DEST_DIR/boxlite-guest"
-    file "$DEST_DIR/boxlite-guest"
-}
-
 # Main execution
 main() {
     check_prerequisites
     setup_rust_target
     build_guest_binary
-    copy_to_destination
+
+    echo "✅ Guest binary built successfully"
+    echo "Binary location: $PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/boxlite-guest"
 
     echo ""
     print_success "Done! Guest binary is ready for packaging."
