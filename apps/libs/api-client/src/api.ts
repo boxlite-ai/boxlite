@@ -21,6 +21,7 @@ export * from './api/auth-api';
 export * from './api/box-api';
 export * from './api/config-api';
 export * from './api/health-api';
+export * from './api/internal-billing-api';
 export * from './api/jobs-api';
 export * from './api/object-storage-api';
 export * from './api/organizations-api';

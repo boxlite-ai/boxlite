@@ -9,6 +9,7 @@ api/auth-api.ts
 api/box-api.ts
 api/config-api.ts
 api/health-api.ts
+api/internal-billing-api.ts
 api/jobs-api.ts
 api/object-storage-api.ts
 api/organizations-api.ts
@@ -58,6 +59,8 @@ docs/ApiKeysApi.md
 docs/AuditApi.md
 docs/AuditLog.md
 docs/AuthApi.md
+docs/BillingPeriodDto.md
+docs/BillingPeriodListDto.md
 docs/Box.md
 docs/BoxApi.md
 docs/BoxClass.md
@@ -81,11 +84,13 @@ docs/CreateVolume.md
 docs/HealthApi.md
 docs/HealthControllerCheck200Response.md
 docs/HealthControllerCheck200ResponseInfoValue.md
+docs/InternalBillingApi.md
 docs/Job.md
 docs/JobStatus.md
 docs/JobType.md
 docs/JobsApi.md
 docs/LogEntry.md
+docs/MarkBilledResultDto.md
 docs/MetricDataPoint.md
 docs/MetricSeries.md
 docs/MetricsResponse.md
@@ -182,6 +187,8 @@ models/announcement.ts
 models/api-key-list.ts
 models/api-key-response.ts
 models/audit-log.ts
+models/billing-period-dto.ts
+models/billing-period-list-dto.ts
 models/box-class.ts
 models/box-desired-state.ts
 models/box-labels.ts
@@ -207,6 +214,7 @@ models/job-status.ts
 models/job-type.ts
 models/job.ts
 models/log-entry.ts
+models/mark-billed-result-dto.ts
 models/metric-data-point.ts
 models/metric-series.ts
 models/metrics-response.ts

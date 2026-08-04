@@ -3091,6 +3091,100 @@ paths:
       summary: Update job status
       tags:
       - jobs
+  /internal/billing/unbilled-periods:
+    get:
+      operationId: BillingController_listUnbilled
+      parameters:
+      - explode: true
+        in: query
+        name: limit
+        required: true
+        schema:
+          type: number
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingPeriodListDto"
+          description: ""
+      security:
+      - bearer: []
+      summary: "List unbilled archived usage periods, oldest endAt first"
+      tags:
+      - internal-billing
+  /internal/billing/periods/{periodId}:
+    get:
+      operationId: BillingController_fetchArchived
+      parameters:
+      - explode: false
+        in: path
+        name: periodId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingPeriodDto"
+          description: ""
+      security:
+      - bearer: []
+      summary: Fetch one archived usage period by id
+      tags:
+      - internal-billing
+  /internal/billing/periods/{periodId}/mark-billed:
+    post:
+      description: Returns marked=false if the period was already billed or does not
+        exist -- never an error.
+      operationId: BillingController_markBilled
+      parameters:
+      - explode: false
+        in: path
+        name: periodId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarkBilledResultDto"
+          description: ""
+      security:
+      - bearer: []
+      summary: Compare-and-swap the period from unbilled to billed
+      tags:
+      - internal-billing
+  /internal/billing/organizations/{organizationId}/open-periods:
+    get:
+      operationId: BillingController_listOpenForOrganization
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingPeriodListDto"
+          description: ""
+      security:
+      - bearer: []
+      summary: List still-running (hot table) usage periods for an organization
+      tags:
+      - internal-billing
   /admin/runners:
     get:
       operationId: adminListRunners
@@ -7284,6 +7378,93 @@ components:
           type: string
       required:
       - status
+      type: object
+    BillingPeriodDto:
+      example:
+        periodId: periodId
+        boxId: boxId
+        organizationId: organizationId
+        region: region
+        startAt: startAt
+        endAt: endAt
+        cpu: 0.8008281904610115
+        gpu: 6.027456183070403
+        mem: 1.4658129805029452
+        disk: 5.962133916683182
+      properties:
+        periodId:
+          type: string
+        boxId:
+          type: string
+        organizationId:
+          nullable: true
+          type: string
+        region:
+          type: string
+        startAt:
+          type: string
+        endAt:
+          nullable: true
+          type: string
+        cpu:
+          type: number
+        gpu:
+          type: number
+        mem:
+          type: number
+        disk:
+          type: number
+      required:
+      - boxId
+      - cpu
+      - disk
+      - endAt
+      - gpu
+      - mem
+      - organizationId
+      - periodId
+      - region
+      - startAt
+      type: object
+    BillingPeriodListDto:
+      example:
+        periods:
+        - periodId: periodId
+          boxId: boxId
+          organizationId: organizationId
+          region: region
+          startAt: startAt
+          endAt: endAt
+          cpu: 0.8008281904610115
+          gpu: 6.027456183070403
+          mem: 1.4658129805029452
+          disk: 5.962133916683182
+        - periodId: periodId
+          boxId: boxId
+          organizationId: organizationId
+          region: region
+          startAt: startAt
+          endAt: endAt
+          cpu: 0.8008281904610115
+          gpu: 6.027456183070403
+          mem: 1.4658129805029452
+          disk: 5.962133916683182
+      properties:
+        periods:
+          items:
+            $ref: "#/components/schemas/BillingPeriodDto"
+          type: array
+      required:
+      - periods
+      type: object
+    MarkBilledResultDto:
+      example:
+        marked: true
+      properties:
+        marked:
+          type: boolean
+      required:
+      - marked
       type: object
     AdminCreateRunner:
       example:
