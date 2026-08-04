@@ -440,8 +440,8 @@ impl LibFixup {
         run_command(&mut cmd, &format!("fix install name for {}", lib_name));
     }
 
-    /// Gives a library that does not already depend on libc a `DT_NEEDED`
-    /// entry for it.
+    /// Holds a library's libc `DT_NEEDED` entry to what the target
+    /// architecture requires: present on aarch64, absent everywhere else.
     ///
     /// libkrunfw is a kernel blob linked `-nostdlib`, so it declares no
     /// dependencies at all. A `+crt-static` shim cannot dlopen such a library
@@ -451,14 +451,20 @@ impl LibFixup {
     /// fails as `undefined symbol: _dl_var_init`, naming the library, which
     /// does not reference it. Depending on libc pulls `ld.so` into scope.
     ///
-    /// Libraries that already link libc are left alone, so this only ever
-    /// touches one that would otherwise be unloadable from a static binary.
+    /// This is deliberately aarch64-only, and enforced in both directions:
+    /// added where it is required, removed where it is not. Elsewhere the entry
+    /// makes a portable static shim load the deployment host's libc as a second
+    /// libc, and the dlopen fails as `Couldn't find or load libkrunfw.so.5` — on
+    /// the target machine, long after the build looked green. Enforcing it here,
+    /// where the dependency is decided, is what keeps the two from drifting.
     ///
-    /// Gated on a glibc host: `libc.so.6` is glibc's soname, and build scripts
-    /// compile for the host, so a musl host would otherwise be stamped with a
-    /// dependency it cannot resolve.
+    /// The architecture that decides is the *target* (`CARGO_CFG_TARGET_ARCH`),
+    /// since the artifact is loaded wherever it is deployed, not where it is
+    /// built. The enclosing `cfg` is about the host instead: `libc.so.6` is
+    /// glibc's soname and build scripts compile for the host, so a musl host
+    /// would otherwise be stamped with a dependency it cannot resolve.
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    fn ensure_libc_dependency(lib_path: &Path) {
+    fn enforce_libc_dependency(lib_path: &Path) {
         const LIBC: &str = "libc.so.6";
         let lib_path_str = lib_path.to_str().expect("Invalid library path");
 
@@ -466,10 +472,29 @@ impl LibFixup {
             .args(["--print-needed", lib_path_str])
             .output()
             .unwrap_or_else(|e| panic!("Failed to read DT_NEEDED of {}: {}", lib_path_str, e));
-        if String::from_utf8_lossy(&needed.stdout)
+        let has_libc = String::from_utf8_lossy(&needed.stdout)
             .lines()
-            .any(|entry| entry.trim() == LIBC)
-        {
+            .any(|entry| entry.trim() == LIBC);
+
+        if env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("aarch64") {
+            if !has_libc {
+                return;
+            }
+            // Strip rather than fail: this also runs over a cached OUT_DIR, so an
+            // artifact stamped by an earlier build heals on the next one instead of
+            // wedging it. libkrunfw is `-nostdlib`, so no dependency is its own
+            // natural state.
+            let mut cmd = Command::new("patchelf");
+            cmd.args(["--remove-needed", LIBC, lib_path_str]);
+            run_command(&mut cmd, &format!("remove {} dependency", LIBC));
+            println!(
+                "cargo:warning=Removed {} dependency from {} (only aarch64 needs it)",
+                LIBC, lib_path_str
+            );
+            return;
+        }
+
+        if has_libc {
             return;
         }
 
@@ -531,7 +556,7 @@ impl LibFixup {
                             println!("cargo:warning=Renamed {} to {}", filename, soname);
                             Self::fix_install_name(&soname, &new_path);
                             #[cfg(target_env = "gnu")]
-                            Self::ensure_libc_dependency(&new_path);
+                            Self::enforce_libc_dependency(&new_path);
                             continue;
                         }
                     }
@@ -539,7 +564,7 @@ impl LibFixup {
 
                 Self::fix_install_name(&filename, &path);
                 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-                Self::ensure_libc_dependency(&path);
+                Self::enforce_libc_dependency(&path);
 
                 // macOS: re-sign after modifying
                 #[cfg(target_os = "macos")]
