@@ -35,6 +35,26 @@ async function fileExists(filePath) {
   }
 }
 
+// These tests spawn the deploy wrapper and drive it with stubbed `aws`/`curl`/`sst` binaries, so
+// the artifact mode they exercise has to be the one they state — never one inherited from the
+// shell they happen to run in. `npm test` runs inside deploy-infra.yml's deploy job, which exports
+// all four selectors at job scope; inheriting them puts the wrapper in build mode, where the Api
+// preflight looks up a commit image, gets nothing back from the stubbed `aws`, and throws ~300ms
+// in — before the release path these fixtures were written for is ever reached. The failure reads
+// as a timeout because waitFor is still polling for a file the wrapper died before writing.
+const ARTIFACT_SELECTOR_KEYS = [
+  'BOXLITE_ARTIFACT_SOURCE',
+  'API_ARTIFACT_SOURCE',
+  'RUNNER_ARTIFACT_SOURCE',
+  'BOXLITE_ARTIFACT_REF',
+  'API_ARTIFACT_REF',
+  'RUNNER_ARTIFACT_REF',
+]
+
+function inheritedEnvironment() {
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !ARTIFACT_SELECTOR_KEYS.includes(key)))
+}
+
 async function waitFor(predicate, description, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -133,7 +153,7 @@ setInterval(() => {}, 1_000)
   const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'synthetic-test', '--stage', 'ci'], {
     cwd: new URL('..', import.meta.url),
     env: {
-      ...process.env,
+      ...inheritedEnvironment(),
       PATH: `${fakeBin}:${process.env.PATH}`,
       SST_BIN_PATH: fakeSst,
       CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
@@ -200,7 +220,7 @@ setInterval(() => {}, 1_000)
   const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'synthetic-test', '--stage', 'ci'], {
     cwd: new URL('..', import.meta.url),
     env: {
-      ...process.env,
+      ...inheritedEnvironment(),
       PATH: `${fakeBin}:${process.env.PATH}`,
       SST_BIN_PATH: fakeSst,
       CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
@@ -264,7 +284,7 @@ setInterval(() => {}, 1_000)
   const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'synthetic-test', '--stage', 'ci'], {
     cwd: new URL('..', import.meta.url),
     env: {
-      ...process.env,
+      ...inheritedEnvironment(),
       PATH: `${fakeBin}:${process.env.PATH}`,
       SST_BIN_PATH: fakeSst,
       CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
@@ -331,7 +351,7 @@ if (args[0] === 'state' && args[1] === 'export') {
   const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'diff', '--stage', 'ci'], {
     cwd: infraRoot,
     env: {
-      ...process.env,
+      ...inheritedEnvironment(),
       PATH: `${fakeBin}:${process.env.PATH}`,
       SST_BIN_PATH: fakeSst,
       CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
@@ -386,7 +406,7 @@ setInterval(() => {}, 1_000)
   const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'diff', '--stage', 'ci'], {
     cwd: infraRoot,
     env: {
-      ...process.env,
+      ...inheritedEnvironment(),
       PATH: `${fakeBin}:${process.env.PATH}`,
       SST_BIN_PATH: fakeSst,
       CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
@@ -454,7 +474,7 @@ setInterval(() => {}, 1_000)
   const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'deploy', '--stage', 'ci'], {
     cwd: new URL('..', import.meta.url),
     env: {
-      ...process.env,
+      ...inheritedEnvironment(),
       PATH: `${fakeBin}:${process.env.PATH}`,
       AWS_CLI_PATH: fakeAws,
       SST_BIN_PATH: fakeSst,
@@ -506,7 +526,7 @@ test('rejects an argument delimiter before guarded SST commands start', async ()
 
   const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'diff', '--stage', 'ci', '--'], {
     cwd: new URL('..', import.meta.url),
-    env: { ...process.env, SST_BIN_PATH: fakeSst },
+    env: { ...inheritedEnvironment(), SST_BIN_PATH: fakeSst },
     stdio: 'ignore',
   })
 
