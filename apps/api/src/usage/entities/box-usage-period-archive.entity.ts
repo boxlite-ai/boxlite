@@ -4,13 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm'
+import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
 import { BoxUsagePeriod } from './box-usage-period.entity'
 
 // Duplicate of BoxUsagePeriod
 // Used to archive usage periods and keep the original table lightweight
 // Will only contain closed usage periods
 @Entity('box_usage_periods_archive')
+@Index('box_usage_periods_archive_box_start_uidx', ['boxId', 'startAt'], { unique: true })
 export class BoxUsagePeriodArchive {
   @PrimaryGeneratedColumn('uuid')
   id: string

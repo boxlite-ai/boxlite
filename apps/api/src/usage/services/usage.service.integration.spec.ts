@@ -10,6 +10,7 @@ import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.c
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { AddBoxUsagePeriods1785250000000 } from '../../migrations/pre-deploy/1785250000000-add-box-usage-periods-migration'
+import { AddBoxUsagePeriodsIndex1786000000000 } from '../../migrations/pre-deploy/1786000000000-add-box-usage-periods-index-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { UsageService } from './usage.service'
@@ -105,6 +106,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     const queryRunner = dataSource.createQueryRunner()
     try {
       await new AddBoxUsagePeriods1785250000000().up(queryRunner)
+      await new AddBoxUsagePeriodsIndex1786000000000().up(queryRunner)
       ownsTables = true
     } finally {
       await queryRunner.release()
@@ -239,6 +241,24 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
 
     expect(index).toMatchObject({ isUnique: true, where: '"endAt" IS NULL' })
     expect(index?.columns.map((column) => column.propertyName)).toEqual(['boxId'])
+  })
+
+  it('declares the archive unique index on the entity as well as in the migration', () => {
+    const index = dataSource
+      .getMetadata(BoxUsagePeriodArchive)
+      .indices.find((candidate) => candidate.name === 'box_usage_periods_archive_box_start_uidx')
+
+    expect(index).toMatchObject({ isUnique: true })
+    expect(index?.columns.map((column) => column.propertyName)).toEqual(['boxId', 'startAt'])
+  })
+
+  it('declares the org open-period index on the entity as well as in the migration', () => {
+    const index = dataSource
+      .getMetadata(BoxUsagePeriod)
+      .indices.find((candidate) => candidate.name === 'idx_box_usage_periods_org_open')
+
+    expect(index).toMatchObject({ isUnique: false, where: '"endAt" IS NULL' })
+    expect(index?.columns.map((column) => column.propertyName)).toEqual(['organizationId'])
   })
 
   it('refuses a second open period for the same box', async () => {

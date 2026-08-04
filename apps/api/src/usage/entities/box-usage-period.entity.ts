@@ -16,6 +16,12 @@ import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
   unique: true,
   where: '"endAt" IS NULL',
 })
+// Accelerates org-scoped open-period lookups (e.g. affordability checks that
+// count running boxes per organization). The partial index covers only rows
+// where endAt IS NULL, matching the live-period working set.
+@Index('idx_box_usage_periods_org_open', ['organizationId'], {
+  where: '"endAt" IS NULL',
+})
 export class BoxUsagePeriod {
   @PrimaryGeneratedColumn('uuid')
   id: string
