@@ -26,6 +26,8 @@ import { AlertCircle, BarChart3, RefreshCw } from '@/components/ui/icon'
 import { useFeatureFlagEnabled } from 'posthog-js/react'
 import { useCallback, useMemo, useState } from 'react'
 import { DateRange } from 'react-day-picker'
+import { Navigate } from 'react-router-dom'
+import { RoutePath } from '@/enums/RoutePath'
 
 const analyticsQuickRanges: QuickRangesConfig = {
   hours: [1, 6, 12, 24],
@@ -104,6 +106,13 @@ const Spending = () => {
       ),
     [sortedPastUsage, currentOrganizationUsage],
   )
+
+  // This route only exists behind the Billing placeholder's own redirect
+  // (see pages/Billing.tsx); reachable directly (e.g. a stale bookmark) while
+  // billing isn't configured, it has nothing to show.
+  if (!config.billingApiUrl) {
+    return <Navigate to={RoutePath.BOXES} replace />
+  }
 
   return (
     <PageLayout>

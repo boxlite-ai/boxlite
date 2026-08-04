@@ -6,6 +6,7 @@
 
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Wallet from './Wallet'
 
@@ -13,10 +14,15 @@ const mocks = vi.hoisted(() => ({
   walletQuery: { data: undefined as unknown, isLoading: false },
   billingPortalUrlQuery: { data: undefined as unknown, isLoading: false },
   invoicesQuery: { data: undefined as unknown, isLoading: false },
+  config: { billingApiUrl: 'http://127.0.0.1:8080' as string | undefined },
 }))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({ selectedOrganization: { id: 'org-1', isDefaultForAuthenticatedUser: true } }),
+}))
+
+vi.mock('@/hooks/useConfig', () => ({
+  useConfig: () => mocks.config,
 }))
 
 vi.mock('react-oidc-context', () => ({
@@ -77,6 +83,7 @@ describe('Wallet', () => {
   beforeEach(() => {
     mocks.walletQuery.data = undefined
     mocks.walletQuery.isLoading = false
+    mocks.config.billingApiUrl = 'http://127.0.0.1:8080'
   })
 
   afterEach(() => {
@@ -121,11 +128,45 @@ describe('Wallet', () => {
     expect(document.body.textContent).not.toContain('Get started with billing')
   })
 
-  it('does not show the get-started card while the initial fetch is still in flight', async () => {
+  it('shows a loading skeleton, not the get-started card, while the initial fetch is still in flight', async () => {
     mocks.walletQuery.isLoading = true
 
     await renderWallet()
 
+    expect(document.body.textContent).not.toContain('Get started with billing')
+    expect(document.body.textContent).not.toContain('Current balance')
+    expect(document.querySelector('[class*="skeleton-shimmer"]')).not.toBeNull()
+  })
+
+  it('keeps the loading skeleton up while only the wallet query -- not the portal URL query -- is still pending', async () => {
+    mocks.walletQuery.isLoading = true
+    mocks.billingPortalUrlQuery.isLoading = false
+
+    await renderWallet()
+
+    expect(document.querySelector('[class*="skeleton-shimmer"]')).not.toBeNull()
+  })
+
+  it('redirects to boxes instead of rendering when billing is not configured', async () => {
+    mocks.config.billingApiUrl = undefined
+
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+
+    await act(async () => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/billing/wallet']}>
+          <Routes>
+            <Route path="/dashboard/billing/wallet" element={<Wallet />} />
+            <Route path="/dashboard/boxes" element={<div>Boxes page</div>} />
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+    await flushReactWork()
+
+    expect(document.body.textContent).toContain('Boxes page')
     expect(document.body.textContent).not.toContain('Get started with billing')
   })
 })

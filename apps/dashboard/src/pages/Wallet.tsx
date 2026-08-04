@@ -29,16 +29,20 @@ import {
   useOwnerWalletQuery,
 } from '@/hooks/queries/billingQueries'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { useConfig } from '@/hooks/useConfig'
 import { formatAmount } from '@/lib/utils'
 import { ArrowUpRight, CheckCircleIcon, InfoIcon, SparklesIcon, TriangleAlertIcon } from '@/components/ui/icon'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { NumericFormat } from 'react-number-format'
 import { useAuth } from 'react-oidc-context'
+import { Navigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { RoutePath } from '@/enums/RoutePath'
 
 const DEFAULT_PAGE_SIZE = 10
 
 const Wallet = () => {
+  const config = useConfig()
   const { selectedOrganization } = useSelectedOrganization()
   const { user } = useAuth()
   const [automaticTopUp, setAutomaticTopUp] = useState<AutomaticTopUp | undefined>(undefined)
@@ -240,9 +244,16 @@ const Wallet = () => {
     [selectedOrganization, voidInvoiceMutation],
   )
 
-  const isBillingLoading = walletQuery.isLoading && billingPortalUrlQuery.isLoading
+  const isBillingLoading = walletQuery.isLoading
   const topUpEnabled =
     wallet?.creditCardConnected && !topUpWalletMutation.isPending && (selectedPreset || oneTimeTopUpAmount)
+
+  // This route only exists behind the Billing placeholder's own redirect
+  // (see pages/Billing.tsx); reachable directly (e.g. a stale bookmark) while
+  // billing isn't configured, it has nothing to show.
+  if (!config.billingApiUrl) {
+    return <Navigate to={RoutePath.BOXES} replace />
+  }
 
   return (
     <PageLayout>
@@ -282,7 +293,7 @@ const Wallet = () => {
               <CardTitle>Get started with billing</CardTitle>
               <CardDescription>
                 Connect a credit card to activate your wallet
-                {user?.profile.email_verified === false ? '' : ' and receive $100 of credits'}.
+                {user?.profile.email_verified ? ' and receive $100 of credits' : ''}.
               </CardDescription>
             </CardHeader>
             <CardContent>

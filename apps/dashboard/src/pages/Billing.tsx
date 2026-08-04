@@ -6,7 +6,8 @@
 
 import { RoutePath } from '@/enums/RoutePath'
 import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components/ui/icon'
-import { Link } from 'react-router-dom'
+import { useConfig } from '@/hooks/useConfig'
+import { Link, Navigate } from 'react-router-dom'
 
 const DIMENSIONS: { icon: LucideIcon; name: string; unit: string }[] = [
   { icon: Cpu, name: 'CPU', unit: 'per vCPU·hr' },
@@ -26,6 +27,16 @@ function SegBars() {
 }
 
 function Billing() {
+  const config = useConfig()
+
+  // Billing is live once the API exposes a billing backend; this placeholder
+  // is only ever the answer when it doesn't. Kept as a component-level
+  // decision rather than a routing-table one, so App.tsx's route mapping for
+  // this pre-existing path is untouched.
+  if (config.billingApiUrl) {
+    return <Navigate to={RoutePath.BILLING_WALLET} replace />
+  }
+
   return (
     <div className="flex min-h-[calc(100svh-60px)] items-center justify-center px-6 py-14 lg:px-[40px]">
       <div className="w-full max-w-[560px] text-center" style={{ animation: 'stat-in 0.5s ease both' }}>

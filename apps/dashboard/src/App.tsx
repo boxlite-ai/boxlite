@@ -186,18 +186,9 @@ function App() {
         <Route index element={<Navigate to={boxesRedirect} replace />} />
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
         <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
-        <Route
-          path={getRouteSubPath(RoutePath.BILLING)}
-          element={config.billingApiUrl ? <Navigate to={RoutePath.BILLING_WALLET} replace /> : <Billing />}
-        />
-        <Route
-          path={getRouteSubPath(RoutePath.BILLING_WALLET)}
-          element={config.billingApiUrl ? <Wallet /> : <Navigate to={boxesRedirect} replace />}
-        />
-        <Route
-          path={getRouteSubPath(RoutePath.BILLING_SPENDING)}
-          element={config.billingApiUrl ? <Spending /> : <Navigate to={boxesRedirect} replace />}
-        />
+        <Route path={getRouteSubPath(RoutePath.BILLING)} element={<Billing />} />
+        <Route path={getRouteSubPath(RoutePath.BILLING_WALLET)} element={<Wallet />} />
+        <Route path={getRouteSubPath(RoutePath.BILLING_SPENDING)} element={<Spending />} />
         <Route path={getRouteSubPath(RoutePath.PRICING)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.ADMIN)} element={<Admin />} />
         {/* TODO(image-rewrite): legacy /dashboard/templates route removed with the templates page. */}
