@@ -265,6 +265,82 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     expect(row.indexdef).toContain('("boxId", "startAt")')
   })
 
+  it('declares the archive unbilled index on the entity as well as in the migration', () => {
+    const index = dataSource
+      .getMetadata(BoxUsagePeriodArchive)
+      .indices.find((candidate) => candidate.name === 'box_usage_periods_archive_unbilled_idx')
+
+    expect(index).toMatchObject({ isUnique: false, where: `"billing_status" = 'unbilled'` })
+    expect(index?.columns.map((column) => column.propertyName)).toEqual(['endAt'])
+  })
+
+  it('verifies the archive unbilled index in the database catalog', async () => {
+    const [row] = await dataSource.query(
+      `SELECT indexdef FROM pg_indexes WHERE indexname = 'box_usage_periods_archive_unbilled_idx'`,
+    )
+
+    expect(row).toBeDefined()
+    expect(row.indexdef).not.toContain('UNIQUE')
+    expect(row.indexdef).toMatch(/ON\s+\S+\.box_usage_periods_archive\s/)
+    expect(row.indexdef).toContain('("endAt")')
+    expect(row.indexdef).toMatch(/billing_status = 'unbilled'::text|"billing_status" = 'unbilled'/)
+  })
+
+  it("uses the unbilled index for commerce-rs's billing scan query, not a full sort", async () => {
+    await archives.save(
+      archives.create({
+        boxId: box.id,
+        organizationId: box.organizationId,
+        region: box.region,
+        cpu: box.cpu,
+        gpu: box.gpu,
+        mem: box.mem,
+        disk: box.disk,
+        startAt: new Date(Date.now() - DAY_MS),
+        endAt: new Date(),
+        billingStatus: 'unbilled',
+      }),
+    )
+
+    // A one-row table always costs less to seq-scan than to index-scan, so the
+    // planner would pick a seq scan here regardless of the index -- that
+    // reflects this table's row count, not whether the index is usable at the
+    // row counts this actually protects against. enable_seqscan=off asks the
+    // same question a much larger archive would answer on its own: is this
+    // index plan-compatible with the query at all. SET and EXPLAIN must share
+    // one connection, so a query runner rather than the pooled dataSource.
+    const queryRunner = dataSource.createQueryRunner()
+    try {
+      // SET (not SET LOCAL): there is no enclosing transaction here, and SET
+      // LOCAL without one reverts before the next statement runs.
+      //
+      // Both seqscan and bitmapscan disabled: at this row count a bitmap
+      // index scan costs about the same as a plain one, and a bitmap scan
+      // doesn't preserve index order, so the planner adds a Sort node that
+      // has nothing to do with whether this index satisfies the ORDER BY --
+      // it's an artifact of a one-row table, not something a growing archive
+      // would still pay for. Forcing a plain index scan asks the real
+      // question: can this index serve the ORDER BY directly.
+      await queryRunner.query('SET enable_seqscan = off')
+      await queryRunner.query('SET enable_bitmapscan = off')
+      const plan = (
+        await queryRunner.query(
+          `EXPLAIN SELECT * FROM "box_usage_periods_archive"
+            WHERE "billing_status" = 'unbilled' ORDER BY "endAt" LIMIT 200`,
+        )
+      )
+        .map((row: { 'QUERY PLAN': string }) => row['QUERY PLAN'])
+        .join('\n')
+
+      expect(plan).toContain('box_usage_periods_archive_unbilled_idx')
+      expect(plan).not.toMatch(/Sort/i)
+    } finally {
+      await queryRunner.query('SET enable_seqscan = on')
+      await queryRunner.query('SET enable_bitmapscan = on')
+      await queryRunner.release()
+    }
+  })
+
   it('declares the org open-period index on the entity as well as in the migration', () => {
     const index = dataSource
       .getMetadata(BoxUsagePeriod)

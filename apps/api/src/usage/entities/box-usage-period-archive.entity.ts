@@ -12,6 +12,14 @@ import { BoxUsagePeriod } from './box-usage-period.entity'
 // Will only contain closed usage periods
 @Entity('box_usage_periods_archive')
 @Index('box_usage_periods_archive_box_start_uidx', ['boxId', 'startAt'], { unique: true })
+// commerce-rs's billing cron scans WHERE billing_status = 'unbilled' ORDER BY
+// endAt every round. The (boxId, startAt) index above can't serve that -- it
+// has neither column -- so without this partial index the scan degrades to a
+// full sort of the archive as it grows. Billed rows drop out of the index
+// entirely, keeping it small regardless of archive size.
+@Index('box_usage_periods_archive_unbilled_idx', ['endAt'], {
+  where: `"billing_status" = 'unbilled'`,
+})
 export class BoxUsagePeriodArchive {
   @PrimaryGeneratedColumn('uuid')
   id: string
