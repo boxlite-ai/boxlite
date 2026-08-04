@@ -157,6 +157,12 @@ const configuration = {
   healthCheck: {
     apiKey: process.env.HEALTH_CHECK_API_KEY,
   },
+  // Auth commerce-rs presents to this internal API (src/billing). Must equal
+  // commerce-rs's own CONTROL_PLANE_SERVICE_TOKEN -- one shared secret for
+  // that one outbound direction, not a general admin credential.
+  commerceService: {
+    apiKey: process.env.COMMERCE_SERVICE_API_KEY,
+  },
   organizationBoxDefaultLimitedNetworkEgress: process.env.ORGANIZATION_BOX_DEFAULT_LIMITED_NETWORK_EGRESS === 'true',
   pylonAppId: process.env.PYLON_APP_ID,
   billingApiUrl: process.env.BILLING_API_URL,

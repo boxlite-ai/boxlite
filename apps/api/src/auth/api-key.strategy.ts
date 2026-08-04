@@ -76,6 +76,13 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
       }
     }
 
+    const commerceServiceApiKey = this.configService.get('commerceService.apiKey')
+    if (commerceServiceApiKey && commerceServiceApiKey === token) {
+      return {
+        role: 'commerce-service',
+      }
+    }
+
     try {
       let apiKey = await this.getApiKeyCache(token)
       if (!apiKey) {

@@ -44,6 +44,13 @@ export class BoxUsagePeriodArchive {
   @Column()
   region: string
 
+  // commerce-rs's billing queue: 'unbilled' until its billing cron claims the
+  // row with a compare-and-swap UPDATE (billingStatus 'unbilled' -> 'billed').
+  // Owned by commerce-rs; this app only ever sets the 'unbilled' default on
+  // insert (see fromUsagePeriod below) and never updates it directly.
+  @Column({ name: 'billing_status', default: 'unbilled' })
+  billingStatus: string
+
   public static fromUsagePeriod(usagePeriod: BoxUsagePeriod) {
     const usagePeriodEntity = new BoxUsagePeriodArchive()
     usagePeriodEntity.boxId = usagePeriod.boxId

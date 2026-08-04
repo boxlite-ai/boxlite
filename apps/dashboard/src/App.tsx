@@ -39,6 +39,8 @@ import Boxes from './pages/Boxes'
 // recharts/terminal deps. Boxes + the Dashboard shell stay eager (first paint).
 const Keys = React.lazy(() => import('./pages/Keys'))
 const Billing = React.lazy(() => import('./pages/Billing'))
+const Wallet = React.lazy(() => import('./pages/Wallet'))
+const Spending = React.lazy(() => import('./pages/Spending'))
 const Admin = React.lazy(() => import('./pages/Admin'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
@@ -54,8 +56,6 @@ const HIDDEN_DASHBOARD_ROUTES = [
   RoutePath.IMAGES,
   RoutePath.VOLUMES,
   RoutePath.LIMITS,
-  RoutePath.BILLING_SPENDING,
-  RoutePath.BILLING_WALLET,
   RoutePath.MEMBERS,
   RoutePath.ROLES,
   RoutePath.AUDIT_LOGS,
@@ -186,7 +186,18 @@ function App() {
         <Route index element={<Navigate to={boxesRedirect} replace />} />
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
         <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
-        <Route path={getRouteSubPath(RoutePath.BILLING)} element={<Billing />} />
+        <Route
+          path={getRouteSubPath(RoutePath.BILLING)}
+          element={config.billingApiUrl ? <Navigate to={RoutePath.BILLING_WALLET} replace /> : <Billing />}
+        />
+        <Route
+          path={getRouteSubPath(RoutePath.BILLING_WALLET)}
+          element={config.billingApiUrl ? <Wallet /> : <Navigate to={boxesRedirect} replace />}
+        />
+        <Route
+          path={getRouteSubPath(RoutePath.BILLING_SPENDING)}
+          element={config.billingApiUrl ? <Spending /> : <Navigate to={boxesRedirect} replace />}
+        />
         <Route path={getRouteSubPath(RoutePath.PRICING)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.ADMIN)} element={<Admin />} />
         {/* TODO(image-rewrite): legacy /dashboard/templates route removed with the templates page. */}

@@ -181,6 +181,10 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   const primaryItems = useMemo<NavItem[]>(
     () => [
       { label: 'Boxes', path: RoutePath.BOXES },
+      // Always navigates to RoutePath.BILLING: when billing is enabled that
+      // route itself redirects to BILLING_WALLET (see App.tsx), and
+      // pathname.startsWith(item.path) below still highlights this item on
+      // the wallet/spending sub-pages because they share this prefix.
       { label: 'Billing', path: RoutePath.BILLING },
       ...(canViewAdmin ? [{ label: 'Admin', path: RoutePath.ADMIN }] : []),
     ],

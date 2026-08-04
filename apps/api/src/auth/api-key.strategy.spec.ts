@@ -72,4 +72,28 @@ describe('ApiKeyStrategy', () => {
     expect(mocks.configService.getOrThrow).not.toHaveBeenCalled()
     expect(mocks.apiKeyService.getApiKeyByValue).toHaveBeenCalledWith('unknown-api-key')
   })
+
+  it('resolves a token matching commerceService.apiKey to the commerce-service role', async () => {
+    const { strategy, mocks } = createStrategy()
+    mocks.configService.get.mockImplementation((key: string) =>
+      key === 'commerceService.apiKey' ? 'commerce-shared-secret' : undefined,
+    )
+
+    await expect(strategy.validate('commerce-shared-secret')).resolves.toEqual({
+      role: 'commerce-service',
+    })
+
+    expect(mocks.apiKeyService.getApiKeyByValue).not.toHaveBeenCalled()
+  })
+
+  it('does not match an unrelated token against commerceService.apiKey', async () => {
+    const { strategy, mocks } = createStrategy()
+    mocks.configService.get.mockImplementation((key: string) =>
+      key === 'commerceService.apiKey' ? 'commerce-shared-secret' : undefined,
+    )
+
+    await expect(strategy.validate('some-other-token')).resolves.toBeNull()
+
+    expect(mocks.apiKeyService.getApiKeyByValue).toHaveBeenCalledWith('some-other-token')
+  })
 })

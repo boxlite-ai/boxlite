@@ -276,6 +276,22 @@ const Wallet = () => {
             </Card>
           </div>
         )}
+        {!walletQuery.isLoading && !wallet && (
+          <Card className="w-full">
+            <CardHeader>
+              <CardTitle>Get started with billing</CardTitle>
+              <CardDescription>
+                Connect a credit card to activate your wallet
+                {user?.profile.email_verified === false ? '' : ' and receive $100 of credits'}.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button onClick={handleUpdatePaymentMethod} disabled={isCheckoutUrlLoading}>
+                {isCheckoutUrlLoading && <Spinner />} Connect a credit card
+              </Button>
+            </CardContent>
+          </Card>
+        )}
         {wallet && (
           <>
             {user && (

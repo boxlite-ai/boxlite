@@ -21,6 +21,7 @@ import { RedisModule, getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import { ScheduleModule } from '@nestjs/schedule'
 import { EventEmitterModule } from '@nestjs/event-emitter'
 import { UsageModule } from './usage/usage.module'
+import { BillingModule } from './billing/billing.module'
 import { AnalyticsModule } from './analytics/analytics.module'
 import { OrganizationModule } from './organization/organization.module'
 import { EmailModule } from './email/email.module'
@@ -175,6 +176,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     BoxModule,
     ScheduleModule.forRoot(),
     UsageModule,
+    BillingModule,
     AnalyticsModule,
     OrganizationModule,
     RegionModule,
