@@ -10,8 +10,7 @@ import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.c
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { AddBoxUsagePeriods1785250000000 } from '../../migrations/pre-deploy/1785250000000-add-box-usage-periods-migration'
-import { AddBoxUsagePeriodsIndex1786000000000 } from '../../migrations/pre-deploy/1786000000000-add-box-usage-periods-index-migration'
-import { AddBoxUsagePeriodsArchiveBillingStatus1786200000000 } from '../../migrations/pre-deploy/1786200000000-add-box-usage-periods-archive-billing-status-migration'
+import { AddBoxUsagePeriodsIndexAndBillingStatus1786000000000 } from '../../migrations/pre-deploy/1786000000000-add-box-usage-periods-index-and-billing-status-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { UsageService } from './usage.service'
@@ -107,8 +106,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     const queryRunner = dataSource.createQueryRunner()
     try {
       await new AddBoxUsagePeriods1785250000000().up(queryRunner)
-      await new AddBoxUsagePeriodsIndex1786000000000().up(queryRunner)
-      await new AddBoxUsagePeriodsArchiveBillingStatus1786200000000().up(queryRunner)
+      await new AddBoxUsagePeriodsIndexAndBillingStatus1786000000000().up(queryRunner)
       ownsTables = true
     } finally {
       await queryRunner.release()
