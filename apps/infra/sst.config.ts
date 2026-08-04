@@ -197,6 +197,10 @@ export default $config({
     const oidcMgmtClientSecret = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_SECRET')
     const posthogApiKey = new sst.Secret('POSTHOG_API_KEY', '')
     const svixAuthToken = new sst.Secret('SVIX_AUTH_TOKEN', '')
+    // Empty fallback: read only when BILLING_API_URL is also set (see the Api
+    // environment block) — an unset commerce deployment should not require a
+    // real value here.
+    const commerceServiceApiKey = new sst.Secret('COMMERCE_SERVICE_API_KEY', '')
 
     // ─── 2. PLATFORM ─────────────────────────────────────────────────────────
     // Network model + rationale (subnets / NAT / egress-only public IP, AWS citations): ./NETWORKING.md
@@ -611,6 +615,25 @@ export default $config({
 
         // Admin
         ADMIN_API_KEY: envOr('ADMIN_API_KEY', adminApiKey.result),
+
+        // Commerce (boxlite-commerce, a separate repo/deploy — see its own
+        // infra/README.md). Both unset by default: the billing console stays
+        // hidden (HIDDEN_DASHBOARD_ROUTES in apps/dashboard/src/App.tsx) until
+        // a commerce service is actually deployed and these are set. Setting
+        // only one of the two would either point the dashboard at a billing
+        // API this stage cannot authenticate to (BILLING_API_URL without the
+        // key) or hold a live credential nothing uses (the key without the
+        // URL) — so they arrive together.
+        ...(process.env.BILLING_API_URL &&
+          process.env.COMMERCE_SERVICE_API_KEY && {
+            BILLING_API_URL: process.env.BILLING_API_URL,
+            // Auth this API *presents* to commerce's internal billing API
+            // (src/billing). Must equal commerce's own
+            // CONTROL_PLANE_SERVICE_TOKEN / COMMERCE_RS_CONTROL_PLANE_SERVICE_TOKEN
+            // — one shared secret for that one outbound direction, set by
+            // whoever deploys each side.
+            COMMERCE_SERVICE_API_KEY: commerceServiceApiKey.value,
+          }),
 
         // Observability read/write path. These stay server-side; never expose
         // ClickHouse credentials to the dashboard bundle.
