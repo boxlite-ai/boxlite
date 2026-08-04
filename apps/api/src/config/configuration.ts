@@ -17,6 +17,7 @@ const configuration = {
   environment: process.env.ENVIRONMENT,
   runMigrations: process.env.RUN_MIGRATIONS === 'true',
   port: parseInt(process.env.PORT, 10),
+  host: process.env.API_HOST || '0.0.0.0',
   appUrl: process.env.APP_URL,
   database: {
     host: process.env.DB_HOST,

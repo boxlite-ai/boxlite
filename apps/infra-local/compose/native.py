@@ -221,6 +221,13 @@ def _components(p: _Paths) -> dict[str, _Component]:
         "RUNNER_AVAILABILITY_SCORE_THRESHOLD": "5",
         "RUNNER_MEMORY_PENALTY_THRESHOLD": "95",
         "RUNNER_DISK_PENALTY_THRESHOLD": "95",
+        # IPv4-only "0.0.0.0" (the API's prod default) leaves the runner's
+        # first dial to "localhost" (which often resolves to ::1 first)
+        # connection-refused with no fallback path of its own. "::" makes
+        # Node bind dual-stack (both ::1 and 127.0.0.1), which is Node's own
+        # default when no host is passed — this only restores that default
+        # for local dev; prod is untouched.
+        "API_HOST": "::",
         **_parse_dotenv(apps / ".env"),
     }
     return {
