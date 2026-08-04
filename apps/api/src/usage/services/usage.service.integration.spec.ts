@@ -252,6 +252,24 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     expect(index?.columns.map((column) => column.propertyName)).toEqual(['boxId', 'startAt'])
   })
 
+  it('verifies the archive unique index in the database catalog', async () => {
+    const [row] = await dataSource.query(`
+      SELECT ix.indisunique        AS is_unique,
+             array_agg(a.attname ORDER BY array_position(ix.indkey, a.attnum)) AS columns
+        FROM pg_index ix
+        JOIN pg_class i ON i.oid = ix.indexrelid
+        JOIN pg_class t ON t.oid = ix.indrelid
+        JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = ANY(ix.indkey)
+       WHERE i.relname = 'box_usage_periods_archive_box_start_uidx'
+         AND t.relname = 'box_usage_periods_archive'
+       GROUP BY i.relname, ix.indisunique
+    `)
+
+    expect(row).toBeDefined()
+    expect(row.is_unique).toBe(true)
+    expect(row.columns).toEqual(['boxId', 'startAt'])
+  })
+
   it('declares the org open-period index on the entity as well as in the migration', () => {
     const index = dataSource
       .getMetadata(BoxUsagePeriod)
@@ -259,6 +277,26 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
 
     expect(index).toMatchObject({ isUnique: false, where: '"endAt" IS NULL' })
     expect(index?.columns.map((column) => column.propertyName)).toEqual(['organizationId'])
+  })
+
+  it('verifies the org open-period index in the database catalog', async () => {
+    const [row] = await dataSource.query(`
+      SELECT ix.indisunique        AS is_unique,
+             pg_get_expr(ix.indpred, ix.indrelid) AS predicate,
+             array_agg(a.attname ORDER BY array_position(ix.indkey, a.attnum)) AS columns
+        FROM pg_index ix
+        JOIN pg_class i ON i.oid = ix.indexrelid
+        JOIN pg_class t ON t.oid = ix.indrelid
+        JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = ANY(ix.indkey)
+       WHERE i.relname = 'idx_box_usage_periods_org_open'
+         AND t.relname = 'box_usage_periods'
+       GROUP BY i.relname, ix.indisunique, ix.indpred
+    `)
+
+    expect(row).toBeDefined()
+    expect(row.is_unique).toBe(false)
+    expect(row.columns).toEqual(['organizationId'])
+    expect(row.predicate).toMatch(/"endAt" IS NULL|endAt IS NULL/)
   })
 
   it('refuses a second open period for the same box', async () => {
