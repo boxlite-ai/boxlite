@@ -1,7 +1,8 @@
 name: Deploy stack
 run-name: Deploy ${{ inputs.stage }} stack
 
-# A build deploy sources both deployable components from one commit on main, each in its own job:
+# A build deploy sources both deployable components from one commit — on main, or the head of an
+# open pull request when a change needs a real stage before it merges — each in its own job:
 #
 #   Api    → Build commit Api image ───────────────→ per-commit ECR tag
 #   Runner → Build C SDK → Build Runner Binary ────→ private per-commit S3 object
@@ -26,7 +27,7 @@ on:
         default: false
         type: boolean
       ref:
-        description: 'Full SHA of any commit already on main. Defaults to current main.'
+        description: 'Full SHA of a commit on main, or the head of an open PR. Defaults to current main.'
         required: false
         type: string
 
@@ -40,9 +41,14 @@ concurrency:
 
 jobs:
   resolve-ref:
-    name: Resolve main commit
+    name: Resolve deployable commit
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    # A job-level block replaces the workflow-level one rather than merging with it, so
+    # contents: read is restated. pull-requests: read is what lets a PR head qualify below.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       sha: ${{ steps.ref.outputs.sha }}
     steps:
@@ -52,20 +58,45 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Require a commit already on main
+      - name: Require a commit on main or an open pull request
         id: ref
         shell: bash
         env:
           INPUT_REF: ${{ inputs.ref }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           candidate="${INPUT_REF:-$GITHUB_SHA}"
           [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be a full commit SHA" >&2; exit 1; }
-          git cat-file -e "$candidate^{commit}"
-          git merge-base --is-ancestor "$candidate" origin/main || {
-            echo "$candidate is not a commit on main" >&2
+
+          # On main needs no further proof. `cat-file` only rules out a SHA this clone has never
+          # seen — fetch-depth: 0 brings every branch, so a same-repo PR head is present and it is
+          # `merge-base` that sends it to the pull-request path below.
+          if git cat-file -e "$candidate^{commit}" 2>/dev/null \
+            && git merge-base --is-ancestor "$candidate" origin/main; then
+            echo "$candidate is on main"
+            echo "sha=$candidate" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Otherwise it has to be what an open pull request in THIS repository proposes.
+          #
+          # Same repository, because everything downstream treats the resolved commit as trusted:
+          # build-c and build-runner check it out holding contents: write, and the deploy job runs
+          # its `npm ci` / `npm test` after the OIDC role is configured, so a fork head would be
+          # arbitrary code with credentials in the environment — the exposure e2e-cloud.yml
+          # documents. Pushing to a branch here already needs write access. Same test as
+          # e2e-local.yml's fork gate, expressed against the API payload.
+          #
+          # Heads only, because /commits/{sha}/pulls also lists a PR's intermediate commits, and
+          # deploying one of those would ship a state no review is looking at.
+          number="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${candidate}/pulls" \
+            --jq "[.[] | select(.state == \"open\" and .head.sha == \"${candidate}\" and .head.repo.full_name == \"${GITHUB_REPOSITORY}\") | .number] | first // empty")"
+          [ -n "$number" ] || {
+            echo "$candidate is not on main, and not the head of an open pull request in ${GITHUB_REPOSITORY}" >&2
             exit 1
           }
+          echo "$candidate is the head of open PR #${number}"
           echo "sha=$candidate" >> "$GITHUB_OUTPUT"
 
   build-api:
@@ -128,7 +159,7 @@ jobs:
       BOXLITE_ARTIFACT_REF: ${{ needs.resolve-ref.outputs.sha }}
 
     steps:
-      - name: Checkout selected main commit
+      - name: Checkout selected commit
         uses: actions/checkout@v5
         with:
           ref: ${{ needs.resolve-ref.outputs.sha }}

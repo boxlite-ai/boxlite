@@ -175,17 +175,36 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.equal(workflow.jobs.deploy['runs-on'], 'ubuntu-24.04')
 
   // `if:` restricts the workflow ref, not the dispatched `ref` input — this shell guard is the
-  // only thing binding the built commit to main. Read the step it lives in, since demoting the
-  // line to a comment leaves it greppable while the guard is gone.
+  // only thing binding the built commit to main or to a pull request someone is proposing. Read
+  // the step it lives in, since demoting a line to a comment leaves it greppable while the guard
+  // is gone.
   const refGuardStep = workflow.jobs['resolve-ref'].steps.find(
-    (step) => step.name === 'Require a commit already on main',
+    (step) => step.name === 'Require a commit on main or an open pull request',
   )
-  assert.ok(refGuardStep, 'the main-ancestry guard step is missing')
+  assert.ok(refGuardStep, 'the deployable-commit guard step is missing')
   // Anchored per line with no leading `#`: a parsed read still hands back the whole shell body,
-  // so commenting the guard out leaves it matchable while it no longer runs.
-  assert.match(refGuardStep.run, /^\s*git merge-base --is-ancestor "\$candidate" origin\/main/m)
+  // so commenting a check out leaves it matchable while it no longer runs. `&&` is allowed
+  // because the main test is the second half of an `if`, but `#` still is not.
+  assert.match(refGuardStep.run, /^\s*(&& )?git merge-base --is-ancestor "\$candidate" origin\/main/m)
   assert.match(refGuardStep.run, /^\s*\[\[ "\$candidate" =~ \^\[0-9a-f\]\{40\}\$ \]\]/m)
   assert.match(refGuardStep.run, /^\s*set -euo pipefail/m)
+  // The pull-request path is the widened surface, so pin all three things that keep it narrow:
+  // only an OPEN pull request, only its head (/commits/{sha}/pulls also returns a PR's
+  // intermediate commits, which no review is looking at), and only one opened from THIS
+  // repository. The fork clause is the load-bearing one: build-c and build-runner check the
+  // resolved commit out with contents: write, and the deploy job runs its npm ci / npm test after
+  // the OIDC role is configured, so a fork head would be arbitrary code holding credentials.
+  assert.match(
+    refGuardStep.run,
+    /^\s*--jq .*select\(\.state == \\"open\\" and \.head\.sha == \\"\$\{candidate\}\\" and \.head\.repo\.full_name == \\"\$\{GITHUB_REPOSITORY\}\\"\)/m,
+  )
+  // Neither path matching has to fail the job; a guard that falls through deploys an arbitrary SHA.
+  assert.match(refGuardStep.run, /^\s*\[ -n "\$number" \] \|\| \{$/m)
+  assert.match(refGuardStep.run, /is not on main, and not the head of an open pull request in/)
+  // The API read the pull-request path depends on; without it the query 404s and every PR ref is
+  // rejected, silently reverting this to main-only.
+  assert.equal(workflow.jobs['resolve-ref'].permissions['pull-requests'], 'read')
+  assert.equal(workflow.jobs['resolve-ref'].permissions.contents, 'read')
 
   // The reusable builds and what they are told to build: `with:` values decide which commit and
   // which C SDK the Runner links, and build-runner-binary.yml defaults libboxlite_source to the
@@ -668,7 +687,7 @@ test('API publishing builds once and promotes that exact image without rebuildin
 
   // Commit mode: how deploy-infra.yml builds the Api for the commit it deploys. `ref` is what
   // selects it, so it has to be call-only — a dispatch that could set it would let someone tag an
-  // image for a commit the main-ancestry guard never saw.
+  // image for a commit the deployable-commit guard never saw.
   assert.deepEqual(Object.keys(workflow.on.workflow_call.inputs).sort(), ['ref', 'stage'])
   assert.equal(workflow.on.workflow_dispatch.inputs.ref, undefined)
   assert.equal(workflow.on.workflow_call.inputs.ref.required, true)

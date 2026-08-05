@@ -134,7 +134,8 @@ OtelCollector are built from it on every path, so a ref naming another commit
 would deploy two.
 
 `.github/workflows/deploy-infra.yml` is the normal path. It accepts the full SHA
-of any commit already on `main` (current `main` by default) and builds each
+of any commit already on `main` (current `main` by default), or the head of an
+open pull request in this repository — never a fork's — and builds each
 component in its own job — the Linux x64 C SDK and Runner on one leg, the API
 image on the other, sharing only the ref resolution — then stages the
 commit-keyed Runner object and deploys both. The Runner reports
@@ -238,8 +239,10 @@ all require the same manual token.
 ## Common commands
 
 ```bash
-# Preview a specific commit already on main instead of current main.
-gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false -f ref=<full-main-commit-sha>
+# Preview a specific commit instead of current main: one already on main, or the head of an open
+# pull request in this repository (a fork's head is refused). Dispatch stays --ref main either way;
+# the job conditions test the launch branch, not this input.
+gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false -f ref=<full-commit-sha>
 
 gh workflow run build-apps-api-image.yml --ref main -f operation=build -f version=0.9.8
 gh workflow run build-apps-api-image.yml --ref main -f operation=promote -f stage=prod -f version=0.9.8

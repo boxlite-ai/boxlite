@@ -101,8 +101,9 @@ jobs:
           ref: refs/tags/v${{ inputs.version }}
           persist-credentials: false
 
-      # The caller resolved this and proved it is a commit on main (deploy-infra.yml resolve-ref);
-      # the operation guard below re-checks its shape rather than trusting the input's provenance.
+      # The caller resolved this and proved it is a commit on main, or the head of an open pull
+      # request in this repository — never a fork's (deploy-infra.yml resolve-ref); the operation
+      # guard below re-checks its shape rather than trusting the input's provenance.
       - name: Checkout the selected commit
         if: inputs.ref != ''
         uses: actions/checkout@v5

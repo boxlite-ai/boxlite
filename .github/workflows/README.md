@@ -161,8 +161,11 @@ is enabled. The workflow is dormant until repository variable
 
 ### `deploy-infra.yml`
 
-Previews or deploys the full stack from one commit already on `main` (current
-`main` by default) on a native AMD64 GitHub runner, for a
+Previews or deploys the full stack from one commit — already on `main` (current
+`main` by default), or the head of an open pull request in this repository, so a
+change can reach a stage before it merges; a fork's head is refused because the
+resolved commit is checked out with write permissions and run after the deploy
+role is configured — on a native AMD64 GitHub runner, for a
 `workflow_dispatch`-selected `stage` (an allowlisted `choice` input, `dev`
 today). Each component is built by its own job, and the two legs share only
 `resolve-ref`, so they run side by side: the reusable C/Runner workflows produce
@@ -203,7 +206,7 @@ adding it to whichever of those lists should reach it.
 
 `commit` is how `deploy-infra.yml` builds the API for the commit it deploys; the
 `ref` input is call-only, so no dispatch can tag an image for a commit the
-main-ancestry guard never saw. The two tag shapes cannot collide, which matters
+deployable-commit guard never saw. The two tag shapes cannot collide, which matters
 because the repository is `IMMUTABLE` and a collision would be unrepairable.
 `promote` copies an exact manifest registry-side, addressed by digest, and
 verifies the digest survived; it never rebuilds. The dispatched operations run
