@@ -27,7 +27,11 @@ on:
         default: false
         type: boolean
       ref:
-        description: 'Full SHA of a commit on main, or the head of an open PR. Defaults to current main.'
+        description: 'Full SHA of a commit on main. Mutually exclusive with pr. Defaults to current main.'
+        required: false
+        type: string
+      pr:
+        description: 'PR number to deploy its current head — same repo or fork. Mutually exclusive with ref.'
         required: false
         type: string
 
@@ -63,40 +67,60 @@ jobs:
         shell: bash
         env:
           INPUT_REF: ${{ inputs.ref }}
+          INPUT_PR: ${{ inputs.pr }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          candidate="${INPUT_REF:-$GITHUB_SHA}"
-          [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be a full commit SHA" >&2; exit 1; }
+          [ -z "$INPUT_REF" ] || [ -z "$INPUT_PR" ] || {
+            echo "ref and pr are mutually exclusive — give at most one" >&2
+            exit 1
+          }
 
-          # On main needs no further proof. `cat-file` only rules out a SHA this clone has never
-          # seen — fetch-depth: 0 brings every branch, so a same-repo PR head is present and it is
-          # `merge-base` that sends it to the pull-request path below.
-          if git cat-file -e "$candidate^{commit}" 2>/dev/null \
-            && git merge-base --is-ancestor "$candidate" origin/main; then
-            echo "$candidate is on main"
-            echo "sha=$candidate" >> "$GITHUB_OUTPUT"
+          # A PR number needs no SHA-shape check of its own: `gh pr view` is the validation, and
+          # it fails on a nonexistent PR the same way cat-file fails on a nonexistent commit below.
+          # This is the fix for the SHA-first design PR #1148 shipped: that guard took a SHA and
+          # asked the API which PR (if any) it belonged to via /commits/{sha}/pulls, which returns
+          # an empty array for a fork PR's head — confirmed live — so no patch to that lookup could
+          # ever accept a fork. Asking the API for a known PR NUMBER's head, instead, works
+          # unconditionally for same-repo and fork PRs alike; there is no lookup to fail.
+          if [ -n "$INPUT_PR" ]; then
+            [[ "$INPUT_PR" =~ ^[0-9]+$ ]] || { echo "pr must be a PR number" >&2; exit 1; }
+            pr_json="$(gh pr view "$INPUT_PR" --json state,headRefOid,headRepository,isCrossRepository)"
+            state="$(jq -r '.state' <<<"$pr_json")"
+            [ "$state" = "OPEN" ] || {
+              echo "PR #$INPUT_PR is $state, not open" >&2
+              exit 1
+            }
+            sha="$(jq -r '.headRefOid' <<<"$pr_json")"
+            fork="$(jq -r '.isCrossRepository' <<<"$pr_json")"
+            # $fork is logged for whoever reviews the run below, never gated on: PR #1148 refused a
+            # fork head here deliberately, as its own security boundary. Accepting one is the point
+            # of this change (it's how #1141 becomes deployable) — dispatching this workflow at all
+            # already requires repo write access, and build-api/deploy additionally sit behind the
+            # dev environment's required reviewer before their AWS OIDC role activates, same as for
+            # any ref. That part is unchanged: a fork head reaches those two jobs' secrets no more
+            # easily than a same-repo head always could.
+            #
+            # build-c/build-runner are the honest exception: neither declares an `environment:` or
+            # touches AWS credentials, so a fork's own Cargo/Go/make code now runs on a GitHub-hosted
+            # runner right after resolve-ref, with no second human look and nothing to steal. Risk
+            # there is compute abuse and build-time tampering (e.g. a rewritten .gitmodules URL), not
+            # credential theft — call it out rather than fold it into the build-api/deploy gate above.
+            echo "PR #$INPUT_PR ($([ "$fork" = "true" ] && echo fork || echo same-repo)) head is $sha"
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Otherwise it has to be what an open pull request in THIS repository proposes.
-          #
-          # Same repository, because everything downstream treats the resolved commit as trusted:
-          # build-c and build-runner check it out holding contents: write, and the deploy job runs
-          # its `npm ci` / `npm test` after the OIDC role is configured, so a fork head would be
-          # arbitrary code with credentials in the environment — the exposure e2e-cloud.yml
-          # documents. Pushing to a branch here already needs write access. Same test as
-          # e2e-local.yml's fork gate, expressed against the API payload.
-          #
-          # Heads only, because /commits/{sha}/pulls also lists a PR's intermediate commits, and
-          # deploying one of those would ship a state no review is looking at.
-          number="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${candidate}/pulls" \
-            --jq "[.[] | select(.state == \"open\" and .head.sha == \"${candidate}\" and .head.repo.full_name == \"${GITHUB_REPOSITORY}\") | .number] | first // empty")"
-          [ -n "$number" ] || {
-            echo "$candidate is not on main, and not the head of an open pull request in ${GITHUB_REPOSITORY}" >&2
+          # Otherwise: a commit already on main. `cat-file` only rules out a SHA this clone has
+          # never seen — fetch-depth: 0 brings every branch, so `merge-base` is the real test.
+          candidate="${INPUT_REF:-$GITHUB_SHA}"
+          [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be a full commit SHA" >&2; exit 1; }
+          if ! git cat-file -e "$candidate^{commit}" 2>/dev/null \
+            || ! git merge-base --is-ancestor "$candidate" origin/main; then
+            echo "$candidate is not a commit on main" >&2
             exit 1
-          }
-          echo "$candidate is the head of open PR #${number}"
+          fi
+          echo "$candidate is on main"
           echo "sha=$candidate" >> "$GITHUB_OUTPUT"
 
   build-api:

@@ -174,37 +174,53 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.equal(workflow.permissions['id-token'], 'write')
   assert.equal(workflow.jobs.deploy['runs-on'], 'ubuntu-24.04')
 
-  // `if:` restricts the workflow ref, not the dispatched `ref` input — this shell guard is the
-  // only thing binding the built commit to main or to a pull request someone is proposing. Read
-  // the step it lives in, since demoting a line to a comment leaves it greppable while the guard
-  // is gone.
+  // `if:` restricts the workflow ref, not the dispatched `ref`/`pr` inputs — this shell guard is
+  // the only thing binding the built commit to main or to a pull request someone is proposing.
+  // Read the step it lives in, since demoting a line to a comment leaves it greppable while the
+  // guard is gone.
   const refGuardStep = workflow.jobs['resolve-ref'].steps.find(
     (step) => step.name === 'Require a commit on main or an open pull request',
   )
   assert.ok(refGuardStep, 'the deployable-commit guard step is missing')
   // Anchored per line with no leading `#`: a parsed read still hands back the whole shell body,
-  // so commenting a check out leaves it matchable while it no longer runs. `&&` is allowed
-  // because the main test is the second half of an `if`, but `#` still is not.
-  assert.match(refGuardStep.run, /^\s*(&& )?git merge-base --is-ancestor "\$candidate" origin\/main/m)
-  assert.match(refGuardStep.run, /^\s*\[\[ "\$candidate" =~ \^\[0-9a-f\]\{40\}\$ \]\]/m)
+  // so commenting a check out leaves it matchable while it no longer runs.
   assert.match(refGuardStep.run, /^\s*set -euo pipefail/m)
-  // The pull-request path is the widened surface, so pin all three things that keep it narrow:
-  // only an OPEN pull request, only its head (/commits/{sha}/pulls also returns a PR's
-  // intermediate commits, which no review is looking at), and only one opened from THIS
-  // repository. The fork clause is the load-bearing one: build-c and build-runner check the
-  // resolved commit out with contents: write, and the deploy job runs its npm ci / npm test after
-  // the OIDC role is configured, so a fork head would be arbitrary code holding credentials.
+  assert.match(refGuardStep.run, /^\s*\[ -z "\$INPUT_REF" \] \|\| \[ -z "\$INPUT_PR" \] \|\| \{/m)
+  assert.match(refGuardStep.run, /ref and pr are mutually exclusive/)
+  // The PR path resolves by NUMBER, not by asking the API which PR (if any) owns a given SHA —
+  // that lookup (/commits/{sha}/pulls) returns an empty array for a fork PR's head, so no fix to
+  // it could ever accept a fork. gh pr view has no such gap: it works identically for a same-repo
+  // or a fork PR, which is the whole point of resolving this direction instead of the other.
+  assert.match(refGuardStep.run, /^\s*\[\[ "\$INPUT_PR" =~ \^\[0-9\]\+\$ \]\]/m)
   assert.match(
     refGuardStep.run,
-    /^\s*--jq .*select\(\.state == \\"open\\" and \.head\.sha == \\"\$\{candidate\}\\" and \.head\.repo\.full_name == \\"\$\{GITHUB_REPOSITORY\}\\"\)/m,
+    /^\s*pr_json="\$\(gh pr view "\$INPUT_PR" --json state,headRefOid,headRepository,isCrossRepository\)"/m,
   )
-  // Neither path matching has to fail the job; a guard that falls through deploys an arbitrary SHA.
-  assert.match(refGuardStep.run, /^\s*\[ -n "\$number" \] \|\| \{$/m)
-  assert.match(refGuardStep.run, /is not on main, and not the head of an open pull request in/)
-  // The API read the pull-request path depends on; without it the query 404s and every PR ref is
-  // rejected, silently reverting this to main-only.
+  assert.match(refGuardStep.run, /^\s*\[ "\$state" = "OPEN" \] \|\| \{/m)
+  // PR #1148 refused a fork head deliberately (`.head.repo.full_name == GITHUB_REPOSITORY`), a
+  // named security boundary — not a side effect of the SHA-reverse-lookup bug this guard fixes.
+  // This guard drops that boundary on purpose: isCrossRepository is fetched and logged for
+  // whoever reviews the run, but nothing here may branch on it. Pin the shape (fetched, echoed)
+  // AND the absence (no `exit 1` between computing it and the block's `exit 0`) so a fork
+  // exclusion added back later doesn't silently pass this test by accident.
+  assert.match(refGuardStep.run, /^\s*fork="\$\(jq -r '\.isCrossRepository' <<<"\$pr_json"\)"/m)
+  assert.match(refGuardStep.run, /^\s*echo "PR #\$INPUT_PR \(\$\(\[ "\$fork" = "true" \] && echo fork \|\| echo same-repo\)\) head is \$sha"/m)
+  const forkOnwards = refGuardStep.run.slice(refGuardStep.run.indexOf('fork="$(jq'))
+  const prBlockTail = forkOnwards.slice(0, forkOnwards.indexOf('exit 0') + 'exit 0'.length)
+  assert.doesNotMatch(
+    prBlockTail,
+    /exit 1/,
+    'a fork PR head must not be rejected between resolving it and exit 0 — same-repo and fork PRs are accepted identically',
+  )
+  assert.match(refGuardStep.run, /^\s*echo "sha=\$sha" >> "\$GITHUB_OUTPUT"/m)
+  // The main-commit path is untouched by the pr path above it.
+  assert.match(refGuardStep.run, /^\s*\[\[ "\$candidate" =~ \^\[0-9a-f\]\{40\}\$ \]\]/m)
+  assert.match(refGuardStep.run, /^\s*\|\| ! git merge-base --is-ancestor "\$candidate" origin\/main/m)
+  // The API the pr path depends on; without it every `pr` input 404s, which fails closed (the
+  // guard rejects), not open — but it's still the reason this permission is here.
   assert.equal(workflow.jobs['resolve-ref'].permissions['pull-requests'], 'read')
   assert.equal(workflow.jobs['resolve-ref'].permissions.contents, 'read')
+  assert.deepEqual(workflow.jobs['resolve-ref'].outputs, { sha: '${{ steps.ref.outputs.sha }}' })
 
   // The reusable builds and what they are told to build: `with:` values decide which commit and
   // which C SDK the Runner links, and build-runner-binary.yml defaults libboxlite_source to the
@@ -242,6 +258,9 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
     assert.equal(workflow.jobs.deploy.env[selector], 'build', `${selector} must be set on the deploy job`)
   }
   assert.equal(workflow.jobs.deploy.env.BOXLITE_ARTIFACT_REF, '${{ needs.resolve-ref.outputs.sha }}')
+  const deployCheckoutStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Checkout selected commit')
+  assert.ok(deployCheckoutStep, 'the deploy job never checks out the resolved commit')
+  assert.equal(deployCheckoutStep.with.ref, '${{ needs.resolve-ref.outputs.sha }}')
   // Both build legs, not just the Runner's. Dropping build-api would let the deploy resolve a
   // commit image tag whose build had not finished — or never ran — and fail on the pull.
   assert.deepEqual(workflow.jobs.deploy.needs, ['resolve-ref', 'build-api', 'build-runner'])
@@ -404,6 +423,26 @@ test('commit Runner builds consume the C SDK artifact from the same reusable run
   assert.ok(runnerWorkflow.on.workflow_call.inputs.libboxlite_source, 'the C SDK source input is gone')
   assert.ok(runnerWorkflow.on.workflow_call.inputs.ref, 'build-runner-binary.yml dropped the ref input')
 
+  // Each resolve-ref job's own checkout only sees THIS repo's branches (fetch-depth: 0), so its
+  // "Validate build commit" step's cat-file check fails for a commit an open pull request (same
+  // repo or fork) proposes, independently of whatever deploy-infra.yml already resolved — each
+  // needs its own fetch-if-needed fallback. A bare-SHA `git fetch` is a real, working fallback
+  // (confirmed live against the real GitHub server, fork heads included) — no PR number or ref
+  // name required, unlike deploy-infra.yml's own resolve-ref, which needs a PR number for a
+  // different reason (the security lookup, not fetchability). Anchored per line: a commented-out
+  // fallback still parses.
+  const cValidateRun = cWorkflow.jobs['resolve-ref'].steps.find((step) => step.name === 'Validate build commit')?.run
+  assert.ok(cValidateRun, 'build-c.yml lost its Validate build commit step')
+  assert.match(cValidateRun, /^\s*git cat-file -e "\$candidate\^\{commit\}" 2>\/dev\/null \|\| git fetch origin "\$candidate"/m)
+  const runnerValidateRun = runnerWorkflow.jobs['resolve-ref'].steps.find(
+    (step) => step.name === 'Validate build commit',
+  )?.run
+  assert.ok(runnerValidateRun, 'build-runner-binary.yml lost its Validate build commit step')
+  assert.match(
+    runnerValidateRun,
+    /^\s*git cat-file -e "\$candidate\^\{commit\}" 2>\/dev\/null \|\| git fetch origin "\$candidate"/m,
+  )
+
   // The upload/download names are the handshake between the two runs: build-c publishes
   // c-sdk-<target>, build-runner consumes c-sdk-linux-x64-gnu. Compare parsed values so a legal
   // requoting does not fail and a commented-out `name:` does not pass.
@@ -468,7 +507,9 @@ test('the cloud E2E suite is reachable only from a deploy or a human', () => {
 
   // The checkout has to follow the caller's commit. Falling back to github.sha alone would test
   // the tip of whatever ref the *caller* ran from, which for a re-deploy of an older commit is
-  // not the commit now on the stack.
+  // not the commit now on the stack. actions/checkout's own ref:-driven fetch already resolves a
+  // fork-derived commit — confirmed live against the real GitHub server — so no restructuring is
+  // needed here, fork-derived deploys included.
   const checkout = workflow.jobs.e2e.steps.find(
     (step) => typeof step.uses === 'string' && step.uses.startsWith('actions/checkout'),
   )

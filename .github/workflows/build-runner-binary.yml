@@ -63,6 +63,11 @@ jobs:
           set -euo pipefail
           candidate="${INPUT_REF:-${WORKFLOW_RUN_SHA:-$GITHUB_SHA}}"
           [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be a full commit SHA" >&2; exit 1; }
+          # fetch-depth: 0 above only brings THIS repo's own branches. A commit proposed by an
+          # open pull request — same-repo or fork — isn't on any of them, so it isn't here yet;
+          # fetch it directly by SHA. (Unlike a ref name, a bare SHA is only a "want" GitHub can
+          # refuse, so this is a fallback, not the first attempt.)
+          git cat-file -e "$candidate^{commit}" 2>/dev/null || git fetch origin "$candidate"
           git cat-file -e "$candidate^{commit}"
           echo "sha=$candidate" >> "$GITHUB_OUTPUT"
 

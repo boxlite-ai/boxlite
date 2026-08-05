@@ -58,17 +58,17 @@
 # Hanging the suite off a deploy makes client and server the same commit;
 # every other run is someone asking for one.
 #
-# The corollary is that untrusted code no longer reaches this workflow —
-# which is what makes it safe for the job that builds and runs the tree
-# to also hold the API key. There is no fork path left to defend:
-# dispatch needs write access, and deploy-infra is itself dispatch-only
-# and resolves only a commit on main or the head of an open pull request
-# in this repository, both of which took write access to create.
-# Restoring any PR trigger would mean restoring that exposure — a labeled
-# fork run hands arbitrary code a live dev credential, and a conftest.py is
-# enough to exfiltrate it — so it would first have to mint a scoped,
-# short-lived key (CreateApiKeyDto takes `permissions` and `expiresAt`) and
-# pass only that to the tests.
+# The corollary used to be "there is no fork path left to defend" — that stopped being
+# literally true when deploy-infra started accepting any open PR's head, fork included.
+# It's still safe for the job that builds and runs the tree to hold the API key, on a
+# deliberate, narrower basis: dispatch needs write access, and deploy-infra is itself
+# dispatch-only, so every run of this workflow — whatever commit it builds — was chosen by
+# someone who already had write access, and the `dev` Environment's required reviewer
+# approves before the OIDC role deploy-infra's own job holds is ever configured. A fork PR's
+# test code does get this key, same as a same-repo PR's; that is accepted, not overlooked —
+# scoping it down to a short-lived, narrowly-permissioned key (CreateApiKeyDto takes
+# `permissions` and `expiresAt`) instead of the standing one remains the available follow-up
+# if that trade-off ever needs revisiting.
 
 name: E2E cloud
 
