@@ -106,6 +106,50 @@ impl LiveState {
     }
 }
 
+/// How long to wait for the guest to freeze its filesystems.
+///
+/// `FIFREEZE` does not fail under write load — it blocks until the filesystem
+/// has flushed, so a busy guest simply takes longer. The old 5s was short
+/// enough that a moderately busy box would time out routinely, which under
+/// [`QuiescePolicy::RequireFrozen`] would turn into a refused export; 30s
+/// still produced spurious refusals when the host itself was saturated
+/// (observed with four VMs booting in parallel: the running-box export flaked
+/// while a lone run passed). An export is not latency-sensitive, so the
+/// ceiling is generous — it exists only to bound a guest that is wedged or
+/// has no agent, not to keep a busy one on schedule.
+const GUEST_QUIESCE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Decide whether an operation may proceed given how the freeze went.
+///
+/// Split out from the quiesce bracket so the refusal contract — which error
+/// class, and whether the message tells the caller what to do about it — is
+/// testable without a running VM.
+fn ensure_frozen_enough(box_id: &BoxID, frozen: bool, policy: QuiescePolicy) -> BoxliteResult<()> {
+    if frozen || policy == QuiescePolicy::BestEffort {
+        return Ok(());
+    }
+    Err(BoxliteError::InvalidState(format!(
+        "Cannot export box {}: the guest did not freeze its filesystems within {}s, so the \
+         archive would only be crash-consistent — the disk equivalent of pulling the power cord, \
+         with the guest's unwritten page cache lost. Stop the box and export it again for a \
+         consistent archive.",
+        box_id,
+        GUEST_QUIESCE_TIMEOUT.as_secs()
+    )))
+}
+
+/// What a failed guest freeze means for the operation being wrapped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QuiescePolicy {
+    /// Carry on without a freeze. The disk view is crash-consistent — as if the
+    /// machine lost power — which is acceptable when the result is a fresh COW
+    /// fork the caller is about to boot anyway.
+    BestEffort,
+    /// Abandon the operation if the guest will not freeze, rather than hand back
+    /// a crash-consistent result that looks indistinguishable from a good one.
+    RequireFrozen,
+}
+
 // ============================================================================
 // BOX IMPL
 // ============================================================================
@@ -1178,6 +1222,23 @@ impl BoxImpl {
     where
         Fut: Future<Output = BoxliteResult<R>>,
     {
+        self.with_quiesce_policy(QuiescePolicy::BestEffort, fut)
+            .await
+    }
+
+    /// `with_quiesce_async`, but the caller chooses what a failed freeze means.
+    ///
+    /// With [`QuiescePolicy::RequireFrozen`] the operation is abandoned before
+    /// the VM is even stopped, so a caller that needs a filesystem-consistent
+    /// view never silently receives a crash-consistent one.
+    pub(crate) async fn with_quiesce_policy<Fut, R>(
+        &self,
+        policy: QuiescePolicy,
+        fut: Fut,
+    ) -> BoxliteResult<R>
+    where
+        Fut: Future<Output = BoxliteResult<R>>,
+    {
         let (pid, was_running) = {
             let state = self.state.read();
             let running = state.status.is_running();
@@ -1201,10 +1262,17 @@ impl BoxImpl {
 
         let t0 = Instant::now();
 
-        // Phase 1: Freeze guest I/O (best-effort, 5s timeout)
+        // Phase 1: Freeze guest I/O
         let t_quiesce = Instant::now();
         let frozen = self.guest_quiesce().await;
         let quiesce_ms = t_quiesce.elapsed().as_millis() as u64;
+
+        // A timed-out quiesce may have frozen the guest before its reply was
+        // dropped. Thaw before a strict policy refuses the operation.
+        if !frozen && policy == QuiescePolicy::RequireFrozen {
+            self.guest_thaw().await;
+        }
+        ensure_frozen_enough(&self.config.id, frozen, policy)?;
 
         // Phase 2: SIGSTOP — pause vCPUs
         // SAFETY: sending SIGSTOP to a known valid PID that we own (shim process).
@@ -1271,7 +1339,7 @@ impl BoxImpl {
             return false;
         };
 
-        let result = tokio::time::timeout(Duration::from_secs(5), async {
+        let result = tokio::time::timeout(GUEST_QUIESCE_TIMEOUT, async {
             let mut guest = live.guest_session.guest().await?;
             guest.quiesce().await
         })
@@ -1441,6 +1509,50 @@ mod tests {
     use boxlite_shared::BoxTransport;
     use chrono::Utc;
     use tempfile::TempDir;
+
+    /// An export whose freeze failed must be refused, not silently downgraded:
+    /// a crash-consistent archive is indistinguishable from a good one.
+    #[test]
+    fn a_failed_freeze_refuses_the_export() {
+        let id = BoxIDMint::mint();
+        let err = ensure_frozen_enough(&id, false, QuiescePolicy::RequireFrozen)
+            .expect_err("an unfrozen guest must not yield an archive");
+
+        assert!(
+            matches!(err, BoxliteError::InvalidState(_)),
+            "expected InvalidState, got {err:?}"
+        );
+        let msg = err.to_string();
+        // The caller can only act on this if the message says what to do.
+        assert!(
+            msg.contains("crash-consistent"),
+            "message must name the hazard: {msg}"
+        );
+        assert!(
+            msg.contains("Stop the box"),
+            "message must state the remedy: {msg}"
+        );
+        assert!(
+            msg.contains(&GUEST_QUIESCE_TIMEOUT.as_secs().to_string()),
+            "message must state how long it waited: {msg}"
+        );
+    }
+
+    /// Clone and snapshot fork a disk the caller boots straight away, so they
+    /// keep the old behaviour rather than failing under write load.
+    #[test]
+    fn best_effort_still_proceeds_without_a_freeze() {
+        let id = BoxIDMint::mint();
+        ensure_frozen_enough(&id, false, QuiescePolicy::BestEffort)
+            .expect("best-effort must tolerate an unfrozen guest");
+    }
+
+    #[test]
+    fn a_successful_freeze_proceeds_under_either_policy() {
+        let id = BoxIDMint::mint();
+        ensure_frozen_enough(&id, true, QuiescePolicy::RequireFrozen).expect("frozen is enough");
+        ensure_frozen_enough(&id, true, QuiescePolicy::BestEffort).expect("frozen is enough");
+    }
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
         info.network

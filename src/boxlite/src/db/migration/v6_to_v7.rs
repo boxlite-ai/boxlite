@@ -18,6 +18,29 @@ use crate::db::schema;
 use crate::runtime::id::BaseDiskID;
 use crate::runtime::id::BaseDiskIDMint;
 
+/// The `base_disk` table exactly as v7 created it.
+///
+/// Frozen on purpose: a migration must reproduce the schema of its own era, so
+/// it cannot read `schema::BASE_DISK_TABLE`. That constant tracks the current
+/// schema, and every column later added to it would otherwise appear here too
+/// — making the `ALTER TABLE` in the migration that introduces the column fail
+/// with "duplicate column name" for anyone upgrading from v6 or earlier.
+const V7_BASE_DISK_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS base_disk (
+    id TEXT PRIMARY KEY NOT NULL,
+    source_box_id TEXT NOT NULL,
+    name TEXT,
+    kind TEXT NOT NULL CHECK(kind IN ('snapshot', 'clone_base', 'rootfs')),
+    base_path TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    json TEXT NOT NULL,
+    UNIQUE(source_box_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_base_disk_source ON base_disk(source_box_id);
+CREATE INDEX IF NOT EXISTS idx_base_disk_kind ON base_disk(kind);
+CREATE INDEX IF NOT EXISTS idx_base_disk_path ON base_disk(base_path);
+"#;
+
 pub(crate) struct MoveDisksAndAddBaseDisk;
 
 impl Migration for MoveDisksAndAddBaseDisk {
@@ -33,7 +56,7 @@ impl Migration for MoveDisksAndAddBaseDisk {
 
     fn run(&self, conn: &Connection, home_dir: Option<&Path>) -> BoxliteResult<()> {
         // 1. Create base_disk table (for clone bases and rootfs cache).
-        db_err!(conn.execute_batch(schema::BASE_DISK_TABLE))?;
+        db_err!(conn.execute_batch(V7_BASE_DISK_TABLE))?;
 
         // 2. Create snapshot table (for per-box snapshots).
         db_err!(conn.execute_batch(schema::SNAPSHOT_TABLE))?;
@@ -307,7 +330,7 @@ mod tests {
     /// Create an in-memory DB with the base_disk table for migration tests.
     fn test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(schema::BASE_DISK_TABLE).unwrap();
+        conn.execute_batch(V7_BASE_DISK_TABLE).unwrap();
         conn.execute_batch(schema::SNAPSHOT_TABLE).unwrap();
         conn.execute_batch(schema::BASE_DISK_REF_TABLE).unwrap();
         conn

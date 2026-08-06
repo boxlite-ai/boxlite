@@ -96,8 +96,8 @@ impl BaseDiskStore {
         let conn = self.db.conn();
         db_err!(conn.execute(
             "INSERT INTO base_disk \
-             (id, source_box_id, name, kind, base_path, created_at, json) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (id, source_box_id, name, kind, base_path, created_at, json, digest) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 &disk.id,
                 &disk.source_box_id,
@@ -106,7 +106,39 @@ impl BaseDiskStore {
                 &disk.disk_info.base_path,
                 disk.created_at,
                 json,
+                &disk.digest,
             ],
+        ))?;
+        Ok(())
+    }
+
+    /// Find a base disk by its content digest.
+    ///
+    /// Only layers whose digest has already been computed are visible here;
+    /// see [`BaseDisk::digest`] for why it is filled in lazily.
+    pub(crate) fn find_by_digest(&self, digest: &str) -> BoxliteResult<Option<BaseDiskInfo>> {
+        let conn = self.db.conn();
+        let result = db_err!(
+            conn.query_row(
+                "SELECT id, source_box_id, name, kind, base_path, \
+                 created_at, json FROM base_disk WHERE digest = ?1",
+                rusqlite::params![digest],
+                row_to_record,
+            )
+            .optional()
+        )?;
+        Ok(result)
+    }
+
+    /// Record a layer's content digest, in both the indexed column and the
+    /// JSON blob so the two cannot drift.
+    pub(crate) fn set_digest(&self, id: &BaseDiskID, digest: &str) -> BoxliteResult<()> {
+        let conn = self.db.conn();
+        db_err!(conn.execute(
+            "UPDATE base_disk \
+             SET digest = ?2, json = json_set(json, '$.digest', ?2) \
+             WHERE id = ?1",
+            rusqlite::params![id, digest],
         ))?;
         Ok(())
     }
@@ -330,6 +362,7 @@ mod tests {
                 size_bytes: 512,
             },
             created_at: chrono::Utc::now().timestamp(),
+            digest: None,
         }
     }
 
@@ -686,6 +719,7 @@ mod tests {
                 size_bytes: 1024,
             },
             created_at: 1700000000,
+            digest: None,
         };
         store.insert(&disk).unwrap();
 

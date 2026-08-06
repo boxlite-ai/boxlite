@@ -143,13 +143,13 @@ typedef struct FFIError {
   char *message;
 } FFIError;
 
-typedef struct RuntimeHandle CBoxliteRuntime;
-
-typedef struct OptionsHandle CBoxliteOptions;
-
 typedef struct BoxHandle CBoxHandle;
 
 typedef struct FFIError CBoxliteError;
+
+typedef struct RuntimeHandle CBoxliteRuntime;
+
+typedef struct OptionsHandle CBoxliteOptions;
 
 // Box creation completion.
 typedef void (*CBoxCreateBoxCb)(CBoxHandle*, CBoxliteError*, void*);
@@ -462,6 +462,17 @@ enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_add(CAdvancedBox
 enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_drop(CAdvancedBoxOptions *opts,
                                                                      const char *const *capabilities,
                                                                      int count);
+
+enum BoxliteErrorCode boxlite_box_export(CBoxHandle *handle,
+                                         const char *dest_path,
+                                         char **out_path,
+                                         CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_runtime_import_box(CBoxliteRuntime *runtime,
+                                                 const char *archive_path,
+                                                 const char *name,
+                                                 CBoxHandle **out_handle,
+                                                 CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
                                          CBoxliteOptions *opts,

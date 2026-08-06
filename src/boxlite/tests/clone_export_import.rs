@@ -101,6 +101,9 @@ async fn test_export_import_roundtrip() {
 
     assert!(archive.path().exists());
     assert!(archive.path().extension().is_some_and(|e| e == "boxlite"));
+    assert!(archive.sha256().is_some_and(|d| d.starts_with("sha256:")));
+    assert!(archive.size_bytes().is_some_and(|size| size > 0));
+    assert!(archive.archive_version().is_some());
 
     let imported = runtime
         .import_box(archive, Some("imported-box".to_string()))
@@ -112,6 +115,53 @@ async fn test_export_import_roundtrip() {
     assert_eq!(info.status, BoxStatus::Stopped);
 
     // Imported box can start
+    imported
+        .start()
+        .await
+        .expect("Failed to start imported box");
+    imported.stop().await.expect("Failed to stop imported box");
+
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+}
+
+#[tokio::test]
+async fn test_directory_export_import_roundtrip() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let source = create_stopped_box(&runtime).await;
+
+    let export_dir = TempDir::new_in("/tmp").unwrap();
+    let mirror = export_dir.path().join("mirror");
+
+    let archive = source
+        .export(ExportOptions { as_directory: true }, &mirror)
+        .await
+        .expect("Failed to export box as directory");
+
+    // The archive is the directory itself: a manifest beside layer objects.
+    assert!(archive.path().is_dir());
+    assert!(archive.path().join("manifest.json").exists());
+    assert!(archive.sha256().is_some_and(|d| d.starts_with("sha256:")));
+    assert!(archive.size_bytes().is_some_and(|size| size > 0));
+    assert!(archive.archive_version().is_some());
+    let objects = std::fs::read_dir(archive.path().join("layers"))
+        .expect("layers dir")
+        .count();
+    assert!(objects >= 1, "expected at least one layer object");
+
+    let imported = runtime
+        .import_box(archive, Some("imported-from-dir".to_string()))
+        .await
+        .expect("Failed to import box from directory");
+
+    let info = imported.info().await.expect("get imported box info");
+    assert_eq!(info.name.as_deref(), Some("imported-from-dir"));
+    assert_eq!(info.status, BoxStatus::Stopped);
+
     imported
         .start()
         .await
@@ -254,6 +304,28 @@ async fn test_export_running_box() {
     );
     imported.start().await.expect("Start imported box");
     imported.stop().await.expect("Stop imported box");
+
+    let mirror = export_dir.path().join("running-mirror");
+    let directory_archive = source
+        .export(ExportOptions { as_directory: true }, &mirror)
+        .await
+        .expect("Directory export on running box should succeed");
+    assert!(directory_archive.path().join("manifest.json").exists());
+    let imported_directory = runtime
+        .import_box(
+            directory_archive,
+            Some("imported-running-directory".to_string()),
+        )
+        .await
+        .expect("Directory archive from running box should import");
+    imported_directory
+        .start()
+        .await
+        .expect("Start directory-imported box");
+    imported_directory
+        .stop()
+        .await
+        .expect("Stop directory-imported box");
 
     source.stop().await.expect("Stop source box");
 

@@ -853,6 +853,9 @@ pub(crate) enum ArchiveImportPolicy {
 pub struct BoxArchive {
     path: PathBuf,
     import_policy: ArchiveImportPolicy,
+    sha256: Option<String>,
+    size_bytes: Option<u64>,
+    archive_version: Option<u32>,
 }
 
 impl BoxArchive {
@@ -865,7 +868,19 @@ impl BoxArchive {
         Self {
             path: path.into(),
             import_policy: ArchiveImportPolicy::Trusted,
+            sha256: None,
+            size_bytes: None,
+            archive_version: None,
         }
+    }
+
+    /// Attach export metadata that callers can persist before moving the
+    /// archive through object storage.
+    pub fn with_metadata(mut self, sha256: String, size_bytes: u64, archive_version: u32) -> Self {
+        self.sha256 = Some(sha256);
+        self.size_bytes = Some(size_bytes);
+        self.archive_version = Some(archive_version);
+        self
     }
 
     /// Create an archive handle for bytes received across an untrusted server
@@ -879,12 +894,37 @@ impl BoxArchive {
         Self {
             path: path.into(),
             import_policy: ArchiveImportPolicy::UntrustedRemote,
+            sha256: None,
+            size_bytes: None,
+            archive_version: None,
         }
     }
 
     /// Path to the archive file.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// SHA-256 digest of the exported artifact.
+    ///
+    /// For single-file archives this is the digest of the `.boxlite` file. For
+    /// directory-form archives this is the digest of `manifest.json`; layer
+    /// digests are recorded inside that manifest.
+    pub fn sha256(&self) -> Option<&str> {
+        self.sha256.as_deref()
+    }
+
+    /// Size of the exported artifact in bytes.
+    ///
+    /// Directory-form archives report the sum of regular files under the
+    /// archive directory.
+    pub fn size_bytes(&self) -> Option<u64> {
+        self.size_bytes
+    }
+
+    /// Archive manifest version.
+    pub fn archive_version(&self) -> Option<u32> {
+        self.archive_version
     }
 
     pub(crate) fn import_policy(&self) -> ArchiveImportPolicy {
@@ -898,7 +938,19 @@ pub struct SnapshotOptions {}
 
 /// Forward-compatible options for exporting a box archive.
 #[derive(Debug, Clone, Default)]
-pub struct ExportOptions {}
+pub struct ExportOptions {
+    /// Write the archive as a directory of individually addressed objects
+    /// rather than a single `.boxlite` file.
+    ///
+    /// The layout is a `manifest.json` beside a `layers/` directory holding one
+    /// compressed object per layer, named by the layer's digest. Because a
+    /// layer is immutable and named by its content, syncing that directory to
+    /// object storage transfers only the objects the destination lacks — an
+    /// `aws s3 sync` or `mc mirror` already skips the rest, with no protocol
+    /// between the two ends. The single-file form cannot do that: it is one
+    /// opaque blob that changes completely between exports.
+    pub as_directory: bool,
+}
 
 /// Forward-compatible options for cloning a box.
 #[derive(Debug, Clone, Default)]

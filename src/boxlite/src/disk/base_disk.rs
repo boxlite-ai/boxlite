@@ -19,9 +19,11 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use boxlite_shared::errors::BoxliteResult;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::db::base_disk::BaseDiskStore;
@@ -64,8 +66,68 @@ pub struct BaseDisk {
     #[serde(flatten)]
     pub disk_info: super::DiskInfo,
     pub created_at: i64,
+    /// Content digest (`sha256:<hex>`) of the layer file, or `None` until one
+    /// is needed.
+    ///
+    /// Computed lazily rather than at creation: `create_base_disk` forks a
+    /// layer with a `rename(2)`, and hashing there would turn an O(1)
+    /// operation into a full read of the disk on every clone. A base is
+    /// immutable once created, so the digest is stable and only has to be
+    /// computed once — see [`BaseDiskManager::digest_of`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
 }
 use crate::disk::constants::filenames as disk_filenames;
+
+/// Sentinel `source_box_id` for layers that arrived in an archive rather than
+/// being forked from a box on this host.
+const IMPORTED_SOURCE: &str = "__imported__";
+
+/// Canonical digest of an immutable layer that has no store record, cached in a
+/// file beside it.
+///
+/// The image disk is the case this exists for: it lives in the image cache
+/// under a path derived from its image digest, nothing rewrites it, and it is
+/// typically the largest layer in a chain. Hashing it on every export is the
+/// single most expensive thing export does.
+///
+/// A stale sidecar is not a risk here — the file it names is addressed by
+/// content and installed atomically, so a given path always holds the same
+/// bytes. The write is best-effort: losing it only costs a rehash.
+fn sidecar_digest(path: &Path) -> BoxliteResult<String> {
+    let sidecar = path.with_extension(format!(
+        "{}.digest",
+        path.extension().unwrap_or_default().to_string_lossy()
+    ));
+
+    if let Ok(cached) = std::fs::read_to_string(&sidecar) {
+        let cached = cached.trim();
+        if cached
+            .strip_prefix("sha256:")
+            .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        {
+            return Ok(cached.to_string());
+        }
+    }
+
+    let digest = crate::litebox::archive::CanonicalLayer::open(path)?.digest()?;
+    let staging = sidecar.with_extension(format!(
+        "{}.{}.partial",
+        sidecar.extension().unwrap_or_default().to_string_lossy(),
+        uuid::Uuid::new_v4()
+    ));
+    if let Err(e) =
+        std::fs::write(&staging, &digest).and_then(|()| std::fs::rename(&staging, &sidecar))
+    {
+        let _ = std::fs::remove_file(&staging);
+        tracing::debug!(
+            path = %sidecar.display(),
+            error = %e,
+            "Could not cache layer digest; it will be recomputed next export"
+        );
+    }
+    Ok(digest)
+}
 
 /// Manages the lifecycle of clone base disks.
 ///
@@ -78,6 +140,7 @@ use crate::disk::constants::filenames as disk_filenames;
 pub(crate) struct BaseDiskManager {
     bases_dir: PathBuf,
     store: BaseDiskStore,
+    lifecycle_lock: Arc<Mutex<()>>,
 }
 
 impl BaseDiskManager {
@@ -91,12 +154,20 @@ impl BaseDiskManager {
         let bases_dir = bases_dir
             .canonicalize()
             .unwrap_or_else(|_| bases_dir.clone());
-        Self { bases_dir, store }
+        Self {
+            bases_dir,
+            store,
+            lifecycle_lock: Arc::new(Mutex::new(())),
+        }
     }
 
     /// Expose the underlying store for direct queries (list, find, etc.).
     pub(crate) fn store(&self) -> &BaseDiskStore {
         &self.store
+    }
+
+    pub(crate) fn lock_lifecycle(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.lifecycle_lock.lock()
     }
 
     /// The bases root directory.
@@ -321,6 +392,7 @@ impl BaseDiskManager {
             kind,
             disk_info,
             created_at: now,
+            digest: None,
         };
         self.store.insert(&disk)?;
 
@@ -330,11 +402,96 @@ impl BaseDiskManager {
         Ok(disk)
     }
 
+    /// Install an already-verified layer blob as a base disk with a known digest.
+    ///
+    /// Used by import: the caller has checked the blob hashes to `digest`, so
+    /// the digest is recorded up front rather than lazily. The blob is moved,
+    /// not copied — it lives in the import's temp directory and is about to be
+    /// discarded.
+    ///
+    /// The digest stays valid after the caller relinks the installed file,
+    /// because it names the layer's canonical (backing-cleared) form rather
+    /// than the bytes currently on disk — see
+    /// [`crate::litebox::archive::CanonicalLayer`].
+    pub(crate) fn install_layer(&self, blob: &Path, digest: &str) -> BoxliteResult<BaseDisk> {
+        let base_disk_id = BaseDiskIDMint::mint();
+        let base_file = self.bases_dir.join(format!("{}.qcow2", base_disk_id));
+
+        crate::litebox::archive::move_file(blob, &base_file)?;
+
+        let size_bytes = std::fs::metadata(&base_file).map(|m| m.len()).unwrap_or(0);
+        let disk = BaseDisk {
+            id: base_disk_id,
+            // Not forked from any box on this host — it arrived in an archive.
+            source_box_id: IMPORTED_SOURCE.to_string(),
+            name: None,
+            kind: BaseDiskKind::CloneBase,
+            disk_info: super::DiskInfo {
+                base_path: base_file
+                    .canonicalize()
+                    .unwrap_or(base_file.clone())
+                    .to_string_lossy()
+                    .to_string(),
+                container_disk_bytes: size_bytes,
+                size_bytes,
+            },
+            created_at: chrono::Utc::now().timestamp(),
+            digest: Some(digest.to_string()),
+        };
+        self.store.insert(&disk)?;
+        Ok(disk)
+    }
+
+    /// The content digest of a layer already registered in the store,
+    /// computing and caching it on first call.
+    ///
+    /// A base is immutable, so the digest is stable and the hash is paid once
+    /// per layer for the lifetime of the store — which is what keeps repeat
+    /// exports of boxes sharing a base cheap.
+    ///
+    /// Returns `None` for a path that is not a registered base (an image
+    /// backing file, a raw rootfs), whose digest the caller must compute
+    /// itself; nothing durable exists to cache it against.
+    pub(crate) fn digest_of(&self, layer_path: &Path) -> BoxliteResult<Option<String>> {
+        let canonical = layer_path
+            .canonicalize()
+            .unwrap_or_else(|_| layer_path.to_path_buf());
+        let Some(record) = self.store.find_by_base_path(&canonical.to_string_lossy())? else {
+            // Not a registered base — the image disk is the one that matters
+            // here, and it is the largest layer in a chain. Its own cache is
+            // keyed by image digest and its contents never change, so a sidecar
+            // is enough to keep export from re-reading hundreds of megabytes
+            // every time.
+            return sidecar_digest(&canonical).map(Some);
+        };
+
+        if let Some(digest) = record.disk.digest {
+            return Ok(Some(digest));
+        }
+
+        let digest = crate::litebox::archive::CanonicalLayer::open(&canonical)?.digest()?;
+        // A cache write that loses a race is harmless: the digest is a pure
+        // function of immutable content, so both writers store the same value.
+        if let Err(e) = self.store.set_digest(&record.disk.id, &digest) {
+            tracing::warn!(
+                base_disk_id = %record.disk.id,
+                error = %e,
+                "Failed to cache base disk digest; it will be recomputed next time"
+            );
+        }
+        Ok(Some(digest))
+    }
+
     /// Attempt to garbage-collect a clone base by ID and cascade to parent.
     ///
     /// Queries the `base_disk_ref` table for dependents. If none exist,
     /// deletes the base (DB record + file) and cascades to the parent base.
     pub(crate) fn try_gc_base(&self, base_disk_id: &BaseDiskID) {
+        let _lifecycle = self.lifecycle_lock.lock();
+        self.try_gc_base_locked(base_disk_id);
+    }
+
+    fn try_gc_base_locked(&self, base_disk_id: &BaseDiskID) {
         let record = match self.store.find_by_id(base_disk_id) {
             Ok(Some(r)) => r,
             _ => return,
@@ -368,7 +525,7 @@ impl BaseDiskManager {
             && let Ok(Some(parent_record)) =
                 self.store.find_by_base_path(&parent_path.to_string_lossy())
         {
-            self.try_gc_base(parent_record.id());
+            self.try_gc_base_locked(parent_record.id());
         }
     }
 
@@ -433,6 +590,47 @@ mod tests {
         let store = BaseDiskStore::new(db);
         let mgr = BaseDiskManager::new(bases_dir, store);
         (dir, mgr)
+    }
+
+    /// A layer outside the base store — the image disk — must not be re-read on
+    /// every export; it is the largest layer in a typical chain.
+    #[test]
+    fn digest_of_an_unregistered_layer_is_cached_beside_it() {
+        let (dir, mgr) = setup();
+        let image_disk = dir.path().join("sha256-abc.ext4");
+        std::fs::write(&image_disk, b"raw ext4 bytes").unwrap();
+
+        let first = mgr.digest_of(&image_disk).unwrap().expect("a digest");
+
+        // Prove the second call answers from the sidecar rather than the file:
+        // replace the file's contents and require the answer not to change.
+        let sidecar = dir.path().join("sha256-abc.ext4.digest");
+        assert!(
+            sidecar.exists(),
+            "expected a sidecar at {}",
+            sidecar.display()
+        );
+        std::fs::write(&image_disk, b"different bytes entirely").unwrap();
+
+        let second = mgr.digest_of(&image_disk).unwrap().expect("a digest");
+        assert_eq!(
+            first, second,
+            "the cached digest must be returned without re-reading the layer"
+        );
+    }
+
+    #[test]
+    fn digest_of_ignores_a_truncated_sidecar() {
+        let (dir, mgr) = setup();
+        let image_disk = dir.path().join("sha256-def.ext4");
+        let sidecar = dir.path().join("sha256-def.ext4.digest");
+        std::fs::write(&image_disk, b"raw ext4 bytes").unwrap();
+        std::fs::write(&sidecar, "sha256:1234").unwrap();
+
+        let digest = mgr.digest_of(&image_disk).unwrap().expect("a digest");
+
+        assert_eq!(digest.len(), "sha256:".len() + 64);
+        assert_eq!(std::fs::read_to_string(sidecar).unwrap(), digest);
     }
 
     /// Helper: create a minimal qcow2 file with an optional backing file path.
@@ -627,6 +825,7 @@ mod tests {
                 size_bytes: 0,
             },
             created_at: 0,
+            digest: None,
         };
         mgr.store().insert(&disk).unwrap();
 
@@ -666,6 +865,7 @@ mod tests {
                 size_bytes: 0,
             },
             created_at: 0,
+            digest: None,
         };
         mgr.store().insert(&bd1).unwrap();
 
@@ -683,6 +883,7 @@ mod tests {
                 size_bytes: 0,
             },
             created_at: 0,
+            digest: None,
         };
         mgr.store().insert(&bd2).unwrap();
 
@@ -726,6 +927,7 @@ mod tests {
                 size_bytes: 0,
             },
             created_at: 0,
+            digest: None,
         };
         mgr.store().insert(&disk).unwrap();
 
@@ -760,6 +962,7 @@ mod tests {
                 size_bytes: 0,
             },
             created_at: 0,
+            digest: None,
         };
         mgr.store().insert(&disk).unwrap();
 
@@ -812,6 +1015,7 @@ mod tests {
                 id: base_id(id),
                 source_box_id: "__global__".to_string(),
                 name: Some(id.to_string()),
+                digest: None,
                 kind,
                 disk_info: DiskInfo {
                     base_path: path.to_string_lossy().to_string(),

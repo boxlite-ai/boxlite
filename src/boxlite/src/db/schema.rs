@@ -7,7 +7,7 @@
 //! Each table has queryable columns for efficient filtering + JSON blob for full data.
 
 /// Current schema version.
-pub const SCHEMA_VERSION: i32 = 9;
+pub const SCHEMA_VERSION: i32 = 10;
 
 /// Schema version tracking table.
 pub const SCHEMA_VERSION_TABLE: &str = r#"
@@ -115,11 +115,13 @@ CREATE TABLE IF NOT EXISTS base_disk (
     base_path TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     json TEXT NOT NULL,
+    digest TEXT,
     UNIQUE(source_box_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_base_disk_source ON base_disk(source_box_id);
 CREATE INDEX IF NOT EXISTS idx_base_disk_kind ON base_disk(kind);
 CREATE INDEX IF NOT EXISTS idx_base_disk_path ON base_disk(base_path);
+CREATE INDEX IF NOT EXISTS idx_base_disk_digest ON base_disk(digest);
 "#;
 
 /// Base disk reference table (added in v7).

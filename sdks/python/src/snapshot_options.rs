@@ -37,7 +37,7 @@ impl PyExportOptions {
 
 impl From<PyExportOptions> for ExportOptions {
     fn from(_py: PyExportOptions) -> Self {
-        ExportOptions {}
+        ExportOptions::default()
     }
 }
 

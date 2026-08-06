@@ -21,7 +21,7 @@ pub struct JsExportOptions {}
 
 impl From<JsExportOptions> for ExportOptions {
     fn from(_js: JsExportOptions) -> Self {
-        ExportOptions {}
+        ExportOptions::default()
     }
 }
 
