@@ -413,20 +413,25 @@ export default $config({
     // an image has to be published before a fresh stack can consume one, so the consumer cannot
     // also be responsible for creating its input.
     const apiArtifact = resolveArtifactSource('api')
+    const selectedApiImage =
+      apiArtifact.kind === 'release' || apiArtifact.ref
+        ? apiImageReference({
+            app: $app.name,
+            stage: $app.stage,
+            accountId,
+            region: REGION,
+            version: apiArtifact.version,
+            ref: apiArtifact.kind === 'release' ? undefined : apiArtifact.ref,
+          })
+        : undefined
+    const billingOutboxDrainedDeployImage = process.env.BOXLITE_INTERNAL_BILLING_OUTBOX_DRAINED_DEPLOY_IMAGE
+    if (billingOutboxDrainedDeployImage && billingOutboxDrainedDeployImage !== selectedApiImage) {
+      throw new Error('the guarded billing outbox deploy image must exactly match the selected immutable Api image')
+    }
     const api = new sst.aws.Service('Api', {
       cluster,
       wait: true,
-      image:
-        apiArtifact.kind === 'release' || apiArtifact.ref
-          ? apiImageReference({
-              app: $app.name,
-              stage: $app.stage,
-              accountId,
-              region: REGION,
-              version: apiArtifact.version,
-              ref: apiArtifact.kind === 'release' ? undefined : apiArtifact.ref,
-            })
-          : { context: '../..', dockerfile: 'apps/api/Dockerfile' },
+      image: selectedApiImage ?? { context: '../..', dockerfile: 'apps/api/Dockerfile' },
       loadBalancer: {
         domain: serviceDomain('api'),
         rules: [{ listen: '443/https', forward: `${PORTS.API}/http` }],
@@ -496,7 +501,10 @@ export default $config({
           resources: ['arn:aws:s3:::boxlite-volume-*', 'arn:aws:s3:::boxlite-volume-*/*'],
         },
       ],
-      scaling: { min: 1, max: 4 },
+      // The wrapper sets this private exact image only after it has persisted the normal target
+      // and drained the old revision. Keeping SST at zero prevents Pulumi from reviving that old
+      // task definition before the service update reaches the preverified immutable image.
+      scaling: { min: billingOutboxDrainedDeployImage ? 0 : 1, max: 4 },
       environment: {
         // Core
         NODE_ENV: 'production',
@@ -514,18 +522,12 @@ export default $config({
         // IMAGE_TAG and the SOURCE_REGISTRY_* block are inert upstream-port residue (no consumer
         // — see apps/api configuration.ts), kept only as reserved names for a future registry path.
         BOXLITE_SYSTEM_IMAGE_TAG: envOr('BOXLITE_SYSTEM_IMAGE_TAG', 'v0.1.0'),
-        BOXLITE_SYSTEM_BASE_IMAGE: envOr(
-          'BOXLITE_SYSTEM_BASE_IMAGE',
-          'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0',
-        ),
+        BOXLITE_SYSTEM_BASE_IMAGE: envOr('BOXLITE_SYSTEM_BASE_IMAGE', 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0'),
         BOXLITE_SYSTEM_PYTHON_IMAGE: envOr(
           'BOXLITE_SYSTEM_PYTHON_IMAGE',
           'ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0',
         ),
-        BOXLITE_SYSTEM_NODE_IMAGE: envOr(
-          'BOXLITE_SYSTEM_NODE_IMAGE',
-          'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0',
-        ),
+        BOXLITE_SYSTEM_NODE_IMAGE: envOr('BOXLITE_SYSTEM_NODE_IMAGE', 'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0'),
         BOXLITE_SYSTEM_IMAGES: envOr('BOXLITE_SYSTEM_IMAGES', ''),
         ...(process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_URL && {
           BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME: envOr(

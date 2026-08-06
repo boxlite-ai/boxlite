@@ -41,7 +41,9 @@ permissions:
   id-token: write
 
 concurrency:
-  group: deploy-release-${{ inputs.stage }}
+  # Share the stage lock with deploy-infra.yml. Two workflows must never join
+  # the same one-time billing cutover while its Api is intentionally drained.
+  group: deploy-${{ inputs.stage }}-stack
   cancel-in-progress: false
 
 jobs:

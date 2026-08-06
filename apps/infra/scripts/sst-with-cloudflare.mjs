@@ -40,13 +40,22 @@ import {
   resolveAwsRegion,
   resolvePublicDeploymentConfig,
 } from './deployment-environment.mjs'
+import {
+  BILLING_OUTBOX_DRAINED_DEPLOY_IMAGE_ENV,
+  fenceBillingOutboxApi,
+  prepareBillingOutboxCutover,
+  recordBillingOutboxCutover,
+  restoreBillingOutboxScaling,
+  startBillingOutboxApiForVerification,
+  verifyBillingOutboxDeploymentWhileDrained,
+} from './billing-outbox-cutover.mjs'
 import { requireFullStackDeploy, requireSstSubcommandFirst, withRequiredRunnerPolicy } from './deployment-scope.mjs'
 import {
   resolveAwsCliPath,
   verifyProxyDeploymentWithRetry,
   verifyPublicDeploymentWithRetry,
 } from './proxy-deployment-verify.mjs'
-import { verifyApiImage } from './api-artifact.mjs'
+import { apiImageReference, verifyApiImage } from './api-artifact.mjs'
 import { requireCheckoutMatchesArtifactRefs, resolveArtifactSource } from './artifact-source.mjs'
 import { resolveAwsAccountId, runnerArtifactsBucketName, verifyRunnerArtifact } from './runner-artifact.mjs'
 import { readRunnerStateBaseline } from './runner-policy-baseline.mjs'
@@ -62,6 +71,7 @@ const TERMINATION_SIGNALS = ['SIGINT', 'SIGTERM']
 let terminationSignal
 let artifactPreflightAbortController
 let runnerPolicyPreflightAbortController
+let billingOutboxCutoverAbortController
 let deploymentVerificationAbortController
 const sstProcessTerminator = new SstProcessTerminator()
 
@@ -76,6 +86,7 @@ for (const signal of TERMINATION_SIGNALS) {
       terminationSignal = signal
       artifactPreflightAbortController?.abort(new Error(`Artifact preflight interrupted by ${signal}`))
       runnerPolicyPreflightAbortController?.abort(new Error(`Runner policy preflight interrupted by ${signal}`))
+      billingOutboxCutoverAbortController?.abort(new Error(`Billing outbox cutover interrupted by ${signal}`))
       deploymentVerificationAbortController?.abort(new Error(`Deployment verification interrupted by ${signal}`))
     }
     if (isRepeatedTermination) {
@@ -98,6 +109,13 @@ try {
 if (terminationSignal) process.exit(signalExitCode(terminationSignal))
 
 loadDeploymentEnvironment()
+
+// Only this wrapper may request a zero-capacity Api rendering from sst.config.ts.
+// Accepting it from a caller would turn a normal deploy into an unreviewed outage.
+if (process.env[BILLING_OUTBOX_DRAINED_DEPLOY_IMAGE_ENV] !== undefined) {
+  console.error(`sst-with-cloudflare: ${BILLING_OUTBOX_DRAINED_DEPLOY_IMAGE_ENV} is reserved for the guarded cutover`)
+  process.exit(1)
+}
 
 const REGION = resolveAwsRegion()
 let sstExecutable
@@ -213,6 +231,7 @@ async function runSstCommand() {
 }
 
 let publicDeploymentConfig
+let selectedApiImageReference
 if (sstArgs[0] === 'deploy') {
   artifactPreflightAbortController = new AbortController()
   try {
@@ -231,6 +250,7 @@ if (sstArgs[0] === 'deploy') {
     requireCheckoutMatchesArtifactRefs([apiSource, runnerSource])
 
     if (apiSource.kind === 'release' || apiSource.ref) {
+      const accountId = await resolveAwsAccountId({ signal })
       const image = verifyApiImage(
         {
           app: APP,
@@ -244,6 +264,14 @@ if (sstArgs[0] === 'deploy') {
       console.log(
         `sst-with-cloudflare: Api ${apiSource.kind} image verified (${image.repository}:${image.tag}, ${image.digest})`,
       )
+      selectedApiImageReference = apiImageReference({
+        app: APP,
+        stage,
+        accountId,
+        region: REGION,
+        version: apiSource.version,
+        ref: apiSource.kind === 'release' ? undefined : apiSource.ref,
+      })
     }
     // Verify whichever artifact this deploy actually resolved to, not always the published
     // release: a build-mode deploy 404-ing on the host is the failure this preflight exists to
@@ -292,17 +320,69 @@ if (sstArgs[0] === 'diff' || sstArgs[0] === 'deploy') {
   }
 }
 
+let billingOutboxCutover
+if (sstArgs[0] === 'deploy') {
+  if (terminationSignal) process.exit(signalExitCode(terminationSignal))
+  billingOutboxCutoverAbortController = new AbortController()
+  try {
+    billingOutboxCutover = await prepareBillingOutboxCutover({
+      app: APP,
+      stage,
+      region: REGION,
+      image: selectedApiImageReference,
+      signal: billingOutboxCutoverAbortController.signal,
+    })
+    if (billingOutboxCutover.required) {
+      process.env[BILLING_OUTBOX_DRAINED_DEPLOY_IMAGE_ENV] = billingOutboxCutover.selectedImage
+      console.log(
+        `sst-with-cloudflare: Api drained and scaling fenced for the first billing outbox deploy ` +
+          `(${billingOutboxCutover.snapshotCreated ? 'recorded' : 'reused'} scaling snapshot)`,
+      )
+    }
+  } catch (error) {
+    console.error(`sst-with-cloudflare: billing outbox cutover preparation failed: ${error.message}`)
+    process.exit(1)
+  } finally {
+    billingOutboxCutoverAbortController = undefined
+  }
+}
+
 let exitCode
 try {
-  exitCode = await withPulumiEventLogCleanup(PULUMI_EVENT_LOG_ROOT, runSstCommand)
+  exitCode = terminationSignal
+    ? signalExitCode(terminationSignal)
+    : await withPulumiEventLogCleanup(PULUMI_EVENT_LOG_ROOT, runSstCommand)
 } catch (error) {
   console.error(`sst-with-cloudflare: secure event-log cleanup failed: ${error.message}`)
   exitCode = 1
+} finally {
+  delete process.env[BILLING_OUTBOX_DRAINED_DEPLOY_IMAGE_ENV]
 }
 
+let billingOutboxCutoverComplete = !billingOutboxCutover?.required
 if (exitCode === 0 && !terminationSignal && sstArgs[0] === 'deploy') {
   deploymentVerificationAbortController = new AbortController()
   try {
+    let deployedApi
+    if (billingOutboxCutover.required) {
+      deployedApi = verifyBillingOutboxDeploymentWhileDrained({
+        app: APP,
+        stage,
+        region: REGION,
+        context: billingOutboxCutover,
+      })
+      console.log('sst-with-cloudflare: drained Api task definition matches the preverified immutable image')
+      await startBillingOutboxApiForVerification({
+        app: APP,
+        stage,
+        region: REGION,
+        context: billingOutboxCutover,
+        deployedTaskDefinition: deployedApi.taskDefinition,
+        signal: deploymentVerificationAbortController.signal,
+      })
+      console.log('sst-with-cloudflare: one outbox-aware Api task started while scaling remains suspended')
+    }
+
     const verification = await verifyProxyDeploymentWithRetry(
       { app: APP, stage, region: REGION },
       {
@@ -336,6 +416,26 @@ if (exitCode === 0 && !terminationSignal && sstArgs[0] === 'deploy') {
         `API ${publicVerification.apiConfigUrl}, ` +
         `version ${publicVerification.version}, issuer ${publicVerification.oidcIssuer})`,
     )
+
+    if (billingOutboxCutover.required) {
+      await restoreBillingOutboxScaling({
+        app: APP,
+        stage,
+        region: REGION,
+        context: billingOutboxCutover,
+        deployedTaskDefinition: deployedApi.taskDefinition,
+        signal: deploymentVerificationAbortController.signal,
+      })
+      console.log('sst-with-cloudflare: Api scaling restored from the recorded cutover snapshot')
+
+      recordBillingOutboxCutover({
+        stage,
+        region: REGION,
+        image: billingOutboxCutover.selectedImage,
+      })
+      billingOutboxCutoverComplete = true
+      console.log('sst-with-cloudflare: recorded billing outbox cutover completion')
+    }
   } catch (error) {
     if (!terminationSignal) {
       console.error(`sst-with-cloudflare: SST deploy completed, but deployment verification failed: ${error.message}`)
@@ -344,6 +444,21 @@ if (exitCode === 0 && !terminationSignal && sstArgs[0] === 'deploy') {
   } finally {
     deploymentVerificationAbortController = undefined
   }
+}
+
+if (billingOutboxCutover?.required && !billingOutboxCutoverComplete) {
+  try {
+    await fenceBillingOutboxApi({
+      app: APP,
+      stage,
+      region: REGION,
+      snapshot: billingOutboxCutover.snapshot,
+    })
+    console.error('sst-with-cloudflare: failed cutover left Api fenced at desired and minimum capacity zero')
+  } catch (error) {
+    console.error(`sst-with-cloudflare: CRITICAL: could not re-establish the Api cutover fence: ${error.message}`)
+  }
+  exitCode = 1
 }
 
 if (terminationSignal) exitCode = signalExitCode(terminationSignal)

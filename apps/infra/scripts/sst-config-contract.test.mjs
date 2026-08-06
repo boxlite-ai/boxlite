@@ -282,6 +282,17 @@ test('the Api deploys either a published image or a build of the deployed checko
   assert.match(source, /ci\/github-deploy-role\.yaml/)
 })
 
+test('the guarded outbox cutover keeps SST Api capacity zero for exactly the selected immutable image', () => {
+  const apiService = configSection('const apiArtifact = resolveArtifactSource', '// Assumed by the Api task role')
+
+  assert.match(
+    apiService,
+    /const billingOutboxDrainedDeployImage = process\.env\.BOXLITE_INTERNAL_BILLING_OUTBOX_DRAINED_DEPLOY_IMAGE/,
+  )
+  assert.match(apiService, /billingOutboxDrainedDeployImage !== selectedApiImage/)
+  assert.match(apiService, /scaling: \{ min: billingOutboxDrainedDeployImage \? 0 : 1, max: 4 \}/)
+})
+
 test('the Runner can read only staged build artifacts from the bootstrapped bucket', () => {
   const runner = configSection('─── 10. RUNNER', '// ── Runner ghcr pull credential')
   const artifactPolicy = extractSection(
