@@ -275,6 +275,12 @@ const configuration = {
     apiKey: process.env.ADMIN_API_KEY,
   },
   skipUserEmailVerification: process.env.SKIP_USER_EMAIL_VERIFICATION === 'true',
+  // Whether a newly created non-default organization starts suspended until a
+  // payment method exists. Separate from billingApiUrl on purpose: pointing the
+  // dashboard at a billing service and demanding payment up front are different
+  // decisions, and conflating them means any billing service — including one that
+  // cannot register a card — locks every new organization out permanently.
+  requirePaymentMethod: process.env.REQUIRE_PAYMENT_METHOD === 'true',
   apiKey: {
     prefix: process.env.API_KEY_PREFIX || 'blk',
     validationCacheTtlSeconds: parseInt(process.env.API_KEY_VALIDATION_CACHE_TTL_SECONDS || '10', 10),

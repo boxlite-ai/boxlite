@@ -25,6 +25,7 @@ import { toast } from 'sonner'
 import { markJustLoggedOut } from '@/lib/auth-session'
 import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
 import { cn, getMetaKey } from '@/lib/utils'
+import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import {
   ArrowRightIcon,
   BookOpen,
@@ -126,14 +127,14 @@ const useNavCommands = (items: NavItem[]) => {
  * presentation matches the new design (Nav.dc): a single 60px monospace bar with bordered
  * segments, a standalone organization switcher, and a profile menu.
  */
-export function Sidebar({ isBannerVisible }: SidebarProps) {
+export function Sidebar({ isBannerVisible, billingEnabled }: SidebarProps) {
   const posthog = usePostHog()
   const { axiosInstance } = useApi()
   const { theme, setTheme } = useTheme()
   const { user, signoutRedirect } = useAuth()
   const { pathname } = useLocation()
   const navigate = useNavigate()
-  const { selectedOrganization } = useSelectedOrganization()
+  const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
   const [, copyToClipboard] = useCopyToClipboard()
 
   const copyOrgId = useCallback(() => {
@@ -178,13 +179,23 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   })
   const canViewAdmin = adminAccessQuery.data === true
 
+  // Billing pages are owner-only and only exist where a billing service is deployed.
+  // The "Billing is on the way" placeholder stands in until one is, so the two real
+  // pages replace it rather than sit beside it contradicting it.
+  const canViewBilling = billingEnabled && authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
+
   const primaryItems = useMemo<NavItem[]>(
     () => [
       { label: 'Boxes', path: RoutePath.BOXES },
-      { label: 'Billing', path: RoutePath.BILLING },
+      ...(canViewBilling
+        ? [
+            { label: 'Wallet', path: RoutePath.BILLING_WALLET },
+            { label: 'Spending', path: RoutePath.BILLING_SPENDING },
+          ]
+        : [{ label: 'Billing', path: RoutePath.BILLING }]),
       ...(canViewAdmin ? [{ label: 'Admin', path: RoutePath.ADMIN }] : []),
     ],
-    [canViewAdmin],
+    [canViewAdmin, canViewBilling],
   )
 
   const openOnboardingGuide = useCallback(() => {

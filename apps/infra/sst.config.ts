@@ -34,7 +34,7 @@ const DEFAULT_STAGE = 'dev'
 // image with its sha. Advancing dev to a newer commerce build means bumping this
 // (or passing COMMERCE_IMAGE_TAG for a one-off): pushing a new image does not
 // move a running stack, by design, so a deploy always names exact bytes.
-const COMMERCE_PINNED_IMAGE_TAG = '24065e6141379c9b994f3b4b4e1482608474f4b6'
+const COMMERCE_PINNED_IMAGE_TAG = 'deba343ad7d679cc3c031569b3396e9a2dd527e6'
 
 // Container ports each service listens on internally
 const PORTS = {
@@ -708,15 +708,13 @@ export default $config({
         SVIX_AUTH_TOKEN: svixAuthToken.value,
         ...(process.env.SVIX_SERVER_URL && { SVIX_SERVER_URL: process.env.SVIX_SERVER_URL }),
 
-        // Billing — opt-in, NOT defaulted to the Commerce service, because this
-        // value does more than tell the dashboard where to call: with it set,
-        // organization.service.ts creates every non-default organization
-        // suspended with 'Payment method required'. Only a billing service that
-        // can actually register a payment method should turn that on; the mock
-        // reports creditCardConnected: false forever, so defaulting it would
-        // leave new organizations permanently suspended.
-        //   BILLING_API_URL=https://commerce.<stackDomain>/api/billing
-        ...(process.env.BILLING_API_URL && { BILLING_API_URL: process.env.BILLING_API_URL }),
+        // Where the dashboard's billing client calls, surfaced to it through
+        // GET /api/config. Safe to default now that suspension is gated on
+        // REQUIRE_PAYMENT_METHOD instead of on this value: it used to also make
+        // organization.service.ts create every non-default organization suspended
+        // with 'Payment method required', which a mock that registers no card
+        // could never clear.
+        BILLING_API_URL: envOr('BILLING_API_URL', `https://commerce.${stackDomain}/api/billing`),
       },
     })
 
@@ -804,12 +802,15 @@ export default $config({
     })
 
     // ─── 7b. COMMERCE (billing / wallet) ─────────────────────────────────────
-    // Serves the 20 endpoints the dashboard's billing client calls. The ALB is
+    // Serves the endpoints the dashboard's billing client calls. The ALB is
     // public because that client runs in the browser with the user's access
-    // token; this is not a service-to-service API. It is not yet *usable* from a
-    // browser — the service sets no CORS headers, and nothing points the
-    // dashboard at it (BILLING_API_URL below) — so today this deploys an
-    // endpoint reachable by direct request only. Both belong with that opt-in.
+    // token; this is not a service-to-service API. The Api's BILLING_API_URL
+    // above points the dashboard here, and CORS_ORIGINS below admits it.
+    //
+    // The dashboard's Wallet and Spending pages are gated on BILLING_API_URL
+    // reaching this service (apps/dashboard/src/App.tsx), so a stage without it
+    // keeps them hidden rather than rendering pages that cannot load. Limits
+    // stays hidden regardless — it is owner-gated, not billing-gated.
     //
     // The image comes from this account's private ECR, pushed by
     // boxlite-ai/boxlite-commerce's own publish-image workflow through GitHub
@@ -839,22 +840,29 @@ export default $config({
           rules: [{ listen: '443/https', forward: `${PORTS.COMMERCE}/http` }],
           // /api/billing/health is the service's only unauthenticated route; a
           // probe of '/' would 401 and fail every task.
-          health: { [`${PORTS.COMMERCE}/http`]: httpHealth('/api/billing/health') },
+          // The service excludes /health from its global prefix, so probe the
+          // bare path; a probe of '/' would 401 and fail every task.
+          health: { [`${PORTS.COMMERCE}/http`]: httpHealth('/health') },
         },
         environment: {
           PORT: String(PORTS.COMMERCE),
-          // Verifies dashboard access tokens against the same issuer the Api
-          // uses. Note this passes the internal issuer only, while the Api and
-          // Proxy also receive publicOidcIssuer: on a stage that sets
-          // PUBLIC_OIDC_DOMAIN, the Api validates `iss` against the public
-          // issuer and rewrites the JWKS host, so tokens there would carry an
-          // `iss` Commerce was never told about. Splitting the pair here is part
-          // of the dashboard opt-in, not this change.
+          // The pair, not just the internal issuer. Tokens minted for the browser
+          // carry the public issuer as `iss` (dev fronts its Auth0 tenant with
+          // auth.dev.boxlite.ai), so a service told only the internal value
+          // rejects every genuine dashboard token. JWKS discovery still goes
+          // through the reachable issuer.
           OIDC_ISSUER: oidcIssuer,
+          ...(publicOidcIssuer && { PUBLIC_OIDC_DOMAIN: publicOidcIssuer }),
           OIDC_AUDIENCE: envOr('OIDC_AUDIENCE', 'boxlite'),
           // Base URL only — the service appends /api/organizations to resolve
           // which organizations the caller may touch.
           BOXLITE_API_URL: stripTrailingSlash(api.url),
+          // The dashboard is a separate origin, so it must be allow-listed or the
+          // browser blocks every billing call before sending it.
+          CORS_ORIGINS: envOr('DASHBOARD_URL', `https://${stackDomain}`),
+          // Where the service's own hand-off pages live, so the URLs it returns
+          // for checkout, portal and top-up resolve to itself.
+          PUBLIC_BASE_URL: `https://commerce.${stackDomain}/api/billing`,
         },
       })
     }

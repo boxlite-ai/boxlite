@@ -358,17 +358,23 @@ test('no longer points operators at the deleted shell updater', () => {
   assert.match(readme, /scripts\/runner-update-binary\.mjs/)
 })
 
-// Setting BILLING_API_URL does more than tell the dashboard where to call: the API then creates
-// every non-default organization suspended with 'Payment method required'
-// (apps/api/src/organization/services/organization.service.ts). The mock commerce service reports
-// creditCardConnected: false permanently, so nothing could clear that suspension. Defaulting the
-// variable to the Commerce service is therefore a regression, and a comment saying so is not a
-// guard — this is.
-test('never defaults BILLING_API_URL to the Commerce service', () => {
-  assert.doesNotMatch(liveConfig, /BILLING_API_URL:\s*envOr\(/)
-  assert.doesNotMatch(liveConfig, /BILLING_API_URL:\s*[`'"]/)
-  // Only the opt-in passthrough form is allowed: present when the operator set it, absent otherwise.
-  assert.match(liveConfig, /\.\.\.\(process\.env\.BILLING_API_URL && \{ BILLING_API_URL: process\.env\.BILLING_API_URL \}\)/)
+// BILLING_API_URL used to do more than tell the dashboard where to call: while organization
+// creation keyed off it, pointing it anywhere made the API create every non-default organization
+// suspended with 'Payment method required' — unclearable by a mock that registers no card. That
+// coupling is what must not come back. Suspension is now gated on its own flag, so the guard
+// belongs on the condition rather than on the URL.
+test('organization suspension is gated on its own flag, not on BILLING_API_URL', () => {
+  const organizationService = liveText(
+    'scriptEmittingShell',
+    readFileSync(new URL('../../api/src/organization/services/organization.service.ts', import.meta.url), 'utf8'),
+  )
+  // The reason string is only ever produced under the dedicated flag.
+  assert.match(organizationService, /configService\.get\('requirePaymentMethod'\)/)
+  assert.doesNotMatch(organizationService, /configService\.get\('billingApiUrl'\)/)
+  assert.match(
+    readFileSync(new URL('../../api/src/config/configuration.ts', import.meta.url), 'utf8'),
+    /requirePaymentMethod: process\.env\.REQUIRE_PAYMENT_METHOD === 'true'/,
+  )
 })
 
 // The image lives in another repository's ECR push, so a stage that never published one cannot

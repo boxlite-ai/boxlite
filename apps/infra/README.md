@@ -5,7 +5,7 @@ nested KVM, RDS Postgres, ElastiCache Redis, S3, and CloudFront.
 
 - **Region** — `AWS_REGION`, default `ap-southeast-1`
 - **IaC** — SST v4 (Pulumi underneath)
-- **Cost** — ~$570/month always-on; see [Cost](#cost)
+- **Cost** — ~$600/month always-on; see [Cost](#cost)
 
 **Where the "why" lives:** design rationale sits in `sst.config.ts` comments,
 next to the code it explains. This file is the runbook.
@@ -185,9 +185,13 @@ GitHub Environments. GitHub OIDC supplies short-lived AWS credentials; no AWS
 access keys are stored in GitHub. `DEPLOY_ENV` materializes the stage's gitignored
 `.env` only for the job and is deleted even if deployment fails.
 
-`ci/github-deploy-role.yaml` bootstraps three things that must exist **before** an
-SST deploy: the OIDC role, the immutable stage ECR repository, and the private
-Runner artifact bucket. That bucket expires only superseded object versions —
+`ci/github-deploy-role.yaml` bootstraps four things that must exist **before** an
+SST deploy: the OIDC role, the two immutable stage ECR repositories (Api and
+Commerce), and the private Runner artifact bucket. Note for `dev` specifically:
+its Commerce repository was created out-of-band and is **not** in the stack, so a
+`dev` bootstrap needs a one-time import before it reconciles — `aws cloudformation
+deploy` has no `--import-existing-resources` here and would otherwise fail on
+"already exists". That bucket expires only superseded object versions —
 first boot re-fetches the commit-keyed tarball at every instance launch, so
 expiring the current object would make a later replacement fail to boot. The role
 grants only the AWS control-plane actions
@@ -349,13 +353,13 @@ ap-southeast-1 on-demand, approximate:
 | Resource | Monthly |
 | --- | --- |
 | EC2 c8i.2xlarge (Runner) | ~$325 |
-| Load balancers (5 ALB + 2 NLB) | ~$115 |
-| 7x Fargate 0.25 vCPU / 0.5 GB | ~$65 |
+| Load balancers (6 ALB + 2 NLB) | ~$135 |
+| 8x Fargate 0.25 vCPU / 0.5 GB | ~$74 |
 | CloudFront + S3 + CloudWatch Logs | ~$20 |
 | 2x NAT EC2 (`t4g.nano`) + public IPv4 | ~$16 |
 | RDS `t4g.micro` Postgres | ~$15 |
 | ElastiCache Redis | ~$15 |
-| **Total** | **~$570** |
+| **Total** | **~$600** |
 
 Only the `prod` stage retains S3 buckets and RDS snapshots on removal
 (`removal: 'retain'`); every other stage is disposable. Whole-stack teardown

@@ -440,7 +440,11 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       organization.suspended = true
       organization.suspendedAt = new Date()
       organization.suspensionReason = 'Please verify your email address'
-    } else if (this.configService.get('billingApiUrl') && !defaultForCreator) {
+    } else if (this.configService.get('requirePaymentMethod') && !defaultForCreator) {
+      // Gated on requirePaymentMethod, not on billingApiUrl: a stage can point the
+      // dashboard at a billing service without also demanding a card up front.
+      // Keyed off billingApiUrl, any deployed billing service that cannot register
+      // a payment method left every new organization suspended with no way out.
       organization.suspended = true
       organization.suspendedAt = new Date()
       organization.suspensionReason = 'Payment method required'
