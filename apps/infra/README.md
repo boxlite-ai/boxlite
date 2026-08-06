@@ -23,11 +23,13 @@ flowchart TB
         cf["CloudFront<br/>STACK_DOMAIN"]
         alb["Api ALB<br/>api.STACK_DOMAIN<br/>idle timeout 1h"]
         nlb["Proxy NLB · TLS 443<br/>proxy + *.proxy.STACK_DOMAIN"]
+        calb["Commerce ALB<br/>commerce.STACK_DOMAIN<br/>dev only, image-gated"]
     end
 
     subgraph vpc["VPC · private subnets"]
         api["Api · NestJS<br/>:3000"]
         proxy["Proxy<br/>:4000"]
+        commerce["Commerce · billing/wallet<br/>:3100"]
         runner["EC2 c8i.2xlarge Runner<br/>nested KVM · :3003"]
         box[["box microVM"]]
 
@@ -53,6 +55,7 @@ flowchart TB
 
     alb --> api
     nlb --> proxy
+    calb --> commerce
     proxy --> box
     runner --> box
 

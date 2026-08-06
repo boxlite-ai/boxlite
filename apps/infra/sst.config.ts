@@ -12,7 +12,7 @@
 // Inside `run()`, resources are created in deploy order:
 //
 //   1. secrets (auto-generated)     6. API
-//   2. platform (VPC/DB/Redis/S3)   7. edge services (Proxy)
+//   2. platform (VPC/DB/Redis/S3)   7. edge services (Proxy), 7b. Commerce
 //   3. IAM                          8. admin UIs (PgAdmin/MailDev)
 //   4. auth (external OIDC)         9. CDN (CloudFront)
 //   5. observability               10. runner (EC2 + nested KVM)
@@ -24,6 +24,18 @@
 // between the two silently leaves the real stack unprotected.
 const PRODUCTION_STAGE = 'prod'
 
+// The stage deploy-infra.yml offers, and so the only one with published
+// commerce images. Named for the same reason as PRODUCTION_STAGE: a bare stage
+// literal at the point of use is what drifted before.
+const DEFAULT_STAGE = 'dev'
+
+// The commerce image DEFAULT_STAGE runs when COMMERCE_IMAGE_TAG is unset — a
+// commit in boxlite-ai/boxlite-commerce, whose publish-image workflow tags each
+// image with its sha. Advancing dev to a newer commerce build means bumping this
+// (or passing COMMERCE_IMAGE_TAG for a one-off): pushing a new image does not
+// move a running stack, by design, so a deploy always names exact bytes.
+const COMMERCE_PINNED_IMAGE_TAG = '24065e6141379c9b994f3b4b4e1482608474f4b6'
+
 // Container ports each service listens on internally
 const PORTS = {
   API: 3000,
@@ -34,6 +46,7 @@ const PORTS = {
   OTEL_HEALTH: 13133,
   MAILDEV_UI: 1080,
   PGADMIN: 80,
+  COMMERCE: 3100,
 } as const
 
 // Pinned third-party images
@@ -119,6 +132,7 @@ export default $config({
     const { apiImageReference } = await import('./scripts/api-artifact.mjs')
     const { resolveArtifactSource } = await import('./scripts/artifact-source.mjs')
     const { resolveRunnerArtifact, runnerArtifactsBucketName } = await import('./scripts/runner-artifact.mjs')
+    const { commerceImageReference } = await import('./scripts/commerce-artifact.mjs')
     const REGION = resolveAwsRegion()
     const { accountId } = await aws.getCallerIdentity()
     const workspaceVersion = readWorkspaceVersion()
@@ -693,6 +707,16 @@ export default $config({
         // Svix (webhook delivery; empty token = off → dashboard logs cosmetic errors)
         SVIX_AUTH_TOKEN: svixAuthToken.value,
         ...(process.env.SVIX_SERVER_URL && { SVIX_SERVER_URL: process.env.SVIX_SERVER_URL }),
+
+        // Billing — opt-in, NOT defaulted to the Commerce service, because this
+        // value does more than tell the dashboard where to call: with it set,
+        // organization.service.ts creates every non-default organization
+        // suspended with 'Payment method required'. Only a billing service that
+        // can actually register a payment method should turn that on; the mock
+        // reports creditCardConnected: false forever, so defaulting it would
+        // leave new organizations permanently suspended.
+        //   BILLING_API_URL=https://commerce.<stackDomain>/api/billing
+        ...(process.env.BILLING_API_URL && { BILLING_API_URL: process.env.BILLING_API_URL }),
       },
     })
 
@@ -778,6 +802,62 @@ export default $config({
         },
       },
     })
+
+    // ─── 7b. COMMERCE (billing / wallet) ─────────────────────────────────────
+    // Serves the 20 endpoints the dashboard's billing client calls. The ALB is
+    // public because that client runs in the browser with the user's access
+    // token; this is not a service-to-service API. It is not yet *usable* from a
+    // browser — the service sets no CORS headers, and nothing points the
+    // dashboard at it (BILLING_API_URL below) — so today this deploys an
+    // endpoint reachable by direct request only. Both belong with that opt-in.
+    //
+    // The image comes from this account's private ECR, pushed by
+    // boxlite-ai/boxlite-commerce's own publish-image workflow through GitHub
+    // OIDC: not a public registry, and not built here, because the source lives
+    // in another repository. commerce-artifact.mjs composes and validates the
+    // reference; ci/github-deploy-role.yaml is where the repository itself is
+    // declared, since CI must push into it before any deploy can read it.
+    //
+    // Declared only for a stage that has an image. A stage whose workflow has
+    // never pushed one cannot build it locally either, so with `wait: true` a
+    // reference that cannot resolve would hang the whole stack deploy on an ECS
+    // pull failure — an unrelated stage should not inherit that.
+    const commerceImage = commerceImageReference({
+      app: $app.name,
+      stage: $app.stage,
+      accountId,
+      region: REGION,
+      tag: envOr('COMMERCE_IMAGE_TAG', $app.stage === DEFAULT_STAGE ? COMMERCE_PINNED_IMAGE_TAG : ''),
+    })
+    if (commerceImage) {
+      new sst.aws.Service('Commerce', {
+        cluster,
+        image: commerceImage,
+        wait: true,
+        loadBalancer: {
+          domain: serviceDomain('commerce'),
+          rules: [{ listen: '443/https', forward: `${PORTS.COMMERCE}/http` }],
+          // /api/billing/health is the service's only unauthenticated route; a
+          // probe of '/' would 401 and fail every task.
+          health: { [`${PORTS.COMMERCE}/http`]: httpHealth('/api/billing/health') },
+        },
+        environment: {
+          PORT: String(PORTS.COMMERCE),
+          // Verifies dashboard access tokens against the same issuer the Api
+          // uses. Note this passes the internal issuer only, while the Api and
+          // Proxy also receive publicOidcIssuer: on a stage that sets
+          // PUBLIC_OIDC_DOMAIN, the Api validates `iss` against the public
+          // issuer and rewrites the JWKS host, so tokens there would carry an
+          // `iss` Commerce was never told about. Splitting the pair here is part
+          // of the dashboard opt-in, not this change.
+          OIDC_ISSUER: oidcIssuer,
+          OIDC_AUDIENCE: envOr('OIDC_AUDIENCE', 'boxlite'),
+          // Base URL only — the service appends /api/organizations to resolve
+          // which organizations the caller may touch.
+          BOXLITE_API_URL: stripTrailingSlash(api.url),
+        },
+      })
+    }
 
     // ─── 8. ADMIN UIs ────────────────────────────────────────────────────────
     // pgAdmin security gate. pgAdmin is a

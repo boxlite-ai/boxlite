@@ -2,7 +2,7 @@
 // Copyright (c) 2026 BoxLite AI
 
 /*
- * How the Api image repository and the Runner artifacts bucket are spelled.
+ * How the Api and Commerce image repositories and the Runner artifacts bucket are spelled.
  *
  *   <namespace>-<workload>-<stage>-<name>[-<attribute>...]
  *
@@ -11,12 +11,14 @@
  * distinguishes a workload token from a stage — `boxlite-e2e-runner` reads equally as stage=e2e
  * or workload=e2e — and a reader cannot parse a name back into its parts.
  *
- * Eight files touch one of these two names, but only THREE spell it, because they cannot call
- * JavaScript: ci/github-deploy-role.yaml declares both, deploy-infra.yml writes the bucket into a
- * shell variable, and build-apps-api-image.yml writes the image name. Everything else — this
- * module's two callers and their callers — goes through awsResourceName and never re-spells the
- * string. Those three are what release-deployment-safety.test.mjs pins, which is what turns a
- * drift into a test failure instead of a deploy that cannot find its own artifact.
+ * Most files that touch one of these three names go through awsResourceName; the exceptions are
+ * the ones that cannot call JavaScript: ci/github-deploy-role.yaml declares all three,
+ * deploy-infra.yml writes the bucket into a shell variable, build-apps-api-image.yml writes the Api
+ * image name, and boxlite-commerce's own publish-image.yml — in a different repository, so outside
+ * any test here — writes the Commerce one. Everything else, this module's three callers
+ * (api-artifact.mjs, runner-artifact.mjs, commerce-artifact.mjs) and their callers, never re-spells
+ * the string. The in-repo spellings are what release-deployment-safety.test.mjs pins, which is what
+ * turns a drift into a test failure instead of a deploy that cannot find its own artifact.
  *
  * A fourth place is easy to miss and is not a spelling at all: ci/github-deploy-role.yaml's
  * runtime permissions boundary allows S3 by ARN prefix. A boundary intersects with every identity

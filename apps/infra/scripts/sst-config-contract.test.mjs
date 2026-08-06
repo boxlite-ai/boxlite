@@ -357,3 +357,35 @@ test('no longer points operators at the deleted shell updater', () => {
   assert.doesNotMatch(readme, /runner-update-binary\.sh/)
   assert.match(readme, /scripts\/runner-update-binary\.mjs/)
 })
+
+// Setting BILLING_API_URL does more than tell the dashboard where to call: the API then creates
+// every non-default organization suspended with 'Payment method required'
+// (apps/api/src/organization/services/organization.service.ts). The mock commerce service reports
+// creditCardConnected: false permanently, so nothing could clear that suspension. Defaulting the
+// variable to the Commerce service is therefore a regression, and a comment saying so is not a
+// guard — this is.
+test('never defaults BILLING_API_URL to the Commerce service', () => {
+  assert.doesNotMatch(liveConfig, /BILLING_API_URL:\s*envOr\(/)
+  assert.doesNotMatch(liveConfig, /BILLING_API_URL:\s*[`'"]/)
+  // Only the opt-in passthrough form is allowed: present when the operator set it, absent otherwise.
+  assert.match(liveConfig, /\.\.\.\(process\.env\.BILLING_API_URL && \{ BILLING_API_URL: process\.env\.BILLING_API_URL \}\)/)
+})
+
+// The image lives in another repository's ECR push, so a stage that never published one cannot
+// build it locally either. With `wait: true`, handing SST a reference that cannot resolve hangs
+// that stage's entire deploy on an ECS pull failure — so the service must stay conditional, and
+// the tag must not fall back to a default on stages other than DEFAULT_STAGE.
+test('declares Commerce only for a stage that has a published image', () => {
+  assert.match(liveConfig, /const commerceImage = commerceImageReference\(\{/)
+  assert.match(liveConfig, /if \(commerceImage\) \{/)
+  assert.match(liveConfig, /tag: envOr\('COMMERCE_IMAGE_TAG', \$app\.stage === DEFAULT_STAGE \? COMMERCE_PINNED_IMAGE_TAG : ''\)/)
+  // Composition and tag validation belong to commerce-artifact.mjs, as the Api's do to
+  // api-artifact.mjs; a registry URL assembled inline would skip both.
+  assert.doesNotMatch(liveConfig, /dkr\.ecr\./)
+  // Named constants, not bare literals at the point of use — the drift PRODUCTION_STAGE prevents.
+  assert.match(liveConfig, /const DEFAULT_STAGE = 'dev'/)
+  assert.match(liveConfig, /const COMMERCE_PINNED_IMAGE_TAG = '[0-9a-f]{40}'/)
+  // The repository must predate the stack that consumes it; the stage bootstrap owns it.
+  assert.match(readFileSync(new URL('../ci/github-deploy-role.yaml', import.meta.url), 'utf8'), /-commerce/)
+  assert.match(environmentExample, /^# COMMERCE_IMAGE_TAG=/m)
+})
