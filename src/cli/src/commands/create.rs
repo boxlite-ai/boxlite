@@ -1,6 +1,6 @@
 use crate::cli::{
-    CapabilityFlags, GlobalFlags, KernelFlags, NetworkFlags, PublishFlags, ResourceFlags,
-    VolumeFlags,
+    CapabilityFlags, GlobalFlags, HookFlags, KernelFlags, NetworkFlags, PublishFlags,
+    ResourceFlags, VolumeFlags,
 };
 use boxlite::{BoxOptions, RootfsSpec};
 use clap::Args;
@@ -18,6 +18,9 @@ pub struct CreateArgs {
 
     #[command(flatten)]
     pub management: crate::cli::ManagementFlags,
+
+    #[command(flatten)]
+    pub hook: HookFlags,
 
     /// Set environment variables
     #[arg(short = 'e', long = "env")]
@@ -76,6 +79,7 @@ impl CreateArgs {
         self.capability.apply_to(&mut options);
         self.boot.apply_to(&mut options);
         self.management.apply_to(&mut options)?;
+        self.hook.apply_to(&mut options)?;
         self.publish.apply_to(&mut options)?;
         self.volume.apply_to(&mut options, global.home.as_deref())?;
         self.network.apply_to(&mut options)?;

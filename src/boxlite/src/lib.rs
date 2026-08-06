@@ -12,6 +12,7 @@ static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLo
 
 pub mod event_listener;
 pub mod experimental;
+pub mod hooks;
 pub mod jailer;
 pub mod litebox;
 pub mod lock;

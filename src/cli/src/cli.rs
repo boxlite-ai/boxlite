@@ -980,6 +980,269 @@ impl ManagementFlags {
     }
 }
 
+// ============================================================================
+// HOOK FLAGS
+// ============================================================================
+
+/// Container lifecycle hooks.
+///
+/// Each `--hook` flag defines one hook. The simple syntax is:
+/// `<name>:<point>:<host|guest>:<program>` with args via `--hook-arg`.
+///
+/// Modifiers like `--hook-timeout` and `--hook-on-error` reference the hook
+/// by name and must appear after the corresponding `--hook` flag.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct HookFlags {
+    /// Register a hook (simple syntax: name:point:type:program).
+    #[arg(long = "hook", value_name = "SPEC")]
+    pub hooks: Vec<String>,
+
+    /// Register a hook via inline JSON.
+    #[arg(long = "hook-json", value_name = "JSON")]
+    pub hooks_json: Vec<String>,
+
+    /// Add an argument to the most recent --hook.
+    #[arg(long = "hook-arg", value_name = "ARG")]
+    pub hook_args: Vec<String>,
+
+    /// Enable or disable a hook by name.
+    #[arg(long = "hook-enabled", value_name = "NAME=BOOL", value_parser = parse_key_value)]
+    pub hook_enabled: Vec<(String, String)>,
+
+    /// Set hook priority (lower = runs first).
+    #[arg(long = "hook-priority", value_name = "NAME=INT", value_parser = parse_key_value)]
+    pub hook_priority: Vec<(String, String)>,
+
+    /// Set per-hook timeout in seconds.
+    #[arg(long = "hook-timeout", value_name = "NAME=SECS", value_parser = parse_key_value)]
+    pub hook_timeout: Vec<(String, String)>,
+
+    /// Set error policy: fail, continue, or retry:N,backoff_s.
+    #[arg(long = "hook-on-error", value_name = "NAME=POLICY", value_parser = parse_key_value)]
+    pub hook_on_error: Vec<(String, String)>,
+
+    /// PostExec condition filter.
+    #[arg(long = "hook-condition-exec-result", value_name = "NAME=COND", value_parser = parse_key_value)]
+    pub hook_condition_exec_result: Vec<(String, String)>,
+
+    /// Add environment variable to a hook.
+    #[arg(long = "hook-env", value_name = "NAME=KEY=VALUE", value_parser = parse_key_value)]
+    pub hook_env: Vec<(String, String)>,
+
+    /// GuestExec user.
+    #[arg(long = "hook-user", value_name = "NAME=USER", value_parser = parse_key_value)]
+    pub hook_user: Vec<(String, String)>,
+
+    /// GuestExec working directory.
+    #[arg(long = "hook-workdir", value_name = "NAME=PATH", value_parser = parse_key_value)]
+    pub hook_workdir: Vec<(String, String)>,
+}
+
+impl HookFlags {
+    /// Apply hook flags to BoxOptions.
+    pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
+        use boxlite::hooks::{
+            ExecHookTrigger, Hook, HookAction, HookCondition, HookErrorPolicy, OnExhausted,
+        };
+
+        // Parse --hook flags (simple syntax)
+        for spec in &self.hooks {
+            let parts: Vec<&str> = spec.splitn(4, ':').collect();
+            if parts.len() < 4 {
+                anyhow::bail!(
+                    "Invalid --hook syntax '{}': expected <name>:<point>:<host|guest>:<program>",
+                    spec
+                );
+            }
+            let name = parts[0].to_string();
+            let point = parse_hook_point(parts[1])?;
+            let hook_type = parts[2];
+            let program = parts[3].to_string();
+
+            let action = match hook_type {
+                "host" => HookAction::HostExec {
+                    program,
+                    args: vec![], // filled by --hook-arg
+                    env: vec![],
+                },
+                "guest" => HookAction::GuestExec {
+                    command: program,
+                    args: vec![],
+                    env: vec![],
+                    user: None,
+                    working_dir: None,
+                },
+                _ => anyhow::bail!("Unknown hook type '{}': expected 'host' or 'guest'", hook_type),
+            };
+
+            opts.hooks.push(Hook {
+                name,
+                point,
+                action,
+                enabled: true,
+                priority: 0,
+                timeout_secs: 30,
+                condition: None,
+                on_error: point.default_on_error(),
+            });
+        }
+
+        // Parse --hook-json flags
+        for json_str in &self.hooks_json {
+            let hook: Hook = serde_json::from_str(json_str)
+                .map_err(|e| anyhow::anyhow!("Invalid --hook-json: {e}"))?;
+            opts.hooks.push(hook);
+        }
+
+        // Apply --hook-arg to the most recent hook (from --hook, not --hook-json)
+        if !self.hook_args.is_empty() {
+            if let Some(last) = opts.hooks.last_mut() {
+                for arg in &self.hook_args {
+                    match &mut last.action {
+                        HookAction::HostExec { args, .. } => args.push(arg.clone()),
+                        HookAction::GuestExec { args, .. } => args.push(arg.clone()),
+                    }
+                }
+            }
+        }
+
+        // Apply modifiers
+        for (name, val) in &self.hook_enabled {
+            let hook = find_hook_mut(opts, name)?;
+            hook.enabled = val.parse::<bool>().unwrap_or(true);
+        }
+        for (name, val) in &self.hook_priority {
+            let hook = find_hook_mut(opts, name)?;
+            hook.priority = val.parse().unwrap_or(0);
+        }
+        for (name, val) in &self.hook_timeout {
+            let hook = find_hook_mut(opts, name)?;
+            hook.timeout_secs = val.parse().unwrap_or(30);
+        }
+        for (name, val) in &self.hook_on_error {
+            let hook = find_hook_mut(opts, name)?;
+            hook.on_error = parse_error_policy(val)?;
+        }
+        for (name, val) in &self.hook_condition_exec_result {
+            let hook = find_hook_mut(opts, name)?;
+            hook.condition = Some(HookCondition::ExecResult {
+                trigger: parse_exec_trigger(val)?,
+            });
+        }
+        for (name, val) in &self.hook_env {
+            let hook = find_hook_mut(opts, name)?;
+            let (k, v) = val.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .unwrap_or_else(|| (val.clone(), String::new()));
+            match &mut hook.action {
+                HookAction::HostExec { env, .. } | HookAction::GuestExec { env, .. } => {
+                    env.push((k, v));
+                }
+            }
+        }
+        for (name, val) in &self.hook_user {
+            let hook = find_hook_mut(opts, name)?;
+            if let HookAction::GuestExec { user, .. } = &mut hook.action {
+                *user = Some(val.clone());
+            }
+        }
+        for (name, val) in &self.hook_workdir {
+            let hook = find_hook_mut(opts, name)?;
+            if let HookAction::GuestExec { working_dir, .. } = &mut hook.action {
+                *working_dir = Some(val.clone());
+            }
+        }
+
+        // Validate no duplicate hook names
+        let mut seen = std::collections::HashSet::new();
+        for hook in &opts.hooks {
+            if !seen.insert(&hook.name) {
+                anyhow::bail!("Duplicate hook name '{}'", hook.name);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Parse `key=value` for hook modifier flags.
+fn parse_key_value(s: &str) -> Result<(String, String), String> {
+    let (k, v) = s.split_once('=')
+        .ok_or_else(|| format!("expected KEY=VALUE, got '{s}'"))?;
+    Ok((k.to_string(), v.to_string()))
+}
+
+fn parse_hook_point(s: &str) -> anyhow::Result<boxlite::hooks::HookPoint> {
+    use boxlite::hooks::HookPoint;
+    match s {
+        "post-create" => Ok(HookPoint::PostCreate),
+        "pre-start" => Ok(HookPoint::PreStart),
+        "post-start" => Ok(HookPoint::PostStart),
+        "pre-stop" => Ok(HookPoint::PreStop),
+        "post-stop" => Ok(HookPoint::PostStop),
+        "pre-exec" => Ok(HookPoint::PreExec),
+        "post-exec" => Ok(HookPoint::PostExec),
+        "pre-snapshot" => Ok(HookPoint::PreSnapshot),
+        "post-snapshot" => Ok(HookPoint::PostSnapshot),
+        "pre-restore" => Ok(HookPoint::PreRestore),
+        "post-restore" => Ok(HookPoint::PostRestore),
+        _ => anyhow::bail!("Unknown hook point '{}'", s),
+    }
+}
+
+fn parse_error_policy(s: &str) -> anyhow::Result<boxlite::hooks::HookErrorPolicy> {
+    use boxlite::hooks::{HookErrorPolicy, OnExhausted};
+    match s {
+        "fail" => Ok(HookErrorPolicy::Fail),
+        "continue" => Ok(HookErrorPolicy::Continue),
+        _ if s.starts_with("retry:") => {
+            let parts: Vec<&str> = s[6..].split(',').collect();
+            if parts.len() < 2 {
+                anyhow::bail!("retry policy needs max_retries,backoff_secs: got '{s}'");
+            }
+            let max_retries: u32 = parts[0].parse()?;
+            let backoff_secs: u64 = parts[1].parse()?;
+            let on_exhausted = parts.get(2).map_or(OnExhausted::Continue, |oe| match *oe {
+                "fail" => OnExhausted::Fail,
+                _ => OnExhausted::Continue,
+            });
+            Ok(HookErrorPolicy::Retry {
+                max_retries,
+                backoff_secs,
+                on_exhausted,
+            })
+        }
+        _ => anyhow::bail!("Unknown error policy '{}'", s),
+    }
+}
+
+fn parse_exec_trigger(s: &str) -> anyhow::Result<boxlite::hooks::ExecHookTrigger> {
+    use boxlite::hooks::ExecHookTrigger;
+    match s {
+        "always" => Ok(ExecHookTrigger::Always),
+        "success" => Ok(ExecHookTrigger::OnSuccess),
+        "failure" => Ok(ExecHookTrigger::OnFailure),
+        _ if s.starts_with("exit:") => {
+            let code: i32 = s[5..].parse()?;
+            Ok(ExecHookTrigger::ExitCode(code))
+        }
+        _ if s.starts_with("cmd:") => {
+            Ok(ExecHookTrigger::CommandMatches(s[4..].to_string()))
+        }
+        _ => anyhow::bail!("Unknown exec trigger '{}'", s),
+    }
+}
+
+fn find_hook_mut<'a>(
+    opts: &'a mut BoxOptions,
+    name: &str,
+) -> anyhow::Result<&'a mut boxlite::hooks::Hook> {
+    opts.hooks
+        .iter_mut()
+        .find(|h| h.name == name)
+        .ok_or_else(|| anyhow::anyhow!("No hook named '{}' found", name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
