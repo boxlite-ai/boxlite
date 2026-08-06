@@ -57,6 +57,11 @@ pub use runtime::options::{
     ImageRegistryAuth, NetworkMode, NetworkSpec, PortProtocol, RegistryTransport, RootfsSpec,
     Secret, SnapshotOptions,
 };
+
+pub use hooks::{
+    ExecHookTrigger, Hook, HookAction, HookCondition, HookContext, HookErrorPolicy, HookPoint,
+    HookRunner, OnExhausted,
+};
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use runtime::id::{BaseDiskID, BaseDiskIDMint, BoxID, BoxIDMint};

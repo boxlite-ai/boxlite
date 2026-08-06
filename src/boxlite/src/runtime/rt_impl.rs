@@ -465,6 +465,28 @@ impl RuntimeImpl {
             ));
         }
 
+        // ── Fire PostCreate hooks (fires once, not on restart) ──
+        {
+            let image = match &box_impl.config.options.rootfs {
+                crate::runtime::options::RootfsSpec::Image(r) => r.clone(),
+                crate::runtime::options::RootfsSpec::RootfsPath(p) => format!("rootfs:{p}"),
+            };
+            let mut ctx = crate::hooks::HookContext::new(
+                box_impl.config.id.to_string(),
+                box_impl.config.container.id.clone(),
+                crate::hooks::HookPoint::PostCreate,
+                String::new(),
+                crate::runtime::types::BoxStatus::Configured,
+                image,
+                0,
+            );
+            // PostCreate errors do not abort create (Continue policy by default)
+            let _ = box_impl
+                .hook_runner
+                .fire(crate::hooks::HookPoint::PostCreate, &mut ctx, None)
+                .await;
+        }
+
         // Increment boxes_created counter (lock-free!)
         self.runtime_metrics
             .boxes_created

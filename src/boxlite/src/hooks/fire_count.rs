@@ -1,22 +1,23 @@
 //! Persisted per-hook fire counter, keyed by `(box_id, hook_name)`.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Stores how many times each hook has fired, keyed by `(box_id, hook_name)`.
 ///
 /// Declarative hooks persist their counts in the box state database.
 /// Trait hooks reset to 1 on each re-registration.
+#[derive(Clone)]
 pub struct FireCountStore {
     /// (box_id, hook_name) → count
-    counts: Mutex<HashMap<(String, String), u64>>,
+    counts: Arc<Mutex<HashMap<(String, String), u64>>>,
 }
 
 impl FireCountStore {
     /// Create an empty store.
     pub fn new() -> Self {
         Self {
-            counts: Mutex::new(HashMap::new()),
+            counts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

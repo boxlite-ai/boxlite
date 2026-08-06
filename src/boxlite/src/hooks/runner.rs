@@ -15,6 +15,7 @@ use super::{ExecHookTrigger, Hook, HookAction, HookCondition, HookErrorPolicy, H
 /// Owns the merged hook registry and executes hooks on demand.
 ///
 /// Created once per box and reused across all hook points.
+#[derive(Clone)]
 pub struct HookRunner {
     /// In-process trait implementations (not persisted).
     trait_hooks: Vec<Arc<dyn Hook>>,
@@ -80,8 +81,13 @@ impl HookRunner {
                 continue;
             }
 
-            // Increment fire count
-            let fire_count = self.fire_counts.increment_and_get(&ctx.box_id, &hook.name);
+            // Update hook_name and fire count in context
+            ctx.hook_name = match item {
+                HookOrTrait::Declarative { hook } => hook.name.clone(),
+                HookOrTrait::Trait { .. } => "trait-hook".to_string(),
+            };
+            let hook_name_for_count = ctx.hook_name.clone();
+            let fire_count = self.fire_counts.increment_and_get(&ctx.box_id, &hook_name_for_count);
             ctx.fire_count = fire_count;
 
             // Execute
