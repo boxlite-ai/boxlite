@@ -33,9 +33,9 @@ function createEntityManager() {
   return { entityManager, saved }
 }
 
-function createOrganizationService() {
+function createOrganizationService(options: { manager?: unknown; config?: Record<string, unknown> } = {}) {
   const configService = {
-    get: jest.fn(() => undefined),
+    get: jest.fn((key: string) => options.config?.[key]),
     getOrThrow: jest.fn((key: string) => {
       if (key === 'organizationBoxDefaultLimitedNetworkEgress') return false
       throw new Error(`Unexpected config key: ${key}`)
@@ -46,7 +46,7 @@ function createOrganizationService() {
   // (organization.service.ts): orgRepo, boxRepo, eventEmitter, configService,
   // redisLockProvider, regionRepo, regionService, encryptionService.
   return new OrganizationService(
-    { manager: {} } as never,
+    { manager: options.manager ?? {} } as never,
     {} as never,
     { emitAsync: jest.fn() } as never,
     configService as never,
@@ -110,6 +110,20 @@ describe('default organization membership semantics', () => {
       isDefaultForUser: true,
     })
     expect(saved).toContain(organization)
+  })
+
+  it('does not suspend a new organization merely because the billing UI is configured', async () => {
+    const { entityManager } = createEntityManager()
+    const service = createOrganizationService({
+      manager: entityManager,
+      config: { billingApiUrl: 'https://billing.example.test' },
+    })
+
+    const organization = await service.create({ name: 'Team' }, 'user-1', false, true)
+
+    expect(organization.suspended).not.toBe(true)
+    expect(organization.suspendedAt).toBeUndefined()
+    expect(organization.suspensionReason).toBeUndefined()
   })
 
   it('allows invitations to default organizations because they are regular organizations', async () => {

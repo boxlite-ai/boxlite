@@ -6,14 +6,18 @@
 import { Redis } from 'ioredis'
 import { Column, DataSource, Entity, IsNull, PrimaryColumn, Repository } from 'typeorm'
 import { BoxState } from '../../box/enums/box-state.enum'
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { AddBoxUsagePeriods1785250000000 } from '../../migrations/pre-deploy/1785250000000-add-box-usage-periods-migration'
 import { AddBoxUsagePeriodInvariants1786000000000 } from '../../migrations/pre-deploy/1786000000000-add-box-usage-period-invariants-migration'
+import { AddBoxBillingTransitionOutbox1786000500000 } from '../../migrations/pre-deploy/1786000500000-add-box-billing-transition-outbox-migration'
+import { UnsuspendLegacyPaymentOrganizations1786000600000 } from '../../migrations/pre-deploy/1786000600000-unsuspend-legacy-payment-organizations-migration'
 import { ValidateBoxUsagePeriodInvariants1786001000000 } from '../../migrations/post-deploy/1786001000000-validate-box-usage-period-invariants-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
+import { BoxBillingTransition } from '../entities/box-billing-transition.entity'
 import { UsageService } from './usage.service'
 import { expectedOpenPeriod } from './expected-usage-period'
 
@@ -30,6 +34,9 @@ class ReconciliationBox {
 
   @Column()
   state: BoxState
+
+  @Column()
+  desiredState: BoxDesiredState
 
   @Column({ type: 'float' })
   cpu: number
@@ -68,7 +75,8 @@ class ReconciliationBox {
 const describeIfDatabase = process.env.DB_HOST && process.env.REDIS_HOST ? describe : describe.skip
 
 const DAY_MS = 24 * 60 * 60 * 1000
-const TABLES = ['box_usage_periods', 'box_usage_periods_archive', 'box']
+const TABLES = ['box_billing_transitions', 'box_usage_periods', 'box_usage_periods_archive', 'box']
+const TEST_MIGRATIONS_TABLE = 'migrations'
 const SETTLED_AGO_MS = 10 * 60 * 1000
 
 describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
@@ -76,10 +84,12 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   let redis: Redis
   let periods: Repository<BoxUsagePeriod>
   let archives: Repository<BoxUsagePeriodArchive>
+  let transitions: Repository<BoxBillingTransition>
   // Set only once this spec has built the tables itself. Until then the rows in
   // them belong to somebody else and nothing here may write or clear them.
   let ownsTables = false
   let preMigrationBoundary: { updatedAt: Date; billingChangedAt: Date }
+  let recordedMigrationNames: string[]
 
   const box = {
     id: 'box-int-1',
@@ -116,19 +126,29 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       }),
     )
 
-  const serviceForBoxState = (state: BoxState, boxOverrides: Partial<typeof box> = {}) =>
-    new UsageService(
+  const serviceForBoxState = (state: BoxState, boxOverrides: Partial<typeof box> = {}) => {
+    const service = new UsageService(
       periods,
       new RedisLockProvider(redis),
       { findOne: async () => ({ ...box, state, ...boxOverrides }) } as any,
       { find: async () => [] } as any,
+      transitions,
     )
+    const closeAndReopenUsagePeriods = service.closeAndReopenUsagePeriods.bind(service)
+    service.closeAndReopenUsagePeriods = async () => {
+      await insertBox({ state, ...boxOverrides })
+      await transitions.update({ boxId: box.id }, { processedAt: new Date() })
+      await closeAndReopenUsagePeriods()
+    }
+    return service
+  }
 
   const openPeriods = () => periods.find({ where: { endAt: IsNull() } })
 
-  const insertBox = (
+  const insertBox = async (
     overrides: Partial<typeof box> & {
       state: BoxState
+      desiredState?: BoxDesiredState
       runnerId?: string | null
       pending?: boolean
       updatedAtMsAgo?: number
@@ -138,15 +158,18 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     const row = {
       ...box,
       runnerId: null,
+      desiredState: BoxDesiredState.STARTED,
       pending: false,
       updatedAtMsAgo: SETTLED_AGO_MS,
       billingChangedAtMsAgo: SETTLED_AGO_MS,
       ...overrides,
     }
-    return dataSource.getRepository(ReconciliationBox).save({
+    const repository = dataSource.getRepository(ReconciliationBox)
+    await repository.save({
       id: row.id,
       organizationId: row.organizationId,
       state: row.state,
+      desiredState: row.desiredState,
       cpu: row.cpu,
       gpu: row.gpu,
       mem: row.mem,
@@ -157,6 +180,9 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       updatedAt: new Date(Date.now() - row.updatedAtMsAgo),
       billingChangedAt: row.billingChangedAtMsAgo === null ? null : new Date(Date.now() - row.billingChangedAtMsAgo),
     })
+    // BEFORE triggers can replace values passed to save(); re-read the row so
+    // assertions use the durable database boundary, not the caller's input.
+    return repository.findOneByOrFail({ id: row.id })
   }
 
   const settleLedger = async (runnerIds: string[] = []) => {
@@ -165,13 +191,14 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       new RedisLockProvider(redis),
       dataSource.getRepository(ReconciliationBox) as any,
       { find: async () => runnerIds.map((id) => ({ id })) } as any,
+      transitions,
     )
     await service.closeAndReopenUsagePeriods()
     await service.reconcileUsagePeriods()
   }
 
   const quoted = TABLES.map((table) => `"${table}"`).join(', ')
-  const dropTables = () => dataSource.query(`DROP TABLE IF EXISTS ${quoted}`)
+  const dropTables = () => dataSource.query(`DROP TABLE IF EXISTS "${TEST_MIGRATIONS_TABLE}", ${quoted}`)
   const truncateTables = () => dataSource.query(`TRUNCATE ${quoted}`)
 
   // This spec owns the ledger tables outright — it drops and rebuilds them from
@@ -180,7 +207,9 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   // refuse, even if the other is missing.
   const assertDisposableDatabase = async () => {
     const existing: string[] = (
-      await dataSource.query(`SELECT table_name FROM information_schema.tables WHERE table_name = ANY($1)`, [TABLES])
+      await dataSource.query(`SELECT table_name FROM information_schema.tables WHERE table_name = ANY($1)`, [
+        [TEST_MIGRATIONS_TABLE, ...TABLES],
+      ])
     ).map((row: { table_name: string }) => row.table_name)
 
     for (const table of existing) {
@@ -201,7 +230,9 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       username: process.env.DB_USERNAME,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
-      entities: [BoxUsagePeriod, BoxUsagePeriodArchive, ReconciliationBox],
+      entities: [BoxUsagePeriod, BoxUsagePeriodArchive, BoxBillingTransition, ReconciliationBox],
+      migrations: [AddBoxBillingTransitionOutbox1786000500000],
+      migrationsTransactionMode: 'each',
       namingStrategy: new CustomNamingStrategy(),
       synchronize: false,
     }).initialize()
@@ -219,6 +250,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
           "id" character varying NOT NULL,
           "organizationId" uuid NOT NULL,
           "state" character varying NOT NULL,
+          "desiredState" character varying NOT NULL,
           "cpu" double precision NOT NULL,
           "gpu" double precision NOT NULL,
           "mem" double precision NOT NULL,
@@ -234,13 +266,14 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       const oldUpdatedAt = new Date(Date.now() - DAY_MS)
       await queryRunner.query(
         `INSERT INTO "box" (
-           "id", "organizationId", "state", "cpu", "gpu", "mem", "disk",
+           "id", "organizationId", "state", "desiredState", "cpu", "gpu", "mem", "disk",
            "region", "runnerId", "pending", "updatedAt"
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, false, $9)`,
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, false, $10)`,
         [
           'box-pre-migration',
           box.organizationId,
           BoxState.STARTED,
+          BoxDesiredState.STARTED,
           box.cpu,
           box.gpu,
           box.mem,
@@ -256,6 +289,28 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
           WHERE "id" = 'box-pre-migration'`,
       )) as Array<{ updatedAt: Date; billingChangedAt: Date }>
       preMigrationBoundary = boundary
+
+      // Model an environment that deployed the original billing migration
+      // before this outbox upgrade existed. TypeORM must see 1786000000000 in
+      // history and still discover and execute the later migration.
+      await queryRunner.query(`
+        CREATE TABLE "migrations" (
+          "id" SERIAL NOT NULL,
+          "timestamp" bigint NOT NULL,
+          "name" character varying NOT NULL,
+          CONSTRAINT "migrations_test_id_pk" PRIMARY KEY ("id")
+        )
+      `)
+      await queryRunner.query(`INSERT INTO "migrations" ("timestamp", "name") VALUES ($1, $2)`, [
+        1786000000000,
+        'AddBoxUsagePeriodInvariants1786000000000',
+      ])
+      await dataSource.runMigrations({ transaction: 'each' })
+      recordedMigrationNames = (
+        (await queryRunner.query(`SELECT "name" FROM "migrations" ORDER BY "timestamp"`)) as Array<{
+          name: string
+        }>
+      ).map((migration) => migration.name)
       ownsTables = true
     } finally {
       await queryRunner.release()
@@ -268,6 +323,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     })
     periods = dataSource.getRepository(BoxUsagePeriod)
     archives = dataSource.getRepository(BoxUsagePeriodArchive)
+    transitions = dataSource.getRepository(BoxBillingTransition)
   })
 
   // Setup can throw (the disposable-database guard), so nothing here may assume
@@ -282,6 +338,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
         // leave the schema in place but carrying nothing, so a later run finds
         // the database exactly as disposable as it expects
         await truncateTables().catch(() => undefined)
+        await dataSource.query(`DROP TABLE IF EXISTS "${TEST_MIGRATIONS_TABLE}"`).catch(() => undefined)
       }
       await dataSource.destroy()
     }
@@ -296,6 +353,167 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     expect(preMigrationBoundary.billingChangedAt).toBeInstanceOf(Date)
     expect(preMigrationBoundary.billingChangedAt.getTime()).toBeGreaterThan(preMigrationBoundary.updatedAt.getTime())
     expect(preMigrationBoundary.billingChangedAt.getTime()).toBeLessThanOrEqual(Date.now())
+  })
+
+  it('runs the outbox upgrade after the original billing migration is already recorded', () => {
+    expect(recordedMigrationNames).toEqual([
+      'AddBoxUsagePeriodInvariants1786000000000',
+      'AddBoxBillingTransitionOutbox1786000500000',
+    ])
+  })
+
+  it('timestamps blocked billing updates only after they acquire the box row lock and preserves id order', async () => {
+    await insertBox({ state: BoxState.STARTED })
+    await transitions.delete({ boxId: box.id })
+
+    const blocker = dataSource.createQueryRunner()
+    const firstUpdater = dataSource.createQueryRunner()
+    const secondUpdater = dataSource.createQueryRunner()
+    await Promise.all([blocker.connect(), firstUpdater.connect(), secondUpdater.connect()])
+    let updates: Promise<unknown>[] = []
+
+    try {
+      await blocker.startTransaction()
+      await blocker.query(`SELECT "id" FROM "box" WHERE "id" = $1 FOR UPDATE`, [box.id])
+      const [{ pid: firstPid }] = (await firstUpdater.query(`SELECT pg_backend_pid() AS pid`)) as Array<{ pid: number }>
+      const [{ pid: secondPid }] = (await secondUpdater.query(`SELECT pg_backend_pid() AS pid`)) as Array<{
+        pid: number
+      }>
+
+      updates = [
+        firstUpdater.query(`UPDATE "box" SET "disk" = "disk" + 1 WHERE "id" = $1`, [box.id]),
+        secondUpdater.query(`UPDATE "box" SET "disk" = "disk" + 1 WHERE "id" = $1`, [box.id]),
+      ]
+
+      let waitingPids: number[] = []
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        waitingPids = (
+          (await dataSource.query(
+            `SELECT pid
+               FROM pg_stat_activity
+              WHERE pid = ANY($1)
+                AND wait_event_type = 'Lock'`,
+            [[firstPid, secondPid]],
+          )) as Array<{ pid: number }>
+        ).map(({ pid }) => pid)
+        if (waitingPids.length === 2) {
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      expect(waitingPids.sort()).toEqual([firstPid, secondPid].sort())
+
+      const [{ releasedAfter }] = (await blocker.query(`SELECT clock_timestamp() AS "releasedAfter"`)) as Array<{
+        releasedAfter: Date
+      }>
+      await blocker.commitTransaction()
+      await Promise.all(updates)
+
+      const captured = await transitions.find({ where: { boxId: box.id }, order: { id: 'ASC' } })
+      expect(captured).toHaveLength(2)
+      expect(captured[0].occurredAt.getTime()).toBeGreaterThanOrEqual(releasedAfter.getTime())
+      expect(captured[1].occurredAt.getTime()).toBeGreaterThanOrEqual(captured[0].occurredAt.getTime())
+    } finally {
+      if (blocker.isTransactionActive) {
+        await blocker.rollbackTransaction()
+      }
+      await Promise.allSettled(updates)
+      await Promise.all([blocker.release(), firstUpdater.release(), secondUpdater.release()])
+    }
+  })
+
+  it('fails an outbox rollback closed while an unprocessed billing transition remains', async () => {
+    await insertBox({ state: BoxState.STARTED })
+    const queryRunner = dataSource.createQueryRunner()
+    await queryRunner.connect()
+    try {
+      await expect(new AddBoxBillingTransitionOutbox1786000500000().down(queryRunner)).rejects.toThrow(
+        /cannot remove billing transition outbox while unprocessed rows remain/,
+      )
+    } finally {
+      if (queryRunner.isTransactionActive) {
+        await queryRunner.rollbackTransaction()
+      }
+      await queryRunner.release()
+    }
+
+    const [{ outboxTable, triggerCount }] = (await dataSource.query(`
+      SELECT
+        to_regclass('box_billing_transitions') AS "outboxTable",
+        (
+          SELECT count(*)::int
+            FROM pg_trigger
+           WHERE tgname = 'box_billing_changed_at_trigger'
+             AND NOT tgisinternal
+        ) AS "triggerCount"
+    `)) as Array<{ outboxTable: string | null; triggerCount: number }>
+    expect(outboxTable).toBe('box_billing_transitions')
+    expect(triggerCount).toBe(1)
+    expect(await transitions.countBy({ boxId: box.id, processedAt: IsNull() })).toBe(1)
+  })
+
+  it('repairs only organizations suspended by the removed payment-method policy', async () => {
+    const queryRunner = dataSource.createQueryRunner()
+    await queryRunner.connect()
+    await queryRunner.startTransaction()
+    try {
+      await queryRunner.query(`
+        CREATE TEMP TABLE "organization" (
+          "id" character varying PRIMARY KEY,
+          "suspended" boolean NOT NULL,
+          "suspendedAt" TIMESTAMP WITH TIME ZONE,
+          "suspensionReason" character varying,
+          "suspendedUntil" TIMESTAMP WITH TIME ZONE
+        ) ON COMMIT DROP
+      `)
+      const suspendedAt = new Date('2026-08-06T00:00:00.000Z')
+      await queryRunner.query(
+        `INSERT INTO "organization" (
+           "id", "suspended", "suspendedAt", "suspensionReason", "suspendedUntil"
+         ) VALUES
+           ('legacy-payment', true, $1, 'Payment method required', $1),
+           ('manual-review', true, $1, 'Manual review required', $1),
+           ('already-active', false, NULL, 'Payment method required', NULL)`,
+        [suspendedAt],
+      )
+
+      await new UnsuspendLegacyPaymentOrganizations1786000600000().up(queryRunner)
+
+      const rows = (await queryRunner.query(`SELECT * FROM "organization" ORDER BY "id"`)) as Array<{
+        id: string
+        suspended: boolean
+        suspendedAt: Date | null
+        suspensionReason: string | null
+        suspendedUntil: Date | null
+      }>
+      expect(rows).toEqual([
+        expect.objectContaining({
+          id: 'already-active',
+          suspended: false,
+          suspensionReason: 'Payment method required',
+        }),
+        expect.objectContaining({
+          id: 'legacy-payment',
+          suspended: false,
+          suspendedAt: null,
+          suspensionReason: null,
+          suspendedUntil: null,
+        }),
+        expect.objectContaining({
+          id: 'manual-review',
+          suspended: true,
+          suspendedAt,
+          suspensionReason: 'Manual review required',
+          suspendedUntil: suspendedAt,
+        }),
+      ])
+      await queryRunner.commitTransaction()
+    } finally {
+      if (queryRunner.isTransactionActive) {
+        await queryRunner.rollbackTransaction()
+      }
+      await queryRunner.release()
+    }
   })
 
   it('archives closed periods and leaves the open one in place', async () => {
@@ -464,6 +682,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       new RedisLockProvider(redis),
       { findOne: async () => null } as any,
       { find: async () => [] } as any,
+      transitions,
     )
 
     await serviceWithoutBox.closeAndReopenUsagePeriods()
@@ -486,6 +705,78 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   })
 
   describe('box state versus the open period', () => {
+    it('replays lost STARTED then STOPPING boundaries in order and only once', async () => {
+      await insertBox({ state: BoxState.STARTED })
+      await dataSource.query(`UPDATE "box" SET "state" = $1 WHERE "id" = $2`, [BoxState.STOPPING, box.id])
+
+      const captured = await transitions.find({ where: { boxId: box.id }, order: { id: 'ASC' } })
+      expect(captured.map((transition) => transition.state)).toEqual([BoxState.STARTED, BoxState.STOPPING])
+      const startedAt = new Date('2026-08-06T00:00:00.000Z')
+      const stoppingAt = new Date('2026-08-06T00:05:00.000Z')
+      captured[0].occurredAt = startedAt
+      captured[1].occurredAt = stoppingAt
+      await transitions.save(captured)
+
+      await settleLedger()
+
+      const firstPass = await periods.find({ where: { boxId: box.id }, order: { startAt: 'ASC' } })
+      expect(firstPass).toEqual([
+        expect.objectContaining({
+          boxId: box.id,
+          startAt: startedAt,
+          endAt: stoppingAt,
+          cpu: box.cpu,
+          gpu: box.gpu,
+          mem: box.mem,
+          disk: box.disk,
+        }),
+        expect.objectContaining({
+          boxId: box.id,
+          startAt: stoppingAt,
+          endAt: null,
+          cpu: 0,
+          gpu: 0,
+          mem: 0,
+          disk: box.disk,
+        }),
+      ])
+      expect((await transitions.findBy({ boxId: box.id })).every((transition) => transition.processedAt)).toBe(true)
+
+      await settleLedger()
+
+      expect(await periods.find({ where: { boxId: box.id }, order: { startAt: 'ASC' } })).toEqual(firstPass)
+    })
+
+    it('closes billing at a pending desired-destroy boundary', async () => {
+      await insertBox({ state: BoxState.STARTED })
+      await dataSource.query(
+        `UPDATE "box"
+            SET "desiredState" = $1, "pending" = true
+          WHERE "id" = $2`,
+        [BoxDesiredState.DESTROYED, box.id],
+      )
+
+      const captured = await transitions.find({ where: { boxId: box.id }, order: { id: 'ASC' } })
+      expect(captured).toHaveLength(2)
+      expect(captured[1]).toEqual(expect.objectContaining({ desiredState: BoxDesiredState.DESTROYED, pending: true }))
+      const startedAt = new Date('2026-08-06T01:00:00.000Z')
+      const destroyRequestedAt = new Date('2026-08-06T01:05:00.000Z')
+      captured[0].occurredAt = startedAt
+      captured[1].occurredAt = destroyRequestedAt
+      await transitions.save(captured)
+
+      await settleLedger()
+
+      expect(await openPeriods()).toHaveLength(0)
+      expect(await periods.find({ where: { boxId: box.id } })).toEqual([
+        expect.objectContaining({
+          startAt: startedAt,
+          endAt: destroyRequestedAt,
+          cpu: box.cpu,
+        }),
+      ])
+    })
+
     it('opens a full-resource period when the STARTED event was lost', async () => {
       const started = await insertBox({ state: BoxState.STARTED })
 
@@ -567,7 +858,15 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     })
 
     it('repairs an explicit null boundary at observation time without consulting updatedAt', async () => {
-      const explicitNull = await insertBox({ state: BoxState.STARTED, billingChangedAtMsAgo: null })
+      await insertBox({ state: BoxState.STARTED })
+      await transitions.delete({ boxId: box.id })
+      await dataSource.query(`ALTER TABLE "box" DISABLE TRIGGER "box_billing_changed_at_trigger"`)
+      try {
+        await dataSource.query(`UPDATE "box" SET "billingChangedAt" = NULL WHERE "id" = $1`, [box.id])
+      } finally {
+        await dataSource.query(`ALTER TABLE "box" ENABLE TRIGGER "box_billing_changed_at_trigger"`)
+      }
+      const explicitNull = await dataSource.getRepository(ReconciliationBox).findOneByOrFail({ id: box.id })
       const observedBefore = Date.now()
 
       await settleLedger()
@@ -599,16 +898,21 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       expect((await periods.findOneByOrFail({ id: open.id })).endAt).toEqual(periodStartAt)
     })
 
-    it('leaves fresh and pending boxes for their state-event handler', async () => {
+    it('applies durable boundaries without waiting for freshness or pending-state drift scans', async () => {
       await insertBox({ id: 'box-fresh', state: BoxState.STARTED, billingChangedAtMsAgo: 0 })
       await insertBox({ id: 'box-pending', state: BoxState.STARTED, pending: true })
 
       await settleLedger()
 
-      expect(await openPeriods()).toHaveLength(0)
+      expect(await openPeriods()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ boxId: 'box-fresh', cpu: box.cpu }),
+          expect.objectContaining({ boxId: 'box-pending', cpu: box.cpu }),
+        ]),
+      )
     })
 
-    it('does not bill or rewrite unassigned warm-pool boxes', async () => {
+    it('closes any accidental billing period for an unassigned warm-pool box', async () => {
       await insertBox({
         state: BoxState.STARTED,
         organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
@@ -622,7 +926,10 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
 
       await settleLedger()
 
-      expect(await periods.find()).toEqual([expect.objectContaining({ id: held.id, endAt: null, cpu: 0 })])
+      expect(await openPeriods()).toHaveLength(0)
+      expect(await periods.findOneByOrFail({ id: held.id })).toEqual(
+        expect.objectContaining({ id: held.id, cpu: 0, endAt: expect.any(Date) }),
+      )
     })
 
     it('reaches both assigned-runner and unassigned-runner shards', async () => {

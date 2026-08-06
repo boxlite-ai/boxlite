@@ -440,11 +440,11 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       organization.suspended = true
       organization.suspendedAt = new Date()
       organization.suspensionReason = 'Please verify your email address'
-    } else if (this.configService.get('billingApiUrl') && !defaultForCreator) {
-      organization.suspended = true
-      organization.suspendedAt = new Date()
-      organization.suspensionReason = 'Payment method required'
     }
+
+    // Publishing the billing UI endpoint must not suspend organizations by
+    // itself. Commerce has no authenticated payment-success callback yet, so
+    // that policy would strand every non-default organization permanently.
 
     organization.boxLimitedNetworkEgress = boxLimitedNetworkEgress
 

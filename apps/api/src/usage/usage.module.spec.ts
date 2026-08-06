@@ -15,6 +15,7 @@ import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-ca
 import { RedisLockProvider } from '../box/common/redis-lock.provider'
 import { BoxUsagePeriod } from './entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from './entities/box-usage-period-archive.entity'
+import { BoxBillingTransition } from './entities/box-billing-transition.entity'
 import { UsageService } from './services/usage.service'
 import { UsageModule } from './usage.module'
 
@@ -51,6 +52,7 @@ describe('UsageModule', () => {
       expect.arrayContaining([
         getRepositoryToken(BoxUsagePeriod),
         getRepositoryToken(BoxUsagePeriodArchive),
+        getRepositoryToken(BoxBillingTransition),
         getRepositoryToken(Box),
         getRepositoryToken(Runner),
       ]),

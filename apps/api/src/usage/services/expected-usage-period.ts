@@ -4,6 +4,7 @@
  */
 
 import { BoxState } from '../../box/enums/box-state.enum'
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 
 /** The resources an open usage period charges for. */
 export interface UsagePeriodShape {
@@ -16,6 +17,7 @@ export interface UsagePeriodShape {
 /** The box fields that decide what its open period should charge. */
 export interface BillableBox extends UsagePeriodShape {
   state: BoxState
+  desiredState?: BoxDesiredState
 }
 
 export type ExpectedOpenPeriod = UsagePeriodShape | null
@@ -46,6 +48,12 @@ export const RESOURCE_EPSILON = 1e-6
  */
 export function expectedOpenPeriod(box: BillableBox | null | undefined): ExpectedOpenPeriod {
   if (!box) {
+    return null
+  }
+  // A destroy request stops billing immediately, before the runner reaches a
+  // terminal state.  The durable transition outbox makes this boundary
+  // recoverable even when the in-process desired-state event is lost.
+  if (box.desiredState === BoxDesiredState.DESTROYED) {
     return null
   }
   if (box.state === BoxState.STARTED) {

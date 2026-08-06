@@ -311,6 +311,19 @@ jobs:
           npm run --silent sst -- diff --stage "$STAGE" --policy . --json |
             node scripts/deployment-preview.mjs
 
+      # This is intentionally apply-only. A preview remains useful while the
+      # existing Api is serving; the first outbox-aware apply does not.
+      - name: Enforce billing outbox cutover drain
+        id: outbox_cutover
+        if: ${{ inputs.apply }}
+        working-directory: apps/infra
+        run: >-
+          node scripts/billing-outbox-cutover.mjs preflight
+          --app boxlite
+          --stage "$STAGE"
+          --region "$AWS_REGION"
+          --github-output "$GITHUB_OUTPUT"
+
       - name: Deploy the full stack
         if: ${{ inputs.apply }}
         working-directory: apps/infra
@@ -318,6 +331,18 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
         run: npm run deploy -- --stage "$STAGE" --policy .
+
+      # npm run deploy returns zero only after SST and the public Api health/config
+      # verification succeed. Preserve an existing marker; this step runs only
+      # for the first, explicitly drained cutover.
+      - name: Record billing outbox cutover
+        if: ${{ success() && inputs.apply && steps.outbox_cutover.outputs.marker_required == 'true' }}
+        working-directory: apps/infra
+        run: >-
+          node scripts/billing-outbox-cutover.mjs record
+          --stage "$STAGE"
+          --region "$AWS_REGION"
+          --ref "$BOXLITE_ARTIFACT_REF"
 
       - name: Remove materialized configuration
         if: always()

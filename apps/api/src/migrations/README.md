@@ -171,6 +171,33 @@ The new API should read from and write to `display_name` only. The trigger handl
 
 ## Migration Scripts
 
+Run these scripts from the `apps` workspace (the directory that contains
+`package.json`). For a private database, establish the approved database tunnel
+first and provide the `DB_*` environment variables to the command. The API
+runtime image does not contain the TypeScript migration sources, so post-deploy
+migrations are an explicit workstation or CI/CD task and must fail the release
+closed if they do not complete.
+
+```bash
+cd apps
+DB_HOST=... DB_PORT=... DB_USERNAME=... DB_PASSWORD=... DB_DATABASE=... \
+  yarn migration:run:post-deploy
+```
+
+For the first release that introduces `box_billing_transitions`, do not run
+pre-outbox and outbox-aware API instances concurrently. Use this one-time
+cutover checklist:
+
+1. Quiesce box lifecycle writes.
+2. Temporarily set the old API service's minimum and desired task counts to
+   zero, then verify that zero old-revision tasks are running.
+3. Run the pre-deploy migration.
+4. Start only the outbox-aware API revision, then restore its normal scaling.
+5. Resume lifecycle writes after the new API is healthy.
+
+The zero-old-task check is a release gate: old tasks mutate the ledger directly,
+while the new revision treats the outbox as its only lifecycle ledger writer.
+
 ### `npm run migration:run:init`
 
 Runs **all migrations** from both pre-deploy and post-deploy folders. Use this for:

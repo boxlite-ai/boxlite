@@ -16,9 +16,10 @@ import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
 import { Box } from '../box/entities/box.entity'
 import { Runner } from '../box/entities/runner.entity'
+import { BoxBillingTransition } from './entities/box-billing-transition.entity'
 
 @Module({
-  imports: [TypeOrmModule.forFeature([BoxUsagePeriod, Box, Runner, BoxUsagePeriodArchive])],
+  imports: [TypeOrmModule.forFeature([BoxUsagePeriod, Box, Runner, BoxUsagePeriodArchive, BoxBillingTransition])],
   providers: [
     UsageService,
     RedisLockProvider,

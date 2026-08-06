@@ -4,6 +4,7 @@
  */
 
 import { BoxState } from '../../box/enums/box-state.enum'
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BOX_STATES_CONSUMING_COMPUTE } from '../../organization/constants/box-consuming-states.constant'
 import { ExpectedOpenPeriod, expectedOpenPeriod, sameShape } from './expected-usage-period'
 
@@ -39,6 +40,10 @@ describe('expectedOpenPeriod', () => {
   it('bills nothing for a box that no longer exists', () => {
     expect(expectedOpenPeriod(null)).toBeNull()
     expect(expectedOpenPeriod(undefined)).toBeNull()
+  })
+
+  it('stops billing at the destroy request even before state reaches a terminal value', () => {
+    expect(expectedOpenPeriod({ ...box, state: BoxState.STARTED, desiredState: BoxDesiredState.DESTROYED })).toBeNull()
   })
 
   it('does not reuse the quota rule for states where a box is not usable yet', () => {
