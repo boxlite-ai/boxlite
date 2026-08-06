@@ -227,6 +227,14 @@ test('passes explicit management API endpoints into the API service', () => {
   assert.match(apiService, /OIDC_MANAGEMENT_API_TOKEN_URL: process\.env\.OIDC_MANAGEMENT_API_TOKEN_URL/)
 })
 
+test('passes the optional public billing URL into the API service', () => {
+  const apiService = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+
+  assert.match(apiService, /BILLING_API_URL: envOr\('BILLING_API_URL', ''\)/)
+  assert.match(environmentExample, /^# BILLING_API_URL=https:\/\/commerce\.dev\.example\.com$/m)
+  assert.match(environmentExample, /Leave unset to keep billing disabled in the dashboard\./)
+})
+
 test('reports the canonical workspace release unless VERSION overrides it', () => {
   assert.match(liveConfig, /const workspaceVersion = readWorkspaceVersion\(\)/)
   assert.match(liveConfig, /resolvePublicDeploymentConfig\(process\.env, workspaceVersion\)/)

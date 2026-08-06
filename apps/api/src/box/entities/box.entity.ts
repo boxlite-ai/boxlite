@@ -148,6 +148,10 @@ export class Box {
   })
   updatedAt: Date
 
+  /** Last state, resource, or attribution change that can alter billed usage. */
+  @Column({ type: 'timestamp with time zone', nullable: true, default: () => 'CURRENT_TIMESTAMP' })
+  billingChangedAt: Date | null
+
   @OneToOne(() => BoxLastActivity, (lastActivity) => lastActivity.box)
   lastActivityAt?: BoxLastActivity
 

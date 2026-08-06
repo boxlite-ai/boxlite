@@ -46,6 +46,7 @@ import { usePostHog } from 'posthog-js/react'
 import { useQuery } from '@tanstack/react-query'
 import { useCallback, useMemo } from 'react'
 import { useAuth } from 'react-oidc-context'
+import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { CommandConfig, useCommandPaletteActions, useRegisterCommands } from './CommandPalette'
 
@@ -126,14 +127,15 @@ const useNavCommands = (items: NavItem[]) => {
  * presentation matches the new design (Nav.dc): a single 60px monospace bar with bordered
  * segments, a standalone organization switcher, and a profile menu.
  */
-export function Sidebar({ isBannerVisible }: SidebarProps) {
+export function Sidebar({ isBannerVisible, billingEnabled }: SidebarProps) {
   const posthog = usePostHog()
   const { axiosInstance } = useApi()
   const { theme, setTheme } = useTheme()
   const { user, signoutRedirect } = useAuth()
   const { pathname } = useLocation()
   const navigate = useNavigate()
-  const { selectedOrganization } = useSelectedOrganization()
+  const { selectedOrganization, authenticatedUserOrganizationMember, organizationMembersLoaded } =
+    useSelectedOrganization()
   const [, copyToClipboard] = useCopyToClipboard()
 
   const copyOrgId = useCallback(() => {
@@ -177,14 +179,18 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
     refetchOnWindowFocus: false,
   })
   const canViewAdmin = adminAccessQuery.data === true
+  const canViewBilling =
+    !billingEnabled ||
+    (organizationMembersLoaded && authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER)
+  const billingPath = billingEnabled ? RoutePath.BILLING_SPENDING : RoutePath.BILLING
 
   const primaryItems = useMemo<NavItem[]>(
     () => [
       { label: 'Boxes', path: RoutePath.BOXES },
-      { label: 'Billing', path: RoutePath.BILLING },
+      ...(canViewBilling ? [{ label: 'Billing', path: billingPath }] : []),
       ...(canViewAdmin ? [{ label: 'Admin', path: RoutePath.ADMIN }] : []),
     ],
-    [canViewAdmin],
+    [billingPath, canViewAdmin, canViewBilling],
   )
 
   const openOnboardingGuide = useCallback(() => {

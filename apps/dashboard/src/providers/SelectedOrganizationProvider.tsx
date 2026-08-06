@@ -25,6 +25,14 @@ type Props = {
   children: ReactNode
 }
 
+const EMPTY_ORGANIZATION_MEMBERS: OrganizationUser[] = []
+
+interface OrganizationMembersState {
+  organizationId: string | null
+  members: OrganizationUser[]
+  loaded: boolean
+}
+
 export function SelectedOrganizationProvider(props: Props) {
   const { user } = useAuth()
   const { organizationsApi } = useApi()
@@ -94,19 +102,51 @@ export function SelectedOrganizationProvider(props: Props) {
   // background instead: the table renders immediately; permission-gated actions
   // default to disabled (authenticatedUserHasPermission returns false on an
   // empty list) until members arrive.
-  const [organizationMembers, setOrganizationMembers] = useState<OrganizationUser[]>([])
+  // Keep membership data attached to the organization it was fetched for.
+  // selectedOrganizationId can change because the organizations list refreshes,
+  // not only through handleSelectOrganization. Without the id, that render can
+  // expose the previous org's loaded OWNER membership to billing hooks for the
+  // newly selected org before this effect has a chance to clear it.
+  const [organizationMembersState, setOrganizationMembersState] = useState<OrganizationMembersState>({
+    organizationId: selectedOrganizationId,
+    members: EMPTY_ORGANIZATION_MEMBERS,
+    loaded: false,
+  })
+  const organizationMembers =
+    organizationMembersState.organizationId === selectedOrganizationId
+      ? organizationMembersState.members
+      : EMPTY_ORGANIZATION_MEMBERS
+  const organizationMembersLoaded =
+    organizationMembersState.organizationId === selectedOrganizationId && organizationMembersState.loaded
 
   useEffect(() => {
     let cancelled = false
+    setOrganizationMembersState({
+      organizationId: selectedOrganizationId,
+      members: EMPTY_ORGANIZATION_MEMBERS,
+      loaded: false,
+    })
     getOrganizationMembers(selectedOrganizationId)
       .then((members) => {
         if (!cancelled) {
-          setOrganizationMembers(members)
+          setOrganizationMembersState({
+            organizationId: selectedOrganizationId,
+            members,
+            loaded: true,
+          })
         }
       })
       // getOrganizationMembers already surfaces a toast via handleApiError; a
       // members failure must not crash the dashboard (was: error boundary).
-      .catch(() => undefined)
+      .catch(() => {
+        if (!cancelled) {
+          setOrganizationMembersState({
+            organizationId: selectedOrganizationId,
+            members: EMPTY_ORGANIZATION_MEMBERS,
+            loaded: true,
+          })
+        }
+      })
     return () => {
       cancelled = true
     }
@@ -114,8 +154,13 @@ export function SelectedOrganizationProvider(props: Props) {
 
   const refreshOrganizationMembers = useCallback(
     async (organizationId?: string) => {
-      const organizationMembers = await getOrganizationMembers(organizationId || selectedOrganizationId)
-      setOrganizationMembers(organizationMembers)
+      const targetOrganizationId = organizationId || selectedOrganizationId
+      const organizationMembers = await getOrganizationMembers(targetOrganizationId)
+      setOrganizationMembersState({
+        organizationId: targetOrganizationId,
+        members: organizationMembers,
+        loaded: true,
+      })
       return organizationMembers
     },
     [getOrganizationMembers, selectedOrganizationId],
@@ -168,6 +213,7 @@ export function SelectedOrganizationProvider(props: Props) {
     return {
       selectedOrganization,
       organizationMembers,
+      organizationMembersLoaded,
       refreshOrganizationMembers,
       authenticatedUserOrganizationMember,
       authenticatedUserHasPermission,
@@ -176,6 +222,7 @@ export function SelectedOrganizationProvider(props: Props) {
   }, [
     selectedOrganization,
     organizationMembers,
+    organizationMembersLoaded,
     authenticatedUserOrganizationMember,
     authenticatedUserHasPermission,
     handleSelectOrganization,

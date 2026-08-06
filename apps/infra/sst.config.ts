@@ -677,6 +677,9 @@ export default $config({
         DASHBOARD_URL: envOr('DASHBOARD_URL', `https://${stackDomain}`),
         APP_URL: envOr('APP_URL', ''),
         DASHBOARD_BASE_API_URL: envOr('DASHBOARD_BASE_API_URL', `https://api.${stackDomain}`),
+        // Public billing facade called directly by the dashboard. Empty keeps
+        // billing disabled; when set, the Api publishes it through /api/config.
+        BILLING_API_URL: envOr('BILLING_API_URL', ''),
 
         // Default runner — the API auto-seeds it at boot; v2 runners self-report
         DEFAULT_RUNNER_NAME: defaultRunnerName,

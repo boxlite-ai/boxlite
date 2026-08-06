@@ -5,9 +5,11 @@
  */
 
 import { Invoice } from '@/billing-api/types/Invoice'
+import { BillingOperationTracker } from '@/billing-api/billingOperation'
 import { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
 import { InvoicesTable } from '@/components/Invoices'
 import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
+import { BillingNavigation } from '@/components/BillingNavigation'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -47,6 +49,8 @@ const Wallet = () => {
   const [redeemCouponSuccess, setRedeemCouponSuccess] = useState<string | null>(null)
   const [oneTimeTopUpAmount, setOneTimeTopUpAmount] = useState<number | undefined>(undefined)
   const [selectedPreset, setSelectedPreset] = useState<number | null>(null)
+  const [couponOperation] = useState(() => new BillingOperationTracker('redeem-coupon'))
+  const [topUpOperation] = useState(() => new BillingOperationTracker('wallet-top-up'))
   const [invoicesPagination, setInvoicesPagination] = useState({
     pageIndex: 0,
     pageSize: DEFAULT_PAGE_SIZE,
@@ -111,22 +115,30 @@ const Wallet = () => {
 
     setRedeemCouponError(null)
     setRedeemCouponSuccess(null)
+    const operationSignature = JSON.stringify([selectedOrganization.id, couponCode])
+    const idempotencyKey = couponOperation.begin(operationSignature)
+    if (!idempotencyKey) {
+      return
+    }
 
     try {
       const message = await redeemCouponMutation.mutateAsync({
         organizationId: selectedOrganization.id,
         couponCode,
+        idempotencyKey,
       })
+      couponOperation.succeed(idempotencyKey)
       setRedeemCouponSuccess(message)
       setTimeout(() => {
         setRedeemCouponSuccess(null)
       }, 3000)
       setCouponCode('')
     } catch (error) {
+      couponOperation.fail(idempotencyKey, error)
       setRedeemCouponError(String(error))
       console.error('Failed to redeem coupon:', error)
     }
-  }, [selectedOrganization, couponCode, redeemCouponMutation])
+  }, [selectedOrganization, couponCode, redeemCouponMutation, couponOperation])
 
   const saveAutomaticTopUpDisabled = useMemo(() => {
     if (setAutomaticTopUpMutation.isPending) {
@@ -164,23 +176,32 @@ const Wallet = () => {
     if (!amount) {
       return
     }
+    const amountCents = amount * 100
+    const operationSignature = JSON.stringify([selectedOrganization.id, amountCents])
+    const idempotencyKey = topUpOperation.begin(operationSignature)
+    if (!idempotencyKey) {
+      return
+    }
 
     const newWindow = window.open('', '_blank')
     try {
       const result = await topUpWalletMutation.mutateAsync({
         organizationId: selectedOrganization.id,
-        amountCents: amount * 100,
+        amountCents,
+        idempotencyKey,
       })
+      topUpOperation.succeed(idempotencyKey)
       if (newWindow) {
         newWindow.location.href = result.url
       }
     } catch (error) {
+      topUpOperation.fail(idempotencyKey, error)
       newWindow?.close()
       toast.error('Failed to initiate top-up', {
         description: String(error),
       })
     }
-  }, [selectedOrganization, selectedPreset, oneTimeTopUpAmount, topUpWalletMutation])
+  }, [selectedOrganization, selectedPreset, oneTimeTopUpAmount, topUpWalletMutation, topUpOperation])
 
   const handlePayInvoice = useCallback(
     async (invoice: Invoice) => {
@@ -248,6 +269,7 @@ const Wallet = () => {
     <PageLayout>
       <PageHeader>
         <PageTitle>Wallet</PageTitle>
+        <BillingNavigation />
       </PageHeader>
 
       <PageContent>

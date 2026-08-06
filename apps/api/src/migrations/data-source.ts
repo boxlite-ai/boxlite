@@ -20,6 +20,10 @@ export const baseDataSourceOptions: DataSourceOptions = {
   database: process.env.DB_DATABASE,
   synchronize: false,
   migrationsRun: false,
+  // Some online DDL (notably CREATE INDEX CONCURRENTLY) must opt out of a
+  // transaction. `each` preserves transactions for ordinary migrations while
+  // honoring MigrationInterface.transaction = false for those online steps.
+  migrationsTransactionMode: 'each',
   logging: process.env.DB_LOGGING === 'true',
   namingStrategy: new CustomNamingStrategy(),
   entities: [join(__dirname, '../**/*.entity.ts')],

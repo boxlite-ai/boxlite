@@ -4,9 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
+import { Check, Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
 
 @Entity('box_usage_periods')
+@Check('box_usage_periods_end_after_start_check', '"endAt" IS NULL OR "endAt" >= "startAt"')
 @Index('idx_box_usage_periods_box_end', ['boxId', 'endAt'])
 // A box bills against exactly one open period at a time. The per-box Redis lock
 // is advisory and expires, so the invariant is enforced in the database: two

@@ -12,6 +12,7 @@ import { usePostHog } from 'posthog-js/react'
 import React, { Suspense, useEffect } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
+import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { BannerProvider } from './components/Banner'
 import { CommandPaletteProvider } from './components/CommandPalette'
 import LoadingFallback from './components/LoadingFallback'
@@ -27,6 +28,7 @@ import {
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from './constants/ExternalLinks'
 import { RoutePath, getRouteSubPath } from './enums/RoutePath'
 import { useConfig } from './hooks/useConfig'
+import { useSelectedOrganization } from './hooks/useSelectedOrganization'
 import Dashboard from './pages/Dashboard'
 import LandingPage from './pages/LandingPage'
 import Logout from './pages/Logout'
@@ -39,6 +41,8 @@ import Boxes from './pages/Boxes'
 // recharts/terminal deps. Boxes + the Dashboard shell stay eager (first paint).
 const Keys = React.lazy(() => import('./pages/Keys'))
 const Billing = React.lazy(() => import('./pages/Billing'))
+const Spending = React.lazy(() => import('./pages/Spending'))
+const Wallet = React.lazy(() => import('./pages/Wallet'))
 const Admin = React.lazy(() => import('./pages/Admin'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
@@ -54,8 +58,6 @@ const HIDDEN_DASHBOARD_ROUTES = [
   RoutePath.IMAGES,
   RoutePath.VOLUMES,
   RoutePath.LIMITS,
-  RoutePath.BILLING_SPENDING,
-  RoutePath.BILLING_WALLET,
   RoutePath.MEMBERS,
   RoutePath.ROLES,
   RoutePath.AUDIT_LOGS,
@@ -81,6 +83,39 @@ const SlackRedirect = () => {
     window.location.href = RoutePath.DASHBOARD
   }, [])
   return null
+}
+
+function BillingAccess({ children }: { children: React.ReactNode }) {
+  const config = useConfig()
+  const { authenticatedUserOrganizationMember, organizationMembersLoaded } = useSelectedOrganization()
+
+  if (!config.billingApiUrl) {
+    return <Navigate to={RoutePath.BILLING} replace />
+  }
+
+  if (!organizationMembersLoaded) {
+    return <LoadingFallback />
+  }
+
+  if (authenticatedUserOrganizationMember?.role !== OrganizationUserRoleEnum.OWNER) {
+    return <Navigate to={RoutePath.BOXES} replace />
+  }
+
+  return children
+}
+
+function BillingLanding() {
+  const config = useConfig()
+
+  if (!config.billingApiUrl) {
+    return <Billing />
+  }
+
+  return (
+    <BillingAccess>
+      <Navigate to={RoutePath.BILLING_SPENDING} replace />
+    </BillingAccess>
+  )
 }
 
 // Same-origin OIDC silent-renew iframes are legitimate, so frame refusal
@@ -186,7 +221,23 @@ function App() {
         <Route index element={<Navigate to={boxesRedirect} replace />} />
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
         <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
-        <Route path={getRouteSubPath(RoutePath.BILLING)} element={<Billing />} />
+        <Route path={getRouteSubPath(RoutePath.BILLING)} element={<BillingLanding />} />
+        <Route
+          path={getRouteSubPath(RoutePath.BILLING_SPENDING)}
+          element={
+            <BillingAccess>
+              <Spending />
+            </BillingAccess>
+          }
+        />
+        <Route
+          path={getRouteSubPath(RoutePath.BILLING_WALLET)}
+          element={
+            <BillingAccess>
+              <Wallet />
+            </BillingAccess>
+          }
+        />
         <Route path={getRouteSubPath(RoutePath.PRICING)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.ADMIN)} element={<Admin />} />
         {/* TODO(image-rewrite): legacy /dashboard/templates route removed with the templates page. */}

@@ -63,3 +63,122 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     expect(window.sessionStorage.getItem('boxlite.reauth-attempted')).toBeNull()
   })
 })
+
+describe('ApiClient billing authentication', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('uses the same bounded re-login recovery for a first billing 401', async () => {
+    const onUnauthorized = vi.fn(() => Promise.resolve())
+    const api = await makeClient(onUnauthorized)
+    let settled = false
+
+    void api.billingApi.getOrganizationUsage('org-1').then(
+      () => (settled = true),
+      () => (settled = true),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
+    expect(settled).toBe(false)
+  })
+
+  it('surfaces a billing 401 after re-login instead of redirecting again', async () => {
+    window.sessionStorage.setItem('boxlite.reauth-attempted', '1')
+    const onUnauthorized = vi.fn(() => Promise.resolve())
+    const api = await makeClient(onUnauthorized)
+
+    await expect(api.billingApi.getOrganizationUsage('org-1')).rejects.toThrow(
+      'Authentication failed after re-login. Please sign in again.',
+    )
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
+  it('uses a refreshed access token for billing requests', async () => {
+    vi.resetModules()
+    const axios = (await import('axios')).default
+    let authorization: string | undefined
+    axios.defaults.adapter = (async (requestConfig: {
+      headers?: { get?: (name: string) => string | undefined; Authorization?: string }
+    }) => {
+      authorization = requestConfig.headers?.get?.('Authorization') ?? requestConfig.headers?.Authorization
+      return { data: {}, status: 200, statusText: 'OK', headers: {}, config: requestConfig }
+    }) as never
+
+    const { ApiClient } = await import('./apiClient')
+    const api = new ApiClient(
+      { apiUrl: 'http://api.test/api', billingApiUrl: 'http://billing.test' } as never,
+      'initial-token',
+    )
+
+    api.setAccessToken('refreshed-token')
+    await api.billingApi.getOrganizationUsage('org-1')
+
+    expect(authorization).toBe('Bearer refreshed-token')
+  })
+
+  it('sends the logical operation key and refreshed token for a manual wallet top-up', async () => {
+    vi.resetModules()
+    const axios = (await import('axios')).default
+    const idempotencyKey = '11111111-1111-4111-8111-111111111111'
+    let authorization: string | undefined
+    let sentIdempotencyKey: string | undefined
+    axios.defaults.adapter = (async (requestConfig: {
+      headers?: { get?: (name: string) => string | undefined; Authorization?: string }
+    }) => {
+      authorization = requestConfig.headers?.get?.('Authorization') ?? requestConfig.headers?.Authorization
+      sentIdempotencyKey = requestConfig.headers?.get?.('Idempotency-Key')
+      return {
+        data: { url: 'https://checkout.test' },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: requestConfig,
+      }
+    }) as never
+
+    const { ApiClient } = await import('./apiClient')
+    const api = new ApiClient(
+      { apiUrl: 'http://api.test/api', billingApiUrl: 'http://billing.test' } as never,
+      'initial-token',
+    )
+
+    api.setAccessToken('refreshed-token')
+    await api.billingApi.topUpWallet('org-1', 5_000, idempotencyKey)
+
+    expect(sentIdempotencyKey).toBe(idempotencyKey)
+    expect(authorization).toBe('Bearer refreshed-token')
+  })
+
+  it('sends the logical operation key and refreshed token for coupon redemption', async () => {
+    vi.resetModules()
+    const axios = (await import('axios')).default
+    const idempotencyKey = '22222222-2222-4222-8222-222222222222'
+    let authorization: string | undefined
+    let sentIdempotencyKey: string | undefined
+    axios.defaults.adapter = (async (requestConfig: {
+      headers?: { get?: (name: string) => string | undefined; Authorization?: string }
+    }) => {
+      authorization = requestConfig.headers?.get?.('Authorization') ?? requestConfig.headers?.Authorization
+      sentIdempotencyKey = requestConfig.headers?.get?.('Idempotency-Key')
+      return { data: { message: 'Coupon redeemed' }, status: 200, statusText: 'OK', headers: {}, config: requestConfig }
+    }) as never
+
+    const { ApiClient } = await import('./apiClient')
+    const api = new ApiClient(
+      { apiUrl: 'http://api.test/api', billingApiUrl: 'http://billing.test' } as never,
+      'initial-token',
+    )
+
+    api.setAccessToken('refreshed-token')
+    await api.billingApi.redeemCoupon('org-1', 'SAVE10', idempotencyKey)
+
+    expect(sentIdempotencyKey).toBe(idempotencyKey)
+    expect(authorization).toBe('Bearer refreshed-token')
+  })
+})

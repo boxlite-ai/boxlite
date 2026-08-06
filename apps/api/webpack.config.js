@@ -7,9 +7,14 @@ const { composePlugins, withNx } = require('@nx/webpack')
 const path = require('path')
 const glob = require('glob')
 
-const migrationFiles = glob.sync(path.join(__dirname, 'src/migrations/**/*-migration.{ts,js}'))
+const migrationsRoot = path.join(__dirname, 'src/migrations')
+const migrationFiles = glob.sync(path.join(migrationsRoot, '**/*-migration.{ts,js}'))
 const migrationEntries = migrationFiles.reduce((acc, migrationFile) => {
-  const entryName = migrationFile.substring(migrationFile.lastIndexOf('/') + 1, migrationFile.lastIndexOf('.'))
+  // Keep phase directories in the build. App startup intentionally loads only
+  // baseline + pre-deploy entries; flattening post-deploy files into the same
+  // output directory would silently defeat that safety boundary.
+  const relativePath = path.relative(migrationsRoot, migrationFile)
+  const entryName = relativePath.slice(0, relativePath.lastIndexOf('.')).split(path.sep).join('/')
   acc[entryName] = migrationFile
   return acc
 }, {})

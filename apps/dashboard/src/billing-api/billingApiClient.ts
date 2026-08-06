@@ -20,25 +20,47 @@ import {
 
 export class BillingApiClient {
   private axiosInstance: AxiosInstance
+  private accessToken: string
 
-  constructor(apiUrl: string, accessToken: string) {
+  constructor(
+    apiUrl: string,
+    accessToken: string,
+    authRecovery?: {
+      onAuthenticated: () => void
+      onUnauthorized: (error: unknown) => Promise<never>
+    },
+  ) {
+    this.accessToken = accessToken
     this.axiosInstance = axios.create({
       baseURL: apiUrl,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
+    })
+
+    this.axiosInstance.interceptors.request.use((request) => {
+      request.headers.set('Authorization', `Bearer ${this.accessToken}`)
+      return request
     })
 
     this.axiosInstance.interceptors.response.use(
       (response) => {
+        authRecovery?.onAuthenticated()
         return response
       },
       (error) => {
+        if (error?.response?.status === 401 && authRecovery) {
+          return authRecovery.onUnauthorized(error)
+        }
+
         const errorMessage = error.response?.data?.message || error.response?.data || error.message || String(error)
 
-        throw BoxliteError.fromString(String(errorMessage))
+        throw BoxliteError.fromString(String(errorMessage), {
+          cause: error instanceof Error ? error : undefined,
+        })
       },
     )
+  }
+
+  public setAccessToken(accessToken: string): void {
+    this.accessToken = accessToken
   }
 
   public async getOrganizationUsage(organizationId: string): Promise<OrganizationUsage> {
@@ -70,8 +92,14 @@ export class BillingApiClient {
     return response.data
   }
 
-  public async redeemCoupon(organizationId: string, couponCode: string): Promise<string> {
-    const response = await this.axiosInstance.post(`/organization/${organizationId}/redeem-coupon/${couponCode}`)
+  public async redeemCoupon(organizationId: string, couponCode: string, idempotencyKey: string): Promise<string> {
+    const response = await this.axiosInstance.post(
+      `/organization/${organizationId}/redeem-coupon/${couponCode}`,
+      undefined,
+      {
+        headers: { 'Idempotency-Key': idempotencyKey },
+      },
+    )
     return response.data?.message || 'Coupon redeemed successfully'
   }
 
@@ -150,10 +178,16 @@ export class BillingApiClient {
     await this.axiosInstance.post(`/organization/${organizationId}/invoices/${invoiceId}/void`)
   }
 
-  public async topUpWallet(organizationId: string, amountCents: number): Promise<PaymentUrl> {
-    const response = await this.axiosInstance.post(`/organization/${organizationId}/wallet/top-up`, {
-      amountCents,
-    } as WalletTopUpRequest)
+  public async topUpWallet(organizationId: string, amountCents: number, idempotencyKey: string): Promise<PaymentUrl> {
+    const response = await this.axiosInstance.post(
+      `/organization/${organizationId}/wallet/top-up`,
+      {
+        amountCents,
+      } as WalletTopUpRequest,
+      {
+        headers: { 'Idempotency-Key': idempotencyKey },
+      },
+    )
     return response.data
   }
 }

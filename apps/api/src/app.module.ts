@@ -31,6 +31,7 @@ import { WebhookModule } from './webhook/webhook.module'
 import { ObjectStorageModule } from './object-storage/object-storage.module'
 import { CustomNamingStrategy } from './common/utils/naming-strategy.util'
 import { MaintenanceMiddleware } from './common/middleware/maintenance.middleware'
+import { apiStartupMigrationPaths } from './migrations/migration-paths'
 import { AuditModule } from './audit/audit.module'
 import { HealthModule } from './health/health.module'
 import { OpenFeatureModule } from '@openfeature/nestjs-sdk'
@@ -80,8 +81,13 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
           password: configService.getOrThrow('database.password'),
           database: configService.getOrThrow('database.database'),
           autoLoadEntities: true,
-          migrations: [join(__dirname, 'migrations/**/*-migration.{ts,js}')],
+          // Startup may apply the baseline and expand/pre-deploy migrations,
+          // but never contract/post-deploy work. Post-deploy validation runs
+          // only through the explicit migration:run:post-deploy command after
+          // the rolling deployment is complete.
+          migrations: apiStartupMigrationPaths(__dirname),
           migrationsRun: configService.get('runMigrations') || !configService.getOrThrow('production'),
+          migrationsTransactionMode: 'each',
           namingStrategy: new CustomNamingStrategy(),
           manualInitialization: configService.get('skipConnections'),
           ssl: configService.get('database.tls.enabled')

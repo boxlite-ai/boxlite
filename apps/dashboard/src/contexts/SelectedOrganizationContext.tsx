@@ -11,6 +11,7 @@ import { createContext } from 'react'
 export interface ISelectedOrganizationContext {
   selectedOrganization: Organization | null
   organizationMembers: OrganizationUser[]
+  organizationMembersLoaded: boolean
   refreshOrganizationMembers: () => Promise<OrganizationUser[]>
   authenticatedUserOrganizationMember: OrganizationUser | null
   authenticatedUserHasPermission: (permission: OrganizationRolePermissionsEnum) => boolean

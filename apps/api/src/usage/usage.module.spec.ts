@@ -9,6 +9,7 @@ import { Test } from '@nestjs/testing'
 import { getRepositoryToken } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 import { Box } from '../box/entities/box.entity'
+import { Runner } from '../box/entities/runner.entity'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
 import { RedisLockProvider } from '../box/common/redis-lock.provider'
@@ -51,6 +52,7 @@ describe('UsageModule', () => {
         getRepositoryToken(BoxUsagePeriod),
         getRepositoryToken(BoxUsagePeriodArchive),
         getRepositoryToken(Box),
+        getRepositoryToken(Runner),
       ]),
     )
     expect(providers).toContain(BoxLookupCacheInvalidationService)

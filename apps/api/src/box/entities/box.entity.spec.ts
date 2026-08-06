@@ -5,6 +5,7 @@
  */
 
 import { BOX_ID_LENGTH, BOX_ID_REGEX } from '../utils/box-id.util'
+import { getMetadataArgsStorage } from 'typeorm'
 import { Box } from './box.entity'
 
 describe('Box entity public identity', () => {
@@ -15,5 +16,17 @@ describe('Box entity public identity', () => {
     expect(box.id).toMatch(BOX_ID_REGEX)
     expect((box as any).boxId).toBeUndefined()
     expect(box.name).toBe('data-loader')
+  })
+
+  it('maps the durable billing transition timestamp to a database-backed column', () => {
+    const column = getMetadataArgsStorage().columns.find(
+      (candidate) => candidate.target === Box && candidate.propertyName === 'billingChangedAt',
+    )
+
+    expect(column?.options).toMatchObject({
+      type: 'timestamp with time zone',
+      nullable: true,
+      default: expect.any(Function),
+    })
   })
 })

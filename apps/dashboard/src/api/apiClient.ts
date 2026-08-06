@@ -131,7 +131,10 @@ export class ApiClient {
     this._userApi = new UsersApi(this.config, undefined, axiosInstance)
     this._apiKeyApi = new ApiKeysApi(this.config, undefined, axiosInstance)
     this._organizationsApi = new OrganizationsApi(this.config, undefined, axiosInstance)
-    this._billingApi = new BillingApiClient(config.billingApiUrl || window.location.origin, accessToken)
+    this._billingApi = new BillingApiClient(config.billingApiUrl || window.location.origin, accessToken, {
+      onAuthenticated: clearReauthAttempted,
+      onUnauthorized: (error) => this.handleUnauthorized(error),
+    })
     this._volumeApi = new VolumesApi(this.config, undefined, axiosInstance)
     this._auditApi = new AuditApi(this.config, undefined, axiosInstance)
     this._regionsApi = new RegionsApi(this.config, undefined, axiosInstance)
@@ -201,6 +204,7 @@ export class ApiClient {
 
   public setAccessToken(accessToken: string) {
     this.config.accessToken = accessToken
+    this._billingApi.setAccessToken(accessToken)
   }
 
   public get boxApi() {

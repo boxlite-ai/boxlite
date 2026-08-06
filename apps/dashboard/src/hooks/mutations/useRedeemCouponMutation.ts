@@ -5,12 +5,14 @@
  */
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { shouldRetryBillingMutation } from '@/billing-api/billingOperation'
 import { queryKeys } from '../queries/queryKeys'
 import { useApi } from '../useApi'
 
 interface RedeemCouponVariables {
   organizationId: string
   couponCode: string
+  idempotencyKey: string
 }
 
 export const useRedeemCouponMutation = () => {
@@ -18,7 +20,9 @@ export const useRedeemCouponMutation = () => {
   const queryClient = useQueryClient()
 
   return useMutation<string, unknown, RedeemCouponVariables>({
-    mutationFn: ({ organizationId, couponCode }) => billingApi.redeemCoupon(organizationId, couponCode),
+    mutationFn: ({ organizationId, couponCode, idempotencyKey }) =>
+      billingApi.redeemCoupon(organizationId, couponCode, idempotencyKey),
+    retry: shouldRetryBillingMutation,
     onSuccess: (_data, { organizationId }) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.organization.wallet(organizationId) })
 

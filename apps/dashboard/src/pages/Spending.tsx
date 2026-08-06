@@ -6,6 +6,7 @@
 
 import { BillableMetricCode, OrganizationUsage } from '@/billing-api/types/OrganizationUsage'
 import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
+import { BillingNavigation } from '@/components/BillingNavigation'
 import { AggregatedUsageChart, ResourceUsageBreakdown, UsageSummary } from '@/components/spending/AggregatedUsageChart'
 import { CostBreakdown } from '@/components/spending/CostBreakdown'
 import { UsageChartData } from '@/components/spending/ResourceUsageChart'
@@ -109,6 +110,7 @@ const Spending = () => {
     <PageLayout>
       <PageHeader>
         <PageTitle>Spending</PageTitle>
+        <BillingNavigation />
       </PageHeader>
 
       <PageContent>

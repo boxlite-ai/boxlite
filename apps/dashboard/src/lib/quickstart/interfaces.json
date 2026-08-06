@@ -81,7 +81,7 @@
     "run": "BOXLITE_API_KEY=$KEY BOXLITE_REST_URL={{REST_API_URL}} bash quickstart-rest.sh",
     "codeLanguage": "bash",
     "setupLabel": "Check REST tools",
-    "setupDescription": "REST does not require an SDK install. The next step uses curl and jq to create a Box and execute a command.",
+    "setupDescription": "REST does not require an SDK install. The next step uses curl and jq to create a Box and execute a command. OpenAPI is available for full endpoint reference and generated clients.",
     "executionDescription": "What it does: uses your API key from Step 1, calls the REST API to create and start a Box, executes a command, prints execution status, then removes the Box.",
     "template": "rest"
   }
