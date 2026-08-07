@@ -77,10 +77,15 @@ WebhookEndpointDetails). Their hooks/components still exist. Active: Landing · 
 (shell/nav) · **Boxes** (list + detail + fullscreen terminal + lifecycle + onboarding — the
 core) · Keys · Billing · Admin · OrganizationSettings · EmailVerify · Logout.
 
-Three more are **conditionally** routed, gated on `config.billingApiUrl` — a deployed billing
-service — and owner-only through the query hooks: **BillingWallet**, **BillingSpending** and
-**Limits** (which carries the subscription surface: `TierUpgradeCard` + `TierComparisonTable`).
-These are pre-restyle UI; they render against the new shell but have not been restyled.
+**Billing** is one page and one nav entry. `pages/Billing.tsx` renders the "on the way"
+placeholder without `config.billingApiUrl`, and otherwise stacks three restyled sections beneath
+a shared `components/billing/BillingAlerts`: `pages/Limits.tsx` (active plan, plan cards,
+enterprise contact, resource ceilings), `pages/Wallet.tsx` (balance, top-up, auto-reload, coupon,
+payment method, invoices) and `pages/Spending.tsx` (cost over time, resource and per-box usage,
+monthly breakdown). `/dashboard/billing/wallet`, `/dashboard/billing/spending` and
+`/dashboard/limits` redirect to it. Wallet/tier data is owner-scoped by
+`hooks/queries/billingQueries.ts`; `useTiersQuery` is not, so plan switching is gated on the
+owner role inside `pages/Limits.tsx`.
 
 ## Recommended rebuild path
 
@@ -90,8 +95,8 @@ These are pre-restyle UI; they render against the new shell but have not been re
    stays untouched throughout.**
 3. Prioritize the Dashboard shell + the full Boxes experience — ~80% of visible value.
 4. Keep the 10 hidden pages hidden during the main restyle; un-hide + restyle them afterwards.
-   The three billing pages are already routed where a billing service exists, so they are next
-   in line for restyling rather than waiting on a routing decision.
+   Billing is done — see the note above. Its cost-over-time chart is the one surface MSW cannot
+   exercise (`start:mock` does not mock the analytics API), so verify it with `npm run start`.
 
 ## Dev commands
 

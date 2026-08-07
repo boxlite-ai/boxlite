@@ -5,13 +5,13 @@
  */
 
 import { BillableMetricCode, OrganizationUsage } from '@/billing-api/types/OrganizationUsage'
-import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
+import { Panel, SectionTitle } from '@/components/ascii'
+import { CostOverTime } from '@/components/billing/CostOverTime'
 import { AggregatedUsageChart, ResourceUsageBreakdown, UsageSummary } from '@/components/spending/AggregatedUsageChart'
 import { CostBreakdown } from '@/components/spending/CostBreakdown'
 import { UsageChartData } from '@/components/spending/ResourceUsageChart'
 import { BoxUsageTable } from '@/components/spending/BoxUsageTable'
 import { Button } from '@/components/ui/button'
-import { Card, CardHeader, CardTitle } from '@/components/ui/card'
 import { DateRangePicker, QuickRangesConfig } from '@/components/ui/date-range-picker'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Separator } from '@/components/ui/separator'
@@ -106,119 +106,123 @@ const Spending = () => {
   )
 
   return (
-    <PageLayout>
-      <PageHeader>
-        <PageTitle>Spending</PageTitle>
-      </PageHeader>
+    <div className="flex flex-col gap-8">
+      {analyticsAvailable && (
+        <>
+          <CostOverTime params={analyticsParams} />
 
-      <PageContent>
-        {analyticsAvailable && (
-          <Card>
-            <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b p-4">
-              <div className="flex-1">
-                <CardTitle>Resource Usage</CardTitle>
-              </div>
-              <DateRangePicker
-                value={analyticsDateRange}
-                onChange={handleAnalyticsDateRangeChange}
-                quickRangesEnabled
-                quickRanges={analyticsQuickRanges}
-                timeSelection
-                defaultSelectedQuickRange="Last 30 days"
-                className="w-auto"
-                contentAlign="end"
-              />
-            </CardHeader>
-            {aggregatedError ? (
-              <Empty className="py-12">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon" className="bg-destructive-background text-destructive">
-                    <AlertCircle />
-                  </EmptyMedia>
-                  <EmptyTitle className="text-destructive">Failed to load resource usage</EmptyTitle>
-                  <EmptyDescription>Something went wrong while fetching usage data. Please try again.</EmptyDescription>
-                </EmptyHeader>
-                <EmptyContent>
-                  <Button variant="secondary" size="sm" onClick={() => refetchAggregated()}>
-                    <RefreshCw />
-                    Retry
-                  </Button>
-                </EmptyContent>
-              </Empty>
-            ) : !aggregatedLoading && !aggregatedUsage?.boxCount ? (
-              <Empty className="py-12">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <BarChart3 />
-                  </EmptyMedia>
-                  <EmptyTitle>No resource usage data</EmptyTitle>
-                  <EmptyDescription>
-                    Usage data will appear here once your boxes start consuming resources in the selected time range.
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            ) : (
-              <>
-                <UsageSummary data={aggregatedUsage} isLoading={aggregatedLoading} />
-                <Separator />
-                <AggregatedUsageChart data={aggregatedUsage} isLoading={aggregatedLoading} />
-                <Separator />
-                <ResourceUsageBreakdown data={aggregatedUsage} />
-              </>
-            )}
-            <Separator />
-            <div className="p-4">
-              <p className="text-xl font-semibold leading-none tracking-tight">Per-Box Usage</p>
-              <p className="text-sm text-muted-foreground mt-2">Resource consumption broken down by individual box.</p>
-            </div>
-            {boxesError ? (
-              <Empty className="py-12">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon" className="bg-destructive-background text-destructive">
-                    <AlertCircle />
-                  </EmptyMedia>
-                  <EmptyTitle className="text-destructive">Failed to load box usage</EmptyTitle>
-                  <EmptyDescription>
-                    Something went wrong while fetching per-box data. Please try again.
-                  </EmptyDescription>
-                </EmptyHeader>
-                <EmptyContent>
-                  <Button variant="secondary" size="sm" onClick={() => refetchBoxes()}>
-                    <RefreshCw />
-                    Retry
-                  </Button>
-                </EmptyContent>
-              </Empty>
-            ) : !boxesLoading && !boxesUsage?.length ? (
-              <Empty className="py-12">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <BarChart3 />
-                  </EmptyMedia>
-                  <EmptyTitle>No box usage yet</EmptyTitle>
-                  <EmptyDescription>
-                    Once you create and run a box, its resource consumption will appear here.
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            ) : (
-              <BoxUsageTable data={boxesUsage} isLoading={boxesLoading} />
-            )}
-          </Card>
-        )}
+          <section>
+            <SectionTitle
+              title="Resource Usage"
+              right={
+                <DateRangePicker
+                  value={analyticsDateRange}
+                  onChange={handleAnalyticsDateRangeChange}
+                  quickRangesEnabled
+                  quickRanges={analyticsQuickRanges}
+                  timeSelection
+                  defaultSelectedQuickRange="Last 30 days"
+                  className="w-auto"
+                  contentAlign="end"
+                />
+              }
+            />
+            <Panel>
+              {aggregatedError ? (
+                <Empty className="py-12">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon" className="bg-destructive-background text-destructive">
+                      <AlertCircle />
+                    </EmptyMedia>
+                    <EmptyTitle className="text-destructive">Failed to load resource usage</EmptyTitle>
+                    <EmptyDescription>
+                      Something went wrong while fetching usage data. Please try again.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                  <EmptyContent>
+                    <Button variant="secondary" size="sm" onClick={() => refetchAggregated()}>
+                      <RefreshCw />
+                      Retry
+                    </Button>
+                  </EmptyContent>
+                </Empty>
+              ) : !aggregatedLoading && !aggregatedUsage?.boxCount ? (
+                <Empty className="py-12">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <BarChart3 />
+                    </EmptyMedia>
+                    <EmptyTitle>No resource usage data</EmptyTitle>
+                    <EmptyDescription>
+                      Usage data will appear here once your boxes start consuming resources in the selected time range.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : (
+                <>
+                  <UsageSummary data={aggregatedUsage} isLoading={aggregatedLoading} />
+                  <Separator />
+                  <AggregatedUsageChart data={aggregatedUsage} isLoading={aggregatedLoading} />
+                  <Separator />
+                  <ResourceUsageBreakdown data={aggregatedUsage} />
+                </>
+              )}
+            </Panel>
+          </section>
 
-        <CostBreakdown
-          usageData={usageChartData}
-          showTotal
-          isLoading={currentUsageLoading || pastUsageLoading}
-          isError={currentUsageError || pastUsageError}
-          onRetry={() => {
-            if (currentUsageError) refetchCurrentUsage()
-            if (pastUsageError) refetchPastUsage()
-          }}
-        />
-      </PageContent>
-    </PageLayout>
+          <section>
+            <SectionTitle title="Per-Box Usage" count={boxesUsage?.length ? `${boxesUsage.length} boxes` : undefined} />
+            <Panel>
+              {boxesError ? (
+                <Empty className="py-12">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon" className="bg-destructive-background text-destructive">
+                      <AlertCircle />
+                    </EmptyMedia>
+                    <EmptyTitle className="text-destructive">Failed to load box usage</EmptyTitle>
+                    <EmptyDescription>
+                      Something went wrong while fetching per-box data. Please try again.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                  <EmptyContent>
+                    <Button variant="secondary" size="sm" onClick={() => refetchBoxes()}>
+                      <RefreshCw />
+                      Retry
+                    </Button>
+                  </EmptyContent>
+                </Empty>
+              ) : !boxesLoading && !boxesUsage?.length ? (
+                <Empty className="py-12">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <BarChart3 />
+                    </EmptyMedia>
+                    <EmptyTitle>No box usage yet</EmptyTitle>
+                    <EmptyDescription>
+                      Once you create and run a box, its resource consumption will appear here.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : (
+                <BoxUsageTable data={boxesUsage} isLoading={boxesLoading} />
+              )}
+            </Panel>
+          </section>
+        </>
+      )}
+
+      {/* CostBreakdown carries its own ▸ header + filter/chart-type/range controls. */}
+      <CostBreakdown
+        usageData={usageChartData}
+        showTotal
+        isLoading={currentUsageLoading || pastUsageLoading}
+        isError={currentUsageError || pastUsageError}
+        onRetry={() => {
+          if (currentUsageError) refetchCurrentUsage()
+          if (pastUsageError) refetchPastUsage()
+        }}
+      />
+    </div>
   )
 }
 

@@ -9,7 +9,7 @@ import { formatAmount } from '@/lib/utils'
 import { ColumnDef } from '@tanstack/react-table'
 import { ArrowDown, ArrowUp } from '@/components/ui/icon'
 import React from 'react'
-import { Badge } from '../ui/badge'
+import { StatusMark } from '@/components/ascii'
 import { InvoicesTableActions } from './InvoicesTableActions'
 
 interface SortableHeaderProps {
@@ -131,24 +131,25 @@ export function getColumns({ onViewInvoice, onVoidInvoice, onPayInvoice }: GetCo
         const isFailed = invoice.paymentStatus === 'failed'
         const isOverdue = invoice.paymentOverdue
 
-        let variant: 'success' | 'destructive' | 'secondary' = 'secondary'
+        let tone: 'ok' | 'bad' | 'warn' | 'idle' = 'warn'
         let label = 'Pending'
 
         if (isSucceeded) {
-          variant = 'success'
+          tone = 'ok'
           label = 'Paid'
         } else if (isOverdue || isFailed) {
-          variant = 'destructive'
+          tone = 'bad'
           label = isOverdue ? 'Overdue' : 'Failed'
         }
 
         if (invoice.status === 'voided') {
+          tone = 'idle'
           label = 'Voided'
         }
 
         return (
-          <div className="max-w-[120px] flex">
-            <Badge variant={variant}>{label}</Badge>
+          <div className="flex max-w-[120px]">
+            <StatusMark tone={tone}>{label}</StatusMark>
           </div>
         )
       },

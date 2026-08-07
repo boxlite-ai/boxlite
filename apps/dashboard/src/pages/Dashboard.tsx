@@ -138,7 +138,7 @@ const Dashboard: React.FC = () => {
         <AnnouncementBanner text={bannerText} onDismiss={handleDismissBanner} learnMoreUrl={bannerLearnMoreUrl} />
       )}
       <SidebarProvider isBannerVisible={false} defaultOpen={true} className="flex-col">
-        <Sidebar isBannerVisible={isBannerVisible} billingEnabled={!!config.billingApiUrl} version={config.version} />
+        <Sidebar isBannerVisible={isBannerVisible} version={config.version} />
         <SidebarInset className="min-h-0 overflow-visible">
           <div className="w-full min-h-[var(--app-content-height,calc(100svh_-_60px))] overscroll-none">
             {/* Lazy route components (Admin/Billing/Settings/box-details) suspend

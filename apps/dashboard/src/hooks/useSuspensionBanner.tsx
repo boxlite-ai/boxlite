@@ -66,10 +66,10 @@ export function useSuspensionBanner(suspension?: Suspension | null) {
           description: 'Add a payment method to start creating Boxes.',
           icon: <CreditCardIcon className="h-4 w-4 flex-shrink-0 text-current" />,
           action:
-            path !== RoutePath.BILLING_WALLET
+            path !== RoutePath.BILLING
               ? {
                   label: 'Go to Billing',
-                  onClick: () => navigate(RoutePath.BILLING_WALLET),
+                  onClick: () => navigate(RoutePath.BILLING),
                 }
               : undefined,
           isDismissible: false,
@@ -107,10 +107,10 @@ export function useSuspensionBanner(suspension?: Suspension | null) {
         title: 'Credits depleted',
         description: cleanupText,
         action:
-          path !== RoutePath.BILLING_WALLET
+          path !== RoutePath.BILLING
             ? {
                 label: 'Go to Billing',
-                onClick: () => navigate(RoutePath.BILLING_WALLET),
+                onClick: () => navigate(RoutePath.BILLING),
               }
             : undefined,
         isDismissible: false,

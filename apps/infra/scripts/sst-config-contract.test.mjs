@@ -403,26 +403,39 @@ test('organization suspension is gated on its own flag, not on BILLING_API_URL',
   )
 })
 
-// The dashboard decides whether its Wallet, Spending and Limits pages exist by whether the Api sent a
-// billing URL, so advertising one on a stage that deploys no billing service renders pages whose
-// every request 404s. The producing and consuming sides sit in different packages: nothing but a
-// cross-file guard notices when one of them moves.
+// The dashboard decides whether its billing surfaces exist by whether the Api sent a billing URL,
+// so advertising one on a stage that deploys no billing service renders pages whose every request
+// 404s. The producing and consuming sides sit in different packages: nothing but a cross-file
+// guard notices when one of them moves.
 test('a billing URL is advertised only where a billing service answers', () => {
   assert.match(liveConfig, /\.\.\.\(\(process\.env\.BILLING_API_URL \|\| commerceImageTag\) && \{/)
   assert.match(liveConfig, /BILLING_API_URL: envOr\('BILLING_API_URL', `https:\/\/commerce\.\$\{stackDomain\}\/api\/billing`\)/)
 
+  // Wallet, plan and usage are sections of one /dashboard/billing page, so the gate moved from
+  // the route table into that page: it must refuse to render any section — none of which can
+  // load without the billing origin — before it reads one, and return the placeholder instead.
+  const billing = liveText(
+    'script',
+    readFileSync(new URL('../../dashboard/src/pages/Billing.tsx', import.meta.url), 'utf8'),
+  )
+  const gate = billing.indexOf('if (!config.billingApiUrl)')
+  assert.notEqual(gate, -1, 'Billing page must gate on config.billingApiUrl')
+  assert.match(billing.slice(gate), /return <BillingComingSoon \/>/)
+  for (const section of ['<BillingAlerts />', '<Limits />', '<Wallet />', '<Spending />']) {
+    assert.ok(billing.indexOf(section) > gate, `${section} must render only past the billing gate`)
+  }
+
+  // The per-surface paths that used to be gated are now redirects into that page. A redirect
+  // issues no request of its own, so it is safe ungated — but it must not render a page, and
+  // must stay out of the force-redirect list that would send it to /boxes instead.
   const app = liveText(
     'script',
     readFileSync(new URL('../../dashboard/src/App.tsx', import.meta.url), 'utf8'),
   )
-  // Every billing page must be inside that gate — a <Route> outside it renders against
-  // the dashboard's own origin — and out of the force-redirect list, or the gate is dead
-  // code. Limits is here too because it carries the subscription surface.
-  // The closer is matched at its own indentation: `)}` alone would hit the first
-  // `getRouteSubPath(...)}` and cut the block off before any route.
-  const billingRoutes = extractSection(app, '{config.billingApiUrl && (', '\n        )}')
   for (const route of ['BILLING_SPENDING', 'BILLING_WALLET', 'LIMITS']) {
-    assert.match(billingRoutes, new RegExp(`getRouteSubPath\\(RoutePath\\.${route}\\)`))
+    // extractSection excludes its end marker, so the closer is matched by the marker itself.
+    const routeLine = extractSection(app, `getRouteSubPath(RoutePath.${route})`, '/>')
+    assert.match(routeLine, /element=\{<Navigate to=\{RoutePath\.BILLING\} replace $/)
   }
   const hiddenRoutes = extractSection(app, 'const HIDDEN_DASHBOARD_ROUTES = [', ']')
   for (const route of ['BILLING_SPENDING', 'BILLING_WALLET', 'LIMITS']) {

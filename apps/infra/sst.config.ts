@@ -716,9 +716,11 @@ export default $config({
         // Where the dashboard's billing client calls, surfaced to it through
         // GET /api/config. Only sent when a billing service will answer — an
         // explicit override, or the Commerce service this stage deploys — because
-        // the dashboard routes its Wallet, Spending and Limits pages on this
-        // value's presence (apps/dashboard/src/App.tsx), and a stage without the
-        // service would show pages whose billing calls all fail.
+        // the dashboard gates its billing surface on this value's presence — the
+        // page itself (apps/dashboard/src/pages/Billing.tsx) and every billing
+        // query hook, including the shell's wallet prefetch — and without it the
+        // billing client would fall back to the dashboard's own origin
+        // (apps/dashboard/src/api/apiClient.ts).
         //
         // Safe to default now that suspension is gated on REQUIRE_PAYMENT_METHOD
         // instead of on this value: it used to also make organization.service.ts
@@ -819,11 +821,11 @@ export default $config({
     // token; this is not a service-to-service API. The Api's BILLING_API_URL
     // above points the dashboard here, and CORS_ORIGINS below admits it.
     //
-    // The dashboard's Wallet, Spending and Limits pages are gated on
-    // BILLING_API_URL reaching this service (apps/dashboard/src/App.tsx), so a
-    // stage without it keeps them hidden. Limits is in that group because it
-    // carries the subscription surface, not because it cannot render without
-    // one — it gates its own tier section (pages/Limits.tsx).
+    // The dashboard's wallet, plan and usage sections all live on one Billing
+    // page gated on BILLING_API_URL reaching this service
+    // (apps/dashboard/src/pages/Billing.tsx), so a stage without it shows the
+    // placeholder instead. The old per-surface paths redirect into that page,
+    // which is safe ungated because a redirect issues no request of its own.
     //
     // The image comes from this account's private ECR, pushed by
     // boxlite-ai/boxlite-commerce's own publish-image workflow through GitHub

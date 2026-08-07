@@ -4,9 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { BillingAlerts } from '@/components/billing/BillingAlerts'
 import { RoutePath } from '@/enums/RoutePath'
+import { useConfig } from '@/hooks/useConfig'
 import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components/ui/icon'
 import { Link } from 'react-router-dom'
+import Limits from './Limits'
+import Spending from './Spending'
+import Wallet from './Wallet'
 
 const DIMENSIONS: { icon: LucideIcon; name: string; unit: string }[] = [
   { icon: Cpu, name: 'CPU', unit: 'per vCPU·hr' },
@@ -25,7 +30,8 @@ function SegBars() {
   )
 }
 
-function Billing() {
+/** Stands in until a billing service is deployed — nothing below it can load without one. */
+function BillingComingSoon() {
   return (
     <div className="flex min-h-[calc(100svh-60px)] items-center justify-center px-6 py-14 lg:px-[40px]">
       <div className="w-full max-w-[560px] text-center" style={{ animation: 'stat-in 0.5s ease both' }}>
@@ -59,6 +65,35 @@ function Billing() {
           Back to Boxes
           <span className="text-[14px] leading-none">→</span>
         </Link>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One page for the whole billing surface — plan, wallet and usage stacked as
+ * sections rather than split across tabs or separate nav entries. Each section
+ * keeps its own hooks; this only composes them.
+ */
+function Billing() {
+  const config = useConfig()
+
+  if (!config.billingApiUrl) {
+    return <BillingComingSoon />
+  }
+
+  return (
+    <div className="flex flex-col px-[34px] pb-14 pt-[26px] lg:px-[40px]">
+      {/* header — same hierarchy as the Boxes/Keys pages */}
+      <div className="mb-[22px] flex items-end justify-between">
+        <h1 className="font-mono text-[22px] font-medium leading-none tracking-[-0.5px]">Billing</h1>
+      </div>
+
+      <div className="flex flex-col gap-8">
+        <BillingAlerts />
+        <Limits />
+        <Wallet />
+        <Spending />
       </div>
     </div>
   )

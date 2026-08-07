@@ -195,7 +195,7 @@ export default function BoxDetails() {
           error instanceof OrganizationSuspendedError &&
           config.billingApiUrl &&
           authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER ? (
-            <Button variant="secondary" onClick={() => navigate(RoutePath.BILLING_WALLET)}>
+            <Button variant="secondary" onClick={() => navigate(RoutePath.BILLING)}>
               Go to billing
             </Button>
           ) : undefined,

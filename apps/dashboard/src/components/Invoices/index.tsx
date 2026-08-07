@@ -53,7 +53,7 @@ export function InvoicesTable({
                       header.column.getCanSort() && header.column.toggleSorting(header.column.getIsSorted() === 'asc')
                     }
                     className={cn(
-                      'sticky top-0 z-[3] border-b border-border',
+                      'sticky top-0 z-[3] border-b border-border font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground',
                       header.column.getCanSort() ? 'hover:bg-muted cursor-pointer' : '',
                     )}
                   >
@@ -86,7 +86,7 @@ export function InvoicesTable({
                         e.stopPropagation()
                       }
                     }}
-                    className="border-b border-border"
+                    className="border-b border-border font-mono text-[12px]"
                     style={{
                       width: cell.column.id === 'number' ? '20%' : 'auto',
                       maxWidth: cell.column.getSize() + 80,

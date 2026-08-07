@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { BRAND } from '@/components/ascii'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
@@ -92,11 +93,13 @@ export function CostBreakdown({ usageData, showTotal, isLoading, isError, onRetr
 
   return (
     <Card>
-      <CardHeader className="flex flex-col sm:flex-row sm:items-center gap-2 space-y-0 border-b p-4">
+      <CardHeader className="flex flex-col gap-2 space-y-0 border-b px-[22px] py-4 sm:flex-row sm:items-center">
         <div className="flex-1">
-          <CardTitle>Monthly Cost Breakdown</CardTitle>
+          <CardTitle className="font-mono text-[11px] uppercase tracking-[1.5px] text-foreground">
+            <span style={{ color: BRAND }}>▸</span> Monthly Cost Breakdown
+          </CardTitle>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex flex-wrap items-center gap-2">
           <FacetFilter
             title="Filters"
             className="h-8 pr-1"

@@ -7,7 +7,12 @@ import { useQuery } from '@tanstack/react-query'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { queryKeys } from '@/hooks/queries/queryKeys'
-import { ModelsAggregatedUsage, ModelsBoxUsage, ModelsUsagePeriod } from '@boxlite-ai/analytics-api-client'
+import {
+  ModelsAggregatedUsage,
+  ModelsBoxUsage,
+  ModelsUsageChartPoint,
+  ModelsUsagePeriod,
+} from '@boxlite-ai/analytics-api-client'
 
 export interface AnalyticsUsageParams {
   from: Date
@@ -48,6 +53,32 @@ export function useBoxesUsage(params: AnalyticsUsageParams) {
         throw new Error('Missing required parameters')
       }
       const response = await api.analyticsUsageApi.organizationOrganizationIdUsageBoxGet(
+        selectedOrganization.id,
+        params.from.toISOString(),
+        params.to.toISOString(),
+      )
+      return response.data
+    },
+    enabled: !!selectedOrganization && !!api.analyticsUsageApi && params.enabled !== false,
+    staleTime: 10_000,
+  })
+}
+
+/**
+ * Org-wide priced usage as a time series. Backs the cost-over-time chart —
+ * `/usage/aggregated` only returns totals, so it cannot plot a trend.
+ */
+export function useUsageChart(params: AnalyticsUsageParams) {
+  const api = useApi()
+  const { selectedOrganization } = useSelectedOrganization()
+
+  return useQuery<ModelsUsageChartPoint[]>({
+    queryKey: queryKeys.analytics.usageChart(selectedOrganization?.id ?? '', params),
+    queryFn: async () => {
+      if (!selectedOrganization || !api.analyticsUsageApi) {
+        throw new Error('Missing required parameters')
+      }
+      const response = await api.analyticsUsageApi.organizationOrganizationIdUsageChartGet(
         selectedOrganization.id,
         params.from.toISOString(),
         params.to.toISOString(),

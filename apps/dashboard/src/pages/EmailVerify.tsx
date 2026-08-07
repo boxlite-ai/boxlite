@@ -37,7 +37,7 @@ export default function EmailVerify() {
         setVerificationStatus('success')
         onSelectOrganization(organizationId)
         setTimeout(() => {
-          navigate(RoutePath.BILLING_WALLET)
+          navigate(RoutePath.BILLING)
         }, 1000)
       } catch (error) {
         setVerificationStatus('error')
@@ -93,10 +93,10 @@ export default function EmailVerify() {
             <p className="mt-2 text-[12.5px] text-muted-foreground">{errorMessage}</p>
             <button
               type="button"
-              onClick={() => navigate(RoutePath.BILLING_WALLET)}
+              onClick={() => navigate(RoutePath.BILLING)}
               className="mt-5 bg-primary px-5 py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85"
             >
-              Go to Wallet
+              Go to billing
             </button>
           </>
         )}
