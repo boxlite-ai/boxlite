@@ -79,12 +79,27 @@ test('SST deploy verifies the selected Runner artifact before invoking SST', () 
   // would skip the check for exactly the deploy `npm run runner:build-artifact` produces.
   assertLiveLine(source, /requireCheckoutMatchesArtifactRefs\(\[apiSource, runnerSource\]\)/)
   assert.match(source, /verifyRunnerArtifact \} from '\.\/runner-artifact\.mjs'/)
-  assert.match(source, /const runnerSource = resolveArtifactSource\('runner'/)
+  // Resolved only when the scope covers it. Dropping the guard restores the failure this scope
+  // exists to avoid: an Api-only deploy demanding a published Runner artifact for a commit whose
+  // Runner was deliberately never built, so a complete deploy fails on a missing thing nobody
+  // asked for. Pin the conditional itself — `resolveArtifactSource('runner')` alone would pass
+  // while verifying a component the plan excludes.
+  assertLiveLine(source, /const runnerSource = deployScope\.components\.includes\('runner'\)/)
+  assertLiveLine(source, /const apiSource = deployScope\.components\.includes\('api'\)/)
   assert.notEqual(preflightIndex, -1, 'the Runner artifact preflight is missing')
   assert.notEqual(sstIndex, -1, 'the guarded SST invocation is missing')
   assert.ok(preflightIndex < sstIndex, 'SST may run before Runner artifact availability is known')
-  assert.doesNotMatch(source, /isSstComponentExcluded/)
-  assert.match(source, /requireFullStackDeploy\(sstArgs\)/)
+  // The scope comes from the args SST is actually handed, resolved once. A second, independent
+  // notion of scope here (an env var, a re-parse) could disagree with the plan and verify the
+  // wrong half.
+  assertLiveLine(source, /deployScope = resolveDeployScope\(sstArgs\)/)
+  // Exported before sst is spawned, so the resource graph is built for the same scope as the
+  // plan. Without it sst.config.ts declares UpgradeRunnerBinary-* on an Api-only deploy, and that
+  // command — a sibling of the excluded instance, so `--exclude Runner` misses it — installs a
+  // Runner binary from a commit whose build-runner job never ran.
+  assertLiveLine(source, /exportDeployScope\(deployScope\)/)
+  const exportIndex = liveText('script', source).indexOf('exportDeployScope(deployScope)')
+  assert.ok(exportIndex !== -1 && exportIndex < sstIndex, 'the scope must be exported before SST is invoked')
   assert.match(source, /withRequiredRunnerPolicy\(sstArgs\)/)
   assert.doesNotMatch(source, /RUNNER_POLICY_ROOT/)
 })
@@ -123,12 +138,16 @@ test('SST deploy verifies the selected API image before invoking SST', () => {
   const preflightIndex = source.indexOf('const image = verifyApiImage(')
   const sstIndex = source.indexOf('await withPulumiEventLogCleanup(')
 
-  assert.match(source, /const apiSource = resolveArtifactSource\('api'\)/)
+  assert.match(source, /resolveArtifactSource\('api'\)/)
   assert.notEqual(preflightIndex, -1, 'the API image preflight is missing')
   assert.ok(preflightIndex < sstIndex, 'SST may run before the selected API image is known to exist')
   // Both published sources go through it. Gating on release alone would let a build deploy name a
   // commit tag nothing ever pushed, and discover it when the ECS task fails to pull.
-  assertLiveLine(source, /if \(apiSource\.kind === 'release' \|\| apiSource\.ref\) \{/)
+  //
+  // The `apiSource &&` is the out-of-scope case, not defensive noise: a Runner-only deploy
+  // excludes the Api, leaves apiSource undefined, and would otherwise throw reading `.kind`
+  // before SST is reached.
+  assertLiveLine(source, /if \(apiSource && \(apiSource\.kind === 'release' \|\| apiSource\.ref\)\) \{/)
 })
 
 test('SST deploy does not depend on a laptop-managed remote builder', () => {
@@ -158,14 +177,14 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   )
   const materializeStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Materialize stage configuration')
   const installStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Install SST providers')
-  const previewStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Preview the full stack')
-  const deployStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Deploy the full stack')
+  const previewStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Preview the selected components')
+  const deployStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Deploy the selected components')
 
   assert.match(source, /workflow_dispatch:/)
   assert.equal(workflow.on.workflow_dispatch.inputs.stage.type, 'choice')
   assert.ok(workflow.on.workflow_dispatch.inputs.stage.options.includes('dev'))
   assert.deepEqual(workflow.on.workflow_dispatch.inputs.apply, {
-    description: 'Preview again, then deploy the full stack',
+    description: 'Preview again, then deploy the selected components',
     required: true,
     default: false,
     type: 'boolean',
@@ -253,6 +272,49 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // expression, so the default success() is what stops the suite running behind a failed deploy.
   assert.deepEqual(workflow.jobs.e2e.needs, ['resolve-ref', 'deploy'])
 
+  // A narrowed scope must drop the build AND the reconcile, or it is not a scope. Each half is
+  // pinned separately because either alone is a distinct bug: the builds without the exclusion
+  // deploys a component from a commit it was never built for, and the exclusion without the
+  // build gating just burns the CI time the input exists to save.
+  const components = workflow.on.workflow_dispatch.inputs.components
+  assert.equal(components.type, 'choice', 'components must be an allowlist, not free text')
+  assert.deepEqual(components.options, ['api+runner', 'api', 'runner'])
+  assert.equal(components.default, 'api+runner', 'an unqualified dispatch must still deploy everything')
+  // `contains` reads as membership only while no single-leg option contains the other leg's name.
+  // The combined option contains both by design; a leg that contained the other would make its
+  // gate fire for a scope that excludes it — an `api`-only dispatch building the Runner anyway.
+  const legs = components.options.filter((option) => option !== 'api+runner')
+  for (const leg of legs) {
+    for (const other of legs.filter((candidate) => candidate !== leg)) {
+      assert.ok(!leg.includes(other), `option '${leg}' contains '${other}', which breaks the contains() gates`)
+    }
+    assert.ok(components.default.includes(leg), `the default must select '${leg}'`)
+  }
+  assert.equal(workflow.jobs['build-api'].if, "${{ contains(inputs.components, 'api') }}")
+  assert.equal(workflow.jobs['build-c'].if, "${{ contains(inputs.components, 'runner') }}")
+  assert.equal(workflow.jobs['build-runner'].if, "${{ contains(inputs.components, 'runner') }}")
+  for (const stepName of ['Download commit Runner artifact', 'Stage commit Runner artifact']) {
+    const step = workflow.jobs.deploy.steps.find((candidate) => candidate.name === stepName)
+    assert.ok(step, `${stepName} is missing`)
+    assert.equal(step.if, "${{ contains(inputs.components, 'runner') }}", `${stepName} must be scope-gated`)
+  }
+  // The SST component each scope excludes. `--target` must never appear: it omits the shared and
+  // provider resources a partial update still depends on, which is how PR #1095 stalled the stack
+  // mid-provider-migration. deployment-scope.mjs rejects it, and this keeps the workflow honest
+  // before it ever gets there.
+  assert.equal(
+    workflow.jobs.deploy.env.DEPLOY_EXCLUDE,
+    "${{ inputs.components == 'api' && 'Runner' || inputs.components == 'runner' && 'Api' || '' }}",
+  )
+  assert.doesNotMatch(liveShell(source), /--target/)
+  // A skipped build job would cascade a skip to the deploy under the implicit success(). Naming a
+  // status-check function turns that off — without one, every narrowed dispatch silently deploys
+  // nothing while reporting green.
+  assert.match(workflow.jobs.deploy.if, /!cancelled\(\)/)
+  assert.match(workflow.jobs.deploy.if, /!contains\(needs\.\*\.result, 'failure'\)/)
+  assert.match(workflow.jobs.deploy.if, /!contains\(needs\.\*\.result, 'cancelled'\)/)
+  assert.match(workflow.jobs.deploy.if, /github\.ref == 'refs\/heads\/main'/)
+
   // Both components resolve to the one commit the build jobs actually produced. The stage secret
   // cannot redirect that: deploy-environment-validation.mjs rejects the selector keys outright.
   for (const selector of ['BOXLITE_ARTIFACT_SOURCE', 'API_ARTIFACT_SOURCE', 'RUNNER_ARTIFACT_SOURCE']) {
@@ -308,18 +370,32 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.equal(previewStep.if, undefined, 'Preview validation must not be conditional')
   assert.equal(previewStep['continue-on-error'], undefined, 'Preview failures must stop deployment')
   assert.equal(previewStep.shell, 'bash')
-  assert.equal(
-    previewStep.run,
-    [
-      'set -euo pipefail',
-      'npm run --silent sst -- diff --stage "$STAGE" --policy . --json |',
-      '  node scripts/deployment-preview.mjs',
-      '',
-    ].join('\n'),
-  )
-  assert.ok(deployStep, 'the full-stack deployment step is missing')
+  // Every executed line and its order, comments stripped: the scope must reach SST, and nothing
+  // may be appended alongside it. Compared as lines rather than one string so rewording a comment
+  // does not churn the pin, while adding or dropping a command still fails.
+  const liveCommands = (run) => liveShell(run).split('\n').filter(Boolean)
+  // Seeded with the fixed arguments, never `args=()`: expanding an empty array under `set -u` is
+  // an unbound-variable error before bash 4.4, so a full-scope deploy would die on the runner's
+  // bash rather than on anything about this stack. Verified against bash 3.2.
+  assert.deepEqual(liveCommands(previewStep.run), [
+    'set -euo pipefail',
+    'args=(diff --stage "$STAGE" --policy .)',
+    '[ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")',
+    'args+=(--json)',
+    'npm run --silent sst -- "${args[@]}" |',
+    '  node scripts/deployment-preview.mjs',
+  ])
+  assert.ok(deployStep, 'the deployment step is missing')
   assert.equal(deployStep.if, '${{ inputs.apply }}')
-  assert.equal(deployStep.run, 'npm run deploy -- --stage "$STAGE" --policy .')
+  assert.deepEqual(liveCommands(deployStep.run), [
+    'set -euo pipefail',
+    'args=(--stage "$STAGE" --policy .)',
+    '[ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")',
+    'npm run deploy -- "${args[@]}"',
+  ])
+  // The `"${args[@]}"` spelling in both invocations above is the whole guard: `--exclude
+  // "$DEPLOY_EXCLUDE"` inline would hand SST an empty component name on every full deploy, and
+  // unquoted it would word-split. The deepEqual pins those lines exactly, so no separate check.
   assert.ok(
     workflow.jobs.deploy.steps.indexOf(previewStep) < workflow.jobs.deploy.steps.indexOf(deployStep),
     'Preview validation must complete before deployment',
@@ -339,7 +415,13 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
       workflow.jobs.deploy.steps.indexOf(installStep) < workflow.jobs.deploy.steps.indexOf(previewStep),
     'SST providers must be installed after stage config and before the deployment preview',
   )
-  assert.doesNotMatch(`${previewStep.run}\n${deployStep.run}`, /--(?:target|exclude)(?:[=\s]|$)/)
+  // A selector may name a component only through DEPLOY_EXCLUDE, whose value the `components`
+  // choice allowlists. Hardcoding one here would deploy a fixed partial scope on every dispatch,
+  // including the default full one — invisible to the input the operator actually set.
+  assert.doesNotMatch(
+    `${liveShell(previewStep.run)}\n${liveShell(deployStep.run)}`,
+    /--(?:target|exclude)[=\s]+(?!"\$DEPLOY_EXCLUDE")[A-Za-z]/,
+  )
   assert.doesNotMatch(source, /setup-qemu/)
 })
 
@@ -920,7 +1002,7 @@ test('one release selector resolves the API and Runner to the same published ver
   // resolveArtifactSource uses the same resolveReleaseVersion(workspace, env) contract as the
   // public deployment config. VERSION therefore selects both artifacts instead of producing an
   // API/Runner split-brain release.
-  assert.match(source, /const runnerSource = resolveArtifactSource\('runner'\)/)
+  assert.match(source, /resolveArtifactSource\('runner'\)/)
   assert.match(source, /await verifyRunnerArtifact\(runnerSource/)
   assert.doesNotMatch(source, /verifyRunnerReleaseAssets\(publicDeploymentConfig\.releaseVersion\)/)
 })

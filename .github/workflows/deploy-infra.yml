@@ -1,5 +1,5 @@
 name: Deploy stack
-run-name: Deploy ${{ inputs.stage }} stack
+run-name: Deploy ${{ inputs.components }} to ${{ inputs.stage }}
 
 # A build deploy sources both deployable components from one commit — on main, or the head of an
 # open pull request when a change needs a real stage before it merges — each in its own job:
@@ -10,6 +10,12 @@ run-name: Deploy ${{ inputs.stage }} stack
 # The two legs share only resolve-ref, so they run side by side. The final deploy sets one
 # BOXLITE_ARTIFACT_SOURCE=build selector for both and compiles neither. A release deploy uses the
 # other selector and consumes the Api image / Runner tarball published for VERSION instead.
+#
+# `components` narrows both halves at once: an unselected leg is neither built nor deployed. It
+# drops the build jobs here and becomes `--exclude <Component>` on the SST commands below, which
+# apps/infra/scripts/deployment-scope.mjs accepts as one of exactly two reviewed partial shapes.
+# Never `--target`: PR #1095 stalled this stack mid-provider-migration that way, because a targeted
+# update omits the shared resources it still depends on. `--exclude` keeps them in the plan.
 
 on:
   workflow_dispatch:
@@ -21,8 +27,17 @@ on:
         type: choice
         options:
           - dev
+      components:
+        description: 'Which legs to build and deploy. An unselected leg is neither built nor reconciled.'
+        required: true
+        default: api+runner
+        type: choice
+        options:
+          - api+runner
+          - api
+          - runner
       apply:
-        description: Preview again, then deploy the full stack
+        description: Preview again, then deploy the selected components
         required: true
         default: false
         type: boolean
@@ -126,6 +141,9 @@ jobs:
   build-api:
     name: Build commit Api image
     needs: resolve-ref
+    # `contains` rather than equality: the value is one of api+runner / api / runner, and no
+    # option's name contains the other's, so a substring test reads as the membership it is.
+    if: ${{ contains(inputs.components, 'api') }}
     # Nothing here depends on the C SDK, so this runs beside build-c rather than behind it.
     # The called workflow reaches ECR through OIDC, and a job-level block replaces the
     # workflow-level one rather than merging with it, so contents: read is restated.
@@ -140,6 +158,7 @@ jobs:
   build-c:
     name: Build commit C SDK
     needs: resolve-ref
+    if: ${{ contains(inputs.components, 'runner') }}
     # The called workflow's release-upload job declares contents: write, and a callee cannot go
     # past what its caller grants (see the caller-grant test in release-deployment-safety.test.mjs
     # for what is documented and what is inferred). Granted here rather than at workflow level so
@@ -154,6 +173,9 @@ jobs:
   build-runner:
     name: Build commit Runner
     needs: [resolve-ref, build-c]
+    # Stated as well as inherited: a skipped build-c already cascades here, but the C SDK is an
+    # input to this job rather than the reason it exists, so the scope is declared on both.
+    if: ${{ contains(inputs.components, 'runner') }}
     # The called workflow's release-upload job declares contents: write, and a callee cannot go
     # past what its caller grants (see the caller-grant test in release-deployment-safety.test.mjs
     # for what is documented and what is inferred). Granted here rather than at workflow level so
@@ -166,9 +188,16 @@ jobs:
       libboxlite_source: artifact
 
   deploy:
-    name: Deploy ${{ inputs.stage }} stack
+    name: Deploy ${{ inputs.components }} to ${{ inputs.stage }}
     needs: [resolve-ref, build-api, build-runner]
-    if: github.ref == 'refs/heads/main'
+    # A narrowed scope SKIPS a build job, and a skipped `needs` entry would cascade a skip to this
+    # job under the implicit success(). Naming any status-check function turns that off, so the
+    # states that must still stop the deploy — a build that failed or was cancelled — are listed.
+    if: >-
+      ${{ !cancelled()
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+      && github.ref == 'refs/heads/main' }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -181,6 +210,11 @@ jobs:
       API_ARTIFACT_SOURCE: build
       RUNNER_ARTIFACT_SOURCE: build
       BOXLITE_ARTIFACT_REF: ${{ needs.resolve-ref.outputs.sha }}
+      # The SST resource whose leg this run leaves alone; empty for a full deploy. Both selectors
+      # stay `build` above even when one leg is excluded: everything the plan declares still comes
+      # from this one commit, and an exclusion that turned out to be narrower than the leg would
+      # then fail loudly on the missing artifact rather than quietly reinstalling a release.
+      DEPLOY_EXCLUDE: ${{ inputs.components == 'api' && 'Runner' || inputs.components == 'runner' && 'Api' || '' }}
 
     steps:
       - name: Checkout selected commit
@@ -212,12 +246,16 @@ jobs:
           role-session-name: deploy-${{ inputs.stage }}-stack-${{ github.run_id }}
 
       - name: Download commit Runner artifact
+        if: ${{ contains(inputs.components, 'runner') }}
         uses: actions/download-artifact@v4
         with:
           name: runner-linux-amd64
           path: dist/runner
 
+      # Both steps are gated: with the Runner out of scope build-runner never ran, so there is no
+      # artifact to download and nothing to publish under this commit's prefix.
       - name: Stage commit Runner artifact
+        if: ${{ contains(inputs.components, 'runner') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -300,7 +338,7 @@ jobs:
       # scripts/sst-with-cloudflare.mjs prefers an already-set env var and
       # otherwise reads SSM, so a stage seeded via SSM keeps working with
       # these unset.
-      - name: Preview the full stack
+      - name: Preview the selected components
         shell: bash
         working-directory: apps/infra
         env:
@@ -308,16 +346,29 @@ jobs:
           CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          npm run --silent sst -- diff --stage "$STAGE" --policy . --json |
+          # An array, so an empty scope contributes no argument at all rather than an empty string
+          # SST would read as a component name. The fixed arguments seed it because expanding an
+          # EMPTY array under `set -u` is an unbound-variable error before bash 4.4 — seeded, it
+          # is never empty, so the line does not depend on the runner image's bash version.
+          args=(diff --stage "$STAGE" --policy .)
+          [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
+          args+=(--json)
+          npm run --silent sst -- "${args[@]}" |
             node scripts/deployment-preview.mjs
 
-      - name: Deploy the full stack
+      - name: Deploy the selected components
         if: ${{ inputs.apply }}
+        shell: bash
         working-directory: apps/infra
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
-        run: npm run deploy -- --stage "$STAGE" --policy .
+        run: |
+          set -euo pipefail
+          # Seeded for the same reason as the preview above: an empty array must never be expanded.
+          args=(--stage "$STAGE" --policy .)
+          [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
+          npm run deploy -- "${args[@]}"
 
       - name: Remove materialized configuration
         if: always()
@@ -334,6 +385,10 @@ jobs:
   #
   # The stage is always `dev`, so the suite's own BOXLITE_DEV_API_URL
   # default is the right target and no api_url is passed.
+  #
+  # Runs whatever `components` was: a narrowed deploy leaves the excluded leg on the commit some
+  # earlier run put there, so the suite is then testing a mixed-commit stack. That is the point of
+  # exercising it — the pairing is exactly what a partial deploy makes uncertain.
   e2e:
     name: E2E suite against ${{ inputs.stage }}
     needs: [resolve-ref, deploy]

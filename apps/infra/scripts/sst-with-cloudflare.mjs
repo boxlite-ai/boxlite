@@ -40,7 +40,12 @@ import {
   resolveAwsRegion,
   resolvePublicDeploymentConfig,
 } from './deployment-environment.mjs'
-import { requireFullStackDeploy, requireSstSubcommandFirst, withRequiredRunnerPolicy } from './deployment-scope.mjs'
+import {
+  exportDeployScope,
+  resolveDeployScope,
+  requireSstSubcommandFirst,
+  withRequiredRunnerPolicy,
+} from './deployment-scope.mjs'
 import {
   resolveAwsCliPath,
   verifyProxyDeploymentWithRetry,
@@ -119,9 +124,16 @@ if (sstArgs.length === 0) {
   console.error('sst-with-cloudflare: expected an sst subcommand (e.g. "deploy --stage dev")')
   process.exit(1)
 }
+let deployScope
 try {
   requireSstSubcommandFirst(sstArgs)
-  requireFullStackDeploy(sstArgs)
+  deployScope = resolveDeployScope(sstArgs)
+  // Before sst is spawned, and unconditionally: sst inherits this process's env, and an excluded
+  // leg has to be absent from the resource graph as well as from the plan. `--exclude Runner`
+  // omits the instance but not UpgradeRunnerBinary-*, a sibling command whose artifact trigger
+  // moves with the deployed commit — left declared, it would install a Runner binary this run
+  // deliberately never built.
+  exportDeployScope(deployScope)
   sstArgs = withRequiredRunnerPolicy(sstArgs)
 } catch (error) {
   console.error(`sst-with-cloudflare: ${error.message}`)
@@ -221,16 +233,22 @@ if (sstArgs[0] === 'deploy') {
     publicDeploymentConfig = resolvePublicDeploymentConfig(process.env, workspaceVersion)
     const signal = artifactPreflightAbortController.signal
 
-    const apiSource = resolveArtifactSource('api')
-    const runnerSource = resolveArtifactSource('runner')
-    // Across both components, before either is verified. The Proxy and the OtelCollector are built
-    // from this checkout on every path, so any ref that is not the checkout deploys two commits —
-    // and nothing downstream would notice: the staged Runner object still verifies and the
-    // post-deploy check only reads X.Y.Z. Checking one component's ref would miss the deploy that
-    // addresses only the other, which is what `npm run runner:build-artifact` produces.
+    // Only what this deploy declares. A scope that excludes a component omits its resources from
+    // the plan, so verifying its artifact would fail a complete deploy for a missing thing nobody
+    // asked to deploy — an Api-only run deliberately never builds a Runner for that commit.
+    // resolveDeployScope answers "in scope?" for both the guard and here, so the plan and the
+    // preflight cannot disagree about what is being deployed.
+    const apiSource = deployScope.components.includes('api') ? resolveArtifactSource('api') : undefined
+    const runnerSource = deployScope.components.includes('runner') ? resolveArtifactSource('runner') : undefined
+    // Across every component in scope, before any of them is verified. The Proxy and the
+    // OtelCollector are built from this checkout on every path, so any ref that is not the
+    // checkout deploys two commits — and nothing downstream would notice: the staged Runner object
+    // still verifies and the post-deploy check only reads X.Y.Z. Checking one component's ref
+    // would miss the deploy that addresses only the other, which is what
+    // `npm run runner:build-artifact` produces. Out-of-scope entries are undefined and drop out.
     requireCheckoutMatchesArtifactRefs([apiSource, runnerSource])
 
-    if (apiSource.kind === 'release' || apiSource.ref) {
+    if (apiSource && (apiSource.kind === 'release' || apiSource.ref)) {
       const image = verifyApiImage(
         {
           app: APP,
@@ -248,21 +266,28 @@ if (sstArgs[0] === 'deploy') {
     // Verify whichever artifact this deploy actually resolved to, not always the published
     // release: a build-mode deploy 404-ing on the host is the failure this preflight exists to
     // prevent, and it would sail straight through a release-only check.
-    const artifactEnvironment =
-      runnerSource.kind === 'build'
-        ? {
-            ...process.env,
-            RUNNER_ARTIFACT_BUCKET: runnerArtifactsBucketName({
-              app: APP,
-              stage,
-              accountId: await resolveAwsAccountId({ signal }),
-            }),
-          }
-        : process.env
-    const runnerArtifact = await verifyRunnerArtifact(runnerSource, { environment: artifactEnvironment, signal })
-    console.log(
-      `sst-with-cloudflare: Runner ${runnerSource.kind} artifact verified (${runnerArtifact.tarballUrl}, linux-amd64)`,
-    )
+    if (runnerSource) {
+      const artifactEnvironment =
+        runnerSource.kind === 'build'
+          ? {
+              ...process.env,
+              RUNNER_ARTIFACT_BUCKET: runnerArtifactsBucketName({
+                app: APP,
+                stage,
+                accountId: await resolveAwsAccountId({ signal }),
+              }),
+            }
+          : process.env
+      const runnerArtifact = await verifyRunnerArtifact(runnerSource, { environment: artifactEnvironment, signal })
+      console.log(
+        `sst-with-cloudflare: Runner ${runnerSource.kind} artifact verified (${runnerArtifact.tarballUrl}, linux-amd64)`,
+      )
+    }
+    if (deployScope.excluded.length > 0) {
+      console.log(
+        `sst-with-cloudflare: ${deployScope.excluded.join(', ')} excluded from this deploy; artifact unverified`,
+      )
+    }
   } catch (error) {
     if (terminationSignal) process.exit(signalExitCode(terminationSignal))
     console.error(`sst-with-cloudflare: deployment preflight failed: ${error.message}`)

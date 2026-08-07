@@ -171,12 +171,37 @@ preview before the full-stack deploy:
 npm run deploy -- --stage dev
 ```
 
-Both commands deliberately avoid `--target` and `--exclude`. Pulumi treats both
-as partial updates, which cannot safely migrate a provider while omitted
-resources still reference the old provider. Full reconciliation also avoids
-silently accumulating stack drift. The deployment wrapper rejects partial
-deploy selectors; targeted `diff` remains available for read-only inspection.
-The Runner EC2 identity and binary remain stable through the controls under
+`--target` is rejected for deploys, always. Pulumi treats a targeted update as a
+partial one that still depends on resources it omits, so it cannot safely migrate
+a provider while those resources reference the old registration — deploying this
+stack with `--target Api` stopped SST on `StorageBucket` before any application
+resource reached AWS. Targeted `diff` remains available for read-only inspection.
+
+`--exclude` is accepted for exactly two scopes, which drop the mutable half of one
+deployable leg — its service or instance, and the binary-upgrade commands that go
+with it — while keeping every shared and provider resource in the plan. The leg's
+ref-independent scaffolding (`RunnerRole`, `RunnerProfile`, `RunnerSecurityGroup`,
+`RunnerArtifactS3Policy`) still reconciles, as a no-op:
+
+```bash
+npm run deploy -- --stage dev                     # both legs
+npm run deploy -- --stage dev --exclude Runner    # Api leg only
+npm run deploy -- --stage dev --exclude Api       # Runner leg only
+```
+
+`scripts/deployment-scope.mjs` is the allowlist, and it is also what tells the
+preflight which artifacts to verify — an excluded leg is not deployed, so its
+artifact is not required to exist. Any other selector is refused. `deploy-infra.yml`
+exposes the same three scopes as its `components` input and skips the build jobs
+for a leg it excludes.
+
+A narrowed deploy leaves the excluded leg on whatever commit an earlier run put
+there, so the stack is then mixed-commit; the residual partial-update risk above
+is why `apply` defaults to false and the guarded preview runs first. Run the
+first `--exclude Api` (`components=runner`) dispatch with `apply=false` and read
+the plan: only `--exclude Runner` has been exercised against this stack, and that
+scope is also the one that turns off the Api image preflight. The Runner
+EC2 identity and binary remain stable through the controls under
 [Operating rules](#operating-rules), and the matching artifact preflight always
 runs before deployment.
 

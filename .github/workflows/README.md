@@ -178,15 +178,31 @@ preview-only; `apply=true` repeats the full structured preview and deploys only
 when the Runner safety gate accepts the
 plan. Routine control-plane deployment rejects every Runner create, delete,
 replacement, or protected-property change; the routine workflow does not
-provision Runners. The job rejects partial `--target`/`--exclude` deploys so
-provider changes and resources reconcile together. It is serialized, uses the
+provision Runners. The job rejects `--target` deploys outright — a targeted
+update omits the shared and provider resources it still depends on, which is
+how a `--target Api` dispatch stalled this stack on `StorageBucket`
+mid-provider-migration — and accepts `--exclude` only for the two scopes the
+`components` input can produce. It is serialized, uses the
 selected stage's protected GitHub Environment, and authenticates to AWS with
 short-lived OIDC credentials. Docker runs entirely in CI; no developer machine
 or public SSH builder participates.
 
-The `stage` input is an allowlist rather than free text, so a
+`components` (`api+runner`, `api`, `runner`) narrows a dispatch to one
+deployable leg: the other leg's build jobs are skipped and its mutable half — the
+service or instance, and the binary-upgrade commands — leaves the plan, so an
+Api-only change need not rebuild the Runner. Its ref-independent scaffolding
+(IAM role, instance profile, security group) still reconciles as a no-op. The
+exclusion covers `sst.config.ts` as well as the SST command line — the
+`UpgradeRunnerBinary-*` commands are siblings of the Runner instance rather
+than children, so `--exclude Runner` alone would leave them firing against an
+artifact the skipped build never published. `apps/infra/scripts/deployment-scope.mjs`
+is the allowlist for both halves. A narrowed deploy leaves the excluded leg on
+whatever commit an earlier run put there, so the stack is then mixed-commit.
+
+The `stage` and `components` inputs are allowlists rather than free text: a
 required-reviewers Environment cannot be targeted by an unbootstrapped or
-misspelled name. Every workflow that binds `environment:` to an input follows
+misspelled name, and a deploy scope is picked from reviewed shapes rather than
+composed on the spot. Every workflow that binds `environment:` to an input follows
 this rule, and each list is independent — it names the stages *that* path is
 meant to reach. Today the commit-build path (`deploy-infra.yml`) lists `dev`,
 while the release path (`deploy-release.yml`, and `build-apps-api-image.yml`'s

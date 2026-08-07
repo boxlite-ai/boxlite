@@ -131,6 +131,7 @@ export default $config({
     const { requireIamPermissionsBoundaryStage } = await import('./scripts/sst-stage.mjs')
     const { apiImageReference } = await import('./scripts/api-artifact.mjs')
     const { resolveArtifactSource } = await import('./scripts/artifact-source.mjs')
+    const { readDeployScope } = await import('./scripts/deployment-scope.mjs')
     const { resolveRunnerArtifact, runnerArtifactsBucketName } = await import('./scripts/runner-artifact.mjs')
     const { commerceImageReference } = await import('./scripts/commerce-artifact.mjs')
     const REGION = resolveAwsRegion()
@@ -956,6 +957,7 @@ export default $config({
     // it owns the API repository: CI stages the object before this stack can consume it. The name
     // is derived in one helper shared with the preflight and the staging command.
     const artifactsBucketName = runnerArtifactsBucketName({ app: $app.name, stage: $app.stage, accountId })
+    const deploysRunner = readDeployScope().includes('runner')
     const runnerArtifactSource = resolveArtifactSource('runner')
     const runnerArtifact = resolveRunnerArtifact(runnerArtifactSource, {
       ...process.env,
@@ -1267,11 +1269,25 @@ export default $config({
       runnerArtifactSource.kind === 'build'
         ? `build:${runnerArtifactSource.version}:${runnerArtifactSource.ref}`
         : `release:${runnerArtifactSource.version}`
+    // Declared only when the Runner is in scope. `--exclude Runner` keeps the instance out of the
+    // plan but not these — they are siblings of it, not children, and SST is never passed
+    // --exclude-dependents. Their trigger carries the deployed commit, so on an Api-only deploy
+    // they would still fire and fetch runner/<sha>/ from S3 for a commit whose build-runner job
+    // was skipped, and deployment-preview.mjs would not catch it: isRunnerLikeResource matches a
+    // name against /^Runner(?:-|$)/ OR an aws:ec2/instance:Instance carrying Runner identity
+    // tags, and this command satisfies neither arm of that disjunction.
+    //
+    // Undeclaring is a delete in Pulumi's model, which is the honest trade here: command.local
+    // .Command has no `delete:` script, so the delete touches nothing on the host, and the next
+    // full deploy recreates it — `create:` re-runs the same convergence-guarded script, a no-op
+    // when the host already serves the target identity.
     let previousUpgrade: $util.Resource | undefined
-    for (const { label, instance } of [
-      { label: 'default', instance: defaultRunner },
-      ...extraRunners.map((r) => ({ label: r.name, instance: r.instance })),
-    ]) {
+    for (const { label, instance } of !deploysRunner
+      ? []
+      : [
+          { label: 'default', instance: defaultRunner },
+          ...extraRunners.map((r) => ({ label: r.name, instance: r.instance })),
+        ]) {
       previousUpgrade = new command.local.Command(
         `UpgradeRunnerBinary-${label}`,
         {

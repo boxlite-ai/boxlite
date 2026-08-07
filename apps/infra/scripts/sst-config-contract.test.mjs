@@ -140,13 +140,22 @@ test('requires the OIDC client ID through the SST secret store', () => {
 })
 
 test('the runbook never hands an operator a deploy the wrapper rejects', () => {
-  // requireFullStackDeploy throws on --target/--exclude before any preflight runs, so a runbook
-  // command carrying one is not a documented escape hatch — it is a step that exits 1.
-  // Both spellings reach the same guard: package.json points `deploy` and `sst` at one wrapper,
-  // which calls requireFullStackDeploy unconditionally, and that gates on `args[0] === 'deploy'`.
-  // `npm run sst --` is what this runbook actually uses, so covering only `npm run deploy` would
-  // guard the rarer spelling. Targeted `diff` stays legal and must not be flagged.
-  assert.doesNotMatch(readme, /npm run (?:deploy|sst -- deploy)[^\n]*--(?:target|exclude)\b/)
+  // resolveDeployScope throws before any preflight runs, so a runbook command it refuses is not a
+  // documented escape hatch — it is a step that exits 1. Both spellings reach the same guard:
+  // package.json points `deploy` and `sst` at one wrapper, which resolves the scope
+  // unconditionally, and that gates on `args[0] === 'deploy'`. `npm run sst --` is what this
+  // runbook actually uses, so covering only `npm run deploy` would guard the rarer spelling.
+  // Targeted `diff` stays legal and must not be flagged.
+  //
+  // `--target` is still refused for deploys; `--exclude` is refused for anything but the two
+  // reviewed component scopes, so the runbook may show those and nothing else.
+  assert.doesNotMatch(readme, /npm run (?:deploy|sst -- deploy)[^\n]*--target\b/)
+  for (const [, excluded] of readme.matchAll(/npm run (?:deploy|sst -- deploy)[^\n]*--exclude[=\s]+(\S+)/g)) {
+    assert.ok(
+      ['Api', 'Runner'].includes(excluded),
+      `the runbook documents --exclude ${excluded}, which resolveDeployScope refuses`,
+    )
+  }
   // The prod stage is `prod`, and PRODUCTION_STAGE is why: a runbook naming `production` sends
   // an operator at a stage that does not exist, which is the same drift the guards above pin.
   assert.doesNotMatch(readme, /\bstage[= ]production\b/)
@@ -175,6 +184,23 @@ test('no stage-name comparison hardcodes a bare production literal', () => {
   assert.doesNotMatch(liveConfig, /\bstage\b\s*(?:===|!==|==|!=)\s*(?:'production'|"production"|`production`)/)
   assert.doesNotMatch(liveConfig, /(?:'production'|"production"|`production`)\s*(?:===|!==|==|!=)\s*\bstage\b/)
   assert.match(liveConfig, /NODE_ENV: 'production'/)
+})
+
+test('the Runner binary upgrade is declared only when the Runner is in scope', () => {
+  // `--exclude Runner` keeps the EC2 instance out of the plan, but UpgradeRunnerBinary-* is a
+  // sibling of it, not a child, and SST is never passed --exclude-dependents. Its trigger carries
+  // the deployed commit, so left declared on an Api-only deploy it fetches runner/<sha>/ for a
+  // commit whose build-runner job was skipped. deployment-preview.mjs cannot catch that:
+  // isRunnerLikeResource matches a name against /^Runner(?:-|$)/ OR an aws:ec2/instance:Instance
+  // carrying Runner identity tags, and this command satisfies neither arm.
+  const live = liveText('scriptEmittingShell', source)
+  assert.match(live, /const deploysRunner = readDeployScope\(\)\.includes\('runner'\)/)
+  assert.match(live, /readDeployScope \} = await import\('\.\/scripts\/deployment-scope\.mjs'\)/)
+  // The gate must sit on the loop that constructs them, not merely exist somewhere in the file.
+  const upgradeIndex = live.indexOf('`UpgradeRunnerBinary-${label}`')
+  assert.notEqual(upgradeIndex, -1, 'the Runner upgrade command is missing')
+  const loopHeader = live.slice(live.lastIndexOf('let previousUpgrade', upgradeIndex), upgradeIndex)
+  assert.match(loopHeader, /!deploysRunner\s*\?\s*\[\]/, 'the upgrade loop is not gated on the deploy scope')
 })
 
 test('every local Command pins dir, so it runs from the app root', () => {
