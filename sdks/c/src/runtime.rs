@@ -3,6 +3,7 @@
 //! Provides Tokio runtime, BoxliteRuntime handle management, and the
 //! per-runtime event queue + drain that drives the post-and-drain callback API.
 
+use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 use std::sync::Arc;
@@ -551,6 +552,16 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_get_or_create_event(result, user_data, cb),
+            RuntimeEvent::BoxExport {
+                cb,
+                user_data,
+                result,
+            } => dispatch_string_event(result, user_data, cb),
+            RuntimeEvent::RuntimeImport {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CBoxHandle>(result, user_data, cb),
             RuntimeEvent::StartBox {
                 cb,
                 user_data,
@@ -674,6 +685,9 @@ type UnitCb = extern "C" fn(*mut FFIError, *mut c_void);
 /// Callback shape for events carrying an owned out-pointer + possible error.
 type HandleCb<T> = extern "C" fn(*mut T, *mut FFIError, *mut c_void);
 
+/// Callback shape for events carrying an owned C string + possible error.
+type StringCb = extern "C" fn(*mut c_char, *mut FFIError, *mut c_void);
+
 unsafe fn dispatch_unit_event(result: Result<(), BoxliteError>, user_data: usize, cb: UnitCb) {
     unsafe {
         let mut err = FFIError::default();
@@ -708,6 +722,29 @@ unsafe fn dispatch_handle_event<T>(
             }
         };
         cb(ptr, &mut err as *mut _, user_data as *mut c_void);
+        if !err.message.is_null() {
+            crate::boxlite_error_free(&mut err);
+        }
+    }
+}
+
+/// Dispatch an owned C string. The callback takes ownership of a successful
+/// value and must release it with `boxlite_free_string`.
+unsafe fn dispatch_string_event(
+    result: Result<CString, BoxliteError>,
+    user_data: usize,
+    cb: StringCb,
+) {
+    unsafe {
+        let mut err = FFIError::default();
+        let value = match result {
+            Ok(value) => value.into_raw(),
+            Err(error) => {
+                err = crate::error::error_to_c_error(error);
+                ptr::null_mut()
+            }
+        };
+        cb(value, &mut err as *mut _, user_data as *mut c_void);
         if !err.message.is_null() {
             crate::boxlite_error_free(&mut err);
         }
@@ -868,5 +905,68 @@ mod tests {
         for result in cases {
             assert!(result.is_err());
         }
+    }
+
+    static BOX_EXPORT_CALLBACK_VALUE: std::sync::Mutex<Option<String>> =
+        std::sync::Mutex::new(None);
+    static RUNTIME_IMPORT_CALLBACK_DROPS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    struct TrackedImportPayload;
+
+    impl Drop for TrackedImportPayload {
+        fn drop(&mut self) {
+            RUNTIME_IMPORT_CALLBACK_DROPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    extern "C" fn capture_box_export_path(
+        value: *mut c_char,
+        _error: *mut FFIError,
+        _user_data: *mut c_void,
+    ) {
+        let value = if value.is_null() {
+            None
+        } else {
+            let value = unsafe { CString::from_raw(value) };
+            Some(value.into_string().expect("valid UTF-8 callback path"))
+        };
+        *BOX_EXPORT_CALLBACK_VALUE.lock().unwrap() = value;
+    }
+
+    extern "C" fn consume_runtime_import_handle(
+        value: *mut TrackedImportPayload,
+        _error: *mut FFIError,
+        _user_data: *mut c_void,
+    ) {
+        if !value.is_null() {
+            unsafe { drop(Box::from_raw(value)) };
+        }
+    }
+
+    #[test]
+    fn box_export_dispatch_transfers_string_ownership_to_callback() {
+        *BOX_EXPORT_CALLBACK_VALUE.lock().unwrap() = None;
+        let value = CString::new("/tmp/export.boxlite").unwrap();
+
+        unsafe { dispatch_string_event(Ok(value), 0, capture_box_export_path) };
+
+        assert_eq!(
+            BOX_EXPORT_CALLBACK_VALUE.lock().unwrap().take().as_deref(),
+            Some("/tmp/export.boxlite")
+        );
+    }
+
+    #[test]
+    fn runtime_import_dispatch_transfers_handle_ownership_to_callback() {
+        RUNTIME_IMPORT_CALLBACK_DROPS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let owned = crate::event_queue::OwnedFfiPtr::new(Box::new(TrackedImportPayload));
+
+        unsafe { dispatch_handle_event(Ok(owned), 0, consume_runtime_import_handle) };
+
+        assert_eq!(
+            RUNTIME_IMPORT_CALLBACK_DROPS.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
     }
 }

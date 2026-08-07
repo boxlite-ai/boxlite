@@ -51,6 +51,7 @@ help:
 	@echo "    make test:integration:node  - Run Node.js SDK integration tests (requires VM)"
 	@echo "    make test:all:node          - Run all Node.js SDK tests"
 	@echo "    make test:unit:go           - Run Go SDK unit tests"
+	@echo "    make test:integration:go    - Run Go SDK archive round-trip test (requires VM, FILTER=<pattern>)"
 	@echo "    make test:all:go            - Run all Go SDK tests"
 	@echo "    make test:unit:c            - Run C SDK unit tests (no VM required)"
 	@echo "    make test:integration:c     - Run C SDK integration tests (requires VM)"

@@ -8,6 +8,7 @@
 #![allow(clippy::too_many_arguments)]
 
 mod advanced_options;
+mod archive;
 mod box_handle;
 mod copy;
 mod error;

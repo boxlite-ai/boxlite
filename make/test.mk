@@ -348,6 +348,12 @@ test\:unit\:go:
 	@$(MAKE) dev:go
 	@cd sdks/go && go test -tags boxlite_dev -v $(GOTEST_FILTER) ./...
 
+# Go SDK archive round-trip integration test. Intentionally excluded from
+# default test matrices and CI.
+test\:integration\:go: dev\:go
+	@echo "🧪 Running Go SDK archive integration test (requires VM)..."
+	@cd sdks/go && go test -count=1 -tags=boxlite_dev,boxlite_integration -v $(GOTEST_FILTER) ./integration/archive
+
 # Go SDK full suite.
 test\:all\:go:
 	@$(MAKE) test:unit:go

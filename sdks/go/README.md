@@ -66,6 +66,30 @@ func main() {
 }
 ```
 
+### Archive Export and Import
+
+```go
+archivePath, err := box.Export(ctx, "/var/lib/my-app/archives")
+if err != nil {
+	log.Fatal(err)
+}
+
+// An empty name uses the same unnamed-box behavior as Create without
+// WithName. The imported box receives a new ID and starts stopped.
+restored, err := rt.Import(ctx, archivePath, "")
+if err != nil {
+	log.Fatal(err)
+}
+defer restored.Close()
+```
+
+A local runtime treats the archive as trusted because local applications own
+both the runtime and archive. A REST runtime uploads the file and relies on the
+server's untrusted-upload policy.
+
+Export and Import never delete the archive. The caller owns its retention and
+must explicitly remove it when it is no longer needed.
+
 ### Runtime Image Management
 
 ```go

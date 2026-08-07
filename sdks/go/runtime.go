@@ -82,15 +82,9 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 // Close releases the runtime. Implements io.Closer.
 //
 // Order matters: closing the `r.closing` channel first wakes every in-flight
-// async caller (Create, Pull, Shutdown, etc.) that's parked on its result
-// channel. They observe ErrRuntimeClosed and return promptly, releasing
-// their cgo.Handles via abandonAsync. Only then do we stop the drain
-// goroutine and free the C runtime handle — at that point no Go caller is
-// still depending on the drain to deliver a result.
-//
-// Without this ordering, an in-flight caller with a non-cancellable ctx
-// would block forever after stopDrain killed the only goroutine that
-// pumps events from C to its result channel.
+// async caller that's parked on its result channel. They return
+// ErrRuntimeClosed and release their per-call resources before the drain
+// goroutine and native runtime are stopped.
 func (r *Runtime) Close() error {
 	if r.handle == nil {
 		return nil

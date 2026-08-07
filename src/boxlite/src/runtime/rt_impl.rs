@@ -211,7 +211,13 @@ impl RuntimeImpl {
         experimental_features: ExperimentalFeatures,
     ) -> BoxliteResult<SharedRuntimeImpl> {
         let _sys = crate::system_check::SystemCheck::run()?;
+        Self::initialize(options, experimental_features)
+    }
 
+    fn initialize(
+        options: BoxliteOptions,
+        experimental_features: ExperimentalFeatures,
+    ) -> BoxliteResult<SharedRuntimeImpl> {
         // Validate Early: Check preconditions before expensive work
         if !options.home_dir.is_absolute() {
             return Err(BoxliteError::Internal(format!(
@@ -378,6 +384,11 @@ impl RuntimeImpl {
         archive: BoxArchive,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot import box: runtime has been shut down".into(),
+            ));
+        }
         super::import::import_box(self, archive, name).await
     }
 
@@ -1953,6 +1964,17 @@ mod tests {
         (runtime, temp_dir)
     }
 
+    fn create_test_runtime_without_host_preflight() -> (SharedRuntimeImpl, TempDir) {
+        let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
+        let options = BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        };
+        let runtime = RuntimeImpl::initialize(options, ExperimentalFeatures::default())
+            .expect("Failed to create test runtime");
+        (runtime, temp_dir)
+    }
+
     /// Create a minimal BoxConfig for testing.
     fn test_box_config(detach: bool) -> BoxConfig {
         BoxConfig {
@@ -3056,6 +3078,27 @@ mod tests {
     // ====================================================================
     // Post-shutdown operation rejection
     // ====================================================================
+
+    #[tokio::test]
+    async fn test_import_after_shutdown_returns_stopped_before_archive_validation() {
+        let (runtime, dir) = create_test_runtime_without_host_preflight();
+        runtime.shutdown_token.cancel();
+
+        let result = runtime
+            .import_box(
+                BoxArchive::new(dir.path().join("missing.boxlite")),
+                Some("imported".to_string()),
+            )
+            .await;
+
+        match result {
+            Err(BoxliteError::Stopped(message)) => {
+                assert!(message.contains("shut down"), "{message}");
+            }
+            Err(other) => panic!("expected Stopped before archive validation, got: {other}"),
+            Ok(_) => panic!("import should fail after shutdown"),
+        }
+    }
 
     #[tokio::test]
     async fn test_create_after_shutdown_returns_stopped() {

@@ -12,6 +12,8 @@ extern CBoxStderrCb cbStderr(void);
 extern CBoxExitCb cbExit(void);
 
 extern CBoxCreateBoxCb cbCreateBox(void);
+extern CBoxExportCb cbBoxExport(void);
+extern CRuntimeImportCb cbRuntimeImport(void);
 extern CBoxGetOrCreateBoxCb cbGetOrCreateBox(void);
 extern CBoxGetBoxCb cbGetBox(void);
 extern CBoxStartBoxCb cbStartBox(void);
