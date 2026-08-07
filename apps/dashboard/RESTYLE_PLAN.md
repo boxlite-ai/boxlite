@@ -12,10 +12,11 @@ Design source (visual/interaction spec only, NOT importable code — DCLogic pro
 1. **Login** → re-skin OIDC. Keep `signinRedirect`; SSO buttons trigger OIDC; the email/password
    + signup form is visual-only / forwards to hosted login. **No backend auth API is added.**
 2. **Billing** → ship the "Billing is on the way" empty state only (matches current live behavior).
-   The rich usage/plans/invoices design is deferred (maps to currently-hidden Spending/Wallet/Limits).
+   The rich usage/plans/invoices design is deferred. Spending/Wallet/Limits now route where a billing
+   service is deployed, still in their pre-restyle form — restyling them is the deferred work.
 3. **Org switcher** → standalone control in the top Nav (all hooks are org-scoped; must not drop it).
 4. **Undesigned pages** → rebuild needed active pages (Admin, OrganizationSettings, EmailVerify) in the
-   new design language; the 13 hidden pages stay hidden.
+   new design language; the 10 hidden pages stay hidden.
 
 ## New design language
 

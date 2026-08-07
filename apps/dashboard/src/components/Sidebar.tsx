@@ -179,8 +179,8 @@ export function Sidebar({ isBannerVisible, billingEnabled }: SidebarProps) {
   })
   const canViewAdmin = adminAccessQuery.data === true
 
-  // Billing pages are owner-only and only exist where a billing service is deployed.
-  // The "Billing is on the way" placeholder stands in until one is, so the two real
+  // Billing pages are owner-only and only routed where a billing service is deployed.
+  // The "Billing is on the way" placeholder stands in until one is, so the three real
   // pages replace it rather than sit beside it contradicting it.
   const canViewBilling = billingEnabled && authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
 
@@ -191,6 +191,7 @@ export function Sidebar({ isBannerVisible, billingEnabled }: SidebarProps) {
         ? [
             { label: 'Wallet', path: RoutePath.BILLING_WALLET },
             { label: 'Spending', path: RoutePath.BILLING_SPENDING },
+            { label: 'Plans', path: RoutePath.LIMITS },
           ]
         : [{ label: 'Billing', path: RoutePath.BILLING }]),
       ...(canViewAdmin ? [{ label: 'Admin', path: RoutePath.ADMIN }] : []),

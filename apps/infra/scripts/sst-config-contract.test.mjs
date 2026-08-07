@@ -377,14 +377,49 @@ test('organization suspension is gated on its own flag, not on BILLING_API_URL',
   )
 })
 
+// The dashboard decides whether its Wallet, Spending and Limits pages exist by whether the Api sent a
+// billing URL, so advertising one on a stage that deploys no billing service renders pages whose
+// every request 404s. The producing and consuming sides sit in different packages: nothing but a
+// cross-file guard notices when one of them moves.
+test('a billing URL is advertised only where a billing service answers', () => {
+  assert.match(liveConfig, /\.\.\.\(\(process\.env\.BILLING_API_URL \|\| commerceImageTag\) && \{/)
+  assert.match(liveConfig, /BILLING_API_URL: envOr\('BILLING_API_URL', `https:\/\/commerce\.\$\{stackDomain\}\/api\/billing`\)/)
+
+  const app = liveText(
+    'script',
+    readFileSync(new URL('../../dashboard/src/App.tsx', import.meta.url), 'utf8'),
+  )
+  // Every billing page must be inside that gate — a <Route> outside it renders against
+  // the dashboard's own origin — and out of the force-redirect list, or the gate is dead
+  // code. Limits is here too because it carries the subscription surface.
+  // The closer is matched at its own indentation: `)}` alone would hit the first
+  // `getRouteSubPath(...)}` and cut the block off before any route.
+  const billingRoutes = extractSection(app, '{config.billingApiUrl && (', '\n        )}')
+  for (const route of ['BILLING_SPENDING', 'BILLING_WALLET', 'LIMITS']) {
+    assert.match(billingRoutes, new RegExp(`getRouteSubPath\\(RoutePath\\.${route}\\)`))
+  }
+  const hiddenRoutes = extractSection(app, 'const HIDDEN_DASHBOARD_ROUTES = [', ']')
+  for (const route of ['BILLING_SPENDING', 'BILLING_WALLET', 'LIMITS']) {
+    assert.doesNotMatch(hiddenRoutes, new RegExp(route))
+  }
+})
+
 // The image lives in another repository's ECR push, so a stage that never published one cannot
 // build it locally either. With `wait: true`, handing SST a reference that cannot resolve hangs
 // that stage's entire deploy on an ECS pull failure — so the service must stay conditional, and
 // the tag must not fall back to a default on stages other than DEFAULT_STAGE.
 test('declares Commerce only for a stage that has a published image', () => {
-  assert.match(liveConfig, /const commerceImage = commerceImageReference\(\{/)
+  // One derivation, read twice: the reference the Service pulls and the gate the Api
+  // advertises must agree, or a stage could publish a billing URL for a service it
+  // never declares. Scoped to the reference call's own argument list, so a dead
+  // `tag: commerceImageTag` elsewhere cannot stand in for the tag this image resolves.
+  assert.match(
+    liveConfig,
+    /const commerceImageTag = envOr\('COMMERCE_IMAGE_TAG', \$app\.stage === DEFAULT_STAGE \? COMMERCE_PINNED_IMAGE_TAG : ''\)/,
+  )
   assert.match(liveConfig, /if \(commerceImage\) \{/)
-  assert.match(liveConfig, /tag: envOr\('COMMERCE_IMAGE_TAG', \$app\.stage === DEFAULT_STAGE \? COMMERCE_PINNED_IMAGE_TAG : ''\)/)
+  const imageReference = extractSection(liveConfig, 'const commerceImage = commerceImageReference({', '})')
+  assert.match(imageReference, /tag: commerceImageTag,/)
   // Composition and tag validation belong to commerce-artifact.mjs, as the Api's do to
   // api-artifact.mjs; a registry URL assembled inline would skip both.
   assert.doesNotMatch(liveConfig, /dkr\.ecr\./)

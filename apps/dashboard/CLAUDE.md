@@ -71,12 +71,16 @@ Runners · Webhooks (Svix) · Analytics/Usage (needs `config.analyticsApiUrl`) �
 
 ## Current visibility
 
-Only **9 pages are active**; 13 are redirected to `/boxes` via `HIDDEN_DASHBOARD_ROUTES` in
-`App.tsx` (Images, Volumes, Limits, BillingSpending, BillingWallet, Members, Roles, AuditLogs,
-Regions, Runners, Experimental, Webhooks, WebhookEndpointDetails). Their hooks/components still
-exist. Active: Landing · Dashboard (shell/nav) · **Boxes** (list + detail + fullscreen terminal +
-lifecycle + onboarding — the core) · Keys · Billing · Admin · OrganizationSettings ·
-EmailVerify · Logout.
+**9 pages are always active**; 10 are redirected to `/boxes` via `HIDDEN_DASHBOARD_ROUTES` in
+`App.tsx` (Images, Volumes, Members, Roles, AuditLogs, Regions, Runners, Experimental, Webhooks,
+WebhookEndpointDetails). Their hooks/components still exist. Active: Landing · Dashboard
+(shell/nav) · **Boxes** (list + detail + fullscreen terminal + lifecycle + onboarding — the
+core) · Keys · Billing · Admin · OrganizationSettings · EmailVerify · Logout.
+
+Three more are **conditionally** routed, gated on `config.billingApiUrl` — a deployed billing
+service — and owner-only through the query hooks: **BillingWallet**, **BillingSpending** and
+**Limits** (which carries the subscription surface: `TierUpgradeCard` + `TierComparisonTable`).
+These are pre-restyle UI; they render against the new shell but have not been restyled.
 
 ## Recommended rebuild path
 
@@ -85,7 +89,9 @@ EmailVerify · Logout.
    primitives → business `components/*` → `pages/*` → `Dashboard.tsx` shell. **The hook layer
    stays untouched throughout.**
 3. Prioritize the Dashboard shell + the full Boxes experience — ~80% of visible value.
-4. Keep the 13 hidden pages hidden during the main restyle; un-hide + restyle them afterwards.
+4. Keep the 10 hidden pages hidden during the main restyle; un-hide + restyle them afterwards.
+   The three billing pages are already routed where a billing service exists, so they are next
+   in line for restyling rather than waiting on a routing decision.
 
 ## Dev commands
 

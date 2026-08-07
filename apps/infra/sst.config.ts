@@ -34,7 +34,7 @@ const DEFAULT_STAGE = 'dev'
 // image with its sha. Advancing dev to a newer commerce build means bumping this
 // (or passing COMMERCE_IMAGE_TAG for a one-off): pushing a new image does not
 // move a running stack, by design, so a deploy always names exact bytes.
-const COMMERCE_PINNED_IMAGE_TAG = 'deba343ad7d679cc3c031569b3396e9a2dd527e6'
+const COMMERCE_PINNED_IMAGE_TAG = '500a16f437f574e7dab2521744f969b91566664a'
 
 // Container ports each service listens on internally
 const PORTS = {
@@ -426,6 +426,10 @@ export default $config({
     // The stage bootstrap template (ci/github-deploy-role.yaml) owns the immutable repository:
     // an image has to be published before a fresh stack can consume one, so the consumer cannot
     // also be responsible for creating its input.
+    // Resolved here rather than beside the Commerce service (section 7b) because the
+    // Api has to know whether a billing service will exist before it advertises one.
+    const commerceImageTag = envOr('COMMERCE_IMAGE_TAG', $app.stage === DEFAULT_STAGE ? COMMERCE_PINNED_IMAGE_TAG : '')
+
     const apiArtifact = resolveArtifactSource('api')
     const api = new sst.aws.Service('Api', {
       cluster,
@@ -709,12 +713,19 @@ export default $config({
         ...(process.env.SVIX_SERVER_URL && { SVIX_SERVER_URL: process.env.SVIX_SERVER_URL }),
 
         // Where the dashboard's billing client calls, surfaced to it through
-        // GET /api/config. Safe to default now that suspension is gated on
-        // REQUIRE_PAYMENT_METHOD instead of on this value: it used to also make
-        // organization.service.ts create every non-default organization suspended
-        // with 'Payment method required', which a mock that registers no card
-        // could never clear.
-        BILLING_API_URL: envOr('BILLING_API_URL', `https://commerce.${stackDomain}/api/billing`),
+        // GET /api/config. Only sent when a billing service will answer — an
+        // explicit override, or the Commerce service this stage deploys — because
+        // the dashboard routes its Wallet, Spending and Limits pages on this
+        // value's presence (apps/dashboard/src/App.tsx), and a stage without the
+        // service would show pages whose billing calls all fail.
+        //
+        // Safe to default now that suspension is gated on REQUIRE_PAYMENT_METHOD
+        // instead of on this value: it used to also make organization.service.ts
+        // create every non-default organization suspended with 'Payment method
+        // required', which a mock that registers no card could never clear.
+        ...((process.env.BILLING_API_URL || commerceImageTag) && {
+          BILLING_API_URL: envOr('BILLING_API_URL', `https://commerce.${stackDomain}/api/billing`),
+        }),
       },
     })
 
@@ -807,10 +818,11 @@ export default $config({
     // token; this is not a service-to-service API. The Api's BILLING_API_URL
     // above points the dashboard here, and CORS_ORIGINS below admits it.
     //
-    // The dashboard's Wallet and Spending pages are gated on BILLING_API_URL
-    // reaching this service (apps/dashboard/src/App.tsx), so a stage without it
-    // keeps them hidden rather than rendering pages that cannot load. Limits
-    // stays hidden regardless — it is owner-gated, not billing-gated.
+    // The dashboard's Wallet, Spending and Limits pages are gated on
+    // BILLING_API_URL reaching this service (apps/dashboard/src/App.tsx), so a
+    // stage without it keeps them hidden. Limits is in that group because it
+    // carries the subscription surface, not because it cannot render without
+    // one — it gates its own tier section (pages/Limits.tsx).
     //
     // The image comes from this account's private ECR, pushed by
     // boxlite-ai/boxlite-commerce's own publish-image workflow through GitHub
@@ -828,7 +840,7 @@ export default $config({
       stage: $app.stage,
       accountId,
       region: REGION,
-      tag: envOr('COMMERCE_IMAGE_TAG', $app.stage === DEFAULT_STAGE ? COMMERCE_PINNED_IMAGE_TAG : ''),
+      tag: commerceImageTag,
     })
     if (commerceImage) {
       new sst.aws.Service('Commerce', {
@@ -838,10 +850,10 @@ export default $config({
         loadBalancer: {
           domain: serviceDomain('commerce'),
           rules: [{ listen: '443/https', forward: `${PORTS.COMMERCE}/http` }],
-          // /api/billing/health is the service's only unauthenticated route; a
-          // probe of '/' would 401 and fail every task.
-          // The service excludes /health from its global prefix, so probe the
-          // bare path; a probe of '/' would 401 and fail every task.
+          // The service excludes health from its api/billing prefix
+          // (commerce src/http.ts), so the unauthenticated route is the bare
+          // /health — not /api/billing/health. A probe of '/' would 401 and
+          // fail every task.
           health: { [`${PORTS.COMMERCE}/http`]: httpHealth('/health') },
         },
         environment: {

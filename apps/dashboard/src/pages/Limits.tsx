@@ -10,16 +10,14 @@ import { TierUpgradeCard } from '@/components/TierUpgradeCard'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { RoutePath } from '@/enums/RoutePath'
 import { useOwnerTierQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
 import { useTiersQuery } from '@/hooks/queries/useTiersQuery'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn } from '@/lib/utils'
 import { RefreshCcw } from '@/components/ui/icon'
-import { ReactNode, useEffect } from 'react'
+import { ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
-import { useNavigate } from 'react-router-dom'
 
 export default function Limits() {
   const { user } = useAuth()
@@ -33,13 +31,6 @@ export default function Limits() {
   const wallet = walletQuery.data
 
   const config = useConfig()
-  const navigate = useNavigate()
-
-  useEffect(() => {
-    if (selectedOrganization && !selectedOrganization.defaultRegionId) {
-      navigate(RoutePath.SETTINGS)
-    }
-  }, [navigate, selectedOrganization])
 
   const isLoading = organizationTierQuery.isLoading || tiersQuery.isLoading || walletQuery.isLoading
   const isError = organizationTierQuery.isError || tiersQuery.isError || walletQuery.isError
