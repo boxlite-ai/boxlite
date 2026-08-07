@@ -31,8 +31,24 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 project_dir="${CLAUDE_PROJECT_DIR:-$repo_root}"
 spec_file="$project_dir/.claude/agents/verdict-auditor.md"
 verdict_file="$project_dir/.agents/state/last-verdict.json"
+audit_lock_file="$project_dir/.agents/state/verdict-audit.lock"
 audit_timeout_seconds="${VERDICT_AUDITOR_TIMEOUT:-600}"
 auditor_model="${VERDICT_AUDITOR_MODEL:-claude-sonnet-5}"
+
+# Announce "an audit is running" to preflight-verdict-check.sh, which otherwise re-blocks
+# the agent every few seconds for this script's whole runtime. Taken before either runner
+# branch so the no-runner exit 2 clears it on the way out.
+# The printf below is the ONLY definition of the body format; other sites point here.
+# This script writes the deadline because only it knows VERDICT_AUDITOR_TIMEOUT; slack
+# covers teardown after the alarm. The `|| return 0` swallows keep the lock an
+# optimisation, never a precondition — an unwritable state dir must still audit.
+take_audit_lock() {
+  mkdir -p "$(dirname "$audit_lock_file")" 2>/dev/null || return 0
+  printf '%s %s' "$$" "$(( $(date +%s) + audit_timeout_seconds + 60 ))" \
+    > "$audit_lock_file" 2>/dev/null || return 0
+  trap 'rm -f "$audit_lock_file"' EXIT INT TERM
+}
+take_audit_lock
 
 # Frontmatter (--- ... ---) is subagent WIRING — name, tools, and now the model and
 # reasoning effort the Task path launches with. None of it is instruction, so none of it

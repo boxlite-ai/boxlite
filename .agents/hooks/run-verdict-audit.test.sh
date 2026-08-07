@@ -69,6 +69,72 @@ check_eq "stale pre-existing dossier does not count → exit 1" "$?" 1
 rm -rf "$R"
 
 echo
+echo "## Audit lock: the gate's only evidence that a run is in progress"
+# The gate's own in-flight cases WRITE the lock themselves, so without coverage here
+# reverting this file leaves both suites green while the fix goes inert. The stub runs
+# INSIDE the audit — the only vantage point that sees a lock held for the run.
+R="$(setup)"
+# Key names must not be substrings of one another: with `pid=`/`ppid=` a greedy
+# `.*pid=` matches the SECOND field, so both extractions return the same number and the
+# comparison below passes no matter what the runner wrote.
+OBSERVE_STUB='cat >/dev/null
+  L="$CLAUDE_PROJECT_DIR/.agents/state/verdict-audit.lock"
+  if [ -r "$L" ]; then
+    P="$(cat "$L")"
+    set -- $P
+    printf "present lockpid=%s deadline=%s runnerpid=%s now=%s alive=%s\n" \
+      "$1" "${2:-none}" "$PPID" "$(date +%s)" \
+      "$(kill -0 "$1" 2>/dev/null && echo yes || echo no)" > "$CLAUDE_PROJECT_DIR/lock-probe"
+  else
+    printf "absent\n" > "$CLAUDE_PROJECT_DIR/lock-probe"
+  fi
+  printf "{\"branch\":\"main\",\"head\":\"h\",\"tree_hash\":\"t\",\"verdict\":\"PASS\",\"proof\":[],\"findings\":[]}" > "$CLAUDE_PROJECT_DIR/.agents/state/last-verdict.json"'
+( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_AUDITOR_CMD="$OBSERVE_STUB" bash "$RUNNER" "$R/transcript.jsonl" >/dev/null 2>&1 )
+probe="$(cat "$R/lock-probe" 2>/dev/null || echo NO-PROBE)"
+held="no"
+[[ "$probe" =~ ^present\ lockpid=[0-9]+\ deadline=[0-9]+\ runnerpid=[0-9]+\ now=[0-9]+\ alive=yes$ ]] && held="yes"
+gone="no";  [[ -e "$R/.agents/state/verdict-audit.lock" ]] || gone="yes"
+# Asserted as ONE pair: "released" alone is trivially true for a runner that never took
+# a lock, so only held-then-released distinguishes the fix from its absence.
+check_eq "lock held by a LIVE pid during the run, released after" \
+  "held=$held released=$gone" "held=yes released=yes"
+# A lock naming an unrelated process would keep the gate silent after this runner is
+# gone. Sentinels differ so a missing probe fails rather than comparing two empties.
+check_eq "lock names the runner process itself" \
+  "$(printf '%s' "$probe" | sed -nE 's/.*lockpid=([0-9]+).*/\1/p'    | grep . || echo NO-LOCKPID)" \
+  "$(printf '%s' "$probe" | sed -nE 's/.*runnerpid=([0-9]+).*/\1/p'  | grep . || echo NO-RUNNERPID)"
+# Asserted as a RANGE: too short and long audits resume storming, too long and a dead
+# run buys silence past the ceiling. Bounds are READ OUT of the gate — hardcoding them
+# lets this keep passing while the gate's real ceiling moves underneath it.
+gate_const() {  # name -> value, or empty if the gate stops declaring it that way
+  sed -nE "s/^$1=([0-9]+)\$/\1/p" "$REPO_ROOT/.agents/hooks/preflight-verdict-check.sh" | head -n1
+}
+probe_deadline="$(printf '%s' "$probe" | sed -nE 's/.*deadline=([0-9]+).*/\1/p' | grep . || echo 0)"
+probe_now="$(printf '%s' "$probe" | sed -nE 's/.*now=([0-9]+).*/\1/p' | grep . || echo 0)"
+window="$(( probe_deadline - probe_now ))"
+gate_dossier_bound="$(gate_const max_age_seconds)"
+gate_lock_ceiling="$(gate_const audit_lock_max_seconds)"
+if [[ -z "$gate_dossier_bound" || -z "$gate_lock_ceiling" ]]; then
+  in_range="gate-constants-unreadable"      # fail loudly rather than compare to empty
+else
+  in_range="no"
+  (( window > gate_dossier_bound && window <= gate_lock_ceiling )) && in_range="yes"
+fi
+check_eq "lock deadline outlives the gate's dossier bound, within its ceiling" "$in_range" "yes"
+rm -rf "$R"
+
+# The no-runner path exits before auditing; a lock left there promises a verdict that
+# never comes. The state dir is removed first so its RE-creation proves the lock code
+# ran — otherwise "no lock" is equally true of a runner that never had it.
+R="$(setup)"; rm -rf "$R/.agents/state"
+( cd "$R" && CLAUDE_PROJECT_DIR="$R" PATH=/usr/bin:/bin VERDICT_AUDITOR_CMD='' bash "$RUNNER" "$R/transcript.jsonl" >/dev/null 2>&1 )
+reached="no"; [[ -d "$R/.agents/state" ]] && reached="yes"
+gone="no";    [[ -e "$R/.agents/state/verdict-audit.lock" ]] || gone="yes"
+check_eq "no-runner exit 2 takes the lock then clears it" \
+  "took=$reached released=$gone" "took=yes released=yes"
+rm -rf "$R"
+
+echo
 echo "## Failure modes"
 R="$(setup)"
 ( cd "$R" && CLAUDE_PROJECT_DIR="$R" bash "$RUNNER" >/dev/null 2>&1 )

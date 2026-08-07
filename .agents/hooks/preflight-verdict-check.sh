@@ -19,6 +19,10 @@
 #        FAIL         -> block with the findings — THE one legitimate loop: it
 #                        persists until the findings are addressed and a re-audit
 #                        passes. A loop driven by real findings is the point.
+#   1b. No dossier, but run-verdict-audit.sh is RUNNING — audit_in_flight() decides,
+#        on the lock's presence, its PID's liveness AND its freshness bound:
+#        allow — the answer is being computed and no amount of re-blocking speeds it
+#        up. Its verdict gates the NEXT turn end.
 #   2. Dossier present but stale / mismatched (branch, HEAD, tree, age):
 #        DISCARD it and fall through to detection. Never block on bookkeeping —
 #        "the binding moved" is not a finding, and blocking on it was the
@@ -72,13 +76,16 @@
 #   not trigger. VERDICT_CLASSIFIER_CMD overrides the classifier (tests use stubs;
 #   set it to `false` to force the regex path).
 #
-# * Why no loop can form: the audit is mandated SYNCHRONOUS (the block instruction
-#   says run_in_background: false), so audit and verdict share one turn — there is no
-#   completion event to re-open anything (#892's default-deny looped precisely on
-#   async audit completions). Validation runs BEFORE detection, so the re-ended turn
-#   consumes its fresh dossier and never reaches the detector. Binding mismatches
-#   discard instead of blocking. The only repeating block is FAIL-with-findings,
-#   which is requirement, not bug; the harness's 8-consecutive-block cap backstops.
+# * KNOWN TRAP, unfixed: "never toward a trap" covers CLASSIFIER failure only. When the
+#   AUDITOR is unreachable, run-verdict-audit.sh exits 1 with no dossier and no rung
+#   tells that apart from "no audit attempted", so the turn cannot end until the API
+#   recovers. Needs the runner to signal unavailability.
+#
+# * Why no loop can form: validation runs BEFORE detection, binding mismatches discard,
+#   and audit_in_flight() allows while the bash runner works. FAIL-with-findings is the
+#   only repeating block, which is the requirement. A Task-launched auditor leaves no
+#   process to observe and so still re-blocks. Do NOT re-derive this from "the audit is
+#   synchronous" — that instructs the model, and the harness ignores it.
 #
 # * Tree-hash binding: at stop time the work is usually UNCOMMITTED (HEAD has not
 #   moved), so HEAD alone can't tell "audited" from "changed since audit". The dossier
@@ -135,6 +142,12 @@ verdict_file="$project_dir/.agents/state/last-verdict.json"
 prev_verdict_file="$project_dir/.agents/state/last-verdict.prev.json"
 last_uuid_file="$project_dir/.agents/state/verdict-last-uuid"
 decision_log="$project_dir/.agents/state/verdict-decisions.log"
+# Held by run-verdict-audit.sh while it runs; body format defined by its
+# take_audit_lock(). Tells "the agent ignored the findings" from "the answer is coming".
+audit_lock_file="$project_dir/.agents/state/verdict-audit.lock"
+# Ceiling on a lock's self-declared deadline. NOT max_age_seconds — dossier staleness
+# and "how long may an audit run" are different questions.
+audit_lock_max_seconds=3600
 max_age_seconds=600
 classifier_timeout_seconds=20
 
@@ -485,6 +498,45 @@ $(verdict_instruction)"
         ;;
     esac
   fi
+fi
+
+# ── An audit is RUNNING and has not answered yet → allow, don't busy-wait ────
+# Level-triggered gate, edge-triggered remedy: an audit takes minutes, a re-block cycle
+# ~3s, so without this rung the agent is re-blocked for the whole duration of the fix
+# the gate demanded. Observed: 108 blocks in one session, 39 in a 512s window.
+# Only the bash runner takes the lock; a Task-launched auditor leaves nothing to observe
+# and keeps today's behaviour.
+audit_in_flight() {
+  # Dossier absence is the runner's own proof it has not answered (it removes the file
+  # before auditing). Redundant with the call site below the dossier branch, kept so the
+  # predicate survives being hoisted.
+  [[ -r "$audit_lock_file" && ! -e "$verdict_file" ]] || return 1
+  local body pid deadline lock_mtime now
+  body="$(cat "$audit_lock_file" 2>/dev/null || echo '')"
+  # Here-string, not `read < file`: the body has no trailing newline, so `read` assigns
+  # and still exits 1 at EOF, which with `|| return 1` silently disables this rung.
+  read -r pid deadline <<< "$body"
+  # `0` excluded: `kill -0 0` signals the caller's own process group and succeeds, so a
+  # truncated write would buy a blanket allow. $$ is never 0.
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  # A lock file alone proves nothing: the trap misses SIGKILL, orphaning the lock.
+  kill -0 "$pid" 2>/dev/null || return 1
+  lock_mtime="$(file_mtime_epoch "$audit_lock_file")"
+  now="$(date +%s)"
+  # Only the runner knows VERDICT_AUDITOR_TIMEOUT, so it writes the deadline; bounding
+  # by max_age_seconds (dossier staleness) would expire the lock mid-run. Past the
+  # ceiling is rejected, not capped — that lock is not what we think it is.
+  if [[ "$deadline" =~ ^[1-9][0-9]*$ ]]; then
+    (( now <= deadline && deadline <= lock_mtime + audit_lock_max_seconds ))
+  else
+    # No deadline field: a lock from an older runner, or a torn write. Fall back to the
+    # conservative bound rather than trusting an unbounded lock.
+    (( now - lock_mtime <= max_age_seconds ))
+  fi
+}
+if audit_in_flight; then
+  log_decision audit inflight-allow
+  allow_with_note "[verdict-gate] audit in flight (pid $(cut -d' ' -f1 "$audit_lock_file" 2>/dev/null)) → allow; its verdict gates the next turn"
 fi
 
 # ── No (usable) dossier → triage: does the turn assert a verdict? ───────────

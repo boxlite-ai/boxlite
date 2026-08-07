@@ -183,6 +183,19 @@ check_gone() {  # desc  repo
   fi
 }
 
+# A classifier stub that RECORDS its own invocation. Tiers A and B are latency work,
+# so what has to be asserted is that the 5-10s round-trip was genuinely SKIPPED — not
+# merely that its answer agreed. The stub also answers the OPPOSITE of the tier under
+# test, so a run without the tier reaches the model and lands on the wrong decision.
+# (Same property the in-flight rung needs: it sits ahead of triage.)
+cls_stub()      { printf "cat >/dev/null; touch '%s/CLASSIFIER_RAN'; echo %s" "$1" "$2"; }
+classifier_ran() { [[ -e "$1/CLASSIFIER_RAN" ]] && echo yes || echo no; }
+run_hook() {  # repo  classifier-answer
+  jq -nc --arg p "$1/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+    | ( cd "$1" && CLAUDE_PROJECT_DIR="$1" VERDICT_GATE_HARD_BLOCK=1 \
+        VERDICT_CLASSIFIER_CMD="$(cls_stub "$1" "$2")" bash "$HOOK" ) 2>/dev/null
+}
+
 # ── Real-repo invariant: every gate-written .agents/state/ file is gitignored ──
 # compute_tree_hash() folds the whole working tree into the dossier binding via
 # `git add -A`, which SKIPS gitignored paths. So every file the gates write under
@@ -199,6 +212,7 @@ for f in \
   .agents/state/last-verdict.prev.json \
   .agents/state/pr-reviewed.json \
   .agents/state/verdict-last-uuid \
+  .agents/state/verdict-audit.lock \
   .agents/state/verdict-decisions.log; do
   if git -C "$REPO_ROOT" check-ignore -q "$f"; then
     pass=$((pass + 1)); printf '  PASS  %s gitignored\n' "$f"
@@ -309,6 +323,138 @@ check "FAIL → block (finding-driven loop)"                        "$R" "block"
 check "FAIL again (unaddressed) → still block"                    "$R" "block"; rm -rf "$R"
 
 echo
+echo "## Audit in flight → allow (the gate must not busy-wait on its own remedy)"
+# Regression: 108 blocks in one session, 39 in a 512s window, while the audit the gate
+# demanded was still running. Each conjunct gets its own case — the rung must suppress
+# only the window where no verdict provably exists yet.
+lock_path() { printf '%s/.agents/state/verdict-audit.lock' "$1"; }
+# $2 = body VERBATIM; cases write malformed and legacy bodies too, so this must not
+# encode the format. See take_audit_lock() in run-verdict-audit.sh.
+take_lock()  { mkdir -p "$1/.agents/state"; printf '%s' "$2" > "$(lock_path "$1")"; }
+now_epoch()  { date +%s; }
+# BSD `date -r` / GNU `date -d @`. The suite's other backdating uses a fixed 2020 stamp,
+# useless here because the deadline ceiling is anchored TO the mtime.
+backdate() {  # file  seconds-ago
+  local target=$(( $(date +%s) - $2 )) stamp
+  stamp="$(date -r "$target" +%Y%m%d%H%M.%S 2>/dev/null \
+        || date -d "@$target" +%Y%m%d%H%M.%S 2>/dev/null)"
+  [[ -n "$stamp" ]] && touch -t "$stamp" "$1"
+}
+
+sleep 300 & LIVE_PID=$!            # stands in for a running run-verdict-audit.sh
+
+# The rung sits ahead of triage, so the 5-10s model round-trip must be skipped too —
+# the stub answers YES, which is what a hook WITHOUT the rung would block on.
+R="$(setup)"; write_transcript "$R" "Root cause is the stale socket path; 12/12 tests pass."
+take_lock "$R" "$LIVE_PID"
+out="$(run_hook "$R" YES)"
+if printf '%s' "$out" | jq -e '(.decision // "") != "block"' >/dev/null 2>&1 \
+   && grep -q ' audit inflight-allow$' "$R/.agents/state/verdict-decisions.log" 2>/dev/null \
+   && [[ ! -e "$R/CLASSIFIER_RAN" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "audit running, no verdict yet → allow (classifier skipped)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s ran=%s log=%s)\n' "in-flight rung" "$out" \
+    "$(classifier_ran "$R")" "$(cat "$R/.agents/state/verdict-decisions.log" 2>/dev/null || echo MISSING)"
+fi; rm -rf "$R"
+
+# A dead runner must not buy silence: the EXIT trap misses SIGKILL, so an interrupted
+# session orphans the lock.
+R="$(setup)"; write_transcript "$R" "Root cause is the stale socket path; 12/12 tests pass."
+sleep 0 & DEAD_PID=$!; wait "$DEAD_PID" 2>/dev/null
+take_lock "$R" "$DEAD_PID"
+out="$(run_hook "$R" YES)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "lock held by a DEAD pid → block (no bypass)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "dead-runner lock bought silence" "$out"
+fi; rm -rf "$R"
+
+# A bare-PID body has no deadline, so it takes the max_age_seconds fallback — not the
+# general rule; a body carrying a deadline gets the wider bound (see the 800s case).
+R="$(setup)"; write_transcript "$R" "Root cause is the stale socket path; 12/12 tests pass."
+take_lock "$R" "$LIVE_PID"; touch -t 202001010000 "$(lock_path "$R")"
+out="$(run_hook "$R" YES)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "lock older than max_age → block (pid reuse bounded)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "aged lock bought silence" "$out"
+fi; rm -rf "$R"
+
+# THE soundness case. The runner removes the dossier before auditing, so a present one
+# means this run already answered (the auditor writes mid-run). A held lock must not
+# mute it, or a real FAIL is skippable for the runner's whole tail.
+R="$(setup)"; write_transcript "$R" "The fix works."
+write_verdict "$R" "FAIL" '["Test: no reproducer for the claimed fix"]'
+take_lock "$R" "$LIVE_PID"
+check "verdict already written → FAIL blocks despite the held lock"  "$R" "block"; rm -rf "$R"
+
+# Untrusted input: anything that is not a PID says nothing about liveness. "0" is the
+# dangerous one — `kill -0 0` hits the caller's own process group and SUCCEEDS, so a
+# bare numeric check would let it past the liveness conjunct.
+for junk in "" "0" "not-a-pid" "12x34" "-1"; do
+  R="$(setup)"; write_transcript "$R" "Root cause is the stale socket path; 12/12 tests pass."
+  take_lock "$R" "$junk"
+  out="$(run_hook "$R" YES)"
+  if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+    pass=$((pass+1)); printf '  PASS  %s\n' "lock content '${junk:-<empty>}' is not a live pid → block"
+  else
+    fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "non-pid lock content '${junk:-<empty>}' bought silence" "$out"
+  fi; rm -rf "$R"
+done
+
+# Models a long run partway through: the lock is ALREADY older than max_age_seconds, so
+# a hook that ignores the deadline and falls back to the mtime bound fails here.
+# Backdated 700s, not to 2020, because the ceiling is anchored to the mtime.
+R="$(setup)"; write_transcript "$R" "Root cause is the stale socket path; 12/12 tests pass."
+take_lock "$R" "$LIVE_PID $(( $(now_epoch) + 800 ))"; backdate "$(lock_path "$R")" 700
+out="$(run_hook "$R" YES)"
+if printf '%s' "$out" | jq -e '(.decision // "") != "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "deadline beyond max_age_seconds → still allow (long audits covered)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "lock expired mid-run despite its deadline" "$out"
+fi; rm -rf "$R"
+
+# ...but the deadline is file content, not a promise. Past it, the run is over however
+# alive the PID looks.
+R="$(setup)"; write_transcript "$R" "Root cause is the stale socket path; 12/12 tests pass."
+take_lock "$R" "$LIVE_PID $(( $(now_epoch) - 30 ))"
+out="$(run_hook "$R" YES)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "deadline already passed → block"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "expired deadline bought silence" "$out"
+fi; rm -rf "$R"
+
+# A lock cannot buy itself unbounded silence by claiming a deadline years out.
+R="$(setup)"; write_transcript "$R" "Root cause is the stale socket path; 12/12 tests pass."
+take_lock "$R" "$LIVE_PID $(( $(now_epoch) + 86400 ))"
+out="$(run_hook "$R" YES)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "deadline past the hard ceiling → block (rejected, not capped)"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "an unbounded deadline was honoured" "$out"
+fi; rm -rf "$R"
+
+# Composition with the discard path, which is how a re-audit round actually looks: the
+# agent fixed the findings (tree moved), the old dossier is discarded as mismatched, and
+# a runner is already recomputing the verdict. The dossier branch must not consume its
+# way past this rung, and the discarded dossier must not resurrect as a block.
+R="$(setup)"; write_transcript "$R" "Root cause is the stale socket path; 12/12 tests pass."
+write_verdict "$R" "FAIL" '["Test: no reproducer for the claimed fix"]'
+printf 'moved\n' >> "$R/src/lib.rs"            # invalidates the binding
+take_lock "$R" "$LIVE_PID $(( $(now_epoch) + 800 ))"
+out="$(run_hook "$R" YES)"
+if printf '%s' "$out" | jq -e '(.decision // "") != "block"' >/dev/null 2>&1 \
+   && [[ ! -e "$R/.agents/state/last-verdict.json" ]]; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "stale dossier discarded + audit in flight → allow"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s dossier=%s)\n' "discard→in-flight composition" "$out" \
+    "$([[ -e "$R/.agents/state/last-verdict.json" ]] && echo present || echo gone)"
+fi; rm -rf "$R"
+
+kill "$LIVE_PID" 2>/dev/null; wait "$LIVE_PID" 2>/dev/null
+
+echo
 echo "## Present dossier, stale/mismatched binding → DISCARD + re-detect (never a bookkeeping block)"
 # Tree moved after the audit, but the turn ends on a chat message → the old
 # dossier is discarded and the turn ends freely. Under #915 this BLOCKED — that
@@ -341,18 +487,6 @@ echo "## Tier A: harness text in the assistant slot decides without a model call
 # interruption markers. No model produced it, so it asserts nothing and can never be a
 # verdict. 81 of 563 real turns in this repo's transcripts (14.4%) are exactly this,
 # and each one used to buy a 5-10s classifier round-trip to be told "NO".
-# A classifier stub that RECORDS its own invocation. Tiers A and B are latency work,
-# so what has to be asserted is that the 5-10s round-trip was genuinely SKIPPED — not
-# merely that its answer agreed. The stub also answers the OPPOSITE of the tier under
-# test, so a run without the tier reaches the model and lands on the wrong decision.
-cls_stub()      { printf "cat >/dev/null; touch '%s/CLASSIFIER_RAN'; echo %s" "$1" "$2"; }
-classifier_ran() { [[ -e "$1/CLASSIFIER_RAN" ]] && echo yes || echo no; }
-run_hook() {  # repo  classifier-answer
-  jq -nc --arg p "$1/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
-    | ( cd "$1" && CLAUDE_PROJECT_DIR="$1" VERDICT_GATE_HARD_BLOCK=1 \
-        VERDICT_CLASSIFIER_CMD="$(cls_stub "$1" "$2")" bash "$HOOK" ) 2>/dev/null
-}
-
 R="$(setup)"; write_transcript "$R" "API Error: 400 Your input exceeds the context window of this model."
 out="$(run_hook "$R" YES)"
 if printf '%s' "$out" | jq -e '(.decision // "") != "block"' >/dev/null 2>&1 && [[ ! -e "$R/CLASSIFIER_RAN" ]]; then
