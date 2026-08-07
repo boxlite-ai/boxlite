@@ -29,7 +29,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter'
 import { OrganizationEvents } from '../constants/organization-events.constant'
 import { UserEmailVerifiedEvent } from '../../user/events/user-email-verified.event'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { RedisLockProvider } from '../../box/common/redis-lock.provider'
+import { RedisLockProvider, withRedisLockLease } from '../../box/common/redis-lock.provider'
 import { OrganizationSuspendedBoxStoppedEvent } from '../events/organization-suspended-box-stopped.event'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { SystemRole } from '../../user/enums/system-role.enum'
@@ -541,51 +541,55 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   async stopSuspendedOrganizationBoxes(): Promise<void> {
     //  lock the sync to only run one instance at a time
     const lockKey = 'stop-suspended-organization-boxes'
-    if (!(await this.redisLockProvider.lock(lockKey, 60))) {
+    const lease = await this.redisLockProvider.acquireLease(lockKey, 60)
+    if (!lease) {
       return
     }
 
-    const queryResult = await this.organizationRepository
-      .createQueryBuilder('organization')
-      .select('id')
-      .where('suspended = true')
-      .andWhere(`"suspendedAt" < NOW() - INTERVAL '1 hour' * "suspensionCleanupGracePeriodHours"`)
-      .andWhere(`"suspendedAt" > NOW() - INTERVAL '7 day'`)
-      .andWhereExists(
-        this.boxRepository
-          .createQueryBuilder('box')
-          .select('1')
-          .where(
-            `"box"."organizationId" = "organization"."id" AND "box"."desiredState" = '${BoxDesiredState.STARTED}' and "box"."state" NOT IN ('${BoxState.ERROR}')`,
-          ),
+    await withRedisLockLease(lease, async (signal) => {
+      const queryResult = await this.organizationRepository
+        .createQueryBuilder('organization')
+        .select('id')
+        .where('suspended = true')
+        .andWhere(`"suspendedAt" < NOW() - INTERVAL '1 hour' * "suspensionCleanupGracePeriodHours"`)
+        .andWhere(`"suspendedAt" > NOW() - INTERVAL '7 day'`)
+        .andWhereExists(
+          this.boxRepository
+            .createQueryBuilder('box')
+            .select('1')
+            .where(
+              `"box"."organizationId" = "organization"."id" AND "box"."desiredState" = '${BoxDesiredState.STARTED}' and "box"."state" NOT IN ('${BoxState.ERROR}')`,
+            ),
+        )
+        .take(100)
+        .getRawMany()
+
+      const suspendedOrganizationIds = queryResult.map((result) => result.id)
+
+      // Skip if no suspended organizations found to avoid empty IN clause
+      if (suspendedOrganizationIds.length === 0) {
+        return
+      }
+
+      const boxes = await this.boxRepository.find({
+        where: {
+          organizationId: In(suspendedOrganizationIds),
+          desiredState: BoxDesiredState.STARTED,
+          state: Not(In([BoxState.ERROR])),
+        },
+      })
+
+      signal.throwIfAborted()
+      await Promise.all(
+        boxes.map((box) => {
+          signal.throwIfAborted()
+          return this.eventEmitter.emitAsync(
+            OrganizationEvents.SUSPENDED_BOX_STOPPED,
+            new OrganizationSuspendedBoxStoppedEvent(box.id),
+          )
+        }),
       )
-      .take(100)
-      .getRawMany()
-
-    const suspendedOrganizationIds = queryResult.map((result) => result.id)
-
-    // Skip if no suspended organizations found to avoid empty IN clause
-    if (suspendedOrganizationIds.length === 0) {
-      await this.redisLockProvider.unlock(lockKey)
-      return
-    }
-
-    const boxes = await this.boxRepository.find({
-      where: {
-        organizationId: In(suspendedOrganizationIds),
-        desiredState: BoxDesiredState.STARTED,
-        state: Not(In([BoxState.ERROR])),
-      },
     })
-
-    boxes.map((box) =>
-      this.eventEmitter.emitAsync(
-        OrganizationEvents.SUSPENDED_BOX_STOPPED,
-        new OrganizationSuspendedBoxStoppedEvent(box.id),
-      ),
-    )
-
-    await this.redisLockProvider.unlock(lockKey)
   }
 
   // TODO(image-rewrite): deactivateSuspendedOrganizationTemplates cron removed with box_template;

@@ -11,9 +11,7 @@ import { Volume } from '../entities/volume.entity'
 import { VolumeState } from '../enums/volume-state.enum'
 import { Cron, CronExpression, SchedulerRegistry } from '@nestjs/schedule'
 import { S3Client, CreateBucketCommand, ListObjectsV2Command, PutBucketTaggingCommand } from '@aws-sdk/client-s3'
-import { InjectRedis } from '@nestjs-modules/ioredis'
-import { Redis } from 'ioredis'
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { RedisLockProvider, withRedisLockLease } from '../common/redis-lock.provider'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { deleteS3Bucket } from '../../common/utils/delete-s3-bucket'
 
@@ -40,7 +38,6 @@ export class VolumeManager
     @InjectRepository(Volume)
     private readonly volumeRepository: Repository<Volume>,
     private readonly configService: TypedConfigService,
-    @InjectRedis() private readonly redis: Redis,
     private readonly redisLockProvider: RedisLockProvider,
     private readonly schedulerRegistry: SchedulerRegistry,
   ) {
@@ -133,61 +130,65 @@ export class VolumeManager
       return
     }
 
+    const lockKey = 'process-pending-volumes'
     try {
       // Lock the entire process
-      const lockKey = 'process-pending-volumes'
-      if (!(await this.redisLockProvider.lock(lockKey, 30))) {
+      const lease = await this.redisLockProvider.acquireLease(lockKey, 30)
+      if (!lease) {
         return
       }
 
-      const pendingVolumes = await this.volumeRepository.find({
-        where: {
-          state: In([VolumeState.PENDING_CREATE, VolumeState.PENDING_DELETE]),
-        },
+      await withRedisLockLease(lease, async (signal) => {
+        const pendingVolumes = await this.volumeRepository.find({
+          where: {
+            state: In([VolumeState.PENDING_CREATE, VolumeState.PENDING_DELETE]),
+          },
+        })
+
+        await Promise.all(
+          pendingVolumes.map(async (volume) => {
+            signal.throwIfAborted()
+            if (this.processingVolumes.has(volume.id)) {
+              return
+            }
+
+            // Get lock for this specific volume
+            const volumeLockKey = `${VOLUME_STATE_LOCK_KEY}${volume.id}`
+            const volumeLease = await this.redisLockProvider.acquireLease(volumeLockKey, 30)
+            if (!volumeLease) {
+              return
+            }
+
+            await withRedisLockLease(volumeLease, async (volumeSignal) => {
+              this.processingVolumes.add(volume.id)
+              try {
+                await this.processVolumeState(volume, volumeSignal)
+              } finally {
+                this.processingVolumes.delete(volume.id)
+              }
+            })
+          }),
+        )
       })
-
-      await Promise.all(
-        pendingVolumes.map(async (volume) => {
-          if (this.processingVolumes.has(volume.id)) {
-            return
-          }
-
-          // Get lock for this specific volume
-          const volumeLockKey = `${VOLUME_STATE_LOCK_KEY}${volume.id}`
-          const acquired = await this.redisLockProvider.lock(volumeLockKey, 30)
-          if (!acquired) {
-            return
-          }
-
-          try {
-            this.processingVolumes.add(volume.id)
-            await this.processVolumeState(volume)
-          } finally {
-            this.processingVolumes.delete(volume.id)
-            await this.redisLockProvider.unlock(volumeLockKey)
-          }
-        }),
-      )
-
-      await this.redisLockProvider.unlock(lockKey)
     } catch (error) {
       this.logger.error('Error processing pending volumes:', error)
     }
   }
 
-  private async processVolumeState(volume: Volume): Promise<void> {
-    const volumeLockKey = `${VOLUME_STATE_LOCK_KEY}${volume.id}`
-
+  private async processVolumeState(volume: Volume, signal: AbortSignal): Promise<void> {
     try {
       switch (volume.state) {
         case VolumeState.PENDING_CREATE:
-          await this.handlePendingCreate(volume, volumeLockKey)
+          await this.handlePendingCreate(volume, signal)
           break
         case VolumeState.PENDING_DELETE:
-          await this.handlePendingDelete(volume, volumeLockKey)
+          await this.handlePendingDelete(volume, signal)
           break
       }
     } catch (error) {
+      if (signal.aborted) {
+        throw signal.reason
+      }
       this.logger.error(`Error processing volume ${volume.id}:`, error)
       await this.volumeRepository.update(volume.id, {
         state: VolumeState.ERROR,
@@ -196,26 +197,22 @@ export class VolumeManager
     }
   }
 
-  private async handlePendingCreate(volume: Volume, lockKey: string): Promise<void> {
+  private async handlePendingCreate(volume: Volume, signal: AbortSignal): Promise<void> {
     try {
-      // Refresh lock before state change
-      await this.redis.setex(lockKey, 30, '1')
-
       // Update state to CREATING
       await this.volumeRepository.save({
         ...volume,
         state: VolumeState.CREATING,
       })
 
-      // Refresh lock before S3 operation
-      await this.redis.setex(lockKey, 30, '1')
-
+      signal.throwIfAborted()
       // Create bucket in Minio/S3
       const createBucketCommand = new CreateBucketCommand({
         Bucket: volume.getBucketName(),
       })
 
       await this.s3Client.send(createBucketCommand)
+      signal.throwIfAborted()
 
       await this.s3Client.send(
         new PutBucketTaggingCommand({
@@ -239,9 +236,6 @@ export class VolumeManager
         }),
       )
 
-      // Refresh lock before final state update
-      await this.redis.setex(lockKey, 30, '1')
-
       // Update volume state to READY
       await this.volumeRepository.save({
         ...volume,
@@ -249,6 +243,9 @@ export class VolumeManager
       })
       this.logger.debug(`Volume ${volume.id} created successfully`)
     } catch (error) {
+      if (signal.aborted) {
+        throw signal.reason
+      }
       this.logger.error(`Error creating volume ${volume.id}:`, error)
       await this.volumeRepository.save({
         ...volume,
@@ -258,23 +255,19 @@ export class VolumeManager
     }
   }
 
-  private async handlePendingDelete(volume: Volume, lockKey: string): Promise<void> {
+  private async handlePendingDelete(volume: Volume, signal: AbortSignal): Promise<void> {
     try {
-      // Refresh lock before state change
-      await this.redis.setex(lockKey, 30, '1')
-
       // Update state to DELETING
       await this.volumeRepository.save({
         ...volume,
         state: VolumeState.DELETING,
       })
 
-      // Refresh lock before S3 operation
-      await this.redis.setex(lockKey, 30, '1')
-
+      signal.throwIfAborted()
       // Delete bucket from Minio/S3
       try {
         await deleteS3Bucket(this.s3Client, volume.getBucketName())
+        signal.throwIfAborted()
       } catch (error) {
         if (error.name === 'NoSuchBucket') {
           this.logger.warn(`Bucket for volume ${volume.id} does not exist, treating as already deleted`)
@@ -284,9 +277,6 @@ export class VolumeManager
           throw error
         }
       }
-
-      // Refresh lock before final state update
-      await this.redis.setex(lockKey, 30, '1')
 
       // Delete any existing volume record with the deleted state and the same name in the same organization
       await this.volumeRepository.delete({
@@ -303,6 +293,9 @@ export class VolumeManager
       })
       this.logger.debug(`Volume ${volume.id} deleted successfully`)
     } catch (error) {
+      if (signal.aborted) {
+        throw signal.reason
+      }
       this.logger.error(`Error deleting volume ${volume.id}:`, error)
       await this.volumeRepository.save({
         ...volume,

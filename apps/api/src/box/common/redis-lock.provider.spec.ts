@@ -1,0 +1,196 @@
+/*
+ * Copyright 2025 BoxLite AI
+ * SPDX-License-Identifier: AGPL-3.0
+ */
+
+import { LockCode, RedisLockProvider, withRedisLockLease } from './redis-lock.provider'
+
+describe('RedisLockProvider owned locks', () => {
+  afterEach(() => {
+    jest.useRealTimers()
+  })
+
+  it('aborts the protected operation when lease renewal fails', async () => {
+    jest.useFakeTimers()
+    const redis = {
+      set: jest.fn().mockResolvedValue('OK'),
+      eval: jest.fn().mockResolvedValue(0),
+    }
+    const provider = new RedisLockProvider(redis as any)
+    const lease = await provider.acquireLease('managed-lock', 10)
+    let operationStopped = false
+
+    const operation = withRedisLockLease(lease!, async (signal) => {
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+      operationStopped = true
+    })
+    const rejected = expect(operation).rejects.toThrow('ownership was lost')
+    await jest.advanceTimersByTimeAsync(5_000)
+
+    await rejected
+    expect(operationStopped).toBe(true)
+  })
+
+  it('preserves the operation error when release also fails', async () => {
+    const operationError = new Error('operation failed')
+    const lease = { release: jest.fn().mockRejectedValue(new Error('release failed')) }
+
+    await expect(
+      withRedisLockLease(lease as any, async () => {
+        throw operationError
+      }),
+    ).rejects.toBe(operationError)
+  })
+
+  it('reports a suppressed release error without replacing the operation error', async () => {
+    const operationError = new Error('operation failed')
+    const releaseError = new Error('release failed')
+    const onSuppressedReleaseError = jest.fn()
+    const lease = { release: jest.fn().mockRejectedValue(releaseError) }
+
+    await expect(
+      withRedisLockLease(
+        lease as any,
+        async () => {
+          throw operationError
+        },
+        onSuppressedReleaseError,
+      ),
+    ).rejects.toBe(operationError)
+    expect(onSuppressedReleaseError).toHaveBeenCalledWith(releaseError)
+  })
+
+  it('releases a lease with the owner token it acquired', async () => {
+    const redis = {
+      set: jest.fn().mockResolvedValue('OK'),
+      eval: jest.fn().mockResolvedValue(1),
+    }
+    const provider = new RedisLockProvider(redis as any)
+
+    const lease = await provider.acquireLease('owned-lock', 10)
+    const ownerCode = redis.set.mock.calls[0][1]
+    await lease?.release()
+
+    expect(ownerCode).not.toBe('1')
+    expect(redis.eval).toHaveBeenCalledWith(expect.stringContaining("redis.call('del'"), 1, 'owned-lock', ownerCode)
+  })
+
+  it('releases a lock only while the caller still owns it', async () => {
+    const redis = {
+      set: jest.fn().mockResolvedValue('OK'),
+      eval: jest.fn().mockResolvedValue(0),
+    }
+    const provider = new RedisLockProvider(redis as any)
+    const owner = new LockCode('owner-1')
+
+    await provider.unlock('usage-period-box-1', owner)
+
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining("redis.call('get', KEYS[1])"),
+      1,
+      'usage-period-box-1',
+      owner.getCode(),
+    )
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining("redis.call('del', KEYS[1])"),
+      1,
+      'usage-period-box-1',
+      owner.getCode(),
+    )
+  })
+
+  it('does not release a replacement owner after managed renewal loses ownership', async () => {
+    jest.useFakeTimers()
+    let currentOwner: string | null = null
+    const redis = {
+      set: jest.fn(async (_key: string, owner: string) => {
+        currentOwner = owner
+        return 'OK'
+      }),
+      get: jest.fn(async () => currentOwner),
+      eval: jest.fn(async (script: string, _keys: number, _key: string, owner: string) => {
+        if (script.includes("redis.call('expire'")) {
+          currentOwner = 'replacement-owner'
+          return 0
+        }
+        if (currentOwner === owner) {
+          currentOwner = null
+          return 1
+        }
+        return 0
+      }),
+    }
+    const provider = new RedisLockProvider(redis as any)
+
+    const lease = await provider.acquireLease('legacy-lock', 10)
+    await jest.advanceTimersByTimeAsync(5_000)
+    await expect(lease?.release()).rejects.toThrow('ownership was lost')
+
+    expect(currentOwner).toBe('replacement-owner')
+    jest.useRealTimers()
+  })
+
+  it('does not let an expired owner release a replacement owner', async () => {
+    let currentOwner = 'replacement-owner'
+    const redis = {
+      eval: jest.fn(async (script: string, _keys: number, _key: string, owner: string) => {
+        if (currentOwner === owner) {
+          currentOwner = ''
+          return 1
+        }
+        return 0
+      }),
+    }
+    const provider = new RedisLockProvider(redis as any)
+
+    await provider.unlock('shared-key', new LockCode('expired-owner'))
+
+    expect(currentOwner).toBe('replacement-owner')
+  })
+
+  it('renews an acquired lease before its TTL expires', async () => {
+    jest.useFakeTimers()
+    const redis = {
+      set: jest.fn().mockResolvedValue('OK'),
+      eval: jest.fn().mockResolvedValue(1),
+    }
+    const provider = new RedisLockProvider(redis as any)
+
+    const lease = await provider.acquireLease('archive-usage-periods', 60)
+    await jest.advanceTimersByTimeAsync(30_000)
+
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining("redis.call('expire', KEYS[1], ARGV[2])"),
+      1,
+      'archive-usage-periods',
+      expect.any(String),
+      60,
+    )
+
+    await lease?.release()
+    jest.useRealTimers()
+  })
+
+  it('stops renewal and releases with the same owner token', async () => {
+    jest.useFakeTimers()
+    const redis = {
+      set: jest.fn().mockResolvedValue('OK'),
+      eval: jest.fn().mockResolvedValue(1),
+    }
+    const provider = new RedisLockProvider(redis as any)
+
+    const lease = await provider.acquireLease('archive-usage-periods', 60)
+    const ownerCode = redis.set.mock.calls[0][1]
+    await lease?.release()
+    await jest.advanceTimersByTimeAsync(60_000)
+
+    expect(redis.eval).toHaveBeenCalledTimes(1)
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining("redis.call('del', KEYS[1])"),
+      1,
+      'archive-usage-periods',
+      ownerCode,
+    )
+    jest.useRealTimers()
+  })
+})

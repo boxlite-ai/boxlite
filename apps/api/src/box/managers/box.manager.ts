@@ -6,7 +6,6 @@
 
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { randomUUID } from 'crypto'
 
 import { BoxConflictError } from '../errors/box-conflict.error'
 import { JobConflictError } from '../errors/job-conflict.error'
@@ -15,7 +14,7 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { RunnerService } from '../services/runner.service'
 import { BoxActivityService } from '../services/box-activity.service'
 
-import { RedisLockProvider, LockCode } from '../common/redis-lock.provider'
+import { RedisLockProvider, withRedisLockLease } from '../common/redis-lock.provider'
 
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 
@@ -73,16 +72,18 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
   async autostopCheck(): Promise<void> {
     const lockKey = 'auto-stop-check-worker-selected'
     // lock the sync to only run one instance at a time
-    if (!(await this.redisLockProvider.lock(lockKey, 60))) {
+    const lease = await this.redisLockProvider.acquireLease(lockKey, 60)
+    if (!lease) {
       return
     }
 
-    try {
+    await withRedisLockLease(lease, async (signal) => {
       const readyRunners = await this.runnerService.findAllReady()
 
       // Process all runners in parallel
       await Promise.all(
         readyRunners.map(async (runner) => {
+          signal.throwIfAborted()
           const boxes = await this.boxRepository
             .createQueryBuilder('box')
             .leftJoin('box_last_activity', 'activity', 'activity."boxId" = box.id')
@@ -106,49 +107,50 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
           await Promise.all(
             boxes.map(async (box) => {
               const lockKey = getStateChangeLockKey(box.id)
-              const acquired = await this.redisLockProvider.lock(lockKey, 30)
-              if (!acquired) {
+              const boxLease = await this.redisLockProvider.acquireLease(lockKey, 30)
+              if (!boxLease) {
                 return
               }
 
               try {
-                // Activity is buffered in Redis before the periodic DB flush.
-                // Recheck after taking the state lock so a recent Exec/Files
-                // call cannot be stopped based on a stale SQL timestamp.
-                const lastActivityAt = await this.boxActivityService.getLastActivityAt(box.id)
-                if (lastActivityAt && Date.now() - lastActivityAt.getTime() < box.autoStop * 1000) {
-                  return
-                }
+                await withRedisLockLease(boxLease, async (boxSignal) => {
+                  // Activity is buffered in Redis before the periodic DB flush.
+                  // Recheck after taking the state lock so a recent Exec/Files
+                  // call cannot be stopped based on a stale SQL timestamp.
+                  const lastActivityAt = await this.boxActivityService.getLastActivityAt(box.id)
+                  boxSignal.throwIfAborted()
+                  if (lastActivityAt && Date.now() - lastActivityAt.getTime() < box.autoStop * 1000) {
+                    return
+                  }
 
-                const updateData: Partial<Box> = {
-                  pending: true,
-                  desiredState: BoxDesiredState.STOPPED,
-                }
+                  const updateData: Partial<Box> = {
+                    pending: true,
+                    desiredState: BoxDesiredState.STOPPED,
+                  }
 
-                this.logger.log(`Auto-stopping box ${box.id}: autoStop=${box.autoStop}s, autoDelete=${box.autoDelete}s`)
-                await this.boxRepository.updateWhere(box.id, {
-                  updateData,
-                  whereCondition: {
-                    pending: false,
-                    state: box.state,
-                    desiredState: BoxDesiredState.STARTED,
-                    autoStop: box.autoStop,
-                  },
+                  this.logger.log(
+                    `Auto-stopping box ${box.id}: autoStop=${box.autoStop}s, autoDelete=${box.autoDelete}s`,
+                  )
+                  await this.boxRepository.updateWhere(box.id, {
+                    updateData,
+                    whereCondition: {
+                      pending: false,
+                      state: box.state,
+                      desiredState: BoxDesiredState.STARTED,
+                      autoStop: box.autoStop,
+                    },
+                  })
+
+                  this.syncInstanceState(box.id).catch(this.logger.error)
                 })
-
-                this.syncInstanceState(box.id).catch(this.logger.error)
               } catch (error) {
                 this.logger.error(`Error processing auto-stop state for box ${box.id}:`, error)
-              } finally {
-                await this.redisLockProvider.unlock(lockKey)
               }
             }),
           )
         }),
       )
-    } finally {
-      await this.redisLockProvider.unlock(lockKey)
-    }
+    })
   }
 
   @Cron(CronExpression.EVERY_10_SECONDS, { name: 'auto-delete-check' })
@@ -158,16 +160,18 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
   async autoDeleteCheck(): Promise<void> {
     const lockKey = 'auto-delete-check-worker-selected'
     // lock the sync to only run one instance at a time
-    if (!(await this.redisLockProvider.lock(lockKey, 60))) {
+    const lease = await this.redisLockProvider.acquireLease(lockKey, 60)
+    if (!lease) {
       return
     }
 
-    try {
+    await withRedisLockLease(lease, async (signal) => {
       const readyRunners = await this.runnerService.findAllReady()
 
       // Process all runners in parallel
       await Promise.all(
         readyRunners.map(async (runner) => {
+          signal.throwIfAborted()
           const boxes = await this.boxRepository
             .createQueryBuilder('box')
             .innerJoin('box.lastActivityAt', 'activity')
@@ -190,38 +194,37 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
           await Promise.all(
             boxes.map(async (box) => {
               const lockKey = getStateChangeLockKey(box.id)
-              const acquired = await this.redisLockProvider.lock(lockKey, 30)
-              if (!acquired) {
+              const boxLease = await this.redisLockProvider.acquireLease(lockKey, 30)
+              if (!boxLease) {
                 return
               }
 
               this.logger.log(`Auto-deleting box ${box.id}: autoDelete=${box.autoDelete}s`)
 
               try {
-                const updateData = Box.getSoftDeleteUpdate(box)
-                await this.boxRepository.updateWhere(box.id, {
-                  updateData,
-                  whereCondition: {
-                    pending: false,
-                    state: box.state,
-                    desiredState: BoxDesiredState.STOPPED,
-                    autoDelete: box.autoDelete,
-                  },
-                })
+                await withRedisLockLease(boxLease, async (boxSignal) => {
+                  boxSignal.throwIfAborted()
+                  const updateData = Box.getSoftDeleteUpdate(box)
+                  await this.boxRepository.updateWhere(box.id, {
+                    updateData,
+                    whereCondition: {
+                      pending: false,
+                      state: box.state,
+                      desiredState: BoxDesiredState.STOPPED,
+                      autoDelete: box.autoDelete,
+                    },
+                  })
 
-                this.syncInstanceState(box.id).catch(this.logger.error)
+                  this.syncInstanceState(box.id).catch(this.logger.error)
+                })
               } catch (error) {
                 this.logger.error(`Error processing auto-delete state for box ${box.id}:`, error)
-              } finally {
-                await this.redisLockProvider.unlock(lockKey)
               }
             }),
           )
         }),
       )
-    } finally {
-      await this.redisLockProvider.unlock(lockKey)
-    }
+    })
   }
 
   @Cron(CronExpression.EVERY_10_SECONDS, { name: 'sync-states' })
@@ -231,11 +234,13 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
   async syncStates(): Promise<void> {
     const globalLockKey = 'sync-states'
     const lockTtl = 10 * 60 // seconds (10 min)
-    if (!(await this.redisLockProvider.lock(globalLockKey, lockTtl))) {
+    const lease = await this.redisLockProvider.acquireLease(globalLockKey, lockTtl)
+    if (!lease) {
       return
     }
 
-    try {
+    await withRedisLockLease(lease, async (signal) => {
+      signal.throwIfAborted()
       const queryBuilder = this.boxRepository
         .createQueryBuilder('box')
         .select(['box.id'])
@@ -299,9 +304,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
           stream.destroy()
         }
       }
-    } finally {
-      await this.redisLockProvider.unlock(globalLockKey)
-    }
+    })
   }
 
   /**
@@ -315,22 +318,21 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
     // Track the start time of the sync operation.
     const startedAt = new Date()
 
-    // Generate a random lock code to prevent race condition if box action continues after the lock expires.
-    const lockCode = new LockCode(randomUUID())
-
     // Prevent syncState cron from running multiple instances of the same box.
     const lockKey = getStateChangeLockKey(boxId)
-    const acquired = await this.redisLockProvider.lock(lockKey, 30, lockCode)
-    if (!acquired) {
+    const lease = await this.redisLockProvider.acquireLease(lockKey, 30)
+    if (!lease) {
       return
     }
+    const lockCode = lease.ownerCode
 
-    try {
+    await withRedisLockLease(lease, async (signal) => {
       const box = await this.boxRepository.findOneOrFail({
         where: { id: boxId },
       })
 
       while (new Date().getTime() - startedAt.getTime() <= 10000) {
+        signal.throwIfAborted()
         if ([BoxState.DESTROYED, BoxState.RESIZING].includes(box.state) || box.state === BoxState.ERROR) {
           // Break sync loop if box reaches a terminal state.
           break
@@ -399,9 +401,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
           break
         }
       }
-    } finally {
-      await this.redisLockProvider.unlock(lockKey)
-    }
+    })
   }
 
   @OnAsyncEvent({

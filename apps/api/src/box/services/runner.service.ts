@@ -25,7 +25,7 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerAdapterFactory, RunnerInfo } from '../runner-adapter/runnerAdapter'
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { RedisLockProvider, withRedisLockLease } from '../common/redis-lock.provider'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
@@ -482,12 +482,12 @@ export class RunnerService {
   @WithInstrumentation()
   private async handleCheckRunners() {
     const lockKey = 'check-runners'
-    const hasLock = await this.redisLockProvider.lock(lockKey, 60)
-    if (!hasLock) {
+    const lease = await this.redisLockProvider.acquireLease(lockKey, 60)
+    if (!lease) {
       return
     }
 
-    try {
+    await withRedisLockLease(lease, async (signal) => {
       const runners = await this.runnerRepository.find({
         where: [
           {
@@ -511,6 +511,7 @@ export class RunnerService {
 
       await Promise.allSettled(
         runners.map(async (runner) => {
+          signal.throwIfAborted()
           // v2 runners report health via healthcheck endpoint, check based on lastChecked timestamp
           if (runner.apiVersion === '2') {
             await this.checkRunnerV2Health(runner)
@@ -522,6 +523,7 @@ export class RunnerService {
           const retryDelays = shouldRetry ? [500, 1000] : []
 
           for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+            signal.throwIfAborted()
             if (attempt > 0) {
               await new Promise((resolve) => setTimeout(resolve, retryDelays[attempt - 1]))
             }
@@ -593,9 +595,7 @@ export class RunnerService {
           }
         }),
       )
-    } finally {
-      await this.redisLockProvider.unlock(lockKey)
-    }
+    })
   }
 
   /**
@@ -642,12 +642,12 @@ export class RunnerService {
   @WithInstrumentation()
   private async handleCheckDecommissionRunners() {
     const lockKey = 'check-decommission-runners'
-    const hasLock = await this.redisLockProvider.lock(lockKey, 60)
-    if (!hasLock) {
+    const lease = await this.redisLockProvider.acquireLease(lockKey, 60)
+    if (!lease) {
       return
     }
 
-    try {
+    await withRedisLockLease(lease, async (signal) => {
       const drainingRunners = await this.runnerRepository.find({
         where: {
           draining: true,
@@ -660,6 +660,7 @@ export class RunnerService {
       await Promise.allSettled(
         drainingRunners.map(async (runner) => {
           try {
+            signal.throwIfAborted()
             // Check if runner has any boxes with desiredState != DESTROYED
             const nonDestroyedBoxCount = await this.boxRepository.count({
               where: {
@@ -700,9 +701,7 @@ export class RunnerService {
           }
         }),
       )
-    } finally {
-      await this.redisLockProvider.unlock(lockKey)
-    }
+    })
   }
 
   async updateSchedulingStatus(id: string, unschedulable: boolean): Promise<Runner> {

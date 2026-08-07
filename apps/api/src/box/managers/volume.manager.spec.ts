@@ -32,7 +32,7 @@ describe('VolumeManager S3 client setup', () => {
         return value
       }),
     }
-    return new VolumeManager({} as any, configService as any, {} as any, {} as any, {} as any)
+    return new VolumeManager({} as any, configService as any, {} as any, {} as any)
   }
 
   const awsConfig = {
@@ -86,5 +86,91 @@ describe('VolumeManager S3 client setup', () => {
     expect(() => buildManager({ 's3.endpoint': 'http://minio:9000', 's3.region': 'us-east-1' })).toThrow(
       /MinIO requires S3_ACCESS_KEY and S3_SECRET_KEY/,
     )
+  })
+})
+
+describe('VolumeManager owned volume locks', () => {
+  it('does not write an error state after the volume lease is lost', async () => {
+    const abortController = new AbortController()
+    const volume = {
+      id: 'volume-1',
+      organizationId: 'org-1',
+      state: 'pending_create',
+      getBucketName: () => 'bucket-1',
+    }
+    const volumeRepository = {
+      save: jest.fn().mockResolvedValue(undefined),
+      update: jest.fn().mockResolvedValue(undefined),
+    }
+    const manager = new VolumeManager(
+      volumeRepository as any,
+      {
+        get: jest.fn((key: string) =>
+          ({ 's3.endpoint': 'https://s3.example.com', skipConnections: true })[key],
+        ),
+        getOrThrow: jest.fn((key: string) =>
+          ({ 's3.endpoint': 'https://s3.example.com', 's3.region': 'us-east-1' })[key],
+        ),
+      } as any,
+      {} as any,
+      {} as any,
+    )
+    mockSend.mockImplementationOnce(async () => {
+      abortController.abort(new Error('ownership was lost'))
+    })
+
+    await expect((manager as any).processVolumeState(volume, abortController.signal)).rejects.toThrow(
+      'ownership was lost',
+    )
+
+    expect(volumeRepository.save).toHaveBeenCalledTimes(1)
+    expect(volumeRepository.update).not.toHaveBeenCalled()
+  })
+
+  it('holds and releases the worker and volume leases while processing a volume', async () => {
+    mockSend.mockResolvedValue({})
+    const volume = {
+      id: 'volume-1',
+      organizationId: 'org-1',
+      state: 'pending_create',
+      getBucketName: () => 'bucket-1',
+    }
+    const volumeRepository = {
+      find: jest.fn().mockResolvedValue([volume]),
+      save: jest.fn().mockResolvedValue(undefined),
+    }
+    const configService = {
+      get: jest.fn((key: string) =>
+        ({
+          's3.endpoint': 'https://s3.example.com',
+          's3.region': 'us-east-1',
+          skipConnections: true,
+        })[key],
+      ),
+      getOrThrow: jest.fn((key: string) =>
+        ({ 's3.endpoint': 'https://s3.example.com', 's3.region': 'us-east-1' })[key],
+      ),
+    }
+    const releaseWorkerLease = jest.fn()
+    const releaseVolumeLease = jest.fn()
+    const redisLockProvider = {
+      acquireLease: jest
+        .fn()
+        .mockResolvedValueOnce({ release: releaseWorkerLease })
+        .mockResolvedValueOnce({ release: releaseVolumeLease }),
+    }
+    const manager = new VolumeManager(
+      volumeRepository as any,
+      configService as any,
+      redisLockProvider as any,
+      {} as any,
+    )
+
+    await manager.processPendingVolumes()
+
+    expect(redisLockProvider.acquireLease).toHaveBeenNthCalledWith(1, 'process-pending-volumes', 30)
+    expect(redisLockProvider.acquireLease).toHaveBeenNthCalledWith(2, 'volume-state-volume-1', 30)
+    expect(releaseVolumeLease).toHaveBeenCalled()
+    expect(releaseWorkerLease).toHaveBeenCalled()
   })
 })

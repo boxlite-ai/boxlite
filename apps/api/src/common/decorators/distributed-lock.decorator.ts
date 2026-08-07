@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { RedisLockProvider } from '../../box/common/redis-lock.provider'
+import { RedisLockProvider, withRedisLockLease } from '../../box/common/redis-lock.provider'
 
 type DistributedLockOptions = {
   lockKey?: string
@@ -36,15 +36,11 @@ export function DistributedLock(options?: DistributedLockOptions): MethodDecorat
       // Set default TTL if not provided
       const lockTtlMs = options?.lockTtl || 30 // 30 seconds default
 
-      const hasLock = await redisLockProvider.lock(lockKey, lockTtlMs)
-      if (!hasLock) {
+      const lease = await redisLockProvider.acquireLease(lockKey, lockTtlMs)
+      if (!lease) {
         return
       }
-      try {
-        return await originalMethod.apply(this, args)
-      } finally {
-        await redisLockProvider.unlock(lockKey)
-      }
+      return withRedisLockLease(lease, (signal) => originalMethod.apply(this, [...args, signal]))
     }
   }
 }

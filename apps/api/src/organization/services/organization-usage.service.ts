@@ -14,7 +14,7 @@ import { BoxState } from '../../box/enums/box-state.enum'
 import { BoxEvents } from '../../box/constants/box-events.constants'
 import { BoxCreatedEvent } from '../../box/events/box-create.event'
 import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
-import { RedisLockProvider } from '../../box/common/redis-lock.provider'
+import { RedisLockProvider, withRedisLockLease } from '../../box/common/redis-lock.provider'
 import { Organization } from '../entities/organization.entity'
 import { OrganizationQuota } from '../entities/organization-quota.entity'
 import { BOX_STATES_CONSUMING_COMPUTE, BOX_STATES_CONSUMING_DISK } from '../constants/box-consuming-states.constant'
@@ -141,20 +141,19 @@ export class OrganizationUsageService {
     }
 
     const lockKey = `org:${organizationId}:fetch-box-usage`
-    await this.redisLockProvider.waitForLock(lockKey, 60)
-    try {
+    const lease = await this.redisLockProvider.waitForLock(lockKey, 60)
+    return withRedisLockLease(lease, async (signal) => {
       const recheck = await this.getCachedBoxUsage(organizationId)
       if (recheck) {
         return excludeBoxId ? await this.excludeBoxFromUsage(recheck, excludeBoxId) : recheck
       }
 
       const current = await this.fetchBoxUsageFromDb(organizationId)
+      signal.throwIfAborted()
       const pending = await this.getCachedPendingUsage(organizationId)
       const overview: BoxUsageOverview = { ...current, ...pending }
       return excludeBoxId ? await this.excludeBoxFromUsage(overview, excludeBoxId) : overview
-    } finally {
-      await this.redisLockProvider.unlock(lockKey)
-    }
+    })
   }
 
   private async excludeBoxFromUsage(overview: BoxUsageOverview, excludeBoxId: string): Promise<BoxUsageOverview> {
@@ -375,33 +374,39 @@ export class OrganizationUsageService {
   async handleBoxCreated(event: BoxCreatedEvent): Promise<void> {
     const box = event.box
     const lockKey = `box:${box.id}:quota-usage-update`
-    await this.redisLockProvider.waitForLock(lockKey, 60)
-    try {
+    const lease = await this.redisLockProvider.waitForLock(lockKey, 60)
+    await withRedisLockLease(lease, async (signal) => {
       await this.updateCurrentQuotaUsage(box.organizationId, 'cpu', box.cpu)
+      signal.throwIfAborted()
       await this.updateCurrentQuotaUsage(box.organizationId, 'memory', box.mem)
+      signal.throwIfAborted()
       await this.updateCurrentQuotaUsage(box.organizationId, 'disk', box.disk)
+      signal.throwIfAborted()
       await this.updateCurrentQuotaUsage(box.organizationId, 'gpu', box.gpu)
+      signal.throwIfAborted()
       await this.updateCurrentQuotaUsage(box.organizationId, 'count', 1)
-    } catch (error) {
+    }).catch((error) => {
       this.logger.warn(`Error updating cached box quota usage for organization ${box.organizationId}: ${error}`)
-    } finally {
-      await this.redisLockProvider.unlock(lockKey)
-    }
+    })
   }
 
   @OnEvent(BoxEvents.STATE_UPDATED)
   async handleBoxStateUpdated(event: BoxStateUpdatedEvent): Promise<void> {
     const box = event.box
     const lockKey = `box:${box.id}:quota-usage-update`
-    await this.redisLockProvider.waitForLock(lockKey, 60)
-    try {
+    const lease = await this.redisLockProvider.waitForLock(lockKey, 60)
+    await withRedisLockLease(lease, async (signal) => {
       // Warm-pool assignment re-emits STARTED -> STARTED to attribute an already
       // running box to its new organization; the membership deltas would be zero.
       if (event.oldState === event.newState && event.newState === BoxState.STARTED) {
         await this.updateCurrentQuotaUsage(box.organizationId, 'cpu', box.cpu)
+        signal.throwIfAborted()
         await this.updateCurrentQuotaUsage(box.organizationId, 'memory', box.mem)
+        signal.throwIfAborted()
         await this.updateCurrentQuotaUsage(box.organizationId, 'disk', box.disk)
+        signal.throwIfAborted()
         await this.updateCurrentQuotaUsage(box.organizationId, 'gpu', box.gpu)
+        signal.throwIfAborted()
         await this.updateCurrentQuotaUsage(box.organizationId, 'count', 1)
         return
       }
@@ -413,15 +418,17 @@ export class OrganizationUsageService {
       const countDelta = stateTransitionDelta(1, event.oldState, event.newState, BOX_STATES_CONSUMING_COMPUTE)
 
       await this.updateCurrentQuotaUsage(box.organizationId, 'cpu', cpuDelta)
+      signal.throwIfAborted()
       await this.updateCurrentQuotaUsage(box.organizationId, 'memory', memoryDelta)
+      signal.throwIfAborted()
       await this.updateCurrentQuotaUsage(box.organizationId, 'disk', diskDelta)
+      signal.throwIfAborted()
       await this.updateCurrentQuotaUsage(box.organizationId, 'gpu', gpuDelta)
+      signal.throwIfAborted()
       await this.updateCurrentQuotaUsage(box.organizationId, 'count', countDelta)
-    } catch (error) {
+    }).catch((error) => {
       this.logger.warn(`Error updating cached box quota usage for organization ${box.organizationId}: ${error}`)
-    } finally {
-      await this.redisLockProvider.unlock(lockKey)
-    }
+    })
   }
 
   private currentKey(organizationId: string, resource: QuotaResource): string {

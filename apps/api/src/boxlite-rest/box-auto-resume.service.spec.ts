@@ -16,20 +16,22 @@ function makeHarness(initial: Record<string, unknown>) {
     waitForStopped: jest.fn().mockResolvedValue({ state: BoxState.STOPPED }),
   }
   const redisLockProvider = {
-    lock: jest.fn().mockResolvedValue(true),
-    unlock: jest.fn().mockResolvedValue(undefined),
+    acquireLease: jest.fn(),
   }
+  const release = jest.fn().mockResolvedValue(undefined)
+  redisLockProvider.acquireLease.mockResolvedValue({ release })
   return {
     service: new BoxAutoResumeService(boxService as never, waiter as never, redisLockProvider as never),
     boxService,
     waiter,
     redisLockProvider,
+    release,
   }
 }
 
 describe('BoxAutoResumeService', () => {
   it('returns immediately for an already STARTED box', async () => {
-    const { service, waiter, redisLockProvider } = makeHarness({
+    const { service, waiter, redisLockProvider, release } = makeHarness({
       id: 'box-1',
       state: BoxState.STARTED,
       desiredState: BoxDesiredState.STARTED,
@@ -37,8 +39,8 @@ describe('BoxAutoResumeService', () => {
 
     await service.ensureReady('box-1', organization)
     expect(waiter.waitForStarted).not.toHaveBeenCalled()
-    expect(redisLockProvider.lock).toHaveBeenCalledWith('box:box-1:state-change', 30)
-    expect(redisLockProvider.unlock).toHaveBeenCalledWith('box:box-1:state-change')
+    expect(redisLockProvider.acquireLease).toHaveBeenCalledWith('box:box-1:state-change', 30)
+    expect(release).toHaveBeenCalled()
   })
 
   it('joins an in-flight Start and waits for STARTED', async () => {

@@ -9,7 +9,7 @@ import Redis from 'ioredis'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, IsNull, Raw } from 'typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { RedisLockProvider, withRedisLockLease } from '../common/redis-lock.provider'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
@@ -40,7 +40,7 @@ export class BoxActivityService {
    */
   async updateLastActivityAt(boxId: string, lastActivityAt: Date): Promise<void> {
     const lockKey = `box:update-last-activity:${boxId}`
-    const acquired = await this.redisLockProvider.lock(
+    const acquired = await this.redisLockProvider.lockUntilExpiry(
       lockKey,
       this.configService.getOrThrow('boxActivity.throttleTtlSeconds'),
     )
@@ -78,12 +78,12 @@ export class BoxActivityService {
   async flushActivityToDb(): Promise<void> {
     const lockKey = 'flush-activity-to-db-lock'
     const lockTtl = 30
-    const acquired = await this.redisLockProvider.lock(lockKey, lockTtl)
-    if (!acquired) {
+    const lease = await this.redisLockProvider.acquireLease(lockKey, lockTtl)
+    if (!lease) {
       return
     }
 
-    try {
+    await withRedisLockLease(lease, async (signal) => {
       let totalFlushed = 0
 
       const batchSize = this.configService.getOrThrow('boxActivity.flushBatchSize')
@@ -104,6 +104,7 @@ export class BoxActivityService {
       }
 
       for (let offset = 0; offset < updates.length; offset += batchSize) {
+        signal.throwIfAborted()
         const batch = updates.slice(offset, offset + batchSize)
         await this.bulkUpsertActivity(batch)
         totalFlushed += batch.length
@@ -114,11 +115,9 @@ export class BoxActivityService {
       if (totalFlushed > 0) {
         this.logger.debug(`Flushed ${totalFlushed} activity timestamps to the database`)
       }
-    } catch (error) {
+    }).catch((error) => {
       this.logger.error('Error flushing activity timestamps to the database:', error)
-    } finally {
-      await this.redisLockProvider.unlock(lockKey)
-    }
+    })
   }
 
   /**

@@ -15,7 +15,7 @@ import { BoxState } from '../../box/enums/box-state.enum'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BoxEvents } from './../../box/constants/box-events.constants'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { RedisLockProvider } from '../../box/common/redis-lock.provider'
+import { RedisLockLease, RedisLockProvider, withRedisLockLease } from '../../box/common/redis-lock.provider'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { TrackableJobExecutions } from '../../common/interfaces/trackable-job-executions'
@@ -50,28 +50,26 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   @OnEvent(BoxEvents.DESIRED_STATE_UPDATED)
   @TrackJobExecution()
   async handleBoxDesiredStateUpdate(event: BoxDesiredStateUpdatedEvent) {
-    await this.waitForLock(event.box.id)
+    const lease = await this.waitForLock(event.box.id)
 
-    try {
+    await this.withLease(lease, async (signal) => {
+      signal.throwIfAborted()
       switch (event.newDesiredState) {
         case BoxDesiredState.DESTROYED: {
           await this.closeUsagePeriod(event.box.id)
           break
         }
       }
-    } finally {
-      this.releaseLock(event.box.id).catch((error) => {
-        this.logger.error(`Error releasing lock for box ${event.box.id}`, error)
-      })
-    }
+    }, `box ${event.box.id}`)
   }
 
   @OnEvent(BoxEvents.STATE_UPDATED)
   @TrackJobExecution()
   async handleBoxStateUpdate(event: BoxStateUpdatedEvent) {
-    await this.waitForLock(event.box.id)
+    const lease = await this.waitForLock(event.box.id)
 
-    try {
+    await this.withLease(lease, async (signal) => {
+      signal.throwIfAborted()
       switch (event.newState) {
         case BoxState.STARTED: {
           await this.closeUsagePeriod(event.box.id)
@@ -110,11 +108,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
           break
         }
       }
-    } finally {
-      this.releaseLock(event.box.id).catch((error) => {
-        this.logger.error(`Error releasing lock for box ${event.box.id}`, error)
-      })
-    }
+    }, `box ${event.box.id}`)
   }
 
   private async createUsagePeriod(event: BoxStateUpdatedEvent, diskOnly = false) {
@@ -157,66 +151,69 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   @LogExecution('close-and-reopen-usage-periods')
   @WithInstrumentation()
   async closeAndReopenUsagePeriods() {
-    if (!(await this.redisLockProvider.lock('close-and-reopen-usage-periods', 60))) {
+    const lockKey = 'close-and-reopen-usage-periods'
+    const lease = await this.redisLockProvider.acquireLease(lockKey, 60)
+    if (!lease) {
       return
     }
 
-    const usagePeriods = await this.boxUsagePeriodRepository.find({
-      where: {
-        endAt: IsNull(),
-        // 1 day ago
-        startAt: LessThan(new Date(Date.now() - 1000 * 60 * 60 * 24)),
-        organizationId: Not(BOX_WARM_POOL_UNASSIGNED_ORGANIZATION),
-      },
-      order: {
-        startAt: 'ASC',
-      },
-      take: 100,
-    })
+    await this.withLease(lease, async (signal) => {
+      const usagePeriods = await this.boxUsagePeriodRepository.find({
+        where: {
+          endAt: IsNull(),
+          // 1 day ago
+          startAt: LessThan(new Date(Date.now() - 1000 * 60 * 60 * 24)),
+          organizationId: Not(BOX_WARM_POOL_UNASSIGNED_ORGANIZATION),
+        },
+        order: {
+          startAt: 'ASC',
+        },
+        take: 100,
+      })
 
-    for (const usagePeriod of usagePeriods) {
-      if (!(await this.aquireLock(usagePeriod.boxId))) {
-        continue
-      }
+      for (const usagePeriod of usagePeriods) {
+        signal.throwIfAborted()
+        const boxLease = await this.acquireLease(usagePeriod.boxId)
+        if (!boxLease) {
+          continue
+        }
 
-      // validate that the usage period should remain active just in case
-      try {
-        const box = await this.boxRepository.findOne({
-          where: {
-            id: usagePeriod.boxId,
-          },
-        })
+        // validate that the usage period should remain active just in case
+        await this.withLease(boxLease, async (boxSignal) => {
+          const box = await this.boxRepository.findOne({
+            where: {
+              id: usagePeriod.boxId,
+            },
+          })
 
-        await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
-          // Close usage period
-          const closeTime = new Date()
-          usagePeriod.endAt = closeTime
-          await transactionalEntityManager.save(usagePeriod)
+          await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
+            boxSignal.throwIfAborted()
+            // Close usage period
+            const closeTime = new Date()
+            usagePeriod.endAt = closeTime
+            await transactionalEntityManager.save(usagePeriod)
 
-          if (
-            box &&
-            (box.state === BoxState.STARTED || box.state === BoxState.STOPPED || box.state === BoxState.STOPPING)
-          ) {
-            // Create new usage period
-            const newUsagePeriod = BoxUsagePeriod.fromUsagePeriod(usagePeriod)
-            newUsagePeriod.startAt = closeTime
-            newUsagePeriod.endAt = null
-            if (box.state === BoxState.STOPPED) {
-              newUsagePeriod.cpu = 0
-              newUsagePeriod.gpu = 0
-              newUsagePeriod.mem = 0
+            if (
+              box &&
+              (box.state === BoxState.STARTED || box.state === BoxState.STOPPED || box.state === BoxState.STOPPING)
+            ) {
+              const newUsagePeriod = BoxUsagePeriod.fromUsagePeriod(usagePeriod)
+              newUsagePeriod.startAt = closeTime
+              newUsagePeriod.endAt = null
+              if (box.state === BoxState.STOPPED) {
+                newUsagePeriod.cpu = 0
+                newUsagePeriod.gpu = 0
+                newUsagePeriod.mem = 0
+              }
+              await transactionalEntityManager.save(newUsagePeriod)
             }
-            await transactionalEntityManager.save(newUsagePeriod)
-          }
+            boxSignal.throwIfAborted()
+          })
+        }, `usage period ${usagePeriod.boxId}`).catch((error) => {
+          this.logger.error(`Error closing and reopening usage period ${usagePeriod.boxId}`, error)
         })
-      } catch (error) {
-        this.logger.error(`Error closing and reopening usage period ${usagePeriod.boxId}`, error)
-      } finally {
-        await this.releaseLock(usagePeriod.boxId)
       }
-    }
-
-    await this.redisLockProvider.unlock('close-and-reopen-usage-periods')
+    }, lockKey)
   }
 
   @Cron(CronExpression.EVERY_MINUTE, { name: 'archive-usage-periods' })
@@ -225,51 +222,57 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   @WithInstrumentation()
   async archiveUsagePeriods() {
     const lockKey = 'archive-usage-periods'
-    if (!(await this.redisLockProvider.lock(lockKey, 60))) {
+    const lease = await this.redisLockProvider.acquireLease(lockKey, 60)
+    if (!lease) {
       return
     }
 
-    await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
-      const usagePeriods = await transactionalEntityManager.find(BoxUsagePeriod, {
-        where: {
-          endAt: Not(IsNull()),
-        },
-        order: {
-          startAt: 'ASC',
-        },
-        take: 1000,
+    await this.withLease(lease, async (signal) => {
+      await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
+        signal.throwIfAborted()
+        const usagePeriods = await transactionalEntityManager.find(BoxUsagePeriod, {
+          where: {
+            endAt: Not(IsNull()),
+          },
+          order: {
+            startAt: 'ASC',
+          },
+          take: 1000,
+        })
+
+        if (usagePeriods.length === 0) {
+          return
+        }
+
+        this.logger.debug(`Found ${usagePeriods.length} usage periods to archive`)
+
+        await transactionalEntityManager.delete(
+          BoxUsagePeriod,
+          usagePeriods.map((usagePeriod) => usagePeriod.id),
+        )
+        await transactionalEntityManager.save(usagePeriods.map(BoxUsagePeriodArchive.fromUsagePeriod))
+        // Keep the archive and export intent atomic so neither can survive without the other.
+        await this.usageExportOutboxService.enqueue(transactionalEntityManager, usagePeriods)
+        signal.throwIfAborted()
       })
-
-      if (usagePeriods.length === 0) {
-        return
-      }
-
-      this.logger.debug(`Found ${usagePeriods.length} usage periods to archive`)
-
-      await transactionalEntityManager.delete(
-        BoxUsagePeriod,
-        usagePeriods.map((usagePeriod) => usagePeriod.id),
-      )
-      await transactionalEntityManager.save(usagePeriods.map(BoxUsagePeriodArchive.fromUsagePeriod))
-      // Same transaction as the archive write, so a usage period can never be
-      // archived without an export intent, nor an intent survive a rollback.
-      await this.usageExportOutboxService.enqueue(transactionalEntityManager, usagePeriods)
-    })
-
-    await this.redisLockProvider.unlock(lockKey)
+    }, lockKey)
   }
 
-  private async waitForLock(boxId: string) {
-    while (!(await this.aquireLock(boxId))) {
+  private async waitForLock(boxId: string): Promise<RedisLockLease> {
+    let lease: RedisLockLease | null
+    while (!(lease = await this.acquireLease(boxId))) {
       await new Promise((resolve) => setTimeout(resolve, 500))
     }
+    return lease
   }
 
-  private async aquireLock(boxId: string): Promise<boolean> {
-    return await this.redisLockProvider.lock(`usage-period-${boxId}`, 60)
+  private async acquireLease(boxId: string): Promise<RedisLockLease | null> {
+    return this.redisLockProvider.acquireLease(`usage-period-${boxId}`, 60)
   }
 
-  private async releaseLock(boxId: string) {
-    await this.redisLockProvider.unlock(`usage-period-${boxId}`)
+  private withLease<T>(lease: RedisLockLease, operation: (signal: AbortSignal) => Promise<T>, context: string) {
+    return withRedisLockLease(lease, operation, (releaseError) => {
+      this.logger.error(`Error releasing Redis lock lease after ${context} operation failed`, releaseError)
+    })
   }
 }

@@ -13,9 +13,6 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { sanitizeBoxError } from '../utils/sanitize-error.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { Box } from '../entities/box.entity'
-import { RedisLockProvider } from '../common/redis-lock.provider'
-import { ResourceType } from '../enums/resource-type.enum'
-import { getStateChangeLockKey } from '../utils/lock-key.util'
 
 /**
  * Service for handling entity state updates based on job completion (v2 runners only).
@@ -25,10 +22,7 @@ import { getStateChangeLockKey } from '../utils/lock-key.util'
 export class JobStateHandlerService {
   private readonly logger = new Logger(JobStateHandlerService.name)
 
-  constructor(
-    private readonly boxRepository: BoxRepository,
-    private readonly redisLockProvider: RedisLockProvider,
-  ) {}
+  constructor(private readonly boxRepository: BoxRepository) {}
 
   /**
    * Handle job completion and update entity state accordingly.
@@ -64,18 +58,6 @@ export class JobStateHandlerService {
       case JobType.RECOVER_BOX:
         await this.handleRecoverBoxJobCompletion(job)
         break
-      default:
-        break
-    }
-
-    switch (job.resourceType) {
-      case ResourceType.BOX: {
-        const lockKey = getStateChangeLockKey(job.resourceId)
-        this.redisLockProvider
-          .unlock(lockKey)
-          .catch((error) => this.logger.error(`Error unlocking Redis lock for box ${job.resourceId}:`, error)) // Clean up lock after job completion
-        break
-      }
       default:
         break
     }

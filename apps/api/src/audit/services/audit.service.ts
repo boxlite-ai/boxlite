@@ -122,7 +122,7 @@ export class AuditService implements OnApplicationBootstrap {
   })
   @DistributedLock()
   @LogExecution('cleanup-old-audit-logs')
-  async cleanupOldAuditLogs(): Promise<void> {
+  async cleanupOldAuditLogs(signal?: AbortSignal): Promise<void> {
     try {
       const retentionDays = this.configService.get('audit.retentionDays')
       if (!retentionDays) {
@@ -132,6 +132,7 @@ export class AuditService implements OnApplicationBootstrap {
       const cutoffDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000)
       this.logger.log(`Starting cleanup of audit logs older than ${retentionDays} days`)
 
+      signal?.throwIfAborted()
       const deletedLogs = await this.auditLogRepository.delete({
         createdAt: LessThan(cutoffDate),
       })
@@ -140,6 +141,9 @@ export class AuditService implements OnApplicationBootstrap {
 
       this.logger.log(`Completed cleanup of audit logs older than ${retentionDays} days (${totalDeleted} logs deleted)`)
     } catch (error) {
+      if (signal?.aborted) {
+        throw signal.reason
+      }
       this.logger.error(`An error occurred during cleanup of old audit logs: ${error.message}`, error.stack)
     }
   }
@@ -152,7 +156,7 @@ export class AuditService implements OnApplicationBootstrap {
   @DistributedLock()
   @WithInstrumentation()
   @LogExecution('resolve-dangling-audit-logs')
-  async resolveDanglingLogs() {
+  async resolveDanglingLogs(signal?: AbortSignal) {
     const danglingLogs = await this.auditLogRepository.find({
       where: {
         statusCode: IsNull(),
@@ -161,6 +165,7 @@ export class AuditService implements OnApplicationBootstrap {
     })
 
     for (const log of danglingLogs) {
+      signal?.throwIfAborted()
       // set status code to unknown
       log.statusCode = 0
       await this.auditLogRepository.save(log)
@@ -179,7 +184,7 @@ export class AuditService implements OnApplicationBootstrap {
   @LogExecution('publish-audit-logs')
   @DistributedLock()
   @WithInstrumentation()
-  async publishAuditLogs() {
+  async publishAuditLogs(signal?: AbortSignal) {
     // Safeguard
     if (!this.auditLogPublisher) {
       this.logger.warn('Audit log publisher not configured, skipping publish')
@@ -200,7 +205,9 @@ export class AuditService implements OnApplicationBootstrap {
       return
     }
 
+    signal?.throwIfAborted()
     await this.auditLogPublisher.write(auditLogs)
+    signal?.throwIfAborted()
     await this.auditLogRepository.delete(auditLogs.map((log) => log.id))
   }
 }

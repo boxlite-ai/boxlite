@@ -155,7 +155,7 @@ export class ApiKeyService {
   async updateLastUsedAt(organizationId: string, userId: string, name: string, lastUsedAt: Date): Promise<void> {
     const cooldownKey = `api-key-last-used-update-${organizationId}-${userId}-${name}`
 
-    const aquired = await this.redisLockProvider.lock(cooldownKey, 10)
+    const aquired = await this.redisLockProvider.lockUntilExpiry(cooldownKey, 10)
 
     // redis for cooldown period - 10 seconds
     // prevents database flooding when multiple requests are made at the same time

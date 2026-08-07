@@ -45,17 +45,30 @@ const satisfies = (actual: unknown, condition: unknown): boolean => {
 
 const makeService = (stored: BoxUsagePeriod[] = []) => {
   const usagePeriodRepository = {
+    find: jest.fn().mockResolvedValue([]),
     findOne: jest.fn(async ({ where }: any) =>
       stored.find((period) =>
         Object.entries(where).every(([column, condition]) => satisfies((period as any)[column], condition)),
       ),
     ),
     save: jest.fn().mockImplementation(async (period) => period),
+    manager: {
+      transaction: jest.fn(async (callback: (manager: any) => Promise<unknown>) =>
+        callback({
+          find: jest.fn().mockResolvedValue([]),
+          delete: jest.fn(),
+          save: jest.fn(),
+        }),
+      ),
+    },
   }
   const redisLockProvider = {
-    lock: jest.fn().mockResolvedValue(true),
     unlock: jest.fn().mockResolvedValue(undefined),
+    acquireLease: jest.fn(),
   }
+  redisLockProvider.acquireLease.mockImplementation(async (key: string) => ({
+    release: () => redisLockProvider.unlock(key, { getCode: () => key }),
+  }))
   const boxRepository = { findOne: jest.fn() }
   const usageExportOutboxService = { enqueue: jest.fn().mockResolvedValue(0) }
 
@@ -88,6 +101,33 @@ describe('UsageService event subscriptions', () => {
 })
 
 describe('UsageService.handleBoxStateUpdate', () => {
+  it('does not finish until its lock has been released', async () => {
+    const { service, redisLockProvider } = makeService()
+    let finishUnlock!: () => void
+    redisLockProvider.unlock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishUnlock = resolve
+        }),
+    )
+
+    const handling = service.handleBoxStateUpdate(event(BoxState.STARTING))
+    while (redisLockProvider.unlock.mock.calls.length === 0) {
+      await Promise.resolve()
+    }
+
+    let isFinished = false
+    handling.then(() => {
+      isFinished = true
+    })
+    await Promise.resolve()
+    expect(isFinished).toBe(false)
+
+    finishUnlock()
+    await handling
+    expect(isFinished).toBe(true)
+  })
+
   it('opens a full-resource period when the box starts', async () => {
     const { service, usagePeriodRepository } = makeService()
 
@@ -241,7 +281,70 @@ describe('UsageService.handleBoxStateUpdate', () => {
 
     await service.handleBoxStateUpdate(event(BoxState.STARTING))
 
-    expect(redisLockProvider.unlock).toHaveBeenCalledWith(`usage-period-${box.id}`)
+    expect(redisLockProvider.unlock).toHaveBeenCalledWith(
+      `usage-period-${box.id}`,
+      expect.objectContaining({ getCode: expect.any(Function) }),
+    )
+  })
+})
+
+describe('UsageService cron lock cleanup', () => {
+  it('rolls back archival when ownership is lost after its writes', async () => {
+    const { service, usagePeriodRepository, redisLockProvider } = makeService()
+    const controller = new AbortController()
+    redisLockProvider.acquireLease.mockResolvedValue({ signal: controller.signal, release: jest.fn() })
+    let committed = false
+    usagePeriodRepository.manager.transaction.mockImplementation(async (callback: (manager: any) => Promise<void>) => {
+      await callback({
+        find: jest.fn().mockResolvedValue([{ id: 'period-1' }]),
+        delete: jest.fn(),
+        save: jest.fn(async () => controller.abort(new Error('ownership was lost'))),
+      })
+      committed = true
+    })
+
+    await expect(service.archiveUsagePeriods()).rejects.toThrow('ownership was lost')
+    expect(committed).toBe(false)
+  })
+
+  it('releases the rollover lock when loading periods fails', async () => {
+    const { service, usagePeriodRepository, redisLockProvider } = makeService()
+    usagePeriodRepository.find.mockRejectedValue(new Error('find failed'))
+
+    await expect(service.closeAndReopenUsagePeriods()).rejects.toThrow('find failed')
+
+    expect(redisLockProvider.unlock).toHaveBeenCalledWith(
+      'close-and-reopen-usage-periods',
+      expect.objectContaining({ getCode: expect.any(Function) }),
+    )
+  })
+
+  it('releases the archive lock when the transaction fails', async () => {
+    const { service, usagePeriodRepository, redisLockProvider } = makeService()
+    usagePeriodRepository.manager.transaction.mockRejectedValue(new Error('transaction failed'))
+
+    await expect(service.archiveUsagePeriods()).rejects.toThrow('transaction failed')
+
+    expect(redisLockProvider.unlock).toHaveBeenCalledWith(
+      'archive-usage-periods',
+      expect.objectContaining({ getCode: expect.any(Function) }),
+    )
+  })
+
+  it('preserves the rollover error when releasing its lease also fails', async () => {
+    const { service, usagePeriodRepository, redisLockProvider } = makeService()
+    usagePeriodRepository.find.mockRejectedValue(new Error('find failed'))
+    redisLockProvider.unlock.mockRejectedValue(new Error('release failed'))
+
+    await expect(service.closeAndReopenUsagePeriods()).rejects.toThrow('find failed')
+  })
+
+  it('preserves the archive error when releasing its lease also fails', async () => {
+    const { service, usagePeriodRepository, redisLockProvider } = makeService()
+    usagePeriodRepository.manager.transaction.mockRejectedValue(new Error('transaction failed'))
+    redisLockProvider.unlock.mockRejectedValue(new Error('release failed'))
+
+    await expect(service.archiveUsagePeriods()).rejects.toThrow('transaction failed')
   })
 })
 
@@ -275,6 +378,9 @@ describe('UsageService.handleBoxDesiredStateUpdate', () => {
       new BoxDesiredStateUpdatedEvent(box, BoxDesiredState.STARTED, BoxDesiredState.DESTROYED),
     )
 
-    expect(redisLockProvider.unlock).toHaveBeenCalledWith(`usage-period-${box.id}`)
+    expect(redisLockProvider.unlock).toHaveBeenCalledWith(
+      `usage-period-${box.id}`,
+      expect.objectContaining({ getCode: expect.any(Function) }),
+    )
   })
 })

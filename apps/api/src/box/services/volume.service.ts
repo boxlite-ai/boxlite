@@ -225,7 +225,7 @@ export class VolumeService {
       const results = await Promise.allSettled(
         volumes.map(async (volume) => {
           // Update once per minute at most
-          if (!(await this.redisLockProvider.lock(`volume:${volume.id}:update-last-used`, 60))) {
+          if (!(await this.redisLockProvider.lockUntilExpiry(`volume:${volume.id}:update-last-used`, 60))) {
             return
           }
           volume.lastUsedAt = event.box.createdAt
