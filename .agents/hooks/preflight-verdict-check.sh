@@ -4,9 +4,9 @@
 #
 # DETECTION-TRIGGERED, finding-driven loops only. The trigger is the WHOLE FINAL
 # TURN — every assistant text since the last real user message, read deterministically
-# from the transcript: if it states facts, findings, or outcomes that should be
-# double-checked ("root cause is X", "tests pass", investigation conclusions), the
-# turn must end with a fresh dossier (.agents/state/last-verdict.json, written by the
+# from the transcript: if it draws a conclusion the reader must take on TRUST — one
+# whose evidence is not shown in the turn itself — the turn must end with a fresh
+# dossier (.agents/state/last-verdict.json, written by the
 # verdict-auditor subagent). Chat, questions, and in-progress narration end freely.
 # Turn-level, not last-fragment: findings asserted mid-turn cannot hide behind a
 # closing "let me check X" (that miss shipped once, caught by a sibling session's
@@ -36,8 +36,8 @@
 #        B. assertion-only (0ms) — a high-precision SUBSET of the fallback list below,
 #           limited to forms that report an observation ("173/173 tests pass", a
 #           whole-line "done.", a line-initial "Verified …") -> block. 10.7% of turns.
-#        C. the model (5-10s)    — everything else. "Does it state facts, findings, or
-#           outcomes that should be double-checked before anyone relies on them?" A
+#        C. the model (5-10s)    — everything else. "Is this a conclusion the reader
+#           must take on trust, with nothing shown that produced it?" A
 #           fast model (haiku) answers YES/NO; when no model is reachable the static
 #           pattern list below decides (deterministic fallback, e.g. sessions without
 #           a model CLI). YES -> block with the audit instruction; NO -> allow
@@ -71,10 +71,13 @@
 #   failure — CLI absent, timeout, garbage output — degrades to the static pattern
 #   list, and a pattern miss degrades further to the agent's CLAUDE.md duty: every
 #   failure moves toward #915's honor system, never toward a trap. A false positive
-#   costs ONE synchronous audit that trivially PASSes — a tax, not a loop. Code spans
-#   and fenced blocks are stripped before triage so documentation ABOUT verdicts does
-#   not trigger. VERDICT_CLASSIFIER_CMD overrides the classifier (tests use stubs;
-#   set it to `false` to force the regex path).
+#   costs ONE synchronous audit that trivially PASSes — a tax, not a loop. Fenced
+#   blocks and multi-word code spans are stripped before triage so documentation ABOUT
+#   verdicts does not trigger. The CLASSIFIER additionally keeps single-token spans,
+#   because they are citations and its question turns on them; the pattern tiers keep
+#   the old text, since anchoring on a token pulled to line start loosened them.
+#   VERDICT_CLASSIFIER_CMD overrides the classifier (tests use stubs; set it to
+#   `false` to force the regex path).
 #
 # * KNOWN TRAP, unfixed: "never toward a trap" covers CLASSIFIER failure only. When the
 #   AUDITOR is unreachable, run-verdict-audit.sh exits 1 with no dossier and no rung
@@ -254,10 +257,51 @@ extract_final_message() {
   FINAL_ID="cksum-$(printf '%s' "$FINAL_TEXT" | cksum | tr ' \t' '--')"
 }
 
-# Remove fenced code blocks and inline code spans: verdict phrasing inside code is
-# documentation about claims, not a claim.
-strip_code() {
+# Fenced blocks go entirely: verdict phrasing quoted inside one is documentation, not a
+# claim. Inline spans are split by whether they contain whitespace, because the two
+# kinds do opposite things to triage:
+#   * multi-word (`tests pass`, `root cause is`) — quoted prose. Stripped, same reason.
+#   * single-token (`preflight-verdict-check.sh:262`, `audit_in_flight`) — a citation.
+# Stripping BOTH deleted exactly the evidence the triage question asks about, so a turn
+# that carefully cited its sources reached the classifier as fragments and got judged
+# more harshly than one that asserted the same thing vaguely. Single tokens keep their
+# text and lose their backticks so they read as ordinary words.
+# TWO strippings, because the tiers want opposite things and a single one silently
+# loosened tier A. Keeping a span's text drops its delimiters, which can pull the token
+# to the START of a line: `API` Error handling is fixed → "API Error handling is fixed",
+# which harness_patterns anchors on, so an assertion left through the top of the cascade
+# with no model call. `Request` was aborted and `Credit` balance is too low do the same,
+# and `Done. #1161` defeats the $-anchored done. assertion.
+#   * static  — every span removed. What harness_patterns, assertion_patterns and
+#               verdict_patterns were written against; they match multi-word PROSE, so
+#               removing citations costs them nothing and keeps their anchors honest.
+#   * cited   — single-token spans kept. Only the classifier sees this, because only its
+#               question ("is the evidence shown?") depends on citations surviving.
+strip_code_static() {
   awk 'BEGIN{fence=0} /^[[:space:]]*```/{fence=!fence; next} !fence' | sed -E 's/`[^`]*`//g'
+}
+
+# Spans are split by ALTERNATION, not by a regex over backticks: ``…`` are ambiguous
+# delimiters, so `[^`]*[[:space:]][^`]*` happily matches the GAP BETWEEN two spans
+# (dropping the prose between a citation and a quote) instead of the span itself.
+strip_code_cited() {
+  awk '
+    BEGIN { fence = 0 }
+    /^[[:space:]]*```/ { fence = !fence; next }
+    fence { next }
+    {
+      n = split($0, p, "`")
+      ends_tick = ($0 ~ /`$/)
+      out = p[1]
+      for (i = 2; i <= n; i++) {
+        inside = (i % 2 == 0)
+        # A trailing unterminated span is ordinary text, not a span.
+        if (inside && i == n && !ends_tick) inside = 0
+        if (inside) { if (p[i] !~ /[[:space:]]/) out = out p[i] }
+        else out = out p[i]
+      }
+      print out
+    }'
 }
 
 # ── Tier A: harness text sitting in the assistant slot ───────────────────────
@@ -304,27 +348,61 @@ assertion_patterns='[0-9]+ */ *[0-9]+ +(tests?|checks?|suites?|cases?)? *(pass(e
 assertion_patterns+='|^[[:space:]]*done[.! ]*$'
 assertion_patterns+='|^[[:space:]]*(verified|confirmed)[[:space:]]+[a-z]'
 
-# Triage: ask a small fast model whether the turn states facts, findings, or
-# outcomes that should be double-checked before anyone relies on them.
+# Triage: ask a small fast model whether the turn draws a conclusion the reader has to
+# take on TRUST. Not "does it state facts" — nearly all engineering status does, and
+# that question blocked 18 of 22 sampled real turns while the 14 audits that actually
+# completed in the same window produced zero findings. The cost of a false YES is
+# minutes of blocked author; the cost of a false NO is one unaudited claim in a system
+# whose own threat model is honest mistakes. Asking about EVIDENCE rather than facts
+# took the same 22 turns to 3 YES with no turn newly blocking.
 # Echoes YES / NO / UNKNOWN. UNKNOWN (no CLI, timeout, garbage) → regex fallback.
 # VERDICT_CLASSIFIER_CMD overrides the whole classifier invocation (stdin = turn
 # text, stdout = YES/NO); tests stub it, `false` forces UNKNOWN.
-triage_prompt='The assistant text of a just-ended turn follows. Decide one thing:
-does it state facts, findings, or outcomes as established that should be
-double-checked before anyone relies on them? If yes, answer YES — an independent
-audit will verify them. If there is nothing to check, answer NO.
-Reply with exactly one word: YES or NO.'
+triage_prompt='Reply with exactly one word: YES or NO. Do not explain.
+
+Below is the assistant text of a just-ended turn. An independent audit costs minutes
+and blocks the author, so it should run only where it changes the odds that something
+wrong ships.
+
+NO: narration, plans, questions, corrections, status — or any claim whose evidence is
+in the text itself (quoted output, counts shown as produced, a cited file:line, a
+named commit).
+
+YES: a conclusion the reader must take on trust — a fix declared to work, a root
+cause, "no issues", a done/ready claim — with nothing shown that produced it.
+
+One word: YES or NO.'
+# The old parse was `tail -n1 | tr -dc 'A-Za-z'`, which turns any explanatory answer
+# into a nonsense token — silently UNKNOWN, silently the regex fallback. That fired on
+# real turns under the previous prompt too. Prefer the first token (a compliant model
+# leads with it); accept a whole-output match; otherwise UNKNOWN. Deliberately NOT a
+# scan for a bare "no" anywhere in the text: prose says "no" constantly, and reading an
+# explanation as an allow would loosen the gate by accident.
+classifier_answer() {  # stdin = raw model output; echoes YES/NO/UNKNOWN
+  local raw first whole
+  raw="$(cat)"
+  first="$(printf '%s' "$raw" | awk 'NF{print toupper($1); exit}' | tr -dc 'A-Za-z')"
+  # A model that reasons first and answers last ("Let me think.\nNO") was readable under
+  # the old tail -n1 and must not regress to UNKNOWN. Whole LINE only — a prose line
+  # ending in "no" is not an answer, and treating it as one would loosen the gate.
+  last="$(printf '%s' "$raw" | awk 'NF{l=$0} END{print toupper(l)}' | tr -dc 'A-Za-z')"
+  whole="$(printf '%s' "$raw" | tr -dc 'A-Za-z' | tr '[:lower:]' '[:upper:]')"
+  case "$first" in YES|NO) printf '%s' "$first"; return ;; esac
+  case "$last"  in YES|NO) printf '%s' "$last";  return ;; esac
+  case "$whole" in YES|NO) printf '%s' "$whole"; return ;; esac
+  printf 'UNKNOWN'
+}
 should_audit() {  # stdin-less; uses $1 as the stripped message; echoes YES/NO/UNKNOWN
   local msg="$1" out=""
   if [[ -n "${VERDICT_CLASSIFIER_CMD:-}" ]]; then
-    out="$(printf '%s' "$msg" | bash -c "$VERDICT_CLASSIFIER_CMD" 2>/dev/null | tail -n1 | tr -dc 'A-Za-z' | tr '[:lower:]' '[:upper:]')"
+    out="$(printf '%s' "$msg" | bash -c "$VERDICT_CLASSIFIER_CMD" 2>/dev/null | classifier_answer)"
   elif command -v claude >/dev/null 2>&1; then
     # perl alarm = portable timeout (macOS has no coreutils `timeout`).
     # disableAllHooks guards nested-hook recursion from inside a hook.
     out="$(printf '%s\n\n<message>\n%s\n</message>\n' "$triage_prompt" "$msg" \
       | perl -e 'alarm shift; exec @ARGV' "$classifier_timeout_seconds" \
           claude -p --model claude-haiku-4-5-20251001 --settings '{"disableAllHooks":true}' 2>/dev/null \
-      | tail -n1 | tr -dc 'A-Za-z' | tr '[:lower:]' '[:upper:]')"
+      | classifier_answer)"
   fi
   case "$out" in
     YES) echo YES ;;
@@ -588,7 +666,9 @@ if [[ -n "$FINAL_ID" && -n "$recorded_id" && "$FINAL_ID" == "$recorded_id" ]]; t
   fi
 fi
 
-stripped="$(printf '%s\n' "$FINAL_TEXT" | strip_code)"
+# `stripped` stays the pattern tiers' text; only the classifier gets citations.
+stripped="$(printf '%s\n' "$FINAL_TEXT" | strip_code_static)"
+stripped_cited="$(printf '%s\n' "$FINAL_TEXT" | strip_code_cited)"
 mkdir -p "$(dirname "$last_uuid_file")" 2>/dev/null || true
 printf '%s' "$FINAL_ID" > "$last_uuid_file" 2>/dev/null || true   # judged now, allow or block
 
@@ -611,10 +691,10 @@ dossier backs it. A claim stated as established needs proof attached.
 $(verdict_instruction)"
 fi
 
-triage="$(should_audit "$stripped")"
+triage="$(should_audit "$stripped_cited")"
 if [[ "$triage" == "NO" ]]; then
   log_decision triage NO-allow
-  allow_with_note "[verdict-gate] triage: NO — nothing to double-check → allow"
+  allow_with_note "[verdict-gate] triage: NO — nothing taken on trust → allow"
 fi
 if [[ "$triage" == "YES" ]]; then
   log_decision triage YES-block

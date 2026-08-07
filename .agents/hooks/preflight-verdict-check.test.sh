@@ -253,6 +253,86 @@ append_user "$R" "thanks — and what should I look at next?"
 append_assistant "$R" "What to look at next depends on the retry budget you want."
 check "previous-turn verdict, new chat turn → allow"              "$R" "allow"; rm -rf "$R"
 
+# A cited file:line is EVIDENCE, and the triage question now asks whether evidence is
+# shown — so stripping single-token spans deleted the very thing being asked about, and
+# a turn that cited its sources was judged more harshly than one that did not. The stub
+# answers NO; what this pins is that the citation still reaches the classifier, checked
+# through the regex fallback (which sees the same stripped text) rather than the model.
+# Keeping a span's TEXT drops its delimiters, which can pull the token to the start of a
+# line and complete a pattern that was never meant to match. Feeding the citation-keeping
+# text to tier A let an assertion out through harness-noise with no model call. Both
+# static tiers get their own case; the stub answers NO so a tier that wrongly fires is
+# the only thing that can produce the wrong decision.
+# The span must lead the LINE — harness_patterns is ^-anchored, so "The `API` Error…"
+# does not reproduce and would pass either way.
+R="$(setup)"; write_transcript "$R" '`API` Error handling is fixed and all tests pass.'
+out="$(run_hook "$R" YES)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "citation at line start does not disguise a claim as harness noise"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "tier A swallowed an assertion" "$out"
+fi; rm -rf "$R"
+
+# Tier B's only \$-anchored pattern: a trailing citation must not defeat it. Classifier
+# forced UNKNOWN so tier B is what decides, not the model.
+R="$(setup)"; write_transcript "$R" 'Done. `#1161`'
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 VERDICT_CLASSIFIER_CMD=false bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "trailing citation does not defeat the done. assertion"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "tier B anchor broken by a citation" "$out"
+fi; rm -rf "$R"
+
+# The mirror of the leading-token case: a model that reasons first and answers last was
+# readable under the old tail -n1 parse and must not regress to UNKNOWN.
+R="$(setup)"; write_transcript "$R" "Noted, I'll wait for your call on the API shape."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 \
+      VERDICT_CLASSIFIER_CMD='cat >/dev/null; printf "Let me think about this.\nYES\n"' \
+      bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "trailing classifier answer still read"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "answer-last shape became UNKNOWN" "$out"
+fi; rm -rf "$R"
+
+# Assert on what the classifier RECEIVES, not on the decision: a stub that answers NO
+# allows either way, so a decision-level assertion here would pass without the change.
+# The stub captures its stdin — the exact post-strip text — and the two cases pin the
+# opposite halves of the rule from one input.
+R="$(setup)"
+write_transcript "$R" 'Root cause is the stale socket path, at `src/proxy.rs:412`, per `tests pass` in the docs.'
+jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 \
+      VERDICT_CLASSIFIER_CMD="cat > '$R/seen.txt'; echo NO" bash "$HOOK" ) >/dev/null 2>&1
+seen="$(cat "$R/seen.txt" 2>/dev/null || echo MISSING)"
+kept="no";      printf '%s' "$seen" | grep -q 'src/proxy.rs:412' && kept="yes"
+dropped="no";   printf '%s' "$seen" | grep -q 'tests pass'       || dropped="yes"
+for probe in "single-token citation reaches the classifier:$kept" \
+             "multi-word quoted prose does not:$dropped"; do
+  if [[ "${probe##*:}" == "yes" ]]; then
+    pass=$((pass+1)); printf '  PASS  %s\n' "${probe%:*}"
+  else
+    fail=$((fail+1)); printf '  FAIL  %s  (post-strip text=%s)\n' "${probe%:*}" "$seen"
+  fi
+done
+rm -rf "$R"
+
+# An explanatory classifier answer must not silently become UNKNOWN. The stub rambles
+# but leads with the word; a `tail -n1 | tr -dc` parse mangles it into nonsense, drops
+# to the regex fallback, and the turn's real triage answer is lost.
+R="$(setup)"; write_transcript "$R" "Noted, I'll wait for your call on the API shape."
+out="$(jq -nc --arg p "$R/transcript.jsonl" '{transcript_path:$p, hook_event_name:"Stop"}' \
+  | ( cd "$R" && CLAUDE_PROJECT_DIR="$R" VERDICT_GATE_HARD_BLOCK=1 \
+      VERDICT_CLASSIFIER_CMD='cat >/dev/null; printf "YES\nbecause the turn declares the fix works\n"' \
+      bash "$HOOK" ) 2>/dev/null)"
+if printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  pass=$((pass+1)); printf '  PASS  %s\n' "explanatory classifier answer still read as YES"
+else
+  fail=$((fail+1)); printf '  FAIL  %s  (out=%s)\n' "rambling answer silently became UNKNOWN" "$out"
+fi; rm -rf "$R"
+
 # Verdict phrasing quoted inside code spans/fences is documentation, not a claim.
 R="$(setup)"; write_transcript "$R" 'The matcher looks for phrases like `tests pass` and `root cause is` in prose:
 ```
