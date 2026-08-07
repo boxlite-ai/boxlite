@@ -99,7 +99,9 @@ findings_json() {
 }
 
 write_audit() {
-  local verdict="$1" findings_payload="$2"
+  # $3 is the non-blocking channel. The local precheck has nothing to put there — every
+  # check it runs is blocking by nature — so it defaults to empty.
+  local verdict="$1" findings_payload="$2" advisories_payload="${3:-[]}"
   jq -nc \
     --arg branch "$branch" \
     --arg head "$head" \
@@ -109,7 +111,8 @@ write_audit() {
     --arg commit_subject_hash "$(commit_subject_hash)" \
     --arg verdict "$verdict" \
     --argjson findings "$findings_payload" \
-    '{branch:$branch, head:$head, command_kind:$command_kind, diff_hash:$diff_hash, command_hash:$command_hash, commit_subject_hash:$commit_subject_hash, verdict:$verdict, findings:$findings}' \
+    --argjson advisories "$advisories_payload" \
+    '{branch:$branch, head:$head, command_kind:$command_kind, diff_hash:$diff_hash, command_hash:$command_hash, commit_subject_hash:$commit_subject_hash, verdict:$verdict, findings:$findings, advisories:$advisories}' \
     > "$audit_file"
 }
 
@@ -409,6 +412,16 @@ Use PASS only when every applicable requirement is satisfied. Findings must be
 short strings shaped as "<phase>: <one-line description>". On PASS, findings
 must be [].
 
+Sort every problem into one of two arrays. "findings" BLOCK the command: wrong or
+unproven behaviour, a missing or tautological test, a weakened assertion, scope
+creep, an undocumented dependency, a secret, a comment that contradicts the code
+it documents, a commit message that breaks CONTRIBUTING. "advisories" never block
+and are for what is worth saying but would not make the tree worse if shipped:
+wording, wrapping, naming taste, a verbose-but-correct comment, a follow-up worth
+filing. When you cannot decide, it is a finding. verdict is FAIL if and only if
+"findings" is non-empty — advisories NEVER make a verdict FAIL, and a PASS
+carrying advisories is a normal outcome.
+
 ${audit_context}
 EOF
 }
@@ -457,7 +470,9 @@ normalize_agentic_output() {
     write_fail "Internal: Codex audit returned FAIL without findings"
   fi
 
-  jq -c '{branch, head, command_kind, diff_hash, command_hash, commit_subject_hash, verdict, findings}' "$raw_file" > "$audit_file"
+  # Whitelist: a field omitted here is dropped silently, which for `advisories` would
+  # look like the model never reported any.
+  jq -c '{branch, head, command_kind, diff_hash, command_hash, commit_subject_hash, verdict, findings, advisories: (.advisories // [])}' "$raw_file" > "$audit_file"
   printf 'codex audit %s: %s\n' "$kind" "$audit_verdict"
   if [[ "$audit_verdict" == "FAIL" ]]; then
     jq -r '.findings[]' "$audit_file" >&2
@@ -478,6 +493,10 @@ run_agentic_audit() {
   fi
   findings=()
 
+  # Constrains ONLY codex's structured output below, never a dossier on disk — which is
+  # why `advisories` is `required` there despite the gate accepting dossiers without it:
+  # strict structured-output modes reject optional properties. Backward compatibility
+  # lives in the gate's `.advisories[]?`.
   if [[ ! -r "$schema_file" ]]; then
     write_fail "Internal: Codex audit schema is missing at ${schema_file}"
   fi

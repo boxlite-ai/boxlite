@@ -104,8 +104,10 @@ run() {
   fi
 }
 
+# $5 omitted by default, NOT defaulted to [], so existing cases keep exercising the
+# pre-advisories shape — defaulting here would quietly stop testing it.
 write_audit() {
-  local verdict="$1" findings_json="$2" kind="$3" command="${4:-}"
+  local verdict="$1" findings_json="$2" kind="$3" command="${4:-}" advisories_json="${5:-}"
   if [[ -z "$command" ]]; then
     case "$kind" in
       commit) command="git commit -m foo" ;;
@@ -119,8 +121,23 @@ write_audit() {
         --arg ch "$(command_hash_for "$command")" \
         --arg csh "$(subject_hash_for "$command")" \
         --argjson f "$findings_json" \
-        '{branch:$b, head:$h, command_kind:$k, diff_hash:$dh, command_hash:$ch, commit_subject_hash:$csh, verdict:$v, findings:$f}' \
+        --argjson a "${advisories_json:-null}" \
+        '{branch:$b, head:$h, command_kind:$k, diff_hash:$dh, command_hash:$ch, commit_subject_hash:$csh, verdict:$v, findings:$f}
+         + (if $a == null then {} else {advisories:$a} end)' \
         > "$TMP/.agents/state/last-audit.json"
+}
+
+# run() collapses "no output" to passthrough and cannot tell a silent allow from one
+# that emitted advisories.
+hook_raw() {  # command -> hook stdout
+  printf '%s' "$1" | jq -Rs '{tool_input:{command:.}}' | hook_ungated
+}
+check_raw() {  # desc  actual  expected
+  if [[ "$2" == "$3" ]]; then
+    pass=$((pass + 1)); printf '  PASS  %s\n' "$1"
+  else
+    fail=$((fail + 1)); printf '  FAIL  %s  (got=%s expected=%s)\n' "$1" "$2" "$3"
+  fi
 }
 
 GC='git commit'
@@ -157,6 +174,32 @@ run "verdict consumed on allow"         "$GC -m foo"                  "deny"
 
 write_audit "FAIL" '["Test: missing"]' "commit"
 run "FAIL verdict → deny"               "$GC -m foo"                  "deny"
+
+echo
+echo "## Severity: advisories are reported but never gate"
+# One channel meant a comment-wrap nit denied a commit as hard as a missing test, so a
+# review that kept surfacing nits could not converge.
+write_audit "PASS" "[]" "commit" "" '["Implement: comment wraps awkwardly"]'
+adv_out="$(hook_raw "$GC -m foo")"
+check_raw "PASS + advisories → not a denial" \
+  "$(printf '%s' "$adv_out" | jq -r '.hookSpecificOutput.permissionDecision // "none"')" "none"
+check_raw "PASS + advisories → surfaced as additionalContext" \
+  "$(printf '%s' "$adv_out" | jq -r '.hookSpecificOutput.additionalContext | test("comment wraps awkwardly")')" "true"
+check_raw "PASS + advisories → says they need no re-audit" \
+  "$(printf '%s' "$adv_out" | jq -r '.hookSpecificOutput.additionalContext | test("non-blocking")')" "true"
+
+# Advisories must not launder a real finding into a note: a FAIL still denies.
+write_audit "FAIL" '["Test: missing"]' "commit" "" '["Implement: comment wraps awkwardly"]'
+run "FAIL + advisories → still deny"    "$GC -m foo"                  "deny"
+deny_out="$(hook_raw "$GC -m foo")"
+check_raw "deny reason marks advisories non-blocking" \
+  "$(printf '%s' "$deny_out" | jq -r '.hookSpecificOutput.permissionDecisionReason | test("NOT blocking")')" "true"
+
+# Backward compatibility: a dossier from a producer that predates the split has no
+# `advisories` key at all. It must allow exactly as before — silently, no stdout.
+write_audit "PASS" "[]" "commit"
+check_raw "pre-split dossier (no advisories key) → silent allow" \
+  "$(hook_raw "$GC -m foo")" ""
 
 write_audit "PASS" "[]" "commit"
 # Mutate head field to simulate a stale-by-HEAD audit

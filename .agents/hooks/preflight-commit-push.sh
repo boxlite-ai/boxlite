@@ -223,7 +223,7 @@ validate_audit() {
 ${invoke_instruction}"
   fi
 
-  local audit_branch audit_head audit_kind audit_diff_hash audit_command_hash audit_commit_subject_hash audit_verdict audit_mtime now_epoch age
+  local audit_branch audit_head audit_kind audit_diff_hash audit_command_hash audit_commit_subject_hash audit_verdict audit_mtime now_epoch age advisories
   audit_branch="$(jq -r '.branch // ""' "$audit_file" 2>/dev/null || echo '')"
   audit_head="$(jq -r '.head // ""' "$audit_file" 2>/dev/null || echo '')"
   audit_kind="$(jq -r '.command_kind // ""' "$audit_file" 2>/dev/null || echo '')"
@@ -279,13 +279,37 @@ Re-audit is required.
 ${invoke_instruction}"
   fi
 
+  # `findings` blocks, `advisories` never does. Two arrays rather than a per-finding
+  # severity so the split FAILS CLOSED: a producer that omits advisories blocks on
+  # everything, whereas a severity field would need a default and a wrong default
+  # downgrades real findings. Same effect as eslint's two counters (lib/cli.js ~496-521,
+  # where errorCount drives the exit code and warningCount only does under
+  # --max-warnings), reached without a defaulting rule.
+  advisories="$(jq -r '.advisories[]? | "  ~ " + .' "$audit_file" 2>/dev/null || echo '')"
+
   if [[ "$audit_verdict" != "PASS" ]]; then
     findings="$(jq -r '.findings[]? | "  - " + .' "$audit_file" 2>/dev/null || echo '')"
     deny "CLAUDE.md audit FAILED on branch '${branch}':
 
 ${findings}
-
+${advisories:+
+Advisories (NOT blocking — do not re-audit for these alone):
+${advisories}
+}
 Address each finding, then re-run the audit producer before retrying git ${kind}."
+  fi
+
+  # Surface without touching the permission decision, as post-remote-write-watch.sh
+  # does. Deliberately NOT permissionDecision:"allow", which would auto-approve a
+  # command the user might otherwise be asked about.
+  if [[ -n "$advisories" ]]; then
+    jq -nc --arg c "Audit PASSED with advisories (non-blocking, no re-audit needed):
+${advisories}" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        additionalContext: $c
+      }
+    }'
   fi
 
   if [[ "$consume_on_pass" == "consume" ]]; then

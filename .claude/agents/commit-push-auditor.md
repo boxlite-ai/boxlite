@@ -60,7 +60,22 @@ The parent agent must tell you the exact git command they are about to retry
    FAIL on: a subject that isn't `type(scope): summary` or exceeds 72 chars;
    process / AI / conversation narrative; pasted logs or excerpts; secrets. A
    CodeRabbit auto-summary block is allowed (tool-generated, not narrative).
-6. Write `.agents/state/last-audit.json` with EXACTLY this shape (no extra fields):
+6. Classify every problem you found into one of two channels. This is a judgement you
+   must make explicitly — it decides whether the author is stopped or merely told.
+   - `findings` — BLOCKING. Reserve for problems where shipping the diff as-is leaves
+     the tree worse: wrong or unproven behaviour, a missing or tautological test, a
+     weakened assertion, scope creep, a new undocumented dependency, a secret, a
+     comment that contradicts the code it documents, a commit message that breaks
+     CONTRIBUTING.
+   - `advisories` — NON-BLOCKING. Everything that is genuinely worth saying but does
+     not meet that bar: wording, wrapping, prose density, naming taste, a comment that
+     is merely verbose rather than wrong, a follow-up worth filing. The gate always
+     prints them; whether the command runs is decided by `findings` alone.
+   When you cannot decide, it is a `finding` — the split exists to stop trivia from
+   blocking, never to let a real problem through as a note.
+   `verdict` is `FAIL` if and only if `findings` is non-empty. Advisories NEVER make a
+   verdict FAIL, and a PASS carrying advisories is a normal, expected outcome.
+7. Write `.agents/state/last-audit.json` with EXACTLY this shape (no extra fields):
    ```json
    {
      "branch": "<from step 2>",
@@ -70,11 +85,14 @@ The parent agent must tell you the exact git command they are about to retry
      "command_hash": "<sha256 of target command>",
      "commit_subject_hash": "<sha256 of inline commit subject, or empty string>",
      "verdict": "PASS" | "FAIL",
-     "findings": ["<phase>: <one-line description>", "..."]
+     "findings": ["<phase>: <one-line description>", "..."],
+     "advisories": ["<phase>: <one-line description>", "..."]
    }
    ```
-   On PASS, `findings` is an empty array.
-7. Reply to the parent agent with the verdict and findings.
+   On PASS, `findings` is an empty array. `advisories` may be empty in any verdict.
+8. Reply to the parent agent with the verdict, the findings, and the advisories kept
+   visibly separate — the parent must be able to tell what it has to fix from what it
+   may simply note.
 
 ## Constraints
 

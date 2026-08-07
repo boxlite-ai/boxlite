@@ -10,7 +10,8 @@
     "command_hash",
     "commit_subject_hash",
     "verdict",
-    "findings"
+    "findings",
+    "advisories"
   ],
   "properties": {
     "branch": {
@@ -47,6 +48,13 @@
       ]
     },
     "findings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "advisories": {
       "type": "array",
       "items": {
         "type": "string",

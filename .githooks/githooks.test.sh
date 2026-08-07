@@ -187,6 +187,14 @@ write_audit() {  # repo kind [push_local_ref push_remote_ref]
     > "$repo/.agents/state/last-audit.json"
 }
 
+# Separate from write_audit() on purpose: every existing case must keep exercising the
+# dossier shape with no `advisories` key, which is what a pre-split producer writes.
+add_advisories() {  # repo  advisory-text
+  local repo="$1" text="$2" f
+  f="$repo/.agents/state/last-audit.json"
+  jq --arg a "$text" '. + {advisories:[$a]}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
 write_handoff_audit() {  # repo kind command
   local repo="$1" kind="$2" command="$3" br hd dh ch
   br="$(git -C "$repo" branch --show-current)"; hd="$(git -C "$repo" rev-parse HEAD)"
@@ -235,6 +243,15 @@ BROKEN_PREFLIGHT
       cat > "$repo/.agents/hooks/preflight-commit-push.sh" <<'BROKEN_PREFLIGHT'
 #!/usr/bin/env bash
 printf 'not-json\n'
+BROKEN_PREFLIGHT
+      ;;
+    # Valid JSON, no permissionDecision, no additionalContext. `not-json` cannot reach
+    # the advisory arm — jq exits 5 on it, tripping the parse guard above — so only this
+    # shape exercises the branch that decides whether the advisory split opened a hole.
+    decisionless)
+      cat > "$repo/.agents/hooks/preflight-commit-push.sh" <<'BROKEN_PREFLIGHT'
+#!/usr/bin/env bash
+printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse"}}\n'
 BROKEN_PREFLIGHT
       ;;
   esac
@@ -340,6 +357,49 @@ branch_ref="$(current_branch_ref "$R")"
 ( cd "$R" && env -i PATH="$PATH" HOME="$HOME" git push -q origin "$branch_ref:$branch_ref" >/dev/null 2>"$R/err.txt" )
 grep -q "$branch_ref" "$R/pre-push.stdin" && replayed=yes || replayed=no
 check_eq "chained .git/hooks/pre-push receives stdin" "$replayed" "yes"
+rm -rf "$R" "$B"
+
+echo
+echo "## Advisories cross the git-level boundary without blocking"
+# The PreToolUse suite pins core.hooksPath='' and cannot see this layer, but in an
+# installed clone THIS is the only consumer of the gate's stdout. It used to reject any
+# non-deny payload, making an advisory MORE blocking than a finding — a finding at least
+# yields an actionable reason.
+R="$(setup)"; stage_change "$R"; write_audit "$R" commit
+add_advisories "$R" "Implement: comment wraps awkwardly"
+check_eq "agent + PASS with advisories → commit allowed" "$(run_commit "$R" agent)" 0
+grep -q 'comment wraps awkwardly' "$R/err.txt" && adv_shown=yes || adv_shown=no
+check_eq "advisory text reaches the author"              "$adv_shown" "yes"
+grep -q 'invalid output' "$R/err.txt" && adv_invalid=yes || adv_invalid=no
+check_eq "advisory is not treated as invalid output"     "$adv_invalid" "no"
+rm -rf "$R"
+
+# The arm that decides whether the split opened a hole. Drop or invert the emptiness
+# test on `advisory` and the gate fails OPEN. Both boundaries, because the two parses
+# are duplicated. A valid PASS audit is written first: without one, commit-msg rejects
+# on its own and the case passes no matter what pre-commit decides.
+R="$(setup)"; stage_change "$R"; write_audit "$R" commit
+write_broken_preflight "$R" decisionless
+check_eq "decision-less payload with no advisory → commit rejected" "$(run_commit "$R" agent)" 1
+rm -rf "$R"
+
+R="$(setup)"
+B="$(mktemp -d)"; git init -q --bare "$B"; git -C "$R" remote add origin "$B"
+branch_ref="$(current_branch_ref "$R")"
+write_audit "$R" push
+add_advisories "$R" "Implement: comment wraps awkwardly"
+( cd "$R" && env -i PATH="$PATH" HOME="$HOME" CLAUDECODE=1 git push -q origin "$branch_ref:$branch_ref" >/dev/null 2>"$R/err.txt" )
+check_eq "agent + PASS with advisories → push allowed"   "$?" 0
+grep -q 'comment wraps awkwardly' "$R/err.txt" && adv_push=yes || adv_push=no
+check_eq "advisory text reaches the author on push"      "$adv_push" "yes"
+rm -rf "$R" "$B"
+
+R="$(setup)"
+B="$(mktemp -d)"; git init -q --bare "$B"; git -C "$R" remote add origin "$B"
+branch_ref="$(current_branch_ref "$R")"
+write_audit "$R" push; write_broken_preflight "$R" decisionless
+( cd "$R" && env -i PATH="$PATH" HOME="$HOME" CLAUDECODE=1 git push -q origin "$branch_ref:$branch_ref" >/dev/null 2>"$R/err.txt" )
+check_eq "decision-less payload with no advisory → push rejected" "$?" 1
 rm -rf "$R" "$B"
 
 echo

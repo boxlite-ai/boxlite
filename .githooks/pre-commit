@@ -70,8 +70,15 @@ if [[ "$is_agent" == 1 ]]; then
       printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason' >&2
       exit 1
     fi
-    printf 'commit-push-auditor delegated preflight returned invalid output\n%s\n' "$out" >&2
-    exit 1
+    # A payload with no decision but an additionalContext is the gate reporting
+    # NON-BLOCKING advisories on an otherwise passing audit. Print and continue; see
+    # preflight-commit-push.sh's validate_audit for what the two channels mean.
+    advisory="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)"
+    if [[ -z "$advisory" ]]; then
+      printf 'commit-push-auditor delegated preflight returned invalid output\n%s\n' "$out" >&2
+      exit 1
+    fi
+    printf '%s\n' "$advisory" >&2
   fi
 fi
 
