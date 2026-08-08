@@ -161,13 +161,25 @@ is enabled. The workflow is dormant until repository variable
 
 ### `deploy-infra.yml`
 
-Previews or deploys the full stack from one commit — already on `main` (current
-`main` by default), or the head of an open pull request in this repository, so a
-change can reach a stage before it merges; a fork's head is refused because the
-resolved commit is checked out with write permissions and run after the deploy
-role is configured — on a native AMD64 GitHub runner, for a
-`workflow_dispatch`-selected `stage` (an allowlisted `choice` input, `dev`
-today). Each component is built by its own job, and the two legs share only
+Previews or deploys the full stack from one commit, on a native AMD64 GitHub
+runner, for a `workflow_dispatch`-selected `stage` (an allowlisted `choice`
+input, `dev` today). That commit is either already on `main` (current `main` by
+default) or the merge of an open pull request with `main`, so a change can reach
+a stage before it merges.
+
+The merge commit rather than the head: the workflow definition comes from the
+dispatch ref while the deploy job checks out the resolved commit, so a head that
+is behind `main` would pair new workflow YAML with old `apps/infra` tooling.
+GitHub recomputes that merge whenever `main` or the head moves, so the resolved
+SHA is a snapshot rather than a commit in anyone's history.
+
+A fork's PR is accepted: dispatching already requires write access, and the
+credential-bearing jobs sit behind the stage Environment's required reviewer.
+`build-c`/`build-runner` are the exception — neither declares an `environment:`,
+so a fork's build code runs on a hosted runner with no second look; the risk
+there is compute abuse and build-time tampering, not credential theft.
+
+Each component is built by its own job, and the two legs share only
 `resolve-ref`, so they run side by side: the reusable C/Runner workflows produce
 a Linux AMD64 Runner with `<workspace-version>+<sha>` identity and stage it in
 the stage's private commit-keyed S3 path, while `build-api` calls

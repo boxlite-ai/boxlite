@@ -214,9 +214,43 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.match(refGuardStep.run, /^\s*\[\[ "\$INPUT_PR" =~ \^\[0-9\]\+\$ \]\]/m)
   assert.match(
     refGuardStep.run,
-    /^\s*pr_json="\$\(gh pr view "\$INPUT_PR" --json state,headRefOid,headRepository,isCrossRepository\)"/m,
+    /^\s*pr_json="\$\(gh pr view "\$INPUT_PR" --json state,headRefOid,isCrossRepository,mergeable,potentialMergeCommit\)"/m,
   )
   assert.match(refGuardStep.run, /^\s*\[ "\$state" = "OPEN" \] \|\| \{/m)
+  // The MERGE commit, not the head. The workflow definition comes from main while this job picks
+  // what is checked out, so deploying a head pairs main's YAML with whatever tooling that branch
+  // carries — the mismatch that sent a components=api dispatch into an apps/infra with no scope
+  // support at all. refs/pull/N/merge is main+PR by construction, so it cannot be behind main.
+  assertShellLine(refGuardStep.run, /sha="\$\(jq -r '\.potentialMergeCommit\.oid \/\/ empty' <<<"\$pr_json"\)"/)
+  assertShellLine(refGuardStep.run, /head_sha="\$\(jq -r '\.headRefOid' <<<"\$pr_json"\)"/)
+  // A conflicting PR has no merge commit, and an uncomputed one is a "not yet" rather than a
+  // verdict — distinct causes, so distinct refusals. Emitting the head as a fallback would
+  // silently reintroduce exactly the behaviour this replaces.
+  assertShellLine(refGuardStep.run, /\[ "\$mergeable" != "CONFLICTING" \] \|\| \{/)
+  assertShellLine(refGuardStep.run, /\[ -n "\$sha" \] \|\| \{/)
+  // Mergeability is computed lazily, so a cold cache answers UNKNOWN and the merge SHA is empty.
+  // Both the loop AND its re-query are pinned: without the re-query the loop spins over the same
+  // stale JSON, which fails a dispatch that one refresh would have resolved and makes the "after
+  // 5 attempts" message untrue.
+  assertShellLine(refGuardStep.run, /for attempt in 1 2 3 4 5; do/)
+  assertShellLine(refGuardStep.run, /\[ "\$mergeable" = "UNKNOWN" \] \|\| \[ -z "\$sha" \] \|\| break/)
+  const retryBody = liveShell(refGuardStep.run)
+  const loopStart = retryBody.indexOf('for attempt in 1 2 3 4 5; do')
+  assert.match(
+    retryBody.slice(loopStart, retryBody.indexOf('done', loopStart)),
+    /pr_json="\$\(gh pr view/,
+    'the retry loop must re-query, or it polls its own stale answer',
+  )
+  // Raw, not live: the message embeds `PR #$INPUT_PR`, and liveShell's stripper reads a `#`
+  // preceded by whitespace as a comment and deletes the rest of the line. The guards above are
+  // pinned live — they carry the behaviour; these two only pin that each cause says its own name.
+  assert.match(refGuardStep.run, /conflicts with main, so it has no merge commit to deploy/)
+  assert.match(refGuardStep.run, /has no merge commit yet \(mergeable=\$mergeable\)/)
+  assert.doesNotMatch(
+    liveShell(refGuardStep.run),
+    /sha="\$head_sha"/,
+    'the head must never stand in for a missing merge commit',
+  )
   // PR #1148 refused a fork head deliberately (`.head.repo.full_name == GITHUB_REPOSITORY`), a
   // named security boundary — not a side effect of the SHA-reverse-lookup bug this guard fixes.
   // This guard drops that boundary on purpose: isCrossRepository is fetched and logged for
@@ -224,7 +258,10 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // AND the absence (no `exit 1` between computing it and the block's `exit 0`) so a fork
   // exclusion added back later doesn't silently pass this test by accident.
   assert.match(refGuardStep.run, /^\s*fork="\$\(jq -r '\.isCrossRepository' <<<"\$pr_json"\)"/m)
-  assert.match(refGuardStep.run, /^\s*echo "PR #\$INPUT_PR \(\$\(\[ "\$fork" = "true" \] && echo fork \|\| echo same-repo\)\) head is \$sha"/m)
+  assert.match(
+    refGuardStep.run,
+    /^\s*echo "PR #\$INPUT_PR \(\$\(\[ "\$fork" = "true" \] && echo fork \|\| echo same-repo\)\) head is \$head_sha; deploying merge \$sha"/m,
+  )
   const forkOnwards = refGuardStep.run.slice(refGuardStep.run.indexOf('fork="$(jq'))
   const prBlockTail = forkOnwards.slice(0, forkOnwards.indexOf('exit 0') + 'exit 0'.length)
   assert.doesNotMatch(

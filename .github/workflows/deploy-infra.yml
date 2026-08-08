@@ -1,7 +1,7 @@
 name: Deploy stack
 run-name: Deploy ${{ inputs.components }} to ${{ inputs.stage }}
 
-# A build deploy sources both deployable components from one commit — on main, or the head of an
+# A build deploy sources both deployable components from one commit — on main, or the merge of an
 # open pull request when a change needs a real stage before it merges — each in its own job:
 #
 #   Api    → Build commit Api image ───────────────→ per-commit ECR tag
@@ -46,7 +46,7 @@ on:
         required: false
         type: string
       pr:
-        description: 'PR number to deploy its current head — same repo or fork. Mutually exclusive with ref.'
+        description: 'PR number. Deploys its merge with main, not its head. Mutually exclusive with ref.'
         required: false
         type: string
 
@@ -64,7 +64,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     # A job-level block replaces the workflow-level one rather than merging with it, so
-    # contents: read is restated. pull-requests: read is what lets a PR head qualify below.
+    # contents: read is restated. pull-requests: read is what lets a PR's merge resolve below.
     permissions:
       contents: read
       pull-requests: read
@@ -100,13 +100,46 @@ jobs:
           # unconditionally for same-repo and fork PRs alike; there is no lookup to fail.
           if [ -n "$INPUT_PR" ]; then
             [[ "$INPUT_PR" =~ ^[0-9]+$ ]] || { echo "pr must be a PR number" >&2; exit 1; }
-            pr_json="$(gh pr view "$INPUT_PR" --json state,headRefOid,headRepository,isCrossRepository)"
+            pr_json="$(gh pr view "$INPUT_PR" --json state,headRefOid,isCrossRepository,mergeable,potentialMergeCommit)"
             state="$(jq -r '.state' <<<"$pr_json")"
             [ "$state" = "OPEN" ] || {
               echo "PR #$INPUT_PR is $state, not open" >&2
               exit 1
             }
-            sha="$(jq -r '.headRefOid' <<<"$pr_json")"
+            # The MERGE, not the head. This workflow's definition comes from main while this job
+            # decides what gets checked out, so deploying the head pairs main's YAML with the
+            # tooling the branch happens to carry — which is how a components=api dispatch reached
+            # an apps/infra that could not scope at all. refs/pull/N/merge is main+PR by
+            # construction, so the deployed tree can never be behind main. Resolved before `fork`
+            # below so the conflict refusals stay out of the fork-acceptance path.
+            #
+            # GitHub recomputes this ref whenever main or the head moves, so the SHA is a snapshot
+            # of "this PR against main right now" — pinned once here and consumed by every
+            # downstream job, but not a commit in anyone's history and not necessarily a tree any
+            # CI run built (CI triggers on pull_request, not on every push to the base).
+            #
+            # Mergeability is computed lazily, so UNKNOWN is a "not yet", not a verdict; retry it
+            # rather than failing a dispatch on a cold cache. There is no event to await here —
+            # the answer only exists once GitHub recomputes it — so this polls.
+            for attempt in 1 2 3 4 5; do
+              mergeable="$(jq -r '.mergeable' <<<"$pr_json")"
+              sha="$(jq -r '.potentialMergeCommit.oid // empty' <<<"$pr_json")"
+              [ "$mergeable" = "UNKNOWN" ] || [ -z "$sha" ] || break
+              [ "$attempt" -lt 5 ] || break
+              sleep 5
+              pr_json="$(gh pr view "$INPUT_PR" --json state,headRefOid,isCrossRepository,mergeable,potentialMergeCommit)"
+            done
+            [ "$mergeable" != "CONFLICTING" ] || {
+              echo "PR #$INPUT_PR conflicts with main, so it has no merge commit to deploy." >&2
+              echo "Resolve the conflict and redispatch." >&2
+              exit 1
+            }
+            [ -n "$sha" ] || {
+              echo "PR #$INPUT_PR has no merge commit yet (mergeable=$mergeable) after 5 attempts." >&2
+              echo "GitHub computes this lazily; open the PR once to force it, then redispatch." >&2
+              exit 1
+            }
+            head_sha="$(jq -r '.headRefOid' <<<"$pr_json")"
             fork="$(jq -r '.isCrossRepository' <<<"$pr_json")"
             # $fork is logged for whoever reviews the run below, never gated on: PR #1148 refused a
             # fork head here deliberately, as its own security boundary. Accepting one is the point
@@ -121,7 +154,7 @@ jobs:
             # runner right after resolve-ref, with no second human look and nothing to steal. Risk
             # there is compute abuse and build-time tampering (e.g. a rewritten .gitmodules URL), not
             # credential theft — call it out rather than fold it into the build-api/deploy gate above.
-            echo "PR #$INPUT_PR ($([ "$fork" = "true" ] && echo fork || echo same-repo)) head is $sha"
+            echo "PR #$INPUT_PR ($([ "$fork" = "true" ] && echo fork || echo same-repo)) head is $head_sha; deploying merge $sha"
             echo "sha=$sha" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -224,12 +257,20 @@ jobs:
           persist-credentials: false
 
       # workflow_dispatch takes the workflow definition from the dispatch ref — main's tip — while
-      # this job checks out the SELECTED commit, so the two halves are versioned independently. A
-      # narrowed scope is the first thing that couples them: `--exclude` reaches a wrapper that may
-      # predate it, and every PR branched before component selection landed is in exactly that
-      # state. Detected on the deployed tree rather than assumed, because the alternative failure
-      # is `partial SST deploys are disabled` from the old guard — true of that commit, but it
-      # reads as a statement about this workflow and sends the operator to the wrong file.
+      # this job checks out the SELECTED commit, so the two halves are versioned independently and
+      # a narrowed scope couples them: `--exclude` reaches a wrapper that may predate it.
+      #
+      # A backstop, not the primary defence. resolve-ref answers `pr` with the merge commit, which
+      # carries main's tooling, so an ordinary branch being behind main no longer reaches here.
+      # Two things still can: `ref`, which names any commit on main including one older than
+      # component selection, and a pull request that itself removes or breaks the module. Detected
+      # on the deployed tree rather than assumed, because the alternative failure is `partial SST
+      # deploys are disabled` from the older guard — true of that commit, but it reads as a
+      # statement about this workflow and sends the operator to the wrong file.
+      #
+      # It answers "can this tree scope at all", not "does it support THIS scope": the probe reads
+      # one export. A commit that knew `--exclude Runner` but not some later selector would pass
+      # here and be refused by resolveDeployScope's own allowlist instead.
       #
       # Runs before the AWS credential step on purpose: an unsupported scope is knowable from the
       # checkout alone, so it should never reach the deploy role.
@@ -238,10 +279,10 @@ jobs:
       # module is pure, so importing it costs nothing.
       #
       # Absence is checked before the probe, not inferred from an import failure. The module only
-      # exists from PR #1095 onward, so most open pull-request heads do not have it at all — that
-      # is the ordinary "too old" case and shares the remedy with a module that lacks the export.
-      # Folding it into the load-failure arm instead would answer "the module is present but
-      # unreadable" for a file that is simply not there.
+      # exists from PR #1095 onward, so a `ref` older than that has no such file — the ordinary
+      # "too old" case, sharing a remedy with a module that lacks the export. Folding it into the
+      # load-failure arm instead would answer "the module is present but unreadable" for a file
+      # that is simply not there.
       - name: Require component selection support in the selected commit
         if: ${{ env.DEPLOY_EXCLUDE != '' }}
         shell: bash
@@ -258,8 +299,8 @@ jobs:
             unsupported)
               echo "commit $BOXLITE_ARTIFACT_REF predates component selection, so it cannot honour" >&2
               echo "--exclude $DEPLOY_EXCLUDE and would deploy the full stack instead." >&2
-              echo "Redispatch it with components=api+runner, or rebase it onto a main that has" >&2
-              echo "$module exporting resolveDeployScope." >&2
+              echo "Redispatch with components=api+runner, or name a newer ref: this needs a commit" >&2
+              echo "whose $module exports resolveDeployScope." >&2
               exit 1
               ;;
             *)
