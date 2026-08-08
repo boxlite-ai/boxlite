@@ -12,14 +12,19 @@ import { BoxUsagePeriod } from './entities/box-usage-period.entity'
 import { UsageService } from './services/usage.service'
 import { RedisLockProvider } from '../box/common/redis-lock.provider'
 import { BoxUsagePeriodArchive } from './entities/box-usage-period-archive.entity'
+import { BoxUsageExportOutbox } from './entities/box-usage-export-outbox.entity'
+import { UsageExportOutboxService } from './services/usage-export-outbox.service'
+import { UsageExportPublisherService } from './services/usage-export-publisher.service'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
 import { Box } from '../box/entities/box.entity'
 
 @Module({
-  imports: [TypeOrmModule.forFeature([BoxUsagePeriod, Box, BoxUsagePeriodArchive])],
+  imports: [TypeOrmModule.forFeature([BoxUsagePeriod, Box, BoxUsagePeriodArchive, BoxUsageExportOutbox])],
   providers: [
     UsageService,
+    UsageExportOutboxService,
+    UsageExportPublisherService,
     RedisLockProvider,
     BoxLookupCacheInvalidationService,
     {

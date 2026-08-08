@@ -57,10 +57,16 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
     unlock: jest.fn().mockResolvedValue(undefined),
   }
   const boxRepository = { findOne: jest.fn() }
+  const usageExportOutboxService = { enqueue: jest.fn().mockResolvedValue(0) }
 
-  const service = new UsageService(usagePeriodRepository as any, redisLockProvider as any, boxRepository as any)
+  const service = new UsageService(
+    usagePeriodRepository as any,
+    redisLockProvider as any,
+    boxRepository as any,
+    usageExportOutboxService as any,
+  )
 
-  return { service, usagePeriodRepository, redisLockProvider }
+  return { service, usagePeriodRepository, redisLockProvider, usageExportOutboxService }
 }
 
 const OTHER_BOX_ID = 'box-2'

@@ -24,6 +24,7 @@ import { setTimeout as sleep } from 'timers/promises'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { BoxRepository } from '../../box/repositories/box.repository'
+import { UsageExportOutboxService } from './usage-export-outbox.service'
 
 @Injectable()
 export class UsageService implements TrackableJobExecutions, OnApplicationShutdown {
@@ -35,6 +36,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     private boxUsagePeriodRepository: Repository<BoxUsagePeriod>,
     private readonly redisLockProvider: RedisLockProvider,
     private readonly boxRepository: BoxRepository,
+    private readonly usageExportOutboxService: UsageExportOutboxService,
   ) {}
 
   async onApplicationShutdown() {
@@ -249,6 +251,9 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
         usagePeriods.map((usagePeriod) => usagePeriod.id),
       )
       await transactionalEntityManager.save(usagePeriods.map(BoxUsagePeriodArchive.fromUsagePeriod))
+      // Same transaction as the archive write, so a usage period can never be
+      // archived without an export intent, nor an intent survive a rollback.
+      await this.usageExportOutboxService.enqueue(transactionalEntityManager, usagePeriods)
     })
 
     await this.redisLockProvider.unlock(lockKey)

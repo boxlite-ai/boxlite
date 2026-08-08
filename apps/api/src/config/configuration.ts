@@ -161,6 +161,27 @@ const configuration = {
   pylonAppId: process.env.PYLON_APP_ID,
   billingApiUrl: process.env.BILLING_API_URL,
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
+  // Export of finalized usage periods to the Commerce service. Kept separate
+  // from billingApiUrl on purpose, for the same reason requirePaymentMethod is:
+  // pointing the dashboard at a billing service and shipping usage to it are
+  // different decisions, and conflating them means one of them cannot be made
+  // without the other. `enabled` gates the outbox write as well as delivery, so
+  // a stage that never exports accumulates no rows; the archive backfill is what
+  // makes turning it on later whole.
+  usageExport: {
+    enabled: process.env.USAGE_EXPORT_ENABLED === 'true',
+    url: process.env.USAGE_EXPORT_URL,
+    token: process.env.USAGE_EXPORT_TOKEN,
+    batchSize: parseInt(process.env.USAGE_EXPORT_BATCH_SIZE || '200', 10),
+    timeoutMs: parseInt(process.env.USAGE_EXPORT_TIMEOUT_MS || '10000', 10),
+    maxAttempts: parseInt(process.env.USAGE_EXPORT_MAX_ATTEMPTS || '10', 10),
+    retentionDays: parseInt(process.env.USAGE_EXPORT_RETENTION_DAYS || '30', 10),
+    // How long a claimed batch stays invisible to other publishers. Longer than
+    // the HTTP timeout, so a delivery still in flight is not claimed twice.
+    visibilityTimeoutMs: parseInt(process.env.USAGE_EXPORT_VISIBILITY_TIMEOUT_MS || '60000', 10),
+    backfillPageSize: parseInt(process.env.USAGE_EXPORT_BACKFILL_PAGE_SIZE || '500', 10),
+    stallWarningMs: parseInt(process.env.USAGE_EXPORT_STALL_WARNING_MS || '3600000', 10),
+  },
   defaultRunner: {
     domain: process.env.DEFAULT_RUNNER_DOMAIN,
     apiKey: process.env.DEFAULT_RUNNER_API_KEY,
