@@ -12,7 +12,7 @@ description: >
   2+ findings on a single change, when sibling bugs of an "already-fixed" issue
   keep appearing across rounds, or when the user asks "why did I miss this?".
   Do NOT use for single-line fixes where the cause is obvious from the diff,
-  or for initial implementation work (use the repository instructions).
+  or for initial implementation work (use CLAUDE.md rules).
 ---
 
 # Adversarial Iteration
@@ -46,7 +46,7 @@ For each finding, answer:
 
 1. **What did I do wrong?** One sentence, no euphemisms.
 2. **Why did I miss it?** Name the assumption encoded without verifying.
-3. **Which repository instruction did I violate?** Be specific.
+3. **Which `CLAUDE.md` rule did I violate?** Be specific.
 4. **What cheap check would have caught it?** (see next section)
 
 Then across all findings: *what's the unifying shape?* Often a single cognitive

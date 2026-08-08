@@ -49,7 +49,7 @@ Do NOT rely on any cached content — you have a fresh context.
    a. **REFLECT** on each finding:
       - What did I do wrong? (one sentence)
       - Why did I miss it? (name the unverified assumption)
-      - Which repository instruction was violated?
+      - Which CLAUDE.md rule was violated?
       - What cheap check catches it?
       - Across all findings: what is the unifying shape?
 
