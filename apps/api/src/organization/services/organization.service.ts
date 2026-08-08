@@ -52,7 +52,7 @@ import { BoxRepository } from '../../box/repositories/box.repository'
 export class OrganizationService implements OnModuleInit, TrackableJobExecutions, OnApplicationShutdown {
   private static readonly DEFAULT_ORGANIZATION_NAME = 'Default Organization'
 
-  activeJobs = new Set<string>()
+  activeJobs = new Set<symbol>()
   private readonly logger = new Logger(OrganizationService.name)
   private defaultBoxLimitedNetworkEgress: boolean
 

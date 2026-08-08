@@ -43,7 +43,7 @@ import { Box } from '../entities/box.entity'
 
 @Injectable()
 export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown {
-  activeJobs = new Set<string>()
+  activeJobs = new Set<symbol>()
 
   private readonly logger = new Logger(BoxManager.name)
 
@@ -257,52 +257,55 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
       const stream = await queryBuilder.stream()
       let processedCount = 0
       const maxProcessPerRun = 1000
-      const pendingProcesses: Promise<void>[] = []
+      const pendingProcesses = new Set<Promise<void>>()
+      const abortStream = () => {
+        const reason = signal.reason instanceof Error ? signal.reason : new Error('Redis lock lease was lost')
+        stream.destroy(reason)
+      }
 
+      signal.addEventListener('abort', abortStream, { once: true })
       try {
-        await new Promise<void>((resolve, reject) => {
-          stream.on('data', async (row: any) => {
-            if (processedCount >= maxProcessPerRun) {
-              resolve()
-              return
-            }
+        if (signal.aborted) {
+          abortStream()
+        }
 
-            const lockKey = getStateChangeLockKey(row.box_id)
-            if (await this.redisLockProvider.isLocked(lockKey)) {
-              // Box is already being processed, skip it
-              return
-            }
+        for await (const row of stream) {
+          signal.throwIfAborted()
+          if (processedCount >= maxProcessPerRun) {
+            break
+          }
 
-            // Process box asynchronously but track the promise
-            const processPromise = this.syncInstanceState(row.box_id).catch((err) => {
-              this.logger.error(`Error syncing box state for ${row.box_id}`, err)
-            })
-            pendingProcesses.push(processPromise)
-            processedCount++
+          const lockKey = getStateChangeLockKey(row.box_id)
+          const isLocked = await this.redisLockProvider.isLocked(lockKey)
+          signal.throwIfAborted()
+          if (isLocked) {
+            continue
+          }
 
-            // Limit concurrent processing to avoid overwhelming the system
-            if (pendingProcesses.length >= 10) {
-              stream.pause()
-              Promise.allSettled(pendingProcesses.splice(0, pendingProcesses.length))
-                .then(() => stream.resume())
-                .catch(reject)
-            }
+          const processPromise = this.syncInstanceState(row.box_id).catch((err) => {
+            this.logger.error(`Error syncing box state for ${row.box_id}`, err)
           })
+          pendingProcesses.add(processPromise)
+          void processPromise.finally(() => pendingProcesses.delete(processPromise))
+          processedCount++
 
-          stream.on('end', () => {
-            Promise.allSettled(pendingProcesses)
-              .then(() => {
-                resolve()
-              })
-              .catch(reject)
-          })
-
-          stream.on('error', reject)
-        })
+          if (pendingProcesses.size >= 10) {
+            await Promise.allSettled([...pendingProcesses])
+            signal.throwIfAborted()
+          }
+        }
+        signal.throwIfAborted()
+      } catch (error) {
+        if (signal.aborted) {
+          throw signal.reason
+        }
+        throw error
       } finally {
+        signal.removeEventListener('abort', abortStream)
         if (!stream.destroyed) {
           stream.destroy()
         }
+        await Promise.allSettled([...pendingProcesses])
       }
     })
   }

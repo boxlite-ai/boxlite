@@ -17,11 +17,12 @@ export function TrackJobExecution() {
         throw new Error(`@TrackExecution requires 'activeJobs' property on ${target.constructor.name}`)
       }
 
-      this.activeJobs.add(propertyKey)
+      const execution = Symbol(propertyKey)
+      this.activeJobs.add(execution)
       try {
         return await original.apply(this, args)
       } finally {
-        this.activeJobs.delete(propertyKey)
+        this.activeJobs.delete(execution)
       }
     }
   }

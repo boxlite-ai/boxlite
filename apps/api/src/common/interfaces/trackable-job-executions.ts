@@ -5,5 +5,5 @@
  */
 
 export interface TrackableJobExecutions {
-  activeJobs: Set<string>
+  activeJobs: Set<symbol>
 }

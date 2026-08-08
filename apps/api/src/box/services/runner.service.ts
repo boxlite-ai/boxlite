@@ -44,6 +44,7 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import { setTimeout as sleep } from 'timers/promises'
 
 @Injectable()
 export class RunnerService {
@@ -370,8 +371,10 @@ export class RunnerService {
       diskGiB?: number
     },
     appVersion?: string,
+    signal?: AbortSignal,
   ): Promise<void> {
     const runner = await this.findOne(runnerId)
+    signal?.throwIfAborted()
     if (!runner) {
       this.logger.error(`Runner ${runnerId} not found when trying to update health`)
       return
@@ -447,17 +450,20 @@ export class RunnerService {
       })
     }
 
+    signal?.throwIfAborted()
     await this.updateRunner(runnerId, updateData)
     this.logger.debug(`Updated health for runner ${runnerId}`)
 
+    signal?.throwIfAborted()
     this.eventEmitter.emit(
       RunnerEvents.STATE_UPDATED,
       new RunnerStateUpdatedEvent(runner, runner.state, updateData.state),
     )
   }
 
-  private async updateRunnerState(runnerId: string, newState: RunnerState): Promise<void> {
+  private async updateRunnerState(runnerId: string, newState: RunnerState, signal: AbortSignal): Promise<void> {
     const runner = await this.findOne(runnerId)
+    signal.throwIfAborted()
     if (!runner) {
       this.logger.error(`Runner ${runnerId} not found when trying to update state`)
       return
@@ -469,11 +475,13 @@ export class RunnerService {
       return
     }
 
+    signal.throwIfAborted()
     await this.updateRunner(runnerId, {
       state: newState,
       lastChecked: new Date(),
     })
 
+    signal.throwIfAborted()
     this.eventEmitter.emit(RunnerEvents.STATE_UPDATED, new RunnerStateUpdatedEvent(runner, runner.state, newState))
   }
 
@@ -509,12 +517,12 @@ export class RunnerService {
         take: 100,
       })
 
-      await Promise.allSettled(
+      const results = await Promise.allSettled(
         runners.map(async (runner) => {
           signal.throwIfAborted()
           // v2 runners report health via healthcheck endpoint, check based on lastChecked timestamp
           if (runner.apiVersion === '2') {
-            await this.checkRunnerV2Health(runner)
+            await this.checkRunnerV2Health(runner, signal)
             return
           }
 
@@ -525,10 +533,15 @@ export class RunnerService {
           for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
             signal.throwIfAborted()
             if (attempt > 0) {
-              await new Promise((resolve) => setTimeout(resolve, retryDelays[attempt - 1]))
+              await sleep(retryDelays[attempt - 1], undefined, { signal })
             }
 
             const abortController = new AbortController()
+            const abortHealthCheck = () => abortController.abort(signal.reason)
+            signal.addEventListener('abort', abortHealthCheck, { once: true })
+            if (signal.aborted) {
+              abortHealthCheck()
+            }
             let timeoutId: NodeJS.Timeout | null = null
 
             const runnerHealthTimeoutSeconds = this.configService.get('runnerHealthTimeout')
@@ -548,6 +561,7 @@ export class RunnerService {
                     this.logger.warn(`Failed to get runner info for runner ${runner.id}: ${e.message}`)
                   }
 
+                  signal.throwIfAborted()
                   await this.updateRunnerHealth(
                     runner.id,
                     undefined,
@@ -556,6 +570,7 @@ export class RunnerService {
                     runnerInfo?.serviceHealth,
                     runnerInfo?.metrics,
                     runnerInfo?.appVersion,
+                    signal,
                   )
                 })(),
                 new Promise((_, reject) => {
@@ -575,7 +590,9 @@ export class RunnerService {
                 clearTimeout(timeoutId)
               }
 
-              if (e.message === 'Health check timeout') {
+              if (signal.aborted) {
+                throw signal.reason
+              } else if (e.message === 'Health check timeout') {
                 this.logger.error(
                   `Runner ${runner.id} health check timed out after ${runnerHealthTimeoutSeconds} seconds`,
                 )
@@ -589,12 +606,20 @@ export class RunnerService {
 
               // If last attempt, mark as unresponsive
               if (attempt === retryDelays.length) {
-                await this.updateRunnerState(runner.id, RunnerState.UNRESPONSIVE)
+                signal.throwIfAborted()
+                await this.updateRunnerState(runner.id, RunnerState.UNRESPONSIVE, signal)
               }
+            } finally {
+              signal.removeEventListener('abort', abortHealthCheck)
             }
           }
         }),
       )
+      signal.throwIfAborted()
+      const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+      if (rejected) {
+        throw rejected.reason
+      }
     })
   }
 
@@ -602,12 +627,13 @@ export class RunnerService {
    * Check v2 runner health based on lastChecked timestamp.
    * v2 runners report health via the healthcheck endpoint, so we check if lastChecked is within threshold.
    */
-  private async checkRunnerV2Health(runner: Runner): Promise<void> {
+  private async checkRunnerV2Health(runner: Runner, signal: AbortSignal): Promise<void> {
     const markAsUnresponsive = async () => {
       this.logger.warn(
         `v2 Runner ${runner.id} health check stale (last: ${Math.round((Date.now() - runner.lastChecked.getTime()) / 1000)}s ago), marking as UNRESPONSIVE`,
       )
-      await this.updateRunnerState(runner.id, RunnerState.UNRESPONSIVE)
+      signal.throwIfAborted()
+      await this.updateRunnerState(runner.id, RunnerState.UNRESPONSIVE, signal)
     }
 
     if (!runner.lastChecked) {
@@ -657,7 +683,7 @@ export class RunnerService {
 
       this.logger.debug(`Checking ${drainingRunners.length} draining runners`)
 
-      await Promise.allSettled(
+      const results = await Promise.allSettled(
         drainingRunners.map(async (runner) => {
           try {
             signal.throwIfAborted()
@@ -668,6 +694,7 @@ export class RunnerService {
                 desiredState: Not(BoxDesiredState.DESTROYED),
               },
             })
+            signal.throwIfAborted()
 
             const redisKey = `runner:draining-check:${runner.id}`
 
@@ -680,10 +707,12 @@ export class RunnerService {
             } else {
               // Increment counter
               const currentCount = await this.redis.get(redisKey)
+              signal.throwIfAborted()
               const count = currentCount ? parseInt(currentCount, 10) + 1 : 1
 
               if (count >= 3) {
                 // Decommission the runner
+                signal.throwIfAborted()
                 await this.updateRunner(runner.id, {
                   state: RunnerState.DECOMMISSIONED,
                 })
@@ -697,10 +726,18 @@ export class RunnerService {
               }
             }
           } catch (e) {
+            if (signal.aborted) {
+              throw signal.reason
+            }
             this.logger.error(`Error checking draining runner ${runner.id}`, e)
           }
         }),
       )
+      signal.throwIfAborted()
+      const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+      if (rejected) {
+        throw rejected.reason
+      }
     })
   }
 

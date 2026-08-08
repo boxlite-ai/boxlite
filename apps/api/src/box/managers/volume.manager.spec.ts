@@ -14,6 +14,9 @@ jest.mock('@aws-sdk/client-s3', () => ({
   CreateBucketCommand: jest.fn().mockImplementation((input) => ({ input })),
   ListObjectsV2Command: jest.fn().mockImplementation((input) => ({ input })),
   PutBucketTaggingCommand: jest.fn().mockImplementation((input) => ({ input })),
+  ListObjectVersionsCommand: jest.fn().mockImplementation((input) => ({ operation: 'list-versions', input })),
+  DeleteObjectsCommand: jest.fn().mockImplementation((input) => ({ operation: 'delete-objects', input })),
+  DeleteBucketCommand: jest.fn().mockImplementation((input) => ({ operation: 'delete-bucket', input })),
 }))
 
 describe('VolumeManager S3 client setup', () => {
@@ -115,6 +118,8 @@ describe('VolumeManager owned volume locks', () => {
       {} as any,
       {} as any,
     )
+    const logger = { error: jest.fn() }
+    Object.assign(manager as any, { logger })
     mockSend.mockImplementationOnce(async () => {
       abortController.abort(new Error('ownership was lost'))
     })
@@ -123,7 +128,7 @@ describe('VolumeManager owned volume locks', () => {
       'ownership was lost',
     )
 
-    expect(volumeRepository.save).toHaveBeenCalledTimes(1)
+    expect(volumeRepository.save).not.toHaveBeenCalled()
     expect(volumeRepository.update).not.toHaveBeenCalled()
   })
 
@@ -172,5 +177,129 @@ describe('VolumeManager owned volume locks', () => {
     expect(redisLockProvider.acquireLease).toHaveBeenNthCalledWith(2, 'volume-state-volume-1', 30)
     expect(releaseVolumeLease).toHaveBeenCalled()
     expect(releaseWorkerLease).toHaveBeenCalled()
+  })
+
+  it('retries a create after the bucket was already created and reaches ready', async () => {
+    const alreadyCreated = Object.assign(new Error('already created'), { name: 'BucketAlreadyOwnedByYou' })
+    mockSend.mockRejectedValueOnce(alreadyCreated).mockResolvedValueOnce({})
+    const volume = {
+      id: 'volume-1',
+      organizationId: 'org-1',
+      state: 'pending_create',
+      getBucketName: () => 'bucket-1',
+    }
+    const volumeRepository = { save: jest.fn().mockResolvedValue(undefined), update: jest.fn() }
+    const manager = new VolumeManager(
+      volumeRepository as any,
+      {
+        get: jest.fn((key: string) =>
+          ({ 's3.endpoint': 'https://s3.example.com', skipConnections: true, environment: 'test' })[key],
+        ),
+        getOrThrow: jest.fn((key: string) =>
+          ({ 's3.endpoint': 'https://s3.example.com', 's3.region': 'us-east-1' })[key],
+        ),
+      } as any,
+      {} as any,
+      {} as any,
+    )
+
+    await (manager as any).processVolumeState(volume, new AbortController().signal)
+
+    expect(volumeRepository.save).toHaveBeenCalledTimes(1)
+    expect(volumeRepository.save).toHaveBeenCalledWith(expect.objectContaining({ state: 'ready' }))
+  })
+
+  it('keeps a deleted bucket pending when its lease is lost so the delete can retry', async () => {
+    const ownershipError = new Error('ownership was lost')
+    const abortController = new AbortController()
+    mockSend
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
+      .mockImplementationOnce(async () => {
+        abortController.abort(ownershipError)
+      })
+    const volume = {
+      id: 'volume-1',
+      name: 'volume',
+      organizationId: 'org-1',
+      state: 'pending_delete',
+      getBucketName: () => 'bucket-1',
+    }
+    const volumeRepository = {
+      delete: jest.fn().mockResolvedValue(undefined),
+      save: jest.fn().mockResolvedValue(undefined),
+      update: jest.fn(),
+    }
+    const manager = new VolumeManager(
+      volumeRepository as any,
+      {
+        get: jest.fn((key: string) =>
+          ({ 's3.endpoint': 'https://s3.example.com', skipConnections: true })[key],
+        ),
+        getOrThrow: jest.fn((key: string) =>
+          ({ 's3.endpoint': 'https://s3.example.com', 's3.region': 'us-east-1' })[key],
+        ),
+      } as any,
+      {} as any,
+      {} as any,
+    )
+
+    await expect((manager as any).processVolumeState(volume, abortController.signal)).rejects.toBe(ownershipError)
+
+    expect(volumeRepository.delete).not.toHaveBeenCalled()
+    expect(volumeRepository.save).not.toHaveBeenCalled()
+    expect(volumeRepository.update).not.toHaveBeenCalled()
+  })
+
+  it('waits for sibling volume work before releasing the worker lease', async () => {
+    const volumes = [
+      { id: 'volume-1', state: 'pending_create' },
+      { id: 'volume-2', state: 'pending_create' },
+    ]
+    const volumeRepository = { find: jest.fn().mockResolvedValue(volumes) }
+    const releaseWorkerLease = jest.fn().mockResolvedValue(undefined)
+    const redisLockProvider = {
+      acquireLease: jest
+        .fn()
+        .mockResolvedValueOnce({ release: releaseWorkerLease })
+        .mockResolvedValueOnce({ release: jest.fn().mockResolvedValue(undefined) })
+        .mockResolvedValueOnce({ release: jest.fn().mockResolvedValue(undefined) }),
+    }
+    const manager = new VolumeManager(
+      volumeRepository as any,
+      {
+        get: jest.fn((key: string) =>
+          ({ 's3.endpoint': 'https://s3.example.com', skipConnections: true })[key],
+        ),
+        getOrThrow: jest.fn((key: string) =>
+          ({ 's3.endpoint': 'https://s3.example.com', 's3.region': 'us-east-1' })[key],
+        ),
+      } as any,
+      redisLockProvider as any,
+      {} as any,
+    )
+    const logger = { error: jest.fn() }
+    Object.assign(manager as any, { logger })
+    let finishSecond!: () => void
+    jest.spyOn(manager as any, 'processVolumeState').mockImplementation((volume: { id: string }) => {
+      if (volume.id === 'volume-1') {
+        return Promise.reject(new Error('volume lease lost'))
+      }
+      return new Promise<void>((resolve) => {
+        finishSecond = resolve
+      })
+    })
+
+    const processing = manager.processPendingVolumes()
+    while (!finishSecond) {
+      await Promise.resolve()
+    }
+    await Promise.resolve()
+    expect(releaseWorkerLease).not.toHaveBeenCalled()
+
+    finishSecond()
+    await processing
+    expect(releaseWorkerLease).toHaveBeenCalledTimes(1)
+    expect(logger.error).toHaveBeenCalledWith('Error processing pending volumes:', expect.any(Error))
   })
 })

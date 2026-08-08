@@ -169,18 +169,23 @@ export class BoxWarmPoolService {
 
           const missingCount = warmPoolItem.pool - boxCount
           if (missingCount > 0) {
-            const promises = []
+            const promises: Promise<unknown>[] = []
             this.logger.debug(`Creating ${missingCount} boxes for warm pool id ${warmPoolItem.id}`)
 
-            for (let i = 0; i < missingCount; i++) {
-              signal.throwIfAborted()
-              promises.push(
-                this.eventEmitter.emitAsync(WarmPoolEvents.TOPUP_REQUESTED, new WarmPoolTopUpRequested(warmPoolItem)),
-              )
+            try {
+              for (let i = 0; i < missingCount; i++) {
+                signal.throwIfAborted()
+                promises.push(
+                  this.eventEmitter.emitAsync(
+                    WarmPoolEvents.TOPUP_REQUESTED,
+                    new WarmPoolTopUpRequested(warmPoolItem),
+                  ),
+                )
+              }
+            } finally {
+              // Started top-ups must finish before the lease is released, including cancellation paths.
+              await Promise.allSettled(promises)
             }
-
-            // Wait for all promises to settle before releasing the lock. Otherwise, another worker could start creating boxes
-            await Promise.allSettled(promises)
           }
         })
       }),

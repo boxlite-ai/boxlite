@@ -65,10 +65,13 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
   const redisLockProvider = {
     unlock: jest.fn().mockResolvedValue(undefined),
     acquireLease: jest.fn(),
+    waitForLock: jest.fn(),
   }
-  redisLockProvider.acquireLease.mockImplementation(async (key: string) => ({
+  const leaseFor = (key: string) => ({
     release: () => redisLockProvider.unlock(key, { getCode: () => key }),
-  }))
+  })
+  redisLockProvider.acquireLease.mockImplementation(async (key: string) => leaseFor(key))
+  redisLockProvider.waitForLock.mockImplementation(async (key: string) => leaseFor(key))
   const boxRepository = { findOne: jest.fn() }
   const usageExportOutboxService = { enqueue: jest.fn().mockResolvedValue(0) }
 
@@ -101,6 +104,30 @@ describe('UsageService event subscriptions', () => {
 })
 
 describe('UsageService.handleBoxStateUpdate', () => {
+  it('cancels a pending lock wait during application shutdown', async () => {
+    const { service, redisLockProvider } = makeService()
+    redisLockProvider.waitForLock.mockImplementation(
+      (_key: string, _ttl: number, options: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
+        }),
+    )
+
+    const handling = service.handleBoxStateUpdate(event(BoxState.STARTING)).catch((error) => error)
+    while (redisLockProvider.waitForLock.mock.calls.length === 0) {
+      await Promise.resolve()
+    }
+    await service.onApplicationShutdown()
+
+    await expect(handling).resolves.toThrow('UsageService is shutting down')
+    expect(redisLockProvider.waitForLock).toHaveBeenCalledWith(
+      `usage-period-${box.id}`,
+      60,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+    expect(redisLockProvider.waitForLock.mock.calls[0][2]).not.toHaveProperty('timeoutMs')
+  })
+
   it('does not finish until its lock has been released', async () => {
     const { service, redisLockProvider } = makeService()
     let finishUnlock!: () => void

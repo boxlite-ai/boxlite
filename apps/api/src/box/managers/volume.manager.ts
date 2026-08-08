@@ -27,7 +27,7 @@ const VOLUME_STATE_LOCK_KEY = 'volume-state-'
 export class VolumeManager
   implements OnModuleInit, TrackableJobExecutions, OnApplicationShutdown, OnApplicationBootstrap
 {
-  activeJobs = new Set<string>()
+  activeJobs = new Set<symbol>()
 
   private readonly logger = new Logger(VolumeManager.name)
   private processingVolumes: Set<string> = new Set()
@@ -145,7 +145,7 @@ export class VolumeManager
           },
         })
 
-        await Promise.all(
+        const results = await Promise.allSettled(
           pendingVolumes.map(async (volume) => {
             signal.throwIfAborted()
             if (this.processingVolumes.has(volume.id)) {
@@ -160,6 +160,7 @@ export class VolumeManager
             }
 
             await withRedisLockLease(volumeLease, async (volumeSignal) => {
+              signal.throwIfAborted()
               this.processingVolumes.add(volume.id)
               try {
                 await this.processVolumeState(volume, volumeSignal)
@@ -169,6 +170,11 @@ export class VolumeManager
             })
           }),
         )
+        signal.throwIfAborted()
+        const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+        if (rejected) {
+          throw rejected.reason
+        }
       })
     } catch (error) {
       this.logger.error('Error processing pending volumes:', error)
@@ -187,7 +193,7 @@ export class VolumeManager
       }
     } catch (error) {
       if (signal.aborted) {
-        throw signal.reason
+        throw error
       }
       this.logger.error(`Error processing volume ${volume.id}:`, error)
       await this.volumeRepository.update(volume.id, {
@@ -199,19 +205,19 @@ export class VolumeManager
 
   private async handlePendingCreate(volume: Volume, signal: AbortSignal): Promise<void> {
     try {
-      // Update state to CREATING
-      await this.volumeRepository.save({
-        ...volume,
-        state: VolumeState.CREATING,
-      })
-
       signal.throwIfAborted()
       // Create bucket in Minio/S3
       const createBucketCommand = new CreateBucketCommand({
         Bucket: volume.getBucketName(),
       })
 
-      await this.s3Client.send(createBucketCommand)
+      try {
+        await this.s3Client.send(createBucketCommand)
+      } catch (error) {
+        if (error.name !== 'BucketAlreadyOwnedByYou') {
+          throw error
+        }
+      }
       signal.throwIfAborted()
 
       await this.s3Client.send(
@@ -237,6 +243,7 @@ export class VolumeManager
       )
 
       // Update volume state to READY
+      signal.throwIfAborted()
       await this.volumeRepository.save({
         ...volume,
         state: VolumeState.READY,
@@ -244,7 +251,7 @@ export class VolumeManager
       this.logger.debug(`Volume ${volume.id} created successfully`)
     } catch (error) {
       if (signal.aborted) {
-        throw signal.reason
+        throw error
       }
       this.logger.error(`Error creating volume ${volume.id}:`, error)
       await this.volumeRepository.save({
@@ -257,12 +264,6 @@ export class VolumeManager
 
   private async handlePendingDelete(volume: Volume, signal: AbortSignal): Promise<void> {
     try {
-      // Update state to DELETING
-      await this.volumeRepository.save({
-        ...volume,
-        state: VolumeState.DELETING,
-      })
-
       signal.throwIfAborted()
       // Delete bucket from Minio/S3
       try {
@@ -279,6 +280,7 @@ export class VolumeManager
       }
 
       // Delete any existing volume record with the deleted state and the same name in the same organization
+      signal.throwIfAborted()
       await this.volumeRepository.delete({
         organizationId: volume.organizationId,
         name: `${volume.name}-deleted`,
@@ -286,6 +288,7 @@ export class VolumeManager
       })
 
       // Update volume state to DELETED and rename
+      signal.throwIfAborted()
       await this.volumeRepository.save({
         ...volume,
         state: VolumeState.DELETED,
@@ -294,7 +297,7 @@ export class VolumeManager
       this.logger.debug(`Volume ${volume.id} deleted successfully`)
     } catch (error) {
       if (signal.aborted) {
-        throw signal.reason
+        throw error
       }
       this.logger.error(`Error deleting volume ${volume.id}:`, error)
       await this.volumeRepository.save({

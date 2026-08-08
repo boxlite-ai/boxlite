@@ -141,7 +141,7 @@ export class AuditService implements OnApplicationBootstrap {
 
       this.logger.log(`Completed cleanup of audit logs older than ${retentionDays} days (${totalDeleted} logs deleted)`)
     } catch (error) {
-      if (signal?.aborted) {
+      if (signal?.aborted && error === signal.reason) {
         throw signal.reason
       }
       this.logger.error(`An error occurred during cleanup of old audit logs: ${error.message}`, error.stack)

@@ -5,11 +5,22 @@
  */
 
 import { InjectRedis } from '@nestjs-modules/ioredis'
-import { Injectable } from '@nestjs/common'
+import { Injectable, Logger } from '@nestjs/common'
 import { Redis } from 'ioredis'
 import { randomUUID } from 'crypto'
+import { setTimeout as sleep } from 'timers/promises'
 
 type Acquired = boolean
+
+type WaitForLockOptions = {
+  signal?: AbortSignal
+  timeoutMs?: number
+  retryDelayMs?: number
+}
+
+type LeaseAcquisitionOutcome =
+  | { kind: 'acquired'; lease: RedisLockLease | null }
+  | { kind: 'failed'; error: unknown }
 
 export class LockCode {
   constructor(private readonly code: string) {}
@@ -84,6 +95,7 @@ export async function withRedisLockLease<T>(
   let result: T
   try {
     result = await operation(signal)
+    signal.throwIfAborted()
   } catch (error) {
     try {
       await lease.release()
@@ -93,13 +105,14 @@ export async function withRedisLockLease<T>(
     }
     throw error
   }
-  signal.throwIfAborted()
   await lease.release()
   return result
 }
 
 @Injectable()
 export class RedisLockProvider {
+  private readonly logger = new Logger(RedisLockProvider.name)
+
   constructor(@InjectRedis() private readonly redis: Redis) {}
 
   async lockUntilExpiry(key: string, ttl: number): Promise<Acquired> {
@@ -152,11 +165,105 @@ export class RedisLockProvider {
     return exists === 1
   }
 
-  async waitForLock(key: string, ttl: number): Promise<RedisLockLease> {
+  async waitForLock(key: string, ttl: number, options: WaitForLockOptions = {}): Promise<RedisLockLease> {
+    const startedAt = Date.now()
+    const retryDelayMs = options.retryDelayMs ?? 50
+
     while (true) {
-      const lease = await this.acquireLease(key, ttl)
+      this.throwIfLockWaitEnded(key, startedAt, options)
+      const lease = await this.acquireLeaseWhileWaiting(key, ttl, startedAt, options)
       if (lease) return lease
-      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      const elapsedMs = Date.now() - startedAt
+      const delayMs =
+        options.timeoutMs === undefined ? retryDelayMs : Math.min(retryDelayMs, options.timeoutMs - elapsedMs)
+      try {
+        await sleep(delayMs, undefined, { signal: options.signal })
+      } catch (error) {
+        options.signal?.throwIfAborted()
+        throw error
+      }
+    }
+  }
+
+  private async acquireLeaseWhileWaiting(
+    key: string,
+    ttl: number,
+    startedAt: number,
+    options: WaitForLockOptions,
+  ): Promise<RedisLockLease | null> {
+    const acquisition = this.acquireLease(key, ttl).then<LeaseAcquisitionOutcome, LeaseAcquisitionOutcome>(
+      (lease) => ({ kind: 'acquired', lease }),
+      (error) => ({ kind: 'failed', error }),
+    )
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+    let abortListener: (() => void) | undefined
+    const waitEnded = new Promise<{ kind: 'ended'; error: unknown }>((resolve) => {
+      if (options.signal) {
+        abortListener = () => resolve({ kind: 'ended', error: options.signal?.reason })
+        options.signal.addEventListener('abort', abortListener, { once: true })
+        if (options.signal.aborted) {
+          abortListener()
+        }
+      }
+
+      if (options.timeoutMs !== undefined) {
+        const remainingMs = Math.max(0, options.timeoutMs - (Date.now() - startedAt))
+        timeoutId = setTimeout(
+          () =>
+            resolve({
+              kind: 'ended',
+              error: new Error(`Timed out waiting for Redis lock ${key} after ${options.timeoutMs}ms`),
+            }),
+          remainingMs,
+        )
+      }
+    })
+
+    const outcome = await Promise.race([acquisition, waitEnded])
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+    }
+    if (abortListener) {
+      options.signal?.removeEventListener('abort', abortListener)
+    }
+
+    if (outcome.kind === 'ended') {
+      void acquisition.then(async (lateOutcome) => {
+        if (lateOutcome.kind === 'acquired' && lateOutcome.lease) {
+          await lateOutcome.lease.release().catch((releaseError) => {
+            this.logger.error(`Error releasing Redis lock ${key} acquired after its wait ended`, releaseError)
+          })
+        } else if (lateOutcome.kind === 'failed') {
+          this.logger.error(`Error acquiring Redis lock ${key} after its wait ended`, lateOutcome.error)
+        }
+      })
+      throw outcome.error
+    }
+
+    if (outcome.kind === 'failed') {
+      throw outcome.error
+    }
+
+    try {
+      this.throwIfLockWaitEnded(key, startedAt, options)
+    } catch (error) {
+      if (outcome.lease) {
+        await outcome.lease.release().catch((releaseError) => {
+          this.logger.error(`Error releasing Redis lock ${key} acquired after its wait ended`, releaseError)
+        })
+      }
+      throw error
+    }
+
+    return outcome.lease
+  }
+
+  private throwIfLockWaitEnded(key: string, startedAt: number, options: WaitForLockOptions): void {
+    options.signal?.throwIfAborted()
+    if (options.timeoutMs !== undefined && Date.now() - startedAt >= options.timeoutMs) {
+      throw new Error(`Timed out waiting for Redis lock ${key} after ${options.timeoutMs}ms`)
     }
   }
 
