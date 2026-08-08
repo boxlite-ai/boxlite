@@ -110,12 +110,44 @@ describe('usageExportConfig', () => {
     expect(usageExportConfig(enabled({ USAGE_EXPORT_URL: url }))).toEqual(expect.objectContaining({ url }))
   })
 
+  // The publisher appends its own path to whatever is stored, so a destination
+  // carrying a query or fragment could never reach the receiver. Rejecting beats
+  // trimming, which would deliver somewhere other than what was configured.
+  // A bare delimiter is the case that reads as absent: URL parses "…/api?" to an
+  // empty search, so asking the parsed value whether it has a query answers no
+  // while the "?" is still there in the string that gets stored — and the
+  // publisher then posts to "…/api?/internal/usage-events". A trailing "?" also
+  // hides the slash from the trim, since /\/+$/ cannot match it.
+  it.each([
+    ['a query', 'https://commerce.test/api?target=1'],
+    ['a fragment', 'https://commerce.test/api#section'],
+    ['a bare query delimiter', 'https://commerce.test/api?'],
+    ['a bare fragment delimiter', 'https://commerce.test/api#'],
+    ['a bare delimiter behind a trailing slash', 'https://commerce.test/api/?'],
+  ])('refuses a destination carrying %s', (_case, url) => {
+    expect(() => usageExportConfig(enabled({ USAGE_EXPORT_URL: url }))).toThrow(
+      /USAGE_EXPORT_URL must not carry a query or fragment/,
+    )
+  })
+
   // The publisher appends "/internal/usage-events", so a stored trailing slash
   // would produce a double slash in the path.
   it('trims a trailing slash from the destination', () => {
     expect(usageExportConfig(enabled({ USAGE_EXPORT_URL: 'https://commerce.test/' }))).toEqual(
       expect.objectContaining({ url: 'https://commerce.test' }),
     )
+  })
+
+  // Only the trailing slash may change. Rebuilding from origin + pathname looks
+  // equivalent and is not: it drops userinfo — which axios turns into Basic auth,
+  // deleting the publisher's Bearer header — drops an explicit port, and
+  // lowercases the host.
+  it.each([
+    ['userinfo', 'https://user:secret@commerce.test/api'],
+    ['an explicit port', 'https://commerce.test:443/api'],
+    ['host casing', 'https://Commerce.TEST/API'],
+  ])('stores the destination verbatim, preserving %s', (_case, url) => {
+    expect(usageExportConfig(enabled({ USAGE_EXPORT_URL: url }))).toEqual(expect.objectContaining({ url }))
   })
 
   // A request still in flight when its rows become claimable again is delivered

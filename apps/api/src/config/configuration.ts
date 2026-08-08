@@ -45,7 +45,25 @@ function requiredCount(value: string | undefined, fallback: number, name: string
 export const USAGE_EXPORT_VISIBILITY_TIMEOUT_MS = 60_000
 
 /**
- * An absolute http(s) URL, or a hard failure.
+ * An absolute http(s) URL with no query or fragment, or a hard failure.
+ *
+ * The caller appends its own path to whatever comes back, so `…/api?x=1` would
+ * produce `…/api?x=1/internal/usage-events`, which reaches nothing. Such a
+ * value is rejected rather than stripped, because stripping it would deliver
+ * somewhere other than the configured destination. Rejecting it is also what
+ * keeps the trailing-slash trim below honest: on a raw string that trim would
+ * otherwise eat a slash inside a query value.
+ *
+ * The delimiters are looked for in the raw string rather than in `parsed.search`
+ * and `parsed.hash`, which are both empty for a bare `?` or `#`. Asking the
+ * parsed value would answer "no query" while the delimiter sits in the string
+ * this returns, and `…/api?` would go out as `…/api?/internal/usage-events`.
+ *
+ * Only the trailing slash is normalized. Returning `origin + pathname` instead
+ * would look equivalent and quietly drop userinfo, drop an explicit port and
+ * lowercase the host — and axios builds Basic auth from userinfo and then
+ * deletes the Authorization header, so dropping it would change which
+ * credential the publisher sends.
  *
  * The offending value is deliberately not echoed: a URL is the one setting that
  * can carry credentials in its userinfo, and a boot log is the wrong place to
@@ -60,6 +78,9 @@ function requiredHttpUrl(value: string, name: string): string {
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error(`${name} must use http or https`)
+  }
+  if (value.includes('?') || value.includes('#')) {
+    throw new Error(`${name} must not carry a query or fragment`)
   }
   return value.replace(/\/+$/, '')
 }
