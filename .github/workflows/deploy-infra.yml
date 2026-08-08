@@ -223,6 +223,53 @@ jobs:
           ref: ${{ needs.resolve-ref.outputs.sha }}
           persist-credentials: false
 
+      # workflow_dispatch takes the workflow definition from the dispatch ref — main's tip — while
+      # this job checks out the SELECTED commit, so the two halves are versioned independently. A
+      # narrowed scope is the first thing that couples them: `--exclude` reaches a wrapper that may
+      # predate it, and every PR branched before component selection landed is in exactly that
+      # state. Detected on the deployed tree rather than assumed, because the alternative failure
+      # is `partial SST deploys are disabled` from the old guard — true of that commit, but it
+      # reads as a statement about this workflow and sends the operator to the wrong file.
+      #
+      # Runs before the AWS credential step on purpose: an unsupported scope is knowable from the
+      # checkout alone, so it should never reach the deploy role.
+      #
+      # Probes the export rather than grepping for it: the capability is what matters, and the
+      # module is pure, so importing it costs nothing.
+      #
+      # Absence is checked before the probe, not inferred from an import failure. The module only
+      # exists from PR #1095 onward, so most open pull-request heads do not have it at all — that
+      # is the ordinary "too old" case and shares the remedy with a module that lacks the export.
+      # Folding it into the load-failure arm instead would answer "the module is present but
+      # unreadable" for a file that is simply not there.
+      - name: Require component selection support in the selected commit
+        if: ${{ env.DEPLOY_EXCLUDE != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          module=apps/infra/scripts/deployment-scope.mjs
+          if [ ! -f "$module" ]; then
+            status=unsupported
+          else
+            status=$(node -e "import('./$module').then(m => console.log(typeof m.resolveDeployScope === 'function' ? 'supported' : 'unsupported')).catch(e => { console.log('unreadable'); console.error(e.message) })")
+          fi
+          case "$status" in
+            supported) ;;
+            unsupported)
+              echo "commit $BOXLITE_ARTIFACT_REF predates component selection, so it cannot honour" >&2
+              echo "--exclude $DEPLOY_EXCLUDE and would deploy the full stack instead." >&2
+              echo "Redispatch it with components=api+runner, or rebase it onto a main that has" >&2
+              echo "$module exporting resolveDeployScope." >&2
+              exit 1
+              ;;
+            *)
+              echo "$module exists at commit $BOXLITE_ARTIFACT_REF but failed to load (reason" >&2
+              echo "above). That is not an age problem, so fix the module rather than widening" >&2
+              echo "the scope to api+runner." >&2
+              exit 1
+              ;;
+          esac
+
       - name: Verify native AMD64 Docker
         shell: bash
         run: |

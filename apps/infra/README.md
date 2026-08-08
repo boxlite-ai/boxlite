@@ -195,6 +195,15 @@ artifact is not required to exist. Any other selector is refused. `deploy-infra.
 exposes the same three scopes as its `components` input and skips the build jobs
 for a leg it excludes.
 
+A narrowed scope needs a *deployed commit* that understands it, which is not the
+same commit as the workflow: `workflow_dispatch` reads the workflow definition
+from the dispatch ref while the deploy job checks out the selected one. So a
+`ref`/`pr` dispatch can pair a new workflow with a wrapper that predates
+`resolveDeployScope`. The job probes for it right after checkout and refuses
+before assuming the deploy role; redispatch such a commit with `api+runner`, or
+rebase it. Only a narrowed scope is affected — `api+runner` passes no selector
+and works against any commit.
+
 A narrowed deploy leaves the excluded leg on whatever commit an earlier run put
 there, so the stack is then mixed-commit; the residual partial-update risk above
 is why `apply` defaults to false and the guarded preview runs first. Run the

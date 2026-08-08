@@ -307,6 +307,54 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
     "${{ inputs.components == 'api' && 'Runner' || inputs.components == 'runner' && 'Api' || '' }}",
   )
   assert.doesNotMatch(liveShell(source), /--target/)
+  // The workflow definition comes from the dispatch ref while this job checks out the SELECTED
+  // commit, so the two are versioned independently and `--exclude` is the first thing that
+  // couples them. Observed: run 31229121181 dispatched `components=api` at a PR head predating
+  // component selection, and the old wrapper answered `partial SST deploys are disabled` — true
+  // of that commit, but it reads as a statement about this workflow.
+  const scopeSupportStep = workflow.jobs.deploy.steps.find(
+    (step) => step.name === 'Require component selection support in the selected commit',
+  )
+  assert.ok(scopeSupportStep, 'the component-selection capability check is missing')
+  assert.equal(scopeSupportStep.if, "${{ env.DEPLOY_EXCLUDE != '' }}", 'the check must run only for a narrowed scope')
+  // Probing the export, not grepping for it: a checkout can carry the identifier in a comment.
+  assertShellLine(scopeSupportStep.run, /typeof m\.resolveDeployScope === 'function'/)
+  // Absence is its own decision, taken before the probe. The module only exists from PR #1095
+  // onward, so most open pull-request heads do not have it at all — inferring that from an import
+  // failure lands them in the load-failure arm, which answers "present but failed to load" about
+  // a file that is not there and points at the wrong remedy.
+  assertShellLine(scopeSupportStep.run, /if \[ ! -f "\$module" \]; then/)
+  assertShellLine(scopeSupportStep.run, /status=unsupported/)
+  // Each arm, and the claim that distinguishes it. Pinning only the `if` leaves an arm free to
+  // carry another arm's message, which a passing suite would not notice: the arms differ solely
+  // in what they tell the operator, so a wrong cause here is invisible to every other assertion.
+  const scopeSupportShell = liveShell(scopeSupportStep.run)
+  assert.match(scopeSupportShell, /supported\) ;;/, 'the supported arm must be a no-op')
+  const tooOld = scopeSupportShell.slice(scopeSupportShell.indexOf('unsupported)'))
+  assert.match(
+    tooOld.slice(0, tooOld.indexOf(';;')),
+    /predates component selection/,
+    'the too-old arm must name age as the cause',
+  )
+  const unreadable = scopeSupportShell.slice(scopeSupportShell.indexOf('*)'))
+  assert.match(
+    unreadable,
+    /failed to load/,
+    'the load-failure arm must not describe the commit as too old — that is the other arm',
+  )
+  assert.doesNotMatch(
+    unreadable,
+    /predates component selection/,
+    'the load-failure arm must not reuse the too-old cause',
+  )
+  // Before the deploy role is assumed. An unsupported scope is knowable from the checkout alone,
+  // so it must never reach AWS credentials.
+  const deployStepNames = workflow.jobs.deploy.steps.map((step) => step.name)
+  assert.ok(
+    deployStepNames.indexOf('Require component selection support in the selected commit') <
+      deployStepNames.indexOf('Configure AWS credentials through OIDC'),
+    'the capability check must run before AWS credentials are configured',
+  )
   // A skipped build job would cascade a skip to the deploy under the implicit success(). Naming a
   // status-check function turns that off — without one, every narrowed dispatch silently deploys
   // nothing while reporting green.
