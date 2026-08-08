@@ -173,6 +173,11 @@ export default $config({
       )
     }
     const collectorExporters = clickHouseExporterEnabled ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
+    // Traces additionally fan out to Jaeger; metrics/logs stay off it (Jaeger
+    // ingests traces only).
+    const collectorTraceExporters = clickHouseExporterEnabled
+      ? '[boxlite_exporter,clickhouse,otlphttp/jaeger]'
+      : '[boxlite_exporter,otlphttp/jaeger]'
 
     // HTTPS everywhere: the Router CloudFront Function deletes customOriginConfig
     // for http origins and CF then falls back to match-viewer (→ tries HTTPS on a
@@ -352,14 +357,28 @@ export default $config({
     // Internal ALB by default: the trace UI exposes every span (URLs, headers,
     // IDs, SQL, error bodies) with no auth, and nothing outside the VPC needs
     // to read it. Reach it via VPN / bastion / `aws ssm start-session`.
-    // JAEGER_PUBLIC=true opts into an internet-facing ALB.
+    // JAEGER_PUBLIC=true opts into an internet-facing ALB — which then also
+    // exposes the unauthenticated OTLP ingest listener below.
     const jaegerPublic = envOr('JAEGER_PUBLIC', 'false') === 'true'
-    new sst.aws.Service('Jaeger', {
+    const jaeger = new sst.aws.Service('Jaeger', {
       cluster,
       image: IMAGES.jaeger,
-      loadBalancer: { public: jaegerPublic, rules: [{ listen: '80/http', forward: `${PORTS.JAEGER_UI}/http` }] },
+      loadBalancer: {
+        public: jaegerPublic,
+        rules: [
+          { listen: '80/http', forward: `${PORTS.JAEGER_UI}/http` },
+          // OTLP HTTP ingest, fed by the OtelCollector's otlphttp/jaeger exporter.
+          { listen: `${PORTS.OTLP_HTTP}/http`, forward: `${PORTS.OTLP_HTTP}/http` },
+        ],
+        health: {
+          // The OTLP receiver returns a client-error status for a bare
+          // health-check GET, which still proves the receiver is listening.
+          [`${PORTS.OTLP_HTTP}/http`]: httpHealth('/', { successCodes: '200-499' }),
+        },
+      },
       environment: { COLLECTOR_OTLP_ENABLED: 'true' },
     })
+    const jaegerOtlpHttpEndpoint = stripTrailingSlash(jaeger.url).apply((url) => `${url}:${PORTS.OTLP_HTTP}`)
 
     const otelCollector = new sst.aws.Service('OtelCollector', {
       cluster,
@@ -368,7 +387,7 @@ export default $config({
         '--config',
         '/otelcol/collector-config.yaml',
         '--set',
-        `service::pipelines::traces::exporters=${collectorExporters}`,
+        `service::pipelines::traces::exporters=${collectorTraceExporters}`,
         '--set',
         `service::pipelines::metrics::exporters=${collectorExporters}`,
         '--set',
@@ -404,6 +423,7 @@ export default $config({
           'BOXLITE_API_KEY',
           envOr('OTEL_COLLECTOR_API_KEY', envOr('ADMIN_API_KEY', adminApiKey.result)),
         ),
+        JAEGER_OTLP_HTTP_ENDPOINT: jaegerOtlpHttpEndpoint,
       },
     })
     const otelCollectorOtlpHttpUrl = stripTrailingSlash(otelCollector.url).apply((url) => `${url}:${PORTS.OTLP_HTTP}`)
@@ -790,6 +810,8 @@ export default $config({
         ...(publicOidcIssuer && {
           OIDC_PUBLIC_DOMAIN: publicOidcIssuer,
         }),
+        OTEL_TRACING_ENABLED: envOr('OTEL_TRACING_ENABLED', 'true'),
+        OTEL_EXPORTER_OTLP_ENDPOINT: envOr('OTEL_EXPORTER_OTLP_ENDPOINT', otelCollectorOtlpHttpUrl),
       },
       transform: {
         loadBalancer: (_args, opts) => {

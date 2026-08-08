@@ -7,6 +7,7 @@ exporters:
   - gomod: github.com/boxlite-ai/otel-collector/exporter v0.0.1
     name: boxliteexporter
     path: otel-collector/exporter
+  - gomod: go.opentelemetry.io/collector/exporter/otlphttpexporter v0.144.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/exporter/clickhouseexporter v0.144.0
     name: clickhouse
 
