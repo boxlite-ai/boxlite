@@ -21,6 +21,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/securecookie"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
@@ -146,6 +147,9 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 
 		common_errors.Recovery()(ctx)
 	})
+
+	// CONNECT tunnels bypass gin via connectAwareHandler, so they are unspanned.
+	router.Use(otelgin.Middleware("boxlite-proxy"))
 
 	router.Use(common_errors.NewErrorMiddleware(func(ctx *gin.Context, err error) common_errors.ErrorResponse {
 		return common_errors.ErrorResponse{

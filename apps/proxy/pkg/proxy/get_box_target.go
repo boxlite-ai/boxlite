@@ -21,6 +21,8 @@ import (
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
 	"github.com/boxlite-ai/common-go/pkg/utils"
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -84,6 +86,15 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 			return nil, err
 		}
 	}
+
+	// Stamp the API's span vocabulary (boxlite.* — see the API's
+	// ObservabilityContextInterceptor) so one key filters a box across
+	// services. Only box_id is stampable here: every proxy auth path is
+	// box-scoped, so org/user identity never reaches the proxy — the API
+	// stamps boxlite.org_id / boxlite.user_id on its own spans in the trace.
+	trace.SpanFromContext(ctx.Request.Context()).SetAttributes(
+		attribute.String("boxlite.box_id", boxId),
+	)
 
 	controllerValue, exists := ctx.Get(ACTIVITY_POLL_STOP_KEY)
 	controller, ok := controllerValue.(*activityPollController)
