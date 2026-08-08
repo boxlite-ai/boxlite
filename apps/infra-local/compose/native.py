@@ -38,6 +38,9 @@ PORT_PROXY = 4000
 PORT_DASHBOARD = 3000
 ALL_COMPONENTS = ("api", "runner", "proxy", "dashboard")  # start order: api first
 _RUNNER_TOKEN = "local-shared-runner-token-aaaa1111"
+# The otel box's host-mapped OTLP HTTP port (the port literal lives in
+# services.py SPEC_OTEL.ports); traces fan out from there to the jaeger box.
+_OTEL_OTLP_HTTP_URL = "http://127.0.0.1:24318"
 
 
 # ── colored logging (TTY only) ─────────────────────────────────────────────
@@ -240,6 +243,8 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "BOXLITE_HOME_DIR": str(p.runner_home),
                 "INSECURE_REGISTRIES": "127.0.0.1:25000",
                 "AWS_REGION": "us-east-1",
+                "OTEL_TRACING_ENABLED": "true",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": _OTEL_OTLP_HTTP_URL,
                 # The runner links the locally-built core, whose embedded guest
                 # may differ from the PyPI SDK version that ensure_runtime_env()
                 # pins for L1. Unset that pin so the runner resolves the runtime
@@ -262,6 +267,8 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "REDIS_HOST": "127.0.0.1",
                 "REDIS_PORT": "26379",
                 "SHUTDOWN_TIMEOUT_SEC": "10",
+                "OTEL_TRACING_ENABLED": "true",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": _OTEL_OTLP_HTTP_URL,
             },
             "boxlite-proxy$",
         ),
@@ -487,6 +494,11 @@ def _seed_api_env(p: _Paths, agent_img: str | None = None) -> None:
     # and point the curated-image allowlist at the local arm64 agent image.
     _set_env_kv(api_env, "PORT", str(PORT_API))
     _set_env_kv(api_env, "APP_URL", f"http://localhost:{PORT_API}")
+    # Trace export is infra-owned like PORT: the otel + jaeger boxes are always
+    # up, so force-enable it — .envs seeded from older templates ship
+    # OTEL_ENABLED=false (or no OTEL block at all) and would leave Jaeger empty.
+    _set_env_kv(api_env, "OTEL_ENABLED", "true")
+    _set_env_kv(api_env, "OTEL_EXPORTER_OTLP_ENDPOINT", _OTEL_OTLP_HTTP_URL)
     if agent_img:
         _set_env_kv(api_env, "BOXLITE_SYSTEM_BASE_IMAGE", agent_img)
     apps_env = p.apps / ".env"  # NestJS reads .env from cwd=apps/
