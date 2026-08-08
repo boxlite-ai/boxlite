@@ -3248,1093 +3248,6 @@ paths:
       summary: Recover box from error state as an admin
       tags:
       - admin
-  /admin/overview:
-    get:
-      operationId: adminGetOverview
-      parameters: []
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminOverview"
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Admin KPI summary
-      tags:
-      - admin
-  /admin/overview/users:
-    get:
-      operationId: adminListUsers
-      parameters: []
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: "#/components/schemas/AdminUserItem"
-                type: array
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: List all users (cross-org)
-      tags:
-      - admin
-  /admin/overview/boxes:
-    get:
-      operationId: adminListBoxes
-      parameters: []
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: "#/components/schemas/AdminBoxItem"
-                type: array
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: List all boxes (cross-org)
-      tags:
-      - admin
-  /admin/overview/runners:
-    get:
-      operationId: adminListRunnersOverview
-      parameters: []
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: "#/components/schemas/AdminRunnerItem"
-                type: array
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: List all runners with full details
-      tags:
-      - admin
-  /admin/overview/machines:
-    get:
-      operationId: adminListMachines
-      parameters: []
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: "#/components/schemas/AdminMachineItem"
-                type: array
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Runner-as-machine resource view
-      tags:
-      - admin
-  /admin/observability/status:
-    get:
-      operationId: adminGetObservabilityStatus
-      parameters: []
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminObservabilityStatusDto"
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get admin observability backend and layer status
-      tags:
-      - admin
-  /admin/observability/logs:
-    get:
-      operationId: adminGetObservabilityLogs
-      parameters:
-      - description: Start of time range (ISO 8601)
-        explode: true
-        in: query
-        name: from
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: End of time range (ISO 8601)
-        explode: true
-        in: query
-        name: to
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: Page number (1-indexed)
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          type: number
-        style: form
-      - description: Number of items per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          type: number
-        style: form
-      - description: Telemetry producer layer
-        explode: true
-        in: query
-        name: layer
-        required: false
-        schema:
-          enum:
-          - api
-          - runner
-          - ec2_host
-          - box
-          type: string
-        style: form
-      - description: OpenTelemetry service.name filter
-        explode: true
-        in: query
-        name: serviceName
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Organization ID filter
-        explode: true
-        in: query
-        name: orgId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: User ID filter
-        explode: true
-        in: query
-        name: userId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Box ID filter
-        explode: true
-        in: query
-        name: boxId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Runner ID filter
-        explode: true
-        in: query
-        name: runnerId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Machine or host ID filter
-        explode: true
-        in: query
-        name: machineId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Trace ID filter
-        explode: true
-        in: query
-        name: traceId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Request ID filter
-        explode: true
-        in: query
-        name: requestId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Operation ID filter
-        explode: true
-        in: query
-        name: operationId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Execution ID filter
-        explode: true
-        in: query
-        name: executionId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Job ID filter
-        explode: true
-        in: query
-        name: jobId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: "Filter by severity levels (DEBUG, INFO, WARN, ERROR)"
-        explode: true
-        in: query
-        name: severities
-        required: false
-        schema:
-          items:
-            type: string
-          type: array
-        style: form
-      - description: Search in log body
-        explode: true
-        in: query
-        name: search
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedLogs"
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get admin-scoped logs
-      tags:
-      - admin
-  /admin/observability/traces:
-    get:
-      operationId: adminGetObservabilityTraces
-      parameters:
-      - description: Start of time range (ISO 8601)
-        explode: true
-        in: query
-        name: from
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: End of time range (ISO 8601)
-        explode: true
-        in: query
-        name: to
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: Page number (1-indexed)
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          type: number
-        style: form
-      - description: Number of items per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          type: number
-        style: form
-      - description: Telemetry producer layer
-        explode: true
-        in: query
-        name: layer
-        required: false
-        schema:
-          enum:
-          - api
-          - runner
-          - ec2_host
-          - box
-          type: string
-        style: form
-      - description: OpenTelemetry service.name filter
-        explode: true
-        in: query
-        name: serviceName
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Organization ID filter
-        explode: true
-        in: query
-        name: orgId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: User ID filter
-        explode: true
-        in: query
-        name: userId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Box ID filter
-        explode: true
-        in: query
-        name: boxId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Runner ID filter
-        explode: true
-        in: query
-        name: runnerId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Machine or host ID filter
-        explode: true
-        in: query
-        name: machineId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Trace ID filter
-        explode: true
-        in: query
-        name: traceId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Request ID filter
-        explode: true
-        in: query
-        name: requestId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Operation ID filter
-        explode: true
-        in: query
-        name: operationId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Execution ID filter
-        explode: true
-        in: query
-        name: executionId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Job ID filter
-        explode: true
-        in: query
-        name: jobId
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedTraces"
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get admin-scoped traces
-      tags:
-      - admin
-  /admin/observability/traces/{traceId}:
-    get:
-      operationId: adminGetObservabilityTraceSpans
-      parameters:
-      - explode: false
-        in: path
-        name: traceId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Start of time range (ISO 8601)
-        explode: true
-        in: query
-        name: from
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: End of time range (ISO 8601)
-        explode: true
-        in: query
-        name: to
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: Page number (1-indexed)
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          type: number
-        style: form
-      - description: Number of items per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          type: number
-        style: form
-      - description: Telemetry producer layer
-        explode: true
-        in: query
-        name: layer
-        required: false
-        schema:
-          enum:
-          - api
-          - runner
-          - ec2_host
-          - box
-          type: string
-        style: form
-      - description: OpenTelemetry service.name filter
-        explode: true
-        in: query
-        name: serviceName
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Organization ID filter
-        explode: true
-        in: query
-        name: orgId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: User ID filter
-        explode: true
-        in: query
-        name: userId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Box ID filter
-        explode: true
-        in: query
-        name: boxId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Runner ID filter
-        explode: true
-        in: query
-        name: runnerId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Machine or host ID filter
-        explode: true
-        in: query
-        name: machineId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Request ID filter
-        explode: true
-        in: query
-        name: requestId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Operation ID filter
-        explode: true
-        in: query
-        name: operationId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Execution ID filter
-        explode: true
-        in: query
-        name: executionId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Job ID filter
-        explode: true
-        in: query
-        name: jobId
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: "#/components/schemas/TraceSpan"
-                type: array
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get admin-scoped trace spans
-      tags:
-      - admin
-  /admin/observability/metrics:
-    get:
-      operationId: adminGetObservabilityMetrics
-      parameters:
-      - description: Start of time range (ISO 8601)
-        explode: true
-        in: query
-        name: from
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: End of time range (ISO 8601)
-        explode: true
-        in: query
-        name: to
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: Page number (1-indexed)
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          type: number
-        style: form
-      - description: Number of items per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          type: number
-        style: form
-      - description: Telemetry producer layer
-        explode: true
-        in: query
-        name: layer
-        required: false
-        schema:
-          enum:
-          - api
-          - runner
-          - ec2_host
-          - box
-          type: string
-        style: form
-      - description: OpenTelemetry service.name filter
-        explode: true
-        in: query
-        name: serviceName
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Organization ID filter
-        explode: true
-        in: query
-        name: orgId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: User ID filter
-        explode: true
-        in: query
-        name: userId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Box ID filter
-        explode: true
-        in: query
-        name: boxId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Runner ID filter
-        explode: true
-        in: query
-        name: runnerId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Machine or host ID filter
-        explode: true
-        in: query
-        name: machineId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Trace ID filter
-        explode: true
-        in: query
-        name: traceId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Request ID filter
-        explode: true
-        in: query
-        name: requestId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Operation ID filter
-        explode: true
-        in: query
-        name: operationId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Execution ID filter
-        explode: true
-        in: query
-        name: executionId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Job ID filter
-        explode: true
-        in: query
-        name: jobId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Filter by metric names
-        explode: true
-        in: query
-        name: metricNames
-        required: false
-        schema:
-          items:
-            type: string
-          type: array
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MetricsResponse"
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get admin-scoped metrics
-      tags:
-      - admin
-  /admin/observability/investigate:
-    get:
-      operationId: adminInvestigateObservability
-      parameters:
-      - description: Start of time range (ISO 8601)
-        explode: true
-        in: query
-        name: from
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: End of time range (ISO 8601)
-        explode: true
-        in: query
-        name: to
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: Page number (1-indexed)
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          type: number
-        style: form
-      - description: Number of items per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          type: number
-        style: form
-      - description: Telemetry producer layer
-        explode: true
-        in: query
-        name: layer
-        required: false
-        schema:
-          enum:
-          - api
-          - runner
-          - ec2_host
-          - box
-          type: string
-        style: form
-      - description: OpenTelemetry service.name filter
-        explode: true
-        in: query
-        name: serviceName
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Organization ID filter
-        explode: true
-        in: query
-        name: orgId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: User ID filter
-        explode: true
-        in: query
-        name: userId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Box ID filter
-        explode: true
-        in: query
-        name: boxId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Runner ID filter
-        explode: true
-        in: query
-        name: runnerId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Machine or host ID filter
-        explode: true
-        in: query
-        name: machineId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Trace ID filter
-        explode: true
-        in: query
-        name: traceId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Request ID filter
-        explode: true
-        in: query
-        name: requestId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Operation ID filter
-        explode: true
-        in: query
-        name: operationId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Execution ID filter
-        explode: true
-        in: query
-        name: executionId
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: Job ID filter
-        explode: true
-        in: query
-        name: jobId
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminObservabilityInvestigateResponse"
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Investigate related observability and platform state from trace or
-        resource identifiers
-      tags:
-      - admin
-  /audit:
-    get:
-      operationId: getAllAuditLogs
-      parameters:
-      - description: Page number of the results
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          minimum: 1
-          type: number
-        style: form
-      - description: Number of results per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          maximum: 200
-          minimum: 1
-          type: number
-        style: form
-      - description: From date (ISO 8601 format)
-        explode: true
-        in: query
-        name: from
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: To date (ISO 8601 format)
-        explode: true
-        in: query
-        name: to
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: "Token for cursor-based pagination. When provided, takes precedence\
-          \ over page parameter."
-        explode: true
-        in: query
-        name: nextToken
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedAuditLogs"
-          description: Paginated list of all audit logs
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get all audit logs
-      tags:
-      - audit
-  /audit/organizations/{organizationId}:
-    get:
-      operationId: getOrganizationAuditLogs
-      parameters:
-      - description: Organization ID
-        explode: false
-        in: path
-        name: organizationId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Page number of the results
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          minimum: 1
-          type: number
-        style: form
-      - description: Number of results per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          maximum: 200
-          minimum: 1
-          type: number
-        style: form
-      - description: From date (ISO 8601 format)
-        explode: true
-        in: query
-        name: from
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: To date (ISO 8601 format)
-        explode: true
-        in: query
-        name: to
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: "Token for cursor-based pagination. When provided, takes precedence\
-          \ over page parameter."
-        explode: true
-        in: query
-        name: nextToken
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedAuditLogs"
-          description: Paginated list of organization audit logs
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get audit logs for organization
-      tags:
-      - audit
   /webhooks/organizations/{organizationId}/app-portal-access:
     post:
       operationId: WebhookController_getAppPortalAccess
@@ -4555,6 +3468,150 @@ paths:
       summary: Get temporary storage access for pushing objects
       tags:
       - object-storage
+  /audit:
+    get:
+      operationId: getAllAuditLogs
+      parameters:
+      - description: Page number of the results
+        explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          minimum: 1
+          type: number
+        style: form
+      - description: Number of results per page
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 100
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      - description: From date (ISO 8601 format)
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: To date (ISO 8601 format)
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Token for cursor-based pagination. When provided, takes precedence\
+          \ over page parameter."
+        explode: true
+        in: query
+        name: nextToken
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedAuditLogs"
+          description: Paginated list of all audit logs
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get all audit logs
+      tags:
+      - audit
+  /audit/organizations/{organizationId}:
+    get:
+      operationId: getOrganizationAuditLogs
+      parameters:
+      - description: Organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Page number of the results
+        explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          minimum: 1
+          type: number
+        style: form
+      - description: Number of results per page
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 100
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      - description: From date (ISO 8601 format)
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: To date (ISO 8601 format)
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Token for cursor-based pagination. When provided, takes precedence\
+          \ over page parameter."
+        explode: true
+        in: query
+        name: nextToken
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedAuditLogs"
+          description: Paginated list of organization audit logs
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get audit logs for organization
+      tags:
+      - audit
   /health:
     get:
       operationId: HealthController_live
@@ -7507,575 +6564,256 @@ components:
       - updatedAt
       - version
       type: object
-    AdminOverviewBoxes:
+    WebhookAppPortalAccess:
       example:
-        total: 80
-        byState:
-          started: 15
-          error: 2
-          build_failed: 1
-          stopped: 62
+        token: appsk_...
+        url: https://app.svix.com/app_1234567890
       properties:
-        total:
-          description: Total number of boxes across all states
-          example: 80
-          type: number
-        byState:
-          additionalProperties:
-            type: number
-          description: Box counts keyed by BoxState
-          example:
-            started: 15
-            error: 2
-            build_failed: 1
-            stopped: 62
-          type: object
+        token:
+          description: The authentication token for the Svix consumer app portal
+          example: appsk_...
+          type: string
+        url:
+          description: The URL to the webhook app portal
+          example: https://app.svix.com/app_1234567890
+          type: string
       required:
-      - byState
-      - total
+      - token
+      - url
       type: object
-    AdminOverviewRunners:
+    WebhookEvent:
+      description: The type of event being sent
+      enum:
+      - box.created
+      - box.state.updated
+      - template.created
+      - template.state.updated
+      - template.removed
+      - volume.created
+      - volume.state.updated
+      type: string
+    SendWebhookDto:
       example:
-        online: 3
-        total: 5
-        draining: 1
+        eventType: box.created
+        payload:
+          id: box-123
+          name: My Box
+        eventId: evt_1234567890abcdef
       properties:
-        online:
-          description: Number of online (ready) runners
+        eventType:
+          allOf:
+          - $ref: "#/components/schemas/WebhookEvent"
+          description: The type of event being sent
+          example: box.created
+        payload:
+          description: The payload data to send
+          example:
+            id: box-123
+            name: My Box
+          type: object
+        eventId:
+          description: Optional event ID for idempotency
+          example: evt_1234567890abcdef
+          type: string
+      required:
+      - eventType
+      - payload
+      type: object
+    WebhookInitializationStatus:
+      example:
+        organizationId: 123e4567-e89b-12d3-a456-426614174000
+        svixApplicationId: app_1234567890
+        lastError: Failed to create Svix application
+        retryCount: 3
+        createdAt: 2023-01-01T00:00:00.000Z
+        updatedAt: 2023-01-01T00:00:00.000Z
+      properties:
+        organizationId:
+          description: Organization ID
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        svixApplicationId:
+          description: The ID of the Svix application
+          example: app_1234567890
+          nullable: true
+          type: string
+        lastError:
+          description: The error reason for the last initialization attempt
+          example: Failed to create Svix application
+          nullable: true
+          type: string
+        retryCount:
+          description: The number of times the initialization has been attempted
           example: 3
           type: number
-        total:
-          description: Total number of runners
-          example: 5
-          type: number
-        draining:
-          description: Number of draining runners
-          example: 1
-          type: number
+        createdAt:
+          description: When the webhook initialization was created
+          example: 2023-01-01T00:00:00.000Z
+          type: string
+        updatedAt:
+          description: When the webhook initialization was last updated
+          example: 2023-01-01T00:00:00.000Z
+          type: string
       required:
-      - draining
-      - online
-      - total
+      - createdAt
+      - lastError
+      - organizationId
+      - retryCount
+      - svixApplicationId
+      - updatedAt
       type: object
-    AdminOverviewCluster:
+    StorageAccessDto:
       example:
-        cpuUtil: 0.42
-        oversell: 1.1
+        accessKey: temp-user-123
+        secret: abchbGciOiJIUzI1NiIs...
+        sessionToken: eyJhbGciOiJIUzI1NiIs...
+        storageUrl: storage.example.com
+        organizationId: 123e4567-e89b-12d3-a456-426614174000
+        bucket: boxlite
       properties:
-        cpuUtil:
-          description: Average CPU utilisation across all runners (0–1)
-          example: 0.42
-          type: number
-        oversell:
-          description: Average CPU oversell ratio (allocated / capacity); 0 when no
-            capacity
-          example: 1.1
-          type: number
-      required:
-      - cpuUtil
-      - oversell
-      type: object
-    AdminOverview:
-      example:
-        users: 120
-        activeBoxes: 47
-        boxes:
-          total: 80
-          byState:
-            started: 15
-            error: 2
-            build_failed: 1
-            stopped: 62
-        runners:
-          online: 3
-          total: 5
-          draining: 1
-        cluster:
-          cpuUtil: 0.42
-          oversell: 1.1
-      properties:
-        users:
-          description: Total number of users
-          example: 120
-          type: number
-        activeBoxes:
-          description: Number of active (started) boxes
-          example: 47
-          type: number
-        boxes:
-          $ref: "#/components/schemas/AdminOverviewBoxes"
-        runners:
-          $ref: "#/components/schemas/AdminOverviewRunners"
-        cluster:
-          $ref: "#/components/schemas/AdminOverviewCluster"
-      required:
-      - activeBoxes
-      - boxes
-      - cluster
-      - runners
-      - users
-      type: object
-    SystemRole:
-      enum:
-      - admin
-      - user
-      type: string
-    AdminUserItem:
-      example:
-        id: usr_abc123
-        email: alice@example.com
-        name: Alice Smith
-        role: user
-      properties:
-        id:
-          description: User ID
-          example: usr_abc123
+        accessKey:
+          description: Access key for storage authentication
+          example: temp-user-123
           type: string
-        email:
-          description: User email
-          example: alice@example.com
+        secret:
+          description: Secret key for storage authentication
+          example: abchbGciOiJIUzI1NiIs...
           type: string
-        name:
-          description: Display name
-          example: Alice Smith
+        sessionToken:
+          description: Session token for storage authentication
+          example: eyJhbGciOiJIUzI1NiIs...
           type: string
-        role:
-          allOf:
-          - $ref: "#/components/schemas/SystemRole"
-          example: user
-      required:
-      - email
-      - id
-      - name
-      - role
-      type: object
-    AdminBoxOwner:
-      example:
-        userId: usr_abc123
-        name: Alice Smith
-        email: alice@example.com
-        orgName: Alice Personal
-        personal: true
-      properties:
-        userId:
-          description: Creator/user ID behind this owner group when available
-          example: usr_abc123
-          type: string
-        name:
-          description: Display name for the owner group
-          example: Alice Smith
-          type: string
-        email:
-          description: "Owner email for personal organizations, blank when unavailable"
-          example: alice@example.com
-          type: string
-        orgName:
-          description: Organization name backing this box
-          example: Alice Personal
-          type: string
-        personal:
-          description: Whether this is a personal organization
-          example: true
-          type: boolean
-      required:
-      - email
-      - name
-      - orgName
-      - personal
-      type: object
-    AdminBoxItem:
-      example:
-        id: box_abc123
-        organizationId: org_xyz
-        state: started
-        runnerId: runner-uuid
-        cpu: 2
-        memoryGiB: 4
-        createdAt: 2024-01-01T00:00:00Z
-        owner:
-          userId: usr_abc123
-          name: Alice Smith
-          email: alice@example.com
-          orgName: Alice Personal
-          personal: true
-      properties:
-        id:
-          description: Box ID
-          example: box_abc123
+        storageUrl:
+          description: Storage URL
+          example: storage.example.com
           type: string
         organizationId:
           description: Organization ID
-          example: org_xyz
+          example: 123e4567-e89b-12d3-a456-426614174000
           type: string
-        state:
-          allOf:
-          - $ref: "#/components/schemas/BoxState"
-          example: started
-        runnerId:
-          description: Runner ID the box is assigned to
-          example: runner-uuid
+        bucket:
+          description: S3 bucket name
+          example: boxlite
           type: string
-        cpu:
-          description: Allocated CPU (vCPUs)
-          example: 2
-          type: number
-        memoryGiB:
-          description: Allocated memory in GiB
-          example: 4
-          type: number
-        createdAt:
-          description: Creation timestamp
-          example: 2024-01-01T00:00:00Z
-          type: string
-        owner:
-          $ref: "#/components/schemas/AdminBoxOwner"
       required:
-      - cpu
-      - createdAt
-      - id
+      - accessKey
+      - bucket
       - organizationId
-      - owner
-      - state
+      - secret
+      - sessionToken
+      - storageUrl
       type: object
-    AdminRunnerItem:
+    AuditLog:
       example:
-        id: runner123
-        domain: runner1.example.com
-        apiUrl: https://api.runner1.example.com
-        proxyUrl: https://proxy.runner1.example.com
-        cpu: 8
-        memory: 16
-        disk: 100
-        gpu: 1
-        gpuType: gpuType
-        class: small
-        currentCpuUsagePercentage: 45.6
-        currentMemoryUsagePercentage: 68.2
-        currentDiskUsagePercentage: 33.8
-        currentAllocatedCpu: 4000
-        currentAllocatedMemoryGiB: 8000
-        currentAllocatedDiskGiB: 50000
-        currentStartedBoxes: 5
-        availabilityScore: 85
-        region: us
-        name: runner1
-        state: initializing
-        lastChecked: 2024-10-01T12:00:00Z
-        unschedulable: false
-        createdAt: 2023-10-01T12:00:00Z
-        updatedAt: 2023-10-01T12:00:00Z
-        version: "0"
-        apiVersion: "0"
-        appVersion: v0.0.0-dev
-        regionType: shared
-        draining: false
+        id: id
+        actorId: actorId
+        actorEmail: actorEmail
+        organizationId: organizationId
+        action: action
+        targetType: targetType
+        targetId: targetId
+        statusCode: 0.8008281904610115
+        errorMessage: errorMessage
+        ipAddress: ipAddress
+        userAgent: userAgent
+        source: source
+        metadata:
+          key: ""
+        createdAt: 2000-01-23T04:56:07.000+00:00
       properties:
         id:
-          description: The ID of the runner
-          example: runner123
           type: string
-        domain:
-          description: The domain of the runner
-          example: runner1.example.com
+        actorId:
           type: string
-        apiUrl:
-          description: The API URL of the runner
-          example: https://api.runner1.example.com
+        actorEmail:
           type: string
-        proxyUrl:
-          description: The proxy URL of the runner
-          example: https://proxy.runner1.example.com
+        organizationId:
           type: string
-        cpu:
-          description: The CPU capacity of the runner
-          example: 8
-          type: number
-        memory:
-          description: The memory capacity of the runner in GiB
-          example: 16
-          type: number
-        disk:
-          description: The disk capacity of the runner in GiB
-          example: 100
-          type: number
-        gpu:
-          description: The GPU capacity of the runner
-          example: 1
-          type: number
-        gpuType:
-          description: The type of GPU
+        action:
           type: string
-        class:
-          allOf:
-          - $ref: "#/components/schemas/BoxClass"
-          description: The class of the runner
-          example: small
-        currentCpuUsagePercentage:
-          description: Current CPU usage percentage
-          example: 45.6
-          type: number
-        currentMemoryUsagePercentage:
-          description: Current RAM usage percentage
-          example: 68.2
-          type: number
-        currentDiskUsagePercentage:
-          description: Current disk usage percentage
-          example: 33.8
-          type: number
-        currentAllocatedCpu:
-          description: Current allocated CPU
-          example: 4000
-          type: number
-        currentAllocatedMemoryGiB:
-          description: Current allocated memory in GiB
-          example: 8000
-          type: number
-        currentAllocatedDiskGiB:
-          description: Current allocated disk in GiB
-          example: 50000
-          type: number
-        currentStartedBoxes:
-          description: Current number of started boxes
-          example: 5
-          type: number
-        availabilityScore:
-          description: Runner availability score
-          example: 85
-          type: number
-        region:
-          description: The region of the runner
-          example: us
+        targetType:
           type: string
-        name:
-          description: The name of the runner
-          example: runner1
+        targetId:
           type: string
-        state:
-          allOf:
-          - $ref: "#/components/schemas/RunnerState"
-          description: The state of the runner
-          example: initializing
-        lastChecked:
-          description: The last time the runner was checked
-          example: 2024-10-01T12:00:00Z
+        statusCode:
+          type: number
+        errorMessage:
           type: string
-        unschedulable:
-          description: Whether the runner is unschedulable
-          example: false
-          type: boolean
+        ipAddress:
+          type: string
+        userAgent:
+          type: string
+        source:
+          type: string
+        metadata:
+          additionalProperties: true
+          type: object
         createdAt:
-          description: The creation timestamp of the runner
-          example: 2023-10-01T12:00:00Z
+          format: date-time
           type: string
-        updatedAt:
-          description: The last update timestamp of the runner
-          example: 2023-10-01T12:00:00Z
-          type: string
-        version:
-          deprecated: true
-          description: The version of the runner (deprecated in favor of apiVersion)
-          example: "0"
-          type: string
-        apiVersion:
-          deprecated: true
-          description: The api version of the runner
-          example: "0"
-          type: string
-        appVersion:
-          deprecated: true
-          description: The app version of the runner
-          example: v0.0.0-dev
-          type: string
-        regionType:
-          allOf:
-          - $ref: "#/components/schemas/RegionType"
-          description: The region type of the runner
-          example: shared
-        draining:
-          description: Whether the runner is currently draining
-          example: false
-          type: boolean
       required:
-      - apiVersion
-      - class
-      - cpu
+      - action
+      - actorEmail
+      - actorId
       - createdAt
-      - disk
-      - draining
       - id
-      - memory
-      - name
-      - region
-      - state
-      - unschedulable
-      - updatedAt
-      - version
       type: object
-    AdminMachineItem:
+    PaginatedAuditLogs:
       example:
-        host: runner-uuid
-        region: us-east-1
-        oversellCpu: 0.75
-        cpuWaterline: 45.6
-        memWaterline: 68.2
-        boxes: 5
+        items:
+        - id: id
+          actorId: actorId
+          actorEmail: actorEmail
+          organizationId: organizationId
+          action: action
+          targetType: targetType
+          targetId: targetId
+          statusCode: 0.8008281904610115
+          errorMessage: errorMessage
+          ipAddress: ipAddress
+          userAgent: userAgent
+          source: source
+          metadata:
+            key: ""
+          createdAt: 2000-01-23T04:56:07.000+00:00
+        - id: id
+          actorId: actorId
+          actorEmail: actorEmail
+          organizationId: organizationId
+          action: action
+          targetType: targetType
+          targetId: targetId
+          statusCode: 0.8008281904610115
+          errorMessage: errorMessage
+          ipAddress: ipAddress
+          userAgent: userAgent
+          source: source
+          metadata:
+            key: ""
+          createdAt: 2000-01-23T04:56:07.000+00:00
+        total: 6.027456183070403
+        page: 1.4658129805029452
+        totalPages: 5.962133916683182
+        nextToken: nextToken
       properties:
-        host:
-          description: Runner / host ID
-          example: runner-uuid
-          type: string
-        region:
-          description: Region ID
-          example: us-east-1
-          type: string
-        oversellCpu:
-          description: CPU oversell ratio (allocatedCpu / totalCpu); 0 when capacity
-            is 0
-          example: 0.75
-          type: number
-        cpuWaterline:
-          description: CPU utilisation waterline (0–100)
-          example: 45.6
-          type: number
-        memWaterline:
-          description: Memory utilisation waterline (0–100)
-          example: 68.2
-          type: number
-        boxes:
-          description: Number of currently started boxes on this runner
-          example: 5
-          type: number
-      required:
-      - boxes
-      - cpuWaterline
-      - host
-      - memWaterline
-      - oversellCpu
-      - region
-      type: object
-    AdminObservabilityBackendStatusDto:
-      example:
-        configured: true
-        state: missing
-        message: message
-      properties:
-        configured:
-          description: Whether ClickHouse/ClickStack query configuration is present
-          type: boolean
-        state:
-          enum:
-          - missing
-          - configured
-          - receiving
-          - stale
-          - error
-          type: string
-        message:
-          type: string
-      required:
-      - configured
-      - state
-      type: object
-    AdminObservabilityLayerSignalsDto:
-      example:
-        logs: missing
-        traces: missing
-        metrics: missing
-      properties:
-        logs:
-          enum:
-          - missing
-          - configured
-          - receiving
-          - stale
-          - error
-          type: string
-        traces:
-          enum:
-          - missing
-          - configured
-          - receiving
-          - stale
-          - error
-          type: string
-        metrics:
-          enum:
-          - missing
-          - configured
-          - receiving
-          - stale
-          - error
-          type: string
-      required:
-      - logs
-      - metrics
-      - traces
-      type: object
-    AdminObservabilityLayerStatusDto:
-      example:
-        layer: api
-        state: missing
-        signals:
-          logs: missing
-          traces: missing
-          metrics: missing
-        lastSeen: lastSeen
-      properties:
-        layer:
-          enum:
-          - api
-          - runner
-          - ec2_host
-          - box
-          type: string
-        state:
-          enum:
-          - missing
-          - configured
-          - receiving
-          - stale
-          - error
-          type: string
-        signals:
-          $ref: "#/components/schemas/AdminObservabilityLayerSignalsDto"
-        lastSeen:
-          type: string
-      required:
-      - layer
-      - signals
-      - state
-      type: object
-    AdminObservabilityStatusDto:
-      example:
-        backend:
-          configured: true
-          state: missing
-          message: message
-        layers:
-        - layer: api
-          state: missing
-          signals:
-            logs: missing
-            traces: missing
-            metrics: missing
-          lastSeen: lastSeen
-        - layer: api
-          state: missing
-          signals:
-            logs: missing
-            traces: missing
-            metrics: missing
-          lastSeen: lastSeen
-      properties:
-        backend:
-          $ref: "#/components/schemas/AdminObservabilityBackendStatusDto"
-        layers:
+        items:
           items:
-            $ref: "#/components/schemas/AdminObservabilityLayerStatusDto"
+            $ref: "#/components/schemas/AuditLog"
           type: array
+        total:
+          type: number
+        page:
+          type: number
+        totalPages:
+          type: number
+        nextToken:
+          description: Token for next page in cursor-based pagination
+          type: string
       required:
-      - backend
-      - layers
+      - items
+      - page
+      - total
+      - totalPages
       type: object
     LogEntry:
       example:
@@ -8376,1214 +7114,6 @@ components:
           type: array
       required:
       - series
-      type: object
-    AdminObservabilityResourceSummary:
-      example:
-        type: box
-        title: title
-        subtitle: subtitle
-        state: state
-        owner: owner
-        identifiers:
-          key: ""
-        timeRange:
-          key: ""
-      properties:
-        type:
-          enum:
-          - box
-          - runner
-          - machine
-          - trace
-          - request
-          - operation
-          - execution
-          - job
-          - org
-          - user
-          - unknown
-          type: string
-        title:
-          type: string
-        subtitle:
-          type: string
-        state:
-          type: string
-        owner:
-          type: string
-        identifiers:
-          additionalProperties: true
-          type: object
-        timeRange:
-          additionalProperties: true
-          type: object
-      required:
-      - title
-      - type
-      type: object
-    AdminObservabilityCorrelation:
-      example:
-        traceIds:
-        - traceIds
-        - traceIds
-        orgIds:
-        - orgIds
-        - orgIds
-        userIds:
-        - userIds
-        - userIds
-        boxIds:
-        - boxIds
-        - boxIds
-        runnerIds:
-        - runnerIds
-        - runnerIds
-        machineIds:
-        - machineIds
-        - machineIds
-        requestIds:
-        - requestIds
-        - requestIds
-        operationIds:
-        - operationIds
-        - operationIds
-        executionIds:
-        - executionIds
-        - executionIds
-        jobIds:
-        - jobIds
-        - jobIds
-        serviceNames:
-        - serviceNames
-        - serviceNames
-      properties:
-        traceIds:
-          items:
-            type: string
-          type: array
-        orgIds:
-          items:
-            type: string
-          type: array
-        userIds:
-          items:
-            type: string
-          type: array
-        boxIds:
-          items:
-            type: string
-          type: array
-        runnerIds:
-          items:
-            type: string
-          type: array
-        machineIds:
-          items:
-            type: string
-          type: array
-        requestIds:
-          items:
-            type: string
-          type: array
-        operationIds:
-          items:
-            type: string
-          type: array
-        executionIds:
-          items:
-            type: string
-          type: array
-        jobIds:
-          items:
-            type: string
-          type: array
-        serviceNames:
-          items:
-            type: string
-          type: array
-      required:
-      - boxIds
-      - executionIds
-      - jobIds
-      - machineIds
-      - operationIds
-      - orgIds
-      - requestIds
-      - runnerIds
-      - serviceNames
-      - traceIds
-      - userIds
-      type: object
-    AdminObservabilitySourceStatus:
-      example:
-        source: clickhouse
-        state: available
-        message: message
-        count: 0.8008281904610115
-      properties:
-        source:
-          enum:
-          - clickhouse
-          - clickstack
-          - postgres
-          - audit
-          - cloudwatch
-          - s3
-          - xlog
-          type: string
-        state:
-          enum:
-          - available
-          - missing
-          - stale
-          - not_configured
-          - error
-          type: string
-        message:
-          type: string
-        count:
-          type: number
-      required:
-      - source
-      - state
-      type: object
-    AdminObservabilityAuditLog:
-      example:
-        id: id
-        actorId: actorId
-        actorEmail: actorEmail
-        organizationId: organizationId
-        action: action
-        targetType: targetType
-        targetId: targetId
-        statusCode: 6.027456183070403
-        errorMessage: errorMessage
-        source: source
-        metadata:
-          key: ""
-        createdAt: 2000-01-23T04:56:07.000+00:00
-      properties:
-        id:
-          type: string
-        actorId:
-          type: string
-        actorEmail:
-          type: string
-        organizationId:
-          type: string
-        action:
-          type: string
-        targetType:
-          type: string
-        targetId:
-          type: string
-        statusCode:
-          type: number
-        errorMessage:
-          type: string
-        source:
-          type: string
-        metadata:
-          additionalProperties: true
-          type: object
-        createdAt:
-          format: date-time
-          type: string
-      required:
-      - action
-      - actorEmail
-      - actorId
-      - createdAt
-      - id
-      type: object
-    AdminObservabilityXLog:
-      example:
-        source: source
-        timestamp: timestamp
-        serviceName: serviceName
-        body: body
-        severityText: severityText
-        traceId: traceId
-        spanId: spanId
-        executionId: executionId
-        jobId: jobId
-        stream: stream
-        attributes:
-          key: ""
-      properties:
-        source:
-          type: string
-        timestamp:
-          type: string
-        serviceName:
-          type: string
-        body:
-          type: string
-        severityText:
-          type: string
-        traceId:
-          type: string
-        spanId:
-          type: string
-        executionId:
-          type: string
-        jobId:
-          type: string
-        stream:
-          type: string
-        attributes:
-          additionalProperties: true
-          type: object
-      required:
-      - body
-      - serviceName
-      - source
-      - timestamp
-      type: object
-    AdminObservabilityS3Object:
-      example:
-        bucket: bucket
-        key: key
-        size: 1.4658129805029452
-        lastModified: 2000-01-23T04:56:07.000+00:00
-        etag: etag
-        matchedBy: matchedBy
-      properties:
-        bucket:
-          type: string
-        key:
-          type: string
-        size:
-          type: number
-        lastModified:
-          format: date-time
-          type: string
-        etag:
-          type: string
-        matchedBy:
-          type: string
-      required:
-      - bucket
-      - key
-      type: object
-    AdminObservabilityTimelineEvent:
-      example:
-        timestamp: timestamp
-        source: source
-        title: title
-        detail: detail
-        severity: severity
-        identifiers:
-          key: ""
-      properties:
-        timestamp:
-          type: string
-        source:
-          type: string
-        title:
-          type: string
-        detail:
-          type: string
-        severity:
-          type: string
-        identifiers:
-          additionalProperties: true
-          type: object
-      required:
-      - source
-      - timestamp
-      - title
-      type: object
-    AdminObservabilityOperation:
-      example:
-        id: id
-        label: label
-        state: enabled
-        method: method
-        path: path
-        reason: reason
-        targetId: targetId
-      properties:
-        id:
-          type: string
-        label:
-          type: string
-        state:
-          enum:
-          - enabled
-          - disabled
-          - request_only
-          type: string
-        method:
-          type: string
-        path:
-          type: string
-        reason:
-          type: string
-        targetId:
-          type: string
-      required:
-      - id
-      - label
-      - method
-      - path
-      - reason
-      - state
-      type: object
-    AdminObservabilityCommands:
-      example:
-        api: api
-        aiAgentPrompt: aiAgentPrompt
-      properties:
-        api:
-          type: string
-        aiAgentPrompt:
-          type: string
-      required:
-      - aiAgentPrompt
-      - api
-      type: object
-    AdminObservabilityClickStackSourceSetup:
-      example:
-        kind: logs
-        envVar: envVar
-        name: name
-        dataType: dataType
-        database: database
-        table: table
-        timestampColumn: timestampColumn
-        defaultSelect: defaultSelect
-        fields:
-          key: ""
-        metricTables:
-          key: ""
-      properties:
-        kind:
-          enum:
-          - logs
-          - traces
-          - metrics
-          type: string
-        envVar:
-          type: string
-        name:
-          type: string
-        dataType:
-          type: string
-        database:
-          type: string
-        table:
-          type: string
-        timestampColumn:
-          type: string
-        defaultSelect:
-          type: string
-        fields:
-          additionalProperties: true
-          type: object
-        metricTables:
-          additionalProperties: true
-          type: object
-      required:
-      - dataType
-      - database
-      - envVar
-      - kind
-      - name
-      - timestampColumn
-      type: object
-    AdminObservabilityClickStackLinks:
-      example:
-        configured: true
-        message: message
-        missingSources:
-        - missingSources
-        - missingSources
-        sourceSetup:
-        - kind: logs
-          envVar: envVar
-          name: name
-          dataType: dataType
-          database: database
-          table: table
-          timestampColumn: timestampColumn
-          defaultSelect: defaultSelect
-          fields:
-            key: ""
-          metricTables:
-            key: ""
-        - kind: logs
-          envVar: envVar
-          name: name
-          dataType: dataType
-          database: database
-          table: table
-          timestampColumn: timestampColumn
-          defaultSelect: defaultSelect
-          fields:
-            key: ""
-          metricTables:
-            key: ""
-        logsUrl: logsUrl
-        dashboardUrl: dashboardUrl
-        tracesUrl: tracesUrl
-        metricsUrl: metricsUrl
-        query: query
-        queryContext:
-          key: ""
-      properties:
-        configured:
-          type: boolean
-        message:
-          type: string
-        missingSources:
-          items:
-            type: string
-          type: array
-        sourceSetup:
-          items:
-            $ref: "#/components/schemas/AdminObservabilityClickStackSourceSetup"
-          type: array
-        logsUrl:
-          type: string
-        dashboardUrl:
-          type: string
-        tracesUrl:
-          type: string
-        metricsUrl:
-          type: string
-        query:
-          type: string
-        queryContext:
-          additionalProperties: true
-          type: object
-      required:
-      - configured
-      type: object
-    AdminObservabilityExternalLinks:
-      example:
-        clickstack:
-          configured: true
-          message: message
-          missingSources:
-          - missingSources
-          - missingSources
-          sourceSetup:
-          - kind: logs
-            envVar: envVar
-            name: name
-            dataType: dataType
-            database: database
-            table: table
-            timestampColumn: timestampColumn
-            defaultSelect: defaultSelect
-            fields:
-              key: ""
-            metricTables:
-              key: ""
-          - kind: logs
-            envVar: envVar
-            name: name
-            dataType: dataType
-            database: database
-            table: table
-            timestampColumn: timestampColumn
-            defaultSelect: defaultSelect
-            fields:
-              key: ""
-            metricTables:
-              key: ""
-          logsUrl: logsUrl
-          dashboardUrl: dashboardUrl
-          tracesUrl: tracesUrl
-          metricsUrl: metricsUrl
-          query: query
-          queryContext:
-            key: ""
-      properties:
-        clickstack:
-          $ref: "#/components/schemas/AdminObservabilityClickStackLinks"
-      required:
-      - clickstack
-      type: object
-    AdminObservabilityInvestigateResponse:
-      example:
-        resource:
-          type: box
-          title: title
-          subtitle: subtitle
-          state: state
-          owner: owner
-          identifiers:
-            key: ""
-          timeRange:
-            key: ""
-        correlation:
-          traceIds:
-          - traceIds
-          - traceIds
-          orgIds:
-          - orgIds
-          - orgIds
-          userIds:
-          - userIds
-          - userIds
-          boxIds:
-          - boxIds
-          - boxIds
-          runnerIds:
-          - runnerIds
-          - runnerIds
-          machineIds:
-          - machineIds
-          - machineIds
-          requestIds:
-          - requestIds
-          - requestIds
-          operationIds:
-          - operationIds
-          - operationIds
-          executionIds:
-          - executionIds
-          - executionIds
-          jobIds:
-          - jobIds
-          - jobIds
-          serviceNames:
-          - serviceNames
-          - serviceNames
-        sources:
-        - source: clickhouse
-          state: available
-          message: message
-          count: 0.8008281904610115
-        - source: clickhouse
-          state: available
-          message: message
-          count: 0.8008281904610115
-        traceSpans:
-        - traceId: traceId
-          spanId: spanId
-          parentSpanId: parentSpanId
-          spanName: spanName
-          serviceName: serviceName
-          layer: layer
-          timestamp: timestamp
-          durationNs: 0.8008281904610115
-          spanAttributes:
-            key: spanAttributes
-          statusCode: statusCode
-          statusMessage: statusMessage
-        - traceId: traceId
-          spanId: spanId
-          parentSpanId: parentSpanId
-          spanName: spanName
-          serviceName: serviceName
-          layer: layer
-          timestamp: timestamp
-          durationNs: 0.8008281904610115
-          spanAttributes:
-            key: spanAttributes
-          statusCode: statusCode
-          statusMessage: statusMessage
-        logs:
-        - timestamp: timestamp
-          body: body
-          severityText: severityText
-          severityNumber: 0.8008281904610115
-          serviceName: serviceName
-          resourceAttributes:
-            key: resourceAttributes
-          logAttributes:
-            key: logAttributes
-          traceId: traceId
-          spanId: spanId
-        - timestamp: timestamp
-          body: body
-          severityText: severityText
-          severityNumber: 0.8008281904610115
-          serviceName: serviceName
-          resourceAttributes:
-            key: resourceAttributes
-          logAttributes:
-            key: logAttributes
-          traceId: traceId
-          spanId: spanId
-        metrics:
-          series:
-          - metricName: metricName
-            dataPoints:
-            - timestamp: timestamp
-              value: 0.8008281904610115
-            - timestamp: timestamp
-              value: 0.8008281904610115
-          - metricName: metricName
-            dataPoints:
-            - timestamp: timestamp
-              value: 0.8008281904610115
-            - timestamp: timestamp
-              value: 0.8008281904610115
-        boxes:
-        - id: box_abc123
-          organizationId: org_xyz
-          state: started
-          runnerId: runner-uuid
-          cpu: 2
-          memoryGiB: 4
-          createdAt: 2024-01-01T00:00:00Z
-          owner:
-            userId: usr_abc123
-            name: Alice Smith
-            email: alice@example.com
-            orgName: Alice Personal
-            personal: true
-        - id: box_abc123
-          organizationId: org_xyz
-          state: started
-          runnerId: runner-uuid
-          cpu: 2
-          memoryGiB: 4
-          createdAt: 2024-01-01T00:00:00Z
-          owner:
-            userId: usr_abc123
-            name: Alice Smith
-            email: alice@example.com
-            orgName: Alice Personal
-            personal: true
-        runners:
-        - id: runner123
-          domain: runner1.example.com
-          apiUrl: https://api.runner1.example.com
-          proxyUrl: https://proxy.runner1.example.com
-          cpu: 8
-          memory: 16
-          disk: 100
-          gpu: 1
-          gpuType: gpuType
-          class: small
-          currentCpuUsagePercentage: 45.6
-          currentMemoryUsagePercentage: 68.2
-          currentDiskUsagePercentage: 33.8
-          currentAllocatedCpu: 4000
-          currentAllocatedMemoryGiB: 8000
-          currentAllocatedDiskGiB: 50000
-          currentStartedBoxes: 5
-          availabilityScore: 85
-          region: us
-          name: runner1
-          state: initializing
-          lastChecked: 2024-10-01T12:00:00Z
-          unschedulable: false
-          createdAt: 2023-10-01T12:00:00Z
-          updatedAt: 2023-10-01T12:00:00Z
-          version: "0"
-          apiVersion: "0"
-          appVersion: v0.0.0-dev
-          regionType: shared
-          draining: false
-        - id: runner123
-          domain: runner1.example.com
-          apiUrl: https://api.runner1.example.com
-          proxyUrl: https://proxy.runner1.example.com
-          cpu: 8
-          memory: 16
-          disk: 100
-          gpu: 1
-          gpuType: gpuType
-          class: small
-          currentCpuUsagePercentage: 45.6
-          currentMemoryUsagePercentage: 68.2
-          currentDiskUsagePercentage: 33.8
-          currentAllocatedCpu: 4000
-          currentAllocatedMemoryGiB: 8000
-          currentAllocatedDiskGiB: 50000
-          currentStartedBoxes: 5
-          availabilityScore: 85
-          region: us
-          name: runner1
-          state: initializing
-          lastChecked: 2024-10-01T12:00:00Z
-          unschedulable: false
-          createdAt: 2023-10-01T12:00:00Z
-          updatedAt: 2023-10-01T12:00:00Z
-          version: "0"
-          apiVersion: "0"
-          appVersion: v0.0.0-dev
-          regionType: shared
-          draining: false
-        machines:
-        - host: runner-uuid
-          region: us-east-1
-          oversellCpu: 0.75
-          cpuWaterline: 45.6
-          memWaterline: 68.2
-          boxes: 5
-        - host: runner-uuid
-          region: us-east-1
-          oversellCpu: 0.75
-          cpuWaterline: 45.6
-          memWaterline: 68.2
-          boxes: 5
-        auditLogs:
-        - id: id
-          actorId: actorId
-          actorEmail: actorEmail
-          organizationId: organizationId
-          action: action
-          targetType: targetType
-          targetId: targetId
-          statusCode: 6.027456183070403
-          errorMessage: errorMessage
-          source: source
-          metadata:
-            key: ""
-          createdAt: 2000-01-23T04:56:07.000+00:00
-        - id: id
-          actorId: actorId
-          actorEmail: actorEmail
-          organizationId: organizationId
-          action: action
-          targetType: targetType
-          targetId: targetId
-          statusCode: 6.027456183070403
-          errorMessage: errorMessage
-          source: source
-          metadata:
-            key: ""
-          createdAt: 2000-01-23T04:56:07.000+00:00
-        xlogs:
-        - source: source
-          timestamp: timestamp
-          serviceName: serviceName
-          body: body
-          severityText: severityText
-          traceId: traceId
-          spanId: spanId
-          executionId: executionId
-          jobId: jobId
-          stream: stream
-          attributes:
-            key: ""
-        - source: source
-          timestamp: timestamp
-          serviceName: serviceName
-          body: body
-          severityText: severityText
-          traceId: traceId
-          spanId: spanId
-          executionId: executionId
-          jobId: jobId
-          stream: stream
-          attributes:
-            key: ""
-        s3Objects:
-        - bucket: bucket
-          key: key
-          size: 1.4658129805029452
-          lastModified: 2000-01-23T04:56:07.000+00:00
-          etag: etag
-          matchedBy: matchedBy
-        - bucket: bucket
-          key: key
-          size: 1.4658129805029452
-          lastModified: 2000-01-23T04:56:07.000+00:00
-          etag: etag
-          matchedBy: matchedBy
-        timeline:
-        - timestamp: timestamp
-          source: source
-          title: title
-          detail: detail
-          severity: severity
-          identifiers:
-            key: ""
-        - timestamp: timestamp
-          source: source
-          title: title
-          detail: detail
-          severity: severity
-          identifiers:
-            key: ""
-        operations:
-        - id: id
-          label: label
-          state: enabled
-          method: method
-          path: path
-          reason: reason
-          targetId: targetId
-        - id: id
-          label: label
-          state: enabled
-          method: method
-          path: path
-          reason: reason
-          targetId: targetId
-        commands:
-          api: api
-          aiAgentPrompt: aiAgentPrompt
-        externalLinks:
-          clickstack:
-            configured: true
-            message: message
-            missingSources:
-            - missingSources
-            - missingSources
-            sourceSetup:
-            - kind: logs
-              envVar: envVar
-              name: name
-              dataType: dataType
-              database: database
-              table: table
-              timestampColumn: timestampColumn
-              defaultSelect: defaultSelect
-              fields:
-                key: ""
-              metricTables:
-                key: ""
-            - kind: logs
-              envVar: envVar
-              name: name
-              dataType: dataType
-              database: database
-              table: table
-              timestampColumn: timestampColumn
-              defaultSelect: defaultSelect
-              fields:
-                key: ""
-              metricTables:
-                key: ""
-            logsUrl: logsUrl
-            dashboardUrl: dashboardUrl
-            tracesUrl: tracesUrl
-            metricsUrl: metricsUrl
-            query: query
-            queryContext:
-              key: ""
-      properties:
-        resource:
-          $ref: "#/components/schemas/AdminObservabilityResourceSummary"
-        correlation:
-          $ref: "#/components/schemas/AdminObservabilityCorrelation"
-        sources:
-          items:
-            $ref: "#/components/schemas/AdminObservabilitySourceStatus"
-          type: array
-        traceSpans:
-          items:
-            $ref: "#/components/schemas/TraceSpan"
-          type: array
-        logs:
-          items:
-            $ref: "#/components/schemas/LogEntry"
-          type: array
-        metrics:
-          $ref: "#/components/schemas/MetricsResponse"
-        boxes:
-          items:
-            $ref: "#/components/schemas/AdminBoxItem"
-          type: array
-        runners:
-          items:
-            $ref: "#/components/schemas/AdminRunnerItem"
-          type: array
-        machines:
-          items:
-            $ref: "#/components/schemas/AdminMachineItem"
-          type: array
-        auditLogs:
-          items:
-            $ref: "#/components/schemas/AdminObservabilityAuditLog"
-          type: array
-        xlogs:
-          items:
-            $ref: "#/components/schemas/AdminObservabilityXLog"
-          type: array
-        s3Objects:
-          items:
-            $ref: "#/components/schemas/AdminObservabilityS3Object"
-          type: array
-        timeline:
-          items:
-            $ref: "#/components/schemas/AdminObservabilityTimelineEvent"
-          type: array
-        operations:
-          items:
-            $ref: "#/components/schemas/AdminObservabilityOperation"
-          type: array
-        commands:
-          $ref: "#/components/schemas/AdminObservabilityCommands"
-        externalLinks:
-          $ref: "#/components/schemas/AdminObservabilityExternalLinks"
-      required:
-      - auditLogs
-      - boxes
-      - commands
-      - correlation
-      - externalLinks
-      - logs
-      - machines
-      - metrics
-      - operations
-      - resource
-      - runners
-      - s3Objects
-      - sources
-      - timeline
-      - traceSpans
-      - xlogs
-      type: object
-    AuditLog:
-      example:
-        id: id
-        actorId: actorId
-        actorEmail: actorEmail
-        organizationId: organizationId
-        action: action
-        targetType: targetType
-        targetId: targetId
-        statusCode: 0.8008281904610115
-        errorMessage: errorMessage
-        ipAddress: ipAddress
-        userAgent: userAgent
-        source: source
-        metadata:
-          key: ""
-        createdAt: 2000-01-23T04:56:07.000+00:00
-      properties:
-        id:
-          type: string
-        actorId:
-          type: string
-        actorEmail:
-          type: string
-        organizationId:
-          type: string
-        action:
-          type: string
-        targetType:
-          type: string
-        targetId:
-          type: string
-        statusCode:
-          type: number
-        errorMessage:
-          type: string
-        ipAddress:
-          type: string
-        userAgent:
-          type: string
-        source:
-          type: string
-        metadata:
-          additionalProperties: true
-          type: object
-        createdAt:
-          format: date-time
-          type: string
-      required:
-      - action
-      - actorEmail
-      - actorId
-      - createdAt
-      - id
-      type: object
-    PaginatedAuditLogs:
-      example:
-        items:
-        - id: id
-          actorId: actorId
-          actorEmail: actorEmail
-          organizationId: organizationId
-          action: action
-          targetType: targetType
-          targetId: targetId
-          statusCode: 0.8008281904610115
-          errorMessage: errorMessage
-          ipAddress: ipAddress
-          userAgent: userAgent
-          source: source
-          metadata:
-            key: ""
-          createdAt: 2000-01-23T04:56:07.000+00:00
-        - id: id
-          actorId: actorId
-          actorEmail: actorEmail
-          organizationId: organizationId
-          action: action
-          targetType: targetType
-          targetId: targetId
-          statusCode: 0.8008281904610115
-          errorMessage: errorMessage
-          ipAddress: ipAddress
-          userAgent: userAgent
-          source: source
-          metadata:
-            key: ""
-          createdAt: 2000-01-23T04:56:07.000+00:00
-        total: 6.027456183070403
-        page: 1.4658129805029452
-        totalPages: 5.962133916683182
-        nextToken: nextToken
-      properties:
-        items:
-          items:
-            $ref: "#/components/schemas/AuditLog"
-          type: array
-        total:
-          type: number
-        page:
-          type: number
-        totalPages:
-          type: number
-        nextToken:
-          description: Token for next page in cursor-based pagination
-          type: string
-      required:
-      - items
-      - page
-      - total
-      - totalPages
-      type: object
-    WebhookAppPortalAccess:
-      example:
-        token: appsk_...
-        url: https://app.svix.com/app_1234567890
-      properties:
-        token:
-          description: The authentication token for the Svix consumer app portal
-          example: appsk_...
-          type: string
-        url:
-          description: The URL to the webhook app portal
-          example: https://app.svix.com/app_1234567890
-          type: string
-      required:
-      - token
-      - url
-      type: object
-    WebhookEvent:
-      description: The type of event being sent
-      enum:
-      - box.created
-      - box.state.updated
-      - template.created
-      - template.state.updated
-      - template.removed
-      - volume.created
-      - volume.state.updated
-      type: string
-    SendWebhookDto:
-      example:
-        eventType: box.created
-        payload:
-          id: box-123
-          name: My Box
-        eventId: evt_1234567890abcdef
-      properties:
-        eventType:
-          allOf:
-          - $ref: "#/components/schemas/WebhookEvent"
-          description: The type of event being sent
-          example: box.created
-        payload:
-          description: The payload data to send
-          example:
-            id: box-123
-            name: My Box
-          type: object
-        eventId:
-          description: Optional event ID for idempotency
-          example: evt_1234567890abcdef
-          type: string
-      required:
-      - eventType
-      - payload
-      type: object
-    WebhookInitializationStatus:
-      example:
-        organizationId: 123e4567-e89b-12d3-a456-426614174000
-        svixApplicationId: app_1234567890
-        lastError: Failed to create Svix application
-        retryCount: 3
-        createdAt: 2023-01-01T00:00:00.000Z
-        updatedAt: 2023-01-01T00:00:00.000Z
-      properties:
-        organizationId:
-          description: Organization ID
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-        svixApplicationId:
-          description: The ID of the Svix application
-          example: app_1234567890
-          nullable: true
-          type: string
-        lastError:
-          description: The error reason for the last initialization attempt
-          example: Failed to create Svix application
-          nullable: true
-          type: string
-        retryCount:
-          description: The number of times the initialization has been attempted
-          example: 3
-          type: number
-        createdAt:
-          description: When the webhook initialization was created
-          example: 2023-01-01T00:00:00.000Z
-          type: string
-        updatedAt:
-          description: When the webhook initialization was last updated
-          example: 2023-01-01T00:00:00.000Z
-          type: string
-      required:
-      - createdAt
-      - lastError
-      - organizationId
-      - retryCount
-      - svixApplicationId
-      - updatedAt
-      type: object
-    StorageAccessDto:
-      example:
-        accessKey: temp-user-123
-        secret: abchbGciOiJIUzI1NiIs...
-        sessionToken: eyJhbGciOiJIUzI1NiIs...
-        storageUrl: storage.example.com
-        organizationId: 123e4567-e89b-12d3-a456-426614174000
-        bucket: boxlite
-      properties:
-        accessKey:
-          description: Access key for storage authentication
-          example: temp-user-123
-          type: string
-        secret:
-          description: Secret key for storage authentication
-          example: abchbGciOiJIUzI1NiIs...
-          type: string
-        sessionToken:
-          description: Session token for storage authentication
-          example: eyJhbGciOiJIUzI1NiIs...
-          type: string
-        storageUrl:
-          description: Storage URL
-          example: storage.example.com
-          type: string
-        organizationId:
-          description: Organization ID
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-        bucket:
-          description: S3 bucket name
-          example: boxlite
-          type: string
-      required:
-      - accessKey
-      - bucket
-      - organizationId
-      - secret
-      - sessionToken
-      - storageUrl
       type: object
     WebhookController_getStatus_200_response:
       example:

@@ -472,25 +472,9 @@ export default $config({
       link: [db, redis],
       permissions: [
         {
-          // DescribeLogGroups ignores log-group-name granularity, but scoping
-          // the resource still cuts cross-region/cross-account reach. The
-          // observability reader defaults to this region
-          // (ADMIN_OBSERVABILITY_CLOUDWATCH_REGION).
-          actions: ['logs:DescribeLogGroups'],
-          resources: [$interpolate`arn:aws:logs:${REGION}:${aws.getCallerIdentityOutput().accountId}:log-group:*`],
-        },
-        {
-          // Admin observability S3 reader + VolumeManager boot probe are
-          // list-only on the storage bucket (ListObjectsV2).
+          // VolumeManager boot probe is list-only on the storage bucket.
           actions: ['s3:ListBucket'],
           resources: [storage.arn],
-        },
-        {
-          actions: ['logs:FilterLogEvents'],
-          resources: [
-            $interpolate`arn:aws:logs:${REGION}:${aws.getCallerIdentityOutput().accountId}:log-group:/sst/cluster/${cluster.nodes.cluster.name}/*`,
-            $interpolate`arn:aws:logs:${REGION}:${aws.getCallerIdentityOutput().accountId}:log-group:/sst/cluster/${cluster.nodes.cluster.name}/*:*`,
-          ],
         },
         {
           // Vend per-org box storage credentials (object-storage.service.ts).
@@ -659,32 +643,6 @@ export default $config({
           'BOX_OTEL_ENDPOINT_URL',
           envOr('OTEL_EXPORTER_OTLP_ENDPOINT', otelCollectorOtlpHttpUrl),
         ),
-        ADMIN_OBSERVABILITY_CLOUDWATCH_REGION: envOr('ADMIN_OBSERVABILITY_CLOUDWATCH_REGION', REGION),
-        ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUPS: envOr('ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUPS', ''),
-        ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUP_PREFIX: envOr(
-          'ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUP_PREFIX',
-          $interpolate`/sst/cluster/${cluster.nodes.cluster.name}/`,
-        ),
-        ADMIN_OBSERVABILITY_CLOUDWATCH_LIMIT_PER_GROUP: envOr('ADMIN_OBSERVABILITY_CLOUDWATCH_LIMIT_PER_GROUP', '25'),
-        ADMIN_OBSERVABILITY_CLOUDWATCH_MAX_LOG_GROUPS: envOr('ADMIN_OBSERVABILITY_CLOUDWATCH_MAX_LOG_GROUPS', '20'),
-        ADMIN_OBSERVABILITY_S3_REGION: envOr('ADMIN_OBSERVABILITY_S3_REGION', REGION),
-        ADMIN_OBSERVABILITY_S3_BUCKETS: envOr('ADMIN_OBSERVABILITY_S3_BUCKETS', storage.name),
-        ADMIN_OBSERVABILITY_S3_MAX_OBJECTS: envOr('ADMIN_OBSERVABILITY_S3_MAX_OBJECTS', '25'),
-        ...(process.env.ADMIN_OBSERVABILITY_CLICKSTACK_URL && {
-          ADMIN_OBSERVABILITY_CLICKSTACK_URL: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_URL,
-        }),
-        ...(process.env.ADMIN_OBSERVABILITY_CLICKSTACK_DASHBOARD_URL && {
-          ADMIN_OBSERVABILITY_CLICKSTACK_DASHBOARD_URL: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_DASHBOARD_URL,
-        }),
-        ...(process.env.ADMIN_OBSERVABILITY_CLICKSTACK_LOG_SOURCE_ID && {
-          ADMIN_OBSERVABILITY_CLICKSTACK_LOG_SOURCE_ID: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_LOG_SOURCE_ID,
-        }),
-        ...(process.env.ADMIN_OBSERVABILITY_CLICKSTACK_TRACE_SOURCE_ID && {
-          ADMIN_OBSERVABILITY_CLICKSTACK_TRACE_SOURCE_ID: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_TRACE_SOURCE_ID,
-        }),
-        ...(process.env.ADMIN_OBSERVABILITY_CLICKSTACK_METRIC_SOURCE_ID && {
-          ADMIN_OBSERVABILITY_CLICKSTACK_METRIC_SOURCE_ID: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_METRIC_SOURCE_ID,
-        }),
 
         // Dashboard — point its API client at the direct `api.<stackDomain>`
         // ALB hostname so long-lived /attach WS, build-log SSE, and file

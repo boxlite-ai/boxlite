@@ -43,9 +43,8 @@ export class ObjectStorageService {
       const bucket = this.configService.getOrThrow('s3.defaultBucket')
       const accessKey = this.configService.get('s3.accessKey')
       const secretKey = this.configService.get('s3.secretKey')
-      // Both-or-neither (mirrors observability-s3.reader.ts): a lone key is a
-      // typo'd pair, and silently falling back to the SDK default chain would
-      // mask the misconfig.
+      // Both-or-neither: a lone key is a typo'd pair, and silently falling
+      // back to the SDK default chain would mask the misconfig.
       if ((accessKey && !secretKey) || (!accessKey && secretKey)) {
         throw new BadRequestException('S3_ACCESS_KEY and S3_SECRET_KEY must be set together')
       }

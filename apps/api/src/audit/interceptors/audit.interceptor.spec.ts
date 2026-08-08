@@ -36,7 +36,7 @@ describe('AuditInterceptor', () => {
     const configService = { get: jest.fn() }
     const interceptor = new AuditInterceptor(reflector, auditService as any, configService as any)
     const request = {
-      url: '/admin/observability/investigate?traceId=trace-1',
+      url: '/admin/runners?traceId=trace-1',
       ip: '127.0.0.1',
       query: { traceId: 'trace-1' },
       user: { userId: 'user-1', email: 'admin@example.com', organizationId: 'org-1' },

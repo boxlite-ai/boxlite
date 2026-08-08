@@ -40,7 +40,6 @@ import Boxes from './pages/Boxes'
 const Keys = React.lazy(() => import('./pages/Keys'))
 // Billing pulls in the plan/wallet/usage sections (and recharts) behind this one chunk.
 const Billing = React.lazy(() => import('./pages/Billing'))
-const Admin = React.lazy(() => import('./pages/Admin'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
 const BoxDetails = React.lazy(() => import('./components/boxes').then((m) => ({ default: m.BoxDetails })))
@@ -197,7 +196,6 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.BILLING_WALLET)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.LIMITS)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.PRICING)} element={<Navigate to={RoutePath.BILLING} replace />} />
-        <Route path={getRouteSubPath(RoutePath.ADMIN)} element={<Admin />} />
         {/* TODO(image-rewrite): legacy /dashboard/templates route removed with the templates page. */}
         {/* Pathless layout route: a single BoxSessionProvider fiber
             persists across the three box routes, so activation state
