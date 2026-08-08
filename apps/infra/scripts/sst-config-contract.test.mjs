@@ -432,13 +432,14 @@ test('a billing URL is advertised only where a billing service answers', () => {
     'script',
     readFileSync(new URL('../../dashboard/src/App.tsx', import.meta.url), 'utf8'),
   )
-  for (const route of ['BILLING_SPENDING', 'BILLING_WALLET', 'LIMITS']) {
+  const redirectedRoutes = ['BILLING_SPENDING', 'BILLING_WALLET', 'LIMITS', 'PRICING']
+  for (const route of redirectedRoutes) {
     // extractSection excludes its end marker, so the closer is matched by the marker itself.
     const routeLine = extractSection(app, `getRouteSubPath(RoutePath.${route})`, '/>')
     assert.match(routeLine, /element=\{<Navigate to=\{RoutePath\.BILLING\} replace $/)
   }
   const hiddenRoutes = extractSection(app, 'const HIDDEN_DASHBOARD_ROUTES = [', ']')
-  for (const route of ['BILLING_SPENDING', 'BILLING_WALLET', 'LIMITS']) {
+  for (const route of redirectedRoutes) {
     assert.doesNotMatch(hiddenRoutes, new RegExp(route))
   }
 })

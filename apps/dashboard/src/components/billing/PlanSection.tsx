@@ -26,7 +26,10 @@ export function PlanSection() {
   const tiersQuery = useTiersQuery()
 
   const organizationTier = organizationTierQuery.data
-  const tiers = tiersQuery.data?.sort((a, b) => a.tier - b.tier)
+  // Sort a copy: the array belongs to the query cache, so reordering it in place would leave a
+  // second consumer reading a mutated array behind a reference that never changed. This is the
+  // only consumer today, and the sort is idempotent, so nothing observes it yet.
+  const tiers = tiersQuery.data?.slice().sort((a, b) => a.tier - b.tier)
   const wallet = walletQuery.data
 
   const config = useConfig()
@@ -170,9 +173,9 @@ function RateLimits({
         <div className="font-mono text-[11px] text-muted-foreground">{description}</div>
       </div>
       <div className="grid grid-cols-3 gap-3 sm:gap-4">
-        {rateLimits.map(
-          ({ label, value, unit, ttlSeconds }) =>
-            value && <RateLimitItem key={label} label={label} value={value} unit={unit} ttlSeconds={ttlSeconds} />,
+        {rateLimits.map(({ label, value, unit, ttlSeconds }) =>
+          // Ternary, not &&: a 0 limit is falsy but renders as a bare "0" in the grid.
+          value ? <RateLimitItem key={label} label={label} value={value} unit={unit} ttlSeconds={ttlSeconds} /> : null,
         )}
       </div>
     </div>
