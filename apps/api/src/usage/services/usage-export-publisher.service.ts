@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common'
+import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { InjectRepository } from '@nestjs/typeorm'
 import axios from 'axios'
@@ -15,13 +15,16 @@ import { TrackJobExecution } from '../../common/decorators/track-job-execution.d
 import { TrackableJobExecutions } from '../../common/interfaces/trackable-job-executions'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
-import { USAGE_EXPORT_SCHEMA_VERSION } from '../usage-event'
 import { UsageExportOutboxService } from './usage-export-outbox.service'
 
 const PUBLISH_LOCK_KEY = 'publish-usage-exports'
-const BACKFILL_LOCK_KEY = 'backfill-usage-exports'
-const PRUNE_LOCK_KEY = 'prune-usage-exports'
 const MAX_BACKOFF_MS = 15 * 60 * 1000
+
+/** How long a claimed batch stays invisible — longer than the HTTP timeout, so a delivery still in flight is not claimed twice. */
+const VISIBILITY_TIMEOUT_MS = 60 * 1000
+
+/** How long delivered rows are kept for inspection before the idle sweep drops them. */
+const RETENTION_DAYS = 30
 
 /**
  * Statuses that mean the receiver will never accept this payload, however often
@@ -39,9 +42,7 @@ const PERMANENT_REJECTION_STATUSES = new Set([400, 422])
  * matter of efficiency and backpressure, not of correctness.
  */
 @Injectable()
-export class UsageExportPublisherService
-  implements TrackableJobExecutions, OnApplicationBootstrap, OnApplicationShutdown
-{
+export class UsageExportPublisherService implements TrackableJobExecutions, OnApplicationShutdown {
   activeJobs = new Set<string>()
   private readonly logger = new Logger(UsageExportPublisherService.name)
 
@@ -53,27 +54,18 @@ export class UsageExportPublisherService
     private readonly configService: TypedConfigService,
   ) {}
 
-  /**
-   * Catches up on periods archived before this exporter existed. Detached on
-   * purpose: a long archive must not hold up application start, and the work is
-   * idempotent, so a restart mid-walk simply resumes from the beginning.
-   */
-  onApplicationBootstrap(): void {
-    if (!this.configService.get('usageExport.enabled')) {
-      return
-    }
-
-    void this.backfillArchivedPeriods().catch((error) => {
-      this.logger.error(`Usage export backfill failed: ${this.describe(error)}`)
-    })
-  }
-
   async onApplicationShutdown(): Promise<void> {
     while (this.activeJobs.size > 0) {
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
   }
 
+  /**
+   * Drains the outbox, and sweeps delivered history when there is nothing left
+   * to send. Folding retention into the idle branch keeps the exporter to one
+   * schedule and one lock, and runs the sweep exactly when the database has
+   * spare attention for it.
+   */
   @Cron(CronExpression.EVERY_30_SECONDS, { name: PUBLISH_LOCK_KEY })
   @TrackJobExecution()
   @LogExecution(PUBLISH_LOCK_KEY)
@@ -90,46 +82,15 @@ export class UsageExportPublisherService
       const claimed = await this.claimBatch()
       if (claimed.length > 0) {
         await this.deliver(claimed)
+        return
       }
-      await this.warnIfStalled()
-    } finally {
-      await this.redisLockProvider.unlock(PUBLISH_LOCK_KEY)
-    }
-  }
 
-  @Cron(CronExpression.EVERY_HOUR, { name: PRUNE_LOCK_KEY })
-  @TrackJobExecution()
-  @LogExecution(PRUNE_LOCK_KEY)
-  async pruneDeliveredExports(): Promise<void> {
-    if (!this.configService.get('usageExport.enabled')) {
-      return
-    }
-    if (!(await this.redisLockProvider.lock(PRUNE_LOCK_KEY, 300))) {
-      return
-    }
-
-    try {
-      const pruned = await this.outboxService.pruneDelivered(this.configService.get('usageExport.retentionDays'))
+      const pruned = await this.outboxService.pruneDelivered(RETENTION_DAYS)
       if (pruned > 0) {
         this.logger.log(`Pruned ${pruned} delivered usage export rows`)
       }
     } finally {
-      await this.redisLockProvider.unlock(PRUNE_LOCK_KEY)
-    }
-  }
-
-  private async backfillArchivedPeriods(): Promise<void> {
-    if (!(await this.redisLockProvider.lock(BACKFILL_LOCK_KEY, 3600))) {
-      return
-    }
-
-    try {
-      const result = await this.outboxService.backfill()
-      if (result.enqueued > 0 || result.scanned > 0) {
-        this.logger.log(`Usage export backfill scanned=${result.scanned} enqueued=${result.enqueued}`)
-      }
-    } finally {
-      await this.redisLockProvider.unlock(BACKFILL_LOCK_KEY)
+      await this.redisLockProvider.unlock(PUBLISH_LOCK_KEY)
     }
   }
 
@@ -149,20 +110,19 @@ export class UsageExportPublisherService
    * publish cron takes a Redis lock first, which would serialise them.
    */
   async claimBatch(): Promise<BoxUsageExportOutbox[]> {
-    const visibilityTimeoutMs = this.configService.get('usageExport.visibilityTimeoutMs')
-    const batchSize = this.configService.get('usageExport.batchSize')
-
     // Wrapped in a CTE so the statement is a SELECT: a bare `UPDATE … RETURNING`
     // comes back from the driver as [rows, affectedCount], and mapping over that
     // tuple silently yields undefined payloads instead of events.
+    // Claiming does not touch `attempts`. That counter is the retry budget, and
+    // a budget spent by taking a row rather than by failing to deliver it would
+    // be consumed by every crash, shutdown or lost lock between here and the
+    // POST — none of which is evidence that Commerce rejected anything.
     return this.outboxRepository.query(
       `WITH claimed AS (
          UPDATE "box_usage_export_outbox"
-         SET "attempts" = "attempts" + 1,
-             "availableAt" = now() + ($1 || ' milliseconds')::interval,
-             "updatedAt" = now()
-         WHERE "id" IN (
-           SELECT "id" FROM "box_usage_export_outbox"
+         SET "availableAt" = now() + ($1 || ' milliseconds')::interval
+         WHERE "eventKey" IN (
+           SELECT "eventKey" FROM "box_usage_export_outbox"
            WHERE "status" = $2 AND "availableAt" <= now()
            ORDER BY "availableAt" ASC
            LIMIT $3
@@ -171,20 +131,17 @@ export class UsageExportPublisherService
          RETURNING *
        )
        SELECT * FROM claimed`,
-      [visibilityTimeoutMs, UsageExportStatus.PENDING, batchSize],
+      [VISIBILITY_TIMEOUT_MS, UsageExportStatus.PENDING, this.configService.get('usageExport.batchSize')],
     )
   }
 
   private async deliver(rows: BoxUsageExportOutbox[]): Promise<void> {
-    const ids = rows.map((row) => row.id)
+    const eventKeys = rows.map((row) => row.eventKey)
 
     try {
       await axios.post(
         `${this.configService.get('usageExport.url')}/internal/usage-events`,
-        {
-          schemaVersion: USAGE_EXPORT_SCHEMA_VERSION,
-          events: rows.map((row) => row.payload),
-        },
+        { events: rows.map((row) => row.payload) },
         {
           timeout: this.configService.get('usageExport.timeoutMs'),
           headers: {
@@ -199,10 +156,10 @@ export class UsageExportPublisherService
     }
 
     await this.outboxRepository.update(
-      { id: In(ids) },
+      { eventKey: In(eventKeys) },
       { status: UsageExportStatus.DELIVERED, deliveredAt: new Date(), lastError: null },
     )
-    this.logger.log(`Delivered ${ids.length} usage export events`)
+    this.logger.log(`Delivered ${eventKeys.length} usage export events`)
   }
 
   /**
@@ -217,38 +174,43 @@ export class UsageExportPublisherService
    * pending, which is the one failure direction this design exists to avoid.
    */
   private async recordFailure(rows: BoxUsageExportOutbox[], error: unknown): Promise<void> {
-    const ids = rows.map((row) => row.id)
     const message = this.describe(error)
     const status = axios.isAxiosError(error) ? error.response?.status : undefined
     const permanent = status !== undefined && PERMANENT_REJECTION_STATUSES.has(status)
     const maxAttempts = this.configService.get('usageExport.maxAttempts')
-    const exhausted = rows.every((row) => row.attempts >= maxAttempts)
 
-    if (permanent || exhausted) {
-      await this.outboxRepository.update({ id: In(ids) }, { status: UsageExportStatus.BLOCKED, lastError: message })
-      this.logger.error(
-        `Blocked ${ids.length} usage export events after ${permanent ? `HTTP ${status}` : `${maxAttempts} attempts`}: ${message}`,
+    // Rows are judged one at a time. A batch is whatever the claim happened to
+    // scoop up, so its members can carry different budgets; deciding for all of
+    // them from the first row, or only when every row is spent, makes the
+    // outcome depend on batch composition rather than on each row's own history.
+    const blocked: string[] = []
+    const deferredByAttempt = new Map<number, string[]>()
+    for (const row of rows) {
+      const attempt = row.attempts + 1
+      if (permanent || attempt >= maxAttempts) {
+        blocked.push(row.eventKey)
+        continue
+      }
+      deferredByAttempt.set(attempt, [...(deferredByAttempt.get(attempt) ?? []), row.eventKey])
+    }
+
+    if (blocked.length > 0) {
+      await this.outboxRepository.update(
+        { eventKey: In(blocked) },
+        { status: UsageExportStatus.BLOCKED, attempts: () => '"attempts" + 1', lastError: message },
       )
-      return
+      this.logger.error(
+        `Blocked ${blocked.length} usage export events after ${permanent ? `HTTP ${status}` : `${maxAttempts} attempts`}: ${message}`,
+      )
     }
 
-    const backoffMs = Math.min(MAX_BACKOFF_MS, 2 ** Math.max(0, rows[0].attempts - 1) * 30_000)
-    await this.outboxRepository.update(
-      { id: In(ids) },
-      { availableAt: new Date(Date.now() + backoffMs), lastError: message },
-    )
-    this.logger.warn(`Deferred ${ids.length} usage export events for ${backoffMs}ms: ${message}`)
-  }
-
-  private async warnIfStalled(): Promise<void> {
-    const oldestPendingAt = await this.outboxService.oldestPendingAt()
-    if (!oldestPendingAt) {
-      return
-    }
-
-    const ageMs = Date.now() - oldestPendingAt.getTime()
-    if (ageMs > this.configService.get('usageExport.stallWarningMs')) {
-      this.logger.warn(`Oldest undelivered usage export is ${Math.round(ageMs / 1000)}s old`)
+    for (const [attempt, eventKeys] of deferredByAttempt) {
+      const backoffMs = Math.min(MAX_BACKOFF_MS, 2 ** Math.max(0, attempt - 1) * 30_000)
+      await this.outboxRepository.update(
+        { eventKey: In(eventKeys) },
+        { attempts: attempt, availableAt: new Date(Date.now() + backoffMs), lastError: message },
+      )
+      this.logger.warn(`Deferred ${eventKeys.length} usage export events for ${backoffMs}ms: ${message}`)
     }
   }
 

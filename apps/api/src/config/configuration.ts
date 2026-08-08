@@ -11,6 +11,65 @@ function csvEnv(value?: string): string[] {
     .filter(Boolean)
 }
 
+/**
+ * A whole number at least 1, or a hard failure.
+ *
+ * `parseInt` is not usable for a setting that must be right: it reads "1e9" as
+ * 1 and a typo as NaN, and both spellings look deliberate in an env file. A
+ * retry budget of NaN never compares true, so nothing would ever stop retrying;
+ * a budget of 1 gives up on the first blip. Refusing at boot is the only point
+ * where either is still visible.
+ */
+function requiredCount(value: string | undefined, fallback: number, name: string): number {
+  const raw = value?.trim()
+  if (!raw) {
+    return fallback
+  }
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`${name} must be a whole number, got "${value}"`)
+  }
+  const parsed = Number(raw)
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a whole number of at least 1, got "${value}"`)
+  }
+  return parsed
+}
+
+/**
+ * Export of finalized usage periods to the Commerce service. Kept separate from
+ * billingApiUrl on purpose, for the same reason requirePaymentMethod is:
+ * pointing the dashboard at a billing service and shipping usage to it are
+ * different decisions. `enabled` gates the outbox write as well as delivery, so
+ * a stage that never exports accumulates no rows.
+ *
+ * Exported so its rules can be tested directly rather than through an import
+ * whose side effect is reading the process environment.
+ */
+export function usageExportConfig(env: NodeJS.ProcessEnv = process.env) {
+  const enabled = env.USAGE_EXPORT_ENABLED === 'true'
+  const url = env.USAGE_EXPORT_URL?.trim()
+  const token = env.USAGE_EXPORT_TOKEN?.trim()
+
+  // Enabled without a destination would post to "undefined/internal/usage-events",
+  // spend the retry budget, and block the batch — a silent stall dressed up as
+  // delivery failure.
+  if (enabled && !url) {
+    throw new Error('USAGE_EXPORT_URL is required when USAGE_EXPORT_ENABLED is true')
+  }
+  if (enabled && !token) {
+    throw new Error('USAGE_EXPORT_TOKEN is required when USAGE_EXPORT_ENABLED is true')
+  }
+
+  return {
+    enabled,
+    url,
+    token,
+    batchSize: requiredCount(env.USAGE_EXPORT_BATCH_SIZE, 200, 'USAGE_EXPORT_BATCH_SIZE'),
+    timeoutMs: requiredCount(env.USAGE_EXPORT_TIMEOUT_MS, 10_000, 'USAGE_EXPORT_TIMEOUT_MS'),
+    maxAttempts: requiredCount(env.USAGE_EXPORT_MAX_ATTEMPTS, 10, 'USAGE_EXPORT_MAX_ATTEMPTS'),
+  }
+}
+
 const configuration = {
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
@@ -161,27 +220,7 @@ const configuration = {
   pylonAppId: process.env.PYLON_APP_ID,
   billingApiUrl: process.env.BILLING_API_URL,
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
-  // Export of finalized usage periods to the Commerce service. Kept separate
-  // from billingApiUrl on purpose, for the same reason requirePaymentMethod is:
-  // pointing the dashboard at a billing service and shipping usage to it are
-  // different decisions, and conflating them means one of them cannot be made
-  // without the other. `enabled` gates the outbox write as well as delivery, so
-  // a stage that never exports accumulates no rows; the archive backfill is what
-  // makes turning it on later whole.
-  usageExport: {
-    enabled: process.env.USAGE_EXPORT_ENABLED === 'true',
-    url: process.env.USAGE_EXPORT_URL,
-    token: process.env.USAGE_EXPORT_TOKEN,
-    batchSize: parseInt(process.env.USAGE_EXPORT_BATCH_SIZE || '200', 10),
-    timeoutMs: parseInt(process.env.USAGE_EXPORT_TIMEOUT_MS || '10000', 10),
-    maxAttempts: parseInt(process.env.USAGE_EXPORT_MAX_ATTEMPTS || '10', 10),
-    retentionDays: parseInt(process.env.USAGE_EXPORT_RETENTION_DAYS || '30', 10),
-    // How long a claimed batch stays invisible to other publishers. Longer than
-    // the HTTP timeout, so a delivery still in flight is not claimed twice.
-    visibilityTimeoutMs: parseInt(process.env.USAGE_EXPORT_VISIBILITY_TIMEOUT_MS || '60000', 10),
-    backfillPageSize: parseInt(process.env.USAGE_EXPORT_BACKFILL_PAGE_SIZE || '500', 10),
-    stallWarningMs: parseInt(process.env.USAGE_EXPORT_STALL_WARNING_MS || '3600000', 10),
-  },
+  usageExport: usageExportConfig(),
   defaultRunner: {
     domain: process.env.DEFAULT_RUNNER_DOMAIN,
     apiKey: process.env.DEFAULT_RUNNER_API_KEY,

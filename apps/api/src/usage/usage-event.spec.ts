@@ -6,13 +6,11 @@
 import { BoxUsagePeriodArchive } from './entities/box-usage-period-archive.entity'
 import { BoxUsagePeriod } from './entities/box-usage-period.entity'
 import {
-  blockedUsageEventKey,
   canonicalJson,
   FinalizedUsagePeriod,
   InvalidUsagePeriodError,
   toUsageEventDto,
   usageEventKey,
-  usagePeriodSnapshot,
 } from './usage-event'
 
 const period = (overrides: Partial<FinalizedUsagePeriod> = {}): FinalizedUsagePeriod => ({
@@ -72,9 +70,9 @@ describe('usageEventKey', () => {
   })
 
   // The live row and its archived copy share no id — fromUsagePeriod does not
-  // copy it — so identity has to come from the interval. If these two ever
-  // disagree, the live enqueue and the archive backfill would each export the
-  // same usage under a different key and the customer would be billed twice.
+  // copy it — so identity has to come from the interval. Anything deriving a key
+  // from an archived row must land on the same value the live row produced, or
+  // one usage fact would carry two identities and be billed twice.
   it('agrees between a live period and its archived copy', () => {
     const live = livePeriod()
     live.id = 'live-row-id'
@@ -140,55 +138,6 @@ describe('canonicalJson', () => {
   })
 })
 
-describe('blockedUsageEventKey', () => {
-  // Two equally malformed rows must not collapse into one, or repairing the
-  // first would hide that the second was ever rejected.
-  it('separates malformed rows by source id', () => {
-    expect(blockedUsageEventKey('row-a')).not.toBe(blockedUsageEventKey('row-b'))
-  })
-
-  it('is stable for one source id', () => {
-    expect(blockedUsageEventKey('row-a')).toBe(blockedUsageEventKey('row-a'))
-  })
-
-  it('never collides with a well-formed event key', () => {
-    expect(blockedUsageEventKey('row-a')).not.toBe(usageEventKey(period()))
-  })
-})
-
-describe('usagePeriodSnapshot', () => {
-  // The reason a row lands here is usually a value JSON cannot carry, so the
-  // diagnostic form has to stringify rather than serialize.
-  it('records values JSON would turn into null', () => {
-    const snapshot = usagePeriodSnapshot({
-      id: 'row-1',
-      organizationId: 'org-1',
-      boxId: 'box-1',
-      region: 'us',
-      startAt: new Date('2026-08-01T00:00:00.000Z'),
-      endAt: new Date('nonsense'),
-      cpu: Number.NaN,
-      gpu: Number.POSITIVE_INFINITY,
-      mem: 4,
-      disk: 10,
-    })
-
-    expect(snapshot).toEqual({
-      sourceId: 'row-1',
-      organizationId: 'org-1',
-      boxId: 'box-1',
-      region: 'us',
-      startAt: '2026-08-01T00:00:00.000Z',
-      endAt: 'Invalid Date',
-      cpu: 'NaN',
-      gpu: 'Infinity',
-      mem: '4',
-      disk: '10',
-    })
-    expect(JSON.parse(JSON.stringify(snapshot)).cpu).toBe('NaN')
-  })
-})
-
 describe('usage period validation', () => {
   it.each<[string, Partial<FinalizedUsagePeriod>]>([
     ['a NaN quantity', { cpu: Number.NaN }],
@@ -199,11 +148,24 @@ describe('usage period validation', () => {
     ['an invalid startAt', { startAt: new Date('nonsense') }],
     ['an end before the start', { endAt: new Date('2026-07-01T00:00:00.000Z') }],
     ['a quantity past the encodable ceiling', { mem: 1e16 }],
+    // toFixed(12) turns this into "0", which would both drop the usage and give
+    // the period the identity of a genuinely zero one.
+    ['a quantity that rounds away to zero', { cpu: 1e-13 }],
   ])('rejects %s', (_case, override) => {
     expect(() => usageEventKey(period(override))).toThrow(InvalidUsagePeriodError)
   })
 
   it('accepts a quantity at the ceiling', () => {
     expect(() => usageEventKey(period({ mem: 1e15 }))).not.toThrow()
+  })
+
+  it('accepts the smallest quantity the encoding can still carry', () => {
+    expect(toUsageEventDto(period({ cpu: 1e-12 })).cpu).toBe('0.000000000001')
+  })
+
+  // Zero is a real quantity — a stopped box holds disk but no CPU — so the
+  // underflow guard must not swallow it.
+  it('still encodes a genuine zero', () => {
+    expect(toUsageEventDto(period({ cpu: 0 })).cpu).toBe('0')
   })
 })

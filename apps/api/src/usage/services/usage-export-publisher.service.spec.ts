@@ -11,7 +11,6 @@ jest.mock('axios', () => ({
   },
 }))
 
-import { Logger } from '@nestjs/common'
 import axios from 'axios'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
 import { UsageExportPublisherService } from './usage-export-publisher.service'
@@ -25,17 +24,12 @@ const CONFIG: Record<string, unknown> = {
   'usageExport.batchSize': 200,
   'usageExport.timeoutMs': 10_000,
   'usageExport.maxAttempts': 10,
-  'usageExport.retentionDays': 30,
-  'usageExport.visibilityTimeoutMs': 60_000,
-  'usageExport.stallWarningMs': 3_600_000,
 }
 
 const row = (overrides: Partial<BoxUsageExportOutbox> = {}): BoxUsageExportOutbox =>
   ({
-    id: 'outbox-1',
     eventKey: 'key-1',
-    payload: { eventKey: 'key-1', cpu: '2' },
-    schemaVersion: 1,
+    payload: { eventKey: 'key-1', schemaVersion: 1, cpu: '2' },
     status: UsageExportStatus.PENDING,
     attempts: 1,
     ...overrides,
@@ -53,11 +47,7 @@ const makeService = (claimed: BoxUsageExportOutbox[], overrides: Record<string, 
     query: jest.fn().mockResolvedValue(claimed),
     update: jest.fn().mockResolvedValue({ affected: claimed.length }),
   }
-  const outboxService = {
-    oldestPendingAt: jest.fn().mockResolvedValue(null),
-    pruneDelivered: jest.fn().mockResolvedValue(0),
-    backfill: jest.fn().mockResolvedValue({ scanned: 0, enqueued: 0 }),
-  }
+  const outboxService = { pruneDelivered: jest.fn().mockResolvedValue(0) }
   const redisLockProvider = {
     lock: jest.fn().mockResolvedValue(true),
     unlock: jest.fn().mockResolvedValue(undefined),
@@ -106,14 +96,14 @@ describe('UsageExportPublisherService.publishPendingExports', () => {
   })
 
   it('sends the stored payloads with the service token and timeout', async () => {
-    const { service } = makeService([row(), row({ id: 'outbox-2', payload: { eventKey: 'key-2' } })])
+    const { service } = makeService([row(), row({ eventKey: 'key-2', payload: { eventKey: 'key-2' } })])
     post.mockResolvedValue({ status: 200, data: { accepted: 2, duplicates: 0 } })
 
     await service.publishPendingExports()
 
     expect(post).toHaveBeenCalledWith(
       'https://commerce.test/internal/usage-events',
-      { schemaVersion: 1, events: [{ eventKey: 'key-1', cpu: '2' }, { eventKey: 'key-2' }] },
+      { events: [{ eventKey: 'key-1', schemaVersion: 1, cpu: '2' }, { eventKey: 'key-2' }] },
       expect.objectContaining({
         timeout: 10_000,
         headers: expect.objectContaining({ authorization: 'Bearer tok-1' }),
@@ -189,7 +179,7 @@ describe('UsageExportPublisherService.publishPendingExports', () => {
   })
 
   it('blocks the batch once attempts are exhausted', async () => {
-    const { service, outboxRepository } = makeService([row({ attempts: 10 })])
+    const { service, outboxRepository } = makeService([row({ attempts: 9 })])
     post.mockRejectedValue(httpError(503))
 
     await service.publishPendingExports()
@@ -200,20 +190,73 @@ describe('UsageExportPublisherService.publishPendingExports', () => {
     )
   })
 
-  it('claims nothing further when the outbox is empty', async () => {
-    const { service } = makeService([])
+  it('charges exactly one attempt to a failed delivery', async () => {
+    const { service, outboxRepository } = makeService([row({ attempts: 3 })])
+    post.mockRejectedValue(httpError(503))
 
     await service.publishPendingExports()
 
-    expect(post).not.toHaveBeenCalled()
+    const [, changes] = outboxRepository.update.mock.calls[0]
+    expect(changes.attempts).toBe(4)
   })
 
-  it('releases the lock even when delivery throws', async () => {
+  // The batch is whatever the claim scooped up, so deciding for all of it from
+  // one row makes a row's fate depend on its neighbours.
+  it('judges each row against its own budget, not the batch', async () => {
+    const { service, outboxRepository } = makeService([
+      row({ eventKey: 'nearly-spent', attempts: 9 }),
+      row({ eventKey: 'fresh', attempts: 1 }),
+    ])
+    post.mockRejectedValue(httpError(503))
+
+    await service.publishPendingExports()
+
+    const updates = outboxRepository.update.mock.calls
+    const blocked = updates.find(([, changes]) => changes.status === UsageExportStatus.BLOCKED)
+    const deferred = updates.find(([, changes]) => changes.status === undefined)
+
+    expect(blocked?.[0].eventKey._value).toEqual(['nearly-spent'])
+    expect(deferred?.[0].eventKey._value).toEqual(['fresh'])
+    expect(deferred?.[1].attempts).toBe(2)
+  })
+
+  it('releases the lock even when the claim throws', async () => {
     const { service, redisLockProvider, outboxRepository } = makeService([row()])
     outboxRepository.query.mockRejectedValue(new Error('database is down'))
 
     await expect(service.publishPendingExports()).rejects.toThrow('database is down')
     expect(redisLockProvider.unlock).toHaveBeenCalledWith('publish-usage-exports')
+  })
+})
+
+// Retention rides the idle branch so the exporter keeps one schedule and one
+// lock. Sweeping while there is still a backlog would spend the cycle on
+// housekeeping instead of delivery.
+describe('UsageExportPublisherService retention', () => {
+  it('sweeps delivered history when there is nothing to send', async () => {
+    const { service, outboxService } = makeService([])
+
+    await service.publishPendingExports()
+
+    expect(outboxService.pruneDelivered).toHaveBeenCalledWith(30)
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('does not sweep while a batch is still in flight', async () => {
+    const { service, outboxService } = makeService([row()])
+    post.mockResolvedValue({ status: 200, data: {} })
+
+    await service.publishPendingExports()
+
+    expect(outboxService.pruneDelivered).not.toHaveBeenCalled()
+  })
+
+  it('does not sweep while export is disabled', async () => {
+    const { service, outboxService } = makeService([], { 'usageExport.enabled': false })
+
+    await service.publishPendingExports()
+
+    expect(outboxService.pruneDelivered).not.toHaveBeenCalled()
   })
 })
 
@@ -229,8 +272,9 @@ describe('UsageExportPublisherService claiming', () => {
 
     const [sql, parameters] = outboxRepository.query.mock.calls[0]
     expect(sql).toContain('FOR UPDATE SKIP LOCKED')
-    expect(sql).toContain('"attempts" = "attempts" + 1')
     expect(sql).toContain('"availableAt" = now()')
+    // The retry budget is spent by a failed delivery, never by taking the row.
+    expect(sql).not.toContain('"attempts"')
     expect(parameters).toEqual([60_000, UsageExportStatus.PENDING, 200])
   })
 
@@ -266,95 +310,8 @@ describe('UsageExportPublisherService backoff', () => {
   // Without a ceiling the doubling would push a row past any plausible
   // retention window and the usage would age out undelivered.
   it('caps the backoff at fifteen minutes', async () => {
-    expect(await deferralMs(9)).toBeLessThanOrEqual(15 * 60 * 1000 + 1_000)
-  })
-})
-
-describe('UsageExportPublisherService stall reporting', () => {
-  afterEach(() => jest.restoreAllMocks())
-
-  it('warns when the oldest undelivered row exceeds the threshold', async () => {
-    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
-    const { service, outboxService } = makeService([])
-    outboxService.oldestPendingAt.mockResolvedValue(new Date(Date.now() - 2 * 3_600_000))
-
-    await service.publishPendingExports()
-
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Oldest undelivered usage export'))
-  })
-
-  it('stays quiet while the backlog is fresh', async () => {
-    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
-    const { service, outboxService } = makeService([])
-    outboxService.oldestPendingAt.mockResolvedValue(new Date(Date.now() - 60_000))
-
-    await service.publishPendingExports()
-
-    expect(warn).not.toHaveBeenCalled()
-  })
-})
-
-describe('UsageExportPublisherService.pruneDeliveredExports', () => {
-  it('prunes with the configured retention window', async () => {
-    const { service, outboxService } = makeService([])
-
-    await service.pruneDeliveredExports()
-
-    expect(outboxService.pruneDelivered).toHaveBeenCalledWith(30)
-  })
-
-  it('does nothing while export is disabled', async () => {
-    const { service, outboxService } = makeService([], { 'usageExport.enabled': false })
-
-    await service.pruneDeliveredExports()
-
-    expect(outboxService.pruneDelivered).not.toHaveBeenCalled()
-  })
-
-  it('yields to whichever replica holds the prune lock', async () => {
-    const { service, outboxService, redisLockProvider } = makeService([])
-    redisLockProvider.lock.mockResolvedValue(false)
-
-    await service.pruneDeliveredExports()
-
-    expect(outboxService.pruneDelivered).not.toHaveBeenCalled()
-  })
-})
-
-describe('UsageExportPublisherService.onApplicationBootstrap', () => {
-  const settle = () => new Promise((resolve) => setImmediate(resolve))
-
-  it('catches up on periods archived before the exporter existed', async () => {
-    const { service, outboxService } = makeService([])
-    ;(outboxService.backfill as jest.Mock) = jest.fn().mockResolvedValue({ scanned: 2, enqueued: 2 })
-
-    service.onApplicationBootstrap()
-    await settle()
-
-    expect(outboxService.backfill).toHaveBeenCalled()
-  })
-
-  it('does not backfill while export is disabled', async () => {
-    const { service, outboxService } = makeService([], { 'usageExport.enabled': false })
-    ;(outboxService.backfill as jest.Mock) = jest.fn()
-
-    service.onApplicationBootstrap()
-    await settle()
-
-    expect(outboxService.backfill).not.toHaveBeenCalled()
-  })
-
-  // Bootstrap must not become a startup failure: the work is idempotent and the
-  // next restart retries it.
-  it('survives a failing backfill without throwing into startup', async () => {
-    const error = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
-    const { service, outboxService } = makeService([])
-    ;(outboxService.backfill as jest.Mock) = jest.fn().mockRejectedValue(new Error('archive unreadable'))
-
-    expect(() => service.onApplicationBootstrap()).not.toThrow()
-    await settle()
-
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('archive unreadable'))
-    error.mockRestore()
+    // attempts 8 charges attempt 9, whose uncapped backoff would be 2**8 x 30s
+    // = 128 minutes; anything at or below the cap proves the clamp.
+    expect(await deferralMs(8)).toBeLessThanOrEqual(15 * 60 * 1000 + 1_000)
   })
 })

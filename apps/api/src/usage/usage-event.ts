@@ -42,7 +42,12 @@ export interface FinalizedUsagePeriod {
   disk: number
 }
 
-/** One exported usage fact, exactly as it crosses the wire. */
+/**
+ * One exported usage fact, exactly as it crosses the wire and exactly as it is
+ * stored in the outbox. Self-describing: `schemaVersion` travels with the event
+ * rather than on the batch, so a stored payload can always be read back without
+ * consulting the row that held it.
+ */
 export interface UsageEventDto {
   schemaVersion: number
   eventKey: string
@@ -58,9 +63,9 @@ export interface UsageEventDto {
 }
 
 /**
- * A usage row that cannot be turned into an event. Raised only for malformed
- * source data — never for programming or database faults, which must keep
- * failing loudly instead of being recorded as bad usage.
+ * Source data that cannot become an event. Raised only for malformed usage —
+ * never for programming or database faults, which must keep failing as
+ * themselves.
  */
 export class InvalidUsagePeriodError extends Error {
   constructor(message: string) {
@@ -86,7 +91,7 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value)
 }
 
-export function sha256(value: string): string {
+function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
@@ -108,7 +113,14 @@ function quantityString(value: number, field: string): string {
     throw new InvalidUsagePeriodError(`${field} exceeds the maximum encodable quantity`)
   }
   const fixed = value.toFixed(QUANTITY_DECIMALS)
-  return fixed.includes('.') ? fixed.replace(/0+$/, '').replace(/\.$/, '') : fixed
+  const encoded = fixed.includes('.') ? fixed.replace(/0+$/, '').replace(/\.$/, '') : fixed
+  // Below 1e-12 the encoding rounds to "0", which would both drop the usage and
+  // hand the period the same identity as a genuinely zero one. Refuse rather
+  // than export a quantity that is not the quantity it was given.
+  if (value > 0 && Number(encoded) === 0) {
+    throw new InvalidUsagePeriodError(`${field} is too small to encode without rounding it away`)
+  }
+  return encoded
 }
 
 function timestampString(value: Date, field: string): string {
@@ -130,9 +142,8 @@ function identityString(value: string, field: string): string {
  *
  * Derived from the interval and what ran in it, never from a row id: archival
  * assigns the archive row a fresh UUID (`BoxUsagePeriodArchive.fromUsagePeriod`
- * does not copy `id`), so live and archived rows for one usage share no id. The
- * live enqueue path and the archive backfill therefore have to agree on this
- * function to converge on one event instead of exporting the usage twice.
+ * does not copy `id`), so the live row and its archived copy share no id and
+ * only the interval identifies the usage they both describe.
  */
 export function usageEventKey(period: FinalizedUsagePeriod): string {
   return sha256(canonicalJson(keyFields(period)))
@@ -147,9 +158,9 @@ export function toUsageEventDto(period: FinalizedUsagePeriod): UsageEventDto {
 }
 
 /**
- * Identity for a period whose data is malformed. Including the source row id
- * keeps two equally broken rows from masking one another; such a row is only
- * ever recorded as blocked, never delivered.
+ * Identity for a period whose data is malformed. Keyed by the source row so two
+ * equally broken rows cannot mask one another; such a row is only ever recorded
+ * as blocked, never delivered.
  */
 export function blockedUsageEventKey(sourceId: string): string {
   return sha256(
@@ -163,7 +174,8 @@ export function blockedUsageEventKey(sourceId: string): string {
 /**
  * Diagnostic form of a period that failed validation. Values are stringified
  * rather than serialized as JSON numbers because the reason a row is here is
- * often a value JSON cannot represent, such as NaN.
+ * usually a value JSON cannot represent — `NaN` becomes `null` otherwise, which
+ * hides the very thing the row was kept for.
  */
 export function usagePeriodSnapshot(period: {
   id?: string

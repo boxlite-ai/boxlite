@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm'
+import { Column, Entity, Index, PrimaryColumn } from 'typeorm'
 
 /**
  * There is deliberately no `delivering` state. A status that a crashed worker
@@ -27,34 +27,32 @@ export enum UsageExportStatus {
  * per row rather than as a watermark: neither usage table has a monotonic
  * column, and adding one would not help, because Postgres sequences can commit
  * out of order and a `seq > cursor` reader would silently skip rows.
+ *
+ * Only the queue state lives in columns. Everything describing the usage itself
+ * stays inside `payload`, which is the message — duplicating those fields
+ * alongside it bought nothing but a second copy to keep honest.
  */
 @Entity('box_usage_export_outbox')
 @Index('box_usage_export_outbox_pending_idx', ['status', 'availableAt'], { where: `"status" = 'pending'` })
 export class BoxUsageExportOutbox {
-  @PrimaryGeneratedColumn('uuid')
-  id: string
-
   /**
    * Deterministic identity of the usage fact, derived from the interval and its
-   * resources. Unique, which is what makes enqueue idempotent and lets the
-   * archive backfill run repeatedly without duplicating work.
+   * resources. It is the natural key, so it is the primary key: a surrogate id
+   * beside it would be a second identity for one row, and every lookup here is
+   * by this value or by queue state.
    */
-  @Column({ unique: true })
+  @PrimaryColumn()
   eventKey: string
 
   /**
    * The exact message, built once at enqueue and never re-derived.
    *
-   * Quantities are not stored as `numeric` and re-serialized at send time: the
-   * Postgres driver returns `numeric` as a string, so a key computed from the
-   * entity ("2") and one computed from a round-tripped column ("2.000000000000")
-   * would differ, and two identities for one fact double-bill the customer.
+   * Deriving it at send time instead would mean any later change to the key
+   * fields silently re-identified rows that were enqueued but not yet
+   * delivered, and Commerce deduplicates on that identity.
    */
   @Column({ type: 'jsonb' })
   payload: Record<string, unknown>
-
-  @Column({ type: 'int' })
-  schemaVersion: number
 
   @Column({ type: 'varchar', length: 16, default: UsageExportStatus.PENDING })
   status: UsageExportStatus
@@ -71,26 +69,4 @@ export class BoxUsageExportOutbox {
 
   @Column({ type: 'text', nullable: true })
   lastError: string | null
-
-  // Denormalized for querying and diagnostics only — never the source of the
-  // message. Null on a blocked row, whose source data failed validation and so
-  // has nothing trustworthy to copy here; its detail lives in `payload`.
-
-  @Column({ nullable: true })
-  organizationId: string | null
-
-  @Column({ name: 'boxId', nullable: true })
-  boxId: string | null
-
-  @Column({ type: 'timestamp with time zone', nullable: true })
-  startAt: Date | null
-
-  @Column({ type: 'timestamp with time zone', nullable: true })
-  endAt: Date | null
-
-  @CreateDateColumn({ type: 'timestamp with time zone' })
-  createdAt: Date
-
-  @UpdateDateColumn({ type: 'timestamp with time zone' })
-  updatedAt: Date
 }

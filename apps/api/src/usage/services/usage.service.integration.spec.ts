@@ -6,7 +6,7 @@
 import { createServer, Server } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { Redis } from 'ioredis'
-import { DataSource, Repository } from 'typeorm'
+import { DataSource, IsNull, Not, Repository } from 'typeorm'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
@@ -50,8 +50,6 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     'close-and-reopen-usage-periods',
     'archive-usage-periods',
     'publish-usage-exports',
-    'prune-usage-exports',
-    'backfill-usage-exports',
   ]
 
   const openPeriod = (overrides: Partial<BoxUsagePeriod> = {}) =>
@@ -73,8 +71,8 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   // Export is off by default here, matching a stage that has not enabled it, so
   // the pre-existing ledger tests keep asserting ledger behaviour alone.
   const outboxService = (enabled = false) =>
-    new UsageExportOutboxService(outboxes, archives, {
-      get: (key: string) => (key === 'usageExport.enabled' ? enabled : 500),
+    new UsageExportOutboxService(outboxes, {
+      get: () => enabled,
     } as any)
 
   const serviceForBoxState = (state: BoxState, exportEnabled = false) =>
@@ -298,9 +296,6 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       expect(enqueued).toEqual(
         expect.objectContaining({
           status: UsageExportStatus.PENDING,
-          schemaVersion: 1,
-          organizationId: box.organizationId,
-          boxId: box.id,
           attempts: 0,
         }),
       )
@@ -335,7 +330,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
         periods,
         new RedisLockProvider(redis),
         { findOne: async () => ({ id: box.id, state: BoxState.STARTED }) } as any,
-        new UsageExportOutboxService(outboxes, archives, {
+        new UsageExportOutboxService(outboxes, {
           get: () => {
             throw new Error('configuration unavailable')
           },
@@ -349,23 +344,9 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       expect(await outboxes.find()).toHaveLength(0)
     })
 
-    // The live path keys off the live row, the backfill off its archived copy —
-    // whose id is different. If the two derivations ever diverged, this second
-    // pass would enqueue the same usage again and the customer would be billed
-    // twice.
-    it('converges with the archive backfill instead of duplicating', async () => {
-      await closedPeriod()
-      await serviceForBoxState(BoxState.STARTED, true).archiveUsagePeriods()
-
-      const result = await outboxService(true).backfill()
-
-      expect(result.scanned).toBe(1)
-      expect(result.enqueued).toBe(0)
-      expect(await outboxes.find()).toHaveLength(1)
-    })
-
-    // The unique event key is what makes the whole pipeline safe to retry. It
-    // must be enforced by the shipped DDL, not merely by the in-memory dedupe.
+    // The unique event key is what makes the whole pipeline safe to retry, and
+    // it has to be enforced by the shipped DDL rather than by anything in
+    // memory.
     it('refuses a second intent for usage it has already recorded', async () => {
       const usagePeriod = await closedPeriod()
       const exporter = outboxService(true)
@@ -376,16 +357,34 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       expect(await outboxes.find()).toHaveLength(1)
     })
 
+    // Two zero-duration periods for one box hash to the same key, so they reach
+    // a single INSERT as duplicate rows. Nothing in the service de-duplicates
+    // them any more — this pins that ON CONFLICT DO NOTHING tolerates a repeat
+    // inside one statement, which is the behaviour that replaced it.
+    it('collapses periods that share an event key inside one insert', async () => {
+      const instant = new Date(Date.now() - DAY_MS)
+      const first = await openPeriod({ startAt: instant, endAt: instant })
+      await periods.delete({ id: first.id })
+      const second = await openPeriod({ startAt: instant, endAt: instant })
+
+      await expect(outboxService(true).enqueue(dataSource.manager, [first, second])).resolves.toBe(1)
+
+      expect(await outboxes.find()).toHaveLength(1)
+    })
+
     it('rejects a status the migration does not allow', async () => {
       await expect(
         dataSource.query(
-          `INSERT INTO "box_usage_export_outbox" ("eventKey", "payload", "schemaVersion", "status")
-           VALUES ('key-bogus', '{}'::jsonb, 1, 'delivering')`,
+          `INSERT INTO "box_usage_export_outbox" ("eventKey", "payload", "status")
+           VALUES ('key-bogus', '{}'::jsonb, 'delivering')`,
         ),
       ).rejects.toThrow(/box_usage_export_outbox_status_ck/)
     })
 
-    it('stores a blocked row with no denormalized attribution to trust', async () => {
+    // NaN survives a NOT NULL double precision column, so this row is reachable.
+    // Were it to throw, it would abort the archive transaction, sort early into
+    // every subsequent batch, and wedge archiving permanently.
+    it('archives a malformed period as a blocked row instead of wedging', async () => {
       await openPeriod({
         startAt: new Date(Date.now() - 2 * DAY_MS),
         endAt: new Date(Date.now() - DAY_MS),
@@ -394,64 +393,41 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
 
       await serviceForBoxState(BoxState.STARTED, true).archiveUsagePeriods()
 
+      expect(await periods.find()).toHaveLength(0)
+      expect(await archives.find()).toHaveLength(1)
       const [blocked] = await outboxes.find()
-      expect(blocked).toEqual(
-        expect.objectContaining({
-          status: UsageExportStatus.BLOCKED,
-          organizationId: null,
-          boxId: null,
-          startAt: null,
-          endAt: null,
-        }),
-      )
+      expect(blocked.status).toBe(UsageExportStatus.BLOCKED)
       expect(blocked.lastError).toMatch(/finite/)
+      expect(blocked.payload).toEqual(expect.objectContaining({ cpu: 'NaN' }))
     })
 
-    it('backfills archived periods that predate the exporter', async () => {
-      await archives.save(
-        archives.create({
-          boxId: box.id,
+    // The archive cron runs every closed period through one transaction ordered
+    // by startAt, so a poison row that threw would be in every batch forever.
+    it('keeps archiving the periods behind a malformed one', async () => {
+      await openPeriod({
+        startAt: new Date(Date.now() - 3 * DAY_MS),
+        endAt: new Date(Date.now() - 2 * DAY_MS),
+        cpu: Number.NaN,
+      })
+      await periods.save(
+        periods.create({
+          boxId: 'box-behind',
           organizationId: box.organizationId,
           region: box.region,
           cpu: box.cpu,
           gpu: box.gpu,
           mem: box.mem,
           disk: box.disk,
-          startAt: new Date(Date.now() - 3 * DAY_MS),
-          endAt: new Date(Date.now() - 2 * DAY_MS),
+          startAt: new Date(Date.now() - 2 * DAY_MS),
+          endAt: new Date(Date.now() - DAY_MS),
         }),
       )
 
-      const result = await outboxService(true).backfill()
+      await serviceForBoxState(BoxState.STARTED, true).archiveUsagePeriods()
 
-      expect(result).toEqual({ scanned: 1, enqueued: 1 })
-      expect(await outboxes.find()).toHaveLength(1)
-    })
-
-    it('backfills across several pages without duplicating', async () => {
-      for (let index = 0; index < 5; index += 1) {
-        await archives.save(
-          archives.create({
-            boxId: `box-page-${index}`,
-            organizationId: box.organizationId,
-            region: box.region,
-            cpu: box.cpu,
-            gpu: box.gpu,
-            mem: box.mem,
-            disk: box.disk,
-            startAt: new Date(Date.now() - (index + 2) * DAY_MS),
-            endAt: new Date(Date.now() - (index + 1) * DAY_MS),
-          }),
-        )
-      }
-
-      const paged = new UsageExportOutboxService(outboxes, archives, {
-        get: (key: string) => (key === 'usageExport.enabled' ? true : 2),
-      } as any)
-
-      await expect(paged.backfill()).resolves.toEqual({ scanned: 5, enqueued: 5 })
-      await expect(paged.backfill()).resolves.toEqual({ scanned: 5, enqueued: 0 })
-      expect(await outboxes.find()).toHaveLength(5)
+      expect(await archives.find()).toHaveLength(2)
+      const statuses = (await outboxes.find()).map((entry) => entry.status).sort()
+      expect(statuses).toEqual([UsageExportStatus.BLOCKED, UsageExportStatus.PENDING])
     })
   })
 
@@ -463,15 +439,14 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     const sortedEvents = (events: any[]) =>
       [...events].sort((left, right) => left.eventKey.localeCompare(right.eventKey))
 
-    // TypeORM refuses an empty update criteria, so every row is addressed by the
-    // one column they all share.
-    const allRows = { schemaVersion: 1 }
+    // TypeORM refuses an empty update criteria, so match every row through the
+    // primary key rather than through a status that the test may have moved.
+    const allRows = { eventKey: Not(IsNull()) }
 
     const enqueueRows = async (count: number) => {
       const rows = Array.from({ length: count }, (_, index) => ({
         eventKey: `key-${index}`,
-        payload: { eventKey: `key-${index}`, cpu: '2' },
-        schemaVersion: 1,
+        payload: { eventKey: `key-${index}`, schemaVersion: 1, cpu: '2' },
         status: UsageExportStatus.PENDING,
         availableAt: new Date(Date.now() - 1_000),
       }))
@@ -486,9 +461,6 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
         'usageExport.batchSize': 100,
         'usageExport.timeoutMs': 5_000,
         'usageExport.maxAttempts': 10,
-        'usageExport.retentionDays': 30,
-        'usageExport.visibilityTimeoutMs': 60_000,
-        'usageExport.stallWarningMs': 3_600_000,
         ...overrides,
       }
       return new UsageExportPublisherService(outboxes, outboxService(true), new RedisLockProvider(redis), {
@@ -530,12 +502,11 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       expect(received).toHaveLength(1)
       expect(received[0].url).toBe('/internal/usage-events')
       expect(received[0].authorization).toBe('Bearer tok-2')
-      expect(received[0].body.schemaVersion).toBe(1)
       // Order within a batch carries no meaning — the receiving side keys off
       // eventKey — so asserting it would only pin an incidental sort.
       expect(sortedEvents(received[0].body.events)).toEqual([
-        { eventKey: 'key-0', cpu: '2' },
-        { eventKey: 'key-1', cpu: '2' },
+        { eventKey: 'key-0', schemaVersion: 1, cpu: '2' },
+        { eventKey: 'key-1', schemaVersion: 1, cpu: '2' },
       ])
 
       const stored = await outboxes.find()
@@ -566,7 +537,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       await enqueueRows(1)
       respondWith = { status: 503 }
 
-      await publisher({ 'usageExport.visibilityTimeoutMs': 60_000 }).publishPendingExports()
+      await publisher().publishPendingExports()
       expect(received).toHaveLength(1)
 
       await publisher().publishPendingExports()
@@ -592,7 +563,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
         publisher({ 'usageExport.batchSize': 8 }).claimBatch(),
       ])
 
-      const claimed = batches.flat().map((entry) => entry.id)
+      const claimed = batches.flat().map((entry) => entry.eventKey)
       expect(claimed.length).toBeGreaterThan(8)
       expect(new Set(claimed).size).toBe(claimed.length)
     })
@@ -615,18 +586,38 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       await publisher().publishPendingExports()
       await outboxes.update({ eventKey: 'key-0' }, { deliveredAt: new Date(Date.now() - 40 * DAY_MS) })
 
-      await publisher().pruneDeliveredExports()
+      await publisher().publishPendingExports()
 
       expect((await outboxes.find()).map((entry) => entry.eventKey)).toEqual(['key-1'])
     })
 
     it('never prunes a row that has not been delivered', async () => {
       await enqueueRows(1)
-      await outboxes.update(allRows, { createdAt: new Date(Date.now() - 90 * DAY_MS) })
+      // Old enough to be swept on age alone, and parked beyond the claim window
+      // so the cycle reaches the sweep instead of delivering it. Without both,
+      // the row is claimed and the assertion holds for any implementation.
+      await outboxes.update(allRows, {
+        deliveredAt: new Date(Date.now() - 90 * DAY_MS),
+        availableAt: new Date(Date.now() + DAY_MS),
+      })
 
-      await publisher().pruneDeliveredExports()
+      await publisher().publishPendingExports()
 
-      expect(await outboxes.find()).toHaveLength(1)
+      expect(received).toHaveLength(0)
+      expect(await outboxes.find()).toEqual([expect.objectContaining({ status: UsageExportStatus.PENDING })])
+    })
+
+    // recordFailure charges the blocked path through a raw SQL fragment that no
+    // other test compiles against a database.
+    it('blocks a rejected row and charges it one attempt', async () => {
+      await enqueueRows(1)
+      respondWith = { status: 400 }
+
+      await publisher().publishPendingExports()
+
+      expect(await outboxes.find()).toEqual([
+        expect.objectContaining({ status: UsageExportStatus.BLOCKED, attempts: 1 }),
+      ])
     })
   })
 })

@@ -4,25 +4,19 @@ export class AddBoxUsageExportOutbox1786100000000 implements MigrationInterface 
   name = 'AddBoxUsageExportOutbox1786100000000'
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    // The event key is the natural key — a deterministic hash of the usage
+    // interval — so it is the primary key. A surrogate id beside it would be a
+    // second identity for the same row with nothing to arbitrate between them.
     await queryRunner.query(
       `CREATE TABLE "box_usage_export_outbox" (
-        "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "eventKey" character varying NOT NULL,
         "payload" jsonb NOT NULL,
-        "schemaVersion" integer NOT NULL,
         "status" character varying(16) NOT NULL DEFAULT 'pending',
         "attempts" integer NOT NULL DEFAULT 0,
         "availableAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "deliveredAt" TIMESTAMP WITH TIME ZONE,
         "lastError" text,
-        "organizationId" character varying,
-        "boxId" character varying,
-        "startAt" TIMESTAMP WITH TIME ZONE,
-        "endAt" TIMESTAMP WITH TIME ZONE,
-        "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
-        "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
-        CONSTRAINT "box_usage_export_outbox_id_pk" PRIMARY KEY ("id"),
-        CONSTRAINT "box_usage_export_outbox_event_key_uq" UNIQUE ("eventKey"),
+        CONSTRAINT "box_usage_export_outbox_pk" PRIMARY KEY ("eventKey"),
         CONSTRAINT "box_usage_export_outbox_attempts_ck" CHECK ("attempts" >= 0),
         CONSTRAINT "box_usage_export_outbox_status_ck"
           CHECK ("status" IN ('pending', 'delivered', 'blocked'))
