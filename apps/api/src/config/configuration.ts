@@ -36,6 +36,35 @@ function requiredCount(value: string | undefined, fallback: number, name: string
 }
 
 /**
+ * How long a claimed usage-export batch stays invisible to other publishers,
+ * and the TTL of the lock the publish cycle holds.
+ *
+ * Lives here rather than beside the publisher so the timeout validation below
+ * can enforce the one relationship between them that has to hold.
+ */
+export const USAGE_EXPORT_VISIBILITY_TIMEOUT_MS = 60_000
+
+/**
+ * An absolute http(s) URL, or a hard failure.
+ *
+ * The offending value is deliberately not echoed: a URL is the one setting that
+ * can carry credentials in its userinfo, and a boot log is the wrong place to
+ * put them. The variable name is enough to find it.
+ */
+function requiredHttpUrl(value: string, name: string): string {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error(`${name} must be an absolute http(s) URL`)
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`${name} must use http or https`)
+  }
+  return value.replace(/\/+$/, '')
+}
+
+/**
  * Export of finalized usage periods to the Commerce service. Kept separate from
  * billingApiUrl on purpose, for the same reason requirePaymentMethod is:
  * pointing the dashboard at a billing service and shipping usage to it are
@@ -47,27 +76,50 @@ function requiredCount(value: string | undefined, fallback: number, name: string
  */
 export function usageExportConfig(env: NodeJS.ProcessEnv = process.env) {
   const enabled = env.USAGE_EXPORT_ENABLED === 'true'
-  const url = env.USAGE_EXPORT_URL?.trim()
+  const rawUrl = env.USAGE_EXPORT_URL?.trim()
   const token = env.USAGE_EXPORT_TOKEN?.trim()
 
-  // Enabled without a destination would post to "undefined/internal/usage-events",
-  // spend the retry budget, and block the batch — a silent stall dressed up as
-  // delivery failure.
-  if (enabled && !url) {
-    throw new Error('USAGE_EXPORT_URL is required when USAGE_EXPORT_ENABLED is true')
-  }
-  if (enabled && !token) {
-    throw new Error('USAGE_EXPORT_TOKEN is required when USAGE_EXPORT_ENABLED is true')
-  }
-
-  return {
+  // Counts are checked whether or not export is on: a value like "1e9" or a
+  // typo is malformed in every state, and rejecting it costs a stage nothing it
+  // could legitimately have wanted.
+  const settings = {
     enabled,
-    url,
+    url: rawUrl,
     token,
     batchSize: requiredCount(env.USAGE_EXPORT_BATCH_SIZE, 200, 'USAGE_EXPORT_BATCH_SIZE'),
     timeoutMs: requiredCount(env.USAGE_EXPORT_TIMEOUT_MS, 10_000, 'USAGE_EXPORT_TIMEOUT_MS'),
     maxAttempts: requiredCount(env.USAGE_EXPORT_MAX_ATTEMPTS, 10, 'USAGE_EXPORT_MAX_ATTEMPTS'),
   }
+
+  // Everything below describes how delivery must behave, and delivery does not
+  // happen while export is off. A stage that leaves a placeholder destination
+  // or an unused timeout behind should keep booting: refusing would fail it for
+  // a setting nothing reads.
+  if (!enabled) {
+    return settings
+  }
+
+  // Enabled without a destination would post to "undefined/internal/usage-events",
+  // spend the retry budget, and block the batch — a silent stall dressed up as
+  // delivery failure. A destination that is merely unusable, like "commerce",
+  // fails exactly the same way, so the check has to be the URL's shape rather
+  // than its length.
+  if (!rawUrl) {
+    throw new Error('USAGE_EXPORT_URL is required when USAGE_EXPORT_ENABLED is true')
+  }
+  if (!token) {
+    throw new Error('USAGE_EXPORT_TOKEN is required when USAGE_EXPORT_ENABLED is true')
+  }
+  // A request still in flight when its rows become claimable again is delivered
+  // twice — harmless, since the receiver deduplicates, but it doubles the load
+  // exactly when the receiver is already too slow to answer in time.
+  if (settings.timeoutMs >= USAGE_EXPORT_VISIBILITY_TIMEOUT_MS) {
+    throw new Error(
+      `USAGE_EXPORT_TIMEOUT_MS must be below the ${USAGE_EXPORT_VISIBILITY_TIMEOUT_MS}ms claim visibility window, got "${env.USAGE_EXPORT_TIMEOUT_MS}"`,
+    )
+  }
+
+  return { ...settings, url: requiredHttpUrl(rawUrl, 'USAGE_EXPORT_URL') }
 }
 
 const configuration = {

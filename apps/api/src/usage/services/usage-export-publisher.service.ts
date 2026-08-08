@@ -13,15 +13,13 @@ import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { TrackJobExecution } from '../../common/decorators/track-job-execution.decorator'
 import { TrackableJobExecutions } from '../../common/interfaces/trackable-job-executions'
+import { USAGE_EXPORT_VISIBILITY_TIMEOUT_MS } from '../../config/configuration'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
 import { UsageExportOutboxService } from './usage-export-outbox.service'
 
 const PUBLISH_LOCK_KEY = 'publish-usage-exports'
 const MAX_BACKOFF_MS = 15 * 60 * 1000
-
-/** How long a claimed batch stays invisible — longer than the HTTP timeout, so a delivery still in flight is not claimed twice. */
-const VISIBILITY_TIMEOUT_MS = 60 * 1000
 
 /** How long delivered rows are kept for inspection before the idle sweep drops them. */
 const RETENTION_DAYS = 30
@@ -74,7 +72,7 @@ export class UsageExportPublisherService implements TrackableJobExecutions, OnAp
     if (!this.configService.get('usageExport.enabled')) {
       return
     }
-    if (!(await this.redisLockProvider.lock(PUBLISH_LOCK_KEY, 60))) {
+    if (!(await this.redisLockProvider.lock(PUBLISH_LOCK_KEY, USAGE_EXPORT_VISIBILITY_TIMEOUT_MS / 1000))) {
       return
     }
 
@@ -131,7 +129,7 @@ export class UsageExportPublisherService implements TrackableJobExecutions, OnAp
          RETURNING *
        )
        SELECT * FROM claimed`,
-      [VISIBILITY_TIMEOUT_MS, UsageExportStatus.PENDING, this.configService.get('usageExport.batchSize')],
+      [USAGE_EXPORT_VISIBILITY_TIMEOUT_MS, UsageExportStatus.PENDING, this.configService.get('usageExport.batchSize')],
     )
   }
 
