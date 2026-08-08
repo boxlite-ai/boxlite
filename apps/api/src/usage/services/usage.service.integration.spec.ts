@@ -598,8 +598,9 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     })
 
     // A claim that did not move the row out of the selection window would let
-    // the next claimer take it straight back.
-    it('leaves nothing claimable that a concurrent claimer already took', async () => {
+    // the next claimer take it straight back. Sequential on purpose: this pins
+    // the visibility bump itself, which the race above cannot isolate.
+    it('leaves nothing claimable that an earlier claimer already took', async () => {
       await enqueueRows(5)
 
       const first = await publisher({ 'usageExport.batchSize': 5 }).claimBatch()

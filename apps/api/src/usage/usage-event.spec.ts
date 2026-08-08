@@ -198,7 +198,12 @@ describe('usage period validation', () => {
     ['a blank boxId', { boxId: '' }],
     ['an invalid startAt', { startAt: new Date('nonsense') }],
     ['an end before the start', { endAt: new Date('2026-07-01T00:00:00.000Z') }],
+    ['a quantity past the encodable ceiling', { mem: 1e16 }],
   ])('rejects %s', (_case, override) => {
     expect(() => usageEventKey(period(override))).toThrow(InvalidUsagePeriodError)
+  })
+
+  it('accepts a quantity at the ceiling', () => {
+    expect(() => usageEventKey(period({ mem: 1e15 }))).not.toThrow()
   })
 })

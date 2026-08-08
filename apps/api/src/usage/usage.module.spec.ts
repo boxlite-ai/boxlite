@@ -14,6 +14,9 @@ import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-ca
 import { RedisLockProvider } from '../box/common/redis-lock.provider'
 import { BoxUsagePeriod } from './entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from './entities/box-usage-period-archive.entity'
+import { BoxUsageExportOutbox } from './entities/box-usage-export-outbox.entity'
+import { UsageExportOutboxService } from './services/usage-export-outbox.service'
+import { UsageExportPublisherService } from './services/usage-export-publisher.service'
 import { UsageService } from './services/usage.service'
 import { UsageModule } from './usage.module'
 
@@ -39,6 +42,8 @@ describe('UsageModule', () => {
     expect(moduleRef.get(UsageService)).toBeInstanceOf(UsageService)
     expect(moduleRef.get(RedisLockProvider)).toBeInstanceOf(RedisLockProvider)
     expect(moduleRef.get(BoxRepository)).toBeInstanceOf(BoxRepository)
+    expect(moduleRef.get(UsageExportOutboxService)).toBeInstanceOf(UsageExportOutboxService)
+    expect(moduleRef.get(UsageExportPublisherService)).toBeInstanceOf(UsageExportPublisherService)
   })
 
   it('registers every entity repository and provider its service resolves through', () => {
@@ -50,10 +55,15 @@ describe('UsageModule', () => {
       expect.arrayContaining([
         getRepositoryToken(BoxUsagePeriod),
         getRepositoryToken(BoxUsagePeriodArchive),
+        getRepositoryToken(BoxUsageExportOutbox),
         getRepositoryToken(Box),
       ]),
     )
     expect(providers).toContain(BoxLookupCacheInvalidationService)
+    // Dropping either of these leaves every service-level test green while the
+    // exporter silently stops running.
+    expect(providers).toContain(UsageExportOutboxService)
+    expect(providers).toContain(UsageExportPublisherService)
   })
 
   // This module hand-rolls its own BoxRepository factory instead of importing

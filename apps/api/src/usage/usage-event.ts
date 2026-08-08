@@ -13,9 +13,9 @@ export const USAGE_EXPORT_SCHEMA_VERSION = 1
 
 /**
  * Quantities are allocation counts (vCPU, GiB), never money. This ceiling is a
- * boundary check, not a product limit: it is where a double stops representing
- * every integer exactly, so past it the decimal encoding below would no longer
- * round-trip the value it was given.
+ * boundary check, not a product limit: a conservative round number below 2^53,
+ * where a double stops representing every integer exactly and the encoding
+ * below would no longer round-trip the value it was given.
  */
 const MAX_QUANTITY = 1e15
 
