@@ -5,6 +5,7 @@
  */
 
 import { OrganizationTier, Tier } from '@/billing-api'
+import { formatWholeDollars } from '@/lib/utils'
 
 /**
  * Preconditions the server enforces before an organization may move up a tier.
@@ -20,15 +21,6 @@ export interface TierRequirementsState {
 export interface TierRequirement {
   label: string
   isChecked: boolean
-}
-
-export function formatDollars(cents: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(cents / 100)
 }
 
 function hasSatisfiedTopUp(currentTier: OrganizationTier, nextTier: Tier): boolean {
@@ -76,7 +68,7 @@ export function getTierRequirements(
 
   if (tier.minTopUpAmountCents) {
     items.push({
-      label: `Top up ${formatDollars(tier.minTopUpAmountCents)} (${tier.topUpIntervalDays ? `every ${tier.topUpIntervalDays} days` : 'one time'})`,
+      label: `Top up ${formatWholeDollars(tier.minTopUpAmountCents)} (${tier.topUpIntervalDays ? `every ${tier.topUpIntervalDays} days` : 'one time'})`,
       isChecked: hasSatisfiedTopUp(currentTier, tier),
     })
   }

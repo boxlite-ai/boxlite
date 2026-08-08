@@ -32,7 +32,7 @@ const analyticsQuickRanges: QuickRangesConfig = {
   days: [7, 14, 30],
 }
 
-const Spending = () => {
+export function UsageSection() {
   const { selectedOrganization } = useSelectedOrganization()
   const config = useConfig()
   const spendingEnabled = useFeatureFlagEnabled(FeatureFlags.BOX_SPENDING)
@@ -257,5 +257,3 @@ function convertUsageToChartData(usage: OrganizationUsage): UsageChartData {
     // gpu,
   }
 }
-
-export default Spending

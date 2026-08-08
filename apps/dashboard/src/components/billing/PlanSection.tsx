@@ -18,7 +18,7 @@ import { RefreshCcw } from '@/components/ui/icon'
 import { ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
 
-export default function Limits() {
+export function PlanSection() {
   const { user } = useAuth()
   const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
   const organizationTierQuery = useOwnerTierQuery()
@@ -169,7 +169,7 @@ function RateLimits({
         <div className="font-mono text-[11px] uppercase tracking-[1.5px] text-foreground">{title}</div>
         <div className="font-mono text-[11px] text-muted-foreground">{description}</div>
       </div>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-4">
+      <div className="grid grid-cols-3 gap-3 sm:gap-4">
         {rateLimits.map(
           ({ label, value, unit, ttlSeconds }) =>
             value && <RateLimitItem key={label} label={label} value={value} unit={unit} ttlSeconds={ttlSeconds} />,

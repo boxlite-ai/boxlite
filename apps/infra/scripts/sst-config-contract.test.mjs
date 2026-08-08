@@ -421,7 +421,7 @@ test('a billing URL is advertised only where a billing service answers', () => {
   const gate = billing.indexOf('if (!config.billingApiUrl)')
   assert.notEqual(gate, -1, 'Billing page must gate on config.billingApiUrl')
   assert.match(billing.slice(gate), /return <BillingComingSoon \/>/)
-  for (const section of ['<BillingAlerts />', '<Limits />', '<Wallet />', '<Spending />']) {
+  for (const section of ['<BillingAlerts />', '<PlanSection />', '<UsageSection />', '<WalletSection />']) {
     assert.ok(billing.indexOf(section) > gate, `${section} must render only past the billing gate`)
   }
 

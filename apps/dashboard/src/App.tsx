@@ -188,7 +188,7 @@ function App() {
             per-surface paths stay as redirects so existing links keep working.
             The route is open to any member: the wallet/tier data is owner-scoped by
             hooks/queries/billingQueries.ts, and the plan-switching surface is gated
-            on the owner role inside pages/Limits.tsx (useTiersQuery is not). */}
+            on the owner role inside components/billing/PlanSection.tsx. */}
         <Route path={getRouteSubPath(RoutePath.BILLING)} element={<Billing />} />
         <Route
           path={getRouteSubPath(RoutePath.BILLING_SPENDING)}

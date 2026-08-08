@@ -56,7 +56,7 @@ export function CycleOverview({
       </div>
 
       {/* Cycle figures */}
-      <div className="flex flex-col gap-6 border-t border-border px-[22px] py-5 sm:flex-row sm:gap-14">
+      <div className="grid grid-cols-2 gap-5 border-t border-border px-[22px] py-5 sm:flex sm:flex-row sm:gap-14">
         <Metric label="Wallet balance" value={formatAmount(wallet.ongoingBalanceCents)} sub="prepaid balance" />
         <Metric
           label="Spent this month"

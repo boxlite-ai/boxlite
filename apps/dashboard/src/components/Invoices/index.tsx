@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { useMatchMedia } from '@/hooks/useMatchMedia'
 import { cn } from '@/lib/utils'
 import { flexRender } from '@tanstack/react-table'
 import { FileText } from '@/components/ui/icon'
@@ -13,6 +14,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { InvoicesTableHeader } from './InvoicesTableHeader'
 import { InvoicesTableProps } from './types'
 import { useInvoicesTable } from './useInvoicesTable'
+
+// A phone fits about three columns. Keep the ones a reader acts on — which
+// invoice, how much, and whether it is paid — and bring the rest back at sm.
+const NARROW_SCREEN_HIDDEN = new Set(['issuingDate', 'paymentDueDate', 'type'])
+
+// Matches the `sm:` boundary the classes below use, so the JS and CSS halves of
+// this layout never disagree in the 640-767px band.
+const NARROW_SCREEN = '(max-width: 639px)'
 
 export function InvoicesTable({
   data,
@@ -26,6 +35,7 @@ export function InvoicesTable({
   onRowClick,
   onPayInvoice,
 }: InvoicesTableProps) {
+  const isNarrow = useMatchMedia(NARROW_SCREEN)
   const { table } = useInvoicesTable({
     data,
     pagination,
@@ -55,6 +65,7 @@ export function InvoicesTable({
                     className={cn(
                       'sticky top-0 z-[3] border-b border-border font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground',
                       header.column.getCanSort() ? 'hover:bg-muted cursor-pointer' : '',
+                      NARROW_SCREEN_HIDDEN.has(header.column.id) && 'hidden sm:table-cell',
                     )}
                   >
                     {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
@@ -86,12 +97,23 @@ export function InvoicesTable({
                         e.stopPropagation()
                       }
                     }}
-                    className="border-b border-border font-mono text-[12px]"
-                    style={{
-                      width: cell.column.id === 'number' ? '20%' : 'auto',
-                      maxWidth: cell.column.getSize() + 80,
-                      minWidth: cell.column.getSize(),
-                    }}
+                    className={cn(
+                      'border-b border-border font-mono text-[12px]',
+                      NARROW_SCREEN_HIDDEN.has(cell.column.id) && 'hidden sm:table-cell',
+                    )}
+                    // The four columns kept below sm carry 440px of minimums
+                    // (100 default + 120 + 120 + 100) against a phone's ~322px of
+                    // content width, which pushed the sticky actions column off
+                    // screen. Below sm they size to their content instead.
+                    style={
+                      isNarrow
+                        ? undefined
+                        : {
+                            width: cell.column.id === 'number' ? '20%' : 'auto',
+                            maxWidth: cell.column.getSize() + 80,
+                            minWidth: cell.column.getSize(),
+                          }
+                    }
                     sticky={cell.column.id === 'actions' ? 'right' : undefined}
                   >
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}

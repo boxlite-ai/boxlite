@@ -78,14 +78,16 @@ WebhookEndpointDetails). Their hooks/components still exist. Active: Landing · 
 core) · Keys · Billing · Admin · OrganizationSettings · EmailVerify · Logout.
 
 **Billing** is one page and one nav entry. `pages/Billing.tsx` renders the "on the way"
-placeholder without `config.billingApiUrl`, and otherwise stacks three restyled sections beneath
-a shared `components/billing/BillingAlerts`: `pages/Limits.tsx` (active plan, plan cards,
-enterprise contact, resource ceilings), `pages/Wallet.tsx` (balance, top-up, auto-reload, coupon,
-payment method, invoices) and `pages/Spending.tsx` (cost over time, resource and per-box usage,
-monthly breakdown). `/dashboard/billing/wallet`, `/dashboard/billing/spending` and
-`/dashboard/limits` redirect to it. Wallet/tier data is owner-scoped by
+placeholder without `config.billingApiUrl`, and otherwise splits three restyled sections across
+an Overview / Usage / Wallet tab strip, with a shared `components/billing/BillingAlerts` above it
+so a blocking alert shows on every tab: `components/billing/PlanSection.tsx` (active plan, plan
+cards, enterprise contact, resource ceilings), `components/billing/WalletSection.tsx` (balance,
+top-up, auto-reload, coupon, payment method, invoices) and `components/billing/UsageSection.tsx`
+(cost over time, resource and per-box usage, monthly breakdown). Those three are sections, not
+pages: nothing routes to them, and `/dashboard/billing/wallet`, `/dashboard/billing/spending` and
+`/dashboard/limits` redirect to the one page. Wallet/tier data is owner-scoped by
 `hooks/queries/billingQueries.ts`; `useTiersQuery` is not, so plan switching is gated on the
-owner role inside `pages/Limits.tsx`.
+owner role inside `components/billing/PlanSection.tsx`.
 
 ## Recommended rebuild path
 

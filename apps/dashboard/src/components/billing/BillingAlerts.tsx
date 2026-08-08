@@ -55,8 +55,8 @@ export function BillingAlerts() {
           icon={<TriangleAlertIcon className="size-4 shrink-0" />}
           title="Outstanding invoices"
         >
-          You have failed or pending invoices that need to be resolved before adding new funds. Please review your
-          invoices below and complete or void any outstanding payments.
+          You have failed or pending invoices that need to be resolved before adding new funds. Open the Wallet tab to
+          review them and complete or void any outstanding payments.
         </StatusBanner>
       )}
     </>

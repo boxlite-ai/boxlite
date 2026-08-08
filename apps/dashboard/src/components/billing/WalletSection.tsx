@@ -33,7 +33,7 @@ import { toast } from 'sonner'
 
 const DEFAULT_PAGE_SIZE = 10
 
-const Wallet = () => {
+export function WalletSection() {
   const { selectedOrganization } = useSelectedOrganization()
   const { user } = useAuth()
   const [automaticTopUp, setAutomaticTopUp] = useState<AutomaticTopUp | undefined>(undefined)
@@ -305,19 +305,21 @@ const Wallet = () => {
 
               {/* Add funds — presets, custom amount and the action all on one row */}
               <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">Add funds</span>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                {[25, 500, 1000, 2000].map((amount) => (
-                  <AsciiChip
-                    key={amount}
-                    selected={selectedPreset === amount}
-                    onClick={() => {
-                      setSelectedPreset(amount)
-                      setOneTimeTopUpAmount(undefined)
-                    }}
-                  >
-                    ${amount.toLocaleString()}
-                  </AsciiChip>
-                ))}
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                <div className="grid grid-cols-2 gap-2 sm:contents">
+                  {[25, 500, 1000, 2000].map((amount) => (
+                    <AsciiChip
+                      key={amount}
+                      selected={selectedPreset === amount}
+                      onClick={() => {
+                        setSelectedPreset(amount)
+                        setOneTimeTopUpAmount(undefined)
+                      }}
+                    >
+                      ${amount.toLocaleString()}
+                    </AsciiChip>
+                  ))}
+                </div>
                 <span className="inline-flex items-center border border-border px-3 py-2 font-mono text-[13px] transition-colors focus-within:border-brand hover:border-brand">
                   <span className="text-muted-foreground">$</span>
                   <NumericFormat
@@ -335,14 +337,14 @@ const Wallet = () => {
                     onFocus={() => {
                       setSelectedPreset(null)
                     }}
-                    className="w-[86px] bg-transparent pl-1 tabular-nums text-foreground outline-none placeholder:text-muted-foreground"
+                    className="w-full bg-transparent pl-1 tabular-nums text-foreground outline-none placeholder:text-muted-foreground sm:w-[86px]"
                   />
                 </span>
                 <AsciiButton
                   variant="primary"
                   onClick={handleTopUpWallet}
                   disabled={!topUpEnabled}
-                  className="ml-auto inline-flex items-center gap-2"
+                  className="inline-flex w-full items-center justify-center gap-2 sm:ml-auto sm:w-auto"
                 >
                   {topUpWalletMutation.isPending && <Spinner />}
                   Top up →
@@ -456,12 +458,12 @@ const Wallet = () => {
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex w-full items-center gap-2 sm:w-auto">
                       <Input
                         placeholder="Enter coupon code"
                         value={couponCode}
                         onChange={(e) => setCouponCode(e.target.value)}
-                        className="h-9 w-[200px] font-mono text-[13px]"
+                        className="h-9 w-full font-mono text-[13px] sm:w-[200px]"
                       />
                       <AsciiButton
                         onClick={handleRedeemCoupon}
@@ -524,5 +526,3 @@ const Wallet = () => {
     </div>
   )
 }
-
-export default Wallet

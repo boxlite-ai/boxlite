@@ -19,7 +19,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { TIER_RATE_LIMITS } from '@/constants/limits'
 import {
   canUpgradeTo,
-  formatDollars,
   getUpgradeRequirements,
   type TierRequirement,
   type TierRequirementsState,
@@ -27,6 +26,7 @@ import {
 import { useDowngradeTierMutation } from '@/hooks/mutations/useDowngradeTierMutation'
 import { useUpgradeTierMutation } from '@/hooks/mutations/useUpgradeTierMutation'
 import { handleApiError } from '@/lib/error-handling'
+import { formatWholeDollars } from '@/lib/utils'
 import { useState } from 'react'
 import { toast } from 'sonner'
 
@@ -40,7 +40,7 @@ function topUpRequirement(tier: Tier): string | null {
   if (!tier.minTopUpAmountCents) {
     return null
   }
-  const amount = formatDollars(tier.minTopUpAmountCents)
+  const amount = formatWholeDollars(tier.minTopUpAmountCents)
   return tier.topUpIntervalDays ? `${amount} every ${tier.topUpIntervalDays} days` : `${amount} one time`
 }
 
