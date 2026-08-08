@@ -16,14 +16,19 @@ import { CustomHeaders } from '../../common/constants/header.constants'
 jest.mock('uuid', () => ({ v4: () => 'uuid-test' }))
 
 describe('AuditInterceptor', () => {
-  it('records the BoxLite source header and structured metadata for audited admin reads', async () => {
+  // The context below is synthetic on purpose: since the admin observability
+  // controller was deleted, no route emits AuditAction.READ. Metadata keys are
+  // resolved generically (resolveRequestMetadata iterates the extractors), so
+  // `surface`/`query` cover nothing the production `body:` extractors miss —
+  // what this uniquely holds is READ and a composite targetIdFromRequest.
+  it('records the BoxLite source header and structured metadata for an audited request', async () => {
     const auditContext: AuditContext = {
       action: AuditAction.READ,
-      targetType: AuditTarget.OBSERVABILITY,
-      targetIdFromRequest: (req) => `traceId:${req.query.traceId}`,
+      targetType: AuditTarget.RUNNER,
+      targetIdFromRequest: (req) => `regionId:${req.query.regionId}`,
       requestMetadata: {
-        surface: () => 'admin_observability',
-        query: (req) => ({ traceId: req.query.traceId }),
+        surface: () => 'admin_runners',
+        query: (req) => ({ regionId: req.query.regionId }),
       },
     }
     const reflector = {
@@ -36,9 +41,9 @@ describe('AuditInterceptor', () => {
     const configService = { get: jest.fn() }
     const interceptor = new AuditInterceptor(reflector, auditService as any, configService as any)
     const request = {
-      url: '/admin/runners?traceId=trace-1',
+      url: '/admin/runners?regionId=region-1',
       ip: '127.0.0.1',
-      query: { traceId: 'trace-1' },
+      query: { regionId: 'region-1' },
       user: { userId: 'user-1', email: 'admin@example.com', organizationId: 'org-1' },
       get: jest.fn((name: string) => {
         if (name === CustomHeaders.SOURCE.name) return 'agent'
@@ -68,19 +73,19 @@ describe('AuditInterceptor', () => {
         actorEmail: 'admin@example.com',
         organizationId: 'org-1',
         action: AuditAction.READ,
-        targetType: AuditTarget.OBSERVABILITY,
-        targetId: 'traceId:trace-1',
+        targetType: AuditTarget.RUNNER,
+        targetId: 'regionId:region-1',
         source: 'agent',
         userAgent: 'boxlite-agent-test',
         metadata: {
-          surface: 'admin_observability',
-          query: { traceId: 'trace-1' },
+          surface: 'admin_runners',
+          query: { regionId: 'region-1' },
         },
       }),
     )
     expect(auditService.updateLog).toHaveBeenCalledWith('audit-1', {
       organizationId: 'org-1',
-      targetId: 'traceId:trace-1',
+      targetId: 'regionId:region-1',
       statusCode: 200,
     })
   })
