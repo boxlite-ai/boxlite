@@ -16,22 +16,24 @@ function makeHarness(initial: Record<string, unknown>) {
     waitForStopped: jest.fn().mockResolvedValue({ state: BoxState.STOPPED }),
   }
   const redisLockProvider = {
-    acquireLease: jest.fn(),
+    waitForLock: jest.fn(),
   }
   const release = jest.fn().mockResolvedValue(undefined)
-  redisLockProvider.acquireLease.mockResolvedValue({ release })
+  const signal = new AbortController().signal
+  redisLockProvider.waitForLock.mockResolvedValue({ signal, release })
   return {
     service: new BoxAutoResumeService(boxService as never, waiter as never, redisLockProvider as never),
     boxService,
     waiter,
     redisLockProvider,
     release,
+    signal,
   }
 }
 
 describe('BoxAutoResumeService', () => {
   it('returns immediately for an already STARTED box', async () => {
-    const { service, waiter, redisLockProvider, release } = makeHarness({
+    const { service, boxService, waiter, redisLockProvider, release, signal } = makeHarness({
       id: 'box-1',
       state: BoxState.STARTED,
       desiredState: BoxDesiredState.STARTED,
@@ -39,7 +41,8 @@ describe('BoxAutoResumeService', () => {
 
     await service.ensureReady('box-1', organization)
     expect(waiter.waitForStarted).not.toHaveBeenCalled()
-    expect(redisLockProvider.acquireLease).toHaveBeenCalledWith('box:box-1:state-change', 30)
+    expect(redisLockProvider.waitForLock).toHaveBeenCalledWith('box:box-1:state-change', 30, { timeoutMs: 30_000 })
+    expect(boxService.ensureStartedForProxy).toHaveBeenCalledWith('box-1', organization, signal)
     expect(release).toHaveBeenCalled()
   })
 

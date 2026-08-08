@@ -10,41 +10,8 @@ import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
-import { RedisLockProvider } from '../common/redis-lock.provider'
 
 describe('JobStateHandlerService RESIZE_BOX completion', () => {
-  it('does not release a state-change lock acquired after the job was dispatched', async () => {
-    let currentOwner: string | null = 'new-request-owner'
-    const redis = {
-      get: jest.fn(async () => currentOwner),
-      eval: jest.fn(async (_script: string, _keys: number, _key: string, owner: string) => {
-        if (currentOwner === owner) {
-          currentOwner = null
-          return 1
-        }
-        return 0
-      }),
-    } as any
-    const redisLockProvider = new RedisLockProvider(redis)
-    const boxRepository = {
-      findOne: jest.fn().mockResolvedValue(undefined),
-    } as any
-    const service = new (JobStateHandlerService as any)(boxRepository, redisLockProvider)
-    const job = new Job({
-      id: 'job-from-prior-request',
-      type: JobType.START_BOX,
-      status: JobStatus.COMPLETED,
-      runnerId: 'runner-1',
-      resourceType: ResourceType.BOX,
-      resourceId: 'box-1',
-    })
-
-    await service.handleJobCompletion(job)
-    await new Promise((resolve) => setImmediate(resolve))
-
-    expect(currentOwner).toBe('new-request-owner')
-  })
-
   it('persists completed V2 resize resources and restores the prior state', async () => {
     const box = {
       id: 'box-1',

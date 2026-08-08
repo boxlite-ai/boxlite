@@ -21,6 +21,7 @@ describe('BoxManager.syncInstanceState', () => {
     const redisLockProvider = {
       acquireLease: jest.fn().mockResolvedValue({
         ownerCode: { getCode: () => 'owner-1' },
+        signal: new AbortController().signal,
         release,
       }),
     }

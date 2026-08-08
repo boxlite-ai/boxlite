@@ -893,9 +893,15 @@ export class BoxService {
    * states are returned unchanged so the caller can wait and retry. Unexpected
    * database errors propagate; AutoResume must never proxy before readiness.
    */
-  async ensureStartedForProxy(boxIdOrName: string, organization: Organization): Promise<Box> {
+  async ensureStartedForProxy(
+    boxIdOrName: string,
+    organization: Organization,
+    signal?: AbortSignal,
+  ): Promise<Box> {
+    signal?.throwIfAborted()
     this.organizationService.assertOrganizationIsNotSuspended(organization)
     const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
+    signal?.throwIfAborted()
 
     if (box.state !== BoxState.STOPPED || box.desiredState !== BoxDesiredState.STOPPED || box.pending) {
       return box
@@ -914,6 +920,7 @@ export class BoxService {
 
     let updated: Box
     try {
+      signal?.throwIfAborted()
       updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
     } catch (error) {
       await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
@@ -922,6 +929,7 @@ export class BoxService {
 
     if (!updated) {
       await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
+      signal?.throwIfAborted()
       return this.findOneByIdOrName(box.id, organization.id)
     }
 

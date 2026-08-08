@@ -22,6 +22,8 @@ type LeaseAcquisitionOutcome =
   | { kind: 'acquired'; lease: RedisLockLease | null }
   | { kind: 'failed'; error: unknown }
 
+export class LockOwnershipLostError extends Error {}
+
 export class LockCode {
   constructor(private readonly code: string) {}
 
@@ -73,6 +75,21 @@ export class RedisLockLease {
     this.renewalTimer = setTimeout(() => {
       this.renewal = this.provider
         .renew(this.key, this.ttl, this.code)
+        .catch((error) => {
+          if (error instanceof LockOwnershipLostError) {
+            throw error
+          }
+          if (this.isReleased) {
+            return
+          }
+          return new Promise<void>((resolve) => {
+            setTimeout(resolve, Math.min((this.ttl * 1000) / 4, 1000))
+          }).then(() => {
+            if (!this.isReleased) {
+              return this.provider.renew(this.key, this.ttl, this.code)
+            }
+          })
+        })
         .catch((error) => {
           this.renewalError = error
           this.abortController.abort(error)
@@ -144,7 +161,7 @@ export class RedisLockProvider {
       ttl,
     )
     if (renewed !== 1) {
-      throw new Error(`Cannot renew Redis lock lease for ${key}: ownership was lost`)
+      throw new LockOwnershipLostError(`Cannot renew Redis lock lease for ${key}: ownership was lost`)
     }
   }
 

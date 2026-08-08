@@ -580,15 +580,22 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       })
 
       signal.throwIfAborted()
-      await Promise.all(
-        boxes.map((box) => {
-          signal.throwIfAborted()
-          return this.eventEmitter.emitAsync(
-            OrganizationEvents.SUSPENDED_BOX_STOPPED,
-            new OrganizationSuspendedBoxStoppedEvent(box.id),
-          )
-        }),
-      )
+      const batchSize = 20
+      for (let offset = 0; offset < boxes.length; offset += batchSize) {
+        signal.throwIfAborted()
+        const results = await Promise.allSettled(
+          boxes.slice(offset, offset + batchSize).map((box) => {
+            return this.eventEmitter.emitAsync(
+              OrganizationEvents.SUSPENDED_BOX_STOPPED,
+              new OrganizationSuspendedBoxStoppedEvent(box.id),
+            )
+          }),
+        )
+        const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+        if (rejected) {
+          throw rejected.reason
+        }
+      }
     })
   }
 

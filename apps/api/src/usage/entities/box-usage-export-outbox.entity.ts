@@ -64,6 +64,10 @@ export class BoxUsageExportOutbox {
   @Column({ type: 'timestamp with time zone', default: () => 'CURRENT_TIMESTAMP' })
   availableAt: Date
 
+  /** Unique fencing value for the publisher that most recently claimed this row. */
+  @Column({ type: 'uuid', nullable: true })
+  claimToken: string | null
+
   @Column({ type: 'timestamp with time zone', nullable: true })
   deliveredAt: Date | null
 

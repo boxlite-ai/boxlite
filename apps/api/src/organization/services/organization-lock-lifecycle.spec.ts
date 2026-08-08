@@ -35,20 +35,77 @@ describe('OrganizationService lock lifecycle', () => {
       boxRepository as any,
       eventEmitter as any,
       { getOrThrow: jest.fn().mockReturnValue(false) } as any,
-      { acquireLease: jest.fn().mockResolvedValue({ release }) } as any,
+      {
+        acquireLease: jest.fn().mockResolvedValue({ signal: new AbortController().signal, release }),
+      } as any,
       {} as any,
       {} as any,
       {} as any,
     )
 
     const stopping = service.stopSuspendedOrganizationBoxes()
-    while (eventEmitter.emitAsync.mock.calls.length === 0) {
+    for (let attempt = 0; attempt < 10 && eventEmitter.emitAsync.mock.calls.length === 0; attempt += 1) {
       await Promise.resolve()
     }
 
+    expect(eventEmitter.emitAsync).toHaveBeenCalledTimes(1)
     expect(release).not.toHaveBeenCalled()
     settleEvent()
     await stopping
     expect(release).toHaveBeenCalled()
+  })
+
+  it('waits for every started stop event before releasing after one fails', async () => {
+    const eventError = new Error('event failed')
+    const controller = new AbortController()
+    let settleSibling!: () => void
+    const release = jest.fn().mockResolvedValue(undefined)
+    const queryBuilder = {
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      andWhereExists: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([{ id: 'org-1' }]),
+    }
+    const service = new OrganizationService(
+      { createQueryBuilder: jest.fn().mockReturnValue(queryBuilder) } as any,
+      {
+        createQueryBuilder: jest.fn().mockReturnValue({ select: jest.fn().mockReturnThis(), where: jest.fn() }),
+        find: jest.fn().mockResolvedValue([{ id: 'box-1' }, { id: 'box-2' }]),
+      } as any,
+      {
+        emitAsync: jest
+          .fn()
+          .mockImplementationOnce(() => {
+            controller.abort(eventError)
+            return Promise.reject(eventError)
+          })
+          .mockImplementationOnce(
+            () =>
+              new Promise<void>((resolve) => {
+                settleSibling = resolve
+              }),
+          ),
+      } as any,
+      { getOrThrow: jest.fn().mockReturnValue(false) } as any,
+      {
+        acquireLease: jest.fn().mockResolvedValue({ signal: controller.signal, release }),
+      } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    )
+
+    const stopping = service.stopSuspendedOrganizationBoxes()
+    for (let attempt = 0; attempt < 10 && !settleSibling; attempt += 1) {
+      await Promise.resolve()
+    }
+
+    expect(settleSibling).toBeDefined()
+    expect(release).not.toHaveBeenCalled()
+    settleSibling()
+    await expect(stopping).rejects.toBe(eventError)
+    expect(release).toHaveBeenCalledTimes(1)
   })
 })

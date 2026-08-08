@@ -13,6 +13,7 @@ import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { AddBoxUsagePeriods1785250000000 } from '../../migrations/pre-deploy/1785250000000-add-box-usage-periods-migration'
 import { AddBoxUsageExportOutbox1786100000000 } from '../../migrations/pre-deploy/1786100000000-add-box-usage-export-outbox-migration'
+import { AddUsageExportClaimToken1786200000000 } from '../../migrations/pre-deploy/1786200000000-add-usage-export-claim-token-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
@@ -130,6 +131,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     try {
       await new AddBoxUsagePeriods1785250000000().up(queryRunner)
       await new AddBoxUsageExportOutbox1786100000000().up(queryRunner)
+      await new AddUsageExportClaimToken1786200000000().up(queryRunner)
       ownsTables = true
     } finally {
       await queryRunner.release()
@@ -579,6 +581,45 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
 
       expect(first).toHaveLength(5)
       expect(second).toHaveLength(0)
+    })
+
+    it('fences a new publisher when an older publisher reclaims its row', async () => {
+      await enqueueRows(1)
+      const [claimed] = await publisher({ 'usageExport.batchSize': 1 }).claimBatch()
+
+      // This is the pre-claimToken statement used by a publisher that is still
+      // draining during a rolling deploy: it changes visibility, but cannot
+      // supply a replacement token.
+      await dataSource.query(
+        `UPDATE "box_usage_export_outbox" SET "availableAt" = now() + interval '1 minute' WHERE "eventKey" = $1`,
+        [claimed.eventKey],
+      )
+      const staleUpdate = await outboxes.update(
+        { eventKey: claimed.eventKey, status: UsageExportStatus.PENDING, claimToken: claimed.claimToken },
+        { status: UsageExportStatus.DELIVERED, claimToken: null },
+      )
+
+      expect(staleUpdate.affected).toBe(0)
+      await outboxes.update({ eventKey: claimed.eventKey }, { availableAt: new Date(Date.now() - 1_000) })
+      const [replacement] = await publisher({ 'usageExport.batchSize': 1 }).claimBatch()
+
+      await expect(
+        dataSource.query(
+          `UPDATE "box_usage_export_outbox"
+           SET "availableAt" = now() + interval '1 minute', "attempts" = "attempts" + 1, "lastError" = 'late failure'
+           WHERE "eventKey" = $1`,
+          [claimed.eventKey],
+        ),
+      ).rejects.toThrow('stale usage export publisher')
+      await expect(
+        dataSource.query(`UPDATE "box_usage_export_outbox" SET "status" = 'delivered' WHERE "eventKey" = $1`, [
+          claimed.eventKey,
+        ]),
+      ).rejects.toThrow('terminal update must release its claim token')
+
+      const current = await outboxes.findOneByOrFail({ eventKey: claimed.eventKey })
+      expect(current.status).toBe(UsageExportStatus.PENDING)
+      expect(current.claimToken).toBe(replacement.claimToken)
     })
 
     it('keeps history only for the retention window', async () => {

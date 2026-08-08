@@ -454,7 +454,8 @@ export class RunnerService {
     await this.updateRunner(runnerId, updateData)
     this.logger.debug(`Updated health for runner ${runnerId}`)
 
-    signal?.throwIfAborted()
+    // Persistence and its domain event are one logical side effect. Once the
+    // write succeeds, always emit so downstream state cannot miss the change.
     this.eventEmitter.emit(
       RunnerEvents.STATE_UPDATED,
       new RunnerStateUpdatedEvent(runner, runner.state, updateData.state),
@@ -481,7 +482,6 @@ export class RunnerService {
       lastChecked: new Date(),
     })
 
-    signal.throwIfAborted()
     this.eventEmitter.emit(RunnerEvents.STATE_UPDATED, new RunnerStateUpdatedEvent(runner, runner.state, newState))
   }
 

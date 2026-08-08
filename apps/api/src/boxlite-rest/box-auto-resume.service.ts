@@ -42,19 +42,21 @@ export class BoxAutoResumeService {
 
   private async submitOrJoinStart(boxId: string, organization: Organization): Promise<Box> {
     const lockKey = getStateChangeLockKey(boxId)
-    const deadline = Date.now() + AUTO_RESUME_TIMEOUT_SECONDS * 1000
-    let lease = await this.redisLockProvider.acquireLease(lockKey, AUTO_RESUME_TIMEOUT_SECONDS)
-    while (!lease) {
-      if (Date.now() >= deadline) {
+    let lease
+    try {
+      lease = await this.redisLockProvider.waitForLock(lockKey, AUTO_RESUME_TIMEOUT_SECONDS, {
+        timeoutMs: AUTO_RESUME_TIMEOUT_SECONDS * 1000,
+      })
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Timed out waiting for Redis lock')) {
         throw new RequestTimeoutException(`Timed out waiting to resume box ${boxId}`)
       }
-      await new Promise((resolve) => setTimeout(resolve, 50))
-      lease = await this.redisLockProvider.acquireLease(lockKey, AUTO_RESUME_TIMEOUT_SECONDS)
+      throw error
     }
 
     return withRedisLockLease(lease, (signal) => {
       signal.throwIfAborted()
-      return this.boxService.ensureStartedForProxy(boxId, organization)
+      return this.boxService.ensureStartedForProxy(boxId, organization, signal)
     })
   }
 }

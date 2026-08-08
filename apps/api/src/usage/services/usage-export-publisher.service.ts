@@ -7,8 +7,9 @@ import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { InjectRepository } from '@nestjs/typeorm'
 import axios from 'axios'
-import { In, Repository } from 'typeorm'
-import { RedisLockProvider } from '../../box/common/redis-lock.provider'
+import { randomUUID } from 'crypto'
+import { In, Repository, UpdateResult } from 'typeorm'
+import { RedisLockProvider, withRedisLockLease } from '../../box/common/redis-lock.provider'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { TrackJobExecution } from '../../common/decorators/track-job-execution.decorator'
@@ -41,7 +42,7 @@ const PERMANENT_REJECTION_STATUSES = new Set([400, 422])
  */
 @Injectable()
 export class UsageExportPublisherService implements TrackableJobExecutions, OnApplicationShutdown {
-  activeJobs = new Set<string>()
+  activeJobs = new Set<symbol>()
   private readonly logger = new Logger(UsageExportPublisherService.name)
 
   constructor(
@@ -72,24 +73,28 @@ export class UsageExportPublisherService implements TrackableJobExecutions, OnAp
     if (!this.configService.get('usageExport.enabled')) {
       return
     }
-    if (!(await this.redisLockProvider.lock(PUBLISH_LOCK_KEY, USAGE_EXPORT_VISIBILITY_TIMEOUT_MS / 1000))) {
+    const lease = await this.redisLockProvider.acquireLease(
+      PUBLISH_LOCK_KEY,
+      USAGE_EXPORT_VISIBILITY_TIMEOUT_MS / 1000,
+    )
+    if (!lease) {
       return
     }
 
-    try {
+    await withRedisLockLease(lease, async (signal) => {
       const claimed = await this.claimBatch()
+      signal.throwIfAborted()
       if (claimed.length > 0) {
-        await this.deliver(claimed)
+        await this.deliver(claimed, signal)
         return
       }
 
       const pruned = await this.outboxService.pruneDelivered(RETENTION_DAYS)
+      signal.throwIfAborted()
       if (pruned > 0) {
         this.logger.log(`Pruned ${pruned} delivered usage export rows`)
       }
-    } finally {
-      await this.redisLockProvider.unlock(PUBLISH_LOCK_KEY)
-    }
+    })
   }
 
   /**
@@ -108,6 +113,7 @@ export class UsageExportPublisherService implements TrackableJobExecutions, OnAp
    * publish cron takes a Redis lock first, which would serialise them.
    */
   async claimBatch(): Promise<BoxUsageExportOutbox[]> {
+    const claimToken = randomUUID()
     // Wrapped in a CTE so the statement is a SELECT: a bare `UPDATE … RETURNING`
     // comes back from the driver as [rows, affectedCount], and mapping over that
     // tuple silently yields undefined payloads instead of events.
@@ -118,7 +124,8 @@ export class UsageExportPublisherService implements TrackableJobExecutions, OnAp
     return this.outboxRepository.query(
       `WITH claimed AS (
          UPDATE "box_usage_export_outbox"
-         SET "availableAt" = now() + ($1 || ' milliseconds')::interval
+         SET "availableAt" = now() + ($1 || ' milliseconds')::interval,
+             "claimToken" = $4
          WHERE "eventKey" IN (
            SELECT "eventKey" FROM "box_usage_export_outbox"
            WHERE "status" = $2 AND "availableAt" <= now()
@@ -129,11 +136,16 @@ export class UsageExportPublisherService implements TrackableJobExecutions, OnAp
          RETURNING *
        )
        SELECT * FROM claimed`,
-      [USAGE_EXPORT_VISIBILITY_TIMEOUT_MS, UsageExportStatus.PENDING, this.configService.get('usageExport.batchSize')],
+      [
+        USAGE_EXPORT_VISIBILITY_TIMEOUT_MS,
+        UsageExportStatus.PENDING,
+        this.configService.get('usageExport.batchSize'),
+        claimToken,
+      ],
     )
   }
 
-  private async deliver(rows: BoxUsageExportOutbox[]): Promise<void> {
+  private async deliver(rows: BoxUsageExportOutbox[], signal: AbortSignal): Promise<void> {
     const eventKeys = rows.map((row) => row.eventKey)
 
     try {
@@ -142,6 +154,7 @@ export class UsageExportPublisherService implements TrackableJobExecutions, OnAp
         { events: rows.map((row) => row.payload) },
         {
           timeout: this.configService.get('usageExport.timeoutMs'),
+          signal,
           headers: {
             authorization: `Bearer ${this.configService.get('usageExport.token')}`,
             'content-type': 'application/json',
@@ -149,14 +162,17 @@ export class UsageExportPublisherService implements TrackableJobExecutions, OnAp
         },
       )
     } catch (error) {
+      signal.throwIfAborted()
       await this.recordFailure(rows, error)
       return
     }
 
-    await this.outboxRepository.update(
-      { eventKey: In(eventKeys) },
-      { status: UsageExportStatus.DELIVERED, deliveredAt: new Date(), lastError: null },
+    signal.throwIfAborted()
+    const updated = await this.outboxRepository.update(
+      this.claimPredicate(rows),
+      { status: UsageExportStatus.DELIVERED, deliveredAt: new Date(), lastError: null, claimToken: null },
     )
+    this.assertClaimStillOwned(updated, rows.length)
     this.logger.log(`Delivered ${eventKeys.length} usage export events`)
   }
 
@@ -181,34 +197,50 @@ export class UsageExportPublisherService implements TrackableJobExecutions, OnAp
     // scoop up, so its members can carry different budgets; deciding for all of
     // them from the first row, or only when every row is spent, makes the
     // outcome depend on batch composition rather than on each row's own history.
-    const blocked: string[] = []
-    const deferredByAttempt = new Map<number, string[]>()
+    const blocked: BoxUsageExportOutbox[] = []
+    const deferredByAttempt = new Map<number, BoxUsageExportOutbox[]>()
     for (const row of rows) {
       const attempt = row.attempts + 1
       if (permanent || attempt >= maxAttempts) {
-        blocked.push(row.eventKey)
+        blocked.push(row)
         continue
       }
-      deferredByAttempt.set(attempt, [...(deferredByAttempt.get(attempt) ?? []), row.eventKey])
+      deferredByAttempt.set(attempt, [...(deferredByAttempt.get(attempt) ?? []), row])
     }
 
     if (blocked.length > 0) {
-      await this.outboxRepository.update(
-        { eventKey: In(blocked) },
-        { status: UsageExportStatus.BLOCKED, attempts: () => '"attempts" + 1', lastError: message },
+      const updated = await this.outboxRepository.update(
+        this.claimPredicate(blocked),
+        { status: UsageExportStatus.BLOCKED, attempts: () => '"attempts" + 1', lastError: message, claimToken: null },
       )
+      this.assertClaimStillOwned(updated, blocked.length)
       this.logger.error(
         `Blocked ${blocked.length} usage export events after ${permanent ? `HTTP ${status}` : `${maxAttempts} attempts`}: ${message}`,
       )
     }
 
-    for (const [attempt, eventKeys] of deferredByAttempt) {
+    for (const [attempt, deferred] of deferredByAttempt) {
       const backoffMs = Math.min(MAX_BACKOFF_MS, 2 ** Math.max(0, attempt - 1) * 30_000)
-      await this.outboxRepository.update(
-        { eventKey: In(eventKeys) },
-        { attempts: attempt, availableAt: new Date(Date.now() + backoffMs), lastError: message },
+      const updated = await this.outboxRepository.update(
+        this.claimPredicate(deferred),
+        { attempts: attempt, availableAt: new Date(Date.now() + backoffMs), lastError: message, claimToken: null },
       )
-      this.logger.warn(`Deferred ${eventKeys.length} usage export events for ${backoffMs}ms: ${message}`)
+      this.assertClaimStillOwned(updated, deferred.length)
+      this.logger.warn(`Deferred ${deferred.length} usage export events for ${backoffMs}ms: ${message}`)
+    }
+  }
+
+  private claimPredicate(rows: BoxUsageExportOutbox[]) {
+    return {
+      eventKey: In(rows.map((row) => row.eventKey)),
+      status: UsageExportStatus.PENDING,
+      claimToken: rows[0].claimToken,
+    }
+  }
+
+  private assertClaimStillOwned(result: UpdateResult, expectedRows: number): void {
+    if (result.affected !== expectedRows) {
+      throw new Error(`Usage export claim was replaced before ${expectedRows} row(s) could be updated`)
     }
   }
 

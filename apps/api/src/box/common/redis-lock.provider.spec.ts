@@ -42,6 +42,53 @@ describe('RedisLockProvider owned locks', () => {
     ).rejects.toBe(operationError)
   })
 
+  it('releases a lease after a successful protected operation', async () => {
+    const lease = { release: jest.fn().mockResolvedValue(undefined) }
+
+    await expect(withRedisLockLease(lease as any, async () => 'done')).resolves.toBe('done')
+
+    expect(lease.release).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries one transient renewal failure before aborting the lease', async () => {
+    jest.useFakeTimers()
+    const redis = {
+      set: jest.fn().mockResolvedValue('OK'),
+      eval: jest.fn().mockRejectedValueOnce(new Error('Redis unavailable')).mockResolvedValue(1),
+    }
+    const provider = new RedisLockProvider(redis as any)
+    const lease = await provider.acquireLease('transient-renewal', 10)
+
+    await jest.advanceTimersByTimeAsync(5_000)
+    await Promise.resolve()
+    await jest.advanceTimersByTimeAsync(1_000)
+
+    expect(lease?.signal.aborted).toBe(false)
+    expect(redis.eval).toHaveBeenCalledTimes(2)
+    await lease?.release()
+  })
+
+  it('aborts after the renewal retry also fails and schedules no third attempt', async () => {
+    jest.useFakeTimers()
+    const retryError = new Error('Redis still unavailable')
+    const redis = {
+      set: jest.fn().mockResolvedValue('OK'),
+      eval: jest.fn().mockRejectedValueOnce(new Error('Redis unavailable')).mockRejectedValueOnce(retryError),
+    }
+    const provider = new RedisLockProvider(redis as any)
+    const lease = await provider.acquireLease('failed-renewal-retry', 10)
+
+    await jest.advanceTimersByTimeAsync(5_000)
+    await Promise.resolve()
+    await jest.advanceTimersByTimeAsync(1_000)
+    await jest.advanceTimersByTimeAsync(20_000)
+
+    expect(lease?.signal.aborted).toBe(true)
+    expect(lease?.signal.reason).toBe(retryError)
+    expect(redis.eval).toHaveBeenCalledTimes(2)
+    await expect(lease?.release()).rejects.toBe(retryError)
+  })
+
   it('releases the lease when ownership is lost before the operation returns', async () => {
     const ownershipError = new Error('ownership was lost')
     const abortController = new AbortController()
@@ -240,7 +287,11 @@ describe('RedisLockProvider owned locks', () => {
   it('releases a lease acquired after the caller aborts', async () => {
     const provider = new RedisLockProvider({} as any)
     const controller = new AbortController()
-    const lease = { release: jest.fn().mockResolvedValue(undefined) }
+    let releaseFinished!: () => void
+    const released = new Promise<void>((resolve) => {
+      releaseFinished = resolve
+    })
+    const lease = { release: jest.fn(async () => releaseFinished()) }
     let finishAcquire!: (lease: any) => void
     jest.spyOn(provider, 'acquireLease').mockReturnValue(
       new Promise((resolve) => {
@@ -256,14 +307,18 @@ describe('RedisLockProvider owned locks', () => {
     expect(lease.release).not.toHaveBeenCalled()
 
     finishAcquire(lease)
-    await Promise.resolve()
+    await released
     expect(lease.release).toHaveBeenCalledTimes(1)
   })
 
   it('releases a lease acquired after the wait deadline', async () => {
     jest.useFakeTimers()
     const provider = new RedisLockProvider({} as any)
-    const lease = { release: jest.fn().mockResolvedValue(undefined) }
+    let releaseFinished!: () => void
+    const released = new Promise<void>((resolve) => {
+      releaseFinished = resolve
+    })
+    const lease = { release: jest.fn(async () => releaseFinished()) }
     let finishAcquire!: (lease: any) => void
     jest.spyOn(provider, 'acquireLease').mockReturnValue(
       new Promise((resolve) => {
@@ -279,7 +334,7 @@ describe('RedisLockProvider owned locks', () => {
     expect(lease.release).not.toHaveBeenCalled()
 
     finishAcquire(lease)
-    await Promise.resolve()
+    await released
     expect(lease.release).toHaveBeenCalledTimes(1)
   })
 })

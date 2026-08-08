@@ -6,11 +6,17 @@
 import { AuditService } from './audit.service'
 
 describe('AuditService cleanup cancellation', () => {
-  const makeService = (deleteLogs: jest.Mock) => {
+  const makeService = (deleteLogs: jest.Mock, controller = new AbortController()) => {
     const service = Object.create(AuditService.prototype) as AuditService
     Object.assign(service as any, {
       auditLogRepository: { delete: deleteLogs },
       configService: { get: jest.fn().mockReturnValue(1) },
+      redisLockProvider: {
+        acquireLease: jest.fn().mockResolvedValue({
+          signal: controller.signal,
+          release: jest.fn().mockResolvedValue(undefined),
+        }),
+      },
       logger: { log: jest.fn(), error: jest.fn() },
     })
     return service
@@ -24,9 +30,10 @@ describe('AuditService cleanup cancellation', () => {
         controller.abort(new Error('ownership was lost'))
         throw repositoryError
       }),
+      controller,
     )
 
-    await service.cleanupOldAuditLogs(controller.signal)
+    await service.cleanupOldAuditLogs()
 
     expect((service as any).logger.error).toHaveBeenCalledWith(
       expect.stringContaining(repositoryError.message),
@@ -38,8 +45,8 @@ describe('AuditService cleanup cancellation', () => {
     const ownershipError = new Error('ownership was lost')
     const controller = new AbortController()
     controller.abort(ownershipError)
-    const service = makeService(jest.fn())
+    const service = makeService(jest.fn(), controller)
 
-    await expect(service.cleanupOldAuditLogs(controller.signal)).rejects.toBe(ownershipError)
+    await expect(service.cleanupOldAuditLogs()).rejects.toBe(ownershipError)
   })
 })

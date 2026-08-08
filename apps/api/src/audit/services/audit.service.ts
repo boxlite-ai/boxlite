@@ -122,7 +122,8 @@ export class AuditService implements OnApplicationBootstrap {
   })
   @DistributedLock()
   @LogExecution('cleanup-old-audit-logs')
-  async cleanupOldAuditLogs(signal?: AbortSignal): Promise<void> {
+  async cleanupOldAuditLogs(...args: unknown[]): Promise<void> {
+    const signal = args.at(-1) as AbortSignal | undefined
     try {
       const retentionDays = this.configService.get('audit.retentionDays')
       if (!retentionDays) {

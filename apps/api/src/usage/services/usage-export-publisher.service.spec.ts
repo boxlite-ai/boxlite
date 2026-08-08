@@ -12,6 +12,7 @@ jest.mock('axios', () => ({
 }))
 
 import axios from 'axios'
+import { USAGE_EXPORT_VISIBILITY_TIMEOUT_MS } from '../../config/configuration'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
 import { UsageExportPublisherService } from './usage-export-publisher.service'
 
@@ -32,6 +33,8 @@ const row = (overrides: Partial<BoxUsageExportOutbox> = {}): BoxUsageExportOutbo
     payload: { eventKey: 'key-1', schemaVersion: 1, cpu: '2' },
     status: UsageExportStatus.PENDING,
     attempts: 1,
+    availableAt: new Date('2026-01-01T00:00:00.000Z'),
+    claimToken: 'f64ef7e8-7d8b-4db9-9c3a-51fe7e75e814',
     ...overrides,
   }) as BoxUsageExportOutbox
 
@@ -45,12 +48,15 @@ const httpError = (status?: number) => ({
 const makeService = (claimed: BoxUsageExportOutbox[], overrides: Record<string, unknown> = {}) => {
   const outboxRepository = {
     query: jest.fn().mockResolvedValue(claimed),
-    update: jest.fn().mockResolvedValue({ affected: claimed.length }),
+    update: jest.fn().mockImplementation(async (where) => ({ affected: where.eventKey._value.length })),
   }
   const outboxService = { pruneDelivered: jest.fn().mockResolvedValue(0) }
+  const release = jest.fn().mockResolvedValue(undefined)
   const redisLockProvider = {
-    lock: jest.fn().mockResolvedValue(true),
-    unlock: jest.fn().mockResolvedValue(undefined),
+    acquireLease: jest.fn().mockResolvedValue({
+      signal: new AbortController().signal,
+      release,
+    }),
   }
   const configService = {
     get: jest.fn((key: string) => {
@@ -69,7 +75,7 @@ const makeService = (claimed: BoxUsageExportOutbox[], overrides: Record<string, 
     configService as any,
   )
 
-  return { service, outboxRepository, outboxService, redisLockProvider }
+  return { service, outboxRepository, outboxService, redisLockProvider, release }
 }
 
 beforeEach(() => {
@@ -88,7 +94,7 @@ describe('UsageExportPublisherService.publishPendingExports', () => {
 
   it('yields to whichever replica holds the lock', async () => {
     const { service, outboxRepository, redisLockProvider } = makeService([row()])
-    redisLockProvider.lock.mockResolvedValue(false)
+    redisLockProvider.acquireLease.mockResolvedValue(null)
 
     await service.publishPendingExports()
 
@@ -118,9 +124,20 @@ describe('UsageExportPublisherService.publishPendingExports', () => {
     await service.publishPendingExports()
 
     expect(outboxRepository.update).toHaveBeenCalledWith(
-      expect.anything(),
+      expect.objectContaining({
+        status: UsageExportStatus.PENDING,
+        claimToken: 'f64ef7e8-7d8b-4db9-9c3a-51fe7e75e814',
+      }),
       expect.objectContaining({ status: UsageExportStatus.DELIVERED, lastError: null }),
     )
+  })
+
+  it('does not overwrite a row claimed again by another publisher', async () => {
+    const { service, outboxRepository } = makeService([row()])
+    post.mockResolvedValue({ status: 200, data: { accepted: 1 } })
+    outboxRepository.update.mockResolvedValueOnce({ affected: 0 })
+
+    await expect(service.publishPendingExports()).rejects.toThrow('Usage export claim was replaced')
   })
 
   // A transient failure must stay claimable. Marking it anything else would
@@ -221,11 +238,15 @@ describe('UsageExportPublisherService.publishPendingExports', () => {
   })
 
   it('releases the lock even when the claim throws', async () => {
-    const { service, redisLockProvider, outboxRepository } = makeService([row()])
+    const { service, redisLockProvider, release, outboxRepository } = makeService([row()])
     outboxRepository.query.mockRejectedValue(new Error('database is down'))
 
     await expect(service.publishPendingExports()).rejects.toThrow('database is down')
-    expect(redisLockProvider.unlock).toHaveBeenCalledWith('publish-usage-exports')
+    expect(redisLockProvider.acquireLease).toHaveBeenCalledWith(
+      'publish-usage-exports',
+      USAGE_EXPORT_VISIBILITY_TIMEOUT_MS / 1000,
+    )
+    expect(release).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -275,7 +296,7 @@ describe('UsageExportPublisherService claiming', () => {
     expect(sql).toContain('"availableAt" = now()')
     // The retry budget is spent by a failed delivery, never by taking the row.
     expect(sql).not.toContain('"attempts"')
-    expect(parameters).toEqual([60_000, UsageExportStatus.PENDING, 200])
+    expect(parameters).toEqual([60_000, UsageExportStatus.PENDING, 200, expect.any(String)])
   })
 
   it('never moves a claimed row into a state a crash could strand', async () => {

@@ -261,6 +261,8 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   }
 
   private async waitForLock(boxId: string): Promise<RedisLockLease> {
+    // State events are not replayed, so a fixed timeout would silently drop
+    // billing transitions. Shutdown is the only safe reason to stop waiting.
     return this.redisLockProvider.waitForLock(`usage-period-${boxId}`, 60, {
       signal: this.shutdownController.signal,
       retryDelayMs: 500,

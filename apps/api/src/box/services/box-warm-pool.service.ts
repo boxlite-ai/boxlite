@@ -144,7 +144,7 @@ export class BoxWarmPoolService {
     await Promise.all(
       warmPoolItems.map(async (warmPoolItem) => {
         const lockKey = `warm-pool-lock-${warmPoolItem.id}`
-        const lease = await this.redisLockProvider.acquireLease(lockKey, 720)
+        const lease = await this.redisLockProvider.acquireLease(lockKey, 30)
         if (!lease) {
           return
         }
