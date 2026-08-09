@@ -226,6 +226,7 @@ describe('BoxService.ensureStartedForProxy', () => {
     organizationUsageService.rollbackPendingUsage.mockRejectedValue(new Error('quota rollback failed'))
 
     await expect(service.ensureStartedForProxy('box-1', activeOrg)).rejects.toBe(startError)
+    expect(organizationUsageService.rollbackPendingUsage).toHaveBeenCalledTimes(1)
   })
 
   it('preserves lease cancellation when quota rollback also fails after a lost race', async () => {
@@ -240,6 +241,7 @@ describe('BoxService.ensureStartedForProxy', () => {
     organizationUsageService.rollbackPendingUsage.mockRejectedValue(new Error('quota rollback failed'))
 
     await expect(service.ensureStartedForProxy('box-1', activeOrg, controller.signal)).rejects.toBe(ownershipError)
+    expect(organizationUsageService.rollbackPendingUsage).toHaveBeenCalledTimes(1)
   })
 
   it('rejects auto-resume when the org is over quota and does not start the box', async () => {
