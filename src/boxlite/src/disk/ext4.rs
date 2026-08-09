@@ -61,8 +61,11 @@ fn calculate_dir_size(dir: &Path) -> BoxliteResult<u64> {
 }
 
 /// Calculate appropriate disk size with ext4 overhead.
-fn calculate_disk_size(source: &Path) -> u64 {
-    disk_size_with_overhead(calculate_dir_size(source).unwrap_or(DEFAULT_DIR_SIZE_BYTES))
+fn calculate_disk_size(source: &Path, reserve_bytes: u64) -> u64 {
+    disk_size_with_overhead(
+        calculate_dir_size(source).unwrap_or(DEFAULT_DIR_SIZE_BYTES),
+        reserve_bytes,
+    )
 }
 
 /// Apply ext4 overhead to a measured tree size and clamp to the minimum image.
@@ -70,22 +73,32 @@ fn calculate_disk_size(source: &Path) -> u64 {
 /// Split from [`calculate_disk_size`] so the unprivileged path — which measures
 /// the tree during its own single scan — shares one definition of the sizing
 /// policy instead of restating the arithmetic.
-fn disk_size_with_overhead(dir_size: u64) -> u64 {
+///
+/// `reserve_bytes` is extra room for content the *caller* adds to the image
+/// after it is built (e.g. `GuestRootfsManager` injects the `boxlite-guest`
+/// binary into a copy of this image once it exists — an unstripped debug
+/// build runs ~231 MiB, well over the free space a floor-sized image
+/// otherwise has). Added once, verbatim, after the tree-size overhead
+/// multiplier: it's an exact byte count, not an estimate that needs the same
+/// safety margin as the measured tree.
+fn disk_size_with_overhead(dir_size: u64, reserve_bytes: u64) -> u64 {
     // ext4 overhead:
     // - Metadata (superblock, block groups, inode tables): ~1-5%
     // - Journal: 64MB
     // - We set reserved blocks to 0% via mke2fs
     // Use 1.1x multiplier (10% overhead) plus 64MB for journal
     // Testing showed ~0.5% overhead needed, 10% provides safety margin
-    let size_with_overhead =
-        dir_size * SIZE_MULTIPLIER_NUM / SIZE_MULTIPLIER_DEN + JOURNAL_OVERHEAD_BYTES;
+    let size_with_overhead = dir_size * SIZE_MULTIPLIER_NUM / SIZE_MULTIPLIER_DEN
+        + JOURNAL_OVERHEAD_BYTES
+        + reserve_bytes;
 
     // Minimum 256MB for small images
     let final_size = size_with_overhead.max(MIN_DISK_SIZE_BYTES);
 
     tracing::debug!(
-        "Calculated disk size: dir_size={}MB, with_overhead={}MB, final={}MB",
+        "Calculated disk size: dir_size={}MB, reserve={}MB, with_overhead={}MB, final={}MB",
         dir_size / (1024 * 1024),
+        reserve_bytes / (1024 * 1024),
         size_with_overhead / (1024 * 1024),
         final_size / (1024 * 1024)
     );
@@ -333,10 +346,16 @@ impl Drop for SourceModeGuard {
 /// from a source directory, which is much simpler than using libext2fs.
 ///
 /// Size is automatically calculated based on directory contents with
-/// appropriate overhead for ext4 metadata, journal, and reserved blocks.
+/// appropriate overhead for ext4 metadata, journal, and reserved blocks, plus
+/// `reserve_bytes` of extra headroom for whatever the caller injects into the
+/// image afterward (0 when nothing will be).
 ///
 /// Returns a non-persistent Disk (will be cleaned up on drop).
-pub fn create_ext4_from_dir(source: &Path, output_path: &Path) -> BoxliteResult<Disk> {
+pub fn create_ext4_from_dir(
+    source: &Path,
+    output_path: &Path,
+    reserve_bytes: u64,
+) -> BoxliteResult<Disk> {
     let output_str = output_path.to_str().ok_or_else(|| {
         BoxliteError::Storage(format!("Invalid output path: {}", output_path.display()))
     })?;
@@ -367,8 +386,8 @@ pub fn create_ext4_from_dir(source: &Path, output_path: &Path) -> BoxliteResult<
     // measurement for the whole tree, not just the unreadable subtree, and
     // under-sizing the image for `mke2fs`.
     let size_bytes = match &scan {
-        Some(scan) => disk_size_with_overhead(scan.dir_size()),
-        None => calculate_disk_size(source),
+        Some(scan) => disk_size_with_overhead(scan.dir_size(), reserve_bytes),
+        None => calculate_disk_size(source, reserve_bytes),
     };
 
     // With -b 4096, mke2fs expects size in 4KB blocks
@@ -680,7 +699,7 @@ mod tests {
 
         let out_root = tempfile::tempdir().expect("output tempdir");
         let out = out_root.path().join("rootfs.ext4");
-        let _disk = create_ext4_from_dir(&src, &out).expect("ext4 build must succeed");
+        let _disk = create_ext4_from_dir(&src, &out, 0).expect("ext4 build must succeed");
 
         // A path that does not exist in the image just built.
         let scan = SourceScan {
@@ -748,7 +767,7 @@ mod tests {
 
         let out_root = tempfile::tempdir().expect("output tempdir");
         let out = out_root.path().join("rootfs.ext4");
-        let built = create_ext4_from_dir(&src, &out);
+        let built = create_ext4_from_dir(&src, &out, 0);
 
         // Restore before asserting so TempDir::drop can always recurse.
         let _ = std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o755));
@@ -808,7 +827,7 @@ mod tests {
 
         // Pre-fix this returns Err (mke2fs aborts on the 0000 file). Bind the
         // returned Disk: it is non-persistent and deletes the image on drop.
-        let _disk = create_ext4_from_dir(&src, &out)
+        let _disk = create_ext4_from_dir(&src, &out, 0)
             .expect("ext4 build must tolerate a 0000-mode source file");
 
         // The image must carry the ORIGINAL 0000 mode (data crosses the
@@ -888,7 +907,7 @@ mod tests {
 
         let out_root = tempfile::tempdir().expect("output tempdir");
         let out = out_root.path().join("rootfs.ext4");
-        let _disk = create_ext4_from_dir(&src, &out).expect("ext4 build must succeed");
+        let _disk = create_ext4_from_dir(&src, &out, 0).expect("ext4 build must succeed");
 
         // The dir restores fine even with the bug (it's restored first).
         assert_eq!(
@@ -981,7 +1000,7 @@ mod tests {
 
         let out_root = tempfile::tempdir().expect("output tempdir");
         let out = out_root.path().join("rootfs.ext4");
-        let _disk = create_ext4_from_dir(&src, &out).expect("ext4 build must succeed");
+        let _disk = create_ext4_from_dir(&src, &out, 0).expect("ext4 build must succeed");
 
         assert_eq!(
             image_owner(&out, "/var/dex"),
@@ -1140,7 +1159,7 @@ mod tests {
 
         let out_root = tempfile::tempdir().expect("output tempdir");
         let out = out_root.path().join("rootfs.ext4");
-        let _disk = create_ext4_from_dir(&src, &out).expect("ext4 build must succeed");
+        let _disk = create_ext4_from_dir(&src, &out, 0).expect("ext4 build must succeed");
 
         let missing_host_file = src_root.path().join("does-not-exist-on-host");
         let result = inject_file_into_ext4(&out, &missing_host_file, "injected");
@@ -1148,6 +1167,82 @@ mod tests {
             result.is_err(),
             "a missing host source file must fail the injection, not silently \
              succeed with the guest path never actually written"
+        );
+    }
+
+    /// Write `len` non-zero, non-repeating bytes to `path`.
+    ///
+    /// `debugfs write` (verified empirically before writing this test, against
+    /// a real image) treats a long run of *zero* bytes in the source file as
+    /// sparse and allocates no real ext4 blocks for it at all — a same-length
+    /// all-zero stand-in file would consume no free space and make the
+    /// reproducer below tautologically green regardless of how little room
+    /// the image actually has.
+    fn write_random_file(path: &Path, len: u64) {
+        use std::io::Read;
+
+        let mut urandom = std::fs::File::open("/dev/urandom").expect("open /dev/urandom");
+        let mut limited = (&mut urandom).take(len);
+        let mut out = std::fs::File::create(path).expect("create random payload file");
+        std::io::copy(&mut limited, &mut out).expect("write random payload");
+    }
+
+    /// A guest binary injected *after* the image is built must actually fit.
+    ///
+    /// `create_ext4_from_dir` sizes the image purely from the source tree it
+    /// is given — a near-empty tree lands at the `MIN_DISK_SIZE_BYTES` floor,
+    /// with no headroom budgeted for anything injected afterward. But
+    /// `GuestRootfsManager::build_and_install` (rootfs/guest.rs) copies
+    /// exactly that image and then injects the `boxlite-guest` binary into
+    /// it — an unstripped debug build runs ~231 MiB, well over the ~223 MiB
+    /// of free space a floor-sized image has once mke2fs/journal overhead is
+    /// accounted for (measured empirically against a real image before
+    /// writing this test).
+    ///
+    /// Pre-fix, this fails: `create_ext4_from_dir` has no way to reserve
+    /// headroom, so a same-shape oversized payload cannot fit and
+    /// `inject_file_into_ext4` correctly reports `Err` (`check_debugfs_output`
+    /// above already catches the underlying `debugfs` silent-failure class) —
+    /// proving this is a real, present-day capacity bug, not a hypothetical
+    /// one.
+    #[test]
+    fn create_ext4_from_dir_reserves_headroom_for_post_build_injection() {
+        if util::find_binary("mke2fs").is_err() || util::find_binary("debugfs").is_err() {
+            eprintln!("skipping: mke2fs/debugfs not found (run `make runtime:debug`)");
+            return;
+        }
+
+        let src_root = tempfile::tempdir().expect("source tempdir");
+        let src = src_root.path().join("rootfs");
+        std::fs::create_dir_all(&src).expect("mkdir rootfs");
+        std::fs::write(src.join("real"), b"x").expect("write real");
+
+        // Larger than the ~223 MiB of free space measured on a floor-sized
+        // image with no reserve — comfortably over, well under a real debug
+        // guest binary (~231 MiB).
+        let payload_len = 235 * 1024 * 1024u64;
+        let payload_root = tempfile::tempdir().expect("payload tempdir");
+        let payload = payload_root.path().join("guest-binary-stand-in");
+        write_random_file(&payload, payload_len);
+
+        let out_root = tempfile::tempdir().expect("output tempdir");
+        let out = out_root.path().join("rootfs.ext4");
+        // Exercises the reserve_bytes mechanism itself, at this function's
+        // own level — not the specific value runtime/rt_impl.rs picks (a
+        // fixed constant; see IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES there).
+        // Sized to the payload plus a small fixed margin, not a percentage of
+        // it: the payload length is already exact, unlike the tree-size
+        // estimate `disk_size_with_overhead`'s multiplier compensates for.
+        let reserve_bytes = payload_len + 8 * 1024 * 1024;
+        let _disk =
+            create_ext4_from_dir(&src, &out, reserve_bytes).expect("ext4 build must succeed");
+
+        let result = inject_file_into_ext4(&out, &payload, "boxlite/bin/boxlite-guest");
+        assert!(
+            result.is_ok(),
+            "a guest binary must always fit in the image it is injected into, \
+             but injection into an unpadded floor-sized image failed: {:?}",
+            result.err()
         );
     }
 

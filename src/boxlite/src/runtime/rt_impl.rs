@@ -194,6 +194,22 @@ pub struct SynchronizedState {
     active_boxes_by_name: HashMap<String, Weak<crate::litebox::box_impl::BoxImpl>>,
 }
 
+/// Headroom `ImageDiskManager` reserves in every image disk it builds, for
+/// the `boxlite-guest` binary `GuestRootfsManager` injects into a copy of it
+/// afterward.
+///
+/// Fixed, not derived from the real guest binary's current size: the cache
+/// key (`ImageDiskManager::disk_path`) does not vary with this value, so a
+/// value that changed on every guest-binary rebuild would orphan a copy of
+/// every already-cached image disk with no way to reclaim it — this manager
+/// has no GC, unlike `GuestRootfsManager`'s paired `version_key` + `gc()`.
+/// An unstripped debug build measures ~232 MB (see
+/// `guest_binary_fits_in_image_disk_headroom` below); 512 MiB covers that
+/// with margin to grow, in both debug and (far smaller) release builds, at
+/// the cost of some unused — but sparse, so cheap on disk — space in every
+/// cached image disk.
+const IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES: u64 = 512 * 1024 * 1024;
+
 impl RuntimeImpl {
     // ========================================================================
     // CONSTRUCTION
@@ -307,8 +323,13 @@ impl RuntimeImpl {
             "Initialized lock manager"
         );
 
-        let image_disk_mgr =
-            ImageDiskManager::new(layout.image_layout().disk_images_dir(), layout.temp_dir());
+        // See IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES for why this is a fixed
+        // budget rather than derived from the guest binary actually on disk.
+        let image_disk_mgr = ImageDiskManager::new(
+            layout.image_layout().disk_images_dir(),
+            layout.temp_dir(),
+            IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES,
+        );
         let guest_rootfs_mgr = GuestRootfsManager::new(base_disk_mgr.clone(), layout.temp_dir());
 
         let inner = Arc::new(Self {
@@ -1847,7 +1868,32 @@ mod tests {
     use crate::runtime::backend::RuntimeBackend;
     use crate::runtime::images::ImageBackend;
     use crate::runtime::options::RootfsSpec;
+    use crate::vmm::guest_binary::GuestBinary;
     use tempfile::TempDir;
+
+    /// `IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES` must stay ahead of the real
+    /// embedded `boxlite-guest` binary — silently falling behind would
+    /// reintroduce the exact "Could not allocate block in ext2 filesystem"
+    /// failure this constant exists to prevent, undetected until a real box
+    /// tried to boot. Skipped when the guest binary isn't assembled (no
+    /// `make guest`/`make runtime:debug`).
+    #[test]
+    fn guest_binary_fits_in_image_disk_headroom() {
+        let Ok(guest) = GuestBinary::get() else {
+            eprintln!("skipping: boxlite-guest not found (run `make guest`)");
+            return;
+        };
+        let guest_len = std::fs::metadata(guest.path())
+            .expect("stat resolved guest binary")
+            .len();
+        assert!(
+            guest_len < IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES,
+            "guest binary is {} MiB, headroom budget is only {} MiB -- bump \
+             IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES",
+            guest_len / (1024 * 1024),
+            IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES / (1024 * 1024)
+        );
+    }
 
     #[test]
     fn local_runtime_rejects_explicit_lifecycle_policy() {

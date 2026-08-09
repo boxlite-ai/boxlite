@@ -33,13 +33,25 @@ use super::ImageObject;
 pub struct ImageDiskManager {
     cache_dir: PathBuf,
     temp_dir: PathBuf,
+    /// Extra headroom baked into every image disk this manager builds.
+    ///
+    /// The cache key is the image digest alone, and `GuestRootfsManager`
+    /// injects the `boxlite-guest` binary into a *copy* of whatever this
+    /// manager cached — so the headroom that copy needs must be decided once,
+    /// here, rather than per `get_or_create` call: `container_rootfs.rs`'s
+    /// `prepare_disk_rootfs` uses the same cached disk directly with no
+    /// injection, and if headroom were instead a per-call choice, whichever
+    /// caller happened to build a given digest first would decide the size
+    /// for every later caller of that digest too.
+    reserve_bytes: u64,
 }
 
 impl ImageDiskManager {
-    pub fn new(cache_dir: PathBuf, temp_dir: PathBuf) -> Self {
+    pub fn new(cache_dir: PathBuf, temp_dir: PathBuf, reserve_bytes: u64) -> Self {
         Self {
             cache_dir,
             temp_dir,
+            reserve_bytes,
         }
     }
 
@@ -86,12 +98,12 @@ impl ImageDiskManager {
         let temp_disk_path = temp.path().join("image.ext4");
         let prepared_path = prepared.path.clone();
         let disk_clone = temp_disk_path.clone();
-        let temp_disk =
-            tokio::task::spawn_blocking(move || create_ext4_from_dir(&prepared_path, &disk_clone))
-                .await
-                .map_err(|e| {
-                    BoxliteError::Internal(format!("Disk creation task failed: {}", e))
-                })??;
+        let reserve_bytes = self.reserve_bytes;
+        let temp_disk = tokio::task::spawn_blocking(move || {
+            create_ext4_from_dir(&prepared_path, &disk_clone, reserve_bytes)
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("Disk creation task failed: {}", e)))??;
 
         // Atomically install staged disk to cache
         self.install(digest, temp_disk)
@@ -138,8 +150,6 @@ impl ImageDiskManager {
     }
 
     /// Compute the cache path for a given image digest.
-    ///
-    /// Format matches `storage.rs:disk_image_path()`: `{digest}.ext4`
     fn disk_path(&self, digest: &str) -> PathBuf {
         let filename = digest.replace(':', "-");
         self.cache_dir.join(format!("{}.ext4", filename))
@@ -152,7 +162,11 @@ mod tests {
 
     #[test]
     fn test_disk_path_replaces_colon() {
-        let mgr = ImageDiskManager::new(PathBuf::from("/cache/disk-images"), PathBuf::from("/tmp"));
+        let mgr = ImageDiskManager::new(
+            PathBuf::from("/cache/disk-images"),
+            PathBuf::from("/tmp"),
+            0,
+        );
         let path = mgr.disk_path("sha256:abc123def456");
         assert_eq!(
             path,
@@ -162,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_disk_path_no_colon() {
-        let mgr = ImageDiskManager::new(PathBuf::from("/cache"), PathBuf::from("/tmp"));
+        let mgr = ImageDiskManager::new(PathBuf::from("/cache"), PathBuf::from("/tmp"), 0);
         let path = mgr.disk_path("plaindigest");
         assert_eq!(path, PathBuf::from("/cache/plaindigest.ext4"));
     }
@@ -170,7 +184,7 @@ mod tests {
     #[test]
     fn test_find_returns_none_when_missing() {
         let dir = tempfile::TempDir::new().unwrap();
-        let mgr = ImageDiskManager::new(dir.path().to_path_buf(), dir.path().to_path_buf());
+        let mgr = ImageDiskManager::new(dir.path().to_path_buf(), dir.path().to_path_buf(), 0);
 
         assert!(mgr.find("sha256:nonexistent").is_none());
     }
@@ -178,10 +192,10 @@ mod tests {
     #[test]
     fn test_find_returns_disk_when_cached() {
         let dir = tempfile::TempDir::new().unwrap();
-        let mgr = ImageDiskManager::new(dir.path().to_path_buf(), dir.path().to_path_buf());
+        let mgr = ImageDiskManager::new(dir.path().to_path_buf(), dir.path().to_path_buf(), 0);
 
         // Create a fake cached disk
-        let cached = dir.path().join("sha256-abc123.ext4");
+        let cached = mgr.disk_path("sha256:abc123");
         std::fs::write(&cached, "fake disk").unwrap();
 
         let disk = mgr.find("sha256:abc123");
@@ -196,7 +210,7 @@ mod tests {
     fn test_install_creates_dir_and_moves_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let cache_dir = dir.path().join("disk-images");
-        let mgr = ImageDiskManager::new(cache_dir.clone(), dir.path().to_path_buf());
+        let mgr = ImageDiskManager::new(cache_dir.clone(), dir.path().to_path_buf(), 0);
 
         // Create staged file
         let staged_path = dir.path().join("staged.ext4");
@@ -204,7 +218,7 @@ mod tests {
         let staged_disk = Disk::new(staged_path, DiskFormat::Ext4, false);
 
         let result = mgr.install("sha256:test", staged_disk).unwrap();
-        let expected = cache_dir.join("sha256-test.ext4");
+        let expected = mgr.disk_path("sha256:test");
 
         assert!(expected.exists());
         assert_eq!(result.path(), expected);
@@ -216,10 +230,10 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let cache_dir = dir.path().join("disk-images");
         std::fs::create_dir_all(&cache_dir).unwrap();
-        let mgr = ImageDiskManager::new(cache_dir.clone(), dir.path().to_path_buf());
+        let mgr = ImageDiskManager::new(cache_dir.clone(), dir.path().to_path_buf(), 0);
 
         // Pre-create target (another process won the race)
-        let target = cache_dir.join("sha256-raced.ext4");
+        let target = mgr.disk_path("sha256:raced");
         std::fs::write(&target, "first").unwrap();
 
         // Try to install over it
