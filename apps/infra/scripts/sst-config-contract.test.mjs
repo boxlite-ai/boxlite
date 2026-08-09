@@ -442,3 +442,9 @@ test('a billing URL is advertised only where a billing service answers', () => {
     assert.doesNotMatch(hiddenRoutes, new RegExp(route))
   }
 })
+
+test('does not restore the removed Commerce deployment', () => {
+  assert.doesNotMatch(liveConfig, /commerce/i)
+  assert.doesNotMatch(environmentExample, /commerce/i)
+  assert.doesNotMatch(readme, /commerce/i)
+})
