@@ -133,20 +133,36 @@ def export_ghcr_env() -> None:
 
 def fix_runtime_cache() -> None:
     """maturin editable builds leave the SDK runtime cache missing the big
-    boxlite-guest/shim binaries; copy them from the cargo build output."""
+    runtime binaries; copy the freshly built runtime from cargo output.
+
+    The cache key is only the package version, so a local editable build of
+    main can share `v0.9.7` with an older release build. Refresh the cache from
+    the current worktree whenever the built runtime is newer, not only when
+    files are missing.
+    """
     base = Path.home() / "Library" / "Application Support" / "boxlite" / "runtimes"
     caches = sorted(base.glob("v*"))
     if not caches:
         return
     cache = caches[0]
-    if (cache / "boxlite-guest").is_file():
+    runtime_dirs = [
+        d for d in REPO.glob("target/debug/build/boxlite-*/out/runtime")
+        if (d / "boxlite-guest").is_file() and (d / "boxlite-shim").is_file()
+    ]
+    if not runtime_dirs:
         return
-    for d in REPO.glob("target/debug/build/boxlite-*/out/runtime"):
-        if (d / "boxlite-guest").is_file():
-            for f in ("boxlite-guest", "boxlite-shim"):
-                shutil.copy2(d / f, cache / f)
-            print(f"  patched runtime cache: boxlite-guest+shim -> {cache}")
-            return
+    runtime = max(runtime_dirs, key=lambda d: (d / "boxlite-shim").stat().st_mtime)
+    cache_shim = cache / "boxlite-shim"
+    if cache_shim.is_file() and cache_shim.stat().st_mtime >= (runtime / "boxlite-shim").stat().st_mtime:
+        return
+    copied = []
+    for f in ("boxlite-guest", "boxlite-shim", "debugfs", "mke2fs", "libkrunfw.5.dylib"):
+        src = runtime / f
+        if src.is_file():
+            shutil.copy2(src, cache / f)
+            copied.append(f)
+    if copied:
+        print(f"  refreshed runtime cache from local build: {', '.join(copied)} -> {cache}")
 
 
 def ensure_shared_target() -> None:
@@ -181,13 +197,34 @@ def ensure_submodules() -> None:
 
 
 def ensure_native_lib() -> None:
-    """Build the real libboxlite.a (the Go runner links it) if missing."""
-    if (REPO / "target" / "debug" / "libboxlite.a").is_file():
+    """Build the real libboxlite.a (the Go runner links it) if missing/stale."""
+    lib = REPO / "target" / "debug" / "libboxlite.a"
+    if lib.is_file() and _native_lib_has_current_go_symbols(lib):
         return
     ensure_shared_target()
     ensure_submodules()
     print("  building native libboxlite.a (real libkrun — slow on first run, shared cache after)...")
     subprocess.run(["make", "dev:go"], cwd=str(REPO), check=True)
+
+
+def _native_lib_has_current_go_symbols(lib: Path) -> bool:
+    """Catch stale shared-cache libboxlite.a before Go runner link time."""
+    try:
+        out = subprocess.run(
+            ["nm", "-g", str(lib)],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        ).stdout
+    except Exception:
+        return False
+    required = (
+        "_boxlite_advanced_options_new",
+        "_boxlite_box_network",
+        "_boxlite_volume_create",
+    )
+    return all(sym in out for sym in required)
 
 
 def _boxlite_is_local_build() -> bool:

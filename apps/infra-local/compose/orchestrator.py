@@ -96,6 +96,7 @@ def _build_box_options_with_volumes(spec: ServiceSpec, config: InfraConfig, volu
         cmd=cmd,
         entrypoint=spec.entrypoint,
         working_dir=spec.working_dir,
+        user=spec.user,
     )
 
 

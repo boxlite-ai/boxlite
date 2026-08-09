@@ -42,6 +42,7 @@ class ServiceSpec:
     cmd: Optional[list[str] | Callable[["InfraConfig"], list[str]]] = None
     entrypoint: Optional[list[str]] = None   # overrides image entrypoint (e.g. ["sh"]); None keeps image default
     working_dir: Optional[str] = None
+    user: Optional[str] = None
     depends_on: list[str] = field(default_factory=list)
     healthcheck: Optional[HealthCheck] = None
     one_shot: bool = False
@@ -248,6 +249,7 @@ SPEC_DEX = ServiceSpec(
     # so we can run the inline script that env-substitutes the config.
     entrypoint=["sh"],
     cmd=["-c", _DEX_ENTRYPOINT],
+    user="root",
     healthcheck=HealthCheck(
         http_url="http://127.0.0.1:25556/dex/.well-known/openid-configuration",
         interval_s=2.0,
@@ -300,6 +302,7 @@ SPEC_PGADMIN = ServiceSpec(
         # Force IPv4 bind (image default is [::]:80 dual-stack).
         "PGADMIN_LISTEN_ADDRESS": "0.0.0.0",
     },
+    user="root",
     depends_on=["postgres"],
     healthcheck=HealthCheck(
         http_url="http://127.0.0.1:25051/misc/ping",

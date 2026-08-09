@@ -356,18 +356,38 @@ def _l1_running(cfg: InfraConfig) -> bool:
     async def go() -> bool:
         orchestrator.ensure_home_env(cfg)
         infos = await orchestrator.get_runtime().list_info()
-        return any((i.name or "") == "boxlite-local-postgres" for i in infos)
+        return any(
+            (i.name or "") == "boxlite-local-postgres"
+            and (i.state.status or "").lower() == "running"
+            for i in infos
+        )
 
     return asyncio.run(go())
 
 
 async def _ensure_l1_async(cfg: InfraConfig) -> bool:
-    """Bring the whole L1 up if postgres isn't running. True if (re)created."""
+    """Bring the whole L1 up unless every daemon box is running. True if (re)created."""
     orchestrator.ensure_home_env(cfg)
-    infos = await orchestrator.get_runtime().list_info()
-    if any((i.name or "") == "boxlite-local-postgres" for i in infos):
+    runtime = orchestrator.get_runtime()
+    infos = await runtime.list_info()
+    l1_infos = [i for i in infos if (i.name or "").startswith("boxlite-local-")]
+    expected = {
+        f"boxlite-local-{name}"
+        for name, spec in SERVICES.items()
+        if not spec.one_shot
+    }
+    running = {
+        i.name
+        for i in l1_infos
+        if (i.name or "") in expected and (i.state.status or "").lower() == "running"
+    }
+    if expected <= running:
         ok("L1 boxes already running")
         return False
+    if l1_infos:
+        states = ", ".join(f"{i.name}={i.state.status}" for i in l1_infos)
+        warn(f"L1 boxes are not healthy ({states}) — recreating")
+        await orchestrator.down(cfg, SERVICES, wipe=True)
     log("L1 boxes not running — starting...")
     await orchestrator.up(cfg, SERVICES)
     return True
