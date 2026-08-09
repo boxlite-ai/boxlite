@@ -1,5 +1,5 @@
 use crate::cli::{
-    CapabilityFlags, GlobalFlags, KernelFlags, ManagementFlags, NetworkFlags, ProcessFlags,
+    CapabilityFlags, GlobalFlags, HookFlags, KernelFlags, ManagementFlags, NetworkFlags, ProcessFlags,
     PublishFlags, ResourceFlags, VolumeFlags,
 };
 use crate::terminal::StreamManager;
@@ -30,6 +30,9 @@ pub struct RunArgs {
 
     #[command(flatten)]
     pub management: ManagementFlags,
+
+    #[command(flatten)]
+    pub hook: HookFlags,
 
     /// Path to an already prepared rootfs
     #[arg(long = "rootfs", value_name = "PATH")]
@@ -133,6 +136,7 @@ impl BoxRunner {
         self.args.capability.apply_to(&mut options);
         self.args.boot.apply_to(&mut options);
         self.args.management.apply_to(&mut options)?;
+        self.args.hook.apply_to(&mut options)?;
         self.args.publish.apply_to(&mut options)?;
         self.args
             .volume

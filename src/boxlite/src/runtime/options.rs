@@ -431,6 +431,10 @@ pub struct BoxOptions {
     /// guest; the real value never enters the VM.
     #[serde(default)]
     pub secrets: Vec<Secret>,
+
+    /// Container lifecycle hooks.
+    #[serde(default)]
+    pub hooks: Vec<crate::hooks::Hook>,
 }
 
 /// A secret for MITM proxy injection.
@@ -537,6 +541,7 @@ impl Default for BoxOptions {
             user: None,
             tty: false,
             secrets: Vec::new(),
+            hooks: Vec::new(),
         }
     }
 }

@@ -21,6 +21,7 @@ use super::exec::{BoxCommand, ExecStderr, ExecStdin, ExecStdout, Execution};
 use super::state::BoxState;
 use crate::disk::Disk;
 use crate::event_listener::EventListener;
+use crate::hooks::{HookContext, HookRunner};
 #[cfg(target_os = "linux")]
 use crate::fs::BindMountHandle;
 use crate::litebox::BoxTunnel;
@@ -129,6 +130,9 @@ pub(crate) struct BoxImpl {
     /// Event listeners (from runtime options).
     pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
 
+    /// Hook runner — dispatches lifecycle hooks at each hook point.
+    pub(crate) hook_runner: HookRunner,
+
     // --- Lazily initialized ---
     live: OnceCell<LiveState>,
 
@@ -180,6 +184,7 @@ impl BoxImpl {
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
+            hook_runner: HookRunner::new(vec![], config.options.hooks.clone()),
             live: OnceCell::new(),
             watcher: std::sync::OnceLock::new(),
             container_start: OnceCell::new(),
@@ -230,6 +235,15 @@ impl BoxImpl {
 
     pub(crate) fn container_id(&self) -> &str {
         self.config.container.id.as_str()
+    }
+
+    /// Resolve the image reference string for hook context.
+    fn resolve_image_string(&self) -> String {
+        use crate::runtime::options::RootfsSpec;
+        match &self.config.options.rootfs {
+            RootfsSpec::Image(r) => r.clone(),
+            RootfsSpec::RootfsPath(p) => format!("rootfs:{p}"),
+        }
     }
 
     /// Metadata for this box. Local reads are synchronous: everything comes
@@ -293,11 +307,49 @@ impl BoxImpl {
         // makes `run` docker-shaped — create, attach, then start. `run` slips the
         // attach between these two calls; every other caller just wants both.
         let live = self.ensure_booted().await?;
+
+        // ── Fire PreStart hooks (after ContainerInit, before ContainerStart) ──
+        let image = self.resolve_image_string();
+        let box_status = self.state.read().status;
+        let hook_ctx = HookContext::new(
+            self.config.id.to_string(),
+            self.config.container.id.clone(),
+            crate::hooks::HookPoint::PreStart,
+            String::new(), // filled per-hook by the runner
+            box_status,
+            image,
+            0, // fire_count filled by runner
+        );
+        // Note: fire() fills in hook_name on a per-hook basis internally.
+        // We pass a template ctx; the runner updates fire_count + hook_name.
+        {
+            let mut ctx = hook_ctx.clone();
+            self.hook_runner
+                .fire(crate::hooks::HookPoint::PreStart, &mut ctx, None)
+                .await?;
+        }
+
         let started_now = self.ensure_container_started(live).await?;
 
-        // Announce the start only when *this* call actually ran init — not on an
-        // idempotent re-`start()` or a reattach to an already-running box.
+        // ── Fire PostStart hooks (after init starts) ──
         if started_now {
+            let box_status = self.state.read().status;
+            let image = self.resolve_image_string();
+            let mut ctx = HookContext::new(
+                self.config.id.to_string(),
+                self.config.container.id.clone(),
+                crate::hooks::HookPoint::PostStart,
+                String::new(),
+                box_status,
+                image,
+                0,
+            );
+            // PostStart errors do not abort start (Continue policy by default)
+            let _ = self
+                .hook_runner
+                .fire(crate::hooks::HookPoint::PostStart, &mut ctx, Some(&live.guest_session))
+                .await;
+
             for listener in &self.event_listeners {
                 listener.on_box_started(&self.config.id);
             }
@@ -428,10 +480,32 @@ impl BoxImpl {
             _ => command,
         };
 
+        // ── Fire PreExec hooks (before Exec RPC) ──
+        {
+            let image = self.resolve_image_string();
+            let box_status = self.state.read().status;
+            let exec_cmd: Vec<String> = std::iter::once(command.command.clone())
+                .chain(command.args.clone())
+                .collect();
+            let mut ctx = crate::hooks::HookContext::for_pre_exec(
+                self.config.id.to_string(),
+                self.config.container.id.clone(),
+                String::new(),
+                box_status,
+                image,
+                0,
+                exec_cmd,
+            );
+            self.hook_runner
+                .fire(crate::hooks::HookPoint::PreExec, &mut ctx, None)
+                .await?; // Fail aborts exec
+        }
+
         for listener in &self.event_listeners {
             listener.on_exec_started(&self.config.id, &command.command, &command.args);
         }
 
+        let t_exec_start = Instant::now();
         let mut exec_interface = live.guest_session.execution().await?;
         let result = exec_interface
             .exec(command, self.shutdown_token.clone())
@@ -453,10 +527,58 @@ impl BoxImpl {
         }
 
         let components = result?;
+
+        // ── Spawn PostExec hook task ──
+        // PostExec fires when the exec result arrives (after Wait).
+        // We tee the result_rx channel so the hook can read the exit code
+        // without consuming the channel the Execution handle needs.
+        let post_exec_hooks = self.hook_runner.clone();
+        let post_exec_box_id = self.config.id.to_string();
+        let post_exec_container_id = self.config.container.id.clone();
+        let post_exec_image = self.resolve_image_string();
+        let post_exec_command: Vec<String> =
+            std::iter::once(command.command.clone())
+                .chain(command.args.clone())
+                .collect();
+        let (tee_tx, tee_rx) = tokio::sync::mpsc::unbounded_channel();
+        let original_rx = components.result_rx;
+        tokio::spawn(async move {
+            let mut rx = original_rx;
+            while let Some(result) = rx.recv().await {
+                let exit_code = result.exit_code;
+                let duration_ms = result
+                    .duration
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let tx_closed = tee_tx.send(result).is_err();
+
+                // Fire PostExec hooks
+                let box_status = BoxStatus::Running; // box is still running at this point
+                let mut ctx = crate::hooks::HookContext::for_post_exec(
+                    post_exec_box_id,
+                    post_exec_container_id,
+                    String::new(),
+                    box_status,
+                    post_exec_image,
+                    0,
+                    post_exec_command,
+                    exit_code,
+                    duration_ms,
+                );
+                let _ = post_exec_hooks
+                    .fire(crate::hooks::HookPoint::PostExec, &mut ctx, None)
+                    .await;
+
+                if tx_closed {
+                    break;
+                }
+            }
+        });
+
         Ok(Execution::new(
             components.execution_id,
             Box::new(exec_interface),
-            components.result_rx,
+            tee_rx,
             Some(ExecStdin::new(components.stdin_tx)),
             Some(ExecStdout::new(components.stdout_rx)),
             Some(ExecStderr::new(components.stderr_rx)),
@@ -658,6 +780,26 @@ impl BoxImpl {
         // stop() must NOT do.
         let should_attach = self.state.read().status == BoxStatus::Running;
         if should_attach && let Ok(live) = self.live_state().await {
+            // ── Fire PreStop hooks (before guest shutdown) ──
+            {
+                let image = self.resolve_image_string();
+                let box_status = self.state.read().status;
+                let mut ctx = HookContext::new(
+                    self.config.id.to_string(),
+                    self.config.container.id.clone(),
+                    crate::hooks::HookPoint::PreStop,
+                    String::new(),
+                    box_status,
+                    image,
+                    0,
+                );
+                // PreStop errors do not abort stop (Continue policy by default)
+                let _ = self
+                    .hook_runner
+                    .fire(crate::hooks::HookPoint::PreStop, &mut ctx, Some(&live.guest_session))
+                    .await;
+            }
+
             // Recovered boxes lazy-attach here via vmm_attach (now
             // ProcessIdentity-gated). Live boxes hit the cached LiveState.
             // Either way the teardown is identical:
@@ -744,6 +886,26 @@ impl BoxImpl {
         // Invalidate cache so new handles get fresh BoxImpl
         self.runtime
             .invalidate_box_impl(self.id(), self.config.name.as_deref());
+
+        // ── Fire PostStop hooks (guest is gone, no guest session) ──
+        {
+            let image = self.resolve_image_string();
+            let box_status = self.state.read().status;
+            let mut ctx = HookContext::new(
+                self.config.id.to_string(),
+                self.config.container.id.clone(),
+                crate::hooks::HookPoint::PostStop,
+                String::new(),
+                box_status,
+                image,
+                0,
+            );
+            // PostStop errors never abort stop
+            let _ = self
+                .hook_runner
+                .fire(crate::hooks::HookPoint::PostStop, &mut ctx, None)
+                .await;
+        }
 
         for listener in &self.event_listeners {
             listener.on_box_stopped(&self.config.id, None);

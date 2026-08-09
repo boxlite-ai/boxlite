@@ -12,6 +12,7 @@ static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLo
 
 pub mod event_listener;
 pub mod experimental;
+pub mod hooks;
 pub mod jailer;
 pub mod litebox;
 pub mod lock;
@@ -55,6 +56,11 @@ pub use runtime::options::{
     BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, ImageRegistry,
     ImageRegistryAuth, NetworkMode, NetworkSpec, PortProtocol, RegistryTransport, RootfsSpec,
     Secret, SnapshotOptions,
+};
+
+pub use hooks::{
+    ExecHookTrigger, Hook, HookAction, HookCondition, HookContext, HookErrorPolicy, HookPoint,
+    HookRunner, OnExhausted,
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
