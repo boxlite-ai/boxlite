@@ -30,6 +30,11 @@ const JOB_STALE_TIMEOUT_MINUTES: Partial<Record<JobType, number>> = {
   [JobType.PULL_ARTIFACT]: 120,
 }
 
+// A PENDING job that has not been claimed within this window will never be
+// claimed — the runner was incapable, lost, or never existed (e.g. local dev).
+// Expire it so the DB connection holding the transaction is released.
+const PENDING_STALE_TIMEOUT_MINUTES = 5
+
 @Injectable()
 export class JobService {
   private readonly logger = new Logger(JobService.name)
@@ -441,6 +446,42 @@ export class JobService {
           } catch (error) {
             this.logger.error(`Error marking job ${job.id} as failed: ${error.message}`, error.stack)
           }
+        }
+      }
+      // Expire PENDING jobs that were never claimed by any runner.
+      const pendingThreshold = new Date(Date.now() - PENDING_STALE_TIMEOUT_MINUTES * 60 * 1000)
+      const stalePendingJobs = await this.jobRepository.find({
+        where: {
+          status: JobStatus.PENDING,
+          createdAt: LessThan(pendingThreshold),
+        },
+        take: 500,
+      })
+
+      for (const job of stalePendingJobs) {
+        try {
+          const errorMessage = `Job expired — not claimed by any runner within ${PENDING_STALE_TIMEOUT_MINUTES} minutes`
+          const result = await this.jobRepository.update(
+            { id: job.id, status: JobStatus.PENDING, createdAt: LessThan(pendingThreshold) },
+            { status: JobStatus.FAILED, errorMessage, completedAt: new Date() },
+          )
+
+          if (!result.affected) {
+            continue
+          }
+
+          this.logger.warn(
+            `Expired pending job ${job.id} (type: ${job.type}, resource: ${job.resourceType} ${job.resourceId})`,
+          )
+
+          const updatedJob = await this.findOne(job.id)
+          if (updatedJob) {
+            this.jobStateHandlerService.handleJobCompletion(updatedJob).catch((error) => {
+              this.logger.error(`Error handling job completion for job ${job.id}:`, error)
+            })
+          }
+        } catch (error) {
+          this.logger.error(`Error expiring pending job ${job.id}: ${error.message}`, error.stack)
         }
       }
     } catch (error) {

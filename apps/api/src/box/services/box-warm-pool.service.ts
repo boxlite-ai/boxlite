@@ -7,7 +7,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { In, MoreThan, Not, Repository } from 'typeorm'
+import { In, MoreThan, MoreThanOrEqual, Not, Repository } from 'typeorm'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
 import { Box } from '../entities/box.entity'
@@ -19,6 +19,7 @@ import { BoxOrganizationUpdatedEvent } from '../events/box-organization-updated.
 import { ConfigService } from '@nestjs/config'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxState } from '../enums/box-state.enum'
+import { RunnerState } from '../enums/runner-state.enum'
 import { Runner } from '../entities/runner.entity'
 import { WarmPoolTopUpRequested } from '../events/warmpool-topup-requested.event'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -134,6 +135,20 @@ export class BoxWarmPoolService {
     return null
   }
 
+  private async hasAvailableRunnerForRegion(region: string): Promise<boolean> {
+    const availabilityScoreThreshold = this.configService.getOrThrow<number>('runnerScore.thresholds.availability')
+    const count = await this.runnerRepository.count({
+      where: {
+        region,
+        state: RunnerState.READY,
+        unschedulable: Not(true),
+        draining: Not(true),
+        availabilityScore: MoreThanOrEqual(availabilityScoreThreshold),
+      },
+    })
+    return count > 0
+  }
+
   //  todo: make frequency configurable or more efficient
   @Cron(CronExpression.EVERY_10_SECONDS, { name: 'warm-pool-check' })
   @LogExecution('warm-pool-check')
@@ -167,6 +182,14 @@ export class BoxWarmPoolService {
 
         const missingCount = warmPoolItem.pool - boxCount
         if (missingCount > 0) {
+          if (!(await this.hasAvailableRunnerForRegion(warmPoolItem.target))) {
+            this.logger.debug(
+              `Skipping warm pool top-up for ${warmPoolItem.id}: no available runners in region ${warmPoolItem.target}`,
+            )
+            await this.redisLockProvider.unlock(lockKey)
+            return
+          }
+
           const promises = []
           this.logger.debug(`Creating ${missingCount} boxes for warm pool id ${warmPoolItem.id}`)
 
@@ -229,8 +252,13 @@ export class BoxWarmPoolService {
       return
     }
 
-    if (warmPoolItem) {
-      this.eventEmitter.emit(WarmPoolEvents.TOPUP_REQUESTED, new WarmPoolTopUpRequested(warmPoolItem))
+    if (!(await this.hasAvailableRunnerForRegion(warmPoolItem.target))) {
+      this.logger.debug(
+        `Skipping warm pool top-up for ${warmPoolItem.id}: no available runners in region ${warmPoolItem.target}`,
+      )
+      return
     }
+
+    this.eventEmitter.emit(WarmPoolEvents.TOPUP_REQUESTED, new WarmPoolTopUpRequested(warmPoolItem))
   }
 }
