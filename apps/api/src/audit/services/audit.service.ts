@@ -142,8 +142,10 @@ export class AuditService implements OnApplicationBootstrap {
 
       this.logger.log(`Completed cleanup of audit logs older than ${retentionDays} days (${totalDeleted} logs deleted)`)
     } catch (error) {
-      if (signal?.aborted && error === signal.reason) {
-        throw signal.reason
+      if (signal?.aborted) {
+        // Preserve a concurrent repository failure; the lock helper will otherwise
+        // replace it with the cancellation observed after this method returns.
+        throw error === signal.reason ? signal.reason : error
       }
       this.logger.error(`An error occurred during cleanup of old audit logs: ${error.message}`, error.stack)
     }

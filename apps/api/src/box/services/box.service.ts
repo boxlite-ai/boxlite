@@ -923,13 +923,31 @@ export class BoxService {
       signal?.throwIfAborted()
       updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
     } catch (error) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
+      try {
+        await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
+      } catch (rollbackError) {
+        this.logger.error(`Failed to roll back quota reservation for box ${box.id}`, rollbackError)
+      }
       throw error
     }
 
     if (!updated) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
-      signal?.throwIfAborted()
+      let rollbackError: unknown
+      try {
+        await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
+      } catch (error) {
+        rollbackError = error
+      }
+
+      if (signal?.aborted) {
+        if (rollbackError) {
+          this.logger.error(`Failed to roll back quota reservation for box ${box.id}`, rollbackError)
+        }
+        throw signal.reason
+      }
+      if (rollbackError) {
+        throw rollbackError
+      }
       return this.findOneByIdOrName(box.id, organization.id)
     }
 

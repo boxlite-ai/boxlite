@@ -33,12 +33,7 @@ describe('AuditService cleanup cancellation', () => {
       controller,
     )
 
-    await service.cleanupOldAuditLogs()
-
-    expect((service as any).logger.error).toHaveBeenCalledWith(
-      expect.stringContaining(repositoryError.message),
-      repositoryError.stack,
-    )
+    await expect(service.cleanupOldAuditLogs()).rejects.toBe(repositoryError)
   })
 
   it('rethrows the cancellation reason produced by the signal', async () => {

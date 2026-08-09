@@ -89,6 +89,26 @@ describe('RedisLockProvider owned locks', () => {
     await expect(lease?.release()).rejects.toBe(retryError)
   })
 
+  it('aborts before expiry when a renewal command never settles', async () => {
+    jest.useFakeTimers()
+    const redis = {
+      set: jest.fn().mockResolvedValue('OK'),
+      eval: jest.fn(() => new Promise(() => undefined)),
+    }
+    const provider = new RedisLockProvider(redis as any)
+    const lease = await provider.acquireLease('stalled-renewal', 2)
+
+    await jest.advanceTimersByTimeAsync(1_800)
+
+    expect(lease?.signal.aborted).toBe(true)
+    expect(lease?.signal.reason).toEqual(expect.objectContaining({ message: expect.stringContaining('timed out') }))
+    expect(redis.eval).toHaveBeenCalledTimes(2)
+    const release = expect(lease?.release()).rejects.toThrow('renewal timed out')
+    await jest.advanceTimersByTimeAsync(250)
+    await release
+    expect(redis.eval).toHaveBeenCalledTimes(3)
+  })
+
   it('releases the lease when ownership is lost before the operation returns', async () => {
     const ownershipError = new Error('ownership was lost')
     const abortController = new AbortController()

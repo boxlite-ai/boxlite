@@ -57,9 +57,17 @@ export class RedisLockLease {
       clearTimeout(this.renewalTimer)
     }
     await this.renewal
-    await this.provider.unlock(this.key, this.code)
+    let unlockError: unknown
+    try {
+      await this.unlockWithTimeout(Math.min((this.ttl * 1000) / 8, 1000))
+    } catch (error) {
+      unlockError = error
+    }
     if (this.renewalError) {
       throw this.renewalError
+    }
+    if (unlockError) {
+      throw unlockError
     }
   }
 
@@ -72,9 +80,11 @@ export class RedisLockLease {
   }
 
   private scheduleRenewal() {
+    // Two bounded attempts plus the retry delay must finish before the lease
+    // expires, including for short TTLs.
+    const renewalAttemptTimeoutMs = Math.min((this.ttl * 1000) / 8, 1000)
     this.renewalTimer = setTimeout(() => {
-      this.renewal = this.provider
-        .renew(this.key, this.ttl, this.code)
+      this.renewal = this.renewWithTimeout(renewalAttemptTimeoutMs)
         .catch((error) => {
           if (error instanceof LockOwnershipLostError) {
             throw error
@@ -83,10 +93,10 @@ export class RedisLockLease {
             return
           }
           return new Promise<void>((resolve) => {
-            setTimeout(resolve, Math.min((this.ttl * 1000) / 4, 1000))
+            setTimeout(resolve, renewalAttemptTimeoutMs)
           }).then(() => {
             if (!this.isReleased) {
-              return this.provider.renew(this.key, this.ttl, this.code)
+              return this.renewWithTimeout(renewalAttemptTimeoutMs)
             }
           })
         })
@@ -100,6 +110,35 @@ export class RedisLockLease {
           }
         })
     }, (this.ttl * 1000) / 2)
+  }
+
+  private async renewWithTimeout(timeoutMs: number): Promise<void> {
+    await this.withTimeout(
+      this.provider.renew(this.key, this.ttl, this.code),
+      timeoutMs,
+      `Redis lock renewal timed out for ${this.key}`,
+    )
+  }
+
+  private async unlockWithTimeout(timeoutMs: number): Promise<void> {
+    await this.withTimeout(
+      this.provider.unlock(this.key, this.code),
+      timeoutMs,
+      `Redis lock release timed out for ${this.key}`,
+    )
+  }
+
+  private async withTimeout(operation: Promise<void>, timeoutMs: number, timeoutMessage: string): Promise<void> {
+    let timeout: ReturnType<typeof setTimeout>
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs)
+    })
+
+    try {
+      await Promise.race([operation, timeoutPromise])
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 }
 

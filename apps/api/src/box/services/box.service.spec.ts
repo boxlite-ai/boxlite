@@ -218,6 +218,30 @@ describe('BoxService.ensureStartedForProxy', () => {
     expect(eventEmitter.emit).not.toHaveBeenCalled()
   })
 
+  it('preserves the conditional-start error when quota rollback also fails', async () => {
+    const { service, boxRepository, organizationUsageService } = makeService()
+    const startError = new Error('db connection lost')
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
+    boxRepository.conditionalStartForProxy.mockRejectedValue(startError)
+    organizationUsageService.rollbackPendingUsage.mockRejectedValue(new Error('quota rollback failed'))
+
+    await expect(service.ensureStartedForProxy('box-1', activeOrg)).rejects.toBe(startError)
+  })
+
+  it('preserves lease cancellation when quota rollback also fails after a lost race', async () => {
+    const { service, boxRepository, organizationUsageService } = makeService()
+    const ownershipError = new Error('ownership was lost')
+    const controller = new AbortController()
+    jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
+    boxRepository.conditionalStartForProxy.mockImplementation(async () => {
+      controller.abort(ownershipError)
+      return null
+    })
+    organizationUsageService.rollbackPendingUsage.mockRejectedValue(new Error('quota rollback failed'))
+
+    await expect(service.ensureStartedForProxy('box-1', activeOrg, controller.signal)).rejects.toBe(ownershipError)
+  })
+
   it('rejects auto-resume when the org is over quota and does not start the box', async () => {
     const { service, boxRepository, organizationUsageService } = makeService()
     jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue(stoppedBox as any)
