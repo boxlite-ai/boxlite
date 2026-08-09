@@ -174,15 +174,10 @@ export default $config({
     }
     const collectorExporters = clickHouseExporterEnabled ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
     // Traces additionally fan out to Jaeger; metrics/logs stay off it (Jaeger
-    // ingests traces only). Public-Jaeger mode drops the OTLP listener from the
-    // ALB (see the Jaeger service), so the exporter is dropped with it — else
-    // the collector would retry into a listener that no longer exists.
-    const jaegerPublic = envOr('JAEGER_PUBLIC', 'false') === 'true'
-    const collectorTraceExporters = jaegerPublic
-      ? collectorExporters
-      : clickHouseExporterEnabled
-        ? '[boxlite_exporter,clickhouse,otlphttp/jaeger]'
-        : '[boxlite_exporter,otlphttp/jaeger]'
+    // ingests traces only).
+    const collectorTraceExporters = clickHouseExporterEnabled
+      ? '[boxlite_exporter,clickhouse,otlphttp/jaeger]'
+      : '[boxlite_exporter,otlphttp/jaeger]'
 
     // HTTPS everywhere: the Router CloudFront Function deletes customOriginConfig
     // for http origins and CF then falls back to match-viewer (→ tries HTTPS on a
@@ -359,33 +354,33 @@ export default $config({
     // Created before Api so API, runner, host, and box can all emit OTLP to the
     // same Collector. ClickHouse is external/managed only; no in-cluster
     // ClickHouseSpike fallback is part of the target architecture.
-    // Internal ALB by default: the trace UI exposes every span (URLs, headers,
-    // IDs, SQL, error bodies) with no auth, and nothing outside the VPC needs
-    // to read it. Reach it via VPN / bastion / `aws ssm start-session`.
-    // JAEGER_PUBLIC=true opts the UI into an internet-facing ALB; the OTLP
-    // ingest listener never rides it (unauthenticated span injection / DoS),
-    // so public mode also stops new traces from reaching Jaeger — it shows
-    // only what arrived while internal.
+    // Jaeger is VPC-internal only: the trace UI exposes every span (URLs,
+    // headers, IDs, SQL, error bodies) with no auth over plain HTTP, and its
+    // OTLP ingest is equally unauthenticated — reach the UI via VPN / bastion /
+    // `aws ssm start-session`. JAEGER_PUBLIC is rejected (fail loud) like
+    // MAILDEV_PUBLIC: no auth gate or TLS story makes public exposure safe.
+    if (envOr('JAEGER_PUBLIC', 'false') === 'true') {
+      throw new Error(
+        'JAEGER_PUBLIC is not supported: Jaeger has no auth and its UI is plain HTTP, so ' +
+          'it cannot be safely exposed to the internet. Reach it via VPN / bastion / ' +
+          '`aws ssm start-session`.',
+      )
+    }
     const jaeger = new sst.aws.Service('Jaeger', {
       cluster,
       image: IMAGES.jaeger,
       loadBalancer: {
-        public: jaegerPublic,
+        public: false,
         rules: [
           { listen: '80/http', forward: `${PORTS.JAEGER_UI}/http` },
-          // OTLP HTTP ingest, fed by the OtelCollector's otlphttp/jaeger
-          // exporter — internal mode only, see the JAEGER_PUBLIC note above.
-          ...(jaegerPublic ? [] : [{ listen: `${PORTS.OTLP_HTTP}/http`, forward: `${PORTS.OTLP_HTTP}/http` }]),
+          // OTLP HTTP ingest, fed by the OtelCollector's otlphttp/jaeger exporter.
+          { listen: `${PORTS.OTLP_HTTP}/http`, forward: `${PORTS.OTLP_HTTP}/http` },
         ],
-        ...(jaegerPublic
-          ? {}
-          : {
-              health: {
-                // The OTLP receiver returns a client-error status for a bare
-                // health-check GET, which still proves the receiver is listening.
-                [`${PORTS.OTLP_HTTP}/http`]: httpHealth('/', { successCodes: '200-499' }),
-              },
-            }),
+        health: {
+          // The OTLP receiver returns a client-error status for a bare
+          // health-check GET, which still proves the receiver is listening.
+          [`${PORTS.OTLP_HTTP}/http`]: httpHealth('/', { successCodes: '200-499' }),
+        },
       },
       environment: { COLLECTOR_OTLP_ENABLED: 'true' },
     })
