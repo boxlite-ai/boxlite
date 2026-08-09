@@ -31,23 +31,6 @@ Resources:
       EncryptionConfiguration:
         EncryptionType: AES256
 
-  # Same reasoning as the Api's, one step further out: the pusher is a *different*
-  # repository's workflow (boxlite-ai/boxlite-commerce), which assumes its own
-  # role to push here, so this repository must exist before either that workflow
-  # or a deploy that consumes the image runs.
-  CommerceImagesRepository:
-    Type: AWS::ECR::Repository
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      # This side declares the name; commerceImageRepository resolves it.
-      RepositoryName: !Sub boxlite-app-${GitHubEnvironment}-commerce
-      ImageTagMutability: IMMUTABLE
-      ImageScanningConfiguration:
-        ScanOnPush: true
-      EncryptionConfiguration:
-        EncryptionType: AES256
-
   RunnerArtifactsBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -315,7 +298,5 @@ Outputs:
     Value: !Ref BoxLiteRuntimePermissionsBoundary
   ApiImagesRepositoryUri:
     Value: !GetAtt ApiImagesRepository.RepositoryUri
-  CommerceImagesRepositoryUri:
-    Value: !GetAtt CommerceImagesRepository.RepositoryUri
   RunnerArtifactsBucketName:
     Value: !Ref RunnerArtifactsBucket

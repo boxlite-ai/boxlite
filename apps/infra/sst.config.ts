@@ -12,7 +12,7 @@
 // Inside `run()`, resources are created in deploy order:
 //
 //   1. secrets (auto-generated)     6. API
-//   2. platform (VPC/DB/Redis/S3)   7. edge services (Proxy), 7b. Commerce
+//   2. platform (VPC/DB/Redis/S3)   7. edge services (Proxy)
 //   3. IAM                          8. admin UIs (PgAdmin/MailDev)
 //   4. auth (external OIDC)         9. CDN (CloudFront)
 //   5. observability               10. runner (EC2 + nested KVM)
@@ -24,18 +24,6 @@
 // between the two silently leaves the real stack unprotected.
 const PRODUCTION_STAGE = 'prod'
 
-// The stage deploy-infra.yml offers, and so the only one with published
-// commerce images. Named for the same reason as PRODUCTION_STAGE: a bare stage
-// literal at the point of use is what drifted before.
-const DEFAULT_STAGE = 'dev'
-
-// The commerce image DEFAULT_STAGE runs when COMMERCE_IMAGE_TAG is unset — a
-// commit in boxlite-ai/boxlite-commerce, whose publish-image workflow tags each
-// image with its sha. Advancing dev to a newer commerce build means bumping this
-// (or passing COMMERCE_IMAGE_TAG for a one-off): pushing a new image does not
-// move a running stack, by design, so a deploy always names exact bytes.
-const COMMERCE_PINNED_IMAGE_TAG = '500a16f437f574e7dab2521744f969b91566664a'
-
 // Container ports each service listens on internally
 const PORTS = {
   API: 3000,
@@ -46,7 +34,6 @@ const PORTS = {
   OTEL_HEALTH: 13133,
   MAILDEV_UI: 1080,
   PGADMIN: 80,
-  COMMERCE: 3100,
 } as const
 
 // Pinned third-party images
@@ -133,7 +120,6 @@ export default $config({
     const { resolveArtifactSource } = await import('./scripts/artifact-source.mjs')
     const { readDeployScope } = await import('./scripts/deployment-scope.mjs')
     const { resolveRunnerArtifact, runnerArtifactsBucketName } = await import('./scripts/runner-artifact.mjs')
-    const { commerceImageReference } = await import('./scripts/commerce-artifact.mjs')
     const REGION = resolveAwsRegion()
     const { accountId } = await aws.getCallerIdentity()
     const workspaceVersion = readWorkspaceVersion()
@@ -427,10 +413,6 @@ export default $config({
     // The stage bootstrap template (ci/github-deploy-role.yaml) owns the immutable repository:
     // an image has to be published before a fresh stack can consume one, so the consumer cannot
     // also be responsible for creating its input.
-    // Resolved here rather than beside the Commerce service (section 7b) because the
-    // Api has to know whether a billing service will exist before it advertises one.
-    const commerceImageTag = envOr('COMMERCE_IMAGE_TAG', $app.stage === DEFAULT_STAGE ? COMMERCE_PINNED_IMAGE_TAG : '')
-
     const apiArtifact = resolveArtifactSource('api')
     const api = new sst.aws.Service('Api', {
       cluster,
@@ -672,21 +654,12 @@ export default $config({
         ...(process.env.SVIX_SERVER_URL && { SVIX_SERVER_URL: process.env.SVIX_SERVER_URL }),
 
         // Where the dashboard's billing client calls, surfaced to it through
-        // GET /api/config. Only sent when a billing service will answer — an
-        // explicit override, or the Commerce service this stage deploys — because
-        // the dashboard gates its billing surface on this value's presence — the
-        // page itself (apps/dashboard/src/pages/Billing.tsx) and every billing
-        // query hook, including the shell's wallet prefetch — and without it the
-        // billing client would fall back to the dashboard's own origin
-        // (apps/dashboard/src/api/apiClient.ts).
-        //
-        // Safe to default now that suspension is gated on REQUIRE_PAYMENT_METHOD
-        // instead of on this value: it used to also make organization.service.ts
-        // create every non-default organization suspended with 'Payment method
-        // required', which a mock that registers no card could never clear.
-        ...((process.env.BILLING_API_URL || commerceImageTag) && {
-          BILLING_API_URL: envOr('BILLING_API_URL', `https://commerce.${stackDomain}/api/billing`),
-        }),
+        // GET /api/config. No default: this stack deploys no billing service,
+        // so without an explicit override the dashboard's billing surface —
+        // the page itself (apps/dashboard/src/pages/Billing.tsx) and every
+        // billing query hook, including the shell's wallet prefetch — stays
+        // gated off and shows its placeholder instead.
+        ...(process.env.BILLING_API_URL && { BILLING_API_URL: process.env.BILLING_API_URL }),
       },
     })
 
@@ -772,73 +745,6 @@ export default $config({
         },
       },
     })
-
-    // ─── 7b. COMMERCE (billing / wallet) ─────────────────────────────────────
-    // Serves the endpoints the dashboard's billing client calls. The ALB is
-    // public because that client runs in the browser with the user's access
-    // token; this is not a service-to-service API. The Api's BILLING_API_URL
-    // above points the dashboard here, and CORS_ORIGINS below admits it.
-    //
-    // The dashboard's wallet, plan and usage sections all live on one Billing
-    // page gated on BILLING_API_URL reaching this service
-    // (apps/dashboard/src/pages/Billing.tsx), so a stage without it shows the
-    // placeholder instead. The old per-surface paths redirect into that page,
-    // which is safe ungated because a redirect issues no request of its own.
-    //
-    // The image comes from this account's private ECR, pushed by
-    // boxlite-ai/boxlite-commerce's own publish-image workflow through GitHub
-    // OIDC: not a public registry, and not built here, because the source lives
-    // in another repository. commerce-artifact.mjs composes and validates the
-    // reference; ci/github-deploy-role.yaml is where the repository itself is
-    // declared, since CI must push into it before any deploy can read it.
-    //
-    // Declared only for a stage that has an image. A stage whose workflow has
-    // never pushed one cannot build it locally either, so with `wait: true` a
-    // reference that cannot resolve would hang the whole stack deploy on an ECS
-    // pull failure — an unrelated stage should not inherit that.
-    const commerceImage = commerceImageReference({
-      app: $app.name,
-      stage: $app.stage,
-      accountId,
-      region: REGION,
-      tag: commerceImageTag,
-    })
-    if (commerceImage) {
-      new sst.aws.Service('Commerce', {
-        cluster,
-        image: commerceImage,
-        wait: true,
-        loadBalancer: {
-          domain: serviceDomain('commerce'),
-          rules: [{ listen: '443/https', forward: `${PORTS.COMMERCE}/http` }],
-          // The service excludes health from its api/billing prefix
-          // (commerce src/http.ts), so the unauthenticated route is the bare
-          // /health — not /api/billing/health. A probe of '/' would 401 and
-          // fail every task.
-          health: { [`${PORTS.COMMERCE}/http`]: httpHealth('/health') },
-        },
-        environment: {
-          PORT: String(PORTS.COMMERCE),
-          // The pair, not just the internal issuer. Tokens minted for the browser
-          // carry the public issuer as `iss` (dev fronts its Auth0 tenant with
-          // auth.dev.boxlite.ai), so a service told only the internal value
-          // rejects every genuine dashboard token. JWKS discovery still goes
-          // through the reachable issuer.
-          OIDC_ISSUER: oidcIssuer,
-          ...(publicOidcIssuer && { PUBLIC_OIDC_DOMAIN: publicOidcIssuer }),
-          OIDC_AUDIENCE: envOr('OIDC_AUDIENCE', 'boxlite'),
-          // Base URL only — the service appends /api/organizations to resolve
-          // which organizations the caller may touch.
-          BOXLITE_API_URL: stripTrailingSlash(api.url),
-          // The dashboard is a separate origin, so it must be allow-listed or the
-          // browser blocks every billing call before sending it.
-          CORS_ORIGINS: envOr('DASHBOARD_URL', `https://${stackDomain}`),
-          // Where the service's own hand-off pages live, so the URLs it returns
-          // for checkout, portal and top-up resolve to itself.
-          PUBLIC_BASE_URL: `https://commerce.${stackDomain}/api/billing`,
-        },
-      })
-    }
 
     // ─── 8. ADMIN UIs ────────────────────────────────────────────────────────
     // pgAdmin security gate. pgAdmin is a

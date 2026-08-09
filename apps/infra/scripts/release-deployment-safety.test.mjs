@@ -12,7 +12,6 @@ import { DEFAULT_SCHEMA, Type, load } from 'js-yaml'
 import { verifyDeployRoleGrantsBoundaryPermission } from './deploy-role-boundary.mjs'
 import { liveText } from './live-source.mjs'
 import { apiImageRepository } from './api-artifact.mjs'
-import { commerceImageRepository } from './commerce-artifact.mjs'
 import { runnerArtifactsBucketName } from './runner-artifact.mjs'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -1105,17 +1104,11 @@ test('every hand-written spelling of an artifact name agrees with the composer',
 
   const declaredRepository = template.Resources.ApiImagesRepository.Properties.RepositoryName
   const declaredBucket = template.Resources.RunnerArtifactsBucket.Properties.BucketName
-  const declaredCommerceRepository = template.Resources.CommerceImagesRepository.Properties.RepositoryName
   assert.equal(declaredRepository, 'boxlite-app-${GitHubEnvironment}-api')
   assert.equal(declaredBucket, 'boxlite-app-${GitHubEnvironment}-artifacts-${AWS::AccountId}')
-  // Commerce's producer is a workflow in another repository, so its hand-written
-  // spelling cannot be asserted here — which makes this the only place the
-  // declaration and the composer can be held together.
-  assert.equal(declaredCommerceRepository, 'boxlite-app-${GitHubEnvironment}-commerce')
 
   // Resolved: the same grammar, through the composer the deploy actually calls.
   assert.equal(apiImageRepository({ app: 'boxlite', stage: 'dev' }), 'boxlite-app-dev-api')
-  assert.equal(commerceImageRepository({ app: 'boxlite', stage: 'dev' }), 'boxlite-app-dev-commerce')
   assert.equal(
     runnerArtifactsBucketName({ app: 'boxlite', stage: 'dev', accountId: '123456789012' }),
     'boxlite-app-dev-artifacts-123456789012',

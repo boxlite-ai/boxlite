@@ -23,13 +23,11 @@ flowchart TB
         cf["CloudFront<br/>STACK_DOMAIN"]
         alb["Api ALB<br/>api.STACK_DOMAIN<br/>idle timeout 1h"]
         nlb["Proxy NLB · TLS 443<br/>proxy + *.proxy.STACK_DOMAIN"]
-        calb["Commerce ALB<br/>commerce.STACK_DOMAIN<br/>dev only, image-gated"]
     end
 
     subgraph vpc["VPC · private subnets"]
         api["Api · NestJS<br/>:3000"]
         proxy["Proxy<br/>:4000"]
-        commerce["Commerce · billing/wallet<br/>:3100"]
         runner["EC2 c8i.2xlarge Runner<br/>nested KVM · :3003"]
         box[["box microVM"]]
 
@@ -55,7 +53,6 @@ flowchart TB
 
     alb --> api
     nlb --> proxy
-    calb --> commerce
     proxy --> box
     runner --> box
 
@@ -219,13 +216,9 @@ GitHub Environments. GitHub OIDC supplies short-lived AWS credentials; no AWS
 access keys are stored in GitHub. `DEPLOY_ENV` materializes the stage's gitignored
 `.env` only for the job and is deleted even if deployment fails.
 
-`ci/github-deploy-role.yaml` bootstraps four things that must exist **before** an
-SST deploy: the OIDC role, the two immutable stage ECR repositories (Api and
-Commerce), and the private Runner artifact bucket. Note for `dev` specifically:
-its Commerce repository was created out-of-band and is **not** in the stack, so a
-`dev` bootstrap needs a one-time import before it reconciles — `aws cloudformation
-deploy` has no `--import-existing-resources` here and would otherwise fail on
-"already exists". That bucket expires only superseded object versions —
+`ci/github-deploy-role.yaml` bootstraps three things that must exist **before** an
+SST deploy: the OIDC role, the immutable Api ECR repository, and the private
+Runner artifact bucket. That bucket expires only superseded object versions —
 first boot re-fetches the commit-keyed tarball at every instance launch, so
 expiring the current object would make a later replacement fail to boot. The role
 grants only the AWS control-plane actions

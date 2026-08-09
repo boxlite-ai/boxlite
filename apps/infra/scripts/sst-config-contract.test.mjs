@@ -408,8 +408,7 @@ test('organization suspension is gated on its own flag, not on BILLING_API_URL',
 // 404s. The producing and consuming sides sit in different packages: nothing but a cross-file
 // guard notices when one of them moves.
 test('a billing URL is advertised only where a billing service answers', () => {
-  assert.match(liveConfig, /\.\.\.\(\(process\.env\.BILLING_API_URL \|\| commerceImageTag\) && \{/)
-  assert.match(liveConfig, /BILLING_API_URL: envOr\('BILLING_API_URL', `https:\/\/commerce\.\$\{stackDomain\}\/api\/billing`\)/)
+  assert.match(liveConfig, /\.\.\.\(process\.env\.BILLING_API_URL && \{ BILLING_API_URL: process\.env\.BILLING_API_URL \}\)/)
 
   // Wallet, plan and usage are sections of one /dashboard/billing page, so the gate moved from
   // the route table into that page: it must refuse to render any section — none of which can
@@ -442,31 +441,4 @@ test('a billing URL is advertised only where a billing service answers', () => {
   for (const route of redirectedRoutes) {
     assert.doesNotMatch(hiddenRoutes, new RegExp(route))
   }
-})
-
-// The image lives in another repository's ECR push, so a stage that never published one cannot
-// build it locally either. With `wait: true`, handing SST a reference that cannot resolve hangs
-// that stage's entire deploy on an ECS pull failure — so the service must stay conditional, and
-// the tag must not fall back to a default on stages other than DEFAULT_STAGE.
-test('declares Commerce only for a stage that has a published image', () => {
-  // One derivation, read twice: the reference the Service pulls and the gate the Api
-  // advertises must agree, or a stage could publish a billing URL for a service it
-  // never declares. Scoped to the reference call's own argument list, so a dead
-  // `tag: commerceImageTag` elsewhere cannot stand in for the tag this image resolves.
-  assert.match(
-    liveConfig,
-    /const commerceImageTag = envOr\('COMMERCE_IMAGE_TAG', \$app\.stage === DEFAULT_STAGE \? COMMERCE_PINNED_IMAGE_TAG : ''\)/,
-  )
-  assert.match(liveConfig, /if \(commerceImage\) \{/)
-  const imageReference = extractSection(liveConfig, 'const commerceImage = commerceImageReference({', '})')
-  assert.match(imageReference, /tag: commerceImageTag,/)
-  // Composition and tag validation belong to commerce-artifact.mjs, as the Api's do to
-  // api-artifact.mjs; a registry URL assembled inline would skip both.
-  assert.doesNotMatch(liveConfig, /dkr\.ecr\./)
-  // Named constants, not bare literals at the point of use — the drift PRODUCTION_STAGE prevents.
-  assert.match(liveConfig, /const DEFAULT_STAGE = 'dev'/)
-  assert.match(liveConfig, /const COMMERCE_PINNED_IMAGE_TAG = '[0-9a-f]{40}'/)
-  // The repository must predate the stack that consumes it; the stage bootstrap owns it.
-  assert.match(readFileSync(new URL('../ci/github-deploy-role.yaml', import.meta.url), 'utf8'), /-commerce/)
-  assert.match(environmentExample, /^# COMMERCE_IMAGE_TAG=/m)
 })
