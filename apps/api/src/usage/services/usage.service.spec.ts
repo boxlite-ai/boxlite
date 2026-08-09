@@ -44,17 +44,30 @@ const satisfies = (actual: unknown, condition: unknown): boolean => {
 }
 
 const makeService = (stored: BoxUsagePeriod[] = []) => {
+  const lease = {
+    signal: new AbortController().signal,
+    release: jest.fn().mockResolvedValue(undefined),
+  }
+  const transactionalEntityManager = {
+    find: jest.fn().mockResolvedValue([]),
+    delete: jest.fn().mockResolvedValue(undefined),
+    save: jest.fn().mockImplementation(async (value) => value),
+  }
   const usagePeriodRepository = {
     findOne: jest.fn(async ({ where }: any) =>
       stored.find((period) =>
         Object.entries(where).every(([column, condition]) => satisfies((period as any)[column], condition)),
       ),
     ),
+    find: jest.fn().mockResolvedValue([]),
     save: jest.fn().mockImplementation(async (period) => period),
+    manager: {
+      transaction: jest.fn(async (callback) => callback(transactionalEntityManager)),
+    },
   }
   const redisLockProvider = {
-    lock: jest.fn().mockResolvedValue(true),
-    unlock: jest.fn().mockResolvedValue(undefined),
+    acquireLease: jest.fn().mockResolvedValue(lease),
+    waitForLease: jest.fn().mockResolvedValue(lease),
   }
   const boxRepository = { findOne: jest.fn() }
   const usageExportOutboxService = { enqueue: jest.fn().mockResolvedValue(0) }
@@ -66,7 +79,14 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
     usageExportOutboxService as any,
   )
 
-  return { service, usagePeriodRepository, redisLockProvider, usageExportOutboxService }
+  return {
+    service,
+    usagePeriodRepository,
+    redisLockProvider,
+    usageExportOutboxService,
+    lease,
+    transactionalEntityManager,
+  }
 }
 
 const OTHER_BOX_ID = 'box-2'
@@ -88,6 +108,23 @@ describe('UsageService event subscriptions', () => {
 })
 
 describe('UsageService.handleBoxStateUpdate', () => {
+  it('cancels a pending lock wait during application shutdown', async () => {
+    const { service, redisLockProvider } = makeService()
+    redisLockProvider.waitForLease.mockImplementation(
+      (_key: string, _ttl: number, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        }),
+    )
+
+    const handling = service.handleBoxStateUpdate(event(BoxState.STARTING)).catch((error) => error)
+    await Promise.resolve()
+    await service.onApplicationShutdown()
+
+    await expect(handling).resolves.toEqual(expect.objectContaining({ message: 'UsageService is shutting down' }))
+    expect(service.activeJobs.size).toBe(0)
+  })
+
   it('opens a full-resource period when the box starts', async () => {
     const { service, usagePeriodRepository } = makeService()
 
@@ -237,11 +274,29 @@ describe('UsageService.handleBoxStateUpdate', () => {
   })
 
   it('releases the per-box lock even when the transition is not billable', async () => {
-    const { service, redisLockProvider } = makeService()
+    const { service, lease } = makeService()
 
     await service.handleBoxStateUpdate(event(BoxState.STARTING))
 
-    expect(redisLockProvider.unlock).toHaveBeenCalledWith(`usage-period-${box.id}`)
+    expect(lease.release).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not reopen a period after lease ownership is lost while closing it', async () => {
+    const open = openPeriod()
+    const { service, usagePeriodRepository, lease } = makeService([open])
+    const ownershipError = new Error('ownership was lost')
+    const controller = new AbortController()
+    lease.signal = controller.signal
+    usagePeriodRepository.save.mockImplementationOnce(async (period) => {
+      controller.abort(ownershipError)
+      return period
+    })
+
+    await expect(service.handleBoxStateUpdate(event(BoxState.STARTED))).rejects.toBe(ownershipError)
+
+    expect(usagePeriodRepository.save).toHaveBeenCalledTimes(1)
+    expect(usagePeriodRepository.save).toHaveBeenCalledWith(open)
+    expect(lease.release).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -269,12 +324,51 @@ describe('UsageService.handleBoxDesiredStateUpdate', () => {
   })
 
   it('releases the per-box lock it took', async () => {
-    const { service, redisLockProvider } = makeService([openPeriod()])
+    const { service, lease } = makeService([openPeriod()])
 
     await service.handleBoxDesiredStateUpdate(
       new BoxDesiredStateUpdatedEvent(box, BoxDesiredState.STARTED, BoxDesiredState.DESTROYED),
     )
 
-    expect(redisLockProvider.unlock).toHaveBeenCalledWith(`usage-period-${box.id}`)
+    expect(lease.release).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('UsageService lease lifecycle', () => {
+  it('releases the archive lease when the transaction fails', async () => {
+    const { service, usagePeriodRepository, lease } = makeService()
+    const transactionError = new Error('archive transaction failed')
+    usagePeriodRepository.manager.transaction.mockRejectedValue(transactionError)
+
+    await expect(service.archiveUsagePeriods()).rejects.toBe(transactionError)
+
+    expect(lease.release).toHaveBeenCalledTimes(1)
+  })
+
+  it('rolls back archive writes when lease ownership is lost before commit', async () => {
+    const { service, usagePeriodRepository, usageExportOutboxService, lease, transactionalEntityManager } =
+      makeService()
+    const ownershipError = new Error('ownership was lost')
+    const controller = new AbortController()
+    lease.signal = controller.signal
+    const period = { id: 'period-1' } as BoxUsagePeriod
+    transactionalEntityManager.find.mockResolvedValue([period])
+    usageExportOutboxService.enqueue.mockImplementation(async () => {
+      controller.abort(ownershipError)
+    })
+    let committed = false
+    usagePeriodRepository.manager.transaction.mockImplementation(async (callback) => {
+      const result = await callback(transactionalEntityManager)
+      committed = true
+      return result
+    })
+
+    await expect(service.archiveUsagePeriods()).rejects.toBe(ownershipError)
+
+    expect(transactionalEntityManager.delete).toHaveBeenCalledWith(BoxUsagePeriod, [period.id])
+    expect(transactionalEntityManager.save).toHaveBeenCalledTimes(1)
+    expect(usageExportOutboxService.enqueue).toHaveBeenCalledTimes(1)
+    expect(committed).toBe(false)
+    expect(lease.release).toHaveBeenCalledTimes(1)
   })
 })
