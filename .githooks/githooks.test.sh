@@ -97,9 +97,17 @@ write_ref_updates_file() {  # repo remote local_ref remote_ref output_file
   printf '%s %s %s %s\n' "$local_ref" "$local_sha" "$remote_ref" "$remote_sha" > "$output_file"
 }
 
+# Extracted from the real pre-push, not hand-duplicated: a second copy of this
+# selection algorithm is exactly how it went stale before (see new_ref_base_sha's
+# own history) — a fix applied to only one copy leaves the other asserting
+# against a base the real hook no longer picks.
+eval "$(sed -n '/^new_ref_base_sha() {/,/^}/p' "$REPO_ROOT/.githooks/pre-push" | \
+  sed -e 's|\${repo_root}|${repo}|g' -e 's|\$repo_root|\$repo|g' \
+      -e 's|\${remote_name}|${remote}|g' -e 's|\$remote_name|\$remote|g')"
+
 pushed_diff_hash_for() {  # repo remote ref_updates_file
   local repo="$1" remote="$2" ref_updates_file="$3"
-  local empty_tree local_ref local_sha remote_ref remote_sha base_sha candidate
+  local empty_tree local_ref local_sha remote_ref remote_sha base_sha
   empty_tree="$(git -C "$repo" hash-object -t tree /dev/null)"
   while read -r local_ref local_sha remote_ref remote_sha; do
     [[ -n "${local_ref:-}" ]] || continue
@@ -107,14 +115,7 @@ pushed_diff_hash_for() {  # repo remote ref_updates_file
     if [[ "$local_sha" =~ ^0+$ ]]; then
       printf 'deleted %s at %s\n' "$remote_ref" "$remote_sha"
     elif [[ "$remote_sha" =~ ^0+$ ]]; then
-      base_sha=""
-      while IFS= read -r candidate; do
-        [[ -n "$candidate" ]] || continue
-        if git -C "$repo" merge-base --is-ancestor "$candidate" "$local_sha" 2>/dev/null; then
-          base_sha="$candidate"
-          break
-        fi
-      done < <(git -C "$repo" for-each-ref --format='%(objectname)' "refs/remotes/${remote}" 2>/dev/null)
+      base_sha="$(new_ref_base_sha "$local_sha" || true)"
       if [[ -n "$base_sha" ]]; then
         git -C "$repo" log --format='commit-subject %H %s' "$base_sha..$local_sha" 2>/dev/null || true
         git -C "$repo" diff --no-ext-diff "$base_sha" "$local_sha" 2>/dev/null || true
@@ -514,6 +515,129 @@ check_eq "Codex delegated new-ref push self-audits from remote base" "$?" 0
 grep -q '+new ref' "$R/new-ref-prompt.txt" && grep -q 'commit-subject .*test(hooks): new ref audit' "$R/new-ref-prompt.txt" && ! grep -q 'commit-subject .*base' "$R/new-ref-prompt.txt" && new_ref_context=yes || new_ref_context=no
 check_eq "new-ref audit excludes unchanged base history" "$new_ref_context" "yes"
 rm -rf "$R" "$B"
+
+# new_ref_base_sha must pick the CLOSEST ancestor among remote-tracking refs,
+# not the first one for-each-ref happens to list. "aaa-early" sorts before
+# "zzz-late" alphabetically and IS also an ancestor of the new branch (it's
+# zzz-late's own ancestor) — a scan that stops at the first match would pick
+# aaa-early's far older commit as the base and drag its whole history into
+# the audited diff. Neither branch is named main/master, so this exercises
+# the fallback scan specifically, not the default-branch fast path.
+R="$(setup)"
+B="$(mktemp -d)"; git init -q --bare "$B"; git -C "$R" remote add origin "$B"
+git -C "$R" checkout -qb aaa-early
+( cd "$R" && env -i PATH="$PATH" HOME="$HOME" git push -q origin aaa-early:aaa-early >/dev/null 2>"$R/err.txt" )
+git -C "$R" checkout -qb zzz-late
+printf 'late 1\n' >> "$R/f"; git -C "$R" add -A; git -C "$R" commit -qm 'test(hooks): zzz-late c1'
+printf 'late 2\n' >> "$R/f"; git -C "$R" add -A; git -C "$R" commit -qm 'test(hooks): zzz-late c2'
+( cd "$R" && env -i PATH="$PATH" HOME="$HOME" git push -q origin zzz-late:zzz-late >/dev/null 2>"$R/err.txt" )
+git -C "$R" fetch -q origin
+git -C "$R" checkout -qb closest-base-test zzz-late
+printf 'newest\n' >> "$R/f"; git -C "$R" add -A; git -C "$R" commit -qm 'test(hooks): closest base new commit'
+mkdir -p "$R/bin"
+cat > "$R/bin/codex" <<'CLOSEST_BASE_FAKE_CODEX'
+#!/usr/bin/env bash
+set -eu
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'codex-cli fake\n'
+  exit 0
+fi
+cd_arg=""; output=""; prompt=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --cd) cd_arg="$2"; shift 2 ;;
+    --output-last-message|-o) output="$2"; shift 2 ;;
+    -) prompt="$(cat)"; shift ;;
+    --ask-for-approval|--disable|--sandbox|--output-schema) shift 2 ;;
+    exec|--ephemeral) shift ;;
+    *) shift ;;
+  esac
+done
+printf '%s\n' "$prompt" > "$cd_arg/closest-base-prompt.txt"
+branch="$(git -C "$cd_arg" branch --show-current)"
+head="$(git -C "$cd_arg" rev-parse HEAD)"
+diff_hash="$(printf '%s\n' "$prompt" | sed -n 's/^Expected diff hash: //p')"
+command_hash="$(printf '%s\n' "$prompt" | sed -n 's/^Expected command hash: //p')"
+jq -nc --arg b "$branch" --arg h "$head" --arg dh "$diff_hash" --arg ch "$command_hash" \
+  '{branch:$b, head:$h, command_kind:"push", diff_hash:$dh, command_hash:$ch, commit_subject_hash:"", verdict:"PASS", findings:[]}' \
+  > "$output"
+CLOSEST_BASE_FAKE_CODEX
+chmod +x "$R/bin/codex"
+( cd "$R" && env -i PATH="$PATH" HOME="$HOME" CODEX_SANDBOX=seatbelt CODEX_BIN="$R/bin/codex" git push -q origin "refs/heads/closest-base-test:refs/heads/closest-base-test" >/dev/null 2>"$R/err.txt" )
+check_eq "Codex delegated closest-base push self-audits" "$?" 0
+grep -q 'commit-subject .*closest base new commit' "$R/closest-base-prompt.txt" \
+  && ! grep -q 'commit-subject .*zzz-late c1' "$R/closest-base-prompt.txt" \
+  && ! grep -q 'commit-subject .*zzz-late c2' "$R/closest-base-prompt.txt" \
+  && closest_base_context=yes || closest_base_context=no
+check_eq "new-ref base picks closest ancestor, not first in ref order" "$closest_base_context" "yes"
+rm -rf "$R" "$B"
+
+# new_ref_base_sha must use merge-base, not is-ancestor: by the time a branch
+# is pushed, the default branch has often moved on with unrelated commits, so
+# its current tip is no longer a strict ancestor of the pushed commit at all
+# (is-ancestor returns false) even though the real fork point is easy to find.
+# A candidate-selection fix that still gates on is-ancestor would exclude
+# main entirely here and fall through to whatever unrelated ref the scan
+# finds first — reproducing the same wrong-base bug from a different angle.
+# Stderr from every push in this test goes to a file OUTSIDE the repo: this
+# test (unlike its siblings) checks out backward to a PREVIOUS branch after
+# committing forward, and a redirect target inside $R gets caught by the next
+# `git add -A`, tracked with whatever content it held at that moment, then
+# silently rewritten (dirtied) by a later push's redirect without a matching
+# commit — so the following checkout to a branch with a DIFFERENT committed
+# version of that same path fails with "would be overwritten by checkout".
+moved_on_err="$(mktemp)"
+R="$(setup)"
+B="$(mktemp -d)"; git init -q --bare "$B"; git -C "$R" remote add origin "$B"
+branch_ref="$(current_branch_ref "$R")"
+( cd "$R" && env -i PATH="$PATH" HOME="$HOME" git push -q origin "$branch_ref:$branch_ref" >/dev/null 2>"$moved_on_err" )
+git -C "$R" checkout -qb moved-on-feature
+printf 'feature 1\n' >> "$R/f"; git -C "$R" add -A; git -C "$R" commit -qm 'test(hooks): feature before main moves on'
+git -C "$R" checkout -q "${branch_ref#refs/heads/}"
+printf 'main moved on 1\n' >> "$R/f"; git -C "$R" add -A; git -C "$R" commit -qm 'test(hooks): main moved on c1'
+printf 'main moved on 2\n' >> "$R/f2"; git -C "$R" add -A; git -C "$R" commit -qm 'test(hooks): main moved on c2'
+( cd "$R" && env -i PATH="$PATH" HOME="$HOME" git push -q origin "$branch_ref:$branch_ref" >/dev/null 2>"$moved_on_err" )
+git -C "$R" fetch -q origin
+git -C "$R" checkout -q moved-on-feature
+printf 'feature 2\n' >> "$R/f"; git -C "$R" add -A; git -C "$R" commit -qm 'test(hooks): feature after main moved on'
+mkdir -p "$R/bin"
+cat > "$R/bin/codex" <<'MOVED_ON_FAKE_CODEX'
+#!/usr/bin/env bash
+set -eu
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'codex-cli fake\n'
+  exit 0
+fi
+cd_arg=""; output=""; prompt=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --cd) cd_arg="$2"; shift 2 ;;
+    --output-last-message|-o) output="$2"; shift 2 ;;
+    -) prompt="$(cat)"; shift ;;
+    --ask-for-approval|--disable|--sandbox|--output-schema) shift 2 ;;
+    exec|--ephemeral) shift ;;
+    *) shift ;;
+  esac
+done
+printf '%s\n' "$prompt" > "$cd_arg/moved-on-prompt.txt"
+branch="$(git -C "$cd_arg" branch --show-current)"
+head="$(git -C "$cd_arg" rev-parse HEAD)"
+diff_hash="$(printf '%s\n' "$prompt" | sed -n 's/^Expected diff hash: //p')"
+command_hash="$(printf '%s\n' "$prompt" | sed -n 's/^Expected command hash: //p')"
+jq -nc --arg b "$branch" --arg h "$head" --arg dh "$diff_hash" --arg ch "$command_hash" \
+  '{branch:$b, head:$h, command_kind:"push", diff_hash:$dh, command_hash:$ch, commit_subject_hash:"", verdict:"PASS", findings:[]}' \
+  > "$output"
+MOVED_ON_FAKE_CODEX
+chmod +x "$R/bin/codex"
+( cd "$R" && env -i PATH="$PATH" HOME="$HOME" CODEX_SANDBOX=seatbelt CODEX_BIN="$R/bin/codex" git push -q origin "refs/heads/moved-on-feature:refs/heads/moved-on-feature" >/dev/null 2>"$moved_on_err" )
+check_eq "Codex delegated moved-on-base push self-audits" "$?" 0
+grep -q 'commit-subject .*feature before main moves on' "$R/moved-on-prompt.txt" \
+  && grep -q 'commit-subject .*feature after main moved on' "$R/moved-on-prompt.txt" \
+  && ! grep -q 'commit-subject .*main moved on c1' "$R/moved-on-prompt.txt" \
+  && ! grep -q 'commit-subject .*main moved on c2' "$R/moved-on-prompt.txt" \
+  && moved_on_context=yes || moved_on_context=no
+check_eq "new-ref base finds real fork point after default branch moves on" "$moved_on_context" "yes"
+rm -rf "$R" "$B" "$moved_on_err"
 
 R="$(setup)"
 B="$(mktemp -d)"; git init -q --bare "$B"; git -C "$R" remote add origin "$B"

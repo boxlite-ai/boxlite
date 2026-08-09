@@ -51,15 +51,41 @@ is_zero_sha() {
 }
 
 new_ref_base_sha() {
-  local local_sha="$1" candidate
+  local local_sha="$1" candidate merge_base best_base="" best_distance="" distance
+
+  # The overwhelming majority of new branches fork from the remote's default
+  # branch — check it first, cheaply. Uses merge-base, not is-ancestor: by the
+  # time this push happens the default branch has often moved past the actual
+  # fork point (more commits landed on it after this branch was cut), so its
+  # current tip may no longer be a strict ancestor of local_sha at all — but
+  # merge-base still finds the real divergence point either way.
+  for candidate in "refs/remotes/${remote_name}/HEAD" "refs/remotes/${remote_name}/main" \
+                   "refs/remotes/${remote_name}/master"; do
+    candidate="$(git -C "$repo_root" rev-parse --verify "$candidate" 2>/dev/null)" || continue
+    merge_base="$(git -C "$repo_root" merge-base "$candidate" "$local_sha" 2>/dev/null)" || continue
+    printf '%s\n' "$merge_base"
+    return 0
+  done
+
+  # Fall back to the closest common ancestor among every remote-tracking ref:
+  # whichever candidate's merge-base needs the fewest commits to reach
+  # local_sha, not the first ref found in ref-name order. Any sufficiently old
+  # branch tip shares SOME common history with local_sha, so "first match in
+  # for-each-ref's alphabetical order" can silently pick a divergence point
+  # from years-old, unrelated history instead of the branch's actual starting
+  # point.
   while IFS= read -r candidate; do
     [[ -n "$candidate" ]] || continue
-    if git -C "$repo_root" merge-base --is-ancestor "$candidate" "$local_sha" 2>/dev/null; then
-      printf '%s\n' "$candidate"
-      return 0
+    merge_base="$(git -C "$repo_root" merge-base "$candidate" "$local_sha" 2>/dev/null)" || continue
+    distance="$(git -C "$repo_root" rev-list --count "${merge_base}..${local_sha}" 2>/dev/null)" || continue
+    if [[ -z "$best_distance" || "$distance" -lt "$best_distance" ]]; then
+      best_base="$merge_base"
+      best_distance="$distance"
     fi
   done < <(git -C "$repo_root" for-each-ref --format='%(objectname)' "refs/remotes/${remote_name}" 2>/dev/null)
-  return 1
+
+  [[ -n "$best_base" ]] || return 1
+  printf '%s\n' "$best_base"
 }
 
 write_pushed_diff() {
