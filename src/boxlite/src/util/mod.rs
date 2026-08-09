@@ -420,11 +420,11 @@ mod tests {
         );
 
         // Verify xattr was set on regular files and directories
-        let check_xattr = |path: &Path, expected_mode: u32| {
+        let check_xattr = |path: &Path, expected_mode: u32, expected_type: &str| {
             let xattr_value = xattr::get(path, "user.containers.override_stat")
                 .unwrap_or_else(|_| panic!("Failed to read xattr from {:?}", path))
                 .unwrap_or_else(|| panic!("xattr not set on {:?}", path));
-            let expected = format!("0:0:{:04o}", expected_mode);
+            let expected = format!("0:0:{:04o}:{}", expected_mode, expected_type);
             assert_eq!(
                 String::from_utf8_lossy(&xattr_value),
                 expected,
@@ -434,16 +434,16 @@ mod tests {
         };
 
         // Root directory should be 700
-        check_xattr(rootfs, 0o700);
+        check_xattr(rootfs, 0o700, "dir");
 
         // Executable should preserve 755
-        check_xattr(&file1, 0o755);
+        check_xattr(&file1, 0o755, "file");
 
         // Readonly should preserve 444
-        check_xattr(&file2, 0o444);
+        check_xattr(&file2, 0o444, "file");
 
         // Directory should preserve 755
-        check_xattr(&dir, 0o755);
+        check_xattr(&dir, 0o755, "dir");
 
         // Verify symlinks don't get xattr (skipped intentionally)
         let symlink_path = rootfs.join("link");
@@ -481,8 +481,49 @@ mod tests {
             .expect("xattr not set");
         assert_eq!(
             String::from_utf8_lossy(&xattr_value),
-            "0:0:4755",
+            "0:0:4755:file",
             "Setuid bit should be preserved in xattr"
         );
+    }
+
+    /// `fix_rootfs_permissions` refreshes the recorded *mode*; it must not
+    /// discard the recorded *ownership*.
+    ///
+    /// Unprivileged extraction cannot `chown`, so the layer's uid/gid exists
+    /// only in this xattr. Rewriting it as `0:0` here destroyed the sole copy
+    /// before the ext4 builder could read it back, so a non-root image `USER`
+    /// (dexidp/dex, 1001:1001) found its layer-chowned directory root-owned.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_fix_rootfs_permissions_preserves_recorded_ownership() {
+        use crate::images::{OverrideFileType, OverrideStat};
+        use crate::rootfs::operations::fix_rootfs_permissions;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let rootfs = temp_dir.path();
+
+        let dex_dir = rootfs.join("var/dex");
+        fs::create_dir_all(&dex_dir).unwrap();
+        fs::set_permissions(&dex_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Encode through the production writer, exactly as the extractor does.
+        OverrideStat::new(1001, 1001, 0o755, OverrideFileType::Dir)
+            .write_xattr(&dex_dir)
+            .expect("seed override_stat");
+
+        fix_rootfs_permissions(rootfs).unwrap();
+
+        let recorded = OverrideStat::read_xattr(&dex_dir)
+            .expect("read override_stat")
+            .expect("override_stat must still be present and parseable");
+        assert_eq!(
+            (recorded.uid, recorded.gid),
+            (1001, 1001),
+            "recorded layer ownership must survive fix_rootfs_permissions"
+        );
+        assert_eq!(recorded.mode, 0o755, "mode must still be refreshed on disk");
     }
 }

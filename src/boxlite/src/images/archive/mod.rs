@@ -15,4 +15,5 @@ mod time;
 mod verifier;
 
 pub use extractor::LayerExtractor;
+pub use override_stat::{OverrideFileType, OverrideStat};
 pub use verifier::LayerVerifier;

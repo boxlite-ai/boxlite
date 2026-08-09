@@ -12,7 +12,7 @@
 //! - mode: octal (4 digits, e.g., 0755)
 //! - type: file, dir, symlink, pipe, socket, block-M-m, char-M-m
 
-#![allow(dead_code)] // parse/read_xattr are for reading layers with existing xattr
+#![allow(dead_code)] // not every accessor on the encoding has a caller yet
 
 use std::path::Path;
 

@@ -196,7 +196,9 @@ pub fn process_whiteouts(dir: &Path) -> BoxliteResult<()> {
 /// The virtio-fs implementation respects the "user.containers.override_stat" attribute.
 ///
 /// Sets directory permissions to 700 and applies user.containers.override_stat
-/// per-file to preserve each file's actual permissions while virtualizing ownership to root (0:0).
+/// per-file to preserve each file's actual permissions. Ownership already recorded
+/// by the layer extractor is carried through unchanged; entries with none recorded
+/// are virtualized to root (0:0).
 /// This ensures setuid binaries and executables maintain their correct permission bits.
 /// Ignores errors on symlinks and special files.
 ///
@@ -207,6 +209,7 @@ pub fn process_whiteouts(dir: &Path) -> BoxliteResult<()> {
 /// * `Ok(())` if permissions and xattr were set successfully
 /// * `Err(...)` if critical operations failed
 pub fn fix_rootfs_permissions(rootfs: &Path) -> BoxliteResult<()> {
+    use crate::images::{OverrideFileType, OverrideStat};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
@@ -235,8 +238,30 @@ pub fn fix_rootfs_permissions(rootfs: &Path) -> BoxliteResult<()> {
         // Get actual mode bits (preserve setuid/setgid/sticky bits)
         let mode = metadata.permissions().mode() & 0o7777;
 
-        // Format as 4-digit octal with leading zeros (e.g., "0:0:0755")
-        let xattr_value = format!("0:0:{:04o}", mode);
+        // Refresh the recorded mode without discarding the recorded ownership.
+        // `LayerExtractor` stores the layer's uid/gid here because unprivileged
+        // extraction cannot `chown`; overwriting it with 0:0 would drop the only
+        // copy before the ext4 builder reads it back. Entries with no prior
+        // record default to root, as before.
+        let recorded = match OverrideStat::read_xattr(path) {
+            Ok(stat) => stat,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to read ownership xattr on {}, defaulting to 0:0: {}",
+                    path.display(),
+                    e
+                );
+                None
+            }
+        };
+        let (uid, gid) = recorded.as_ref().map_or((0, 0), |s| (s.uid, s.gid));
+        let default_type = if metadata.is_dir() {
+            OverrideFileType::Dir
+        } else {
+            OverrideFileType::File
+        };
+        let file_type = recorded.map_or(default_type, |s| s.file_type);
+        let xattr_value = OverrideStat::new(uid, gid, mode, file_type).format();
 
         // Temporarily add write permission if needed to set xattr
         let needs_write = (mode & 0o200) == 0;
