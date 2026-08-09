@@ -209,7 +209,7 @@ class _Component:
     timeout_s: int
     argv: list[str]
     cwd: Path | None
-    env: dict[str, str | None]   # extra env layered on top of os.environ; None unsets
+    env: dict[str, str]   # extra env layered on top of os.environ
     pkill_pattern: str    # orphan-sweep fallback (matches the bash pkill -f)
 
 
@@ -245,11 +245,6 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "AWS_REGION": "us-east-1",
                 "OTEL_TRACING_ENABLED": "true",
                 "OTEL_EXPORTER_OTLP_ENDPOINT": _OTEL_OTLP_HTTP_URL,
-                # The runner links the locally-built core, whose embedded guest
-                # may differ from the PyPI SDK version that ensure_runtime_env()
-                # pins for L1. Unset that pin so the runner resolves the runtime
-                # matching its OWN core (avoids "Guest binary hash mismatch").
-                "BOXLITE_RUNTIME_DIR": None,
             },
             "boxlite-runner$",
         ),
@@ -297,9 +292,7 @@ def start_component(p: _Paths, comp: _Component) -> bool:
         proc = subprocess.Popen(
             comp.argv,
             cwd=str(comp.cwd) if comp.cwd else None,
-            # A None value in comp.env unsets an inherited var (e.g. the L1
-            # BOXLITE_RUNTIME_DIR pin must not leak to the runner — see below).
-            env={k: v for k, v in {**os.environ, **comp.env}.items() if v is not None},
+            env={**os.environ, **comp.env},
             stdout=logf,
             stderr=subprocess.STDOUT,
             start_new_session=True,  # detach: survives our exit + own process group
@@ -517,14 +510,12 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
             err(f"unknown component: {name} (valid: {' '.join(ALL_COMPONENTS)})")
             return 2
     # 0. Apple-Silicon bootstrap (idempotent no-ops once done): thread docker.io
-    # + ghcr.io creds through to L1 + runner, build the native lib, fix the
-    # runtime cache.
+    # + ghcr.io creds through to L1 + runner, build the native lib.
     _local_arm64.ensure_tools_on_path()
     _local_arm64.export_dockerhub_env()
     _local_arm64.export_ghcr_env()
     _ensure_installed(p)
     _local_arm64.ensure_native_lib()
-    _local_arm64.fix_runtime_cache()
 
     # 1. ensure L1 boxes (single asyncio.run; brings L1 up if postgres is down)
     l1_recreated = asyncio.run(_ensure_l1_async(cfg))
