@@ -196,14 +196,18 @@ pub struct SynchronizedState {
 
 /// Headroom `ImageDiskManager` reserves in every image disk it builds, for
 /// the `boxlite-guest` binary `GuestRootfsManager` injects into a copy of it
-/// afterward.
+/// afterward. `ImageDiskManager` folds this into its cache key
+/// (`disk_path`), so a disk cached under a different value is never reused.
 ///
-/// Fixed, not derived from the real guest binary's current size: the cache
-/// key (`ImageDiskManager::disk_path`) does not vary with this value, so a
-/// value that changed on every guest-binary rebuild would orphan a copy of
-/// every already-cached image disk with no way to reclaim it — this manager
-/// has no GC, unlike `GuestRootfsManager`'s paired `version_key` + `gc()`.
-/// An unstripped debug build measures ~232 MB (see
+/// Fixed, not derived from the real guest binary's current size: this
+/// manager has no GC (unlike `GuestRootfsManager`'s paired `version_key` +
+/// `gc()`), so a value that changed on every guest-binary rebuild would
+/// orphan a cache entry per digest on every rebuild — a routine, frequent
+/// event for developers. Because this is instead a source-level constant, it
+/// only changes on the rare, deliberate occasions *this number itself* gets
+/// edited (e.g. if a future guest binary outgrows it), each such change
+/// creating at most one new generation of cache entries, not a continuous
+/// leak. An unstripped debug build measures ~232 MB (see
 /// `guest_binary_fits_in_image_disk_headroom` below); 512 MiB covers that
 /// with margin to grow, in both debug and (far smaller) release builds, at
 /// the cost of some unused — but sparse, so cheap on disk — space in every

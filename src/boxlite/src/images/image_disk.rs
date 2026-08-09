@@ -16,7 +16,10 @@ use super::ImageObject;
 /// Builds and caches ext4 disk images from OCI images.
 ///
 /// Image disks are pure: only OCI image content, no guest binary injected.
-/// Cache key is the image digest (SHA256 of layer digests).
+/// Cache key is the image digest (SHA256 of layer digests) plus the
+/// manager's `reserve_bytes` — see the field doc — so a disk cached by an
+/// older build (before headroom existed, or under a smaller budget) is never
+/// mistaken for one sized under the current budget.
 ///
 /// Follows the staged install pattern: build in temp → atomic rename to cache.
 /// No half-written files ever appear in the cache directory.
@@ -33,16 +36,28 @@ use super::ImageObject;
 pub struct ImageDiskManager {
     cache_dir: PathBuf,
     temp_dir: PathBuf,
-    /// Extra headroom baked into every image disk this manager builds.
+    /// Extra headroom baked into every image disk this manager builds, and
+    /// folded into its cache key (`disk_path`).
     ///
-    /// The cache key is the image digest alone, and `GuestRootfsManager`
-    /// injects the `boxlite-guest` binary into a *copy* of whatever this
-    /// manager cached — so the headroom that copy needs must be decided once,
-    /// here, rather than per `get_or_create` call: `container_rootfs.rs`'s
-    /// `prepare_disk_rootfs` uses the same cached disk directly with no
-    /// injection, and if headroom were instead a per-call choice, whichever
-    /// caller happened to build a given digest first would decide the size
-    /// for every later caller of that digest too.
+    /// `GuestRootfsManager` injects the `boxlite-guest` binary into a *copy*
+    /// of whatever this manager cached — so the headroom that copy needs
+    /// must be decided once, here, rather than per `get_or_create` call:
+    /// `container_rootfs.rs`'s `prepare_disk_rootfs` uses the same cached
+    /// disk directly with no injection, and if headroom were instead a
+    /// per-call choice, whichever caller happened to build a given digest
+    /// first would decide the size for every later caller of that digest too.
+    ///
+    /// In production this is a fixed constant
+    /// (`IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES` in `runtime/rt_impl.rs`),
+    /// not derived from the guest binary's live size — so, unlike a value
+    /// that changed on every guest-binary rebuild, folding it into the cache
+    /// key doesn't orphan a cache entry on every rebuild; it only creates a
+    /// new one on the rare, deliberate occasions the constant itself changes
+    /// (this manager has no GC, so that distinction is load-bearing — see
+    /// the constant's own doc comment). It still MUST be in the cache key:
+    /// an older build with no headroom budgeted at all (or a smaller one)
+    /// would otherwise be reused as-is, silently reproducing the exact
+    /// ENOSPC-on-injection failure this field exists to prevent.
     reserve_bytes: u64,
 }
 
@@ -150,9 +165,12 @@ impl ImageDiskManager {
     }
 
     /// Compute the cache path for a given image digest.
+    ///
+    /// Includes `reserve_bytes` — see the field doc for why that's safe.
     fn disk_path(&self, digest: &str) -> PathBuf {
         let filename = digest.replace(':', "-");
-        self.cache_dir.join(format!("{}.ext4", filename))
+        self.cache_dir
+            .join(format!("{}-r{}.ext4", filename, self.reserve_bytes))
     }
 }
 
@@ -170,7 +188,7 @@ mod tests {
         let path = mgr.disk_path("sha256:abc123def456");
         assert_eq!(
             path,
-            PathBuf::from("/cache/disk-images/sha256-abc123def456.ext4")
+            PathBuf::from("/cache/disk-images/sha256-abc123def456-r0.ext4")
         );
     }
 
@@ -178,7 +196,25 @@ mod tests {
     fn test_disk_path_no_colon() {
         let mgr = ImageDiskManager::new(PathBuf::from("/cache"), PathBuf::from("/tmp"), 0);
         let path = mgr.disk_path("plaindigest");
-        assert_eq!(path, PathBuf::from("/cache/plaindigest.ext4"));
+        assert_eq!(path, PathBuf::from("/cache/plaindigest-r0.ext4"));
+    }
+
+    /// Two different `reserve_bytes` values must produce two different cache
+    /// paths for the *same* digest — the property
+    /// `find_does_not_reuse_a_disk_cached_with_different_reserve_bytes` below
+    /// relies on.
+    #[test]
+    fn test_disk_path_varies_with_reserve_bytes() {
+        let dir = PathBuf::from("/cache");
+        let small = ImageDiskManager::new(dir.clone(), PathBuf::from("/tmp"), 0);
+        let large = ImageDiskManager::new(dir, PathBuf::from("/tmp"), 100 * 1024 * 1024);
+
+        assert_ne!(
+            small.disk_path("sha256:abc123"),
+            large.disk_path("sha256:abc123"),
+            "the same digest under a different reserve_bytes must not collide \
+             on the same cache path"
+        );
     }
 
     #[test]
@@ -223,6 +259,41 @@ mod tests {
         assert!(expected.exists());
         assert_eq!(result.path(), expected);
         let _ = result.leak();
+    }
+
+    /// A disk cached under a smaller `reserve_bytes` must not be handed to a
+    /// caller that now needs more headroom.
+    ///
+    /// Live-reproduced during development: a real `~/Library/Application
+    /// Support/boxlite/images/disk-images/{digest}.ext4` built before this
+    /// budget existed (digest-only filename, no reserve) was reused as-is
+    /// once `reserve_bytes` shipped, and `GuestRootfsManager::
+    /// build_and_install` hit the identical "Could not allocate block in
+    /// ext2 filesystem" failure `reserve_bytes` exists to prevent — a cache
+    /// hit had bypassed the fix entirely. `GuestRootfsManager` already
+    /// solves the identical problem one layer up (`version_key` folds the
+    /// guest binary's id into its cache key so a rebuilt guest can't reuse a
+    /// stale rootfs); this pins the same fix at the `ImageDiskManager` layer.
+    #[test]
+    fn find_does_not_reuse_a_disk_cached_with_different_reserve_bytes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let small = ImageDiskManager::new(dir.path().to_path_buf(), dir.path().to_path_buf(), 0);
+        let large = ImageDiskManager::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            100 * 1024 * 1024,
+        );
+
+        // Simulate a disk an earlier build cached with less (or no) headroom.
+        let cached = small.disk_path("sha256:abc123");
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&cached, "small-reserve disk").unwrap();
+
+        assert!(
+            large.find("sha256:abc123").is_none(),
+            "a disk cached under a smaller reserve_bytes must not be returned \
+             to a caller that now needs more headroom"
+        );
     }
 
     #[test]
