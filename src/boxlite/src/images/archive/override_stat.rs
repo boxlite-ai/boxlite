@@ -145,12 +145,23 @@ impl OverrideStat {
     }
 
     /// Read override stat from xattr on the given path.
+    ///
+    /// `Ok(None)` means the xattr is genuinely absent. A present-but-malformed
+    /// value — invalid UTF-8, or valid UTF-8 that doesn't match `parse`'s
+    /// expected shape — is `Err`, same as any other unreadable-record case, so
+    /// callers can't conflate "nothing was ever recorded" with "a record exists
+    /// but couldn't be honored".
     pub fn read_xattr(path: &Path) -> std::io::Result<Option<Self>> {
         match xattr::get(path, CONTAINERS_OVERRIDE_XATTR)? {
             Some(value) => {
                 let s = std::str::from_utf8(&value)
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-                Ok(Self::parse(s))
+                Self::parse(s).map(Some).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("malformed {CONTAINERS_OVERRIDE_XATTR} value: {s:?}"),
+                    )
+                })
             }
             None => Ok(None),
         }
@@ -240,5 +251,35 @@ mod tests {
         assert!(OverrideStat::parse("").is_none());
         assert!(OverrideStat::parse("1000:1000").is_none());
         assert!(OverrideStat::parse("invalid:invalid:invalid:invalid").is_none());
+    }
+
+    /// `read_xattr` must not conflate "no ownership was ever recorded" with
+    /// "a record exists but is corrupt or in a format this build can't parse".
+    /// Every caller (the ext4 builder, `fix_rootfs_permissions`) treats `Ok(None)`
+    /// as "default to 0:0, nothing lost" — correct for a genuinely absent xattr,
+    /// wrong for a present-but-unparseable one, since that value is the *only*
+    /// copy of a layer's declared ownership (unprivileged extraction can't
+    /// `chown`). A non-UTF-8 value already surfaces as `Err` via the `str::from_utf8`
+    /// conversion; a valid-UTF-8-but-wrong-format value must too, for the same
+    /// reason — both indicate someone (or something) marked this file specially
+    /// and the record can't be honored.
+    #[test]
+    fn read_xattr_distinguishes_absent_from_malformed() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("f");
+        std::fs::write(&path, b"x").expect("write f");
+
+        assert!(
+            matches!(OverrideStat::read_xattr(&path), Ok(None)),
+            "genuinely absent xattr must read as Ok(None)"
+        );
+
+        // Valid UTF-8, wrong shape (missing the mode/type fields OverrideStat::parse requires).
+        xattr::set(&path, CONTAINERS_OVERRIDE_XATTR, b"1001:1001")
+            .expect("seed malformed xattr value");
+        assert!(
+            OverrideStat::read_xattr(&path).is_err(),
+            "a present-but-unparseable xattr must not read the same as absent"
+        );
     }
 }

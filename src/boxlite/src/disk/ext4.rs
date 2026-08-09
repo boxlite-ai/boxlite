@@ -428,6 +428,42 @@ pub fn create_ext4_from_dir(source: &Path, output_path: &Path) -> BoxliteResult<
     Ok(disk)
 }
 
+/// Check a `debugfs -w -f -` batch-script invocation actually succeeded,
+/// including per-command failures the process exit code alone can't see.
+///
+/// `debugfs -f -` logs a per-command failure (e.g. `sif` on a path it can't
+/// resolve, or `write` on a source file that vanished — both via `com_err`) to
+/// the same stderr stream as its one-line startup banner, then continues to
+/// the next command rather than aborting. So a clean exit code isn't proof
+/// every command landed; anything beyond that first banner line means a
+/// command failed silently. `what` names the operation for the error message
+/// (e.g. `"normalizing {path}"`, `"injecting {src} -> {dst}"`).
+fn check_debugfs_output(what: &str, output: &std::process::Output) -> BoxliteResult<()> {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(BoxliteError::Storage(format!(
+            "debugfs failed (exit {:?}) while {}: {}",
+            output.status.code(),
+            what,
+            stderr
+        )));
+    }
+
+    let after_banner = match output.stderr.iter().position(|&b| b == b'\n') {
+        Some(newline) => &output.stderr[newline + 1..],
+        None => &output.stderr[..],
+    };
+    if !after_banner.is_empty() {
+        return Err(BoxliteError::Storage(format!(
+            "debugfs reported unexpected output while {}: {}",
+            what,
+            String::from_utf8_lossy(after_banner)
+        )));
+    }
+
+    Ok(())
+}
+
 /// Normalize inode metadata in the ext4 image via debugfs: give every file the
 /// ownership its layer declared (0:0 when none was recorded), and restore the
 /// original mode on any entry whose owner-read bit was temporarily widened so
@@ -500,15 +536,7 @@ fn normalize_inodes_with_debugfs(
     // This is the only pass that writes the original 0000 modes back into the
     // image, so a failure must abort the build rather than yield an image with
     // wrong inode metadata.
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(BoxliteError::Storage(format!(
-            "debugfs inode normalization failed (exit {:?}) on {}: {}",
-            output.status.code(),
-            image_path.display(),
-            stderr
-        )));
-    }
+    check_debugfs_output(&format!("normalizing {}", image_path.display()), &output)?;
 
     tracing::info!(
         "Normalized {} inodes ({} without recorded ownership → 0:0, {} mode-restored) in {:?}",
@@ -564,15 +592,10 @@ pub fn inject_file_into_ext4(
         .wait_with_output()
         .map_err(|e| BoxliteError::Storage(format!("Failed to wait for debugfs: {}", e)))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(BoxliteError::Storage(format!(
-            "debugfs injection failed for {} -> {}: {}",
-            host_file.display(),
-            guest_path,
-            stderr
-        )));
-    }
+    check_debugfs_output(
+        &format!("injecting {} -> {}", host_file.display(), guest_path),
+        &output,
+    )?;
 
     tracing::debug!(
         "Injected {} into ext4 image at /{}",
@@ -626,6 +649,58 @@ fn build_inject_commands(host_file_str: &str, guest_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `sif` command targeting a path debugfs cannot resolve makes the whole
+    /// batch script exit 0 — e2fsprogs's `-f -` mode logs the failure via
+    /// `com_err` to the same stderr stream as the one-line startup banner, and
+    /// moves on to the next command rather than aborting. The doc comment on
+    /// `normalize_inodes_with_debugfs` states "a failure must abort the build",
+    /// but checking only `output.status.success()` cannot see this class of
+    /// failure at all.
+    ///
+    /// Verified empirically before writing this test: 20 failing `sif` commands
+    /// against a real image still produced `exit=0`, with each failure adding a
+    /// `"<path>: File not found by ext2_lookup"` line to stderr, after the fixed
+    /// one-line banner.
+    #[test]
+    fn normalize_inodes_with_debugfs_fails_on_unresolvable_path() {
+        if util::find_binary("mke2fs").is_err() || util::find_binary("debugfs").is_err() {
+            eprintln!("skipping: mke2fs/debugfs not found (run `make runtime:debug`)");
+            return;
+        }
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: root skips debugfs normalization entirely");
+            return;
+        }
+
+        let src_root = tempfile::tempdir().expect("source tempdir");
+        let src = src_root.path().join("rootfs");
+        std::fs::create_dir_all(&src).expect("mkdir rootfs");
+        std::fs::write(src.join("real"), b"x").expect("write real");
+
+        let out_root = tempfile::tempdir().expect("output tempdir");
+        let out = out_root.path().join("rootfs.ext4");
+        let _disk = create_ext4_from_dir(&src, &out).expect("ext4 build must succeed");
+
+        // A path that does not exist in the image just built.
+        let scan = SourceScan {
+            owners: vec![InodeOwner {
+                ext4_path: "/does-not-exist".to_string(),
+                uid: 1001,
+                gid: 1001,
+            }],
+            unrecorded: 0,
+            total_blocks: 0,
+            entry_count: 0,
+        };
+
+        let result = normalize_inodes_with_debugfs(&out, &scan, &[]);
+        assert!(
+            result.is_err(),
+            "an unresolvable sif target must fail the build, not silently succeed \
+             with the image left partially unnormalized"
+        );
+    }
 
     /// A tree larger than `MIN_DISK_SIZE_BYTES` must still build when it
     /// contains an unreadable (mode `0000`) directory.
@@ -1039,6 +1114,41 @@ mod tests {
 
         // Make the tree removable so TempDir can clean up.
         std::fs::set_permissions(&secret_dir, std::fs::Permissions::from_mode(0o700)).ok();
+    }
+
+    /// `inject_file_into_ext4` runs the same `debugfs -w -f -` batch-script
+    /// pattern as `normalize_inodes_with_debugfs`, and has the identical gap: a
+    /// failing `write` (e.g. the host source file vanished) makes every
+    /// subsequent `sif` on that never-created guest path fail too, but the
+    /// whole script still exits 0.
+    ///
+    /// Verified empirically before writing this test: `write` on a nonexistent
+    /// host path produces `"do_write_internal: No such file or directory..."` on
+    /// stderr, followed by three `"File not found by ext2_lookup"` lines (one per
+    /// cascading `sif`), with the process still exiting 0.
+    #[test]
+    fn inject_file_into_ext4_fails_on_missing_host_file() {
+        if util::find_binary("mke2fs").is_err() || util::find_binary("debugfs").is_err() {
+            eprintln!("skipping: mke2fs/debugfs not found (run `make runtime:debug`)");
+            return;
+        }
+
+        let src_root = tempfile::tempdir().expect("source tempdir");
+        let src = src_root.path().join("rootfs");
+        std::fs::create_dir_all(&src).expect("mkdir rootfs");
+        std::fs::write(src.join("real"), b"x").expect("write real");
+
+        let out_root = tempfile::tempdir().expect("output tempdir");
+        let out = out_root.path().join("rootfs.ext4");
+        let _disk = create_ext4_from_dir(&src, &out).expect("ext4 build must succeed");
+
+        let missing_host_file = src_root.path().join("does-not-exist-on-host");
+        let result = inject_file_into_ext4(&out, &missing_host_file, "injected");
+        assert!(
+            result.is_err(),
+            "a missing host source file must fail the injection, not silently \
+             succeed with the guest path never actually written"
+        );
     }
 
     #[test]

@@ -509,8 +509,11 @@ mod tests {
         fs::create_dir_all(&dex_dir).unwrap();
         fs::set_permissions(&dex_dir, fs::Permissions::from_mode(0o755)).unwrap();
 
-        // Encode through the production writer, exactly as the extractor does.
-        OverrideStat::new(1001, 1001, 0o755, OverrideFileType::Dir)
+        // Seed a stale mode (0o700) that differs from the real on-disk mode
+        // (0o755) so the assertion below can only pass if fix_rootfs_permissions
+        // actually re-reads the mode from disk — not if it just carries the old
+        // recorded value forward.
+        OverrideStat::new(1001, 1001, 0o700, OverrideFileType::Dir)
             .write_xattr(&dex_dir)
             .expect("seed override_stat");
 
