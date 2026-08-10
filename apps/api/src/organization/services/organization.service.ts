@@ -263,10 +263,25 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     await this.organizationRepository.save(organization)
   }
 
-  async unsuspend(organizationId: string): Promise<void> {
+  /**
+   * @param organizationId - The ID of the organization.
+   * @param ifReason - When given, unsuspend only if the organization is currently suspended
+   *   with exactly this reason. Omit for the unconditional admin unsuspend.
+   * @throws {NotFoundException} If the organization is not found.
+   * @throws {ConflictException} If ifReason is given and does not match the organization's
+   *   current suspension reason — e.g. an admin re-suspended it for a different reason in the
+   *   meantime. The organization is left untouched.
+   */
+  async unsuspend(organizationId: string, ifReason?: string): Promise<void> {
     const organization = await this.organizationRepository.findOne({ where: { id: organizationId } })
     if (!organization) {
       throw new NotFoundException(`Organization with ID ${organizationId} not found`)
+    }
+
+    if (ifReason !== undefined && organization.suspensionReason !== ifReason) {
+      throw new ConflictException(
+        `Organization suspension reason does not match: expected "${ifReason}", found "${organization.suspensionReason ?? 'not suspended'}"`,
+      )
     }
 
     organization.suspended = false

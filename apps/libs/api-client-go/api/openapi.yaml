@@ -542,9 +542,17 @@ paths:
         schema:
           type: string
         style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrganizationUnsuspension"
+        required: false
       responses:
         "204":
           description: Organization unsuspended successfully
+        "409":
+          description: Organization is not suspended with the given ifReason
       security:
       - bearer: []
       - oauth2:
@@ -4620,6 +4628,15 @@ components:
       required:
       - reason
       - until
+      type: object
+    OrganizationUnsuspension:
+      example:
+        ifReason: ifReason
+      properties:
+        ifReason:
+          description: Unsuspend only if the organization is currently suspended with
+            this exact reason
+          type: string
       type: object
     OtelConfig:
       example:

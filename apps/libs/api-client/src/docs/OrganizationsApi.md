@@ -1366,16 +1366,19 @@ void (empty response body)
 ```typescript
 import {
     OrganizationsApi,
-    Configuration
+    Configuration,
+    OrganizationUnsuspension
 } from './api';
 
 const configuration = new Configuration();
 const apiInstance = new OrganizationsApi(configuration);
 
 let organizationId: string; //Organization ID (default to undefined)
+let organizationUnsuspension: OrganizationUnsuspension; // (optional)
 
 const { status, data } = await apiInstance.unsuspendOrganization(
-    organizationId
+    organizationId,
+    organizationUnsuspension
 );
 ```
 
@@ -1383,6 +1386,7 @@ const { status, data } = await apiInstance.unsuspendOrganization(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
+| **organizationUnsuspension** | **OrganizationUnsuspension**|  | |
 | **organizationId** | [**string**] | Organization ID | defaults to undefined|
 
 
@@ -1396,7 +1400,7 @@ void (empty response body)
 
 ### HTTP request headers
 
- - **Content-Type**: Not defined
+ - **Content-Type**: application/json
  - **Accept**: Not defined
 
 
@@ -1404,6 +1408,7 @@ void (empty response body)
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**204** | Organization unsuspended successfully |  -  |
+|**409** | Organization is not suspended with the given ifReason |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

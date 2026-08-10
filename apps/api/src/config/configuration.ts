@@ -79,17 +79,24 @@ function requiredHttpUrl(value: string, name: string): string {
 }
 
 /**
- * Export of finalized usage periods to the Commerce service. Kept separate from
- * billingApiUrl on purpose, for the same reason requirePaymentMethod is:
- * pointing the dashboard at a billing service and shipping usage to it are
- * different decisions. `enabled` gates the outbox write as well as delivery, so
- * a stage that never exports accumulates no rows.
+ * Export of finalized usage periods, and snapshots of still-open ones, to the
+ * Commerce service. Kept separate from billingApiUrl on purpose, for the same
+ * reason requirePaymentMethod is: pointing the dashboard at a billing service
+ * and shipping usage to it are different decisions. `enabled` gates the outbox
+ * write as well as delivery, so a stage that never exports accumulates no rows.
+ *
+ * The allocation snapshot cron posts to the same destination with the same
+ * token (it is the same Commerce service, just a different internal route), so
+ * it shares this URL/token pair rather than getting its own — but it can be
+ * turned on independently of finalized-usage export, so either flag alone must
+ * be enough to require them.
  *
  * Exported so its rules can be tested directly rather than through an import
  * whose side effect is reading the process environment.
  */
 export function usageExportConfig(env: NodeJS.ProcessEnv = process.env) {
   const enabled = env.USAGE_EXPORT_ENABLED === 'true'
+  const allocationSnapshotEnabled = env.USAGE_ALLOCATION_SNAPSHOT_ENABLED === 'true'
   const rawUrl = env.USAGE_EXPORT_URL?.trim()
   const token = env.USAGE_EXPORT_TOKEN?.trim()
 
@@ -98,6 +105,7 @@ export function usageExportConfig(env: NodeJS.ProcessEnv = process.env) {
   // could legitimately have wanted.
   const settings = {
     enabled,
+    allocationSnapshotEnabled,
     url: rawUrl,
     token,
     batchSize: requiredCount(env.USAGE_EXPORT_BATCH_SIZE, 200, 'USAGE_EXPORT_BATCH_SIZE'),
@@ -106,10 +114,10 @@ export function usageExportConfig(env: NodeJS.ProcessEnv = process.env) {
   }
 
   // Everything below describes how delivery must behave, and delivery does not
-  // happen while export is off. A stage that leaves a placeholder destination
-  // or an unused timeout behind should keep booting: refusing would fail it for
-  // a setting nothing reads.
-  if (!enabled) {
+  // happen while both flags are off. A stage that leaves a placeholder
+  // destination or an unused timeout behind should keep booting: refusing
+  // would fail it for a setting nothing reads.
+  if (!enabled && !allocationSnapshotEnabled) {
     return settings
   }
 
@@ -118,16 +126,19 @@ export function usageExportConfig(env: NodeJS.ProcessEnv = process.env) {
   // delivery failure. A destination that is merely unusable, like "commerce",
   // fails exactly the same way, so the check has to be the URL's shape rather
   // than its length.
+  const enabledBy = enabled ? 'USAGE_EXPORT_ENABLED' : 'USAGE_ALLOCATION_SNAPSHOT_ENABLED'
   if (!rawUrl) {
-    throw new Error('USAGE_EXPORT_URL is required when USAGE_EXPORT_ENABLED is true')
+    throw new Error(`USAGE_EXPORT_URL is required when ${enabledBy} is true`)
   }
   if (!token) {
-    throw new Error('USAGE_EXPORT_TOKEN is required when USAGE_EXPORT_ENABLED is true')
+    throw new Error(`USAGE_EXPORT_TOKEN is required when ${enabledBy} is true`)
   }
   // A request still in flight when its rows become claimable again is delivered
   // twice — harmless, since the receiver deduplicates, but it doubles the load
-  // exactly when the receiver is already too slow to answer in time.
-  if (settings.timeoutMs >= USAGE_EXPORT_VISIBILITY_TIMEOUT_MS) {
+  // exactly when the receiver is already too slow to answer in time. Only the
+  // claim-based outbox export has this failure mode; the snapshot cron is a
+  // stateless full-replace push with no claim to double up.
+  if (enabled && settings.timeoutMs >= USAGE_EXPORT_VISIBILITY_TIMEOUT_MS) {
     throw new Error(
       `USAGE_EXPORT_TIMEOUT_MS must be below the ${USAGE_EXPORT_VISIBILITY_TIMEOUT_MS}ms claim visibility window, got "${env.USAGE_EXPORT_TIMEOUT_MS}"`,
     )
@@ -281,6 +292,9 @@ const configuration = {
   },
   healthCheck: {
     apiKey: process.env.HEALTH_CHECK_API_KEY,
+  },
+  billing: {
+    apiKey: process.env.BILLING_API_KEY,
   },
   organizationBoxDefaultLimitedNetworkEgress: process.env.ORGANIZATION_BOX_DEFAULT_LIMITED_NETWORK_EGRESS === 'true',
   pylonAppId: process.env.PYLON_APP_ID,

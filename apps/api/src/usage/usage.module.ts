@@ -15,6 +15,7 @@ import { BoxUsagePeriodArchive } from './entities/box-usage-period-archive.entit
 import { BoxUsageExportOutbox } from './entities/box-usage-export-outbox.entity'
 import { UsageExportOutboxService } from './services/usage-export-outbox.service'
 import { UsageExportPublisherService } from './services/usage-export-publisher.service'
+import { UsageAllocationSnapshotService } from './services/usage-allocation-snapshot.service'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
 import { Box } from '../box/entities/box.entity'
@@ -25,6 +26,7 @@ import { Box } from '../box/entities/box.entity'
     UsageService,
     UsageExportOutboxService,
     UsageExportPublisherService,
+    UsageAllocationSnapshotService,
     RedisLockProvider,
     BoxLookupCacheInvalidationService,
     {

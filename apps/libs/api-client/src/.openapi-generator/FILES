@@ -70,6 +70,7 @@ docs/OrganizationBoxDefaultLimitedNetworkEgress.md
 docs/OrganizationInvitation.md
 docs/OrganizationRole.md
 docs/OrganizationSuspension.md
+docs/OrganizationUnsuspension.md
 docs/OrganizationUser.md
 docs/OrganizationsApi.md
 docs/OtelConfig.md
@@ -162,6 +163,7 @@ models/organization-box-default-limited-network-egress.ts
 models/organization-invitation.ts
 models/organization-role.ts
 models/organization-suspension.ts
+models/organization-unsuspension.ts
 models/organization-user.ts
 models/organization.ts
 models/otel-config.ts

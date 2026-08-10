@@ -101,8 +101,11 @@ function sha256(value: string): string {
  * Never `String(value)`: that yields exponent notation for small magnitudes
  * ("1e-7"), and two spellings of one quantity would be two event identities for
  * one usage fact — which is how the same period gets billed twice.
+ *
+ * Exported so other usage-quantity encodings (e.g. the open-allocation
+ * snapshot) share this exact rule rather than growing their own.
  */
-function quantityString(value: number, field: string): string {
+export function quantityString(value: number, field: string): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new InvalidUsagePeriodError(`${field} must be a finite number`)
   }
@@ -123,14 +126,14 @@ function quantityString(value: number, field: string): string {
   return encoded
 }
 
-function timestampString(value: Date, field: string): string {
+export function timestampString(value: Date, field: string): string {
   if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
     throw new InvalidUsagePeriodError(`${field} must be a valid timestamp`)
   }
   return value.toISOString()
 }
 
-function identityString(value: string, field: string): string {
+export function identityString(value: string, field: string): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw new InvalidUsagePeriodError(`${field} must be a non-empty string`)
   }

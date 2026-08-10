@@ -3088,6 +3088,12 @@ type OrganizationsAPIUnsuspendOrganizationRequest struct {
 	ctx context.Context
 	ApiService OrganizationsAPI
 	organizationId string
+	organizationUnsuspension *OrganizationUnsuspension
+}
+
+func (r OrganizationsAPIUnsuspendOrganizationRequest) OrganizationUnsuspension(organizationUnsuspension OrganizationUnsuspension) OrganizationsAPIUnsuspendOrganizationRequest {
+	r.organizationUnsuspension = &organizationUnsuspension
+	return r
 }
 
 func (r OrganizationsAPIUnsuspendOrganizationRequest) Execute() (*http.Response, error) {
@@ -3130,7 +3136,7 @@ func (a *OrganizationsAPIService) UnsuspendOrganizationExecute(r OrganizationsAP
 	localVarFormParams := url.Values{}
 
 	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
+	localVarHTTPContentTypes := []string{"application/json"}
 
 	// set Content-Type header
 	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
@@ -3146,6 +3152,8 @@ func (a *OrganizationsAPIService) UnsuspendOrganizationExecute(r OrganizationsAP
 	if localVarHTTPHeaderAccept != "" {
 		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
 	}
+	// body params
+	localVarPostBody = r.organizationUnsuspension
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
 		return nil, err

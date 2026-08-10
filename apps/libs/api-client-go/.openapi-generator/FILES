@@ -60,6 +60,7 @@ model_organization_box_default_limited_network_egress.go
 model_organization_invitation.go
 model_organization_role.go
 model_organization_suspension.go
+model_organization_unsuspension.go
 model_organization_user.go
 model_otel_config.go
 model_paginated_audit_logs.go

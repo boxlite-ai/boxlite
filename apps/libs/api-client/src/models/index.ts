@@ -38,6 +38,7 @@ export * from './organization-box-default-limited-network-egress';
 export * from './organization-invitation';
 export * from './organization-role';
 export * from './organization-suspension';
+export * from './organization-unsuspension';
 export * from './organization-user';
 export * from './otel-config';
 export * from './paginated-audit-logs';

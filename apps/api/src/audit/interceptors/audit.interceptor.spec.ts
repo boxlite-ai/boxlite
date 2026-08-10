@@ -89,4 +89,49 @@ describe('AuditInterceptor', () => {
       statusCode: 200,
     })
   })
+
+  // A caller authenticated through a system API key (billing, proxy, ...) has
+  // no userId — only a role. AuditLog.actorId is NOT NULL with no default, so
+  // passing that undefined userId through crashed the insert and turned every
+  // audited action such a caller reached into a 500 before the handler ran.
+  it('audits an API-key-role caller (no userId) without crashing', async () => {
+    const auditContext: AuditContext = {
+      action: AuditAction.SUSPEND,
+      targetType: AuditTarget.ORGANIZATION,
+      targetIdFromRequest: (req) => req.params.organizationId,
+    }
+    const reflector = { get: jest.fn().mockReturnValue(auditContext) } as unknown as Reflector
+    const auditService = {
+      createLog: jest.fn().mockResolvedValue({ id: 'audit-2' }),
+      updateLog: jest.fn().mockResolvedValue({ id: 'audit-2' }),
+    }
+    const configService = { get: jest.fn() }
+    const interceptor = new AuditInterceptor(reflector, auditService as any, configService as any)
+    const request = {
+      url: '/organizations/org-1/suspend',
+      ip: '127.0.0.1',
+      params: { organizationId: 'org-1' },
+      user: { role: 'billing' },
+      get: jest.fn().mockReturnValue(undefined),
+    }
+    const response = { statusCode: 204 }
+    const executionContext = {
+      getHandler: jest.fn(),
+      switchToHttp: () => ({
+        getRequest: () => request,
+        getResponse: () => response,
+      }),
+    } as unknown as ExecutionContext
+    const next = { handle: jest.fn().mockReturnValue(of(undefined)) } as unknown as CallHandler
+
+    await expect(firstValueFrom(interceptor.intercept(executionContext, next))).resolves.toBeUndefined()
+
+    expect(auditService.createLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: 'api-role:billing',
+        actorEmail: '',
+        organizationId: undefined,
+      }),
+    )
+  })
 })

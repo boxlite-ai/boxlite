@@ -42,6 +42,8 @@ import type { OrganizationRole } from '../models';
 // @ts-ignore
 import type { OrganizationSuspension } from '../models';
 // @ts-ignore
+import type { OrganizationUnsuspension } from '../models';
+// @ts-ignore
 import type { OrganizationUser } from '../models';
 // @ts-ignore
 import type { OtelConfig } from '../models';
@@ -1137,10 +1139,11 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
          * 
          * @summary Unsuspend organization
          * @param {string} organizationId Organization ID
+         * @param {OrganizationUnsuspension} [organizationUnsuspension] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        unsuspendOrganization: async (organizationId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        unsuspendOrganization: async (organizationId: string, organizationUnsuspension?: OrganizationUnsuspension, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'organizationId' is not null or undefined
             assertParamExists('unsuspendOrganization', 'organizationId', organizationId)
             const localVarPath = `/organizations/{organizationId}/unsuspend`
@@ -1162,10 +1165,12 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
 
             // authentication oauth2 required
 
+            localVarHeaderParameter['Content-Type'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(organizationUnsuspension, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -1857,11 +1862,12 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
          * 
          * @summary Unsuspend organization
          * @param {string} organizationId Organization ID
+         * @param {OrganizationUnsuspension} [organizationUnsuspension] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async unsuspendOrganization(organizationId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.unsuspendOrganization(organizationId, options);
+        async unsuspendOrganization(organizationId: string, organizationUnsuspension?: OrganizationUnsuspension, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.unsuspendOrganization(organizationId, organizationUnsuspension, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.unsuspendOrganization']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -2249,11 +2255,12 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
          * 
          * @summary Unsuspend organization
          * @param {string} organizationId Organization ID
+         * @param {OrganizationUnsuspension} [organizationUnsuspension] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        unsuspendOrganization(organizationId: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.unsuspendOrganization(organizationId, options).then((request) => request(axios, basePath));
+        unsuspendOrganization(organizationId: string, organizationUnsuspension?: OrganizationUnsuspension, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.unsuspendOrganization(organizationId, organizationUnsuspension, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -2641,11 +2648,12 @@ export class OrganizationsApi extends BaseAPI {
      * 
      * @summary Unsuspend organization
      * @param {string} organizationId Organization ID
+     * @param {OrganizationUnsuspension} [organizationUnsuspension] 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public unsuspendOrganization(organizationId: string, options?: RawAxiosRequestConfig) {
-        return OrganizationsApiFp(this.configuration).unsuspendOrganization(organizationId, options).then((request) => request(this.axios, this.basePath));
+    public unsuspendOrganization(organizationId: string, organizationUnsuspension?: OrganizationUnsuspension, options?: RawAxiosRequestConfig) {
+        return OrganizationsApiFp(this.configuration).unsuspendOrganization(organizationId, organizationUnsuspension, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

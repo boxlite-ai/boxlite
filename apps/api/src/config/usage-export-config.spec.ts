@@ -14,6 +14,7 @@ describe('usageExportConfig', () => {
   it('defaults to disabled and demands nothing', () => {
     expect(usageExportConfig({})).toEqual({
       enabled: false,
+      allocationSnapshotEnabled: false,
       url: undefined,
       token: undefined,
       batchSize: 200,
@@ -171,6 +172,53 @@ describe('usageExportConfig', () => {
   // it on its own.
   it('ships a default timeout inside the window', () => {
     expect(usageExportConfig(enabled()).timeoutMs).toBeLessThan(USAGE_EXPORT_VISIBILITY_TIMEOUT_MS)
+  })
+})
+
+// The allocation snapshot cron posts to the same destination and token as
+// finalized-usage export, so it demands the same two settings — but it can be
+// turned on while export itself stays off, and each flag alone must be enough
+// to require them.
+describe('usageExportConfig when only the allocation snapshot is enabled', () => {
+  const snapshotOnly = (overrides: Record<string, string> = {}) => ({
+    USAGE_EXPORT_ENABLED: 'false',
+    USAGE_ALLOCATION_SNAPSHOT_ENABLED: 'true',
+    ...overrides,
+  })
+
+  it.each([
+    ['no URL', snapshotOnly({ USAGE_EXPORT_TOKEN: 'tok' }), /USAGE_EXPORT_URL is required/],
+    ['no token', snapshotOnly({ USAGE_EXPORT_URL: 'https://commerce.test' }), /USAGE_EXPORT_TOKEN is required/],
+  ])('refuses to start with %s', (_case, environment, expected) => {
+    expect(() => usageExportConfig(environment)).toThrow(expected)
+  })
+
+  it('accepts a fully configured destination', () => {
+    expect(
+      usageExportConfig(snapshotOnly({ USAGE_EXPORT_URL: 'https://commerce.test', USAGE_EXPORT_TOKEN: 'tok' })),
+    ).toEqual(
+      expect.objectContaining({
+        enabled: false,
+        allocationSnapshotEnabled: true,
+        url: 'https://commerce.test',
+        token: 'tok',
+      }),
+    )
+  })
+
+  // The claim-visibility invariant exists only for the claim-based outbox
+  // export; the snapshot cron is a stateless full-replace push with no claim to
+  // double up, so its own timeout has nothing to violate.
+  it('does not enforce the export claim-visibility timeout window', () => {
+    expect(() =>
+      usageExportConfig(
+        snapshotOnly({
+          USAGE_EXPORT_URL: 'https://commerce.test',
+          USAGE_EXPORT_TOKEN: 'tok',
+          USAGE_EXPORT_TIMEOUT_MS: String(USAGE_EXPORT_VISIBILITY_TIMEOUT_MS),
+        }),
+      ),
+    ).not.toThrow()
   })
 })
 

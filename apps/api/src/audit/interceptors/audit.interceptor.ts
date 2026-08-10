@@ -22,12 +22,12 @@ import { AUDIT_CONTEXT_KEY, AuditContext, AuditTargetId } from '../decorators/au
 import { AuditLog, AuditLogMetadata } from '../entities/audit-log.entity'
 import { AuditAction } from '../enums/audit-action.enum'
 import { AuditService } from '../services/audit.service'
-import { AuthContext } from '../../common/interfaces/auth-context.interface'
+import { AuthContextType, isAuthContext } from '../../common/interfaces/auth-context.interface'
 import { CustomHeaders } from '../../common/constants/header.constants'
 import { TypedConfigService } from '../../config/typed-config.service'
 
 type RequestWithUser = Request & {
-  user?: AuthContext
+  user?: AuthContextType
 }
 
 @Injectable()
@@ -76,10 +76,11 @@ export class AuditInterceptor implements NestInterceptor {
     observer: Subscriber<any>,
   ): Promise<void> {
     try {
+      const actor = this.resolveActor(request.user)
       const auditLog = await this.auditService.createLog({
-        actorId: request.user.userId,
-        actorEmail: request.user.email,
-        organizationId: request.user.organizationId,
+        actorId: actor.actorId,
+        actorEmail: actor.actorEmail,
+        organizationId: actor.organizationId,
         action: auditContext.action,
         targetType: auditContext.targetType,
         targetId: this.resolveTargetId(auditContext, request),
@@ -114,7 +115,22 @@ export class AuditInterceptor implements NestInterceptor {
   }
 
   private resolveOrganizationId(request: RequestWithUser, result?: any): string | null {
-    return result?.organizationId || request.user.organizationId
+    return result?.organizationId || this.resolveActor(request.user).organizationId || null
+  }
+
+  /**
+   * A caller authenticated through a system API key (proxy, billing, otel
+   * collector, ...) has no user identity to audit against — only its role.
+   * AuditLog.actorId is NOT NULL with no default, so falling through to
+   * `user.userId` for such a caller fails the insert and turns an audited
+   * action into a 500 before the handler ever runs. The role name keeps the
+   * caller distinguishable in the log instead.
+   */
+  private resolveActor(user: AuthContextType): { actorId: string; actorEmail: string; organizationId?: string } {
+    if (isAuthContext(user)) {
+      return { actorId: user.userId, actorEmail: user.email, organizationId: user.organizationId }
+    }
+    return { actorId: `api-role:${user.role}`, actorEmail: '' }
   }
 
   /**
