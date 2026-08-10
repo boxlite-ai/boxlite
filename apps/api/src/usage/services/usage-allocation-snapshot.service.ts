@@ -22,6 +22,18 @@ import { OpenAllocationDto, toOpenAllocationDto } from '../open-allocation'
 const SNAPSHOT_LOCK_KEY = 'snapshot-open-allocations'
 
 /**
+ * Safety margin the lock lease keeps over the configured POST timeout.
+ *
+ * The lease has to outlive the slowest possible push, or its Redis key can
+ * expire while a request is still in flight and let a second replica start a
+ * concurrent tick — the two pushes can then land out of order, replacing a
+ * newer asOf with an older one. Deriving the lease from the actual configured
+ * timeout (instead of a bare number) keeps that margin true even if the
+ * timeout is ever raised.
+ */
+const SNAPSHOT_LOCK_MARGIN_MS = 30_000
+
+/**
  * Pushes every currently open (not yet closed) box usage allocation to
  * Commerce as one full replace-all snapshot, on a fixed interval.
  *
@@ -59,7 +71,8 @@ export class UsageAllocationSnapshotService implements TrackableJobExecutions, O
     if (!this.configService.get('usageExport.allocationSnapshotEnabled')) {
       return
     }
-    if (!(await this.redisLockProvider.lock(SNAPSHOT_LOCK_KEY, 60))) {
+    const lockTtlSeconds = Math.ceil((this.configService.get('usageExport.timeoutMs') + SNAPSHOT_LOCK_MARGIN_MS) / 1000)
+    if (!(await this.redisLockProvider.lock(SNAPSHOT_LOCK_KEY, lockTtlSeconds))) {
       return
     }
 

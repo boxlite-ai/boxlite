@@ -80,6 +80,23 @@ describe('UsageAllocationSnapshotService.snapshotOpenAllocations', () => {
     expect(post).not.toHaveBeenCalled()
   })
 
+  // The lease must outlive the slowest possible push, or its Redis key can expire mid-flight
+  // and let a second replica start a concurrent tick — landing an older asOf after a newer one.
+  it.each([
+    [10_000, 40],
+    [45_000, 75],
+  ])(
+    'locks for the configured POST timeout plus a safety margin (timeout %ims -> %is)',
+    async (timeoutMs, expectedTtl) => {
+      const { service, redisLockProvider } = makeService([openPeriod()], { 'usageExport.timeoutMs': timeoutMs })
+      post.mockResolvedValue({ status: 200 })
+
+      await service.snapshotOpenAllocations()
+
+      expect(redisLockProvider.lock).toHaveBeenCalledWith('snapshot-open-allocations', expectedTtl)
+    },
+  )
+
   it('yields to whichever replica holds the lock', async () => {
     const { service, boxUsagePeriodRepository, redisLockProvider } = makeService([openPeriod()])
     redisLockProvider.lock.mockResolvedValue(false)

@@ -74,6 +74,18 @@ describe('OrganizationService.unsuspend', () => {
     expect(organizationRepository.save).not.toHaveBeenCalled()
   })
 
+  // suspensionReason is free text an admin or support agent wrote — a caller probing with
+  // guessed ifReason values must not be able to read it back out of the error.
+  it('does not leak the stored suspension reason into the 409 message', async () => {
+    const { service } = makeService(
+      organization({ suspended: true, suspensionReason: 'flagged for suspected abuse by support' }),
+    )
+
+    await expect(service.unsuspend('org-1', 'credits depleted')).rejects.toMatchObject({
+      message: expect.not.stringContaining('flagged for suspected abuse by support'),
+    })
+  })
+
   it('leaves the organization untouched and throws 409 when ifReason is given but the org is not suspended', async () => {
     const { service, organizationRepository } = makeService(organization())
 
@@ -85,5 +97,33 @@ describe('OrganizationService.unsuspend', () => {
     const { service } = makeService(null)
 
     await expect(service.unsuspend('missing')).rejects.toThrow(NotFoundException)
+  })
+})
+
+describe('OrganizationService.assertOrganizationIsNotSuspended', () => {
+  it('does not throw for an active organization', () => {
+    const { service } = makeService(organization())
+
+    expect(() => service.assertOrganizationIsNotSuspended(organization())).not.toThrow()
+  })
+
+  // suspensionReason is free text an admin or support agent wrote and may describe a case
+  // (e.g. a fraud investigation) in more detail than "you are suspended" should disclose.
+  it('does not leak the stored suspension reason to the suspended organization itself', () => {
+    const { service } = makeService(organization())
+    const suspended = organization({ suspended: true, suspensionReason: 'flagged for suspected abuse by support' })
+
+    expect(() => service.assertOrganizationIsNotSuspended(suspended)).toThrow(
+      expect.objectContaining({
+        message: expect.not.stringContaining('flagged for suspected abuse by support'),
+      }),
+    )
+  })
+
+  it('does not throw once a temporary suspension has expired', () => {
+    const { service } = makeService(organization())
+    const expired = organization({ suspended: true, suspendedUntil: new Date(Date.now() - 1000) })
+
+    expect(() => service.assertOrganizationIsNotSuspended(expired)).not.toThrow()
   })
 })

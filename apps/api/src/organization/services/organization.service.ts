@@ -278,10 +278,10 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       throw new NotFoundException(`Organization with ID ${organizationId} not found`)
     }
 
+    // suspensionReason is free text an admin or support agent wrote, so it is never echoed
+    // back into the response — only that the caller's expectation didn't hold.
     if (ifReason !== undefined && organization.suspensionReason !== ifReason) {
-      throw new ConflictException(
-        `Organization suspension reason does not match: expected "${ifReason}", found "${organization.suspensionReason ?? 'not suspended'}"`,
-      )
+      throw new ConflictException('Organization suspension reason does not match the expected reason')
     }
 
     organization.suspended = false
@@ -695,12 +695,10 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       return
     }
 
+    // suspensionReason is free text an admin or support agent wrote and is never echoed back —
+    // it can carry details about a case (e.g. a fraud investigation) beyond "you are suspended".
     if (organization.suspendedUntil ? organization.suspendedUntil > new Date() : true) {
-      if (organization.suspensionReason) {
-        throw new ForbiddenException(`Organization is suspended: ${organization.suspensionReason}`)
-      } else {
-        throw new ForbiddenException('Organization is suspended')
-      }
+      throw new ForbiddenException('Organization is suspended')
     }
   }
 }
