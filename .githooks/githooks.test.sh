@@ -101,9 +101,14 @@ write_ref_updates_file() {  # repo remote local_ref remote_ref output_file
 # selection algorithm is exactly how it went stale before (see new_ref_base_sha's
 # own history) — a fix applied to only one copy leaves the other asserting
 # against a base the real hook no longer picks.
+# shellcheck disable=SC2016  # sed scripts are literal; expansion must not happen here.
 eval "$(sed -n '/^new_ref_base_sha() {/,/^}/p' "$REPO_ROOT/.githooks/pre-push" | \
   sed -e 's|\${repo_root}|${repo}|g' -e 's|\$repo_root|\$repo|g' \
       -e 's|\${remote_name}|${remote}|g' -e 's|\$remote_name|\$remote|g')"
+declare -F new_ref_base_sha >/dev/null || {
+  printf 'FATAL: could not extract new_ref_base_sha from .githooks/pre-push\n' >&2
+  exit 1
+}
 
 pushed_diff_hash_for() {  # repo remote ref_updates_file
   local repo="$1" remote="$2" ref_updates_file="$3"
@@ -525,12 +530,17 @@ rm -rf "$R" "$B"
 # the fallback scan specifically, not the default-branch fast path.
 R="$(setup)"
 B="$(mktemp -d)"; git init -q --bare "$B"; git -C "$R" remote add origin "$B"
+# Outside $R, not "$R/err.txt": the checkouts below cross branches after a
+# `git add -A`, which would otherwise sweep a same-named file into history
+# and then dirty the working tree on the next redirect — the exact hazard
+# the "moved_on_err" test below documents.
+aaa_zzz_err="$(mktemp)"
 git -C "$R" checkout -qb aaa-early
-( cd "$R" && env -i PATH="$PATH" HOME="$HOME" git push -q origin aaa-early:aaa-early >/dev/null 2>"$R/err.txt" )
+( cd "$R" && env -i PATH="$PATH" HOME="$HOME" git push -q origin aaa-early:aaa-early >/dev/null 2>"$aaa_zzz_err" )
 git -C "$R" checkout -qb zzz-late
 printf 'late 1\n' >> "$R/f"; git -C "$R" add -A; git -C "$R" commit -qm 'test(hooks): zzz-late c1'
 printf 'late 2\n' >> "$R/f"; git -C "$R" add -A; git -C "$R" commit -qm 'test(hooks): zzz-late c2'
-( cd "$R" && env -i PATH="$PATH" HOME="$HOME" git push -q origin zzz-late:zzz-late >/dev/null 2>"$R/err.txt" )
+( cd "$R" && env -i PATH="$PATH" HOME="$HOME" git push -q origin zzz-late:zzz-late >/dev/null 2>"$aaa_zzz_err" )
 git -C "$R" fetch -q origin
 git -C "$R" checkout -qb closest-base-test zzz-late
 printf 'newest\n' >> "$R/f"; git -C "$R" add -A; git -C "$R" commit -qm 'test(hooks): closest base new commit'
@@ -570,7 +580,7 @@ grep -q 'commit-subject .*closest base new commit' "$R/closest-base-prompt.txt" 
   && ! grep -q 'commit-subject .*zzz-late c2' "$R/closest-base-prompt.txt" \
   && closest_base_context=yes || closest_base_context=no
 check_eq "new-ref base picks closest ancestor, not first in ref order" "$closest_base_context" "yes"
-rm -rf "$R" "$B"
+rm -rf "$R" "$B" "$aaa_zzz_err"
 
 # new_ref_base_sha must use merge-base, not is-ancestor: by the time a branch
 # is pushed, the default branch has often moved on with unrelated commits, so

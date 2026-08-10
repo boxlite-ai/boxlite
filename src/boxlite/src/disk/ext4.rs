@@ -161,24 +161,27 @@ impl SourceScan {
     /// header's uid/gid in the `override_stat` xattr and `mke2fs -d` records the
     /// *host* uid instead. Entries with no record — the guest rootfs, injected
     /// binaries — stay 0:0, which is what those paths require.
-    fn record_owner(&mut self, source_root: &Path, path: &Path) {
+    ///
+    /// A *present-but-malformed* record is different: it is the only copy of
+    /// that file's real ownership, so it must abort the build rather than
+    /// silently default to 0:0 like a genuinely absent one — see
+    /// `OverrideStat::read_xattr`'s doc comment for why `Ok(None)` and `Err`
+    /// are deliberately distinct.
+    fn record_owner(&mut self, source_root: &Path, path: &Path) -> BoxliteResult<()> {
         let rel = path.strip_prefix(source_root).unwrap_or(path);
         if rel.as_os_str().is_empty() {
-            return; // the source root maps to the image root
+            return Ok(()); // the source root maps to the image root
         }
 
-        let (uid, gid) = match OverrideStat::read_xattr(path) {
-            Ok(Some(stat)) => (stat.uid, stat.gid),
-            Ok(None) => {
-                self.unrecorded += 1;
-                (0, 0)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to read ownership xattr on {}, defaulting to 0:0: {}",
-                    path.display(),
-                    e
-                );
+        let (uid, gid) = match OverrideStat::read_xattr(path).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to read ownership xattr on {}: {}",
+                path.display(),
+                e
+            ))
+        })? {
+            Some(stat) => (stat.uid, stat.gid),
+            None => {
                 self.unrecorded += 1;
                 (0, 0)
             }
@@ -190,6 +193,7 @@ impl SourceScan {
             uid,
             gid,
         });
+        Ok(())
     }
 }
 
@@ -243,7 +247,7 @@ fn scan_dir_recursive(
         record_and_widen(source_root, dir, dir_mode, dir_mode | 0o500, widened)?;
     }
     scan.account(&dir_meta);
-    scan.record_owner(source_root, dir);
+    scan.record_owner(source_root, dir)?;
 
     let entries = std::fs::read_dir(dir).map_err(|e| {
         BoxliteError::Storage(format!("Failed to read dir {}: {}", dir.display(), e))
@@ -274,7 +278,7 @@ fn scan_dir_recursive(
             )?;
         }
         scan.account(&meta);
-        scan.record_owner(source_root, &path);
+        scan.record_owner(source_root, &path)?;
     }
     Ok(())
 }
@@ -1016,6 +1020,41 @@ mod tests {
             image_owner(&out, "/etc/passwd"),
             ("0".to_string(), "0".to_string()),
             "an entry with no recorded ownership must still normalize to 0:0"
+        );
+    }
+
+    /// A malformed `override_stat` xattr must abort the scan, not silently
+    /// default to 0:0.
+    ///
+    /// `OverrideStat::read_xattr` distinguishes a genuinely absent xattr
+    /// (`Ok(None)`, correctly defaults to 0:0) from a present-but-unparseable
+    /// one (`Err`) — but `record_owner` treated both the same, logging a
+    /// warning and defaulting to 0:0 either way. Unprivileged extraction
+    /// can't `chown`, so a layer-declared xattr is the *only* copy of that
+    /// file's real ownership; silently discarding a corrupt one is exactly
+    /// the silent-failure class this file's `check_debugfs_output` already
+    /// guards against one layer down — the scan itself must not repeat it.
+    #[test]
+    fn scan_source_tree_fails_on_malformed_override_stat() {
+        // Matches OverrideStat::CONTAINERS_OVERRIDE_XATTR (private to
+        // images::archive::override_stat) — the containers/storage xattr name,
+        // not expected to ever change.
+        const CONTAINERS_OVERRIDE_XATTR: &str = "user.containers.override_stat";
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let src = root.path().join("rootfs");
+        std::fs::create_dir_all(&src).expect("mkdir rootfs");
+        let f = src.join("file");
+        std::fs::write(&f, b"x").expect("write file");
+        xattr::set(&f, CONTAINERS_OVERRIDE_XATTR, b"not-a-valid-record")
+            .expect("seed malformed xattr");
+
+        let mut widened = Vec::new();
+        let result = scan_source_tree(&src, &mut widened);
+        assert!(
+            result.is_err(),
+            "a malformed override_stat xattr is the only copy of a layer's \
+             declared ownership; the scan must fail, not silently default to 0:0"
         );
     }
 
