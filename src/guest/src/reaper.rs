@@ -112,11 +112,6 @@ impl ExitClaim {
     pub(crate) fn slot(&self) -> ExitSlot {
         self.slot.clone()
     }
-
-    #[cfg(test)]
-    pub(crate) fn pid(&self) -> Pid {
-        self.pid
-    }
 }
 
 impl ExitSlot {
@@ -487,6 +482,7 @@ mod tests {
     //! the race handling — without the OS-level `waitpid(-1)`/SIGCHLD loop. We
     //! drive `deliver()` directly to stand in for what `drain()` would do.
 
+    use std::os::unix::process::ExitStatusExt;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -1164,13 +1160,27 @@ mod tests {
 
     #[tokio::test]
     async fn signal_leader_refuses_a_settled_claim() {
+        let _test_guard = super::reap_test_guard().await;
         let r = bare();
-        let claim = r.register_claim(pid(2_002), Instant::now()).await;
-        r.deliver(pid(2_002), ExitStatus::Code(0));
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let leader = Pid::from_raw(child.id() as i32);
+        let claim = r.register_claim(leader, Instant::now()).await;
+        r.deliver(leader, ExitStatus::Code(0));
 
         assert!(!r
-            .signal_leader_if_live(&claim, claim.pid(), Signal::SIGTERM)
+            .signal_leader_if_live(&claim, leader, Signal::SIGTERM)
             .expect("a settled claim must be rejected before signaling"));
+        assert!(
+            child.try_wait().expect("check child status").is_none(),
+            "a settled claim must not reach a process still holding the pid"
+        );
+
+        child.kill().expect("kill test child");
+        let _fence = reap_fence();
+        child.wait().expect("wait for test child");
     }
 
     #[tokio::test]
@@ -1189,6 +1199,10 @@ mod tests {
             .expect("signal the live leader"));
         let _fence = reap_fence();
         let status = child.wait().expect("wait for terminated child");
-        assert_eq!(status.code(), None);
+        assert_eq!(
+            status.signal(),
+            Some(Signal::SIGTERM as i32),
+            "the leader must die from the signal this test sent"
+        );
     }
 }
