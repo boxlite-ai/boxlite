@@ -461,14 +461,17 @@ impl ContainerService for GuestServer {
                                 }
                             });
                         });
-                        let exit = crate::reaper::REAPER
+                        let reaper = crate::reaper::REAPER
                             .get()
-                            .expect("reaper installed at startup")
+                            .expect("reaper installed at startup");
+                        let claim = reaper
                             .on_exit(handle.pid(), std::time::Instant::now(), action)
                             .await;
-                        let state = crate::service::exec::state::ExecutionState::new_init_session(
+                        let exit = claim.slot();
+                        let state = crate::service::exec::state::ExecutionState::new_init_session_with_signal_target(
                             handle,
-                            exit.clone(),
+                            std::sync::Arc::clone(reaper),
+                            claim,
                         );
                         self.registry
                             .register(init_execution_id.clone(), state)

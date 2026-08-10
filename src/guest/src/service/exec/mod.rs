@@ -320,25 +320,32 @@ async fn spawn_execution(
     let (child, container_ref) =
         spawn_with_executor(server, &req, &execution_id, ssh_workload).await?;
 
-    let pid = child.pid().as_raw() as u32;
+    let leader_pid = child.pid();
+    let pid = leader_pid.as_raw() as u32;
 
     // Claim this pid's exit slot. A detached exec sends no Wait until its caller
     // chooses to, so the slot must exist from the spawn rather than from the
     // wait, or the exit would age out as an ownerless stray in between.
-    let exit = crate::reaper::REAPER
+    let reaper = crate::reaper::REAPER
         .get()
-        .expect("reaper installed at startup")
-        .register(child.pid(), spawned_at)
-        .await;
+        .expect("reaper installed at startup");
+    let claim = reaper.register_claim(leader_pid, spawned_at).await;
 
     // Step 2: Create execution state and register
     // If running inside a container, pass the init health checker for death detection
     let state = match container_ref {
         Some(container) => {
             let health: std::sync::Arc<tokio::sync::Mutex<dyn InitHealthCheck>> = container;
-            state::ExecutionState::new_with_init_health(child, health, exit)
+            state::ExecutionState::new_claimed_with_init_health(
+                child,
+                health,
+                std::sync::Arc::clone(reaper),
+                claim.clone(),
+            )
         }
-        None => state::ExecutionState::new(child, exit),
+        None => {
+            state::ExecutionState::new_claimed(child, std::sync::Arc::clone(reaper), claim.clone())
+        }
     };
     server
         .registry
@@ -348,7 +355,7 @@ async fn spawn_execution(
     // Step 3: Start timeout watcher (if requested)
     if req.timeout_ms > 0 {
         timeout::start_timeout_watcher(
-            state,
+            timeout::TimeoutTarget::new(std::sync::Arc::clone(reaper), claim, leader_pid),
             execution_id.clone(),
             std::time::Duration::from_millis(req.timeout_ms),
         );

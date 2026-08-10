@@ -4,7 +4,7 @@
 //! to execution metadata, I/O channels, and completion status.
 
 use crate::service::exec::state::ExecutionState;
-use nix::sys::signal::{kill, Signal};
+use nix::sys::signal::Signal;
 
 /// How long [`ExecutionRegistry::shutdown_all`] gives execs to die between
 /// SIGTERM and SIGKILL.
@@ -13,7 +13,6 @@ use nix::sys::signal::{kill, Signal};
 /// host-driven Shutdown RPC and the guest's own power-off when the main
 /// command exits — drain the same execs and should wait the same amount.
 pub(crate) const SHUTDOWN_TIMEOUT_MS: u64 = 1000;
-use nix::unistd::Pid;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -72,25 +71,28 @@ impl ExecutionRegistry {
     ///
     /// Sends SIGTERM first, waits for exit with timeout, then SIGKILL if needed.
     pub async fn shutdown_all(&self, timeout_ms: u64) {
-        // Step 1: Collect all PIDs and send SIGTERM
-        let mut pids_to_wait: Vec<(String, i32)> = Vec::new();
+        // Step 1: SIGTERM every execution whose claim is still live
+        let mut states_to_wait = Vec::new();
 
-        {
-            let executions = self.executions.lock().await;
-            for (exec_id, state) in executions.iter() {
-                if let Some(pid) = state.get_pid().await {
-                    let pid_i32 = pid as i32;
-                    // Check if process is still alive (signal 0 doesn't send anything)
-                    if kill(Pid::from_raw(pid_i32), None).is_ok() {
-                        info!(exec_id = %exec_id, pid = pid, "Sending SIGTERM to execution");
-                        let _ = kill(Pid::from_raw(pid_i32), Signal::SIGTERM);
-                        pids_to_wait.push((exec_id.clone(), pid_i32));
-                    }
+        let states: Vec<_> = self
+            .executions
+            .lock()
+            .await
+            .iter()
+            .map(|(exec_id, state)| (exec_id.clone(), state.clone()))
+            .collect();
+        for (exec_id, state) in states {
+            match state.signal_owned_leader_if_live(Signal::SIGTERM) {
+                Ok(true) => {
+                    info!(exec_id = %exec_id, "Sending SIGTERM to execution");
+                    states_to_wait.push((exec_id, state));
                 }
+                Ok(false) => {}
+                Err(error) => warn!(exec_id = %exec_id, %error, "shutdown SIGTERM failed"),
             }
         }
 
-        if pids_to_wait.is_empty() {
+        if states_to_wait.is_empty() {
             info!("No running executions to shutdown");
             return;
         }
@@ -100,26 +102,22 @@ impl ExecutionRegistry {
         while start.elapsed().as_millis() < timeout_ms as u128 {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-            // Check which processes are still running
-            let still_running: Vec<_> = pids_to_wait
-                .iter()
-                .filter(|(_, pid)| kill(Pid::from_raw(*pid), None).is_ok())
-                .cloned()
-                .collect();
+            states_to_wait.retain(|(_, state)| state.owned_leader_is_live());
 
-            if still_running.is_empty() {
+            if states_to_wait.is_empty() {
                 info!("All executions exited gracefully");
                 return;
             }
-
-            pids_to_wait = still_running;
         }
 
         // Step 3: SIGKILL remaining executions
-        for (exec_id, pid) in &pids_to_wait {
-            if kill(Pid::from_raw(*pid), None).is_ok() {
-                warn!(exec_id = %exec_id, pid = pid, "Execution didn't exit gracefully, sending SIGKILL");
-                let _ = kill(Pid::from_raw(*pid), Signal::SIGKILL);
+        for (exec_id, state) in &states_to_wait {
+            match state.signal_owned_leader_if_live(Signal::SIGKILL) {
+                Ok(true) => {
+                    warn!(exec_id = %exec_id, "Execution didn't exit gracefully, sending SIGKILL");
+                }
+                Ok(false) => {}
+                Err(error) => warn!(exec_id = %exec_id, %error, "shutdown SIGKILL failed"),
             }
         }
     }
@@ -142,7 +140,7 @@ mod release_tests {
         if is_init {
             ExecutionState::new_init_session(handle, exit)
         } else {
-            ExecutionState::new(handle, exit)
+            ExecutionState::new_for_test(handle, exit)
         }
     }
 
@@ -187,5 +185,41 @@ mod release_tests {
         }
 
         assert!(registry.exists("retained").await);
+    }
+
+    #[tokio::test]
+    async fn shutdown_does_not_signal_an_unclaimed_execution() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let _test_guard = crate::reaper::reap_test_guard().await;
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id() as i32;
+        let registry = ExecutionRegistry::new();
+        registry
+            .register("unclaimed".into(), settled_state(pid, false))
+            .await;
+
+        registry.shutdown_all(0).await;
+
+        assert!(
+            child.try_wait().expect("check child status").is_none(),
+            "registry must not signal a state without an exit claim"
+        );
+        child.kill().expect("kill test child");
+        let status = tokio::task::spawn_blocking(move || {
+            let _fence = crate::reaper::reap_fence();
+            child.wait().expect("wait for test child")
+        })
+        .await
+        .expect("wait task must not panic");
+        assert_eq!(
+            status.signal(),
+            Some(nix::sys::signal::Signal::SIGKILL as i32),
+            "child must die from this test's SIGKILL; SIGTERM means shutdown_all \
+             signalled a state that holds no exit claim"
+        );
     }
 }

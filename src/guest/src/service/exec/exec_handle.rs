@@ -402,30 +402,6 @@ impl ExecHandle {
         self.stderr.take()
     }
 
-    /// Kill process with signal.
-    ///
-    /// Sends a signal to the process.
-    ///
-    /// # Arguments
-    ///
-    /// - `signal`: POSIX signal number (9 = SIGKILL, 15 = SIGTERM, etc.)
-    ///
-    /// # Errors
-    ///
-    /// - Invalid signal number
-    /// - Process already exited
-    /// - Permission denied
-    pub fn kill(&self, signal: Signal) -> BoxliteResult<()> {
-        use nix::sys::signal::kill;
-
-        kill(self.pid, signal).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "Failed to send signal {} to process {}: {}",
-                signal, self.pid, e
-            ))
-        })
-    }
-
     /// Signal the execution's process group after proving the tracked process
     /// is still that group's leader. This check prevents a negative-PID kill
     /// from targeting a different group when used on an execution that did not

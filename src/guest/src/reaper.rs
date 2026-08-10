@@ -21,14 +21,15 @@
 //! `Slot::stray_since`, which ages such strays out.
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
 use nix::errno::Errno;
+use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::sync::{watch, Mutex};
+use tokio::sync::watch;
 use tracing::{debug, error, warn};
 
 use crate::service::exec::exec_handle::ExitStatus;
@@ -56,6 +57,9 @@ const REAPED_TTL: Duration = Duration::from_secs(60);
 /// other, only against the sweep.
 static REAP_LOCK: RwLock<()> = RwLock::new(());
 
+#[cfg(test)]
+static REAP_TEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
 /// Hold this across a call that waits for its own child (`Command::output()`,
 /// `Child::wait()`) so the reaper cannot reap that child out from under it.
 ///
@@ -64,6 +68,19 @@ pub(crate) fn reap_fence() -> RwLockReadGuard<'static, ()> {
     REAP_LOCK
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+fn reap_test_lock() -> &'static tokio::sync::Mutex<()> {
+    REAP_TEST_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+/// Serialize tests that spawn real children or take the reap fence, so one
+/// test's waits cannot perturb another's assertions. Async-aware because
+/// callers hold the guard across their awaits.
+#[cfg(test)]
+pub(crate) async fn reap_test_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    reap_test_lock().lock().await
 }
 
 /// A follow-up the reaper runs when a pid's exit is delivered.
@@ -83,6 +100,24 @@ pub(crate) type ExitAction = Box<dyn FnOnce(ExitStatus) + Send>;
 /// status to exactly one caller and strand the rest.
 #[derive(Clone)]
 pub(crate) struct ExitSlot(watch::Receiver<Option<ExitStatus>>);
+
+#[derive(Clone)]
+pub(crate) struct ExitClaim {
+    pid: Pid,
+    token: u64,
+    slot: ExitSlot,
+}
+
+impl ExitClaim {
+    pub(crate) fn slot(&self) -> ExitSlot {
+        self.slot.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pid(&self) -> Pid {
+        self.pid
+    }
+}
 
 impl ExitSlot {
     /// The pid's exit status, awaiting it if it has not exited yet.
@@ -126,6 +161,7 @@ struct Inner {
     /// not expecting. Holding both cases in one map is what removes the separate
     /// "reaped early" cache the pull API needed.
     slots: HashMap<Pid, Slot>,
+    next_claim_token: u64,
 }
 
 struct Slot {
@@ -145,6 +181,7 @@ struct Slot {
     /// slot never holds an unfired action, and the recycle guards that drop or
     /// detach settled slots can never discard one.
     action: Option<ExitAction>,
+    claim_token: Option<u64>,
 }
 
 impl Inner {
@@ -155,6 +192,7 @@ impl Inner {
             stray_since,
             settled_at: None,
             action: None,
+            claim_token: None,
         })
     }
 
@@ -173,6 +211,13 @@ impl Inner {
 }
 
 impl Reaper {
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> Arc<Self> {
+        Arc::new(Self {
+            inner: Mutex::new(Inner::default()),
+        })
+    }
+
     /// Become a child-subreaper and spawn the reap loop. Call once, inside the
     /// tokio runtime, before any container init is created.
     pub(crate) fn install() -> Arc<Reaper> {
@@ -209,14 +254,11 @@ impl Reaper {
     /// Reap every child that has exited. `SIGCHLD` coalesces, so one delivery may
     /// stand for several exits.
     ///
-    /// Exits are swept under `REAP_LOCK` first and delivered only after the guard
-    /// is dropped: `deliver` awaits, and a std lock must never be held across an
-    /// await.
     async fn drain(&self) {
-        for (pid, status) in Self::sweep_exits() {
-            if let Some(action) = self.deliver(pid, status).await {
-                // Fired here, after deliver released the registry lock, so a
-                // slow or re-entrant action cannot block other deliveries.
+        for (status, action) in self.sweep_exits() {
+            if let Some(action) = action {
+                // Actions run after the sweep releases both locks, so a slow or
+                // re-entrant callback cannot block reaping or delivery.
                 action(status);
             }
         }
@@ -227,15 +269,21 @@ impl Reaper {
     ///
     /// Blocks on the lock rather than `try_write`: skipping a sweep could strand
     /// an exit until the next `SIGCHLD`, which may never arrive.
-    fn sweep_exits() -> Vec<(Pid, ExitStatus)> {
+    fn sweep_exits(&self) -> Vec<(ExitStatus, Option<ExitAction>)> {
         let _fence = REAP_LOCK
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut exits = Vec::new();
         loop {
             match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
-                Ok(WaitStatus::Exited(pid, code)) => exits.push((pid, ExitStatus::Code(code))),
-                Ok(WaitStatus::Signaled(pid, sig, _)) => exits.push((pid, ExitStatus::Signal(sig))),
+                Ok(WaitStatus::Exited(pid, code)) => {
+                    let status = ExitStatus::Code(code);
+                    exits.push((status, self.deliver(pid, status)));
+                }
+                Ok(WaitStatus::Signaled(pid, sig, _)) => {
+                    let status = ExitStatus::Signal(sig);
+                    exits.push((status, self.deliver(pid, status)));
+                }
                 // WNOHANG with a live-but-unexited child, or no children left.
                 Ok(WaitStatus::StillAlive) | Err(Errno::ECHILD) => break,
                 Err(Errno::EINTR) => continue,
@@ -250,29 +298,18 @@ impl Reaper {
         exits
     }
 
-    /// Claim this pid's exit slot. The only way to obtain one.
-    ///
-    /// Call the moment the pid is known — right after the spawn or build returns
-    /// it — not when a Wait arrives. A detached exec sends no Wait until its
-    /// caller chooses to; claiming at spawn is what keeps its exit from ageing
-    /// out as an ownerless stray in the meantime.
-    ///
-    /// `spawned_at` must be read *before* the spawn. A slot already sitting
-    /// under this pid may be a stray, or a finished execution's — the registry
-    /// never drops entries, so a claimed slot outlives its execution. Either
-    /// way `settled_at` separates the two things it might be:
-    ///
-    /// - settled **before** we spawned → the previous owner of a recycled pid.
-    ///   Claimed slots never age out, so this must be dropped or wraparound
-    ///   would hand us someone else's exit as our own.
-    /// - settled **after** we spawned → *our* child, which exited before its pid
-    ///   finished travelling back from the zygote. Dropping it would strand the
-    ///   waiter forever, so it is kept and adopted.
-    ///
-    /// Slots grow with the execution registry, which is likewise only cleared
-    /// when the guest exits, so this adds no new unbounded growth.
+    #[cfg(test)]
     pub(crate) async fn register(&self, pid: Pid, spawned_at: Instant) -> ExitSlot {
-        let mut inner = self.inner.lock().await;
+        self.register_claim(pid, spawned_at).await.slot()
+    }
+
+    /// Claim immediately after spawn; `spawned_at` rejects a stale PID-reuse
+    /// slot but adopts this child when it exited before spawn returned.
+    pub(crate) async fn register_claim(&self, pid: Pid, spawned_at: Instant) -> ExitClaim {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if inner
             .slots
             .get(&pid)
@@ -280,14 +317,75 @@ impl Reaper {
         {
             inner.slots.remove(&pid);
         }
+        inner.next_claim_token = inner.next_claim_token.wrapping_add(1).max(1);
+        let token = inner.next_claim_token;
         let slot = inner.slot(pid, None);
         slot.stray_since = None;
-        ExitSlot(slot.tx.subscribe())
+        slot.claim_token = Some(token);
+        ExitClaim {
+            pid,
+            token,
+            slot: ExitSlot(slot.tx.subscribe()),
+        }
+    }
+
+    pub(crate) async fn release_claim(&self, claim: &ExitClaim) {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if inner
+            .slots
+            .get(&claim.pid)
+            .is_some_and(|slot| slot.claim_token == Some(claim.token))
+        {
+            inner.slots.remove(&claim.pid);
+        }
+    }
+
+    /// Signal a claimed process only while this exact claim still owns a live
+    /// slot. The reap fence prevents delivery and PID recycling between that
+    /// check and the leader-only signal.
+    pub(crate) fn signal_leader_if_live(
+        &self,
+        claim: &ExitClaim,
+        leader_pid: Pid,
+        signal: Signal,
+    ) -> Result<bool, Errno> {
+        let _fence = reap_fence();
+        let is_live = leader_pid == claim.pid
+            && self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .slots
+                .get(&claim.pid)
+                .is_some_and(|slot| {
+                    slot.claim_token == Some(claim.token) && slot.settled_at.is_none()
+                });
+        if !is_live {
+            return Ok(false);
+        }
+
+        match nix::sys::signal::kill(leader_pid, signal) {
+            Ok(()) => Ok(true),
+            Err(Errno::ESRCH) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) fn claim_is_live(&self, claim: &ExitClaim) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .slots
+            .get(&claim.pid)
+            .is_some_and(|slot| slot.claim_token == Some(claim.token) && slot.settled_at.is_none())
     }
 
     /// Claim this pid's exit slot *and* register the follow-up the reaper runs
     /// when the exit is delivered. Same claim semantics as `register` — the
-    /// returned slot serves any number of readers — plus one action, fired
+    /// returned claim's slot serves any number of readers — plus one action, fired
     /// exactly once.
     ///
     /// If the exit already landed (a fast child reaped before its owner could
@@ -298,10 +396,13 @@ impl Reaper {
         pid: Pid,
         spawned_at: Instant,
         action: ExitAction,
-    ) -> ExitSlot {
+    ) -> ExitClaim {
         let mut action = Some(action);
-        let (slot_rx, fire_with) = {
-            let mut inner = self.inner.lock().await;
+        let (claim, fire_with) = {
+            let mut inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if inner
                 .slots
                 .get(&pid)
@@ -309,27 +410,40 @@ impl Reaper {
             {
                 inner.slots.remove(&pid);
             }
+            inner.next_claim_token = inner.next_claim_token.wrapping_add(1).max(1);
+            let token = inner.next_claim_token;
             let slot = inner.slot(pid, None);
             slot.stray_since = None;
+            slot.claim_token = Some(token);
             let fire_with = *slot.tx.borrow();
             if fire_with.is_none() {
                 slot.action = action.take();
             }
-            (ExitSlot(slot.tx.subscribe()), fire_with)
+            (
+                ExitClaim {
+                    pid,
+                    token,
+                    slot: ExitSlot(slot.tx.subscribe()),
+                },
+                fire_with,
+            )
         };
         if let (Some(status), Some(action)) = (fire_with, action) {
             // Outside the lock, like every action invocation.
             action(status);
         }
-        slot_rx
+        claim
     }
 
     /// Deposit a reaped exit. Never blocks on a reader, so an exit that lands
     /// before its owner registers is simply already there when the owner
     /// arrives. Returns the pid's registered action, if any, for the caller to
     /// fire once the lock is released.
-    async fn deliver(&self, pid: Pid, status: ExitStatus) -> Option<ExitAction> {
-        let mut inner = self.inner.lock().await;
+    fn deliver(&self, pid: Pid, status: ExitStatus) -> Option<ExitAction> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // We are the only writer, and the kernel reaps a pid once per
         // incarnation, so an already-settled slot under this pid can only
@@ -378,7 +492,7 @@ mod tests {
 
     use nix::sys::signal::Signal;
     use nix::unistd::Pid;
-    use tokio::sync::Mutex;
+    use std::sync::Mutex;
 
     use tokio::sync::watch;
 
@@ -397,6 +511,7 @@ mod tests {
             stray_since: Some(since),
             settled_at: Some(since),
             action: None,
+            claim_token: None,
         }
     }
 
@@ -433,7 +548,7 @@ mod tests {
     async fn an_action_fires_once_with_the_delivered_status() {
         let r = bare();
         let (tx, rx) = std::sync::mpsc::channel();
-        let slot = r
+        let claim = r
             .on_exit(
                 pid(801),
                 Instant::now(),
@@ -443,7 +558,7 @@ mod tests {
             )
             .await;
 
-        if let Some(action) = r.deliver(pid(801), ExitStatus::Code(5)).await {
+        if let Some(action) = r.deliver(pid(801), ExitStatus::Code(5)) {
             action(ExitStatus::Code(5));
         }
         assert_eq!(
@@ -453,7 +568,7 @@ mod tests {
         );
 
         // Pid recycled: a second deliver settles a fresh slot with no action.
-        if let Some(action) = r.deliver(pid(801), ExitStatus::Code(6)).await {
+        if let Some(action) = r.deliver(pid(801), ExitStatus::Code(6)) {
             action(ExitStatus::Code(6));
         }
         assert!(
@@ -462,7 +577,29 @@ mod tests {
         );
 
         // The claim's readers still work like any register-claimed slot.
-        assert_eq!(code(slot.get().await), Some(5));
+        assert_eq!(code(claim.slot().get().await), Some(5));
+    }
+
+    #[tokio::test]
+    async fn releasing_an_on_exit_claim_cancels_its_action() {
+        let r = bare();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let claim = r
+            .on_exit(
+                pid(803),
+                Instant::now(),
+                Box::new(move |status| {
+                    tx.send(status).expect("test channel");
+                }),
+            )
+            .await;
+
+        r.release_claim(&claim).await;
+        if let Some(action) = r.deliver(pid(803), ExitStatus::Code(7)) {
+            action(ExitStatus::Code(7));
+        }
+
+        assert!(rx.try_recv().is_err());
     }
 
     /// The exit can beat the registration — a fast child is reaped before its
@@ -472,10 +609,10 @@ mod tests {
     async fn an_action_registered_after_the_exit_fires_immediately() {
         let r = bare();
         let spawned_at = Instant::now();
-        r.deliver(pid(802), ExitStatus::Code(3)).await;
+        r.deliver(pid(802), ExitStatus::Code(3));
 
         let (tx, rx) = std::sync::mpsc::channel();
-        let slot = r
+        let claim = r
             .on_exit(
                 pid(802),
                 spawned_at,
@@ -493,7 +630,7 @@ mod tests {
             Some(3)
         );
         assert_eq!(
-            code(slot.get().await),
+            code(claim.slot().get().await),
             Some(3),
             "readers see the same status"
         );
@@ -506,7 +643,7 @@ mod tests {
         let slot = r.register(pid(101), Instant::now()).await;
         let waiter = tokio::spawn(async move { slot.get().await });
 
-        r.deliver(pid(101), ExitStatus::Code(7)).await;
+        r.deliver(pid(101), ExitStatus::Code(7));
 
         let got = tokio::time::timeout(Duration::from_secs(5), waiter)
             .await
@@ -523,7 +660,7 @@ mod tests {
         let r = bare();
         // Read before the spawn, exactly as the exec path does.
         let spawned_at = Instant::now();
-        r.deliver(pid(102), ExitStatus::Code(3)).await; // no owner yet
+        r.deliver(pid(102), ExitStatus::Code(3));
 
         let slot = r.register(pid(102), spawned_at).await;
         let got = tokio::time::timeout(Duration::from_secs(5), slot.get())
@@ -537,8 +674,7 @@ mod tests {
     async fn signaled_exit_is_delivered_as_signal() {
         let r = bare();
         let slot = r.register(pid(103), Instant::now()).await;
-        r.deliver(pid(103), ExitStatus::Signal(Signal::SIGTERM))
-            .await;
+        r.deliver(pid(103), ExitStatus::Signal(Signal::SIGTERM));
         assert_eq!(sig(slot.get().await), Some(Signal::SIGTERM));
     }
 
@@ -549,8 +685,8 @@ mod tests {
         let first = r.register(pid(201), Instant::now()).await;
         let second = r.register(pid(202), Instant::now()).await;
 
-        r.deliver(pid(201), ExitStatus::Code(1)).await;
-        r.deliver(pid(202), ExitStatus::Code(2)).await;
+        r.deliver(pid(201), ExitStatus::Code(1));
+        r.deliver(pid(202), ExitStatus::Code(2));
 
         assert_eq!(code(second.get().await), Some(2));
         assert_eq!(code(first.get().await), Some(1));
@@ -565,7 +701,7 @@ mod tests {
     async fn a_settled_slot_answers_every_caller() {
         let r = bare();
         let slot = r.register(pid(104), Instant::now()).await;
-        r.deliver(pid(104), ExitStatus::Code(5)).await;
+        r.deliver(pid(104), ExitStatus::Code(5));
 
         for attempt in 0..3 {
             let got = tokio::time::timeout(Duration::from_millis(500), slot.get())
@@ -592,7 +728,7 @@ mod tests {
             })
             .collect();
 
-        r.deliver(pid(105), ExitStatus::Code(6)).await;
+        r.deliver(pid(105), ExitStatus::Code(6));
 
         for (n, waiter) in waiters.into_iter().enumerate() {
             let got = tokio::time::timeout(Duration::from_secs(5), waiter)
@@ -611,7 +747,10 @@ mod tests {
     #[tokio::test]
     async fn prune_stale_drops_expired_keeps_fresh() {
         let r = bare();
-        let mut inner = r.inner.lock().await;
+        let mut inner = r
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         inner
             .slots
             .insert(pid(301), stray_slot(ExitStatus::Code(9), expired_at()));
@@ -635,13 +774,20 @@ mod tests {
     #[tokio::test]
     async fn claiming_a_stray_exempts_it_from_pruning() {
         let r = bare();
-        r.deliver(pid(305), ExitStatus::Code(4)).await; // stray
-        let slot = r.register(pid(305), Instant::now()).await; // ...now claimed
+        r.deliver(pid(305), ExitStatus::Code(4));
+        let slot = r.register(pid(305), Instant::now()).await;
 
-        r.inner.lock().await.prune_stale();
+        r.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .prune_stale();
 
         assert!(
-            r.inner.lock().await.slots.contains_key(&pid(305)),
+            r.inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .slots
+                .contains_key(&pid(305)),
             "a claimed slot is exempt from pruning whatever its age"
         );
         // The claim discarded the stray's status (it settled before the spawn),
@@ -656,20 +802,32 @@ mod tests {
     #[tokio::test]
     async fn stray_is_kept_then_aged_out() {
         let r = bare();
-        r.deliver(pid(303), ExitStatus::Code(0)).await; // stray, unclaimed
-        assert!(r.inner.lock().await.slots.contains_key(&pid(303)));
+        r.deliver(pid(303), ExitStatus::Code(0));
+        assert!(r
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .slots
+            .contains_key(&pid(303)));
 
         // Backdate it past the TTL, then trigger a prune with an unrelated stray.
         {
-            let mut inner = r.inner.lock().await;
+            let mut inner = r
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             inner
                 .slots
                 .insert(pid(303), stray_slot(ExitStatus::Code(0), expired_at()));
         }
-        r.deliver(pid(999), ExitStatus::Code(0)).await; // unclaimed → prune_stale
+        r.deliver(pid(999), ExitStatus::Code(0));
 
         assert!(
-            !r.inner.lock().await.slots.contains_key(&pid(303)),
+            !r.inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .slots
+                .contains_key(&pid(303)),
             "aged-out stray must be gone so a recycled pid can't read it"
         );
     }
@@ -690,10 +848,10 @@ mod tests {
         let slot = r.register(pid(401), Instant::now()).await;
 
         // A detached exec's tenant exits with nobody reading yet.
-        r.deliver(pid(401), ExitStatus::Code(7)).await;
+        r.deliver(pid(401), ExitStatus::Code(7));
 
         // A later stray (an intermediate nobody claims) triggers prune_stale().
-        r.deliver(pid(402), ExitStatus::Code(0)).await;
+        r.deliver(pid(402), ExitStatus::Code(0));
 
         // The detached exec's owner finally asks. It must still get 7.
         let got = tokio::time::timeout(Duration::from_millis(500), slot.get())
@@ -714,7 +872,7 @@ mod tests {
         let spawned_at = Instant::now();
 
         // The tenant exits while its pid is still travelling back to us.
-        r.deliver(pid(601), ExitStatus::Code(3)).await;
+        r.deliver(pid(601), ExitStatus::Code(3));
         // Only now does the exec path learn the pid and claim it.
         let slot = r.register(pid(601), spawned_at).await;
 
@@ -738,7 +896,7 @@ mod tests {
 
         // A previous exec claimed this pid, ran, and exited. Its slot remains.
         let previous = r.register(pid(602), Instant::now()).await;
-        r.deliver(pid(602), ExitStatus::Code(9)).await;
+        r.deliver(pid(602), ExitStatus::Code(9));
         assert_eq!(
             code(previous.get().await),
             Some(9),
@@ -771,13 +929,13 @@ mod tests {
 
         // Exec A: claims the pid, runs, exits. Its slot and receiver persist.
         let first = r.register(pid(701), Instant::now()).await;
-        r.deliver(pid(701), ExitStatus::Code(1)).await;
+        r.deliver(pid(701), ExitStatus::Code(1));
         assert_eq!(code(first.get().await), Some(1));
 
         // Pid recycled. B's spawn instant is read before B runs, as the exec
         // path does; B then exits before its own register lands.
         let b_spawned_at = Instant::now();
-        r.deliver(pid(701), ExitStatus::Code(2)).await;
+        r.deliver(pid(701), ExitStatus::Code(2));
 
         assert_eq!(
             code(first.get().await),
@@ -796,7 +954,7 @@ mod tests {
         let r = bare();
         r.inner
             .lock()
-            .await
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .slots
             .insert(pid(603), stray_slot(ExitStatus::Code(9), expired_at()));
 
@@ -823,26 +981,25 @@ mod tests {
     /// `sweep_exits` (or the read guard in `reap_fence`) and this fails.
     /// Phase 3 checks the lock shape: shared for callers, exclusive vs the sweep.
     ///
-    /// This is the only test that touches the process-global `REAP_LOCK`; keep it
-    /// that way so parallel tests cannot perturb the assertions.
+    /// Real-child reaper tests serialize through `reap_test_guard` so their
+    /// waits cannot interfere with this test's fence assertions.
     #[test]
     fn reap_fence_prevents_the_sweep_from_stealing_a_waiters_child() {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::mpsc;
         use std::thread;
 
+        let _test_guard = super::reap_test_lock().blocking_lock();
+
         // ---- Phase 1: unfenced, the sweep steals the child and its owner's
         // wait fails with ECHILD. Order is forced, so this is deterministic.
+        let reaper = bare();
         let mut victim = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg("exit 0")
             .spawn()
             .expect("spawn victim");
-        let victim_pid = victim.id() as i32;
-        while !Reaper::sweep_exits()
-            .iter()
-            .any(|(pid, _)| pid.as_raw() == victim_pid)
-        {
+        while reaper.sweep_exits().is_empty() {
             thread::sleep(Duration::from_millis(10)); // wait for it to exit, then sweep
         }
         let stolen = victim.wait().expect_err("sweep already took this child");
@@ -857,9 +1014,10 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let sweeper = {
             let stop = Arc::clone(&stop);
+            let reaper = Arc::clone(&reaper);
             thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
-                    let _ = Reaper::sweep_exits();
+                    let _ = reaper.sweep_exits();
                     thread::yield_now();
                 }
             })
@@ -890,8 +1048,9 @@ mod tests {
         let first = reap_fence();
         let second = reap_fence(); // must not block on `first`
         let (tx, rx) = mpsc::channel();
+        let reaper = Arc::clone(&reaper);
         let blocked = thread::spawn(move || {
-            let _ = Reaper::sweep_exits();
+            let _ = reaper.sweep_exits();
             let _ = tx.send(());
         });
         assert!(
@@ -940,7 +1099,7 @@ mod tests {
         for i in (0..n).rev() {
             let r2 = Arc::clone(&r);
             deliverers.push(tokio::spawn(async move {
-                r2.deliver(pid(1000 + i), ExitStatus::Code(i)).await
+                r2.deliver(pid(1000 + i), ExitStatus::Code(i))
             }));
         }
         for d in deliverers {
@@ -953,5 +1112,83 @@ mod tests {
                 .unwrap();
             assert_eq!(code(got), Some(i), "pid {} got the wrong exit", 1000 + i);
         }
+    }
+
+    /// The case this claim machinery exists for: the kernel recycles a finished
+    /// execution's pid, and the stale claim must not reach the new owner.
+    ///
+    /// Uses a real child so the assertion binds the token check. Against a
+    /// fabricated pid, `kill` would answer `ESRCH` and `signal_leader_if_live`
+    /// would return `Ok(false)` even with the token comparison removed.
+    #[tokio::test]
+    async fn a_recycled_pid_refuses_the_stale_claims_signal() {
+        let _test_guard = super::reap_test_guard().await;
+        let r = bare();
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let leader = Pid::from_raw(child.id() as i32);
+
+        let stale = r.register_claim(leader, Instant::now()).await;
+        r.deliver(leader, ExitStatus::Code(0));
+        let fresh = r.register_claim(leader, Instant::now()).await;
+
+        assert!(!r.claim_is_live(&stale));
+        assert!(r.claim_is_live(&fresh));
+        assert_eq!(
+            r.signal_leader_if_live(&stale, leader, Signal::SIGKILL),
+            Ok(false)
+        );
+        assert!(
+            child.try_wait().expect("check child status").is_none(),
+            "a claim whose token was replaced must not reach the pid's new owner"
+        );
+
+        child.kill().expect("kill test child");
+        let _fence = reap_fence();
+        child.wait().expect("wait for test child");
+    }
+
+    #[tokio::test]
+    async fn releasing_an_old_claim_cannot_remove_a_replacement() {
+        let r = bare();
+        let first = r.register_claim(pid(2_001), Instant::now()).await;
+
+        r.release_claim(&first).await;
+        let replacement = r.register_claim(pid(2_001), Instant::now()).await;
+
+        r.release_claim(&first).await;
+        assert!(r.claim_is_live(&replacement));
+    }
+
+    #[tokio::test]
+    async fn signal_leader_refuses_a_settled_claim() {
+        let r = bare();
+        let claim = r.register_claim(pid(2_002), Instant::now()).await;
+        r.deliver(pid(2_002), ExitStatus::Code(0));
+
+        assert!(!r
+            .signal_leader_if_live(&claim, claim.pid(), Signal::SIGTERM)
+            .expect("a settled claim must be rejected before signaling"));
+    }
+
+    #[tokio::test]
+    async fn signal_leader_terminates_the_live_claimed_process() {
+        let _test_guard = super::reap_test_guard().await;
+        let r = bare();
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let leader = Pid::from_raw(child.id() as i32);
+        let claim = r.register_claim(leader, Instant::now()).await;
+
+        assert!(r
+            .signal_leader_if_live(&claim, leader, Signal::SIGTERM)
+            .expect("signal the live leader"));
+        let _fence = reap_fence();
+        let status = child.wait().expect("wait for terminated child");
+        assert_eq!(status.code(), None);
     }
 }
