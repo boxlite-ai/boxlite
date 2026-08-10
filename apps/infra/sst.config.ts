@@ -203,6 +203,23 @@ export default $config({
     const oidcMgmtClientSecret = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_SECRET')
     const posthogApiKey = new sst.Secret('POSTHOG_API_KEY', '')
     const svixAuthToken = new sst.Secret('SVIX_AUTH_TOKEN', '')
+    // The credential the usage exporter presents to Commerce's ingest route:
+    // half of a shared secret whose other half is a Secrets Manager container
+    // owned by boxlite-commerce's own stack, so both ends are set out of band
+    // from one value rather than generated here.
+    //
+    // It is a secret of this stack rather than a read of that container
+    // because the Api's *runtime* role could not read it if we tried. Its
+    // execution role carries the boxlite-<stage>-runtime-boundary, which
+    // admits only secret:boxlite-<stage>-* — deliberately, so one stage's
+    // tasks cannot reach another's secrets. ECS says so plainly when asked:
+    // it refuses to place the task with "no permissions boundary allows the
+    // secretsmanager:GetSecretValue action". (The deploy role is not the
+    // constraint — its boxlite-sst-deploy policy grants secretsmanager on
+    // every resource, and it carries no boundary at all.)
+    //
+    // Empty means the exporter stays off; see USAGE_EXPORT_ENABLED below.
+    const usageExportToken = new sst.Secret('USAGE_EXPORT_TOKEN', '')
 
     // ─── 2. PLATFORM ─────────────────────────────────────────────────────────
     // Network model + rationale (subnets / NAT / egress-only public IP, AWS citations): ./NETWORKING.md
@@ -685,7 +702,28 @@ export default $config({
         // the page itself (apps/dashboard/src/pages/Billing.tsx) and every
         // billing query hook, including the shell's wallet prefetch — stays
         // gated off and shows its placeholder instead.
-        ...(process.env.BILLING_API_URL && { BILLING_API_URL: process.env.BILLING_API_URL }),
+        ...(process.env.BILLING_API_URL && {
+          BILLING_API_URL: process.env.BILLING_API_URL,
+
+          // Where finalized usage periods are shipped, from the outbox in
+          // apps/api/src/usage/services/usage-export-publisher.service.ts.
+          // The same signal and the same service as BILLING_API_URL, but
+          // deliberately not the same value: the publisher appends
+          // /internal/usage-events, which Commerce serves off its bare origin
+          // because that route authenticates a service rather than a user and
+          // so sits outside its /api/billing prefix. Sending BILLING_API_URL's
+          // value here would 404 every batch — which is why this derives the
+          // origin from it rather than taking a second setting that could be
+          // pointed somewhere else.
+          USAGE_EXPORT_URL: envOr('USAGE_EXPORT_URL', new URL(process.env.BILLING_API_URL).origin),
+          USAGE_EXPORT_TOKEN: usageExportToken.value,
+          // Derived from the credential rather than set outright, because
+          // configuration.ts refuses to boot when export is on without a
+          // token: a stage pointed at a billing service but never given the
+          // shared secret would crash-loop on deploy instead of simply not
+          // exporting yet. Setting the secret is what turns delivery on.
+          USAGE_EXPORT_ENABLED: usageExportToken.value.apply((token) => (token.trim() ? 'true' : 'false')),
+        }),
       },
     })
 

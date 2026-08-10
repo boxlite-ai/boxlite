@@ -408,7 +408,12 @@ test('organization suspension is gated on its own flag, not on BILLING_API_URL',
 // 404s. The producing and consuming sides sit in different packages: nothing but a cross-file
 // guard notices when one of them moves.
 test('a billing URL is advertised only where a billing service answers', () => {
-  assert.match(liveConfig, /\.\.\.\(process\.env\.BILLING_API_URL && \{ BILLING_API_URL: process\.env\.BILLING_API_URL \}\)/)
+  // Shape, not formatting: the block gained usage-export settings on the same gate, so pinning
+  // the one-line spelling would fail on a change that keeps the guarantee exactly. What matters
+  // is that the gate is the env var and the value is passed through with no default behind it.
+  assert.match(liveConfig, /\.\.\.\(process\.env\.BILLING_API_URL && \{/)
+  assert.match(liveConfig, /BILLING_API_URL: process\.env\.BILLING_API_URL,/)
+  assert.doesNotMatch(liveConfig, /BILLING_API_URL: envOr\(/)
 
   // Wallet, plan and usage are sections of one /dashboard/billing page, so the gate moved from
   // the route table into that page: it must refuse to render any section — none of which can
@@ -441,4 +446,36 @@ test('a billing URL is advertised only where a billing service answers', () => {
   for (const route of redirectedRoutes) {
     assert.doesNotMatch(hiddenRoutes, new RegExp(route))
   }
+})
+
+// Where usage is shipped and where the dashboard calls are one letter apart in intent and a whole
+// route apart in fact: the publisher appends /internal/usage-events, which the billing service
+// serves off its bare origin because that route authenticates a service rather than a user, so it
+// sits outside the /api/billing prefix (boxlite-commerce src/http.ts). Handing the exporter
+// BILLING_API_URL's value is the plausible edit that 404s every batch, silently, for as long as
+// nobody reads the outbox — and the two sides sit in different repositories, where no type checks
+// the seam. Deriving the origin is what makes the two impossible to point apart by accident.
+test('usage is exported to the ingest origin, never to the dashboard billing URL', () => {
+  assert.match(
+    liveConfig,
+    /USAGE_EXPORT_URL: envOr\('USAGE_EXPORT_URL', new URL\(process\.env\.BILLING_API_URL\)\.origin\)/,
+  )
+  assert.doesNotMatch(liveConfig, /USAGE_EXPORT_URL: envOr\([^)]*\/api\/billing/)
+
+  // Delivery is gated on the credential, not asserted alongside it: configuration.ts throws when
+  // export is enabled without a token, so a stage pointed at a billing service but holding no
+  // secret must come up exporting nothing rather than crash-loop on boot.
+  assert.match(liveConfig, /USAGE_EXPORT_TOKEN: usageExportToken\.value/)
+  assert.match(
+    liveConfig,
+    /USAGE_EXPORT_ENABLED: usageExportToken\.value\.apply\(\(token\) => \(token\.trim\(\) \? 'true' : 'false'\)\)/,
+  )
+  assert.match(liveConfig, /const usageExportToken = new sst\.Secret\('USAGE_EXPORT_TOKEN', ''\)/)
+
+  // Nothing here can discover the receiving half — it belongs to the billing service's own stack —
+  // so the note naming the value to set is the only thing between an operator and a stage that
+  // 401s every batch, and it must keep naming it.
+  assert.match(environmentExample, /^# USAGE_EXPORT_URL=/m)
+  assert.match(environmentExample, /boxlite-commerce\/<stage>\/usage-ingest-token/)
+  assert.doesNotMatch(environmentExample, /^USAGE_EXPORT_TOKEN=/m)
 })
