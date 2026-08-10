@@ -46,6 +46,21 @@ export interface JobTypeMap {
   [JobType.RECOVER_BOX]: {
     resourceType: [ResourceType.BOX]
   }
+  [JobType.EXPORT_BOX]: {
+    resourceType: [ResourceType.BOX]
+  }
+  [JobType.IMPORT_BOX]: {
+    resourceType: [ResourceType.BOX]
+  }
+  [JobType.ROLLBACK_EXPORT_BOX]: {
+    resourceType: [ResourceType.BOX]
+  }
+  [JobType.ROLLBACK_IMPORT_BOX]: {
+    resourceType: [ResourceType.BOX]
+  }
+  [JobType.DISCARD_EXPORTED_BOX]: {
+    resourceType: [ResourceType.BOX]
+  }
 }
 
 /**

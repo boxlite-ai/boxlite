@@ -23,20 +23,28 @@ import (
 	"github.com/boxlite-ai/runner/internal/metrics"
 	runnerapiclient "github.com/boxlite-ai/runner/pkg/apiclient"
 	"github.com/boxlite-ai/runner/pkg/backend"
+	"github.com/boxlite-ai/runner/pkg/storage"
 )
 
 type ExecutorConfig struct {
 	Backend   backend.BoxBackend
 	Collector *metrics.Collector
 	Logger    *slog.Logger
+	// ArchiveStore and MigrateWorkDir are only needed for box migration. A
+	// runner deployed without object-store credentials leaves ArchiveStore nil
+	// and fails migration jobs explicitly instead of failing to start.
+	ArchiveStore   storage.ArchiveStore
+	MigrateWorkDir string
 }
 
 // Executor handles job execution
 type Executor struct {
-	log       *slog.Logger
-	client    *apiclient.APIClient
-	backend   backend.BoxBackend
-	collector *metrics.Collector
+	log            *slog.Logger
+	client         *apiclient.APIClient
+	backend        backend.BoxBackend
+	collector      *metrics.Collector
+	archiveStore   storage.ArchiveStore
+	migrateWorkDir string
 }
 
 // NewExecutor creates a new job executor
@@ -47,10 +55,12 @@ func NewExecutor(cfg *ExecutorConfig) (*Executor, error) {
 	}
 
 	return &Executor{
-		log:       cfg.Logger.With(slog.String("component", "executor")),
-		client:    apiClient,
-		backend:   cfg.Backend,
-		collector: cfg.Collector,
+		log:            cfg.Logger.With(slog.String("component", "executor")),
+		client:         apiClient,
+		backend:        cfg.Backend,
+		collector:      cfg.Collector,
+		archiveStore:   cfg.ArchiveStore,
+		migrateWorkDir: cfg.MigrateWorkDir,
 	}, nil
 }
 
@@ -143,6 +153,16 @@ func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, err
 		resultMetadata, err = e.updateNetworkSettings(ctx, job)
 	case apiclient.JOBTYPE_RECOVER_BOX:
 		resultMetadata, err = e.recoverBox(ctx, job)
+	case apiclient.JOBTYPE_EXPORT_BOX:
+		resultMetadata, err = e.exportBox(ctx, job)
+	case apiclient.JOBTYPE_IMPORT_BOX:
+		resultMetadata, err = e.importBox(ctx, job)
+	case apiclient.JOBTYPE_ROLLBACK_EXPORT_BOX:
+		resultMetadata, err = e.rollbackExportBox(ctx, job)
+	case apiclient.JOBTYPE_ROLLBACK_IMPORT_BOX:
+		resultMetadata, err = e.rollbackImportBox(ctx, job)
+	case apiclient.JOBTYPE_DISCARD_EXPORTED_BOX:
+		resultMetadata, err = e.discardExportedBox(ctx, job)
 	default:
 		err = fmt.Errorf("unknown job type: %s", job.GetType())
 	}

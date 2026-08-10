@@ -26,6 +26,16 @@ The type of the job
 
 * `UPDATE_BOX_NETWORK_SETTINGS` (value: `'UPDATE_BOX_NETWORK_SETTINGS'`)
 
+* `EXPORT_BOX` (value: `'EXPORT_BOX'`)
+
+* `IMPORT_BOX` (value: `'IMPORT_BOX'`)
+
+* `ROLLBACK_EXPORT_BOX` (value: `'ROLLBACK_EXPORT_BOX'`)
+
+* `ROLLBACK_IMPORT_BOX` (value: `'ROLLBACK_IMPORT_BOX'`)
+
+* `DISCARD_EXPORTED_BOX` (value: `'DISCARD_EXPORTED_BOX'`)
+
 * `UNKNOWN_DEFAULT_OPEN_API` (value: `'11184809'`)
 
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)

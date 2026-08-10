@@ -26,6 +26,11 @@ type BoxBackend interface {
 	UpdateNetworkSettings(ctx context.Context, boxId string, settings dto.UpdateNetworkSettingsDTO) error
 	GetBoxState(ctx context.Context, boxId string) (enums.BoxState, error)
 
+	// Migration — move a box between runners through a portable archive.
+	// ExportBox returns the archive path the runtime wrote inside destDir.
+	ExportBox(ctx context.Context, boxId, destDir string) (string, error)
+	ImportBox(ctx context.Context, boxId, archivePath string) error
+
 	// Health
 	Ping(ctx context.Context) error
 }

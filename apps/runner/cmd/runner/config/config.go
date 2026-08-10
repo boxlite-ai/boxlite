@@ -62,6 +62,7 @@ type Config struct {
 	GhcrToken                          string        `envconfig:"GHCR_TOKEN"`
 	DockerHubUsername                  string        `envconfig:"DOCKERHUB_USERNAME"`
 	DockerHubToken                     string        `envconfig:"DOCKERHUB_TOKEN"`
+	MigrateWorkDir                     string        `envconfig:"MIGRATE_WORK_DIR"`
 }
 
 var DEFAULT_API_PORT int = 8080

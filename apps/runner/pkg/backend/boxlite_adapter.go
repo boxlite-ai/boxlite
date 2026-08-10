@@ -57,3 +57,11 @@ func (a *BoxliteAdapter) GetBoxState(ctx context.Context, boxId string) (enums.B
 func (a *BoxliteAdapter) Ping(ctx context.Context) error {
 	return a.client.Ping(ctx)
 }
+
+func (a *BoxliteAdapter) ExportBox(ctx context.Context, boxId, destDir string) (string, error) {
+	return a.client.ExportBox(ctx, boxId, destDir)
+}
+
+func (a *BoxliteAdapter) ImportBox(ctx context.Context, boxId, archivePath string) error {
+	return a.client.ImportBox(ctx, boxId, archivePath)
+}

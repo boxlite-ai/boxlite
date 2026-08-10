@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/boxlite-ai/runner/pkg/runner/v2/healthcheck"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/poller"
 	"github.com/boxlite-ai/runner/pkg/services"
+	"github.com/boxlite-ai/runner/pkg/storage"
 	"github.com/boxlite-ai/runner/pkg/telemetry/filters"
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
@@ -182,9 +184,11 @@ func run() int {
 		}()
 
 		executorService, err := executor.NewExecutor(&executor.ExecutorConfig{
-			Logger:    logger,
-			Backend:   boxBackend,
-			Collector: metricsCollector,
+			Logger:         logger,
+			Backend:        boxBackend,
+			Collector:      metricsCollector,
+			ArchiveStore:   migrationArchiveStore(cfg, logger),
+			MigrateWorkDir: migrationWorkDir(cfg, logger),
 		})
 		if err != nil {
 			logger.Error("Failed to create executor service", "error", err)
@@ -253,4 +257,54 @@ func run() int {
 		logger.Info("Shutdown complete")
 		return 143
 	}
+}
+
+// migrationArchiveStore builds the object-store client that box migration moves
+// archives through. It is optional on purpose: a runner deployed without a
+// bucket still serves every other job type, and a migration job that reaches it
+// fails with a configuration error the control plane can see, instead of the
+// runner refusing to start.
+func migrationArchiveStore(cfg *config.Config, logger *slog.Logger) storage.ArchiveStore {
+	if cfg.AWSDefaultBucket == "" {
+		logger.Warn("Box migration disabled: AWS_DEFAULT_BUCKET is not set")
+		return nil
+	}
+
+	store, err := storage.NewS3ArchiveStore(storage.S3ArchiveStoreConfig{
+		EndpointUrl:     cfg.AWSEndpointUrl,
+		Region:          cfg.AWSRegion,
+		AccessKeyId:     cfg.AWSAccessKeyId,
+		SecretAccessKey: cfg.AWSSecretAccessKey,
+		Bucket:          cfg.AWSDefaultBucket,
+	})
+	if err != nil {
+		logger.Warn("Box migration disabled: object store client unavailable", "error", err)
+		return nil
+	}
+
+	return store
+}
+
+// migrationWorkDir resolves where a migration archive is staged, mirroring how
+// boxlite-core resolves its own home directory: an explicit setting wins, then
+// BOXLITE_HOME, then $HOME/.boxlite.
+func migrationWorkDir(cfg *config.Config, logger *slog.Logger) string {
+	if cfg.MigrateWorkDir != "" {
+		return cfg.MigrateWorkDir
+	}
+
+	home := cfg.BoxliteHomeDir
+	if home == "" {
+		home = os.Getenv("BOXLITE_HOME")
+	}
+	if home == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			logger.Warn("Box migration disabled: no home directory to stage archives in", "error", err)
+			return ""
+		}
+		home = filepath.Join(userHome, ".boxlite")
+	}
+
+	return filepath.Join(home, "migrate")
 }
