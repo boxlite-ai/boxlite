@@ -319,7 +319,7 @@ async fn spawn_execution(
 
     let leader_pid = child.pid();
     let pid = leader_pid.as_raw() as u32;
-    let identity = identity::ProcessIdentity::capture(leader_pid);
+    let identity = identity::ProcessSignalTarget::capture(leader_pid);
     if identity.is_none() {
         warn!(
             execution_id = %execution_id,

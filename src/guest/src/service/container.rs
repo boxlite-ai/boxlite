@@ -369,8 +369,9 @@ impl ContainerService for GuestServer {
                 // container.
                 let init_exit = match container.take_init_exec_handle() {
                     Ok(Some(handle)) => {
-                        let identity =
-                            crate::service::exec::identity::ProcessIdentity::capture(handle.pid());
+                        let identity = crate::service::exec::identity::ProcessSignalTarget::capture(
+                            handle.pid(),
+                        );
                         if identity.is_none() {
                             warn!(
                                 container_id = %container_id,
