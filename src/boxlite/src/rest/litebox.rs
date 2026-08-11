@@ -648,6 +648,36 @@ async fn attach_ws(
     .await;
 }
 
+/// Decode as much of `payload` as forms valid UTF-8, prepending any bytes
+/// carried over from a previous call. A codepoint split across two frames
+/// stays buffered in `pending` until the rest arrives, instead of the
+/// incomplete tail being replaced with U+FFFD.
+fn decode_utf8_streaming(pending: &mut Vec<u8>, payload: &[u8]) -> String {
+    pending.extend_from_slice(payload);
+    match std::str::from_utf8(pending) {
+        Ok(s) => {
+            let text = s.to_string();
+            pending.clear();
+            text
+        }
+        Err(e) => {
+            let valid_up_to = e.valid_up_to();
+            let text = std::str::from_utf8(&pending[..valid_up_to])
+                .expect("bytes before valid_up_to are always valid UTF-8")
+                .to_string();
+            if e.error_len().is_none() {
+                // Incomplete sequence at the end of the buffer -- keep it
+                // for the next frame.
+                pending.drain(..valid_up_to);
+            } else {
+                // Genuinely invalid bytes; buffering them won't help.
+                pending.clear();
+            }
+            text
+        }
+    }
+}
+
 /// Pump stdin/stdout/stderr/control over a WebSocket attach. On transient
 /// disconnects (watchdog timeout, close frame, stream error) the pump probes
 /// the server's view of the execution; if the exec is still running it
@@ -687,6 +717,10 @@ async fn attach_ws_pump(
     // Sticky across reconnects: once the server has ever sent a frame the
     // exec is real, so a later reconnect uses the steady-state watchdog.
     let mut first_frame_seen = false;
+    // Trailing bytes of a UTF-8 codepoint split across two frames, held
+    // here until the rest arrives. Independent per channel.
+    let mut stdout_pending: Vec<u8> = Vec::new();
+    let mut stderr_pending: Vec<u8> = Vec::new();
 
     let mut current_stream = Some(initial_stream);
 
@@ -796,15 +830,20 @@ async fn attach_ws_pump(
                     match frame {
                         Message::Binary(bytes) => {
                             if let Some((channel, payload)) = bytes.split_first() {
-                                let text = String::from_utf8_lossy(payload).into_owned();
                                 match *channel {
                                     0x01 => {
-                                        tracing::trace!(len = text.len(), "WS attach: stdout frame");
-                                        let _ = stdout_tx.send(text);
+                                        let text = decode_utf8_streaming(&mut stdout_pending, payload);
+                                        if !text.is_empty() {
+                                            tracing::trace!(len = text.len(), "WS attach: stdout frame");
+                                            let _ = stdout_tx.send(text);
+                                        }
                                     }
                                     0x02 => {
-                                        tracing::trace!(len = text.len(), "WS attach: stderr frame");
-                                        let _ = stderr_tx.send(text);
+                                        let text = decode_utf8_streaming(&mut stderr_pending, payload);
+                                        if !text.is_empty() {
+                                            tracing::trace!(len = text.len(), "WS attach: stderr frame");
+                                            let _ = stderr_tx.send(text);
+                                        }
                                     }
                                     other => {
                                         tracing::warn!(channel = other, "WS attach: unknown channel prefix");
@@ -1581,6 +1620,61 @@ mod tests {
             s.received_stdin
         );
         drop(s);
+        server.abort();
+    }
+
+    // ─── ws_stdout_utf8_split_across_frames ───────────────────────────────
+    //
+    // A multi-byte UTF-8 codepoint (€, bytes E2 82 AC) is split across two
+    // stdout binary frames. The client must reassemble it instead of
+    // replacing the incomplete tail with U+FFFD per frame.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_stdout_utf8_split_across_frames() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, None, |mut ws, _state| async move {
+                ws.send(Message::Binary(vec![0x01, 0xE2, 0x82]))
+                    .await
+                    .unwrap();
+                ws.send(Message::Binary(vec![0x01, 0xAC])).await.unwrap();
+                ws.send(Message::Text(r#"{"type":"exit","exit_code":0}"#.into()))
+                    .await
+                    .unwrap();
+                let _ = ws.close(None).await;
+            })
+            .await;
+        });
+
+        let client = client_for(port);
+        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let attach = tokio::spawn(async move {
+            attach_ws(
+                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+            )
+            .await;
+        });
+
+        tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+            .await
+            .expect("result channel timed out")
+            .expect("result channel closed without value");
+
+        let mut received = String::new();
+        while let Ok(Some(chunk)) =
+            tokio::time::timeout(Duration::from_millis(200), stdout_rx.recv()).await
+        {
+            received.push_str(&chunk);
+        }
+        assert_eq!(received, "€");
+
+        attach.await.unwrap();
         server.abort();
     }
 
