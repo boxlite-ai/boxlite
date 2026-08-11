@@ -6,10 +6,10 @@
  *
  *   <namespace>-<workload>-<stage>-<name>[-<attribute>...]
  *
- * The workload slot exists because the account holds more than one: the application stack, the
- * ops console (boxlite-ops-console*), and the e2e fleet (boxlite-e2e-*). Without it nothing
- * distinguishes a workload token from a stage — `boxlite-e2e-runner` reads equally as stage=e2e
- * or workload=e2e — and a reader cannot parse a name back into its parts.
+ * The workload slot exists because the account holds more than one: the application stack and the
+ * e2e fleet (boxlite-e2e-*). Without it nothing distinguishes a workload token from a stage —
+ * `boxlite-e2e-runner` reads equally as stage=e2e or workload=e2e — and a reader cannot parse a
+ * name back into its parts.
  *
  * Most files that touch one of these two names go through awsResourceName; the exceptions are
  * the ones that cannot call JavaScript: ci/github-deploy-role.yaml declares both,
@@ -38,7 +38,7 @@
  * they already exist and are referenced elsewhere, not because anything makes them unrenamable.
  */
 
-// The application stack, as distinct from the ops-console and e2e workloads in the same account.
+// The application stack, as distinct from the e2e workload in the same account.
 const WORKLOAD = 'app'
 
 export function awsResourceName({ app, stage, name, attributes = [] }) {
