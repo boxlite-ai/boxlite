@@ -10,8 +10,8 @@
  * the matching deploy command.
  *
  * Usage:
- *   npm run runner:build-artifact
- *   npm run runner:build-artifact -- --stage dev
+ *   npm run runner:build-artifact -- --stage dev --region ap-southeast-1
+ *   npm run runner:build-artifact -- --stage dev --region ap-southeast-1 --release <sha256>
  *
  * The checkout must be clean and its submodules initialized. Otherwise a commit-keyed object
  * would claim to contain bytes that the named commit does not actually produce.
@@ -24,14 +24,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { loadDeploymentEnvironment, readWorkspaceVersion, resolveAwsRegion } from './deployment-environment.mjs'
+import { DeploymentConfigStore } from './deployment-config-store.mjs'
+import { readWorkspaceVersion, resolveAwsRegion } from './deployment-environment.mjs'
 import { resolveAwsCliPath } from './proxy-deployment-verify.mjs'
-import { resolveAwsAccountId, runnerArtifactsBucketName } from './runner-artifact.mjs'
+import { runnerArtifactsBucketName } from './runner-artifact.mjs'
 
 const APP = 'boxlite'
 const SCRIPT_DIRECTORY = fileURLToPath(new URL('.', import.meta.url))
 const COMMIT = /^[0-9a-f]{40}$/
-const STAGE = /^[a-z0-9][a-z0-9-]{0,31}$/
+const STAGE = /^[a-z0-9]{1,20}$/
+const REGION = /^[a-z]{2}(?:-gov)?-[a-z]+-\d+$/
+const RELEASE = /^[0-9a-f]{64}$/
 
 function checked(
   command,
@@ -50,34 +53,40 @@ function checked(
   return (result.stdout || '').trim()
 }
 
-function parseArgs(argv) {
-  let stage = process.env.SST_STAGE || 'dev'
+export function parseRunnerArtifactArgs(argv) {
+  const options = {}
   for (let index = 2; index < argv.length; index += 1) {
-    if (argv[index] !== '--stage') throw new Error(`unknown argument '${argv[index]}' (expected --stage <name>)`)
+    const name = argv[index].match(/^--(stage|region|release)$/)?.[1]
+    if (!name) throw new Error(`unknown argument '${argv[index]}' (expected --stage, --region, or --release)`)
     const value = argv[index + 1]
-    if (!value || value.startsWith('-')) throw new Error('--stage requires a value')
-    stage = value
+    if (!value || value.startsWith('-')) throw new Error(`--${name} requires a value`)
+    if (options[name] !== undefined) throw new Error(`--${name} may be specified only once`)
+    options[name] = value
     index += 1
   }
-  if (!STAGE.test(stage)) throw new Error(`invalid stage '${stage}'`)
-  return { stage }
+  if (!options.stage) throw new Error('--stage is required')
+  if (!options.region) throw new Error('--region is required')
+  if (!STAGE.test(options.stage)) throw new Error(`invalid stage '${options.stage}'`)
+  if (!REGION.test(options.region)) throw new Error(`invalid region '${options.region}'`)
+  if (options.release && !RELEASE.test(options.release)) throw new Error('invalid release; expected a lowercase SHA-256')
+  return { stage: options.stage, region: options.region, releaseId: options.release }
 }
 
 export class RunnerArtifactBuilder {
   constructor({
     environment = process.env,
     run = checked,
-    accountId = resolveAwsAccountId,
+    accountId,
     readVersion = readWorkspaceVersion,
     awsCliPath = resolveAwsCliPath,
-    loadEnvironment = loadDeploymentEnvironment,
+    configStore = (options) => new DeploymentConfigStore(options),
   } = {}) {
     this.environment = environment
     this.run = run
     this.accountId = accountId
     this.readVersion = readVersion
     this.awsCliPath = awsCliPath
-    this.loadEnvironment = loadEnvironment
+    this.configStore = configStore
   }
 
   inspectCheckout() {
@@ -146,20 +155,29 @@ export class RunnerArtifactBuilder {
     }
   }
 
-  async prepareStage({ stage, ref }) {
+  async prepareStage({ stage, ref, region, releaseId }) {
     const awsCliPath = this.awsCliPath(this.environment)
-    const accountId = await this.accountId({ awsCliPath, environment: this.environment })
-    const region = resolveAwsRegion(this.environment)
+    const selectedRegion = region ?? resolveAwsRegion(this.environment)
+    let accountId
+    let selectedReleaseId = releaseId
+    if (this.accountId) {
+      // An injected resolver keeps the builder unit-testable without an AWS CLI.
+      accountId = await this.accountId({ awsCliPath, environment: this.environment })
+    } else {
+      const release = this.configStore({ awsCliPath, region: selectedRegion }).resolve({ stage, releaseId })
+      accountId = release.document.accountId
+      selectedReleaseId = release.releaseId
+    }
     const bucket = runnerArtifactsBucketName({ app: APP, stage, accountId })
     const keyPrefix = `runner/${ref}`
     const prefix = `s3://${bucket}/${keyPrefix}`
 
     // Discover missing credentials/bootstrap before spending minutes compiling libkrun.
-    this.run(awsCliPath, ['s3api', 'head-bucket', '--bucket', bucket], {
+    this.run(awsCliPath, ['s3api', 'head-bucket', '--region', selectedRegion, '--bucket', bucket], {
       environment: this.environment,
       description: `artifact bucket ${bucket} lookup`,
     })
-    return { awsCliPath, region, bucket, keyPrefix, prefix }
+    return { awsCliPath, region: selectedRegion, releaseId: selectedReleaseId, bucket, keyPrefix, prefix }
   }
 
   // Write-once, because everything downstream treats version+ref as an identity: the Pulumi
@@ -225,13 +243,9 @@ export class RunnerArtifactBuilder {
     }
   }
 
-  async execute({ stage }) {
-    // The printed deploy command runs through sst-with-cloudflare.mjs, which loads apps/infra/.env
-    // before resolving AWS. Staging without it would take AWS_PROFILE/AWS_REGION/AWS_CLI_PATH from
-    // the bare shell and could upload into a different account than the deploy then reads.
-    this.loadEnvironment({ environment: this.environment })
+  async execute({ stage, region, releaseId }) {
     const checkout = this.inspectCheckout()
-    const destination = await this.prepareStage({ stage, ref: checkout.ref })
+    const destination = await this.prepareStage({ stage, ref: checkout.ref, region, releaseId })
     const built = await this.build(checkout)
     try {
       this.stage({ ...built, ...destination })
@@ -243,13 +257,15 @@ export class RunnerArtifactBuilder {
 }
 
 async function main() {
-  const options = parseArgs(process.argv)
+  const options = parseRunnerArtifactArgs(process.argv)
   const result = await new RunnerArtifactBuilder().execute(options)
   console.log(`staged ${result.archive} (${result.identity}) at ${result.prefix}`)
   // Runner-scoped, not the global pair: this staged a Runner and nothing else, so the Api keeps
   // building from the checkout. The global key would point it at a commit image only CI publishes.
   console.log(
-    `RUNNER_ARTIFACT_SOURCE=build RUNNER_ARTIFACT_REF=${result.ref} ` + `npm run deploy -- --stage ${result.stage}`,
+    `RUNNER_ARTIFACT_SOURCE=build RUNNER_ARTIFACT_REF=${result.ref} ` +
+      `BOXLITE_DEPLOY_CONFIG_RELEASE=${result.releaseId} AWS_REGION=${result.region} ` +
+      `npm run deploy -- --stage ${result.stage}`,
   )
 }
 

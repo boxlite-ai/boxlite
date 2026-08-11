@@ -7,8 +7,10 @@ const {
   CONTROL_PLANE_NAME_TAG,
   RUNNER_RESOURCE_NAME_PATTERN,
   RUNNER_RESOURCE_TYPE,
+  extraRunnerInstanceProfileName,
   isRunnerLikeResource,
 } = require('./runner-inventory.cjs')
+const { parseEc2InstanceId } = require('./runner-instance-identity.cjs')
 
 const ALLOWED_MUTABLE_INPUTS = new Set(['ami', 'tags', 'tagsAll', 'userDataBase64'])
 const REQUIRED_IGNORED_PROPERTIES = ['ami', 'userDataBase64']
@@ -88,6 +90,13 @@ function createRunnerSafetyFingerprint(properties) {
   return `sha256:${createHash('sha256').update(serializedInputs).digest('hex')}`
 }
 
+function createRunnerProfileMigrationFingerprint(properties) {
+  const protectedInputs = normalizeRunnerProtectedInputs(properties)
+  delete protectedInputs.iamInstanceProfile
+  const serializedInputs = JSON.stringify(protectedInputs)
+  return `sha256:${createHash('sha256').update(serializedInputs).digest('hex')}`
+}
+
 function readConsistentIdentityTag(properties, key) {
   const values = []
   for (const tags of [properties?.tags, properties?.tagsAll]) {
@@ -132,10 +141,22 @@ function hasExactIgnoredProperties(ignoreChanges) {
   )
 }
 
-function createRunnerStateBaseline(exportedState) {
+function hasValidEc2InstanceId(instanceId) {
+  try {
+    parseEc2InstanceId(instanceId)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function createRunnerStateBaseline(exportedState, { stage = exportedState?.stack } = {}) {
   const latest = exportedState?.latest
   const resources = latest?.resources
   if (!Array.isArray(resources)) throw new Error('SST state export does not contain a resource checkpoint')
+  // The deterministic target profile name is also the stage validation boundary
+  // used by the one-time extra Runner profile migration below.
+  extraRunnerInstanceProfileName(stage)
   for (const pendingOperationsField of ['pending_operations', 'pendingOperations']) {
     if (!Object.prototype.hasOwnProperty.call(latest, pendingOperationsField)) continue
     const pendingOperations = latest[pendingOperationsField]
@@ -157,7 +178,7 @@ function createRunnerStateBaseline(exportedState) {
     if (
       resource.custom !== true ||
       typeof resource.id !== 'string' ||
-      resource.id.length === 0 ||
+      !hasValidEc2InstanceId(resource.id) ||
       typeof resource.provider !== 'string' ||
       resource.provider.length === 0 ||
       ['delete', 'external', 'pendingReplacement', 'retainOnDelete', 'taint'].some(
@@ -173,15 +194,17 @@ function createRunnerStateBaseline(exportedState) {
 
     try {
       runnerResources[name] = {
+        instanceId: resource.id,
         inputFingerprint: createRunnerSafetyFingerprint(resource.inputs),
         identityFingerprint: createRunnerIdentityFingerprint(resource.inputs, name, { allowLegacyFallback: true }),
+        profileMigrationFingerprint: createRunnerProfileMigrationFingerprint(resource.inputs),
       }
     } catch {
       throw new Error('SST state export contains invalid Runner inputs')
     }
   }
 
-  return { version: 3, resources: runnerResources }
+  return { version: 4, stage, resources: runnerResources }
 }
 
 function parseRunnerStateBaseline(serializedBaseline) {
@@ -192,23 +215,28 @@ function parseRunnerStateBaseline(serializedBaseline) {
     throw new Error('Runner state baseline is not valid JSON')
   }
   if (
-    baseline?.version !== 3 ||
+    baseline?.version !== 4 ||
+    typeof baseline.stage !== 'string' ||
     !baseline.resources ||
     typeof baseline.resources !== 'object' ||
     Array.isArray(baseline.resources)
   ) {
     throw new Error('Runner state baseline has an unsupported shape')
   }
+  extraRunnerInstanceProfileName(baseline.stage)
 
   for (const [name, properties] of Object.entries(baseline.resources)) {
+    const expectedKeys = 'identityFingerprint\0inputFingerprint\0instanceId\0profileMigrationFingerprint'
     if (
       !RUNNER_RESOURCE_NAME_PATTERN.test(name) ||
       !properties ||
       typeof properties !== 'object' ||
       Array.isArray(properties) ||
-      Object.keys(properties).sort().join('\0') !== 'identityFingerprint\0inputFingerprint' ||
+      Object.keys(properties).sort().join('\0') !== expectedKeys ||
+      !hasValidEc2InstanceId(properties.instanceId) ||
       !RUNNER_FINGERPRINT_PATTERN.test(properties.inputFingerprint) ||
-      !RUNNER_FINGERPRINT_PATTERN.test(properties.identityFingerprint)
+      !RUNNER_FINGERPRINT_PATTERN.test(properties.identityFingerprint) ||
+      !RUNNER_FINGERPRINT_PATTERN.test(properties.profileMigrationFingerprint)
     ) {
       throw new Error('Runner state baseline has invalid safety fingerprints')
     }
@@ -218,6 +246,7 @@ function parseRunnerStateBaseline(serializedBaseline) {
 
 module.exports = {
   createRunnerIdentityFingerprint,
+  createRunnerProfileMigrationFingerprint,
   createRunnerSafetyFingerprint,
   createRunnerStateBaseline,
   hasExactIgnoredProperties,

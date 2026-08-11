@@ -9,10 +9,11 @@
     "remove": "node scripts/sst-with-cloudflare.mjs remove",
     "test": "node --test scripts/*.test.mjs",
     "sst": "node scripts/sst-with-cloudflare.mjs",
-    "secrets": "node scripts/sst-with-cloudflare.mjs secret list",
+    "secrets": "node scripts/runtime-secrets-cli.mjs status",
     "runner:update": "node scripts/runner-update-binary.mjs",
     "login": "node scripts/login.mjs",
     "bootstrap": "node scripts/bootstrap-environment.mjs",
+    "config:activate": "node scripts/deployment-config-activate.mjs",
     "verify-deploy-role": "node scripts/verify-deploy-role-boundary.mjs",
     "runner:build-artifact": "node scripts/runner-artifact-build.mjs"
   },
@@ -20,7 +21,7 @@
     "@pulumi/aws": "^7.24.0",
     "@pulumi/policy": "1.21.0",
     "js-yaml": "^4.1.0",
-    "sst": "^4.6.11"
+    "sst": "4.6.11"
   },
   "dependencies": {
     "@pulumi/random": "^4.19.2",

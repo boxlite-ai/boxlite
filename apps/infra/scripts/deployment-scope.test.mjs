@@ -44,6 +44,23 @@ test('an unqualified deploy still covers both components', () => {
   assert.deepEqual(resolveDeployScope(['deploy', '--stage', 'dev']).excluded, [])
 })
 
+test('application selectors after the shell separator cannot narrow the stack graph', () => {
+  const scope = resolveDeployScope([
+    'shell',
+    '--stage',
+    'dev',
+    '--',
+    'node',
+    'script.mjs',
+    '--exclude',
+    'Runner',
+    '--target=Api',
+  ])
+
+  assert.deepEqual([...scope.components], ['api', 'runner'])
+  assert.deepEqual([...scope.excluded], [])
+})
+
 test('an excluded diff is narrowed exactly like the deploy behind it', () => {
   // The preview and the apply must build the SAME resource graph. Deriving the scope from the
   // subcommand instead of the selector made `diff --exclude Runner` declare UpgradeRunnerBinary-*

@@ -5,8 +5,9 @@
  * Idempotent, human-run environment preparation for a BoxLite SST
  * deployment: the GitHub OIDC deploy role + runtime IAM boundary
  * (ci/github-deploy-role.yaml), the Cloudflare provider credentials in SSM,
- * the OIDC_CLIENT_ID SST secret, and the GitHub `<stage>` Environment
- * variables/secret the deploy workflow reads. See apps/infra/README.md's
+ * the OIDC_CLIENT_ID SST secret, stable runtime secrets, the immutable
+ * deployment configuration release, and the GitHub `<stage>` Environment
+ * variables the deploy workflow reads. See apps/infra/README.md's
  * "Deploy an existing stack" section for the full prerequisite list this
  * script does NOT cover (Cloudflare domain, Auth0/OIDC tenant, an existing
  * Runner — first-Runner provisioning is a separate, not-yet-built operation).
@@ -20,7 +21,7 @@
  * `gh` CLI authenticated against the target repo.
  *
  * Usage: node scripts/bootstrap-environment.mjs [--stage dev] [--repo owner/name]
- *                                               [--reviewers 123,456] [--force]
+ *                                               [--reviewers 123,456] [--env-file path] [--force]
  *   --stage      SST stage to bootstrap (default: dev, or SST_STAGE). The GitHub
  *                Environment must be named exactly this — the deploy role's trust
  *                policy pins `repo:<owner>/<repo>:environment:<stage>`.
@@ -28,7 +29,11 @@
  *                a community fork resolves to itself automatically)
  *   --reviewers  Comma-separated numeric GitHub user ids required to approve a
  *                deployment (default: whoever is authenticated with `gh`)
- *   --force      see decideSsmOverwrite() in environment-bootstrap.mjs
+ *   --env-file   Bootstrap input path (default: apps/infra/.env). Relative paths
+ *                resolve from the caller's working directory, so an operator file
+ *                outside a disposable worktree can be used without copying it.
+ *   --force      Replace mutable provider/runtime secret values. Encryption
+ *                key material and the default Runner API key cannot rotate in v1.
  *   --provision-auth0
  *                Create the Auth0 SPA app, custom API, and post-login Action
  *                (requires `npm run login` first). NOT idempotent — Auth0 has no
@@ -42,15 +47,37 @@
  * Non-interactive use (e.g. wiring this into a more-privileged automation
  * later): set CLOUDFLARE_API_TOKEN, CLOUDFLARE_DEFAULT_ACCOUNT_ID, and
  * OIDC_CLIENT_ID in the environment and no prompts fire.
+ *
+ * Bootstrap publishes configuration and secret versions; it does not restart
+ * ECS tasks or Runners. After a mutable-secret rotation, preview and apply the
+ * newly current digest. First expand is bootstrap -> apply -> bootstrap again
+ * to replace generated-pending markers -> preview/apply the finalized release.
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
+import { existsSync, readFileSync, realpathSync, unlinkSync } from 'node:fs'
+import { devNull } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { hasFlag, parseFlag } from './cli-flags.mjs'
-import { loadDeploymentEnvironment, resolveAwsRegion } from './deployment-environment.mjs'
+import {
+  loadBootstrapEnvironment,
+  resolveBootstrapEnvironmentPath,
+  validateBootstrapArguments,
+} from './bootstrap-environment-file.mjs'
+import { validateBootstrapConsumerInvariants } from './bootstrap-consumer-validation.mjs'
+import {
+  canonicalizeDeploymentConfig,
+  createDeploymentConfigDocument,
+  PENDING_RUNTIME_SECRET_GENERATION,
+  shieldSstEnvironment,
+  validateRuntimeSecretGenerations,
+  validateDeploymentConfigStage,
+} from './deployment-config.mjs'
+import { DeploymentConfigStore } from './deployment-config-store.mjs'
+import { resolveAwsRegion } from './deployment-environment.mjs'
 import {
   GITHUB_OIDC_PROVIDER_URL,
   MINIMUM_AWS_CLI_VERSION,
@@ -79,7 +106,28 @@ import {
   parseReviewerIds,
 } from './github-environment.mjs'
 import { resolveAwsCliPath } from './proxy-deployment-verify.mjs'
+import {
+  evaluateRunnerCommandTagGate,
+  parseRunnerEc2Instances,
+} from './runner-command-tag-gate.mjs'
+import runnerInventory from './runner-inventory.cjs'
+import { readRunnerStateBaseline } from './runner-policy-baseline.mjs'
+import {
+  RUNTIME_SECRET_DEFINITIONS,
+  RUNTIME_SECRET_INITIALIZATION_PENDING,
+  RUNTIME_SECRET_INITIALIZATION_SEALED,
+  RUNTIME_SECRET_INITIALIZATION_TAG,
+  RUNTIME_SECRET_INITIAL_VALUE_TAG,
+  SST_APP_SECRET_NAMES,
+  resolveRuntimeSecretSeedValues,
+  runtimeSecretName,
+} from './runtime-secrets.mjs'
+import { validateSstSecretMutationArgs } from './sst-command-contract.mjs'
+import { withSstLogSecurity } from './sst-event-log-security.mjs'
+import { resolveSstExecutable } from './sst-executable.mjs'
 import { resolveSstStage } from './sst-stage.mjs'
+
+const { resolveRunnerInventory } = runnerInventory
 
 const SCRIPT_NAME = 'bootstrap-environment'
 // The one stage that must never end up with an unreviewed deploy path. Matches
@@ -110,11 +158,19 @@ const CLOUDFLARE_CREDENTIALS = [
   { envVar: 'CLOUDFLARE_DEFAULT_ACCOUNT_ID', param: 'cloudflare-account-id', label: 'Cloudflare account ID' },
 ]
 
-function requireStageEnvFile() {
-  if (!existsSync(ENV_PATH)) {
-    throw new Error(`${ENV_PATH} does not exist; run \`cp .env.example .env\` and fill it in first`)
+function requireStageEnvFile(path) {
+  if (!existsSync(path)) {
+    throw new Error(`${path} does not exist; pass --env-file or run \`cp .env.example .env\` and fill it in first`)
   }
-  return ENV_PATH
+  return path
+}
+
+export function validateBootstrapStageSelection(stage, environment = process.env) {
+  const ambientStage = environment.SST_STAGE
+  if (ambientStage !== undefined && ambientStage !== '' && ambientStage !== stage) {
+    throw new Error('ambient SST_STAGE conflicts with the selected bootstrap stage')
+  }
+  return stage
 }
 
 function requireGhAuthenticated() {
@@ -271,46 +327,510 @@ function promptSecret(label) {
   })
 }
 
-function ssmParameterExists(awsCliPath, region, name) {
+export function ssmParameterExists(
+  awsCliPath,
+  region,
+  name,
+  { execute = execFileSync } = {},
+) {
   try {
-    execFileSync(awsCliPath, ['ssm', 'get-parameter', '--region', region, '--name', name], {
-      stdio: 'ignore',
+    execute(awsCliPath, ['ssm', 'get-parameter', '--region', region, '--name', name], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'ignore', 'pipe'],
       timeout: 15_000,
       killSignal: 'SIGTERM',
+      maxBuffer: 64 * 1024,
     })
     return true
-  } catch {
-    return false // ParameterNotFound (or a transient error — the put below is the real signal)
+  } catch (error) {
+    const detail = `${error?.code ?? ''}\n${error?.stderr ?? ''}\n${error?.message ?? ''}`
+    if (/ParameterNotFound/i.test(detail)) return false
+    throw new Error(`could not inspect SecureString parameter ${name}`)
   }
 }
 
-function putSsmSecureParameter(awsCliPath, region, name, value) {
-  execFileSync(
+export function putSsmSecureParameter(
+  awsCliPath,
+  region,
+  name,
+  value,
+  { execute = execFileSync, overwrite = false } = {},
+) {
+  if (typeof overwrite !== 'boolean') {
+    throw new Error('SecureString overwrite selection must be boolean')
+  }
+  const args = [
+    'ssm',
+    'put-parameter',
+    '--region',
+    region,
+    '--type',
+    'SecureString',
+    '--name',
+    name,
+    '--value',
+    'file:///dev/stdin',
+  ]
+  if (overwrite) args.push('--overwrite')
+  try {
+    execute(
+      awsCliPath,
+      args,
+      { input: value, encoding: 'utf8', stdio: ['pipe', 'ignore', 'pipe'], timeout: 15_000, killSignal: 'SIGTERM' },
+    )
+  } catch {
+    throw new Error(`could not update SecureString parameter ${name}`)
+  }
+}
+
+function inspectRuntimeSecret(execute, awsCliPath, region, name) {
+  try {
+    const metadata = JSON.parse(
+      execute(awsCliPath, ['secretsmanager', 'describe-secret', '--region', region, '--secret-id', name], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 15_000,
+        killSignal: 'SIGTERM',
+      }),
+    )
+    const currentVersionIds = Object.entries(metadata.VersionIdsToStages ?? {})
+      .filter(([, stages]) => Array.isArray(stages) && stages.includes('AWSCURRENT'))
+      .map(([versionId]) => versionId)
+    if (currentVersionIds.length > 1) {
+      throw new Error('runtime secret metadata contains multiple AWSCURRENT versions')
+    }
+    const currentVersionId = currentVersionIds[0]
+    const hasCurrentValue = currentVersionId !== undefined
+    if (!Array.isArray(metadata.Tags)) throw new Error('runtime secret metadata contains invalid tags')
+    const readExactTag = (key) => {
+      const matches = metadata.Tags.filter((tag) => tag?.Key === key)
+      if (matches.length > 1 || (matches[0] && typeof matches[0].Value !== 'string')) {
+        throw new Error('runtime secret metadata contains ambiguous ownership tags')
+      }
+      return matches[0]?.Value
+    }
+    const initialValue = readExactTag(RUNTIME_SECRET_INITIAL_VALUE_TAG)
+    const initialization = readExactTag(RUNTIME_SECRET_INITIALIZATION_TAG)
+    return { state: 'existing', initialValue, initialization, hasCurrentValue, currentVersionId }
+  } catch (error) {
+    const detail = `${error.stderr ?? ''}\n${error.message ?? ''}`
+    if (/ResourceNotFoundException/i.test(detail)) {
+      return {
+        state: 'missing',
+        initialValue: undefined,
+        initialization: undefined,
+        hasCurrentValue: false,
+        currentVersionId: undefined,
+      }
+    }
+    throw new Error(`could not inspect runtime secret container ${name}`, { cause: error })
+  }
+}
+
+function runtimeSecretOwnershipTags(initialValue, initialization) {
+  return JSON.stringify([
+    { Key: RUNTIME_SECRET_INITIAL_VALUE_TAG, Value: initialValue },
+    { Key: RUNTIME_SECRET_INITIALIZATION_TAG, Value: initialization },
+  ])
+}
+
+function createRuntimeSecret(execute, awsCliPath, region, name, initialValue, initialization) {
+  try {
+    execute(
+      awsCliPath,
+      [
+        'secretsmanager',
+        'create-secret',
+        '--region',
+        region,
+        '--name',
+        name,
+        '--description',
+        'Stable BoxLite runtime secret managed by bootstrap',
+        '--tags',
+        runtimeSecretOwnershipTags(initialValue, initialization),
+      ],
+      { stdio: ['ignore', 'ignore', 'pipe'], timeout: 30_000, killSignal: 'SIGTERM' },
+    )
+  } catch (error) {
+    throw new Error(`could not create runtime secret container ${name}; its state may have changed after planning`, {
+      cause: error,
+    })
+  }
+}
+
+function tagRuntimeSecret(execute, awsCliPath, region, name, initialValue, initialization) {
+  execute(
     awsCliPath,
-    ['ssm', 'put-parameter', '--region', region, '--type', 'SecureString', '--name', name, '--value', 'file:///dev/stdin', '--overwrite'],
-    { input: value, encoding: 'utf8', stdio: ['pipe', 'ignore', 'pipe'], timeout: 15_000, killSignal: 'SIGTERM' },
+    [
+      'secretsmanager',
+      'tag-resource',
+      '--region',
+      region,
+      '--secret-id',
+      name,
+      '--tags',
+      runtimeSecretOwnershipTags(initialValue, initialization),
+    ],
+    { stdio: ['ignore', 'ignore', 'pipe'], timeout: 15_000, killSignal: 'SIGTERM' },
   )
 }
 
-async function ensureCloudflareCredentials({ awsCliPath, region, stage, force }) {
+function seedRuntimeSecret(execute, awsCliPath, region, name, value, versionId) {
+  try {
+    execute(
+      awsCliPath,
+      [
+        'secretsmanager',
+        'put-secret-value',
+        '--region',
+        region,
+        '--secret-id',
+        name,
+        '--secret-string',
+        'file:///dev/stdin',
+        '--client-request-token',
+        versionId,
+      ],
+      {
+        input: value,
+        encoding: 'utf8',
+        stdio: ['pipe', 'ignore', 'pipe'],
+        timeout: 30_000,
+        killSignal: 'SIGTERM',
+      },
+    )
+  } catch {
+    throw new Error(`could not seed runtime secret ${name}`)
+  }
+}
+
+function readRuntimeSecretValue(execute, awsCliPath, region, name) {
+  try {
+    const source = execute(
+      awsCliPath,
+      [
+        'secretsmanager',
+        'get-secret-value',
+        '--region',
+        region,
+        '--secret-id',
+        name,
+        '--query',
+        'SecretString',
+        '--output',
+        'json',
+      ],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 30_000,
+        killSignal: 'SIGTERM',
+      },
+    )
+    const value = JSON.parse(source)
+    if (typeof value !== 'string') throw new Error('SecretString is unavailable')
+    return value
+  } catch {
+    // AWS stdout may contain the current credential, including malformed JSON.
+    // Do not retain it, the parser error, or the CLI failure as a printable cause.
+    throw new Error(`could not compare the existing value for runtime secret ${name}`)
+  }
+}
+
+function secretValuesEqual(left, right) {
+  const leftBytes = Buffer.from(left, 'utf8')
+  const rightBytes = Buffer.from(right, 'utf8')
+  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes)
+}
+
+export function planRuntimeSecrets({
+  awsCliPath,
+  region,
+  stage,
+  seeds,
+  force,
+  execute = execFileSync,
+  createVersionId = randomUUID,
+}) {
+  if (!Array.isArray(seeds)) throw new Error('validated runtime secret seeds are required')
+  const definitions = new Map(RUNTIME_SECRET_DEFINITIONS.map((definition) => [definition.id, definition]))
+  const seedById = new Map()
+  for (const seed of seeds) {
+    if (!definitions.has(seed?.id)) throw new Error(`unknown runtime secret seed id '${seed?.id ?? ''}'`)
+    if (seedById.has(seed.id)) throw new Error(`duplicate runtime secret seed id '${seed.id}'`)
+    if (typeof seed.value !== 'string' || !seed.value) throw new Error(`runtime secret seed ${seed.id} has no value`)
+    seedById.set(seed.id, seed)
+  }
+
+  // Complete discovery first. No create/tag/put call is permitted until every
+  // container's tags and AWSCURRENT state have been observed.
+  const observations = RUNTIME_SECRET_DEFINITIONS.map((definition) => {
+    const name = runtimeSecretName(stage, definition.id)
+    return {
+      definition,
+      name,
+      ownership: inspectRuntimeSecret(execute, awsCliPath, region, name),
+      seed: seedById.get(definition.id),
+    }
+  })
+
+  const plan = observations.map(({ definition, name, ownership, seed }) => {
+    if (ownership.state === 'missing') {
+      return {
+        id: definition.id,
+        name,
+        seed,
+        action: seed ? 'create-explicit' : 'create-generated',
+        generation: seed ? createVersionId() : PENDING_RUNTIME_SECRET_GENERATION,
+        message: seed ? 'seeded from local input' : 'created for generated initial value',
+      }
+    }
+
+    const initialValue = ownership.initialValue
+    if (!['generated', 'explicit', 'updating'].includes(initialValue)) {
+      throw new Error(`runtime secret ${name} has invalid bootstrap ownership metadata`)
+    }
+    if (
+      ownership.initialization !== undefined &&
+      ![RUNTIME_SECRET_INITIALIZATION_PENDING, RUNTIME_SECRET_INITIALIZATION_SEALED].includes(
+        ownership.initialization,
+      )
+    ) {
+      throw new Error(`runtime secret ${name} has invalid bootstrap initialization metadata`)
+    }
+    if (initialValue === 'explicit' && ownership.initialization === RUNTIME_SECRET_INITIALIZATION_PENDING) {
+      throw new Error(`runtime secret ${name} has an invalid explicit pending initialization state`)
+    }
+    if (
+      initialValue === 'generated' &&
+      ownership.initialization === RUNTIME_SECRET_INITIALIZATION_SEALED &&
+      !ownership.hasCurrentValue
+    ) {
+      throw new Error(`runtime secret ${name} is sealed but has no AWSCURRENT value`)
+    }
+
+    if (!seed) {
+      if (initialValue === 'updating') {
+        throw new Error(
+          `runtime secret ${name} has an incomplete explicit rotation; rerun bootstrap with its local seed value`,
+        )
+      }
+      if (initialValue === 'explicit' && !ownership.hasCurrentValue) {
+        throw new Error(
+          `runtime secret ${name} is tagged explicit but has no AWSCURRENT value; supply its local seed to repair it`,
+        )
+      }
+      let action
+      if (initialValue === 'generated' && ownership.hasCurrentValue) {
+        action =
+          ownership.initialization === RUNTIME_SECRET_INITIALIZATION_SEALED
+            ? 'retain-generated'
+            : 'seal-generated'
+      } else if (initialValue === 'generated') {
+        action =
+          ownership.initialization === RUNTIME_SECRET_INITIALIZATION_PENDING
+            ? 'retain-generated'
+            : 'tag-generated-pending'
+      } else {
+        action =
+          ownership.initialization === RUNTIME_SECRET_INITIALIZATION_SEALED
+            ? 'retain-explicit'
+            : 'seal-explicit'
+      }
+      return {
+        id: definition.id,
+        name,
+        action,
+        generation: ownership.currentVersionId ?? PENDING_RUNTIME_SECRET_GENERATION,
+        message: `${initialValue} value retained`,
+      }
+    }
+
+    if (!ownership.hasCurrentValue) {
+      return {
+        id: definition.id,
+        name,
+        seed,
+        action: 'seed-explicit',
+        generation: createVersionId(),
+        message: 'seeded from local input',
+      }
+    }
+
+    const currentValue = readRuntimeSecretValue(execute, awsCliPath, region, name)
+    if (secretValuesEqual(currentValue, seed.value)) {
+      return {
+        id: definition.id,
+        name,
+        action:
+          initialValue === 'explicit' &&
+          ownership.initialization === RUNTIME_SECRET_INITIALIZATION_SEALED
+            ? 'retain-explicit'
+            : 'seal-explicit',
+        generation: ownership.currentVersionId,
+        message: 'explicit value unchanged',
+      }
+    }
+    if (definition.rotationPolicy === 'non-rotatable-v1') {
+      throw new Error(`runtime secret ${name} cannot be rotated in v1 because ${definition.rotationBlockReason}`)
+    }
+    if (!force) {
+      throw new Error(`runtime secret ${name} differs from local input; rerun bootstrap with --force to rotate it`)
+    }
+    return {
+      id: definition.id,
+      name,
+      seed,
+      action: 'rotate-explicit',
+      generation: createVersionId(),
+      message: 'rotated from local input',
+    }
+  })
+  runtimeSecretGenerationsFromPlan(plan)
+  return plan
+}
+
+export function runtimeSecretGenerationsFromPlan(plan) {
+  if (!Array.isArray(plan)) throw new Error('a precomputed runtime secret plan is required')
+  const generations = {}
+  for (const item of plan) {
+    if (typeof item?.id !== 'string' || Object.hasOwn(generations, item.id)) {
+      throw new Error('runtime secret plan contains a missing or duplicate secret id')
+    }
+    generations[item.id] = item.generation
+  }
+  return validateRuntimeSecretGenerations(generations)
+}
+
+export function runtimeSecretInitializationRequired(plan) {
+  return plan.some(
+    (item) =>
+      item.generation === PENDING_RUNTIME_SECRET_GENERATION &&
+      (item.action === 'create-generated' || item.action === 'retain-generated' || item.action === 'tag-generated-pending'),
+  )
+}
+
+export function partitionRuntimeSecretPlanForInitializationGate(plan) {
+  runtimeSecretGenerationsFromPlan(plan)
+  const sealBeforeEnable = plan.filter((item) => item.action === 'seal-generated')
+  const remaining = plan.filter((item) => item.action !== 'seal-generated')
+  return { sealBeforeEnable, remaining }
+}
+
+function applyRuntimeSecretActions({
+  awsCliPath,
+  region,
+  plan,
+  execute = execFileSync,
+  log = console.log,
+}) {
+  if (!Array.isArray(plan)) throw new Error('a precomputed runtime secret plan is required')
+  for (const item of plan) {
+    if (item.action === 'create-generated') {
+      createRuntimeSecret(
+        execute,
+        awsCliPath,
+        region,
+        item.name,
+        'generated',
+        RUNTIME_SECRET_INITIALIZATION_PENDING,
+      )
+    } else if (item.action === 'create-explicit') {
+      createRuntimeSecret(
+        execute,
+        awsCliPath,
+        region,
+        item.name,
+        'explicit',
+        RUNTIME_SECRET_INITIALIZATION_SEALED,
+      )
+      seedRuntimeSecret(execute, awsCliPath, region, item.name, item.seed.value, item.generation)
+    } else if (item.action === 'seed-explicit' || item.action === 'rotate-explicit') {
+      seedRuntimeSecret(execute, awsCliPath, region, item.name, item.seed.value, item.generation)
+      tagRuntimeSecret(
+        execute,
+        awsCliPath,
+        region,
+        item.name,
+        'explicit',
+        RUNTIME_SECRET_INITIALIZATION_SEALED,
+      )
+    } else if (item.action === 'seal-explicit') {
+      tagRuntimeSecret(execute, awsCliPath, region, item.name, 'explicit', RUNTIME_SECRET_INITIALIZATION_SEALED)
+    } else if (item.action === 'seal-generated') {
+      tagRuntimeSecret(execute, awsCliPath, region, item.name, 'generated', RUNTIME_SECRET_INITIALIZATION_SEALED)
+    } else if (item.action === 'tag-generated-pending') {
+      tagRuntimeSecret(execute, awsCliPath, region, item.name, 'generated', RUNTIME_SECRET_INITIALIZATION_PENDING)
+    } else if (!item.action.startsWith('retain-')) {
+      throw new Error(`unknown runtime secret bootstrap action '${item.action}'`)
+    }
+    log(`[${SCRIPT_NAME}] runtime secret ${item.name} ... ${item.message}`)
+  }
+  return plan
+}
+
+export function applyRuntimeSecretPlan(options) {
+  runtimeSecretGenerationsFromPlan(options?.plan)
+  return applyRuntimeSecretActions(options)
+}
+
+export function applyRuntimeSecretPlanSubset(options) {
+  if (!Array.isArray(options?.plan)) throw new Error('a precomputed runtime secret plan subset is required')
+  for (const item of options.plan) {
+    if (!RUNTIME_SECRET_DEFINITIONS.some(({ id }) => id === item?.id)) {
+      throw new Error('runtime secret plan subset contains an unknown secret id')
+    }
+  }
+  return applyRuntimeSecretActions(options)
+}
+
+export function ensureRuntimeSecrets({
+  awsCliPath,
+  region,
+  stage,
+  seeds,
+  force,
+  execute = execFileSync,
+  log = console.log,
+}) {
+  const plan = planRuntimeSecrets({ awsCliPath, region, stage, seeds, force, execute })
+  return applyRuntimeSecretPlan({ awsCliPath, region, plan, execute, log })
+}
+
+export async function ensureCloudflareCredentials({
+  awsCliPath,
+  region,
+  stage,
+  force,
+  environment = process.env,
+  parameterExists = ssmParameterExists,
+  putParameter = putSsmSecureParameter,
+  prompt = promptSecret,
+  log = console.log,
+}) {
   for (const { envVar, param, label } of CLOUDFLARE_CREDENTIALS) {
     const name = ssmParameterName(stage, param)
-    const fromEnv = process.env[envVar]?.trim()
+    const fromEnv = environment[envVar]?.trim()
+    const exists = parameterExists(awsCliPath, region, name)
     if (fromEnv) {
-      putSsmSecureParameter(awsCliPath, region, name, fromEnv)
-      console.log(`[${SCRIPT_NAME}] ${label} ... set from ${envVar}`)
+      if (decideSsmOverwrite({ exists, force }) === 'skip') {
+        log(`[${SCRIPT_NAME}] ${label} ... already set (use --force to change)`)
+        continue
+      }
+      putParameter(awsCliPath, region, name, fromEnv, { overwrite: exists })
+      log(`[${SCRIPT_NAME}] ${label} ... set from ${envVar}`)
       continue
     }
 
-    const exists = ssmParameterExists(awsCliPath, region, name)
     if (decideSsmOverwrite({ exists, force }) === 'skip') {
-      console.log(`[${SCRIPT_NAME}] ${label} ... already set (use --force to change)`)
+      log(`[${SCRIPT_NAME}] ${label} ... already set (use --force to change)`)
       continue
     }
 
-    const value = requireNonEmptySecret(label, await promptSecret(`${label}: `))
-    putSsmSecureParameter(awsCliPath, region, name, value)
-    console.log(`[${SCRIPT_NAME}] ${label} ... set`)
+    const value = requireNonEmptySecret(label, await prompt(`${label}: `))
+    putParameter(awsCliPath, region, name, value, { overwrite: exists })
+    log(`[${SCRIPT_NAME}] ${label} ... set`)
   }
 }
 
@@ -337,14 +857,20 @@ const SST_PLATFORM_DIR = join(INFRA_ROOT, '.sst', 'platform')
  */
 function ensureSstPlatform(stage) {
   if (sstPlatformState(SST_PLATFORM_DIR) === 'ready') {
-    runSst(['install', '--stage', stage], { timeout: SST_INSTALL_TIMEOUT_MS, label: 'install the SST platform' })
+    runBootstrapSst(['install', '--stage', stage], {
+      timeout: SST_INSTALL_TIMEOUT_MS,
+      label: 'install the SST platform',
+    })
     console.log(`[${SCRIPT_NAME}] SST platform ... ready`)
     return
   }
 
   console.log(`[${SCRIPT_NAME}] SST platform ... installing (first run: pulumi + providers, a minute or two)`)
   try {
-    runSst(['install', '--stage', stage], { timeout: SST_COLD_INSTALL_TIMEOUT_MS, label: 'install the SST platform' })
+    runBootstrapSst(['install', '--stage', stage], {
+      timeout: SST_COLD_INSTALL_TIMEOUT_MS,
+      label: 'install the SST platform',
+    })
   } catch (error) {
     if (sstPlatformState(SST_PLATFORM_DIR) !== 'deps-missing') throw error
     console.warn(
@@ -357,7 +883,10 @@ function ensureSstPlatform(stage) {
       timeout: SST_INSTALL_TIMEOUT_MS,
       killSignal: 'SIGTERM',
     })
-    runSst(['install', '--stage', stage], { timeout: SST_INSTALL_TIMEOUT_MS, label: 'install the SST platform' })
+    runBootstrapSst(['install', '--stage', stage], {
+      timeout: SST_INSTALL_TIMEOUT_MS,
+      label: 'install the SST platform',
+    })
   }
   console.log(`[${SCRIPT_NAME}] SST platform ... ready`)
 }
@@ -367,29 +896,104 @@ function ensureSstPlatform(stage) {
  * bare sst binary) so this stays the one place that knows how to reach it —
  * see scripts/sst-with-cloudflare.mjs's own header comment for why.
  *
- * sst writes its own diagnosis to .sst/log/sst.log and prints only "Unexpected
- * error occurred" to the terminal, so a failure here is worthless without that
- * file's tail attached.
+ * Nonsecret operations retain SST's diagnostic tail. Secret mutations use the
+ * dedicated path below because SST's raw log is not a safe output channel for
+ * credential-bearing commands.
  */
-function runSst(args, { input, timeout, label }) {
+function executeBootstrapSst(
+  args,
+  {
+    input,
+    timeout,
+    execute,
+    infraRoot,
+    wrapperPath,
+  },
+) {
+  return execute(process.execPath, [wrapperPath, ...args], {
+    ...(input === undefined ? {} : { input }),
+    encoding: 'utf8',
+    stdio: [input === undefined ? 'ignore' : 'pipe', 'inherit', 'inherit'],
+    timeout,
+    killSignal: 'SIGTERM',
+    cwd: infraRoot,
+  })
+}
+
+function sstFailureHint(cause, timeout) {
+  return cause.code === 'ETIMEDOUT' ? ` after ${Math.round(timeout / 1000)}s` : ''
+}
+
+function removeBootstrapSstDiagnosticLog(infraRoot, phase) {
+  const logPath = join(infraRoot, '.sst', 'log', 'sst.log')
   try {
-    execFileSync(process.execPath, [SST_WRAPPER_PATH, ...args], {
-      ...(input === undefined ? {} : { input }),
-      encoding: 'utf8',
-      stdio: [input === undefined ? 'ignore' : 'pipe', 'inherit', 'inherit'],
-      timeout,
-      killSignal: 'SIGTERM',
-      cwd: INFRA_ROOT,
-    })
+    unlinkSync(logPath)
   } catch (cause) {
-    const hint = cause.code === 'ETIMEDOUT' ? ` after ${Math.round(timeout / 1000)}s` : ''
-    throw new Error(`could not ${label}${hint}${sstLogTail()}`, { cause })
+    if (cause.code === 'ENOENT') return
+    throw new Error(`could not remove the SST diagnostic log ${phase} a secret mutation`, { cause })
   }
 }
 
-function sstLogTail(lines = 5) {
+export function runBootstrapSst(
+  args,
+  {
+    timeout,
+    label,
+    execute = execFileSync,
+    infraRoot = INFRA_ROOT,
+    wrapperPath = SST_WRAPPER_PATH,
+  },
+) {
+  if (!Array.isArray(args) || args.length !== 3 || args[0] !== 'install' || args[1] !== '--stage') {
+    throw new Error('the nonsecret bootstrap SST runner accepts only install with one explicit --stage')
+  }
+  validateDeploymentConfigStage(args[2])
   try {
-    const tail = readFileSync(join(INFRA_ROOT, '.sst', 'log', 'sst.log'), 'utf8').trimEnd().split('\n').slice(-lines)
+    return executeBootstrapSst(args, { timeout, execute, infraRoot, wrapperPath })
+  } catch (cause) {
+    throw new Error(`could not ${label}${sstFailureHint(cause, timeout)}${sstLogTail(5, infraRoot)}`, { cause })
+  }
+}
+
+export function runBootstrapSstSecretMutation(
+  args,
+  {
+    input,
+    timeout,
+    label,
+    execute = execFileSync,
+    infraRoot = INFRA_ROOT,
+    wrapperPath = SST_WRAPPER_PATH,
+  },
+) {
+  const { operation, name, confirmation, sstArgs } = validateSstSecretMutationArgs(args)
+  if (!SST_APP_SECRET_NAMES.includes(name)) {
+    throw new Error('the bootstrap SST secret name is not registered')
+  }
+  if (confirmation !== undefined) {
+    throw new Error('bootstrap SST secret mutations do not accept a confirmation option')
+  }
+  if (operation === 'set' && (typeof input !== 'string' || !input)) {
+    throw new Error(`${label} requires a non-empty secret value`)
+  }
+  if (operation === 'remove' && input !== undefined) {
+    throw new Error(`${label} must not receive a secret value`)
+  }
+  removeBootstrapSstDiagnosticLog(infraRoot, 'before')
+  try {
+    return executeBootstrapSst(sstArgs, { input, timeout, execute, infraRoot, wrapperPath })
+  } catch (cause) {
+    // Never attach .sst/log/sst.log here. It is an unstructured third-party
+    // diagnostic and may contain the stdin value supplied to `sst secret`.
+    throw new Error(`could not ${label}${sstFailureHint(cause, timeout)}`, { cause })
+  } finally {
+    removeBootstrapSstDiagnosticLog(infraRoot, 'after')
+  }
+}
+
+function sstLogTail(lines = 5, infraRoot = INFRA_ROOT) {
+  try {
+    const tail = readFileSync(join(infraRoot, '.sst', 'log', 'sst.log'), 'utf8').trimEnd().split('\n').slice(-lines)
     return tail.length ? `\n  last lines of .sst/log/sst.log:\n${tail.map((line) => `    ${line}`).join('\n')}` : ''
   } catch {
     return '' // no log yet — the wrapper's own stderr is all there is
@@ -405,12 +1009,26 @@ async function ensureOidcClientId(stage) {
   // 120s, not 60s: the platform is warm by now, but this still writes to the
   // stage's secret store over the network and a slow link should not look like
   // a broken one.
-  runSst(['secret', 'set', 'OIDC_CLIENT_ID', '--stage', stage], {
+  runBootstrapSstSecretMutation(['secret', 'set', 'OIDC_CLIENT_ID', '--stage', stage], {
     input: value,
     timeout: 120_000,
     label: 'set the OIDC_CLIENT_ID secret',
   })
   console.log(`[${SCRIPT_NAME}] OIDC_CLIENT_ID ... set${fromEnv ? ' from OIDC_CLIENT_ID env' : ''}`)
+}
+
+function ensureConfiguredSstSecrets(stage, configuredKeys) {
+  const configured = new Set(configuredKeys)
+  for (const name of SST_APP_SECRET_NAMES) {
+    if (name === 'OIDC_CLIENT_ID') continue
+    if (!configured.has(name)) continue
+    runBootstrapSstSecretMutation(['secret', 'set', name, '--stage', stage], {
+      input: process.env[name],
+      timeout: 120_000,
+      label: `set the ${name} secret`,
+    })
+    console.log(`[${SCRIPT_NAME}] ${name} ... set from local input`)
+  }
 }
 
 /*
@@ -575,10 +1193,103 @@ function provisionAuth0({ stackDomain }) {
   console.log(`[${SCRIPT_NAME}] supply this when prompted for the OIDC client ID: ${clientId}`)
 }
 
-function deployGithubDeployRoleStack({ awsCliPath, region, stage, repo }) {
-  const stackName = githubDeployRoleStackName(stage)
-  const overrides = cloudFormationParameterOverrides({ repo, stage })
+export function readCloudFormationBooleanParameter({
+  awsCliPath,
+  region,
+  stackName,
+  parameterName,
+  execute = execFileSync,
+}) {
+  try {
+    const value = execute(
+      awsCliPath,
+      [
+        'cloudformation',
+        'describe-stacks',
+        '--region',
+        region,
+        '--stack-name',
+        stackName,
+        '--query',
+        `Stacks[0].Parameters[?ParameterKey=='${parameterName}'].ParameterValue | [0]`,
+        '--output',
+        'text',
+      ],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 30_000,
+        killSignal: 'SIGTERM',
+      },
+    ).trim()
+    if (value === '' || value === 'None') return false
+    if (value === 'true') return true
+    if (value === 'false') return false
+    throw new Error('CloudFormation returned an invalid boolean parameter')
+  } catch (error) {
+    const detail = `${error?.stderr ?? ''}\n${error?.message ?? ''}`
+    if (/ValidationError[\s\S]*Stack with id[\s\S]*does not exist/i.test(detail)) return false
+    throw new Error(`could not inspect CloudFormation safety parameter ${parameterName}`)
+  }
+}
 
+function describeEc2Instances(awsCliPath, region, execute = execFileSync) {
+  try {
+    return parseRunnerEc2Instances(
+      execute(
+        awsCliPath,
+        ['ec2', 'describe-instances', '--region', region, '--output', 'json', '--no-cli-pager'],
+        {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: 60_000,
+          killSignal: 'SIGTERM',
+          maxBuffer: 16 * 1024 * 1024,
+        },
+      ),
+    )
+  } catch {
+    throw new Error('could not verify Runner command authorization tags from EC2 metadata')
+  }
+}
+
+async function resolveRunnerCommandTagGate({ awsCliPath, region, stage, stackName }) {
+  const previousEnabled = readCloudFormationBooleanParameter({
+    awsCliPath,
+    region,
+    stackName,
+    parameterName: 'RunnerCommandTagGateEnabled',
+  })
+  const nativeEnvironment = { ...process.env }
+  const sstPath = resolveSstExecutable(nativeEnvironment)
+  shieldSstEnvironment(nativeEnvironment)
+  nativeEnvironment.SST_STAGE = stage
+  nativeEnvironment.SST_LOG = devNull
+  const serializedBaseline = await withSstLogSecurity(INFRA_ROOT, () =>
+    readRunnerStateBaseline({
+      stage,
+      sstPath,
+      sstArgs: ['state'],
+      environment: nativeEnvironment,
+      workingDirectory: INFRA_ROOT,
+    }),
+  )
+  let baseline
+  try {
+    baseline = JSON.parse(serializedBaseline)
+  } catch {
+    throw new Error('could not verify Runner command authorization from the SST state baseline')
+  }
+  return evaluateRunnerCommandTagGate({
+    previousEnabled,
+    stage,
+    desiredInventory: resolveRunnerInventory(process.env),
+    baseline,
+    instances: describeEc2Instances(awsCliPath, region),
+  })
+}
+
+function deployGithubDeployRoleStack({ awsCliPath, region, stackName, overrides }) {
   const deployStdout = execFileSync(
     awsCliPath,
     [
@@ -631,86 +1342,207 @@ function ghVariableSet({ repo, stage, name, value }) {
   })
 }
 
-/*
- * The gh installed here (2.92.0) has no --body-file, and passing it makes gh
- * print usage and exit non-zero. It takes --body, or reads the value from
- * stdin when --body is omitted; --env-file is a different feature entirely
- * (many secrets named by a dotenv file, not one secret whose value is that
- * file). Passing the whole file on stdin is what stores DEPLOY_ENV as a single
- * secret, and keeps the contents out of argv where other processes could read
- * them.
- */
-function ghSecretSetFromFile({ repo, stage, name, filePath }) {
-  execFileSync('gh', ['secret', 'set', name, '--repo', repo, '--env', stage], {
-    input: readFileSync(filePath),
-    stdio: ['pipe', 'inherit', 'inherit'],
-    timeout: 30_000,
-    killSignal: 'SIGTERM',
-  })
-}
-
 function wireGithubEnvironment({ repo, stage, region, roleArn }) {
   ghVariableSet({ repo, stage, name: 'AWS_DEPLOY_ROLE_ARN', value: roleArn })
   ghVariableSet({ repo, stage, name: 'AWS_REGION', value: region })
-  ghSecretSetFromFile({ repo, stage, name: 'DEPLOY_ENV', filePath: requireStageEnvFile() })
-  console.log(`[${SCRIPT_NAME}] GitHub ${stage} environment ... AWS_DEPLOY_ROLE_ARN, AWS_REGION, DEPLOY_ENV set`)
+  console.log(`[${SCRIPT_NAME}] GitHub ${stage} environment ... AWS_DEPLOY_ROLE_ARN, AWS_REGION set`)
+}
+
+export function commitBootstrapConfigRelease({
+  deploymentConfigStore,
+  publicationInput,
+  runtimeSecretInitializationEnabled = false,
+  sealRuntimeSecrets = () => {},
+  deployBootstrapPolicy = () => {},
+  applyRuntimeSecrets,
+}) {
+  if (!deploymentConfigStore || typeof deploymentConfigStore.prepare !== 'function') {
+    throw new Error('bootstrap config commit requires a deployment config store with prepare()')
+  }
+  if (typeof deploymentConfigStore.activate !== 'function') {
+    throw new Error('bootstrap config commit requires a deployment config store with activate()')
+  }
+  if (typeof applyRuntimeSecrets !== 'function') {
+    throw new Error('bootstrap config commit requires a runtime secret apply callback')
+  }
+  if (typeof runtimeSecretInitializationEnabled !== 'boolean') {
+    throw new Error('bootstrap config commit requires a boolean runtime secret initialization gate')
+  }
+  if (typeof sealRuntimeSecrets !== 'function' || typeof deployBootstrapPolicy !== 'function') {
+    throw new Error('bootstrap config commit requires runtime secret sealing and policy callbacks')
+  }
+
+  // Retain a byte-verified immutable release before rotating any stable
+  // secret. A failed apply can then be repaired by a normal bootstrap rerun;
+  // current remains unchanged until the complete precomputed plan succeeds.
+  const prepared = deploymentConfigStore.prepare(publicationInput)
+  // When a later generated container needs initialization, close every old
+  // pending+AWSCURRENT container before re-enabling PutSecretValue. On the
+  // ordinary finalization path, first remove that Put grant and only then seal.
+  if (runtimeSecretInitializationEnabled) sealRuntimeSecrets()
+  deployBootstrapPolicy()
+  if (!runtimeSecretInitializationEnabled) sealRuntimeSecrets()
+  applyRuntimeSecrets()
+  return deploymentConfigStore.activate({
+    stage: publicationInput.stage,
+    releaseId: prepared.releaseId,
+  })
 }
 
 async function main() {
-  // Every other consumer (sst-with-cloudflare.mjs, sst.config.ts) loads the
-  // stage dotenv first; without it AWS_REGION/STACK_DOMAIN from .env are
-  // silently ignored and the stage lands in the default region.
-  loadDeploymentEnvironment()
   const args = process.argv.slice(2)
+  validateBootstrapArguments(args)
+  const environmentPath = requireStageEnvFile(
+    resolveBootstrapEnvironmentPath({ args, defaultPath: ENV_PATH }),
+  )
+  const { configuredKeys } = loadBootstrapEnvironment({ path: environmentPath, environment: process.env })
+  const runtimeSecretSeeds = resolveRuntimeSecretSeedValues(process.env)
+  validateBootstrapConsumerInvariants({ environment: process.env, configuredKeys, runtimeSecretSeeds })
   const stage = resolveSstStage(args)
+  validateDeploymentConfigStage(stage)
+  validateBootstrapStageSelection(stage)
+  // This bootstrap-specific grammar is stricter than SST's general stage
+  // grammar because the stage is also part of a CloudFormation stack name.
+  // Prepare it before any external mutation so an underscore cannot leave a
+  // half-provisioned GitHub/AWS environment.
+  const deployRoleStackName = githubDeployRoleStackName(stage)
   const force = hasFlag(args, 'force')
   const region = resolveAwsRegion()
   const awsCliPath = resolveAwsCliPath()
   const reviewerIds = parseReviewerIds(parseFlag(args, 'reviewers'))
 
-  requireStageEnvFile()
   requireGhAuthenticated()
   const repo = resolveRepo(args)
   requireAwsCliWithLoginSupport(awsCliPath)
   const identity = currentAwsIdentity(awsCliPath, region)
 
+  // Secrets Manager VersionIds may be as long as 64 characters. Size and type
+  // check that conservative release shape before the SSM lock write; otherwise
+  // a valid plan could acquire the lock only to discover that it cannot fit in
+  // a Standard Parameter.
+  const worstCaseRuntimeSecretGenerations = Object.fromEntries(
+    RUNTIME_SECRET_DEFINITIONS.map(({ id }) => [id, 'a'.repeat(64)]),
+  )
+  const deploymentConfigPreflightDocument = createDeploymentConfigDocument({
+    environment: process.env,
+    configuredKeys,
+    stage,
+    region,
+    accountId: identity.Account,
+    runtimeSecretGenerations: worstCaseRuntimeSecretGenerations,
+  })
+  canonicalizeDeploymentConfig(deploymentConfigPreflightDocument)
+
   console.log(`[${SCRIPT_NAME}] stage=${stage} region=${region} repo=${repo}`)
   console.log(`[${SCRIPT_NAME}] AWS identity ... ${identity.Arn}`)
 
-  // Default the reviewer to whoever is running this, so the environment comes
-  // out actually protected rather than nominally so.
-  const effectiveReviewerIds = reviewerIds.length > 0 ? reviewerIds : [authenticatedGitHubUserId()]
+  const deploymentConfigStore = new DeploymentConfigStore({ awsCliPath, region })
+  await deploymentConfigStore.withDeploymentOperationLock({ stage }, async () => {
+    // Planning observes every secret while this stage's operation lock is held,
+    // so no cooperating bootstrap or stack evaluation can act on the old state.
+    const runtimeSecretPlan = planRuntimeSecrets({
+      awsCliPath,
+      region,
+      stage,
+      seeds: runtimeSecretSeeds,
+      force,
+    })
+    const runtimeSecretGenerations = runtimeSecretGenerationsFromPlan(runtimeSecretPlan)
+    const runtimeSecretInitializationEnabled = runtimeSecretInitializationRequired(runtimeSecretPlan)
+    const { sealBeforeEnable, remaining } = partitionRuntimeSecretPlanForInitializationGate(runtimeSecretPlan)
+    // Validate the exact observed/preallocated generations before any provider
+    // mutation. Publication itself stays last, after every referenced secret
+    // container and the deploy role are ready.
+    const deploymentConfigDocument = createDeploymentConfigDocument({
+      environment: process.env,
+      configuredKeys,
+      stage,
+      region,
+      accountId: identity.Account,
+      runtimeSecretGenerations,
+    })
+    canonicalizeDeploymentConfig(deploymentConfigDocument)
 
-  ensureGitHubOidcProvider({ awsCliPath, region })
-  ensureGithubEnvironment({ repo, stage, reviewerIds: effectiveReviewerIds })
-  if (hasFlag(args, 'provision-auth0')) {
-    const stackDomain = process.env.STACK_DOMAIN
-    if (!stackDomain) throw new Error('STACK_DOMAIN must be set in .env before --provision-auth0 can build callback URLs')
-    provisionAuth0({ stackDomain })
-  }
-  await ensureCloudflareCredentials({ awsCliPath, region, stage, force })
-  // Before the first timed sst call, not inside it — see ensureSstPlatform.
-  ensureSstPlatform(stage)
-  await ensureOidcClientId(stage)
-  const roleArn = deployGithubDeployRoleStack({ awsCliPath, region, stage, repo })
-  wireGithubEnvironment({ repo, stage, region, roleArn })
+    // Default the reviewer to whoever is running this, so the environment comes
+    // out actually protected rather than nominally so.
+    const effectiveReviewerIds = reviewerIds.length > 0 ? reviewerIds : [authenticatedGitHubUserId()]
+
+    // Install locally before the first timed state read, then finish every
+    // fallible live gate inspection before mutating GitHub, AWS, or providers.
+    ensureSstPlatform(stage)
+    const runnerCommandTagGateEnabled = await resolveRunnerCommandTagGate({
+      awsCliPath,
+      region,
+      stage,
+      stackName: deployRoleStackName,
+    })
+
+    ensureGitHubOidcProvider({ awsCliPath, region })
+    ensureGithubEnvironment({ repo, stage, reviewerIds: effectiveReviewerIds })
+    if (hasFlag(args, 'provision-auth0')) {
+      const stackDomain = process.env.STACK_DOMAIN
+      if (!stackDomain) throw new Error('STACK_DOMAIN must be set in .env before --provision-auth0 can build callback URLs')
+      provisionAuth0({ stackDomain })
+    }
+    await ensureCloudflareCredentials({ awsCliPath, region, stage, force })
+    ensureConfiguredSstSecrets(stage, configuredKeys)
+    await ensureOidcClientId(stage)
+    const publication = commitBootstrapConfigRelease({
+      deploymentConfigStore,
+      publicationInput: {
+        stage,
+        environment: process.env,
+        configuredKeys,
+        runtimeSecretGenerations,
+      },
+      runtimeSecretInitializationEnabled,
+      sealRuntimeSecrets() {
+        applyRuntimeSecretPlanSubset({ awsCliPath, region, plan: sealBeforeEnable })
+      },
+      deployBootstrapPolicy() {
+        const roleArn = deployGithubDeployRoleStack({
+          awsCliPath,
+          region,
+          stackName: deployRoleStackName,
+          overrides: cloudFormationParameterOverrides({
+            repo,
+            stage,
+            runnerCommandTagGateEnabled,
+            runtimeSecretInitializationEnabled,
+          }),
+        })
+        // GitHub wiring is a prerequisite, not post-commit cleanup. A failure
+        // here must leave the old /current pointer and runtime generations intact.
+        wireGithubEnvironment({ repo, stage, region, roleArn })
+      },
+      applyRuntimeSecrets() {
+        applyRuntimeSecretPlanSubset({ awsCliPath, region, plan: remaining })
+      },
+    })
+    console.log(
+      `[${SCRIPT_NAME}] deployment config ${publication.releaseId} ... ` +
+        `${publication.isCurrent ? 'current' : 'published; another concurrent release is current'}`,
+    )
+  })
 
   console.log(
     `[${SCRIPT_NAME}] done. Preview next: gh workflow run deploy-infra.yml --repo ${repo} --ref main -f stage=${stage} -f apply=false`,
   )
 }
 
-try {
-  await main()
-} catch (error) {
-  // Print the cause chain. Several checks here wrap a tool failure in advice
-  // ("GitHub CLI is not authenticated; run `npm run login` first"), and the
-  // advice is only right for one of the ways that tool can fail — `gh auth
-  // status` also exits non-zero when it cannot reach github.com. Without the
-  // cause an operator whose session is fine is sent to re-authenticate.
-  console.error(`${SCRIPT_NAME}: ${error.message}`)
-  for (let cause = error.cause; cause; cause = cause.cause) {
-    console.error(`${SCRIPT_NAME}:   caused by: ${cause.message ?? cause}`)
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+  try {
+    await main()
+  } catch (error) {
+    // Print the cause chain. Several checks here wrap a tool failure in advice
+    // ("GitHub CLI is not authenticated; run `npm run login` first"), and the
+    // advice is only right for one of the ways that tool can fail — `gh auth
+    // status` also exits non-zero when it cannot reach github.com. Without the
+    // cause an operator whose session is fine is sent to re-authenticate.
+    console.error(`${SCRIPT_NAME}: ${error.message}`)
+    for (let cause = error.cause; cause; cause = cause.cause) {
+      console.error(`${SCRIPT_NAME}:   caused by: ${cause.message ?? cause}`)
+    }
+    process.exit(1)
   }
-  process.exit(1)
 }

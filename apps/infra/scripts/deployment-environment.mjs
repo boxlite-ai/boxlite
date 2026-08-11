@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-import { config as loadDotenv } from 'dotenv'
 import { readFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,14 +10,6 @@ import { optionalPublicOidcIssuer, requireOidcIssuer } from './oidc-issuer.mjs'
 const DEFAULT_AWS_REGION = 'ap-southeast-1'
 const STABLE_SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const DEFAULT_MODULE_DIRECTORY = dirname(fileURLToPath(import.meta.url))
-
-export function loadDeploymentEnvironment({ path, environment = process.env } = {}) {
-  return loadDotenv({
-    ...(path ? { path } : {}),
-    processEnv: environment,
-    quiet: true,
-  })
-}
 
 export function resolveAwsRegion(environment = process.env) {
   return environment.AWS_REGION?.trim() || DEFAULT_AWS_REGION

@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { cpSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,7 +22,9 @@ import {
   ssmSupervisionSeconds,
   TERMINAL_SSM_STATUSES,
   waitForTerminalStatus,
+  withRunnerUpdateOperationLock,
 } from './runner-update-binary.mjs'
+import { DEPLOYMENT_OPERATION_LOCK_OWNER_ENV } from './deployment-config-store.mjs'
 
 const assertShellLine = (run, pattern) => assert.match(liveText('shell', run), pattern)
 
@@ -30,16 +32,42 @@ const VERSION = '1.2.3'
 const TARBALL = `boxlite-runner-v${VERSION}-linux-amd64.tar.gz`
 const REF = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
 const BUCKET = 'boxlite-dev-artifacts-123456789012'
+const INSTANCE_A = 'i-0123456789abcdef0'
+const INSTANCE_B = 'i-11111111111111111'
+const INSTANCE_C = 'i-22222222222222222'
+const LEGACY_INSTANCE = 'i-01234567'
 // The module reads its region once at import; mirror that rather than assume a default.
 const REGION = process.env.AWS_REGION || 'ap-southeast-1'
+const runnerUpdateArgv = (...args) => ['node', 'script', '--stage', 'dev', ...args]
+const RUNNER_UPDATE_SOURCE = liveText(
+  'script',
+  readFileSync(new URL('./runner-update-binary.mjs', import.meta.url), 'utf8'),
+)
+
+function runnerInstance(instanceId, { stage = 'dev', role = 'runner', state = 'running', extraTags = [] } = {}) {
+  return {
+    InstanceId: instanceId,
+    State: { Name: state },
+    Tags: [
+      { Key: 'boxlite:stage', Value: stage },
+      { Key: 'boxlite:ssm-role', Value: role },
+      ...extraTags,
+    ],
+  }
+}
+
+function describeResponse(...instances) {
+  return JSON.stringify({ Reservations: [{ Instances: instances }] })
+}
 
 // Both upgrades come out of the production resolver rather than hand-built literals, so a change
 // to how a source is turned into an artifact reaches every payload assertion below.
-const releaseUpgrade = (version = VERSION) => resolveUpgrade(['node', 'script', version], {})
+const releaseUpgrade = (version = VERSION) => resolveUpgrade(runnerUpdateArgv(version), {})
 const buildUpgrade = (version = VERSION) =>
   resolveUpgrade(
     ['node', 'script'],
     {
+      SST_STAGE: 'dev',
       RUNNER_ARTIFACT_SOURCE: 'build',
       BOXLITE_ARTIFACT_REF: REF,
       RUNNER_ARTIFACT_BUCKET: BUCKET,
@@ -51,35 +79,116 @@ const buildUpgrade = (version = VERSION) =>
   )
 
 test('resolveVersion prefers the positional argument, then the environment', () => {
-  assert.equal(resolveVersion(['node', 'script', '1.2.3'], { RUNNER_VERSION: '9.9.9' }), '1.2.3')
-  assert.equal(resolveVersion(['node', 'script'], { RUNNER_VERSION: '4.5.6' }), '4.5.6')
+  assert.equal(resolveVersion(runnerUpdateArgv('1.2.3'), { RUNNER_VERSION: '9.9.9' }), '1.2.3')
+  assert.equal(resolveVersion(runnerUpdateArgv(), { RUNNER_VERSION: '4.5.6' }), '4.5.6')
 })
 
 test('resolveVersion strips a leading v so operators can paste a tag name', () => {
-  assert.equal(resolveVersion(['node', 'script', 'v1.2.3'], {}), '1.2.3')
-  assert.equal(resolveVersion(['node', 'script', '  v1.2.3  '], {}), '1.2.3')
+  assert.equal(resolveVersion(runnerUpdateArgv('v1.2.3'), {}), '1.2.3')
+  assert.equal(resolveVersion(runnerUpdateArgv('  v1.2.3  '), {}), '1.2.3')
 })
 
 test('resolveVersion falls back to the workspace version', () => {
-  assert.match(resolveVersion(['node', 'script'], {}), /^\d+\.\d+\.\d+/)
+  assert.match(resolveVersion(runnerUpdateArgv(), {}), /^\d+\.\d+\.\d+/)
+})
+
+test('the CLI requires a stage instead of silently targeting dev or loading dotenv', () => {
+  assert.throws(() => resolveUpgrade(['node', 'script', VERSION], {}), /--stage|SST_STAGE/)
+})
+
+test('the CLI accepts --stage plus one optional release version', () => {
+  const selected = resolveUpgrade(['node', 'script', '--stage', 'prod', VERSION], {})
+
+  assert.equal(selected.stage, 'prod')
+  assert.equal(selected.kind, 'release')
+  assert.equal(selected.version, VERSION)
+})
+
+test('runner update owns the stage operation lock directly or validates the wrapper owner', () => {
+  const ownerId = '11111111-1111-4111-8111-111111111111'
+  const directEvents = []
+  const directStore = {
+    acquireDeploymentOperationLock(options) {
+      directEvents.push(['acquire', options])
+      return { stage: options.stage, ownerId }
+    },
+    releaseDeploymentOperationLock(lock) {
+      directEvents.push(['release', lock])
+    },
+  }
+  const directResult = withRunnerUpdateOperationLock(
+    {
+      stage: 'dev',
+      region: REGION,
+      environment: {},
+      createStore: () => directStore,
+    },
+    () => {
+      directEvents.push(['update'])
+      return 'updated'
+    },
+  )
+  assert.equal(directResult, 'updated')
+  assert.deepEqual(directEvents.map(([event]) => event), ['acquire', 'update', 'release'])
+
+  const inheritedEvents = []
+  const inheritedStore = {
+    assertDeploymentOperationLockOwner(options) {
+      inheritedEvents.push(['validate-owner', options])
+    },
+    acquireDeploymentOperationLock() {
+      assert.fail('a nested Runner update must not deadlock by acquiring its parent lock')
+    },
+    releaseDeploymentOperationLock() {
+      assert.fail('a nested Runner update must not release its parent lock')
+    },
+  }
+  withRunnerUpdateOperationLock(
+    {
+      stage: 'dev',
+      region: REGION,
+      environment: { [DEPLOYMENT_OPERATION_LOCK_OWNER_ENV]: ownerId },
+      createStore: () => inheritedStore,
+    },
+    () => inheritedEvents.push(['update']),
+  )
+  assert.deepEqual(inheritedEvents.map(([event]) => event), ['validate-owner', 'update'])
+})
+
+test('the CLI rejects ambiguous or malformed stage and version arguments', () => {
+  assert.throws(() => resolveUpgrade(['node', 'script', '--stage'], {}), /--stage requires a value/)
+  assert.throws(
+    () => resolveUpgrade(['node', 'script', '--stage', 'dev', '--stage', 'prod'], {}),
+    /--stage may be specified only once/,
+  )
+  assert.throws(() => resolveUpgrade(['node', 'script', '--stage=dev'], {}), /unknown argument/)
+  assert.throws(() => resolveUpgrade(['node', 'script', '--stage', '../prod'], {}), /invalid SST stage/)
+  assert.throws(() => resolveUpgrade(['node', 'script', '--stage', 'dev-blue'], {}), /invalid SST stage/)
+  assert.throws(
+    () => resolveUpgrade(['node', 'script', '--stage', 'dev', '1.2.3', '1.2.4'], {}),
+    /at most one release version/,
+  )
 })
 
 test('release resolution shares VERSION with the API unless the Runner override is explicit', () => {
   const selected = resolveUpgrade(['node', 'script'], {
+    SST_STAGE: 'dev',
     RUNNER_ARTIFACT_SOURCE: 'release',
     VERSION: '8.7.6',
   })
+  assert.equal(selected.stage, 'dev', 'the SST deploy path carries its already-resolved stage in SST_STAGE')
   assert.equal(selected.version, '8.7.6')
   assert.match(selected.artifact.tarballUrl, /\/v8\.7\.6\/boxlite-runner-v8\.7\.6-linux-amd64\.tar\.gz$/)
 
   const runnerOverride = resolveUpgrade(['node', 'script'], {
+    SST_STAGE: 'dev',
     RUNNER_ARTIFACT_SOURCE: 'release',
     VERSION: '8.7.6',
     RUNNER_VERSION: '7.6.5',
   })
   assert.equal(runnerOverride.version, '7.6.5')
 
-  const positional = resolveUpgrade(['node', 'script', '6.5.4'], {
+  const positional = resolveUpgrade(runnerUpdateArgv('6.5.4'), {
     RUNNER_ARTIFACT_SOURCE: 'build',
     RUNNER_VERSION: '7.6.5',
   })
@@ -87,21 +196,148 @@ test('release resolution shares VERSION with the API unless the Runner override 
   assert.equal(positional.version, '6.5.4')
 })
 
-test('resolveTargets parses an explicit instance list without calling AWS', () => {
-  const describe = () => assert.fail('AWS must not be consulted when INSTANCE_IDS is set')
-  assert.deepEqual(resolveTargets({ INSTANCE_IDS: 'i-1,i-2' }, { describe }), ['i-1', 'i-2'])
-  assert.deepEqual(resolveTargets({ INSTANCE_IDS: ' i-1 , , i-2 ' }, { describe }), ['i-1', 'i-2'])
+test('resolveTargets verifies every explicit instance against the selected stage before preserving operator order', () => {
+  const calls = []
+  const describe = (args) => {
+    calls.push(args)
+    return describeResponse(runnerInstance(INSTANCE_A), runnerInstance(INSTANCE_B))
+  }
+
+  assert.deepEqual(
+    resolveTargets({ INSTANCE_IDS: ` ${INSTANCE_B},${INSTANCE_A} ` }, { describe, stage: 'dev' }),
+    [INSTANCE_B, INSTANCE_A],
+  )
+  assert.equal(calls.length, 1)
+  const args = calls[0]
+  assert.deepEqual(args.slice(args.indexOf('--instance-ids') + 1, args.indexOf('--output')), [INSTANCE_B, INSTANCE_A])
+  assert.equal(args[args.indexOf('--output') + 1], 'json')
+  assert.equal(args.includes('--no-cli-pager'), true)
+  assert.equal(args.includes('--filters'), false, 'explicit metadata must be returned so ownership is verified locally')
+})
+
+test('resolveTargets rejects malformed, empty, duplicate, or over-limit explicit ids before AWS', () => {
+  let calls = 0
+  const describe = () => {
+    calls += 1
+    return describeResponse(runnerInstance(INSTANCE_A))
+  }
+
+  const tooMany = Array.from({ length: 101 }, (_, index) => `i-${index.toString(16).padStart(17, '0')}`).join(',')
+  for (const value of [
+    '',
+    `,${INSTANCE_A}`,
+    `${INSTANCE_A},`,
+    `${INSTANCE_A},,${INSTANCE_B}`,
+    '--debug',
+    'i-1',
+    'i-012345678',
+    'i-0123456789abcdef',
+    'i-0123456789ABCDEF0',
+    `${INSTANCE_A},${INSTANCE_A}`,
+    tooMany,
+  ]) {
+    assert.throws(() => resolveTargets({ INSTANCE_IDS: value }, { describe, stage: 'dev' }), /Runner instance ids/i)
+  }
+  assert.equal(calls, 0, 'malformed input must fail before the AWS CLI')
+  assert.deepEqual(
+    resolveTargets(
+      { INSTANCE_IDS: `${LEGACY_INSTANCE},${INSTANCE_A}` },
+      {
+        describe: () => describeResponse(runnerInstance(INSTANCE_A), runnerInstance(LEGACY_INSTANCE)),
+        stage: 'dev',
+      },
+    ),
+    [LEGACY_INSTANCE, INSTANCE_A],
+  )
+})
+
+test('resolveTargets rejects every explicit EC2 metadata ownership mismatch', () => {
+  const cases = [
+    { response: describeResponse(), message: /missing|exact/i },
+    { response: describeResponse(runnerInstance(INSTANCE_A, { stage: 'prod' })), message: /authorization|stage/i },
+    { response: describeResponse(runnerInstance(INSTANCE_A, { role: 'api' })), message: /authorization|role/i },
+    { response: describeResponse(runnerInstance(INSTANCE_A, { state: 'stopped' })), message: /running/i },
+    {
+      response: describeResponse(
+        runnerInstance(INSTANCE_A, { extraTags: [{ Key: 'BOXLITE:STAGE', Value: 'dev' }] }),
+      ),
+      message: /case-variant|duplicate/i,
+    },
+    {
+      response: describeResponse(runnerInstance(INSTANCE_A), runnerInstance(INSTANCE_A)),
+      message: /duplicate/i,
+    },
+    {
+      response: describeResponse(runnerInstance(INSTANCE_A), runnerInstance(INSTANCE_B)),
+      message: /extra|exact/i,
+    },
+  ]
+  for (const { response, message } of cases) {
+    assert.throws(
+      () => resolveTargets({ INSTANCE_IDS: INSTANCE_A }, { describe: () => response, stage: 'dev' }),
+      message,
+    )
+  }
+
+  assert.throws(
+    () =>
+      resolveTargets(
+        { INSTANCE_IDS: `${INSTANCE_A},${INSTANCE_B}` },
+        { describe: () => describeResponse(runnerInstance(INSTANCE_A)), stage: 'dev' },
+      ),
+    /missing|exact/i,
+  )
 })
 
 test('resolveTargets orders discovered instances so a roll is reproducible', () => {
   // describe-instances promises no order, and an explicit list keeps the operator's.
-  const describe = () => 'i-0c\ti-0a\ti-0b'
-  assert.deepEqual(resolveTargets({}, { describe }), ['i-0a', 'i-0b', 'i-0c'])
-  assert.deepEqual(resolveTargets({ INSTANCE_IDS: 'i-0c,i-0a' }, { describe }), ['i-0c', 'i-0a'])
+  const describe = (args) =>
+    args.includes('--instance-ids')
+      ? describeResponse(runnerInstance(INSTANCE_A), runnerInstance(INSTANCE_C))
+      : describeResponse(runnerInstance(INSTANCE_C), runnerInstance(INSTANCE_A), runnerInstance(INSTANCE_B))
+  assert.deepEqual(resolveTargets({}, { describe, stage: 'dev' }), [INSTANCE_A, INSTANCE_B, INSTANCE_C])
+  assert.deepEqual(resolveTargets({ INSTANCE_IDS: `${INSTANCE_C},${INSTANCE_A}` }, { describe, stage: 'dev' }), [
+    INSTANCE_C,
+    INSTANCE_A,
+  ])
+})
+
+test('resolveTargets discovers only BoxLite runners in the selected SST stage', () => {
+  let args
+  resolveTargets(
+    {},
+    {
+      stage: 'staging',
+      describe: (input) => {
+        args = input
+        return describeResponse(runnerInstance(INSTANCE_A, { stage: 'staging' }))
+      },
+    },
+  )
+
+  const filters = args.slice(args.indexOf('--filters') + 1, args.indexOf('--output'))
+  assert.ok(filters.includes('Name=tag:sst:app,Values=boxlite'))
+  assert.ok(filters.includes('Name=tag:sst:stage,Values=staging'))
+  assert.ok(filters.includes('Name=tag:Name,Values=boxlite-runner-*'))
+  assert.ok(filters.includes('Name=tag:boxlite:stage,Values=staging'))
+  assert.ok(filters.includes('Name=tag:boxlite:ssm-role,Values=runner'))
+  assert.ok(filters.includes('Name=instance-state-name,Values=running'))
 })
 
 test('resolveTargets rejects an empty discovery rather than silently doing nothing', () => {
-  assert.throws(() => resolveTargets({}, { describe: () => 'None' }), /no running instances tagged/)
+  assert.throws(() => resolveTargets({}, { stage: 'dev', describe: () => describeResponse() }), /no running instances tagged/)
+  assert.throws(
+    () => resolveTargets({}, { describe: () => describeResponse(runnerInstance(INSTANCE_A)) }),
+    /valid SST stage is required/,
+  )
+})
+
+test('main parses explicit Runner ids before acquiring the deployment operation lock', () => {
+  const main = RUNNER_UPDATE_SOURCE.slice(RUNNER_UPDATE_SOURCE.indexOf('function main()'))
+  const parse = main.indexOf('parseExplicitRunnerInstanceIds(process.env)')
+  const lock = main.indexOf('withRunnerUpdateOperationLock(')
+  assert.notEqual(parse, -1, 'main must parse the explicit target list at its input boundary')
+  assert.ok(parse < lock, 'malformed target input must fail before the operation-lock AWS mutation')
 })
 
 test('a version with no publishable release is refused on the deployer', () => {
@@ -390,23 +626,23 @@ test('runs as a script from a path that needs percent-encoding', (t) => {
   // `file://${argv[1]}` never equals import.meta.url once the path contains a space, so
   // the old guard skipped main() and exited 0 — the roll silently did nothing while the
   // Pulumi command reported success. Invoke the real file from such a path and require
-  // that it actually got as far as needing the aws CLI.
+  // that it actually got as far as acquiring the operation lock through the aws CLI.
   const root = mkdtempSync(join(tmpdir(), 'boxlite runner update '))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const scriptDirectory = fileURLToPath(new URL('.', import.meta.url))
   const copied = join(root, 'scripts')
   cpSync(scriptDirectory, copied, { recursive: true })
-  // The copies still import dotenv; point module resolution at the real dependencies
-  // without moving the script back out of the spaced path.
+  // Point module resolution at the real dependencies without moving the script back out of the
+  // spaced path.
   symlinkSync(join(scriptDirectory, '..', 'node_modules'), join(root, 'node_modules'), 'dir')
 
-  const result = spawnSync(process.execPath, [join(copied, 'runner-update-binary.mjs'), VERSION], {
+  const result = spawnSync(process.execPath, [join(copied, 'runner-update-binary.mjs'), '--stage', 'dev', VERSION], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: '/nonexistent', INSTANCE_IDS: 'i-1' },
+    env: { ...process.env, PATH: '/nonexistent', INSTANCE_IDS: INSTANCE_A },
   })
 
   assert.equal(result.status, 1, `expected the roll to run and fail on the missing CLI:\n${result.stdout}`)
-  assert.match(result.stderr, /aws` CLI is required/)
+  assert.match(result.stderr, /could not acquire the deployment operation lock/)
 })
 
 const bash = (script, args = []) => spawnSync('bash', ['-c', script, 'test', ...args], { encoding: 'utf8' })

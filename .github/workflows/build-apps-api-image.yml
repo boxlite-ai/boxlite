@@ -123,8 +123,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$TARGET_STAGE" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { echo "invalid target stage '$TARGET_STAGE'" >&2; exit 1; }
-          [[ "$SOURCE_STAGE" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { echo "invalid source stage '$SOURCE_STAGE'" >&2; exit 1; }
+          [[ "$TARGET_STAGE" =~ ^[a-z0-9]{1,20}$ ]] || { echo "invalid target stage '$TARGET_STAGE'" >&2; exit 1; }
+          [[ "$SOURCE_STAGE" =~ ^[a-z0-9]{1,20}$ ]] || { echo "invalid source stage '$SOURCE_STAGE'" >&2; exit 1; }
 
           operation="$OPERATION"
           case "$operation" in
@@ -180,12 +180,33 @@ jobs:
             echo "operation=$operation"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Prepare trusted deploy-role verifier checkout
+        shell: bash
+        run: /usr/bin/rm -rf -- "$GITHUB_WORKSPACE/.trusted-deploy-contract"
+
+      - name: Checkout trusted deploy-role verifier
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .trusted-deploy-contract
+          persist-credentials: false
+
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: build-apps-api-image-${{ github.run_id }}
+
+      # A selected commit may provide the image source, but only the workflow commit supplies this
+      # verifier. It runs before the first ECR read or write.
+      - name: Attest assumed deploy role contract
+        working-directory: .trusted-deploy-contract/apps/infra
+        run: node scripts/verify-deploy-role-boundary.mjs
+
+      - name: Remove trusted verifier checkout
+        shell: bash
+        run: /usr/bin/rm -rf -- "$GITHUB_WORKSPACE/.trusted-deploy-contract"
 
       - name: Log in to ECR
         id: ecr

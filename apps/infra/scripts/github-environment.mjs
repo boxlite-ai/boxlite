@@ -5,7 +5,7 @@
  * Pure helpers for creating the deployment stage's GitHub Environment.
  *
  * The deploy workflow binds to `environment: ${{ inputs.stage }}` and reads
- * `AWS_DEPLOY_ROLE_ARN`/`AWS_REGION`/`DEPLOY_ENV` from it, and the AWS trust
+ * `AWS_DEPLOY_ROLE_ARN`/`AWS_REGION` from it, and the AWS trust
  * policy pins `repo:<owner>/<repo>:environment:<stage>` — so the Environment
  * must exist, under exactly that name, before any of it works.
  *

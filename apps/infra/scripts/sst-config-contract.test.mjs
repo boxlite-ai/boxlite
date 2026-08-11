@@ -52,7 +52,8 @@ test('pins the AWS provider used by the deployed stack', () => {
 test('applies the deployment permissions boundary to every SST-created IAM role', () => {
   assert.match(liveConfig, /const runtimePermissionsBoundaryArn =/)
   assert.match(liveConfig, /requireIamPermissionsBoundaryStage\(\$app\.stage\)/)
-  assert.match(environmentExample, /^IAM_PERMISSIONS_BOUNDARY_STAGE=dev$/m)
+  assert.match(environmentExample, /^# IAM_PERMISSIONS_BOUNDARY_STAGE=dev$/m)
+  assert.doesNotMatch(environmentExample, /^IAM_PERMISSIONS_BOUNDARY_STAGE=/m)
   // The sole mechanism applying the boundary to every SST-created role, so it is read live:
   // commented out, the deploy still runs and every role it creates is unbounded.
   assert.match(
@@ -91,12 +92,14 @@ test('keeps the AWS region in run scope and passes it into Runner user data', ()
   assert.match(runnerUserDataSource, /Environment=AWS_REGION=\$\{input\.awsRegion\}/)
 })
 
-test('tags Runner instances with their exact control-plane identity', () => {
+test('tags Runner instances with their exact immutable deployment and control-plane identity', () => {
   const runnerResources = configSection('const makeRunner =', '// Register the extra runners')
 
   assert.match(liveConfig, /import\('\.\/scripts\/runner-inventory\.cjs'\)/)
   assert.match(liveConfig, /const runnerInventory = resolveRunnerInventory\(process\.env\)/)
   assert.match(runnerResources, /'boxlite:control-plane-runner-name': controlPlaneRunnerName/)
+  assert.match(runnerResources, /\[RUNNER_STAGE_TAG\]: \$app\.stage/)
+  assert.match(runnerResources, /\[RUNNER_ROLE_TAG\]: RUNNER_ROLE_VALUE/)
   assert.match(
     runnerResources,
     /makeRunner\([\s\S]*defaultRunnerConfig\.resourceName,[\s\S]*defaultRunnerConfig\.nameTag,[\s\S]*defaultRunnerConfig\.controlPlaneRunnerName,[\s\S]*runnerUserData/,
@@ -115,7 +118,7 @@ test('keeps every Runner instance protected from replacement during full-stack d
   // First boot reads the staged artifact with the instance role, and those two options mean a
   // host that boots before the grant exists never retries. The SSM upgrade path pins the same
   // edge (see the rolling-upgrade test); without this one only half the rule is enforced.
-  assert.match(runnerFactory, /dependsOn: \[runnerArtifactPolicy\]/)
+  assert.match(runnerFactory, /dependsOn: access\.policies/)
 })
 
 test('passes both the internal and public OIDC issuers to Proxy', () => {
@@ -307,16 +310,22 @@ test('the Runner can read only staged build artifacts from the bootstrapped buck
     "new aws.iam.RolePolicy('RunnerArtifactS3Policy'",
     'const runnerInstanceProfile',
   )
+  const artifactPolicyDocument = extractSection(
+    runner,
+    'const runnerArtifactS3PolicyDocument',
+    'const runnerRole',
+  )
 
   assert.match(runner, /runnerArtifactsBucketName\(\{ app: \$app\.name, stage: \$app\.stage, accountId \}\)/)
-  assert.match(artifactPolicy, /Action: \['s3:GetObject'\]/)
-  assert.match(artifactPolicy, /Resource: `arn:aws:s3:::\$\{artifactsBucketName\}\/runner\/\*`/)
+  assert.match(artifactPolicy, /policy: runnerArtifactS3PolicyDocument/)
+  assert.match(artifactPolicyDocument, /Action: \['s3:GetObject'\]/)
+  assert.match(artifactPolicyDocument, /Resource: `arn:aws:s3:::\$\{artifactsBucketName\}\/runner\/\*`/)
   // Both spellings, and `sst.aws.Bucket` is the one that matters: it is what this config
   // actually uses elsewhere (the Storage bucket), so it is how "the stack creates the input it
   // is supposed to consume" would most plausibly come back. The raw-Pulumi form appears nowhere
   // in the file today, so pinning only that would have guarded a spelling nobody writes here.
   assert.doesNotMatch(runner, /new (?:aws\.s3\.Bucket(?:V2)?|sst\.aws\.Bucket)\b/)
-  assert.doesNotMatch(artifactPolicy, /s3:(?:PutObject|DeleteObject|ListBucket)/)
+  assert.doesNotMatch(artifactPolicyDocument, /s3:(?:PutObject|DeleteObject|ListBucket)/)
 })
 
 test('Runner bootstrap fetches the selected artifact and fails closed on its checksum', () => {
@@ -350,19 +359,25 @@ test('upgrades every Runner through a dependsOn chain, one host per command', ()
 
   // Every Runner gets a command: the default (captured for exactly this) plus each extra.
   assert.match(liveConfig, /const defaultRunner = makeRunner\(/)
-  assert.match(upgrades, /\{ label: 'default', instance: defaultRunner \}/)
-  assert.match(upgrades, /\.\.\.extraRunners\.map\(\(r\) => \(\{ label: r\.name, instance: r\.instance \}\)\)/)
+  assert.match(
+    upgrades,
+    /\{ label: 'default', instance: defaultRunner, artifactPolicy: runnerArtifactPolicy \}/,
+  )
+  assert.match(upgrades, /\.\.\.extraRunners\.map\(\(r\) => \(\{[\s\S]*artifactPolicy: extraRunnerArtifactPolicy/)
   assert.match(upgrades, /new command\.local\.Command\(\s*`UpgradeRunnerBinary-\$\{label\}`/)
 
-  // Each command waits on the previous one, so two Runners never restart at once.
+  // Each command waits on every extra-runner GHCR migration and the previous
+  // upgrade, so no binary restart races the credential-reference convergence
+  // and two Runners never restart at once.
   assert.match(upgrades, /previousUpgrade = new command\.local\.Command/)
   // The artifact grant is a prerequisite, not a sibling: build mode reads S3 with the instance
   // role, and Pulumi sees no edge because the bucket reaches the command as a plain string.
   assert.match(
     upgrades,
-    /dependsOn: \[instance, runnerArtifactPolicy, \.\.\.\(previousUpgrade \? \[previousUpgrade\] : \[\]\)\]/,
+    /dependsOn: \[\s*instance,\s*artifactPolicy,\s*\.\.\.extraRunnerGhcrMigrations,\s*\.\.\.\(previousUpgrade \? \[previousUpgrade\] : \[\]\),?\s*\]/,
   )
   assert.match(liveConfig, /const runnerArtifactPolicy = new aws\.iam\.RolePolicy\('RunnerArtifactS3Policy'/)
+  assert.match(liveConfig, /const extraRunnerArtifactPolicy = new aws\.iam\.RolePolicy\('ExtraRunnerArtifactS3Policy'/)
 
   // Exactly one host per command. A release bump or a build commit change re-runs it.
   assert.match(upgrades, /INSTANCE_IDS: instance\.id/)

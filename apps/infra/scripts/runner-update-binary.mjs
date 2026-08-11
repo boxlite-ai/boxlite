@@ -25,16 +25,17 @@
  * same either way.
  *
  * Usage:
- *   npm run runner:update                  # source from the environment, every running runner
- *   npm run runner:update -- 0.9.5         # explicit version, always a release
- *   INSTANCE_IDS=i-abc npm run runner:update
+ *   npm run runner:update -- --stage dev          # source from env, every dev runner
+ *   npm run runner:update -- --stage dev 0.9.5    # explicit version, always a release
+ *   INSTANCE_IDS=i-abc npm run runner:update -- --stage dev
  *
  * Env:
+ *   SST_STAGE       internal deploy-path stage; CLI operators pass --stage instead
  *   RUNNER_ARTIFACT_SOURCE  release|build (see artifact-source.mjs; default release)
  *   BOXLITE_ARTIFACT_REF    commit a build-mode binary was produced from
  *   RUNNER_ARTIFACT_BUCKET  bucket a build-mode binary is staged in
- *   RUNNER_VERSION   target version (argv[2] wins; falls back to the workspace version)
- *   INSTANCE_IDS     comma-separated EC2 ids; unset = discover by tag:Name=boxlite-runner-*
+ *   RUNNER_VERSION   target version (the optional positional version wins)
+ *   INSTANCE_IDS     comma-separated EC2 ids; unset = discover by app + stage + Name tags
  *   AWS_REGION       default ap-southeast-1
  *   RUNNER_PORT      port the runner's health route listens on (default 3003)
  *   ALLOW_DOWNGRADE  set to 1 to permit replacing a runner with an OLDER version
@@ -45,12 +46,28 @@ import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 import { resolveArtifactSource } from './artifact-source.mjs'
+import {
+  DEPLOYMENT_OPERATION_LOCK_OWNER_ENV,
+  DeploymentConfigStore,
+} from './deployment-config-store.mjs'
 import { readWorkspaceVersion } from './deployment-environment.mjs'
 import { artifactFetchCommand, resolveRunnerArtifact } from './runner-artifact.mjs'
+import runnerInstanceIdentity from './runner-instance-identity.cjs'
+import runnerInventory from './runner-inventory.cjs'
+
+const {
+  assertRunnerCommandTargets,
+  parseExplicitRunnerInstanceIds,
+  parseRunnerEc2Instances,
+  validateRunnerInstanceIds,
+} = runnerInstanceIdentity
+const { RUNNER_ROLE_TAG, RUNNER_ROLE_VALUE, RUNNER_STAGE_TAG } = runnerInventory
 
 const REGION = process.env.AWS_REGION || 'ap-southeast-1'
 const RUNNER_PORT = process.env.RUNNER_PORT || '3003'
+const APP_TAG = 'boxlite'
 const NAME_TAG_PATTERN = 'boxlite-runner-*'
+const STAGE_PATTERN = /^[a-z0-9]{1,20}$/
 // ~5 min at 10s apart — covers SSM agent registration on a freshly created instance.
 const SSM_REGISTRATION_ATTEMPTS = 30
 // ~30 min at 5s apart. This has to stay above the payload's own worst case: giving up first
@@ -100,36 +117,106 @@ function aws(args) {
 
 // ── target + version resolution ──────────────────────────────────────────────
 
-// Explicit ids (SST passes exactly one per command) or every running runner in the
-// region. The caller walks whichever list it gets one entry at a time.
-export function resolveTargets(environment = process.env, { describe = aws } = {}) {
-  const explicit = (environment.INSTANCE_IDS || '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean)
-  if (explicit.length > 0) return explicit
+export function parseRunnerUpdateArgs(argv = process.argv, environment = process.env) {
+  let stage
+  let version
+  const args = argv.slice(2)
 
-  const discovered = describe([
-    'ec2',
-    'describe-instances',
-    '--region',
-    REGION,
-    '--filters',
-    `Name=tag:Name,Values=${NAME_TAG_PATTERN}`,
-    'Name=instance-state-name,Values=running',
-    '--query',
-    'Reservations[].Instances[].InstanceId',
-    '--output',
-    'text',
-  ])
-    .split(/\s+/)
-    .filter((id) => id && id !== 'None')
-    // describe-instances does not promise an order; sort so a fleet-wide roll visits the
-    // same hosts in the same sequence every run.
-    .sort()
+  for (let index = 0; index < args.length; index++) {
+    const argument = args[index]
+    if (argument === '--stage') {
+      const value = args[index + 1]
+      if (!value || value.startsWith('-')) throw new Error('--stage requires a value')
+      if (stage !== undefined) throw new Error('--stage may be specified only once')
+      stage = value
+      index += 1
+      continue
+    }
+    if (argument.startsWith('-')) {
+      throw new Error(`unknown argument '${argument}' (expected --stage <stage> and an optional release version)`)
+    }
+    if (version !== undefined) throw new Error('runner:update accepts at most one release version')
+    version = argument
+  }
+
+  const selectedStage = stage ?? environment.SST_STAGE
+  if (!selectedStage) throw new Error('runner:update requires an explicit --stage or SST_STAGE')
+  if (!STAGE_PATTERN.test(selectedStage)) {
+    throw new Error(`invalid SST stage '${selectedStage}' (expected 1-20 lowercase letters or numbers)`)
+  }
+  return { stage: selectedStage, version }
+}
+
+const runnerFilters = (stage) => [
+  `Name=tag:sst:app,Values=${APP_TAG}`,
+  `Name=tag:sst:stage,Values=${stage}`,
+  `Name=tag:Name,Values=${NAME_TAG_PATTERN}`,
+  `Name=tag:${RUNNER_STAGE_TAG},Values=${stage}`,
+  `Name=tag:${RUNNER_ROLE_TAG},Values=${RUNNER_ROLE_VALUE}`,
+  'Name=instance-state-name,Values=running',
+]
+
+export function verifyRunnerCommandTargets(
+  instanceIds,
+  { describe = aws, region = REGION, stage } = {},
+) {
+  const requestedIds = validateRunnerInstanceIds(instanceIds)
+  const instances = parseRunnerEc2Instances(
+    describe([
+      'ec2',
+      'describe-instances',
+      '--region',
+      region,
+      '--instance-ids',
+      ...requestedIds,
+      '--output',
+      'json',
+      '--no-cli-pager',
+    ]),
+  )
+  return assertRunnerCommandTargets({ instances, requestedIds, stage })
+}
+
+// Explicit ids (SST passes exactly one per command) and discovered hosts both cross the
+// same JSON metadata boundary. Filters select candidates; the local verifier remains the
+// authority for exact running state and canonical command-authorization tags.
+export function resolveTargets(
+  environment = process.env,
+  {
+    describe = aws,
+    region = REGION,
+    stage,
+    targetSelection = { explicitInstanceIds: parseExplicitRunnerInstanceIds(environment) },
+  } = {},
+) {
+  if (!stage || !STAGE_PATTERN.test(stage)) throw new Error('a valid SST stage is required to resolve Runner targets')
+  const explicit = targetSelection?.explicitInstanceIds
+  if (explicit !== undefined) {
+    return verifyRunnerCommandTargets(explicit, { describe, region, stage })
+  }
+
+  const discovered = assertRunnerCommandTargets({
+    instances: parseRunnerEc2Instances(
+      describe([
+        'ec2',
+        'describe-instances',
+        '--region',
+        region,
+        '--filters',
+        ...runnerFilters(stage),
+        '--output',
+        'json',
+        '--no-cli-pager',
+      ]),
+    ),
+    stage,
+  })
 
   if (discovered.length === 0) {
-    throw new Error(`no running instances tagged Name=${NAME_TAG_PATTERN} in ${REGION}`)
+    throw new Error(
+      `no running instances tagged sst:app=${APP_TAG}, sst:stage=${stage}, ` +
+        `Name=${NAME_TAG_PATTERN} in ${region}`,
+    )
   }
   return discovered
 }
@@ -137,7 +224,8 @@ export function resolveTargets(environment = process.env, { describe = aws } = {
 // The workspace version is the release version for every published asset — the same
 // field sst.config.ts bakes into the runner user-data.
 export function resolveVersion(argv = process.argv, environment = process.env) {
-  const explicit = argv[2] || environment.RUNNER_VERSION
+  const { version } = parseRunnerUpdateArgs(argv, environment)
+  const explicit = version || environment.RUNNER_VERSION
   return explicit ? explicit.trim().replace(/^v/, '') : readWorkspaceVersion()
 }
 
@@ -148,9 +236,10 @@ export function resolveUpgrade(
   environment = process.env,
   { readVersion = readWorkspaceVersion } = {},
 ) {
+  const selection = parseRunnerUpdateArgs(argv, environment)
   // An explicit version on the command line names a release whatever the environment selects:
-  // `npm run runner:update -- 0.9.5` has only ever meant one thing.
-  const explicitVersion = argv[2] ? resolveVersion(argv, environment) : undefined
+  // `npm run runner:update -- --stage dev 0.9.5` has only ever meant one thing.
+  const explicitVersion = selection.version ? selection.version.trim().replace(/^v/, '') : undefined
   const source = explicitVersion
     ? { kind: 'release', version: explicitVersion }
     : resolveArtifactSource('runner', environment, { readVersion })
@@ -163,14 +252,14 @@ export function resolveUpgrade(
     (source.kind === 'build'
       ? source.version
       : environment.RUNNER_VERSION
-        ? resolveVersion(['node', 'script'], environment)
+        ? environment.RUNNER_VERSION.trim().replace(/^v/, '')
         : source.version)
   const artifact = resolveRunnerArtifact(source.kind === 'release' ? { kind: 'release', version } : source, environment)
   // A build carries its commit as semver build metadata. Without it two builds of the same
   // checkout are indistinguishable on the wire, and the "already current" guard below would skip
   // every dev deploy after the first — the exact failure that makes a dev Runner untestable.
   const expectedVersion = source.kind === 'build' ? `${version}+${source.ref}` : version
-  return { kind: source.kind, version, ref: source.ref, expectedVersion, artifact }
+  return { stage: selection.stage, kind: source.kind, version, ref: source.ref, expectedVersion, artifact }
 }
 
 // ── remote upgrade script ────────────────────────────────────────────────────
@@ -471,23 +560,54 @@ function upgradeOne(instanceId, upgrade) {
 
 // ── roll ─────────────────────────────────────────────────────────────────────
 
+export function withRunnerUpdateOperationLock(
+  {
+    stage,
+    region = REGION,
+    environment = process.env,
+    createStore = (options) => new DeploymentConfigStore(options),
+  },
+  update,
+) {
+  if (typeof update !== 'function') throw new Error('runner update operation callback is required')
+  const store = createStore({ awsCliPath: environment.AWS_CLI_PATH || 'aws', region })
+  const inheritedOwnerId = environment[DEPLOYMENT_OPERATION_LOCK_OWNER_ENV]
+  if (inheritedOwnerId) {
+    store.assertDeploymentOperationLockOwner({ stage, ownerId: inheritedOwnerId })
+    return update()
+  }
+
+  const lock = store.acquireDeploymentOperationLock({ stage })
+  try {
+    return update()
+  } finally {
+    store.releaseDeploymentOperationLock(lock)
+  }
+}
+
 function main() {
   const upgrade = resolveUpgrade()
-  const targets = resolveTargets()
+  const explicitInstanceIds = parseExplicitRunnerInstanceIds(process.env)
+  return withRunnerUpdateOperationLock({ stage: upgrade.stage }, () => {
+    const targets = resolveTargets(process.env, {
+      stage: upgrade.stage,
+      targetSelection: { explicitInstanceIds },
+    })
 
-  console.log(
-    `==> Rolling boxlite-runner to ${upgrade.expectedVersion} (${upgrade.kind}) ` +
-      `across ${targets.length} instance(s) in ${REGION}`,
-  )
-  console.log(`==> artifact: ${upgrade.artifact.tarballUrl}`)
-  targets.forEach((instanceId, i) => {
-    console.log(`==> [${i + 1}/${targets.length}] ${instanceId}`)
-    upgradeOne(instanceId, upgrade)
+    console.log(
+      `==> Rolling boxlite-runner to ${upgrade.expectedVersion} (${upgrade.kind}) ` +
+        `across ${targets.length} instance(s) in ${REGION} for stage ${upgrade.stage}`,
+    )
+    console.log(`==> artifact: ${upgrade.artifact.tarballUrl}`)
+    targets.forEach((instanceId, i) => {
+      console.log(`==> [${i + 1}/${targets.length}] ${instanceId}`)
+      upgradeOne(instanceId, upgrade)
+    })
+    // Deliberately does not assert the fleet is at the target: a host can be skipped as
+    // already-current, left alone as still-bootstrapping, or refused as a downgrade. The
+    // per-host lines above say which; a blanket "all at vX" would be false for those.
+    console.log(`==> done (${targets.length} instance(s))`)
   })
-  // Deliberately does not assert the fleet is at the target: a host can be skipped as
-  // already-current, left alone as still-bootstrapping, or refused as a downgrade. The
-  // per-host lines above say which; a blanket "all at vX" would be false for those.
-  console.log(`==> done (${targets.length} instance(s))`)
 }
 
 // Importable for tests; only the direct invocation performs the roll. Both normalizations

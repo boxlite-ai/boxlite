@@ -9,7 +9,10 @@ const { createRunnerStateBaseline } = runnerStateBaseline
 const MAX_STATE_EXPORT_BYTES = 64 * 1024 * 1024
 const STATE_EXPORT_TIMEOUT_MS = 5 * 60_000
 const STATE_EXPORT_KILL_GRACE_MS = 5_000
-const MAX_SERIALIZED_RUNNER_BASELINE_BYTES = 32 * 1024
+// One environment value on Linux may be up to 128 KiB. Keep a 2x safety
+// margin while still accommodating the instance id now required for all 100
+// supported Runners.
+const MAX_SERIALIZED_RUNNER_BASELINE_BYTES = 64 * 1024
 const STATE_NOT_FOUND_LOG = /\berr="state not found"(?:\s|$)/
 
 function signalProcessGroup(child, signal) {
@@ -144,7 +147,9 @@ function forwardedConfigArguments(sstArgs) {
   const configArguments = []
   for (let index = 1; index < sstArgs.length; index += 1) {
     const argument = sstArgs[index]
-    if (argument === '--config') {
+    if (argument === '--') {
+      break
+    } else if (argument === '--config') {
       const value = sstArgs[index + 1]
       if (!value || value.startsWith('--')) throw new Error('SST --config requires a path')
       configArguments.push('--config', value)
@@ -193,6 +198,7 @@ export async function readRunnerStateBaseline({
   sstArgs,
   environment = process.env,
   signal,
+  workingDirectory,
   execute = executeStateExportProcess,
 }) {
   let exportedState
@@ -202,6 +208,7 @@ export async function readRunnerStateBaseline({
       ['state', 'export', '--stage', stage, '--print-logs', ...forwardedConfigArguments(sstArgs)],
       {
         encoding: 'utf8',
+        ...(workingDirectory ? { cwd: workingDirectory } : {}),
         env: environment,
         signal,
         timeout: STATE_EXPORT_TIMEOUT_MS,
@@ -215,7 +222,7 @@ export async function readRunnerStateBaseline({
     exportedState = JSON.parse(typeof result === 'string' ? result : result.stdout)
   } catch (error) {
     if (isMissingStateExport(error)) {
-      exportedState = { latest: { resources: [] } }
+      exportedState = { stack: stage, latest: { resources: [] } }
     } else {
       throw new Error(`failed to export the current SST state: ${stateExportFailureReason(error)}`, { cause: error })
     }
@@ -223,12 +230,12 @@ export async function readRunnerStateBaseline({
 
   let serializedBaseline
   try {
-    serializedBaseline = JSON.stringify(createRunnerStateBaseline(exportedState))
+    serializedBaseline = JSON.stringify(createRunnerStateBaseline(exportedState, { stage }))
   } catch (error) {
     throw new Error(`failed to create the Runner state baseline: ${error.message}`, { cause: error })
   }
   if (Buffer.byteLength(serializedBaseline, 'utf8') > MAX_SERIALIZED_RUNNER_BASELINE_BYTES) {
-    throw new Error('Runner state baseline exceeds the 32 KiB environment handoff limit')
+    throw new Error('Runner state baseline exceeds the 64 KiB environment handoff limit')
   }
   return serializedBaseline
 }

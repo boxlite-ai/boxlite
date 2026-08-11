@@ -35,6 +35,10 @@ on:
         required: false
         default: false
         type: boolean
+      config_release:
+        description: 'Immutable deployment config SHA-256. Blank uses the stage current pointer.'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -75,12 +79,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$STAGE" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { echo "invalid artifact stage '$STAGE'" >&2; exit 1; }
+          [[ "$STAGE" =~ ^[a-z0-9]{1,20}$ ]] || { echo "invalid artifact stage '$STAGE'" >&2; exit 1; }
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
             echo "version must be a stable X.Y.Z (got '$VERSION')" >&2
             exit 1
           }
           echo "IAM_PERMISSIONS_BOUNDARY_STAGE=$STAGE" >> "$GITHUB_ENV"
+
+      - name: Prepare trusted deploy-role verifier checkout
+        shell: bash
+        run: /usr/bin/rm -rf -- "$GITHUB_WORKSPACE/.trusted-deploy-contract"
+
+      - name: Checkout trusted deploy-role verifier
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .trusted-deploy-contract
+          persist-credentials: false
 
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v4
@@ -88,6 +103,34 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: deploy-release-${{ github.run_id }}
+
+      # This trusted workflow verifier runs before the config resolver or npm can execute code.
+      - name: Attest assumed deploy role contract
+        working-directory: .trusted-deploy-contract/apps/infra
+        run: node scripts/verify-deploy-role-boundary.mjs
+
+      - name: Remove trusted verifier checkout
+        shell: bash
+        run: /usr/bin/rm -rf -- "$GITHUB_WORKSPACE/.trusted-deploy-contract"
+
+      # Resolve the mutable pointer at most once. The deploy wrapper receives only the exact
+      # immutable digest, so retries and rollbacks cannot drift to a newer /current value.
+      - name: Resolve deployment config release
+        id: deployment-config
+        shell: bash
+        env:
+          INPUT_CONFIG_RELEASE: ${{ inputs.config_release }}
+        run: |
+          set -euo pipefail
+          args=(--stage "$STAGE")
+          [ -z "$INPUT_CONFIG_RELEASE" ] || args+=(--release "$INPUT_CONFIG_RELEASE")
+          release=$(node apps/infra/scripts/deployment-config-resolve.mjs "${args[@]}")
+          [[ "$release" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "deployment config resolver returned an invalid release id" >&2
+            exit 1
+          }
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          printf '### Deployment configuration\n\n- Release: `%s`\n' "$release" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -108,21 +151,22 @@ jobs:
         working-directory: apps/infra
         run: node scripts/verify-deploy-role-boundary.mjs
 
-      - name: Materialize stage configuration
+      - name: Install SST providers
+        working-directory: apps/infra
+        run: npm run --silent sst -- install --stage "$STAGE"
+
+      - name: Preview published API and Runner artifacts
         shell: bash
+        working-directory: apps/infra
         env:
-          DEPLOY_ENV: ${{ secrets.DEPLOY_ENV }}
+          BOXLITE_DEPLOY_CONFIG_RELEASE: ${{ steps.deployment-config.outputs.release }}
         run: |
           set -euo pipefail
-          test -n "$DEPLOY_ENV"
-          umask 077
-          printf '%s\n' "$DEPLOY_ENV" > apps/infra/.env
-          node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env
+          npm run --silent sst -- diff --stage "$STAGE" --policy . --json |
+            node scripts/deployment-preview.mjs
 
       - name: Deploy published API and Runner artifacts
         working-directory: apps/infra
+        env:
+          BOXLITE_DEPLOY_CONFIG_RELEASE: ${{ steps.deployment-config.outputs.release }}
         run: npm run deploy -- --stage "$STAGE" --policy .
-
-      - name: Remove materialized configuration
-        if: always()
-        run: rm -f apps/infra/.env

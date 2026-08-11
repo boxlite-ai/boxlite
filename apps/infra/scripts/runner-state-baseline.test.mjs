@@ -8,6 +8,7 @@ import runnerStateBaseline from './runner-state-baseline.cjs'
 
 const {
   createRunnerIdentityFingerprint,
+  createRunnerProfileMigrationFingerprint,
   createRunnerSafetyFingerprint,
   createRunnerStateBaseline,
   parseRunnerStateBaseline,
@@ -42,7 +43,7 @@ function runnerStateResource(name = 'Runner', overrides = {}) {
     urn: `urn:pulumi:dev::boxlite::aws:ec2/instance:Instance::${name}`,
     type: 'aws:ec2/instance:Instance',
     custom: true,
-    id: 'i-runner',
+    id: 'i-00000000000000001',
     inputs: runnerInputs(),
     outputs: { passwordData: SENSITIVE_VALUE },
     provider: 'urn:pulumi:dev::boxlite::pulumi:providers:aws::AwsProvider::provider-id',
@@ -65,13 +66,16 @@ test('reduces SST state to non-secret Runner safety properties', () => {
   )
 
   assert.deepEqual(baseline, {
-    version: 3,
+    version: 4,
+    stage: 'dev',
     resources: {
       Runner: {
+        instanceId: 'i-00000000000000001',
         inputFingerprint: createRunnerSafetyFingerprint(runnerInputs()),
         identityFingerprint: createRunnerIdentityFingerprint(runnerInputs(), 'Runner', {
           allowLegacyFallback: true,
         }),
+        profileMigrationFingerprint: createRunnerProfileMigrationFingerprint(runnerInputs()),
       },
     },
   })
@@ -164,6 +168,17 @@ test('hashes every explicit input while ignoring provider defaults and approved 
   )
 })
 
+test('profile migration fingerprint ignores only the instance profile', () => {
+  assert.equal(
+    createRunnerProfileMigrationFingerprint(runnerInputs()),
+    createRunnerProfileMigrationFingerprint(runnerInputs({ iamInstanceProfile: 'new-profile' })),
+  )
+  assert.notEqual(
+    createRunnerProfileMigrationFingerprint(runnerInputs()),
+    createRunnerProfileMigrationFingerprint(runnerInputs({ instanceType: 'c8i.4xlarge' })),
+  )
+})
+
 test('ignores approved mutable inputs recorded in provider defaults metadata', () => {
   assert.equal(
     createRunnerSafetyFingerprint(
@@ -214,6 +229,9 @@ test('rejects malformed, duplicate, unexpected, or unprotected Runner state', ()
   )
   for (const overrides of [
     { id: '' },
+    { id: 'i-not-an-instance' },
+    { id: 'i-000000000' },
+    { id: 'i-0000000000000000' },
     { custom: false },
     { delete: true },
     { external: true },
@@ -228,7 +246,7 @@ test('rejects malformed, duplicate, unexpected, or unprotected Runner state', ()
     )
   }
   assert.throws(() => parseRunnerStateBaseline('not-json'), /Runner state baseline/)
-  assert.throws(() => parseRunnerStateBaseline('{"version":1,"resources":{}}'), /Runner state baseline/)
+  assert.throws(() => parseRunnerStateBaseline('{"version":3,"stage":"dev","resources":{}}'), /Runner state baseline/)
   assert.throws(
     () =>
       createRunnerStateBaseline(

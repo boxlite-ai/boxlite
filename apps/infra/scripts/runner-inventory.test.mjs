@@ -6,7 +6,14 @@ import test from 'node:test'
 
 import runnerInventory from './runner-inventory.cjs'
 
-const { resolveRunnerInventory } = runnerInventory
+const { extraRunnerInstanceProfileName, resolveRunnerInventory } = runnerInventory
+
+test('derives one exact stage-bound extra Runner profile name', () => {
+  assert.equal(extraRunnerInstanceProfileName('dev'), 'boxlite-dev-extra-runner-profile')
+  for (const stage of ['', '../prod', 'Dev', 'dev_test', 'dev-blue', 'x'.repeat(21)]) {
+    assert.throws(() => extraRunnerInstanceProfileName(stage), /invalid SST stage/)
+  }
+})
 
 test('resolves the exact default and extra Runner identities from deployment config', () => {
   assert.deepEqual(resolveRunnerInventory({}), [

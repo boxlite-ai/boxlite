@@ -173,18 +173,27 @@ is behind `main` would pair new workflow YAML with old `apps/infra` tooling.
 GitHub recomputes that merge whenever `main` or the head moves, so the resolved
 SHA is a snapshot rather than a commit in anyone's history.
 
-A fork's PR is accepted: dispatching already requires write access, and the
-credential-bearing jobs sit behind the stage Environment's required reviewer.
-`build-c`/`build-runner` are the exception — neither declares an `environment:`,
-so a fork's build code runs on a hosted runner with no second look; the risk
-there is compute abuse and build-time tampering, not credential theft.
+A fork's PR is accepted: dispatching already requires write access, and every
+build/deploy path waits for the stage-bound `deploy-role-contract` and its
+required reviewer. `build-c`/`build-runner` do not assume AWS themselves, but
+their reusable workflows receive a write-scoped GitHub token for release
+publication, so reviewers must treat fork build code as privileged.
 
-Each component is built by its own job, and the two legs share only
-`resolve-ref`, so they run side by side: the reusable C/Runner workflows produce
-a Linux AMD64 Runner with `<workspace-version>+<sha>` identity and stage it in
-the stage's private commit-keyed S3 path, while `build-api` calls
-`build-apps-api-image.yml` for the same commit and pushes
-`boxlite-app-<stage>-api:v<version>-<sha>`. The deploy itself compiles neither.
+Each component is built by its own job. After `resolve-ref`, a credential-free
+`selected-ref-contract` job checks out that commit and requires immutable
+deployment-config schema v1. A separate main-only `deploy-role-contract` job
+checks out the trusted workflow commit, assumes the stage role, and requires the
+role's CloudFormation stack to be complete, its live sensitive policy to match
+the reviewed v1 contract exactly, its topology to contain one inline policy and
+zero attached managed policies, and its role namespace to stay within the
+selected stage. Both build legs
+depend on those guards and then run
+side by side: the reusable C/Runner workflows produce a Linux AMD64 Runner with
+`<workspace-version>+<sha>` identity and stage it in the stage's private
+commit-keyed S3 path, while `build-api` calls `build-apps-api-image.yml` for the
+same commit and pushes `boxlite-app-<stage>-api:v<version>-<sha>`. The deploy
+itself compiles neither. A selected commit predating this config contract is
+rejected before selected code reaches an artifact-producing job.
 Deployment safety tests first enforce the Runner lifecycle options. Dispatch defaults to
 preview-only; `apply=true` repeats the full structured preview and deploys only
 when the Runner safety gate accepts the
@@ -198,6 +207,14 @@ mid-provider-migration — and accepts `--exclude` only for the two scopes the
 selected stage's protected GitHub Environment, and authenticates to AWS with
 short-lived OIDC credentials. Docker runs entirely in CI; no developer machine
 or public SSH builder participates.
+
+Every path that can mutate AWS checks out the verifier from
+`github.workflow_sha` immediately before OIDC, then attests the exact assumed
+caller, completed CloudFormation stack, full live sensitive-policy contract,
+one-inline/zero-managed topology, and bounded selected-stage role namespace
+immediately after OIDC. Selected code cannot replace this verifier before it
+runs, and it runs before selected code can resolve config, install npm
+dependencies, or write ECR/S3.
 
 `components` (`api+runner`, `api`, `runner`) narrows a dispatch to one
 deployable leg: the other leg's build jobs are skipped and its mutable half — the
@@ -242,19 +259,29 @@ from `main`, because a release event runs on a tag ref that the branch-scoped
 deployment Environments block before the job can obtain AWS credentials.
 
 `deploy-release.yml` accepts one stable `X.Y.Z` for both that API image and the
-matching Runner GitHub Release assets, verifies both before SST runs, and
-compiles neither component.
+matching Runner GitHub Release assets, verifies both, runs the guarded
+full-stack preview with the pinned config release, and compiles neither
+component. It deploys only after that preview succeeds.
 
 Required Environment configuration (per stage):
 
 - Variable `AWS_DEPLOY_ROLE_ARN`
 - Variable `AWS_REGION` (defaults to `ap-southeast-1`)
-- Secret `DEPLOY_ENV` containing the stage's dotenv configuration
+
+Bootstrap publishes non-secret stage configuration as immutable AWS SSM
+releases under `/boxlite/<stage>/deploy-config/releases/<sha256>` and updates
+`/boxlite/<stage>/deploy-config/current` last. A workflow resolves that pointer
+once, records the digest in its summary, and gives the same exact release to
+preview and apply without creating `apps/infra/.env`. Set the optional
+`config_release` input to an existing digest for a deterministic retry or
+rollback; blank selects `current` once at job start.
 
 Bootstrap the scoped role, runtime permissions boundary, immutable API ECR
 repository, and private Runner artifact bucket with
 `apps/infra/ci/github-deploy-role.yaml`. Redeploy that CloudFormation stack when
 its policy/resources change, then require reviewers before enabling deployments.
+Stage tokens are 1–20 lowercase letters or digits (no hyphens), so the IAM
+`boxlite-<stage>-*` namespace cannot overlap another stage prefix.
 
 ### `e2e-local.yml`
 

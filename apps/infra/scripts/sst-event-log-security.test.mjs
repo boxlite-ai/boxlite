@@ -3,16 +3,86 @@
 
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdtemp, mkdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
-import { removePulumiEventLogs, withPulumiEventLogCleanup } from './sst-event-log-security.mjs'
+import { canonicalizeDeploymentConfig, deploymentConfigReleaseId } from './deployment-config.mjs'
+import {
+  prepareSstLogSecurity,
+  removePulumiEventLogs,
+  withPulumiEventLogCleanup,
+  withSstLogSecurity,
+} from './sst-event-log-security.mjs'
 
 const SYNTHETIC_PROVIDER_TOKEN = 'synthetic-provider-token-for-regression-only'
+const SYNTHETIC_CONFIG_SOURCE = canonicalizeDeploymentConfig({
+  accountId: '123456789012',
+  region: 'ap-southeast-1',
+  schemaVersion: 1,
+  stage: 'ci',
+  values: {
+    BOXLITE_RUNTIME_SECRET_GENERATIONS: {
+      adminApiKey: 'generated-pending',
+      clickHouseReaderPassword: 'generated-pending',
+      clickHouseWriterPassword: 'generated-pending',
+      defaultRunnerApiKey: 'generated-pending',
+      encryptionKey: 'generated-pending',
+      encryptionSalt: 'generated-pending',
+      ghcrPullToken: 'generated-pending',
+      otelCollectorApiKey: 'generated-pending',
+      otelExporterOtlpHeaders: 'generated-pending',
+      pgAdminDefaultPassword: 'generated-pending',
+      proxyApiKey: 'generated-pending',
+    },
+    OIDC_AUDIENCE: 'boxlite-api',
+    OIDC_ISSUER_BASE_URL: 'https://auth.example.test/',
+    STACK_DOMAIN: 'ci.example.test',
+  },
+})
+const SYNTHETIC_CONFIG_RELEASE = deploymentConfigReleaseId(SYNTHETIC_CONFIG_SOURCE)
+
+const FAKE_CONFIG_AWS = `#!/usr/bin/env node
+const { existsSync, readFileSync, unlinkSync, writeFileSync } = require('node:fs')
+const args = process.argv.slice(2)
+const option = (name) => args[args.indexOf(name) + 1]
+if (args[0] === 'sts' && args[1] === 'get-caller-identity') {
+  process.stdout.write(JSON.stringify({ Account: '123456789012', Arn: 'arn:aws:sts::123456789012:assumed-role/test/run' }))
+} else if (args[0] === 'ssm' && args[1] === 'put-parameter' && option('--name').endsWith('/deployment-operation-lock')) {
+  try {
+    writeFileSync(process.env.SYNTHETIC_OPERATION_LOCK_PATH, readFileSync(0, 'utf8'), { flag: 'wx' })
+    process.stdout.write(JSON.stringify({ Version: 1 }))
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error
+    process.stderr.write('ParameterAlreadyExists')
+    process.exit(254)
+  }
+} else if (args[0] === 'ssm' && args[1] === 'delete-parameter' && option('--name').endsWith('/deployment-operation-lock')) {
+  unlinkSync(process.env.SYNTHETIC_OPERATION_LOCK_PATH)
+  process.stdout.write('{}')
+} else if (args[0] === 'ssm' && args[1] === 'get-parameter') {
+  const name = option('--name')
+  const value = name.endsWith('/deployment-operation-lock') && existsSync(process.env.SYNTHETIC_OPERATION_LOCK_PATH)
+    ? readFileSync(process.env.SYNTHETIC_OPERATION_LOCK_PATH, 'utf8')
+    : name.endsWith('/current')
+      ? process.env.SYNTHETIC_CONFIG_RELEASE
+      : name.includes('/deploy-config/releases/')
+        ? process.env.SYNTHETIC_CONFIG_SOURCE
+        : process.env.SYNTHETIC_PROVIDER_TOKEN
+  process.stdout.write(JSON.stringify({ Parameter: { Type: 'String', Value: value } }))
+} else if (args[0] === 'secretsmanager' && args[1] === 'describe-secret') {
+  process.stdout.write(JSON.stringify({
+    Tags: [
+      { Key: 'boxlite:initial-value', Value: 'generated' },
+      { Key: 'boxlite:initialization', Value: 'pending' },
+    ],
+    VersionIdsToStages: {},
+  }))
+}
+`
 
 async function fixtureRoot() {
   return mkdtemp(join(tmpdir(), 'boxlite-sst-event-log-security-'))
@@ -124,16 +194,84 @@ test('cleans a generated event log when the wrapped command fails', async () => 
   assert.equal(await fileExists(generatedLog), false)
 })
 
+for (const outcome of ['success', 'failure']) {
+  test(`keeps fixed SST and Pulumi logs on null sinks across command ${outcome}`, async () => {
+    const root = await fixtureRoot()
+    const logDirectory = join(root, '.sst', 'log')
+    const sstLog = join(logDirectory, 'sst.log')
+    const pulumiLog = join(logDirectory, 'pulumi.log')
+    const pulumiErrorLog = join(logDirectory, 'pulumi.err.log')
+    const unrelatedDiagnostic = join(logDirectory, 'diagnostic.json')
+    const sentinel = `fixed-log-secret-sentinel-${outcome}`
+    await mkdir(logDirectory, { recursive: true })
+    await Promise.all([
+      writeFile(sstLog, sentinel),
+      writeFile(pulumiLog, sentinel),
+      writeFile(pulumiErrorLog, sentinel),
+      writeFile(unrelatedDiagnostic, '{"safe":true}'),
+    ])
+
+    const invoke = async () => {
+      for (const path of [pulumiLog, pulumiErrorLog]) {
+        assert.equal((await lstat(path)).isSymbolicLink(), true)
+        assert.equal(await readlink(path), '/dev/null')
+        await writeFile(path, sentinel)
+      }
+      await writeFile(sstLog, sentinel)
+      if (outcome === 'failure') throw new Error('synthetic native SST failure')
+      return 23
+    }
+
+    try {
+      if (outcome === 'failure') {
+        await assert.rejects(withSstLogSecurity(root, invoke), /synthetic native SST failure/)
+      } else {
+        assert.equal(await withSstLogSecurity(root, invoke), 23)
+      }
+      assert.equal(await fileExists(sstLog), false)
+      for (const path of [pulumiLog, pulumiErrorLog]) {
+        assert.equal((await lstat(path)).isSymbolicLink(), true)
+        assert.equal(await readlink(path), '/dev/null')
+        assert.equal(await readFile(path, 'utf8'), '')
+      }
+      assert.equal(await readFile(unrelatedDiagnostic, 'utf8'), '{"safe":true}')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+}
+
+test('fails closed instead of following a symlinked SST log directory', async () => {
+  const root = await fixtureRoot()
+  const outside = await fixtureRoot()
+  const outsideMarker = join(outside, 'must-remain')
+  await writeFile(outsideMarker, 'untouched')
+  await symlink(outside, join(root, '.sst'))
+
+  try {
+    await assert.rejects(prepareSstLogSecurity(root), /symlink|directory|log/i)
+    assert.equal(await readFile(outsideMarker, 'utf8'), 'untouched')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(outside, { recursive: true, force: true })
+  }
+})
+
 test('cleans a generated event log before exiting after SIGTERM', async () => {
   const fixture = await fixtureRoot()
   const fakeBin = join(fixture, 'bin')
   const fakeSst = join(fakeBin, 'sst')
-  const pulumiRoot = new URL('../.sst/pulumi/', import.meta.url)
-  const eventLog = join(pulumiRoot.pathname, `signal-test-${process.pid}-${Date.now()}`, 'eventlog.json')
+  const scriptsDirectory = fileURLToPath(new URL('.', import.meta.url))
+  const isolatedScriptsDirectory = join(fixture, 'scripts')
+  const eventLog = join(fixture, '.sst', 'pulumi', 'signal-test', 'eventlog.json')
   const childPidFile = join(fixture, 'sst-child.pid')
   let childPid
 
   await mkdir(fakeBin, { recursive: true })
+  // Node's test runner executes files in parallel. Preserve the wrapper's
+  // symlinked main-module path so its derived infra/log root is this fixture,
+  // not the shared apps/infra/.sst directory another subprocess may clean.
+  await symlink(scriptsDirectory, isolatedScriptsDirectory, 'dir')
   await writeFile(
     fakeSst,
     `#!/usr/bin/env node
@@ -150,19 +288,24 @@ setInterval(() => {}, 1_000)
   )
   await chmod(fakeSst, 0o755)
 
-  const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'synthetic-test', '--stage', 'ci'], {
-    cwd: new URL('..', import.meta.url),
-    env: {
-      ...inheritedEnvironment(),
-      PATH: `${fakeBin}:${process.env.PATH}`,
-      SST_BIN_PATH: fakeSst,
-      CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
-      CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
-      SYNTHETIC_EVENT_LOG_PATH: eventLog,
-      SYNTHETIC_SST_PID_PATH: childPidFile,
+  const wrapper = spawn(
+    process.execPath,
+    ['--preserve-symlinks-main', join(isolatedScriptsDirectory, 'sst-with-cloudflare.mjs'), 'version', '--stage', 'ci'],
+    {
+      cwd: fixture,
+      env: {
+        ...inheritedEnvironment(),
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        SST_BIN_PATH: fakeSst,
+        BOXLITE_TEST_UNAUDITED_SST_BIN: '1',
+        CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
+        CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
+        SYNTHETIC_EVENT_LOG_PATH: eventLog,
+        SYNTHETIC_SST_PID_PATH: childPidFile,
+      },
+      stdio: 'ignore',
     },
-    stdio: 'ignore',
-  })
+  )
 
   try {
     await waitFor(() => fileExists(eventLog), 'the synthetic SST event log')
@@ -217,12 +360,13 @@ setInterval(() => {}, 1_000)
   )
   await chmod(fakeSst, 0o755)
 
-  const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'synthetic-test', '--stage', 'ci'], {
+  const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'version', '--stage', 'ci'], {
     cwd: new URL('..', import.meta.url),
     env: {
       ...inheritedEnvironment(),
       PATH: `${fakeBin}:${process.env.PATH}`,
       SST_BIN_PATH: fakeSst,
+      BOXLITE_TEST_UNAUDITED_SST_BIN: '1',
       CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
       CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
       SYNTHETIC_SST_GRANDCHILD_PID_PATH: grandchildPidFile,
@@ -281,12 +425,13 @@ setInterval(() => {}, 1_000)
   )
   await chmod(fakeSst, 0o755)
 
-  const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'synthetic-test', '--stage', 'ci'], {
+  const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'version', '--stage', 'ci'], {
     cwd: new URL('..', import.meta.url),
     env: {
       ...inheritedEnvironment(),
       PATH: `${fakeBin}:${process.env.PATH}`,
       SST_BIN_PATH: fakeSst,
+      BOXLITE_TEST_UNAUDITED_SST_BIN: '1',
       CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
       CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
       SYNTHETIC_SST_PID_PATH: childPidFile,
@@ -330,6 +475,7 @@ test('forwards one canonical Runner policy path to the SST process', async () =>
   const fixture = await fixtureRoot()
   const fakeBin = join(fixture, 'bin')
   const fakeSst = join(fakeBin, 'sst')
+  const fakeAws = join(fakeBin, 'aws')
   const capturedCalls = join(fixture, 'sst-calls.jsonl')
   const infraRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
@@ -346,18 +492,26 @@ if (args[0] === 'state' && args[1] === 'export') {
 `,
     'utf8',
   )
-  await chmod(fakeSst, 0o755)
+  await writeFile(fakeAws, FAKE_CONFIG_AWS, 'utf8')
+  await Promise.all([chmod(fakeSst, 0o755), chmod(fakeAws, 0o755)])
 
   const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'diff', '--stage', 'ci'], {
     cwd: infraRoot,
     env: {
       ...inheritedEnvironment(),
       PATH: `${fakeBin}:${process.env.PATH}`,
+      AWS_CLI_PATH: fakeAws,
+      AWS_REGION: 'ap-southeast-1',
       SST_BIN_PATH: fakeSst,
+      BOXLITE_TEST_UNAUDITED_SST_BIN: '1',
       CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
       CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
       RUNNERS: '1',
       DEFAULT_RUNNER_NAME: 'default',
+      SYNTHETIC_CONFIG_RELEASE,
+      SYNTHETIC_CONFIG_SOURCE,
+      SYNTHETIC_OPERATION_LOCK_PATH: join(fixture, 'deployment-operation-lock'),
+      SYNTHETIC_PROVIDER_TOKEN,
       SYNTHETIC_SST_CALLS_PATH: capturedCalls,
     },
     stdio: 'ignore',
@@ -383,6 +537,7 @@ test('interrupts a pending Runner state export when the wrapper is terminated', 
   const fixture = await fixtureRoot()
   const fakeBin = join(fixture, 'bin')
   const fakeSst = join(fakeBin, 'sst')
+  const fakeAws = join(fakeBin, 'aws')
   const childPidFile = join(fixture, 'state-export.pid')
   const infraRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
   let childPid
@@ -401,16 +556,24 @@ setInterval(() => {}, 1_000)
 `,
     'utf8',
   )
-  await chmod(fakeSst, 0o755)
+  await writeFile(fakeAws, FAKE_CONFIG_AWS, 'utf8')
+  await Promise.all([chmod(fakeSst, 0o755), chmod(fakeAws, 0o755)])
 
   const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'diff', '--stage', 'ci'], {
     cwd: infraRoot,
     env: {
       ...inheritedEnvironment(),
       PATH: `${fakeBin}:${process.env.PATH}`,
+      AWS_CLI_PATH: fakeAws,
+      AWS_REGION: 'ap-southeast-1',
       SST_BIN_PATH: fakeSst,
+      BOXLITE_TEST_UNAUDITED_SST_BIN: '1',
       CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
       CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
+      SYNTHETIC_CONFIG_RELEASE,
+      SYNTHETIC_CONFIG_SOURCE,
+      SYNTHETIC_OPERATION_LOCK_PATH: join(fixture, 'deployment-operation-lock'),
+      SYNTHETIC_PROVIDER_TOKEN,
       SYNTHETIC_SST_PID_PATH: childPidFile,
     },
     stdio: 'ignore',
@@ -457,7 +620,7 @@ test('interrupts Runner release preflight without starting SST', async () => {
 
   await mkdir(fakeBin, { recursive: true })
   await writeFile(fakeSst, `#!/bin/sh\nprintf called > "$SYNTHETIC_SST_CALL_PATH"\n`, 'utf8')
-  await writeFile(fakeAws, '#!/bin/sh\nexit 0\n', 'utf8')
+  await writeFile(fakeAws, FAKE_CONFIG_AWS, 'utf8')
   await writeFile(
     fakeCurl,
     `#!/usr/bin/env node
@@ -477,12 +640,18 @@ setInterval(() => {}, 1_000)
       ...inheritedEnvironment(),
       PATH: `${fakeBin}:${process.env.PATH}`,
       AWS_CLI_PATH: fakeAws,
+      AWS_REGION: 'ap-southeast-1',
       SST_BIN_PATH: fakeSst,
+      BOXLITE_TEST_UNAUDITED_SST_BIN: '1',
       CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
       CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
       IAM_PERMISSIONS_BOUNDARY_STAGE: 'ci',
       OIDC_ISSUER_BASE_URL: 'https://auth.example.test/',
       STACK_DOMAIN: 'ci.example.test',
+      SYNTHETIC_CONFIG_RELEASE,
+      SYNTHETIC_CONFIG_SOURCE,
+      SYNTHETIC_OPERATION_LOCK_PATH: join(fixture, 'deployment-operation-lock'),
+      SYNTHETIC_PROVIDER_TOKEN,
       SYNTHETIC_CURL_PID_PATH: curlPidFile,
       SYNTHETIC_SST_CALL_PATH: sstCallFile,
     },
@@ -526,7 +695,11 @@ test('rejects an argument delimiter before guarded SST commands start', async ()
 
   const wrapper = spawn(process.execPath, ['scripts/sst-with-cloudflare.mjs', 'diff', '--stage', 'ci', '--'], {
     cwd: new URL('..', import.meta.url),
-    env: { ...inheritedEnvironment(), SST_BIN_PATH: fakeSst },
+    env: {
+      ...inheritedEnvironment(),
+      SST_BIN_PATH: fakeSst,
+      BOXLITE_TEST_UNAUDITED_SST_BIN: '1',
+    },
     stdio: 'ignore',
   })
 
@@ -540,16 +713,17 @@ test('rejects an argument delimiter before guarded SST commands start', async ()
 
 test('the Cloudflare wrapper cleans immediately after SST before post-deploy verification', async () => {
   const wrapperSource = await readFile(new URL('./sst-with-cloudflare.mjs', import.meta.url), 'utf8')
-  const cleanupCall = 'withPulumiEventLogCleanup(PULUMI_EVENT_LOG_ROOT, runSstCommand)'
+  const cleanupCall = 'withSstLogSecurity(INFRA_ROOT, () =>'
   const cleanupIndex = wrapperSource.indexOf(cleanupCall)
   const proxyVerificationIndex = wrapperSource.indexOf('await verifyProxyDeploymentWithRetry(')
   const publicVerificationIndex = wrapperSource.indexOf('await verifyPublicDeploymentWithRetry(')
 
+  assert.match(wrapperSource, /prepareSstLogSecurity,[\s\S]*withPulumiEventLogCleanup,[\s\S]*withSstLogSecurity,/)
+  assert.match(wrapperSource, /async function runSstCommand\(\)[\s\S]*spawn\(sstExecutable, sstArgs/)
   assert.match(
     wrapperSource,
-    /import \{ removePulumiEventLogs, withPulumiEventLogCleanup \} from '\.\/sst-event-log-security\.mjs'/,
+    /assertNoSstStageEnvironmentFile\([^;]+[\s\S]*readRunnerStateBaseline\([\s\S]*withSstLogSecurity/,
   )
-  assert.match(wrapperSource, /async function runSstCommand\(\)[\s\S]*spawn\(sstExecutable, sstArgs/)
   assert.match(
     wrapperSource,
     /process\.on\(signal,[\s\S]*sstProcessTerminator\.forceStop\(\)[\s\S]*sstProcessTerminator\.interrupt\(\)/,

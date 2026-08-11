@@ -8,7 +8,7 @@ import { executeStateExportProcess, readRunnerStateBaseline } from './runner-pol
 import runnerInventory from './runner-inventory.cjs'
 
 const { CONTROL_PLANE_NAME_TAG } = runnerInventory
-const SAFE_BASELINE_HANDOFF_BYTES = 32 * 1024
+const SAFE_BASELINE_HANDOFF_BYTES = 64 * 1024
 
 function runnerStateResource(index) {
   const isDefaultRunner = index === 1
@@ -19,7 +19,7 @@ function runnerStateResource(index) {
     urn: `urn:pulumi:dev::boxlite::aws:ec2/instance:Instance::${resourceName}`,
     type: 'aws:ec2/instance:Instance',
     custom: true,
-    id: `i-runner-${index}`,
+    id: `i-${String(index).padStart(17, '0')}`,
     inputs: {
       instanceType: 'c8i.2xlarge',
       tags: {
@@ -48,7 +48,7 @@ test('exports the matching SST checkpoint with bounded, cancellable execution', 
     },
   })
 
-  assert.deepEqual(JSON.parse(baseline), { version: 3, resources: {} })
+  assert.deepEqual(JSON.parse(baseline), { version: 4, stage: 'dev', resources: {} })
   assert.equal(calls.length, 1)
   assert.equal(calls[0].command, 'sst')
   assert.deepEqual(calls[0].args, [
@@ -66,10 +66,56 @@ test('exports the matching SST checkpoint with bounded, cancellable execution', 
   assert.equal(calls[0].options.maxBuffer, 64 * 1024 * 1024)
 })
 
+test('forwards only SST config arguments before a shell command separator', async () => {
+  const cases = [
+    {
+      sstArgs: [
+        'shell',
+        '--stage',
+        'dev',
+        '--config=infra/sst.config.ts',
+        '--',
+        'node',
+        'script.mjs',
+        '--config',
+        'app.json',
+      ],
+      expectedConfigArgs: ['--config', 'infra/sst.config.ts'],
+    },
+    {
+      sstArgs: ['shell', '--stage', 'dev', '--', 'node', 'script.mjs', '--config=app.json'],
+      expectedConfigArgs: [],
+    },
+  ]
+
+  for (const { sstArgs, expectedConfigArgs } of cases) {
+    const calls = []
+    await readRunnerStateBaseline({
+      stage: 'dev',
+      sstArgs,
+      async execute(command, args) {
+        calls.push({ command, args })
+        return { stdout: JSON.stringify({ stack: 'dev', latest: { resources: [] } }), stderr: '' }
+      },
+    })
+
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].command, 'sst')
+    assert.deepEqual(calls[0].args, [
+      'state',
+      'export',
+      '--stage',
+      'dev',
+      '--print-logs',
+      ...expectedConfigArgs,
+    ])
+  }
+})
+
 test('represents an explicitly missing SST stage as an empty Runner baseline', async () => {
   const baseline = await readRunnerStateBaseline({
-    stage: 'new-stage',
-    sstArgs: ['diff', '--stage', 'new-stage'],
+    stage: 'newstage',
+    sstArgs: ['diff', '--stage', 'newstage'],
     async execute() {
       throw Object.assign(new Error('synthetic missing state'), {
         code: 1,
@@ -78,7 +124,7 @@ test('represents an explicitly missing SST stage as an empty Runner baseline', a
     },
   })
 
-  assert.deepEqual(JSON.parse(baseline), { version: 3, resources: {} })
+  assert.deepEqual(JSON.parse(baseline), { version: 4, stage: 'newstage', resources: {} })
 })
 
 test('keeps the maximum supported Runner inventory within the safe environment handoff size', async () => {
@@ -91,7 +137,7 @@ test('keeps the maximum supported Runner inventory within the safe environment h
     },
   })
 
-  assert.equal(JSON.parse(baseline).version, 3)
+  assert.equal(JSON.parse(baseline).version, 4)
   assert.equal(Object.keys(JSON.parse(baseline).resources).length, 100)
   assert.ok(Buffer.byteLength(baseline, 'utf8') < SAFE_BASELINE_HANDOFF_BYTES)
 })
@@ -107,7 +153,7 @@ test('rejects an oversized Runner baseline before the environment handoff', asyn
         return { stdout: JSON.stringify({ latest: { resources } }), stderr: '' }
       },
     }),
-    /Runner state baseline exceeds the 32 KiB environment handoff limit/,
+    /Runner state baseline exceeds the 64 KiB environment handoff limit/,
   )
 })
 

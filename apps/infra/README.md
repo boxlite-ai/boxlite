@@ -86,10 +86,10 @@ This updates an existing stack. It cannot create or replace a Runner.
 ```bash
 cd apps/infra
 npm install
-cp .env.example .env && $EDITOR .env   # STACK_DOMAIN, OIDC_ISSUER_BASE_URL, OIDC_AUDIENCE
+cp .env.example .env && $EDITOR .env   # bootstrap input; never consumed as routine config
 
 npm run login                          # browser sign-in: AWS, GitHub, Auth0
-npm run bootstrap -- --stage dev       # IAM role, GitHub Environment, secrets
+npm run bootstrap -- --stage dev       # IAM, secrets, and immutable stage-config release
 
 # Optional, and NOT idempotent — Auth0 has no upsert, so this duplicates apps:
 npm run bootstrap -- --stage dev --provision-auth0
@@ -98,15 +98,94 @@ gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false  # previ
 gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=true   # deploy
 ```
 
-`npm run bootstrap` is safe to re-run. It prompts once per stage for the
-Cloudflare token and `OIDC_CLIENT_ID`, then stores them in SSM and the SST
-secret store; `--force` replaces already-seeded values. Its full flag list is in
-the script's header comment.
+`npm run bootstrap` is safe to re-run. It is the **only** command that consumes
+`apps/infra/.env` as configuration. It validates and classifies every key, stores credentials in
+their dedicated secret stores, publishes the non-secret values as one immutable
+SSM release, then moves the stage's `current` pointer last. `--force` replaces
+operator-owned mutable credentials, but cannot rotate the encryption key,
+encryption salt, or default Runner API key in v1. Persisted ciphertext and the
+default Runner database record have no safe rotation path yet. Immutable config
+releases are never overwritten. This includes publishing `OIDC_CLIENT_ID` to
+the stage-scoped SST secret store; it never enters the immutable non-secret
+release. Its full flag list is in the script's header comment.
+
+SST 4.6.11 still runs its built-in parser for the project-root `.env` during
+native startup. The BoxLite wrapper neutralizes that parser by setting every
+classified key before SST starts, then overlays the pinned release and stage
+provider credentials. It audits only assignment names in the retained `.env`
+and refuses any unclassified key, then rejects `.env.<stage>` outright because
+SST would overload those values after startup. This native parsing is not a
+configuration source for routine BoxLite commands; keep bootstrap values to one
+assignment per line.
+
+Routine `diff`, `deploy`, `remove`, `refresh`, and `shell` commands resolve that
+pointer once and run with the exact SHA-256 release. Bootstrap, config
+activation, and each of those stack-evaluating commands hold the same
+`/boxlite/<stage>/deployment-operation-lock` for their full mutation window.
+Direct `npm run runner:update` uses the same lock; when SST invokes that updater
+inside a deploy, the child validates and reuses the parent owner instead of
+deadlocking or releasing a lock it does not own.
+While holding it, a routine command requires all eleven release generation
+markers to equal Secrets Manager `AWSCURRENT`; `generated-pending` is strict,
+not a wildcard. On the first expand deployment, generated containers initially
+publish that marker and SST creates their first versions. The complete first
+expand sequence is: apply that release, rerun `npm run bootstrap -- --stage
+<stage>` to finalize the real version ids, then preview and apply the newly
+current digest as appropriate.
+
+That same two-pass expand closes the temporary Runner command gate. The first
+bootstrap leaves `RunnerCommandTagGateEnabled=false`, which still restricts SSM
+to `AWS-RunShellScript` in the selected region but can address any instance in
+that account and region. The expand apply adds immutable `boxlite:stage` and
+`boxlite:ssm-role=runner` tags to every state-owned Runner. The mandatory second
+bootstrap compares the declared inventory, exact SST state instance ids, and EC2
+tags, then flips the gate monotonically to `true`; a fresh preview/apply uses the
+tag-scoped policy. Treat `false` only as this migration exposure window, never as
+a steady state. Runtime secret containers follow the parallel
+`boxlite:initialization=pending|sealed` gate: routine SST may create an initial
+version only for a bootstrap-owned `generated+pending` container while the
+CloudFormation initialization gate is explicitly enabled.
+
+Bootstrap alone does not restart or refresh ECS tasks or Runners. After every
+successful bootstrap that rotates a mutable runtime secret, preview and apply
+the newly current digest so generation markers restart the affected consumers.
+
+To retry or roll back deterministically, pass `config_release=<sha256>` to a
+deploy workflow. Exact activation is allowed only when the historical release
+already names the current runtime secret generations:
+
+```bash
+npm run config:activate -- --stage dev --release <sha256>
+```
+
+After any mutable-secret rotation, preserve the historical non-secret rollback
+state by explicitly rebasing it. This reads only `AWSCURRENT` metadata, writes
+and verifies a new immutable release with the historical non-secret values,
+then activates the new digest; it never rewrites the historical release or
+reads a secret value:
+
+```bash
+npm run config:activate -- --stage dev --release <historical-sha256> --rebase-runtime-generations
+```
+
+`install`, `secret`, `unlock`, and `version` deliberately do not load deployment
+configuration. Unknown SST subcommands fail until their configuration contract
+has been reviewed.
+
+For a disposable worktree, keep the operator file in the primary checkout and
+select it explicitly instead of copying credentials:
+
+```bash
+npm run bootstrap -- --stage dev --env-file /absolute/path/to/apps/infra/.env
+```
 
 A deploy takes 10–15 minutes and prints the service URLs. On a transient
 registry error, just rerun — SST resumes from the failed step.
 
-**Adding a stage:** run `npm run bootstrap -- --stage <name>`, then add `<name>`
+**Adding a stage:** names are 1–20 lowercase ASCII letters or digits, with no
+hyphens. This keeps every `boxlite-<stage>-*` IAM prefix unambiguous and leaves
+room for SST's generated physical-name suffixes. Run `npm run bootstrap --
+--stage <name>`, then add `<name>`
 to the `options` of whichever Environment-selecting inputs should reach it —
 `stage` in `.github/workflows/deploy-infra.yml` and `deploy-release.yml`, and
 both `stage` and `source_stage` in `build-apps-api-image.yml` (a stage absent from
@@ -134,8 +213,8 @@ OtelCollector are built from it on every path, so a ref naming another commit
 would deploy two.
 
 `.github/workflows/deploy-infra.yml` is the normal path. It accepts the full SHA
-of any commit already on `main` (current `main` by default), or the head of an
-open pull request in this repository — never a fork's — and builds each
+of any commit already on `main` (current `main` by default), or GitHub's
+`potentialMergeCommit.oid` for an open same-repository or fork pull request, and builds each
 component in its own job — the Linux x64 C SDK and Runner on one leg, the API
 image on the other, sharing only the ref resolution — then stages the
 commit-keyed Runner object and deploys both. The Runner reports
@@ -144,7 +223,9 @@ distinct upgrade targets; the API tag carries the same pair.
 
 `.github/workflows/deploy-release.yml` is the release path. It sets one stable
 `VERSION=X.Y.Z` for both components and compiles neither. The deploy wrapper
-verifies the ECR image and Runner release assets before invoking SST.
+verifies the ECR image and Runner release assets before invoking SST. The
+workflow then runs the same structured full-stack safety preview with the
+pinned config release before applying it.
 
 `build-apps-api-image.yml` is where every API image is built. `deploy-infra.yml`
 calls it for the commit being deployed (`v<version>-<sha>`, into that stage);
@@ -213,40 +294,56 @@ runs before deployment.
 
 The workflows are manual/serialized, restricted to `main`, and bound to protected
 GitHub Environments. GitHub OIDC supplies short-lived AWS credentials; no AWS
-access keys are stored in GitHub. `DEPLOY_ENV` materializes the stage's gitignored
-`.env` only for the job and is deleted even if deployment fails.
+access keys are stored in GitHub. A credential-free selected-ref job rejects a
+commit that predates the deployment-config contract before its code can publish
+an API or Runner artifact. A trusted main-workflow job first verifies that the
+role's CloudFormation stack is complete, the full live sensitive policy matches
+the reviewed v1 contract exactly, it has one `boxlite-sst-deploy` inline policy
+and no attached managed policies, and its role namespace is bounded to the
+selected stage. Each credentialed mutation path checks out that verifier from
+`github.workflow_sha` immediately before OIDC and runs it immediately after
+OIDC, before selected code can resolve config, install npm dependencies, or
+write S3/ECR. The deploy job then resolves one immutable config digest and uses
+it for both preview and apply. No deployment workflow creates or materializes
+`apps/infra/.env`.
 
 `ci/github-deploy-role.yaml` bootstraps three things that must exist **before** an
 SST deploy: the OIDC role, the immutable Api ECR repository, and the private
 Runner artifact bucket. That bucket expires only superseded object versions —
 first boot re-fetches the commit-keyed tarball at every instance launch, so
-expiring the current object would make a later replacement fail to boot. The role
-grants only the AWS control-plane actions
-used by this SST stack. IAM mutation is limited to `boxlite-*` roles, policies, and
-instance profiles. Every role created by SST must carry the stage's runtime
+expiring the current object would make a later replacement fail to boot. The
+role's **direct** SSM, Secrets Manager, IAM, and PassRole permissions are
+stage-contained, and IAM mutation is limited to the selected stage's
+`boxlite-<stage>-*` roles, policies, and instance profiles. Every role created by SST must carry the stage's runtime
 permissions boundary, which excludes IAM mutation and limits workloads to the
 data-plane APIs they need. Redeploy that CloudFormation stack whenever its policy
 or resources change. `IAM_PERMISSIONS_BOUNDARY_STAGE` must match both the SST stage
 and the template's `GitHubEnvironment`; deployment fails before creating roles if
-they differ. Keep required reviewers enabled on each Environment.
+they differ. This is direct-role containment, not isolation from code that can
+use the role's broad approved EC2/ECS/Lambda control plane indirectly. Treat the
+Environment-approved selected deployment code as trusted account-control-plane
+code; complete indirect isolation is deferred. Keep required reviewers enabled
+on each Environment.
 
 ## Secrets & credentials
 
-Nothing secret lives in git, but there are **two** control planes, and
-offboarding means revoking both. Most secrets live in AWS, where anyone who can
-deploy can read them. The rest are GitHub Environment secrets (see the table
-below), reachable by anyone who can administer the repository or run the
-workflow — revoking AWS access does not touch those. Secrets are per-stage; seed
+Nothing secret lives in git. Concrete stage configuration and credentials are
+AWS/account-owned; GitHub Environments retain only the stage's OIDC deploy-role
+and region variables plus deployment approvals. Secrets are per-stage, so seed
 each stage you run.
 
 | What | Stored in | Set by |
 | --- | --- | --- |
 | App secrets (`OIDC_CLIENT_ID`, Auth0 Management API, Svix, PostHog, `USAGE_EXPORT_TOKEN`) | SST secret store | `npm run bootstrap`; others via `npm run sst -- secret set <NAME> --stage <stage>` reading stdin |
-| Cloudflare creds (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`) | AWS SSM SecureString, or GitHub Environment secrets (which win) | `npm run bootstrap` |
-| Stage config (`STACK_DOMAIN`, `OIDC_*`, toggles) | GitHub Environment secret `DEPLOY_ENV` | `npm run bootstrap` |
+| Runtime credentials (encryption/admin/proxy/default-Runner keys, pgAdmin, GHCR, ClickHouse, OTLP) | Stable stage-named AWS Secrets Manager entries | `npm run bootstrap`; migrated ECS and default-Runner consumers receive only secret ARNs |
+| Cloudflare creds (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`) | Authoritative stage-scoped AWS SSM SecureStrings | `npm run bootstrap` |
+| Non-secret stage config (`STACK_DOMAIN`, `OIDC_*`, toggles) | Immutable SSM String release + `current` pointer | `npm run bootstrap` |
 
 Never pass secret values as command arguments or echo them. Rotate on any
-suspected disclosure. `npm run secrets -- --stage dev` lists what is set.
+suspected disclosure. Raw `sst secret list` is blocked because SST prints values.
+`npm run secrets -- --stage dev --region ap-southeast-1` reports registered
+runtime, SST app, and stale secret names with `SET`/`UNSET`/`UNKNOWN` metadata;
+it never invokes SST listing or calls `GetSecretValue`.
 
 Run SST through the npm scripts, never bare `npx sst` — the wrapper loads
 Cloudflare creds from SSM, enforces the Runner safety policy, and scrubs
@@ -273,19 +370,22 @@ all require the same manual token.
 ## Common commands
 
 ```bash
-# Preview a specific commit instead of current main: one already on main, or the head of an open
-# pull request in this repository (a fork's head is refused). Dispatch stays --ref main either way;
+# Preview a specific commit already on main. Dispatch stays --ref main because
 # the job conditions test the launch branch, not this input.
 gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false -f ref=<full-commit-sha>
+
+# Preview GitHub's merge commit for an open same-repository or fork pull request.
+gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false -f pr=<number>
 
 gh workflow run build-apps-api-image.yml --ref main -f operation=build -f version=0.9.8
 gh workflow run build-apps-api-image.yml --ref main -f operation=promote -f stage=prod -f version=0.9.8
 gh workflow run deploy-release.yml --ref main -f stage=prod -f version=0.9.8
-npm run runner:build-artifact -- --stage dev # local linux/amd64 build + private S3 stage
+npm run runner:build-artifact -- --stage dev --region ap-southeast-1 # local build + private S3 stage
 
 npm run sst -- diff --stage dev      # preview changes
 npm run sst -- unlock --stage dev    # recover from "concurrent update detected"
 npm run sst -- shell --stage dev     # shell with SST-linked env vars
+npm run config:activate -- --stage dev --release <sha256> # deliberate config rollback
 npm run runner:update -- --stage dev # roll the Runner binary, one host at a time
 ```
 
@@ -340,6 +440,20 @@ is only for short request/response calls.
 ## Troubleshooting
 
 **"concurrent update detected"** — `npm run sst -- unlock --stage dev`, then retry.
+
+**"a deployment operation ... is already in progress"** — an interrupted or
+terminated owner does not always get a chance to release its SSM lock:
+`SIGINT`, `SIGTERM`, or `SIGKILL` can strand
+`/boxlite/<stage>/deployment-operation-lock`, as can a host crash or power loss.
+Before recovery, verify that no bootstrap, config activation, diff, deploy,
+remove, refresh, shell, or direct `runner:update` owner is still running. Then
+delete only that exact stage parameter and retry:
+
+```bash
+aws ssm delete-parameter \
+  --name /boxlite/<stage>/deployment-operation-lock \
+  --region <region>
+```
 
 **Service stuck at `rolloutState: FAILED` with 1 running task** — stale event
 from an earlier failed deploy. If `runningCount == desiredCount`, ignore it.

@@ -2,8 +2,9 @@
 // Copyright (c) 2026 BoxLite AI
 
 /*
- * CI preflight: confirm the assumed deploy role can actually attach the
- * runtime IAM permissions boundary before `sst diff`/`sst deploy` run.
+ * CI preflight: confirm the assumed deploy role comes from a completed
+ * bootstrap stack, matches the reviewed live policy contract, and can attach
+ * the runtime IAM permissions boundary before `sst diff`/`sst deploy` run.
  * apps/infra/sst.config.ts requires every role it manages to carry that
  * boundary (see the $transform there); if the bootstrap CloudFormation
  * stack (ci/github-deploy-role.yaml, provisioned by
@@ -22,8 +23,17 @@
 
 import { execFileSync } from 'node:child_process'
 
-import { parseAssumedRoleName, verifyDeployRoleGrantsBoundaryPermission } from './deploy-role-boundary.mjs'
-import { loadDeploymentEnvironment, resolveAwsRegion } from './deployment-environment.mjs'
+import {
+  assertDeployPolicyContract,
+  assertDeployRoleStackComplete,
+  assertDeployRoleTopology,
+  assertSelectedStageRolesBounded,
+  parseAssumedRoleIdentity,
+  parseAssumedRoleName,
+  verifyDeployRoleGrantsBoundaryPermission,
+} from './deploy-role-boundary.mjs'
+import { githubDeployRoleStackName } from './environment-bootstrap.mjs'
+import { resolveAwsRegion } from './deployment-environment.mjs'
 import { resolveAwsCliPath } from './proxy-deployment-verify.mjs'
 
 const SCRIPT_NAME = 'verify-deploy-role-boundary'
@@ -44,35 +54,61 @@ function awsJson(awsCliPath, region, args) {
   return JSON.parse(stdout)
 }
 
-function fetchInlinePolicyDocuments(awsCliPath, region, roleName) {
+function fetchDeployPolicyDocument(awsCliPath, region, roleName, stage) {
+  const { Role } = awsJson(awsCliPath, region, ['iam', 'get-role', '--role-name', roleName])
   const { PolicyNames } = awsJson(awsCliPath, region, ['iam', 'list-role-policies', '--role-name', roleName])
-  return PolicyNames.map(
-    (policyName) =>
-      awsJson(awsCliPath, region, ['iam', 'get-role-policy', '--role-name', roleName, '--policy-name', policyName])
-        .PolicyDocument,
-  )
+  const { AttachedPolicies } = awsJson(awsCliPath, region, ['iam', 'list-attached-role-policies', '--role-name', roleName])
+  const topology = assertDeployRoleTopology({
+    roleName,
+    stage,
+    inlinePolicyNames: PolicyNames,
+    attachedPolicyArns: AttachedPolicies.map(({ PolicyArn }) => PolicyArn),
+    roleTags: Role?.Tags,
+  })
+  return awsJson(awsCliPath, region, [
+    'iam',
+    'get-role-policy',
+    '--role-name',
+    roleName,
+    '--policy-name',
+    topology.policyName,
+  ]).PolicyDocument
 }
 
-function fetchAttachedManagedPolicyDocuments(awsCliPath, region, roleName) {
-  const { AttachedPolicies } = awsJson(awsCliPath, region, ['iam', 'list-attached-role-policies', '--role-name', roleName])
-  return AttachedPolicies.map(({ PolicyArn }) => {
-    const { Policy } = awsJson(awsCliPath, region, ['iam', 'get-policy', '--policy-arn', PolicyArn])
-    const { PolicyVersion } = awsJson(awsCliPath, region, [
+function fetchAllRoles(awsCliPath, region) {
+  const roles = []
+  const seenMarkers = new Set()
+  let marker
+  do {
+    const response = awsJson(awsCliPath, region, [
       'iam',
-      'get-policy-version',
-      '--policy-arn',
-      PolicyArn,
-      '--version-id',
-      Policy.DefaultVersionId,
+      'list-roles',
+      '--no-paginate',
+      ...(marker ? ['--marker', marker] : []),
     ])
-    return PolicyVersion.Document
-  })
+    if (!Array.isArray(response.Roles) || typeof response.IsTruncated !== 'boolean') {
+      throw new Error('IAM list-roles returned an invalid pagination response')
+    }
+    roles.push(...response.Roles)
+    if (!response.IsTruncated) {
+      if (response.Marker !== undefined && response.Marker !== null && response.Marker !== '') {
+        throw new Error('IAM list-roles returned an unexpected final marker')
+      }
+      marker = undefined
+      continue
+    }
+    if (typeof response.Marker !== 'string' || !response.Marker || seenMarkers.has(response.Marker)) {
+      throw new Error('IAM list-roles returned an invalid or repeated pagination marker')
+    }
+    seenMarkers.add(response.Marker)
+    marker = response.Marker
+  } while (marker)
+  return roles
 }
 
 function main() {
-  // CI supplies these as job env, but `npm run verify-deploy-role` locally
-  // needs the stage dotenv.
-  loadDeploymentEnvironment()
+  // CI and local operators supply stage/region explicitly. This preflight must
+  // not consult the bootstrap-only local environment file.
   const region = resolveAwsRegion()
   const stage = requireStage()
   const awsCliPath = resolveAwsCliPath()
@@ -85,12 +121,28 @@ function main() {
   }
 
   let policyDocuments
+  let policyContract
+  let stackStatus
   try {
-    const roleName = parseAssumedRoleName(identity.Arn)
-    policyDocuments = [
-      ...fetchInlinePolicyDocuments(awsCliPath, region, roleName),
-      ...fetchAttachedManagedPolicyDocuments(awsCliPath, region, roleName),
-    ]
+    const assumedRole = parseAssumedRoleIdentity(identity.Arn)
+    if (identity.Account !== assumedRole.accountId) throw new Error('caller ARN and account do not match')
+    const roleName = assumedRole.roleName
+    const stack = awsJson(awsCliPath, region, [
+      'cloudformation',
+      'describe-stacks',
+      '--stack-name',
+      githubDeployRoleStackName(stage),
+    ])
+    stackStatus = assertDeployRoleStackComplete({ stage, stacks: stack.Stacks })
+    policyDocuments = [fetchDeployPolicyDocument(awsCliPath, region, roleName, stage)]
+    policyContract = assertDeployPolicyContract({
+      policyDocument: policyDocuments[0],
+      accountId: identity.Account,
+      partition: assumedRole.partition,
+      region,
+      stage,
+    })
+    assertSelectedStageRolesBounded({ roles: fetchAllRoles(awsCliPath, region), accountId: identity.Account, stage })
   } catch (cause) {
     throw new Error(`could not read the deploy role's IAM policies for stage '${stage}'`, { cause })
   }
@@ -113,7 +165,12 @@ function main() {
     )
   }
 
-  console.log(`[${SCRIPT_NAME}] ${roleName} grants iam:PutRolePermissionsBoundary for ${boundaryArn}`)
+  console.log(
+    `[${SCRIPT_NAME}] ${roleName} has the reviewed live policy (${stackStatus.stackStatus}; ` +
+      `runner-tag-gate=${policyContract.runnerCommandTagGateEnabled}; ` +
+      `runtime-secret-init=${policyContract.runtimeSecretInitializationEnabled}) and grants ` +
+      `iam:PutRolePermissionsBoundary for ${boundaryArn}`,
+  )
 }
 
 try {

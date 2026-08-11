@@ -11,8 +11,12 @@ import runnerStateBaseline from './runner-state-baseline.cjs'
 import runnerPolicyDefinitions from '../policies/runner/definitions.cjs'
 import runnerPolicy from '../policies/runner/validate.cjs'
 
-const { CONTROL_PLANE_NAME_TAG, resolveRunnerInventory } = runnerInventory
-const { createRunnerIdentityFingerprint, createRunnerSafetyFingerprint } = runnerStateBaseline
+const { CONTROL_PLANE_NAME_TAG, extraRunnerInstanceProfileName, resolveRunnerInventory } = runnerInventory
+const {
+  createRunnerIdentityFingerprint,
+  createRunnerProfileMigrationFingerprint,
+  createRunnerSafetyFingerprint,
+} = runnerStateBaseline
 const { createRunnerPolicies } = runnerPolicyDefinitions
 const { validateRunnerResource, validateRunnerStack } = runnerPolicy
 const RUNNER_TYPE = 'aws:ec2/instance:Instance'
@@ -40,6 +44,8 @@ function runnerResource(spec, overrides = {}) {
       tags: {
         Name: spec.nameTag,
         [CONTROL_PLANE_NAME_TAG]: spec.controlPlaneRunnerName,
+        'boxlite:stage': 'dev',
+        'boxlite:ssm-role': 'runner',
       },
     },
     opts: SAFE_OPTIONS,
@@ -50,15 +56,18 @@ function runnerResource(spec, overrides = {}) {
 function runnerBaseline(inventory, includedInventory = inventory) {
   const includedNames = new Set(includedInventory.map((runner) => runner.resourceName))
   return {
-    version: 3,
+    version: 4,
+    stage: 'dev',
     resources: Object.fromEntries(
       inventory
         .filter((runner) => includedNames.has(runner.resourceName))
         .map((runner) => [
           runner.resourceName,
           {
+            instanceId: `i-${String(inventory.indexOf(runner) + 1).padStart(17, '0')}`,
             inputFingerprint: createRunnerSafetyFingerprint(runnerResource(runner).props),
             identityFingerprint: createRunnerIdentityFingerprint(runnerResource(runner).props, runner.resourceName),
+            profileMigrationFingerprint: createRunnerProfileMigrationFingerprint(runnerResource(runner).props),
           },
         ]),
     ),
@@ -120,6 +129,24 @@ test('accepts protected Runner resources with exact lifecycle, identity, and sta
     ),
     [],
   )
+})
+
+test('rejects missing or changed Runner stage and role tags', () => {
+  const inventory = resolveRunnerInventory({})
+  const baseline = runnerBaseline(inventory)
+  const [spec] = inventory
+  const missingStage = runnerResource(spec)
+  delete missingStage.props.tags['boxlite:stage']
+  const wrongStage = runnerResource(spec)
+  wrongStage.props.tags['boxlite:stage'] = 'prod'
+  const wrongRole = runnerResource(spec)
+  wrongRole.props.tags['boxlite:ssm-role'] = 'api'
+
+  for (const resource of [missingStage, wrongStage, wrongRole]) {
+    assert.deepEqual(validateRunnerResource(resource, inventory, baseline), [
+      'Runner identity tags must match the deployment inventory.',
+    ])
+  }
 })
 
 test('rejects unsafe Runner lifecycle options without reporting property values', () => {
@@ -289,6 +316,42 @@ test('rejects protected Runner property drift even when no preview event is avai
       ),
     )
   }
+})
+
+test('allows only extra Runners one in-place migration to their exact stage-bound profile', () => {
+  const inventory = resolveRunnerInventory({ RUNNERS: '2' })
+  const baseline = runnerBaseline(inventory)
+  const [defaultRunner, extraRunner] = inventory
+  const targetProfile = extraRunnerInstanceProfileName('dev')
+  const migratedExtra = runnerResource(extraRunner)
+  migratedExtra.props.iamInstanceProfile = targetProfile
+
+  assert.deepEqual(validateRunnerResource(migratedExtra, inventory, baseline), [])
+
+  const wrongProfile = runnerResource(extraRunner)
+  wrongProfile.props.iamInstanceProfile = extraRunnerInstanceProfileName('prod')
+  assert.ok(
+    validateRunnerResource(wrongProfile, inventory, baseline).includes(
+      'Runner protected properties must match the current deployment state.',
+    ),
+  )
+
+  const changedAlongsideProfile = runnerResource(extraRunner)
+  changedAlongsideProfile.props.iamInstanceProfile = targetProfile
+  changedAlongsideProfile.props.instanceType = 'c8i.4xlarge'
+  assert.ok(
+    validateRunnerResource(changedAlongsideProfile, inventory, baseline).includes(
+      'Runner protected properties must match the current deployment state.',
+    ),
+  )
+
+  const defaultWithExtraProfile = runnerResource(defaultRunner)
+  defaultWithExtraProfile.props.iamInstanceProfile = targetProfile
+  assert.ok(
+    validateRunnerResource(defaultWithExtraProfile, inventory, baseline).includes(
+      'Runner protected properties must match the current deployment state.',
+    ),
+  )
 })
 
 test('rejects a currently missing Runner in routine deployments', () => {

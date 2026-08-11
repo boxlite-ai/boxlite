@@ -8,29 +8,11 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import {
-  loadDeploymentEnvironment,
   readWorkspaceVersion,
   resolveAwsRegion,
   resolvePublicDeploymentConfig,
   resolveReleaseVersion,
 } from './deployment-environment.mjs'
-
-test('loads the deployment dotenv before resolving wrapper-side AWS settings', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'boxlite-deployment-environment-'))
-  const dotenvPath = join(directory, '.env')
-  const environment = { AWS_REGION: 'eu-west-1' }
-  writeFileSync(dotenvPath, 'AWS_REGION=ap-southeast-2\nAWS_CLI_PATH=/custom/bin/aws\nSST_STAGE=staging\n')
-
-  try {
-    loadDeploymentEnvironment({ path: dotenvPath, environment })
-
-    assert.equal(resolveAwsRegion(environment), 'eu-west-1', 'the shell environment must override .env')
-    assert.equal(environment.AWS_CLI_PATH, '/custom/bin/aws')
-    assert.equal(environment.SST_STAGE, 'staging')
-  } finally {
-    rmSync(directory, { recursive: true, force: true })
-  }
-})
 
 test('uses one AWS region resolver for the wrapper and SST config', () => {
   assert.equal(resolveAwsRegion({}), 'ap-southeast-1')

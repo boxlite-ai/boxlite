@@ -6,7 +6,7 @@ import { resolve } from 'node:path'
 
 import runnerInventory from './runner-inventory.cjs'
 
-const { isRunnerLikeResource } = runnerInventory
+const { extraRunnerInstanceProfileName, isRunnerLikeResource } = runnerInventory
 
 const MAX_PREVIEW_BYTES = 32 * 1024 * 1024
 
@@ -14,7 +14,20 @@ function resourceName(urn) {
   return urn.slice(urn.lastIndexOf('::') + 2)
 }
 
-function isAllowedRunnerUpdatePath(path) {
+function isAllowedExtraRunnerProfileMigration(change, name, stage) {
+  if (!/^Runner-runner-[1-9][0-9]*$/.test(name) || !stage) return false
+  let expectedProfile
+  try {
+    expectedProfile = extraRunnerInstanceProfileName(stage)
+  } catch {
+    return false
+  }
+  const oldProfile = change.old?.inputs?.iamInstanceProfile
+  const newProfile = change.new?.inputs?.iamInstanceProfile
+  return newProfile === expectedProfile && oldProfile !== newProfile
+}
+
+function isAllowedRunnerUpdatePath(path, context) {
   return (
     path === '__provider' ||
     path === 'tags' ||
@@ -22,11 +35,16 @@ function isAllowedRunnerUpdatePath(path) {
     path.startsWith('tags[') ||
     path === 'tagsAll' ||
     path.startsWith('tagsAll.') ||
-    path.startsWith('tagsAll[')
+    path.startsWith('tagsAll[') ||
+    (path === 'iamInstanceProfile' &&
+      isAllowedExtraRunnerProfileMigration(context.change, context.name, context.stage))
   )
 }
 
-export function validateDeploymentPreview(rawPreview) {
+export function validateDeploymentPreview(
+  rawPreview,
+  { stage = process.env.SST_STAGE || process.env.STAGE } = {},
+) {
   let changes
   try {
     changes = JSON.parse(rawPreview)
@@ -60,7 +78,7 @@ export function validateDeploymentPreview(rawPreview) {
       change.op === 'update' &&
       change.new?.protect === true &&
       paths.length > 0 &&
-      paths.every(isAllowedRunnerUpdatePath)
+      paths.every((path) => isAllowedRunnerUpdatePath(path, { change, name, stage }))
 
     if (!isSafeUpdate) {
       unsafeRunnerChanges.push(`${name}: ${change.op} (${paths.join(', ') || 'no detailed diff'})`)

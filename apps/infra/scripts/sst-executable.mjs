@@ -12,6 +12,13 @@ export function resolveSstExecutable(environment = process.env) {
     if (!configuredPath || configuredPath !== configuredPath.trim() || !isAbsolute(configuredPath)) {
       throw new Error('SST_BIN_PATH must be an absolute path without surrounding whitespace')
     }
+    // Production commands must use the exact package-lock-pinned native build
+    // whose dotenv and diagnostic-file behavior is audited. The override
+    // exists solely so subprocess contract tests can emulate that native
+    // boundary without touching node_modules.
+    if (environment.BOXLITE_TEST_UNAUDITED_SST_BIN !== '1') {
+      throw new Error('SST_BIN_PATH is a test-only unaudited executable override')
+    }
     return configuredPath
   }
 

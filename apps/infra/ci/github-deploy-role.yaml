@@ -10,8 +10,30 @@ Parameters:
     Type: String
     Default: dev
     MinLength: 1
-    MaxLength: 32
-    AllowedPattern: '^[a-z0-9][a-z0-9-]*$'
+    MaxLength: 20
+    AllowedPattern: '^[a-z0-9]{1,20}$'
+  RunnerCommandTagGateEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  RuntimeSecretInitializationEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+Conditions:
+  RunnerCommandTagGateIsEnabled:
+    Fn::Equals:
+      - Ref: RunnerCommandTagGateEnabled
+      - 'true'
+  RuntimeSecretInitializationIsEnabled:
+    Fn::Equals:
+      - Ref: RuntimeSecretInitializationEnabled
+      - 'true'
 
 Resources:
   # Artifact stores belong to the stage's deployment bootstrap, not to the SST stack that
@@ -92,8 +114,6 @@ Resources:
               - ssm:GetDeployablePatchSnapshotForInstance
               - ssm:GetDocument
               - ssm:GetManifest
-              - ssm:GetParameter
-              - ssm:GetParameters
               - ssm:ListAssociations
               - ssm:ListInstanceAssociations
               - ssm:PutComplianceItems
@@ -160,7 +180,7 @@ Resources:
           - Sid: AssumeBoxLiteRuntimeRoles
             Effect: Allow
             Action: sts:AssumeRole
-            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-s3-access
 
   GitHubDeployRole:
     Type: AWS::IAM::Role
@@ -168,6 +188,9 @@ Resources:
       RoleName: !Sub boxlite-${GitHubEnvironment}-github-deploy
       Description: Short-lived role used only by the guarded BoxLite GitHub deployment environment
       MaxSessionDuration: 7200
+      Tags:
+        - Key: boxlite:deploy-policy-contract
+          Value: v1
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -209,16 +232,182 @@ Resources:
                   - logs:*
                   - rds:*
                   - s3:*
-                  - secretsmanager:*
                   - servicediscovery:*
-                  - ssm:*
                   - tag:GetResources
                   - tag:GetTagKeys
                   - tag:GetTagValues
                 Resource: '*'
+              # Parameter Store is intentionally absent from the broad control-plane grant. The
+              # deploy identity may read only the selected stage's provider/config state, mutate
+              # only its operation lock and names-only SST status markers, and use SSM commands
+              # for Runner reconciliation. This deny also contains permissions added elsewhere.
+              - Sid: DenyOtherParameterMutation
+                Effect: Deny
+                Action:
+                  - ssm:AddTagsToResource
+                  - ssm:DeleteParameter
+                  - ssm:DeleteParameters
+                  - ssm:LabelParameterVersion
+                  - ssm:PutParameter
+                  - ssm:RemoveTagsFromResource
+                  - ssm:UnlabelParameterVersion
+                NotResource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/boxlite/${GitHubEnvironment}/deployment-operation-lock
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/boxlite/${GitHubEnvironment}/sst-secret-status/*
+              - Sid: DenyParameterResourcePolicyMutation
+                Effect: Deny
+                Action:
+                  - ssm:DeleteResourcePolicy
+                  - ssm:PutResourcePolicy
+                Resource: '*'
+              - Sid: ReadCloudflareProviderCredentials
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/boxlite/${GitHubEnvironment}/cloudflare-api-token
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/boxlite/${GitHubEnvironment}/cloudflare-account-id
+              - Sid: UseBoxLiteSstSecretStatus
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/boxlite/${GitHubEnvironment}/sst-secret-status/*
+              - Sid: UseRunnerCommandDocument
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript
+              - Fn::If:
+                  - RunnerCommandTagGateIsEnabled
+                  - Sid: SendSelectedStageRunnerCommand
+                    Effect: Allow
+                    Action: ssm:SendCommand
+                    Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+                    Condition:
+                      StringEquals:
+                        ssm:resourceTag/boxlite:stage: !Sub '${GitHubEnvironment}'
+                        ssm:resourceTag/boxlite:ssm-role: runner
+                  - Sid: SendLegacyRunnerCommand
+                    Effect: Allow
+                    Action: ssm:SendCommand
+                    Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+              - Fn::If:
+                  - RunnerCommandTagGateIsEnabled
+                  - Sid: DenyRunnerCommandAuthorizationTagMutation
+                    Effect: Deny
+                    Action:
+                      - ec2:CreateTags
+                      - ec2:DeleteTags
+                    Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+                    Condition:
+                      ForAnyValue:StringEqualsIgnoreCase:
+                        aws:TagKeys:
+                          - boxlite:stage
+                          - boxlite:ssm-role
+                      StringNotEqualsIfExists:
+                        ec2:CreateAction: RunInstances
+                  - Ref: AWS::NoValue
+              - Sid: ReadSystemsManagerCommandResult
+                Effect: Allow
+                Action: ssm:GetCommandInvocation
+                Resource: '*'
+              # Bootstrap owns the stable runtime namespace. Routine deployments may read it,
+              # and may install only a generated first version during the explicit expand gate.
+              - Sid: ReadSelectedStageRuntimeSecrets
+                Effect: Allow
+                Action:
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetResourcePolicy
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:boxlite-${GitHubEnvironment}-runtime/*
+              - Fn::If:
+                  - RuntimeSecretInitializationIsEnabled
+                  - Sid: InitializeGeneratedPendingRuntimeSecrets
+                    Effect: Allow
+                    Action: secretsmanager:PutSecretValue
+                    Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:boxlite-${GitHubEnvironment}-runtime/*
+                    Condition:
+                      StringEquals:
+                        secretsmanager:ResourceTag/boxlite:initial-value: generated
+                        secretsmanager:ResourceTag/boxlite:initialization: pending
+                  - Ref: AWS::NoValue
+              - Fn::If:
+                  - RuntimeSecretInitializationIsEnabled
+                  - Ref: AWS::NoValue
+                  - Sid: DenyRuntimeSecretInitialization
+                    Effect: Deny
+                    Action: secretsmanager:PutSecretValue
+                    Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:boxlite-${GitHubEnvironment}-runtime/*
+              - Sid: DenyRuntimeSecretLifecycleMutation
+                Effect: Deny
+                NotAction:
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetResourcePolicy
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:boxlite-${GitHubEnvironment}-runtime/*
+              # SST owns exactly these component-created stage secrets. Keep the lifecycle list
+              # explicit so it cannot reach bootstrap-owned runtime containers or another stage.
+              - Sid: ManageSelectedStageStackSecrets
+                Effect: Allow
+                Action:
+                  - secretsmanager:CancelRotateSecret
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetResourcePolicy
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:ListSecretVersionIds
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:RestoreSecret
+                  - secretsmanager:RotateSecret
+                  - secretsmanager:TagResource
+                  - secretsmanager:UntagResource
+                  - secretsmanager:UpdateSecret
+                  - secretsmanager:UpdateSecretVersionStage
+                Resource:
+                  - !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:boxlite-${GitHubEnvironment}-DatabaseProxySecret-*
+                  - !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:boxlite-${GitHubEnvironment}-CacheProxySecret-*
+                  - !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:boxlite-${GitHubEnvironment}-GhcrPullToken-*
+              - Sid: DenyBoxLiteSecretResourcePolicyMutation
+                Effect: Deny
+                Action:
+                  - secretsmanager:DeleteResourcePolicy
+                  - secretsmanager:PutResourcePolicy
+                Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:boxlite-*
+              # Deployment configuration is published and activated only by the bootstrap/operator
+              # identity. The deploy role resolves `current` once and subsequently reads one exact
+              # immutable release. A different stage is not readable by this role.
+              - Sid: ReadBoxLiteDeploymentConfig
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/boxlite/${GitHubEnvironment}/deploy-config/*
+              # No deploy identity may publish, activate, tag, share, or delete any stage's
+              # immutable configuration. NotAction keeps this closed when SSM adds new operations.
+              - Sid: DenyBoxLiteDeploymentConfigMutation
+                Effect: Deny
+                NotAction: ssm:GetParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/boxlite/*/deploy-config/*
+              # Bootstrap, config activation, preview, and apply serialize on this one stage-scoped
+              # parameter. It is deliberately outside deploy-config/* so the immutable-config deny
+              # does not prevent the routine deploy role from acquiring and owner-safely releasing it.
+              - Sid: UseBoxLiteDeploymentOperationLock
+                Effect: Allow
+                Action:
+                  - ssm:DeleteParameter
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/boxlite/${GitHubEnvironment}/deployment-operation-lock
+              - Sid: DenyOtherBoxLiteDeploymentOperationLockActions
+                Effect: Deny
+                NotAction:
+                  - ssm:DeleteParameter
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/boxlite/${GitHubEnvironment}/deployment-operation-lock
               - Sid: ReadIamAndAccountMetadata
                 Effect: Allow
                 Action:
+                  - cloudformation:DescribeStacks
                   - iam:GetInstanceProfile
                   - iam:GetPolicy
                   - iam:GetPolicyVersion
@@ -227,6 +416,7 @@ Resources:
                   - iam:ListAttachedRolePolicies
                   - iam:ListInstanceProfilesForRole
                   - iam:ListPolicyVersions
+                  - iam:ListRoles
                   - iam:ListRolePolicies
                   - iam:ListRoleTags
                   - sts:GetCallerIdentity
@@ -234,10 +424,23 @@ Resources:
               - Sid: CreateBoundedBoxLiteRoles
                 Effect: Allow
                 Action: iam:CreateRole
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-*
                 Condition:
                   StringEquals:
                     iam:PermissionsBoundary: !Ref BoxLiteRuntimePermissionsBoundary
+              # This inline deny is self-protecting: PutRolePolicy/DeleteRolePolicy cannot replace
+              # or remove it, and no stage deploy can mutate, pass, or re-bound any GitHub deploy
+              # role. Read-only inspection remains available for bootstrap verification.
+              - Sid: DenyGitHubDeployRoleMutation
+                Effect: Deny
+                NotAction:
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:ListRolePolicies
+                  - iam:ListRoleTags
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*-github-deploy
               - Sid: ManageBoxLiteRoles
                 Effect: Allow
                 Action:
@@ -247,7 +450,6 @@ Resources:
                   - iam:DeleteRole
                   - iam:DeleteRolePolicy
                   - iam:DetachRolePolicy
-                  - iam:PassRole
                   - iam:PutRolePolicy
                   - iam:RemoveRoleFromInstanceProfile
                   - iam:AddRoleToInstanceProfile
@@ -259,15 +461,36 @@ Resources:
                   - iam:UpdateRole
                   - iam:UpdateRoleDescription
                 Resource:
-                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*
-                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/boxlite-*
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-*
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/boxlite-${GitHubEnvironment}-*
+              - Sid: PassSelectedStageRuntimeRoles
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-*
+                Condition:
+                  StringEquals:
+                    iam:PassedToService:
+                      - ec2.amazonaws.com
+                      - ecs-tasks.amazonaws.com
               - Sid: SetBoxLiteRoleBoundary
                 Effect: Allow
                 Action: iam:PutRolePermissionsBoundary
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-*
                 Condition:
                   StringEquals:
                     iam:PermissionsBoundary: !Ref BoxLiteRuntimePermissionsBoundary
+              # The deploy role can create and pass bounded helpers, so allowing it to rewrite the
+              # boundary would turn that ceiling into an escalation path. Boundary changes remain
+              # an operator/bootstrap action for every stage.
+              - Sid: DenyRuntimeBoundaryMutation
+                Effect: Deny
+                NotAction:
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                  - iam:ListEntitiesForPolicy
+                  - iam:ListPolicyTags
+                  - iam:ListPolicyVersions
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boxlite-*-runtime-boundary
               - Sid: ManageBoxLitePolicies
                 Effect: Allow
                 Action:
@@ -278,7 +501,7 @@ Resources:
                   - iam:SetDefaultPolicyVersion
                   - iam:TagPolicy
                   - iam:UntagPolicy
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boxlite-*
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boxlite-${GitHubEnvironment}-*
               - Sid: CreateRequiredServiceLinkedRoles
                 Effect: Allow
                 Action: iam:CreateServiceLinkedRole

@@ -14,9 +14,30 @@ test('resolves the installed native SST executable', () => {
   assert.match(executable, new RegExp(`sst-${process.platform}-${process.arch}`))
 })
 
-test('accepts only an explicit absolute SST executable override', () => {
-  assert.equal(resolveSstExecutable({ SST_BIN_PATH: '/synthetic/bin/sst' }), '/synthetic/bin/sst')
+test('keeps unaudited SST executable overrides behind an explicit test-only gate', () => {
+  assert.throws(
+    () => resolveSstExecutable({ SST_BIN_PATH: '/synthetic/bin/sst' }),
+    /test-only|audited|override/i,
+  )
+  assert.equal(
+    resolveSstExecutable({
+      BOXLITE_TEST_UNAUDITED_SST_BIN: '1',
+      SST_BIN_PATH: '/synthetic/bin/sst',
+    }),
+    '/synthetic/bin/sst',
+  )
   for (const configuredPath of ['', 'sst', ' /synthetic/bin/sst']) {
-    assert.throws(() => resolveSstExecutable({ SST_BIN_PATH: configuredPath }), /SST_BIN_PATH must be an absolute path/)
+    assert.throws(
+      () => resolveSstExecutable({ BOXLITE_TEST_UNAUDITED_SST_BIN: '1', SST_BIN_PATH: configuredPath }),
+      /SST_BIN_PATH must be an absolute path/,
+    )
   }
+  assert.throws(
+    () =>
+      resolveSstExecutable({
+        BOXLITE_TEST_UNAUDITED_SST_BIN: 'true',
+        SST_BIN_PATH: '/synthetic/bin/sst',
+      }),
+    /test-only|gate/i,
+  )
 })

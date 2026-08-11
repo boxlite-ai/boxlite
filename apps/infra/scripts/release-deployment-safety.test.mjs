@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { DEFAULT_SCHEMA, Type, load } from 'js-yaml'
 
-import { verifyDeployRoleGrantsBoundaryPermission } from './deploy-role-boundary.mjs'
+import { assertDeployPolicyContract, verifyDeployRoleGrantsBoundaryPermission } from './deploy-role-boundary.mjs'
 import { liveText } from './live-source.mjs'
 import { apiImageRepository } from './api-artifact.mjs'
 import { runnerArtifactsBucketName } from './runner-artifact.mjs'
@@ -27,6 +27,7 @@ const BUILD_RUNNER_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-runner-bi
 const E2E_CLOUD_WORKFLOW = join(REPO_ROOT, '.github/workflows/e2e-cloud.yml')
 const LINT_WORKFLOW = join(REPO_ROOT, '.github/workflows/lint.yml')
 const DEV_DEPLOY_ROLE = join(REPO_ROOT, 'apps/infra/ci/github-deploy-role.yaml')
+const DEPLOY_ROLE_VERIFIER = join(REPO_ROOT, 'apps/infra/scripts/verify-deploy-role-boundary.mjs')
 const CLOUDFORMATION_SCHEMA = DEFAULT_SCHEMA.extend([
   new Type('!Sub', {
     kind: 'scalar',
@@ -50,6 +51,45 @@ const assertShellLine = (run, pattern, message) =>
 const assertLiveLine = (text, pattern, message) =>
   assert.match(liveText('script', text), pattern, message ?? `missing live line: ${pattern}`)
 
+function assertImmediateDeployRoleAttestation(job, stageVariable) {
+  const oidcIndex = job.steps.findIndex((step) => step.name === 'Configure AWS credentials through OIDC')
+  const attestationIndex = job.steps.findIndex((step) => step.name === 'Attest assumed deploy role contract')
+  assert.notEqual(oidcIndex, -1, 'AWS OIDC configuration is missing')
+  assert.equal(
+    attestationIndex,
+    oidcIndex + 1,
+    'the deploy-role attestation must be the first step after AWS credentials become available',
+  )
+
+  const attestation = job.steps[attestationIndex]
+  assert.equal(attestation['working-directory'], '.trusted-deploy-contract/apps/infra')
+  assert.equal(attestation.run, 'node scripts/verify-deploy-role-boundary.mjs')
+
+  const trustedCheckout = job.steps.find(
+    (step) =>
+      typeof step.uses === 'string' &&
+      step.uses.startsWith('actions/checkout') &&
+      step.with?.path === '.trusted-deploy-contract',
+  )
+  assert.ok(trustedCheckout, `the ${stageVariable} mutation job does not check out its trusted deploy-role verifier`)
+  assert.equal(trustedCheckout.with.ref, '${{ github.workflow_sha }}')
+  assert.equal(trustedCheckout.with['persist-credentials'], false)
+  assert.equal(
+    job.steps.indexOf(trustedCheckout),
+    oidcIndex - 1,
+    'the trusted verifier must be checked out after selected code and immediately before OIDC',
+  )
+
+  const trustedCheckoutIndex = job.steps.indexOf(trustedCheckout)
+  const prepareCheckout = job.steps[trustedCheckoutIndex - 1]
+  assert.equal(prepareCheckout?.name, 'Prepare trusted deploy-role verifier checkout')
+  assert.equal(
+    prepareCheckout?.run,
+    '/usr/bin/rm -rf -- "$GITHUB_WORKSPACE/.trusted-deploy-contract"',
+    'the selected checkout must not supply the trusted verifier path or a symlink for it',
+  )
+}
+
 function readDeployTemplate() {
   return load(readFileSync(DEV_DEPLOY_ROLE, 'utf8'), { schema: CLOUDFORMATION_SCHEMA })
 }
@@ -58,16 +98,129 @@ function readRuntimeBoundaryStatements() {
   return readDeployTemplate().Resources.BoxLiteRuntimePermissionsBoundary.Properties.PolicyDocument.Statement
 }
 
+function readDeployRoleStatements({
+  runnerCommandTagGateEnabled = true,
+  runtimeSecretInitializationEnabled = false,
+} = {}) {
+  return readDeployTemplate().Resources.GitHubDeployRole.Properties.Policies.flatMap((policy) =>
+    policy.PolicyDocument.Statement.flatMap((statement) => {
+      const conditional = statement?.['Fn::If']
+      if (!conditional) return [statement]
+      const conditionValue = {
+        RunnerCommandTagGateIsEnabled: runnerCommandTagGateEnabled,
+        RuntimeSecretInitializationIsEnabled: runtimeSecretInitializationEnabled,
+      }[conditional[0]]
+      assert.notEqual(conditionValue, undefined, `unclassified deploy-role condition ${conditional[0]}`)
+      const selected = conditionValue ? conditional[1] : conditional[2]
+      return selected?.Ref === 'AWS::NoValue' ? [] : [selected]
+    }),
+  )
+}
+
+function resolvedDeployRolePolicy(options = {}) {
+  const accountId = '123456789012'
+  const region = 'ap-southeast-1'
+  const stage = 'dev'
+  const boundaryArn = `arn:aws:iam::${accountId}:policy/boxlite-${stage}-runtime-boundary`
+  const policyDocument = JSON.parse(
+    JSON.stringify({ Version: '2012-10-17', Statement: readDeployRoleStatements(options) })
+      .replaceAll('${AWS::Partition}', 'aws')
+      .replaceAll('${AWS::Region}', region)
+      .replaceAll('${AWS::AccountId}', accountId)
+      .replaceAll('${GitHubEnvironment}', stage)
+      .replaceAll('"BoxLiteRuntimePermissionsBoundary"', JSON.stringify(boundaryArn)),
+  )
+  return { accountId, region, stage, policyDocument }
+}
+
 function findStatement(statements, sid) {
   const statement = statements.find((candidate) => candidate.Sid === sid)
   assert.ok(statement, `missing ${sid} statement`)
   return statement
 }
 
+const asArray = (value) => (value === undefined ? [] : Array.isArray(value) ? value : [value])
+
+function iamGlobMatches(pattern, value, { caseInsensitive = false } = {}) {
+  const escaped = pattern
+    .split('*')
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('.*')
+  return new RegExp(`^${escaped}$`, caseInsensitive ? 'i' : '').test(value)
+}
+
+function iamConditionsMatch(condition, context = {}) {
+  if (condition === undefined) return true
+  const contextEntries = new Map(Object.entries(context).map(([key, value]) => [key.toLowerCase(), value]))
+  const stringEquals = (actual, expected) =>
+    asArray(expected).some((expectedValue) => asArray(actual).includes(expectedValue))
+  const stringEqualsIgnoreCase = (actual, expected) =>
+    asArray(expected).some((expectedValue) =>
+      asArray(actual).some((actualValue) => actualValue.toLowerCase() === expectedValue.toLowerCase()),
+    )
+
+  return Object.entries(condition).every(([operator, entries]) =>
+    Object.entries(entries).every(([key, expected]) => {
+      const actual = contextEntries.get(key.toLowerCase())
+      if (operator === 'StringEquals') return stringEquals(actual, expected)
+      if (operator === 'ForAnyValue:StringEqualsIgnoreCase') return stringEqualsIgnoreCase(actual, expected)
+      if (operator === 'StringNotEqualsIfExists') {
+        return actual === undefined || !stringEquals(actual, expected)
+      }
+      return false
+    }),
+  )
+}
+
+function iamStatementMatches(statement, { action, resource, context }) {
+  const actionMatches = statement.Action
+    ? asArray(statement.Action).some((pattern) => iamGlobMatches(pattern, action, { caseInsensitive: true }))
+    : !asArray(statement.NotAction).some((pattern) => iamGlobMatches(pattern, action, { caseInsensitive: true }))
+  const resourceMatches = statement.Resource
+    ? asArray(statement.Resource).some((pattern) => iamGlobMatches(pattern, resource))
+    : !asArray(statement.NotResource).some((pattern) => iamGlobMatches(pattern, resource))
+  return actionMatches && resourceMatches && iamConditionsMatch(statement.Condition, context)
+}
+
+function iamDecision(statements, request) {
+  if (statements.some((statement) => statement.Effect === 'Deny' && iamStatementMatches(statement, request))) {
+    return 'Deny'
+  }
+  if (statements.some((statement) => statement.Effect === 'Allow' && iamStatementMatches(statement, request))) {
+    return 'Allow'
+  }
+  return 'ImplicitDeny'
+}
+
+function resolvedDeployRoleStatements({
+  accountId = '123456789012',
+  region = 'ap-southeast-1',
+  runnerCommandTagGateEnabled = true,
+  runtimeSecretInitializationEnabled = false,
+  stage = 'dev',
+} = {}) {
+  const replacements = new Map([
+    ['${AWS::Partition}', 'aws'],
+    ['${AWS::Region}', region],
+    ['${AWS::AccountId}', accountId],
+    ['${GitHubEnvironment}', stage],
+  ])
+  return JSON.parse(
+    JSON.stringify(
+      readDeployRoleStatements({ runnerCommandTagGateEnabled, runtimeSecretInitializationEnabled }),
+      (_key, value) => {
+      if (typeof value !== 'string') return value
+      for (const [placeholder, replacement] of replacements) value = value.replaceAll(placeholder, replacement)
+      return value
+      },
+    ),
+  )
+}
+
 test('SST deploy verifies the selected Runner artifact before invoking SST', () => {
   const source = readFileSync(SST_WRAPPER, 'utf8')
   const preflightIndex = source.indexOf('await verifyRunnerArtifact(')
-  const sstIndex = source.indexOf('await withPulumiEventLogCleanup(')
+  const sstIndex = source.indexOf('exitCode = await withSstLogSecurity(')
 
   assert.match(source, /requireCheckoutMatchesArtifactRefs, resolveArtifactSource \} from '\.\/artifact-source\.mjs'/)
   // The import is not the behavior: commenting the call out leaves the import, and a build deploy
@@ -96,10 +249,10 @@ test('SST deploy verifies the selected Runner artifact before invoking SST', () 
   // plan. Without it sst.config.ts declares UpgradeRunnerBinary-* on an Api-only deploy, and that
   // command — a sibling of the excluded instance, so `--exclude Runner` misses it — installs a
   // Runner binary from a commit whose build-runner job never ran.
-  assertLiveLine(source, /exportDeployScope\(deployScope\)/)
-  const exportIndex = liveText('script', source).indexOf('exportDeployScope(deployScope)')
+  assertLiveLine(source, /exportDeployScope\(deployScope, sstEnvironment\)/)
+  const exportIndex = liveText('script', source).indexOf('exportDeployScope(deployScope, sstEnvironment)')
   assert.ok(exportIndex !== -1 && exportIndex < sstIndex, 'the scope must be exported before SST is invoked')
-  assert.match(source, /withRequiredRunnerPolicy\(sstArgs\)/)
+  assert.match(source, /withRequiredRunnerPolicy\(sstArgs, INFRA_ROOT\)/)
   assert.doesNotMatch(source, /RUNNER_POLICY_ROOT/)
 })
 
@@ -135,9 +288,9 @@ test('SST deploy verifies the selected API image before invoking SST', () => {
   // commented-out call would otherwise leave both indices and the ordering intact.
   const source = liveText('script', readFileSync(SST_WRAPPER, 'utf8'))
   const preflightIndex = source.indexOf('const image = verifyApiImage(')
-  const sstIndex = source.indexOf('await withPulumiEventLogCleanup(')
+  const sstIndex = source.indexOf('exitCode = await withSstLogSecurity(')
 
-  assert.match(source, /resolveArtifactSource\('api'\)/)
+  assert.match(source, /resolveArtifactSource\('api', sstEnvironment\)/)
   assert.notEqual(preflightIndex, -1, 'the API image preflight is missing')
   assert.ok(preflightIndex < sstIndex, 'SST may run before the selected API image is known to exist')
   // Both published sources go through it. Gating on release alone would let a build deploy name a
@@ -166,15 +319,100 @@ test('SST deploy does not depend on a laptop-managed remote builder', () => {
   }
 })
 
+test('the selected deployment-config contract gates every artifact build and deploy', () => {
+  const workflow = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
+
+  // The workflow definition comes from main while every artifact build executes the selected
+  // commit. Refuse a tree that predates the immutable-config interface before any of those jobs
+  // can run. This job deliberately receives neither the protected Environment nor an OIDC token:
+  // importing selected code is a compatibility probe, not a reason to expose credentials.
+  const configContractJob = workflow.jobs['selected-ref-contract']
+  assert.ok(configContractJob, 'the selected-ref deployment-config contract job is missing')
+  assert.equal(configContractJob.needs, 'resolve-ref')
+  assert.equal(configContractJob.environment, undefined)
+  assert.equal(configContractJob.permissions.contents, 'read')
+  assert.equal(configContractJob.permissions['id-token'], undefined)
+  const configContractCheckout = configContractJob.steps.find(
+    (step) => typeof step.uses === 'string' && step.uses.startsWith('actions/checkout'),
+  )
+  assert.ok(configContractCheckout, 'the deployment-config contract job does not check out the selected ref')
+  assert.equal(configContractCheckout.with.ref, '${{ needs.resolve-ref.outputs.sha }}')
+  assert.equal(configContractCheckout.with['persist-credentials'], false)
+  const configContractProbe = configContractJob.steps.find(
+    (step) => typeof step.run === 'string' && step.run.includes('deployment-config-capability.mjs'),
+  )
+  assert.ok(configContractProbe, 'the selected ref does not run the composed deployment-config capability probe')
+  assertShellLine(configContractProbe.run, /capability=apps\/infra\/scripts\/deployment-config-capability\.mjs/)
+  assertShellLine(configContractProbe.run, /if \[ ! -f "\$capability" \]; then/)
+  assertShellLine(configContractProbe.run, /node "\$capability"/)
+  assert.doesNotMatch(configContractProbe.run, /node --input-type=module/)
+
+  const deployRoleContractJob = workflow.jobs['deploy-role-contract']
+  assert.ok(deployRoleContractJob, 'the trusted deploy-role contract job is missing')
+  assert.deepEqual(deployRoleContractJob.needs, ['resolve-ref', 'selected-ref-contract'])
+  assert.equal(deployRoleContractJob.if, "github.ref == 'refs/heads/main'")
+  assert.equal(deployRoleContractJob.environment, '${{ inputs.stage }}')
+  assert.equal(deployRoleContractJob.permissions.contents, 'read')
+  assert.equal(deployRoleContractJob.permissions['id-token'], 'write')
+  const deployRoleContractCheckout = deployRoleContractJob.steps.find(
+    (step) => typeof step.uses === 'string' && step.uses.startsWith('actions/checkout'),
+  )
+  assert.equal(deployRoleContractCheckout.with.ref, '${{ github.workflow_sha }}')
+  assert.equal(deployRoleContractCheckout.with['persist-credentials'], false)
+  const deployRoleContractProbe = deployRoleContractJob.steps.find(
+    (step) => typeof step.run === 'string' && step.run.includes('verify-deploy-role-boundary.mjs'),
+  )
+  assert.ok(deployRoleContractProbe, 'trusted workflow code does not verify the live deploy-role contract')
+
+  for (const job of ['build-api', 'build-c', 'build-runner', 'deploy']) {
+    const needs = Array.isArray(workflow.jobs[job].needs) ? workflow.jobs[job].needs : [workflow.jobs[job].needs]
+    assert.ok(needs.includes('selected-ref-contract'), `${job} can run without the selected-ref contract`)
+    assert.ok(needs.includes('deploy-role-contract'), `${job} can run without the live deploy-role contract`)
+  }
+})
+
+test('every AWS mutation path immediately attests the assumed deploy role', () => {
+  const infraWorkflow = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
+  const releaseWorkflow = load(readFileSync(RELEASE_DEPLOY_WORKFLOW, 'utf8'))
+  const imageWorkflow = load(readFileSync(API_IMAGE_BUILD_WORKFLOW, 'utf8'))
+
+  assertImmediateDeployRoleAttestation(infraWorkflow.jobs.deploy, 'STAGE')
+  assertImmediateDeployRoleAttestation(releaseWorkflow.jobs.deploy, 'STAGE')
+  assertImmediateDeployRoleAttestation(imageWorkflow.jobs.publish, 'TARGET_STAGE')
+
+  const deploySteps = infraWorkflow.jobs.deploy.steps
+  const attestationIndex = deploySteps.findIndex((step) => step.name === 'Attest assumed deploy role contract')
+  const selectedScopeProbeIndex = deploySteps.findIndex(
+    (step) => typeof step.run === 'string' && step.run.includes("import('./$module')"),
+  )
+  assert.notEqual(selectedScopeProbeIndex, -1, 'the selected-ref component capability probe is missing')
+  assert.ok(
+    selectedScopeProbeIndex > attestationIndex,
+    'selected code must not execute before the trusted deploy-role attestation',
+  )
+})
+
 test('deployment previews and reconciles the full stack in guarded GitHub CI', () => {
   assert.ok(existsSync(DEPLOY_WORKFLOW), 'the stack deployment workflow is missing')
   const source = readFileSync(DEPLOY_WORKFLOW, 'utf8')
   const workflow = load(source)
+  for (const stepName of ['Preview the selected components', 'Deploy the selected components']) {
+    const step = workflow.jobs.deploy.steps.find((candidate) => candidate.name === stepName)
+    assert.ok(step, `${stepName} is missing`)
+    assert.equal(step.env?.CLOUDFLARE_API_TOKEN, undefined)
+    assert.equal(step.env?.CLOUDFLARE_DEFAULT_ACCOUNT_ID, undefined)
+  }
+  assert.doesNotMatch(source, /secrets\.CLOUDFLARE_(?:API_TOKEN|DEFAULT_ACCOUNT_ID)/)
   const safetyTestStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Run deployment safety tests')
-  const boundaryCheckStep = workflow.jobs.deploy.steps.find(
-    (step) => step.name === 'Verify deploy role IAM boundary permissions',
+  const boundaryCheckStep = workflow.jobs['deploy-role-contract'].steps.find(
+    (step) => step.name === 'Verify completed stack, exact live policy, and bounded role namespace',
   )
-  const materializeStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Materialize stage configuration')
+  const configureAwsStep = workflow.jobs.deploy.steps.find(
+    (step) => step.name === 'Configure AWS credentials through OIDC',
+  )
+  const configReleaseStep = workflow.jobs.deploy.steps.find(
+    (step) => step.name === 'Resolve deployment config release',
+  )
   const installStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Install SST providers')
   const previewStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Preview the selected components')
   const deployStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Deploy the selected components')
@@ -188,6 +426,11 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
     default: false,
     type: 'boolean',
   })
+  const configReleaseInput = workflow.on.workflow_dispatch.inputs.config_release
+  assert.ok(configReleaseInput, 'the optional immutable config_release input is missing')
+  assert.equal(configReleaseInput.type, 'string')
+  assert.equal(configReleaseInput.required, false)
+  assert.equal(configReleaseInput.default, undefined)
   assert.equal(workflow.on.workflow_dispatch.inputs.runner_create_allowlist, undefined)
   assert.match(source, /environment: \$\{\{ inputs\.stage \}\}/)
   assert.equal(workflow.permissions['id-token'], 'write')
@@ -293,7 +536,14 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
 
   // The Api leg links against nothing the C SDK produces. Adding build-c to its `needs` would
   // still deploy the right bytes, just serialized behind a Rust compile it never reads.
-  assert.deepEqual(workflow.jobs['build-api'].needs, 'resolve-ref')
+  assert.deepEqual(workflow.jobs['build-api'].needs, ['resolve-ref', 'selected-ref-contract', 'deploy-role-contract'])
+  assert.deepEqual(workflow.jobs['build-c'].needs, ['resolve-ref', 'selected-ref-contract', 'deploy-role-contract'])
+  assert.deepEqual(workflow.jobs['build-runner'].needs, [
+    'resolve-ref',
+    'selected-ref-contract',
+    'deploy-role-contract',
+    'build-c',
+  ])
 
   // The suite that proves the deploy is the third call of that shape, and the two values that
   // make it worth running are just as much contract. Drop `with.ref` and it builds its SDKs from
@@ -302,7 +552,8 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.equal(workflow.jobs.e2e.uses, './.github/workflows/e2e-cloud.yml')
   assert.equal(workflow.jobs.e2e.with.ref, '${{ needs.resolve-ref.outputs.sha }}')
   assert.equal(workflow.jobs.e2e.if, '${{ inputs.apply }}')
-  // Named, not `inherit` — which would also hand the suite DEPLOY_ENV and the Cloudflare token.
+  // Named, not `inherit` — which would also hand the suite the Cloudflare token and every other
+  // stage secret held by the caller.
   assert.equal(workflow.jobs.e2e.secrets.BOXLITE_DEV_API_KEY, '${{ secrets.BOXLITE_DEV_API_KEY }}')
   // `needs` carries the ordering the `if` relies on: no status-check function appears in that
   // expression, so the default success() is what stops the suite running behind a failed deploy.
@@ -383,13 +634,13 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
     /predates component selection/,
     'the load-failure arm must not reuse the too-old cause',
   )
-  // Before the deploy role is assumed. An unsupported scope is knowable from the checkout alone,
-  // so it must never reach AWS credentials.
+  // Importing the selected module can persist environment changes for later workflow steps. The
+  // trusted live-role check must therefore finish before this selected code executes.
   const deployStepNames = workflow.jobs.deploy.steps.map((step) => step.name)
   assert.ok(
-    deployStepNames.indexOf('Require component selection support in the selected commit') <
-      deployStepNames.indexOf('Configure AWS credentials through OIDC'),
-    'the capability check must run before AWS credentials are configured',
+    deployStepNames.indexOf('Require component selection support in the selected commit') >
+      deployStepNames.indexOf('Attest assumed deploy role contract'),
+    'the capability check must run after the trusted deploy-role attestation',
   )
   // A skipped build job would cascade a skip to the deploy under the implicit success(). Naming a
   // status-check function turns that off — without one, every narrowed dispatch silently deploys
@@ -399,8 +650,8 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.match(workflow.jobs.deploy.if, /!contains\(needs\.\*\.result, 'cancelled'\)/)
   assert.match(workflow.jobs.deploy.if, /github\.ref == 'refs\/heads\/main'/)
 
-  // Both components resolve to the one commit the build jobs actually produced. The stage secret
-  // cannot redirect that: deploy-environment-validation.mjs rejects the selector keys outright.
+  // Both components resolve to the one commit the build jobs actually produced. These fixed job
+  // values are applied outside the immutable stage configuration, so it cannot redirect them.
   for (const selector of ['BOXLITE_ARTIFACT_SOURCE', 'API_ARTIFACT_SOURCE', 'RUNNER_ARTIFACT_SOURCE']) {
     assert.equal(workflow.jobs.deploy.env[selector], 'build', `${selector} must be set on the deploy job`)
   }
@@ -410,7 +661,16 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.equal(deployCheckoutStep.with.ref, '${{ needs.resolve-ref.outputs.sha }}')
   // Both build legs, not just the Runner's. Dropping build-api would let the deploy resolve a
   // commit image tag whose build had not finished — or never ran — and fail on the pull.
-  assert.deepEqual(workflow.jobs.deploy.needs, ['resolve-ref', 'build-api', 'build-runner'])
+  // Keep the contract job as a DIRECT dependency. This deploy intentionally tolerates skipped
+  // build jobs for narrowed scopes; if the contract were only transitive, its failure would turn
+  // the builds into `skipped`, which this job's custom condition permits.
+  assert.deepEqual(workflow.jobs.deploy.needs, [
+    'resolve-ref',
+    'selected-ref-contract',
+    'deploy-role-contract',
+    'build-api',
+    'build-runner',
+  ])
   const versionStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Resolve commit version')
   assert.ok(versionStep, 'the commit-version step is missing')
   assertShellLine(versionStep.run, /echo "VERSION=\$version" >> "\$GITHUB_ENV"/)
@@ -430,30 +690,39 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assertShellLine(archStep.run, /test "\$\(docker info --format '\{\{\.Architecture\}\}'\)" = "x86_64"/)
   assert.match(source, /aws-actions\/configure-aws-credentials@/)
   assert.match(source, /role-to-assume: \$\{\{ vars\.AWS_DEPLOY_ROLE_ARN \}\}/)
-  assert.match(source, /secrets\.DEPLOY_ENV/)
+  assert.doesNotMatch(source, /\bDEPLOY_ENV\b/)
+  assert.doesNotMatch(source, /apps\/infra\/\.env/)
+  assert.doesNotMatch(source, /deploy-environment-validation/)
   assert.equal(workflow.jobs.deploy.env.RUNNER_CREATE_ALLOWLIST, undefined)
   // Every sst step passes --stage "$STAGE"; without this job env they would all
   // run with an empty stage.
   assert.equal(workflow.jobs.deploy.env.STAGE, '${{ inputs.stage }}')
   assert.equal(workflow.jobs.deploy.env.IAM_PERMISSIONS_BOUNDARY_STAGE, '${{ inputs.stage }}')
-  assert.match(source, /node apps\/infra\/scripts\/deploy-environment-validation\.mjs apps\/infra\/\.env/)
-  assert.doesNotMatch(materializeStep.run, /grep/)
+  assert.equal(workflow.jobs.deploy.env.BOXLITE_DEPLOY_CONFIG_RELEASE, undefined)
   assert.ok(safetyTestStep, 'the deployment safety test step is missing')
   assert.equal(safetyTestStep.run, 'npm test')
-  assert.ok(materializeStep, 'the stage configuration step is missing')
-  const liveMaterialize = liveShell(materializeStep.run)
-  const materializeConfigIndex = liveMaterialize.indexOf('printf \'%s\\n\' "$DEPLOY_ENV" > apps/infra/.env')
-  const validateConfigIndex = liveMaterialize.indexOf(
-    'node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env',
-  )
-  assert.notEqual(materializeConfigIndex, -1, 'the stage configuration is not materialized')
-  assert.ok(validateConfigIndex > materializeConfigIndex, 'DEPLOY_ENV must be validated after it is materialized')
+  assert.ok(configureAwsStep, 'the AWS credential step is missing')
+  assert.ok(configReleaseStep, 'the immutable deployment-config resolver step is missing')
+  assert.equal(configReleaseStep.id, 'deployment-config')
+  assert.equal(configReleaseStep.env.INPUT_CONFIG_RELEASE, '${{ inputs.config_release }}')
+  assert.doesNotMatch(configReleaseStep.run, /\$\{\{\s*inputs\.config_release/)
+  assertShellLine(configReleaseStep.run, /deployment-config-resolve\.mjs/)
+  assertShellLine(configReleaseStep.run, /--stage "\$STAGE"/)
+  assertShellLine(configReleaseStep.run, /--release "\$INPUT_CONFIG_RELEASE"/)
+  assertShellLine(configReleaseStep.run, /\^\[0-9a-f\]\{64\}\$/)
+  assertShellLine(configReleaseStep.run, />> "\$GITHUB_OUTPUT"/)
+  assertShellLine(configReleaseStep.run, />> "\$GITHUB_STEP_SUMMARY"/)
   assert.ok(installStep, 'the SST provider installation step is missing')
   assert.equal(installStep.run, 'npm run --silent sst -- install --stage "$STAGE"')
+  assert.equal(installStep.env?.BOXLITE_DEPLOY_CONFIG_RELEASE, undefined)
   assert.ok(previewStep, 'the full-stack preview step is missing')
   assert.equal(previewStep.if, undefined, 'Preview validation must not be conditional')
   assert.equal(previewStep['continue-on-error'], undefined, 'Preview failures must stop deployment')
   assert.equal(previewStep.shell, 'bash')
+  assert.equal(
+    previewStep.env.BOXLITE_DEPLOY_CONFIG_RELEASE,
+    '${{ steps.deployment-config.outputs.release }}',
+  )
   // Every executed line and its order, comments stripped: the scope must reach SST, and nothing
   // may be appended alongside it. Compared as lines rather than one string so rewording a comment
   // does not churn the pin, while adding or dropping a command still fails.
@@ -471,6 +740,10 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   ])
   assert.ok(deployStep, 'the deployment step is missing')
   assert.equal(deployStep.if, '${{ inputs.apply }}')
+  assert.equal(
+    deployStep.env.BOXLITE_DEPLOY_CONFIG_RELEASE,
+    '${{ steps.deployment-config.outputs.release }}',
+  )
   assert.deepEqual(liveCommands(deployStep.run), [
     'set -euo pipefail',
     'args=(--stage "$STAGE" --policy .)',
@@ -490,14 +763,19 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   )
   assert.ok(boundaryCheckStep, 'the IAM boundary preflight step is missing')
   assert.ok(
-    workflow.jobs.deploy.steps.indexOf(safetyTestStep) < workflow.jobs.deploy.steps.indexOf(boundaryCheckStep) &&
-      workflow.jobs.deploy.steps.indexOf(boundaryCheckStep) < workflow.jobs.deploy.steps.indexOf(previewStep),
-    'The IAM boundary preflight must run after safety tests and before the deployment preview',
+    workflow.jobs.deploy.needs.includes('deploy-role-contract'),
+    'The trusted live-role preflight must complete before the deployment job starts',
   )
   assert.ok(
-    workflow.jobs.deploy.steps.indexOf(materializeStep) < workflow.jobs.deploy.steps.indexOf(installStep) &&
-      workflow.jobs.deploy.steps.indexOf(installStep) < workflow.jobs.deploy.steps.indexOf(previewStep),
-    'SST providers must be installed after stage config and before the deployment preview',
+    workflow.jobs.deploy.steps.indexOf(configureAwsStep) < workflow.jobs.deploy.steps.indexOf(configReleaseStep) &&
+      workflow.jobs.deploy.steps.indexOf(configReleaseStep) < workflow.jobs.deploy.steps.indexOf(stageStep),
+    'the deployment config must be pinned after OIDC and before the first stage artifact write',
+  )
+  assert.ok(
+    workflow.jobs.deploy.steps.indexOf(installStep) < workflow.jobs.deploy.steps.indexOf(previewStep) &&
+      workflow.jobs.deploy.steps.indexOf(configReleaseStep) < workflow.jobs.deploy.steps.indexOf(previewStep) &&
+      workflow.jobs.deploy.steps.indexOf(configReleaseStep) < workflow.jobs.deploy.steps.indexOf(deployStep),
+    'provider install and immutable-config resolution must complete before preview and deploy',
   )
   // A selector may name a component only through DEPLOY_EXCLUDE, whose value the `components`
   // choice allowlists. Hardcoding one here would deploy a fixed partial scope on every dispatch,
@@ -550,6 +828,55 @@ test('the checked-in deploy role satisfies the CI IAM boundary preflight', () =>
   )
 })
 
+test('the live deploy-role policy attestation binds every security-critical invariant', () => {
+  const verifierSource = liveText('script', readFileSync(DEPLOY_ROLE_VERIFIER, 'utf8'))
+  assert.match(verifierSource, /cloudformation[\s\S]*describe-stacks/)
+  assert.match(verifierSource, /assertDeployRoleStackComplete\(/)
+  assert.match(verifierSource, /assertDeployPolicyContract\(/)
+  assert.ok(
+    verifierSource.indexOf('assertDeployRoleStackComplete(') < verifierSource.indexOf('assertDeployPolicyContract('),
+    'the verifier must reject an in-progress stack before accepting its live inline policy',
+  )
+
+  for (const options of [
+    { runnerCommandTagGateEnabled: false, runtimeSecretInitializationEnabled: true },
+    { runnerCommandTagGateEnabled: true, runtimeSecretInitializationEnabled: false },
+  ]) {
+    const fixture = resolvedDeployRolePolicy(options)
+    assert.doesNotThrow(() => assertDeployPolicyContract({ ...fixture, partition: 'aws' }))
+
+    for (const sid of [
+      'DenyParameterResourcePolicyMutation',
+      'DenyRuntimeSecretLifecycleMutation',
+      'DenyBoxLiteSecretResourcePolicyMutation',
+      'DenyBoxLiteDeploymentConfigMutation',
+      'DenyGitHubDeployRoleMutation',
+      'DenyRuntimeBoundaryMutation',
+    ]) {
+      const policyDocument = structuredClone(fixture.policyDocument)
+      policyDocument.Statement = policyDocument.Statement.filter((statement) => statement.Sid !== sid)
+      assert.throws(
+        () => assertDeployPolicyContract({ ...fixture, partition: 'aws', policyDocument }),
+        new RegExp(sid),
+      )
+    }
+
+    for (const statement of [
+      { Sid: 'UnreviewedSsmAccess', Effect: 'Allow', Action: 'ssm:*', Resource: '*' },
+      { Sid: 'WildcardBackdoor', Effect: 'Allow', Action: '*', Resource: '*' },
+      { Sid: 'ServiceWildcardBackdoor', Effect: 'Allow', Action: 's*:Get*', Resource: '*' },
+      { Sid: 'NotActionBackdoor', Effect: 'Allow', NotAction: 'ec2:*', Resource: '*' },
+    ]) {
+      const policyDocument = structuredClone(fixture.policyDocument)
+      policyDocument.Statement.push(statement)
+      assert.throws(
+        () => assertDeployPolicyContract({ ...fixture, partition: 'aws', policyDocument }),
+        new RegExp(`unreviewed.*${statement.Sid}`, 'i'),
+      )
+    }
+  }
+})
+
 test('the deploy role grants the CloudFront KeyValueStore prefix Router needs', () => {
   // `cloudfront:*` does not reach `cloudfront-keyvaluestore:*` — an IAM
   // wildcard never crosses the `service:` colon, and these are two service
@@ -566,6 +893,763 @@ test('the deploy role grants the CloudFront KeyValueStore prefix Router needs', 
     actions.includes('cloudfront-keyvaluestore:*'),
     'ci/github-deploy-role.yaml must grant cloudfront-keyvaluestore:*; cloudfront:* does not cover it',
   )
+})
+
+test('the deploy role reads but cannot mutate immutable deployment config releases', () => {
+  const statements = readDeployRoleStatements()
+  const selectedStageResource =
+    'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:' +
+    'parameter/boxlite/${GitHubEnvironment}/deploy-config/*'
+  const everyStageResource =
+    'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:' +
+    'parameter/boxlite/*/deploy-config/*'
+
+  // The loader names exactly two parameters (`current` and one immutable release), so it needs no
+  // path listing or write privilege. The explicit all-stage Deny is future-closed: any SSM action
+  // other than that one read is rejected, including operations added after this template was cut.
+  const readConfig = findStatement(statements, 'ReadBoxLiteDeploymentConfig')
+  assert.equal(readConfig.Effect, 'Allow')
+  assert.deepEqual(Array.isArray(readConfig.Action) ? readConfig.Action : [readConfig.Action], ['ssm:GetParameter'])
+  assert.equal(readConfig.Resource, selectedStageResource)
+
+  const denyMutation = findStatement(statements, 'DenyBoxLiteDeploymentConfigMutation')
+  assert.equal(denyMutation.Effect, 'Deny')
+  assert.equal(denyMutation.Action, undefined)
+  assert.deepEqual(asArray(denyMutation.NotAction), ['ssm:GetParameter'])
+  assert.equal(denyMutation.Resource, everyStageResource)
+
+  const resolved = resolvedDeployRoleStatements()
+  const configResource = (stage) =>
+    `arn:aws:ssm:ap-southeast-1:123456789012:parameter/boxlite/${stage}/deploy-config/current`
+  const mutationActions = [
+    'ssm:AddTagsToResource',
+    'ssm:DeleteParameter',
+    'ssm:DeleteParameters',
+    'ssm:DeleteResourcePolicy',
+    'ssm:LabelParameterVersion',
+    'ssm:PutParameter',
+    'ssm:PutResourcePolicy',
+    'ssm:RemoveTagsFromResource',
+    'ssm:UnlabelParameterVersion',
+    'ssm:FutureConfigMutation',
+  ]
+  for (const stage of ['dev', 'prod']) {
+    for (const action of mutationActions) {
+      assert.equal(
+        iamDecision(resolved, { action, resource: configResource(stage) }),
+        'Deny',
+        `${action} must be denied for the ${stage} deployment-config namespace`,
+      )
+    }
+  }
+  assert.equal(iamDecision(resolved, { action: 'ssm:GetParameter', resource: configResource('dev') }), 'Allow')
+  assert.equal(
+    iamDecision(resolved, { action: 'ssm:GetParameter', resource: configResource('prod') }),
+    'ImplicitDeny',
+  )
+})
+
+test('the deploy role can coordinate only through the exact stage operation lock', () => {
+  const statements = readDeployRoleStatements()
+  const resource =
+    'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:' +
+    'parameter/boxlite/${GitHubEnvironment}/deployment-operation-lock'
+  const actions = ['ssm:DeleteParameter', 'ssm:GetParameter', 'ssm:PutParameter']
+
+  const useLock = findStatement(statements, 'UseBoxLiteDeploymentOperationLock')
+  assert.equal(useLock.Effect, 'Allow')
+  assert.deepEqual([...(Array.isArray(useLock.Action) ? useLock.Action : [useLock.Action])].sort(), actions)
+  assert.equal(useLock.Resource, resource)
+
+  const denyOtherLockOperations = findStatement(statements, 'DenyOtherBoxLiteDeploymentOperationLockActions')
+  assert.equal(denyOtherLockOperations.Effect, 'Deny')
+  assert.deepEqual(
+    [...(Array.isArray(denyOtherLockOperations.NotAction)
+      ? denyOtherLockOperations.NotAction
+      : [denyOtherLockOperations.NotAction])].sort(),
+    actions,
+  )
+  assert.equal(denyOtherLockOperations.Action, undefined)
+  assert.equal(denyOtherLockOperations.Resource, resource)
+
+  const resolved = resolvedDeployRoleStatements()
+  const lockResource = (stage) =>
+    `arn:aws:ssm:ap-southeast-1:123456789012:parameter/boxlite/${stage}/deployment-operation-lock`
+  for (const action of actions) {
+    assert.equal(
+      iamDecision(resolved, { action, resource: lockResource('dev') }),
+      'Allow',
+      `${action} must remain available for the selected-stage lock`,
+    )
+    const crossStageDecision = action === 'ssm:GetParameter' ? 'ImplicitDeny' : 'Deny'
+    assert.equal(iamDecision(resolved, { action, resource: lockResource('prod') }), crossStageDecision)
+  }
+  assert.equal(
+    iamDecision(resolved, { action: 'ssm:AddTagsToResource', resource: lockResource('dev') }),
+    'Deny',
+  )
+})
+
+test('the deploy role can mutate only its lock and SST secret-status parameters', () => {
+  const statements = readDeployRoleStatements()
+  const lockResource =
+    'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:' +
+    'parameter/boxlite/${GitHubEnvironment}/deployment-operation-lock'
+  const statusResource =
+    'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:' +
+    'parameter/boxlite/${GitHubEnvironment}/sst-secret-status/*'
+  const parameterMutationActions = [
+    'ssm:AddTagsToResource',
+    'ssm:DeleteParameter',
+    'ssm:DeleteParameters',
+    'ssm:LabelParameterVersion',
+    'ssm:PutParameter',
+    'ssm:RemoveTagsFromResource',
+    'ssm:UnlabelParameterVersion',
+  ]
+
+  const denyParameterMutation = findStatement(statements, 'DenyOtherParameterMutation')
+  assert.equal(denyParameterMutation.Effect, 'Deny')
+  assert.deepEqual([...asArray(denyParameterMutation.Action)].sort(), [...parameterMutationActions].sort())
+  assert.equal(denyParameterMutation.Resource, undefined)
+  assert.deepEqual([...asArray(denyParameterMutation.NotResource)].sort(), [lockResource, statusResource].sort())
+
+  const denyParameterSharing = findStatement(statements, 'DenyParameterResourcePolicyMutation')
+  assert.equal(denyParameterSharing.Effect, 'Deny')
+  assert.deepEqual(
+    [...asArray(denyParameterSharing.Action)].sort(),
+    ['ssm:DeleteResourcePolicy', 'ssm:PutResourcePolicy'],
+  )
+  assert.equal(denyParameterSharing.Resource, '*')
+
+  const useStatus = findStatement(statements, 'UseBoxLiteSstSecretStatus')
+  assert.equal(useStatus.Effect, 'Allow')
+  assert.deepEqual([...asArray(useStatus.Action)].sort(), ['ssm:GetParameter', 'ssm:PutParameter'])
+  assert.equal(useStatus.Resource, statusResource)
+
+  const readProviderCredentials = findStatement(statements, 'ReadCloudflareProviderCredentials')
+  assert.equal(readProviderCredentials.Effect, 'Allow')
+  assert.deepEqual(asArray(readProviderCredentials.Action), ['ssm:GetParameter'])
+  assert.deepEqual(readProviderCredentials.Resource, [
+    'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:' +
+      'parameter/boxlite/${GitHubEnvironment}/cloudflare-api-token',
+    'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:' +
+      'parameter/boxlite/${GitHubEnvironment}/cloudflare-account-id',
+  ])
+
+  const sendCommandDocument = findStatement(statements, 'UseRunnerCommandDocument')
+  assert.equal(sendCommandDocument.Effect, 'Allow')
+  assert.deepEqual(asArray(sendCommandDocument.Action), ['ssm:SendCommand'])
+  assert.equal(
+    sendCommandDocument.Resource,
+    'arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript',
+  )
+
+  const sendRunnerCommand = findStatement(statements, 'SendSelectedStageRunnerCommand')
+  assert.equal(sendRunnerCommand.Effect, 'Allow')
+  assert.deepEqual(asArray(sendRunnerCommand.Action), ['ssm:SendCommand'])
+  assert.equal(
+    sendRunnerCommand.Resource,
+    'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*',
+  )
+  assert.deepEqual(sendRunnerCommand.Condition, {
+    StringEquals: {
+      'ssm:resourceTag/boxlite:stage': '${GitHubEnvironment}',
+      'ssm:resourceTag/boxlite:ssm-role': 'runner',
+    },
+  })
+
+  const denyAuthorizationTagMutation = findStatement(statements, 'DenyRunnerCommandAuthorizationTagMutation')
+  assert.equal(denyAuthorizationTagMutation.Effect, 'Deny')
+  assert.deepEqual(
+    [...asArray(denyAuthorizationTagMutation.Action)].sort(),
+    ['ec2:CreateTags', 'ec2:DeleteTags'],
+  )
+  assert.equal(
+    denyAuthorizationTagMutation.Resource,
+    'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*',
+  )
+  assert.deepEqual(denyAuthorizationTagMutation.Condition, {
+    'ForAnyValue:StringEqualsIgnoreCase': {
+      'aws:TagKeys': ['boxlite:stage', 'boxlite:ssm-role'],
+    },
+    StringNotEqualsIfExists: {
+      'ec2:CreateAction': 'RunInstances',
+    },
+  })
+
+  const readCommandResult = findStatement(statements, 'ReadSystemsManagerCommandResult')
+  assert.equal(readCommandResult.Effect, 'Allow')
+  assert.deepEqual(asArray(readCommandResult.Action), ['ssm:GetCommandInvocation'])
+  assert.equal(readCommandResult.Resource, '*')
+
+  const resolved = resolvedDeployRoleStatements()
+  const parameterResource = (stage, suffix) =>
+    `arn:aws:ssm:ap-southeast-1:123456789012:parameter/boxlite/${stage}/${suffix}`
+  assert.equal(
+    iamDecision(resolved, {
+      action: 'ssm:PutParameter',
+      resource: parameterResource('dev', 'sst-secret-status/OIDC_CLIENT_ID'),
+    }),
+    'Allow',
+  )
+  assert.equal(
+    iamDecision(resolved, {
+      action: 'ssm:DeleteParameter',
+      resource: parameterResource('dev', 'sst-secret-status/OIDC_CLIENT_ID'),
+    }),
+    'ImplicitDeny',
+  )
+  for (const suffix of ['sst-secret-status/OIDC_CLIENT_ID', 'unrelated']) {
+    assert.equal(
+      iamDecision(resolved, { action: 'ssm:PutParameter', resource: parameterResource('prod', suffix) }),
+      'Deny',
+    )
+  }
+  for (const parameter of ['cloudflare-api-token', 'cloudflare-account-id']) {
+    assert.equal(
+      iamDecision(resolved, { action: 'ssm:GetParameter', resource: parameterResource('dev', parameter) }),
+      'Allow',
+    )
+    assert.equal(
+      iamDecision(resolved, { action: 'ssm:GetParameter', resource: parameterResource('prod', parameter) }),
+      'ImplicitDeny',
+    )
+  }
+  assert.equal(
+    iamDecision(resolved, {
+      action: 'ssm:GetParameter',
+      resource: parameterResource('prod', 'sst-secret-status/OIDC_CLIENT_ID'),
+    }),
+    'ImplicitDeny',
+  )
+  for (const action of ['ssm:PutResourcePolicy', 'ssm:DeleteResourcePolicy']) {
+    assert.equal(
+      iamDecision(resolved, { action, resource: parameterResource('dev', 'sst-secret-status/OIDC_CLIENT_ID') }),
+      'Deny',
+    )
+  }
+  assert.equal(
+    iamDecision(resolved, {
+      action: 'ssm:SendCommand',
+      resource: 'arn:aws:ssm:ap-southeast-1::document/AWS-RunShellScript',
+    }),
+    'Allow',
+  )
+  const runnerInstance = 'arn:aws:ec2:ap-southeast-1:123456789012:instance/i-00000000000000001'
+  assert.equal(
+    iamDecision(resolved, {
+      action: 'ssm:SendCommand',
+      resource: runnerInstance,
+      context: {
+        'ssm:resourceTag/boxlite:stage': 'dev',
+        'ssm:resourceTag/boxlite:ssm-role': 'runner',
+      },
+    }),
+    'Allow',
+  )
+  for (const context of [
+    { 'ssm:resourceTag/boxlite:stage': 'prod', 'ssm:resourceTag/boxlite:ssm-role': 'runner' },
+    { 'ssm:resourceTag/boxlite:stage': 'dev', 'ssm:resourceTag/boxlite:ssm-role': 'api' },
+    { 'ssm:resourceTag/boxlite:stage': 'dev' },
+  ]) {
+    assert.equal(
+      iamDecision(resolved, { action: 'ssm:SendCommand', resource: runnerInstance, context }),
+      'ImplicitDeny',
+    )
+  }
+  assert.equal(iamDecision(resolved, { action: 'ssm:GetCommandInvocation', resource: '*' }), 'Allow')
+  for (const action of [
+    'ssm:CancelCommand',
+    'ssm:DescribeInstanceInformation',
+    'ssm:ListCommandInvocations',
+    'ssm:ListCommands',
+  ]) {
+    assert.equal(iamDecision(resolved, { action, resource: '*' }), 'ImplicitDeny')
+  }
+
+  for (const action of ['ec2:CreateTags', 'ec2:DeleteTags']) {
+    for (const tagKey of ['boxlite:stage', 'BOXLITE:STAGE', 'boxlite:ssm-role', 'BoxLite:Ssm-Role']) {
+      assert.equal(
+        iamDecision(resolved, {
+          action,
+          resource: runnerInstance,
+          context: { 'aws:TagKeys': [tagKey] },
+        }),
+        'Deny',
+        `${action} must not alter command-authorization tag ${tagKey}`,
+      )
+    }
+  }
+  assert.equal(
+    iamDecision(resolved, {
+      action: 'ec2:CreateTags',
+      resource: runnerInstance,
+      context: {
+        'aws:TagKeys': ['boxlite:stage', 'boxlite:ssm-role'],
+        'ec2:CreateAction': 'RunInstances',
+      },
+    }),
+    'Allow',
+  )
+
+  const legacyStatements = readDeployRoleStatements({ runnerCommandTagGateEnabled: false })
+  const legacySendRunnerCommand = findStatement(legacyStatements, 'SendLegacyRunnerCommand')
+  assert.equal(legacySendRunnerCommand.Effect, 'Allow')
+  assert.deepEqual(asArray(legacySendRunnerCommand.Action), ['ssm:SendCommand'])
+  assert.equal(
+    legacySendRunnerCommand.Resource,
+    'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*',
+  )
+  assert.equal(legacySendRunnerCommand.Condition, undefined)
+  assert.equal(legacyStatements.some(({ Sid }) => Sid === 'SendSelectedStageRunnerCommand'), false)
+  assert.equal(legacyStatements.some(({ Sid }) => Sid === 'DenyRunnerCommandAuthorizationTagMutation'), false)
+  const legacyResolved = resolvedDeployRoleStatements({ runnerCommandTagGateEnabled: false })
+  assert.equal(iamDecision(legacyResolved, { action: 'ssm:SendCommand', resource: runnerInstance }), 'Allow')
+  assert.equal(
+    iamDecision(legacyResolved, { action: 'ssm:SendCommand', resource: 'arn:aws:ec2:us-east-1:123456789012:instance/i-1' }),
+    'ImplicitDeny',
+  )
+})
+
+test('the deploy role cannot mutate, pass, or re-bound any GitHub deploy role', () => {
+  const statements = readDeployRoleStatements()
+  const denyRoleMutation = findStatement(statements, 'DenyGitHubDeployRoleMutation')
+  const allowedReadActions = [
+    'iam:GetRole',
+    'iam:GetRolePolicy',
+    'iam:ListAttachedRolePolicies',
+    'iam:ListInstanceProfilesForRole',
+    'iam:ListRolePolicies',
+    'iam:ListRoleTags',
+  ]
+  assert.equal(denyRoleMutation.Effect, 'Deny')
+  assert.equal(denyRoleMutation.Action, undefined)
+  assert.deepEqual([...asArray(denyRoleMutation.NotAction)].sort(), [...allowedReadActions].sort())
+  assert.equal(
+    denyRoleMutation.Resource,
+    'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*-github-deploy',
+  )
+
+  const resolved = resolvedDeployRoleStatements()
+  const roleResource = (name) => `arn:aws:iam::123456789012:role/${name}`
+  const roleMutationActions = [
+    'iam:AddRoleToInstanceProfile',
+    'iam:AttachRolePolicy',
+    'iam:DeleteRole',
+    'iam:DeleteRolePermissionsBoundary',
+    'iam:DeleteRolePolicy',
+    'iam:DetachRolePolicy',
+    'iam:PassRole',
+    'iam:PutRolePermissionsBoundary',
+    'iam:PutRolePolicy',
+    'iam:RemoveRoleFromInstanceProfile',
+    'iam:TagRole',
+    'iam:UntagRole',
+    'iam:UpdateAssumeRolePolicy',
+    'iam:UpdateRole',
+    'iam:UpdateRoleDescription',
+    'iam:FutureRoleMutation',
+  ]
+  for (const action of roleMutationActions) {
+    for (const githubDeployRole of ['boxlite-dev-github-deploy', 'boxlite-prod-github-deploy']) {
+      assert.equal(
+        iamDecision(resolved, { action, resource: roleResource(githubDeployRole) }),
+        'Deny',
+        `${action} must not alter ${githubDeployRole}`,
+      )
+    }
+  }
+  for (const action of ['iam:AttachRolePolicy', 'iam:DeleteRolePolicy', 'iam:DetachRolePolicy', 'iam:PutRolePolicy']) {
+    assert.equal(
+      iamDecision(resolved, { action, resource: roleResource('boxlite-dev-RunnerRole-a1b2c3') }),
+      'Allow',
+      `${action} must remain available for stage runtime roles`,
+    )
+  }
+})
+
+test('the bootstrap template declares one inline-only deploy policy', () => {
+  const role = readDeployTemplate().Resources.GitHubDeployRole.Properties
+  assert.equal(role.RoleName, 'boxlite-${GitHubEnvironment}-github-deploy')
+  assert.deepEqual(role.Tags, [{ Key: 'boxlite:deploy-policy-contract', Value: 'v1' }])
+  assert.equal(role.ManagedPolicyArns, undefined)
+  assert.equal(role.Policies.length, 1)
+  assert.equal(role.Policies[0].PolicyName, 'boxlite-sst-deploy')
+
+  const criticalContractStatements = new Set([
+    'DenyBoxLiteDeploymentConfigMutation',
+    'DenyBoxLiteSecretResourcePolicyMutation',
+    'DenyGitHubDeployRoleMutation',
+    'DenyOtherParameterMutation',
+    'DenyParameterResourcePolicyMutation',
+    'DenyRuntimeBoundaryMutation',
+    'DenyRuntimeSecretLifecycleMutation',
+    'PassSelectedStageRuntimeRoles',
+    'ReadSelectedStageRuntimeSecrets',
+    'UseBoxLiteDeploymentOperationLock',
+    'UseRunnerCommandDocument',
+  ])
+  const actualSids = new Set(
+    role.Policies[0].PolicyDocument.Statement.flatMap((statement) => {
+      if (statement.Sid) return [statement.Sid]
+      const conditional = statement['Fn::If']
+      return conditional ? conditional.slice(1).flatMap((branch) => (branch?.Sid ? [branch.Sid] : [])) : []
+    }),
+  )
+  for (const sid of criticalContractStatements) assert.ok(actualSids.has(sid), `v1 contract lost ${sid}`)
+
+  const maximumPolicyDocument = {
+    Version: role.Policies[0].PolicyDocument.Version,
+    Statement: resolvedDeployRoleStatements({
+      stage: 's'.repeat(20),
+      runnerCommandTagGateEnabled: true,
+      runtimeSecretInitializationEnabled: true,
+    }),
+  }
+  const renderedPolicyBytes = Buffer.byteLength(JSON.stringify(maximumPolicyDocument), 'utf8')
+  assert.ok(
+    renderedPolicyBytes <= 10_240,
+    `maximum rendered deploy-role inline policy is ${renderedPolicyBytes} bytes (IAM limit: 10240)`,
+  )
+})
+
+test('the deploy role manages only selected-stage IAM resources and cannot rewrite runtime boundaries', () => {
+  const statements = readDeployRoleStatements()
+  const stageRoleResource = 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-*'
+  const stageProfileResource =
+    'arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/boxlite-${GitHubEnvironment}-*'
+  const stagePolicyResource = 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boxlite-${GitHubEnvironment}-*'
+
+  assert.ok(asArray(findStatement(statements, 'ReadIamAndAccountMetadata').Action).includes('iam:ListRoles'))
+
+  assert.equal(findStatement(statements, 'CreateBoundedBoxLiteRoles').Resource, stageRoleResource)
+  assert.deepEqual(findStatement(statements, 'ManageBoxLiteRoles').Resource, [
+    stageRoleResource,
+    stageProfileResource,
+  ])
+  assert.equal(asArray(findStatement(statements, 'ManageBoxLiteRoles').Action).includes('iam:PassRole'), false)
+  assert.equal(findStatement(statements, 'SetBoxLiteRoleBoundary').Resource, stageRoleResource)
+  assert.equal(findStatement(statements, 'ManageBoxLitePolicies').Resource, stagePolicyResource)
+
+  const passRuntimeRoles = findStatement(statements, 'PassSelectedStageRuntimeRoles')
+  assert.equal(passRuntimeRoles.Effect, 'Allow')
+  assert.deepEqual(asArray(passRuntimeRoles.Action), ['iam:PassRole'])
+  assert.equal(passRuntimeRoles.Resource, stageRoleResource)
+  assert.deepEqual(passRuntimeRoles.Condition, {
+    StringEquals: {
+      'iam:PassedToService': ['ec2.amazonaws.com', 'ecs-tasks.amazonaws.com'],
+    },
+  })
+
+  const denyBoundaryMutation = findStatement(statements, 'DenyRuntimeBoundaryMutation')
+  assert.equal(denyBoundaryMutation.Effect, 'Deny')
+  assert.equal(denyBoundaryMutation.Action, undefined)
+  assert.deepEqual(
+    [...asArray(denyBoundaryMutation.NotAction)].sort(),
+    [
+      'iam:GetPolicy',
+      'iam:GetPolicyVersion',
+      'iam:ListEntitiesForPolicy',
+      'iam:ListPolicyTags',
+      'iam:ListPolicyVersions',
+    ].sort(),
+  )
+  assert.equal(
+    denyBoundaryMutation.Resource,
+    'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boxlite-*-runtime-boundary',
+  )
+
+  const resolved = resolvedDeployRoleStatements()
+  const roleResource = (stage) => `arn:aws:iam::123456789012:role/boxlite-${stage}-RunnerRole-a1b2c3`
+  const profileResource = (stage) => `arn:aws:iam::123456789012:instance-profile/boxlite-${stage}-RunnerProfile-a1b2c3`
+  const policyResource = (stage, name = 'service-policy') =>
+    `arn:aws:iam::123456789012:policy/boxlite-${stage}-${name}`
+
+  for (const [action, selected, other] of [
+    ['iam:PutRolePolicy', roleResource('dev'), roleResource('prod')],
+    ['iam:CreateInstanceProfile', profileResource('dev'), profileResource('prod')],
+    ['iam:CreatePolicyVersion', policyResource('dev'), policyResource('prod')],
+  ]) {
+    assert.equal(iamDecision(resolved, { action, resource: selected }), 'Allow', `${action} lost selected-stage access`)
+    assert.equal(iamDecision(resolved, { action, resource: other }), 'ImplicitDeny', `${action} reached another stage`)
+  }
+
+  for (const service of ['ec2.amazonaws.com', 'ecs-tasks.amazonaws.com']) {
+    assert.equal(
+      iamDecision(resolved, {
+        action: 'iam:PassRole',
+        resource: roleResource('dev'),
+        context: { 'iam:PassedToService': service },
+      }),
+      'Allow',
+    )
+    assert.equal(
+      iamDecision(resolved, {
+        action: 'iam:PassRole',
+        resource: roleResource('prod'),
+        context: { 'iam:PassedToService': service },
+      }),
+      'ImplicitDeny',
+    )
+  }
+  for (const service of ['lambda.amazonaws.com', 'arbitrary.example.com']) {
+    assert.equal(
+      iamDecision(resolved, {
+        action: 'iam:PassRole',
+        resource: roleResource('dev'),
+        context: { 'iam:PassedToService': service },
+      }),
+      'ImplicitDeny',
+    )
+  }
+
+  for (const stage of ['dev', 'prod']) {
+    for (const action of [
+      'iam:CreatePolicy',
+      'iam:CreatePolicyVersion',
+      'iam:DeletePolicy',
+      'iam:DeletePolicyVersion',
+      'iam:SetDefaultPolicyVersion',
+      'iam:TagPolicy',
+      'iam:UntagPolicy',
+      'iam:FuturePolicyMutation',
+    ]) {
+      assert.equal(
+        iamDecision(resolved, { action, resource: policyResource(stage, 'runtime-boundary') }),
+        'Deny',
+        `${action} must not alter the ${stage} runtime boundary`,
+      )
+    }
+  }
+})
+
+test('the runtime boundary permits assuming only the selected-stage storage role', () => {
+  const assumeStorageRole = findStatement(readRuntimeBoundaryStatements(), 'AssumeBoxLiteRuntimeRoles')
+  assert.equal(assumeStorageRole.Effect, 'Allow')
+  assert.deepEqual(asArray(assumeStorageRole.Action), ['sts:AssumeRole'])
+  assert.equal(
+    assumeStorageRole.Resource,
+    'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-s3-access',
+  )
+
+  const config = liveText('script', readFileSync(join(REPO_ROOT, 'apps/infra/sst.config.ts'), 'utf8'))
+  assert.match(config, /const s3AccessRoleName = `\$\{\$app\.name\}-\$\{\$app\.stage\}-s3-access`/)
+  assert.match(config, /new aws\.iam\.Role\('S3AccessRole', \{[\s\S]*?name: s3AccessRoleName,/)
+})
+
+test('the runtime boundary excludes Parameter Store reads from Runner effective permissions', () => {
+  const controlChannels = findStatement(readRuntimeBoundaryStatements(), 'RuntimeAccountWideControlChannels')
+  const actions = asArray(controlChannels.Action)
+
+  assert.equal(actions.includes('ssm:GetParameter'), false)
+  assert.equal(actions.includes('ssm:GetParameters'), false)
+  for (const requiredAction of [
+    'ssm:GetDocument',
+    'ssm:UpdateInstanceInformation',
+    'ssmmessages:OpenControlChannel',
+    'ec2messages:GetMessages',
+  ]) {
+    assert.ok(actions.includes(requiredAction), `${requiredAction} is required by the SSM instance control channel`)
+  }
+
+  for (const stage of ['dev', 'prod']) {
+    for (const suffix of ['deploy-config/current', 'cloudflare-api-token']) {
+      assert.equal(
+        iamDecision(readRuntimeBoundaryStatements(), {
+          action: 'ssm:GetParameter',
+          resource: `arn:aws:ssm:ap-southeast-1:123456789012:parameter/boxlite/${stage}/${suffix}`,
+        }),
+        'ImplicitDeny',
+      )
+    }
+  }
+})
+
+test('the deploy role separates bootstrap-owned runtime secrets from selected-stage stack secrets', () => {
+  const statements = readDeployRoleStatements()
+  const broadControlPlane = findStatement(statements, 'BoxLiteAwsControlPlane')
+  assert.equal(
+    asArray(broadControlPlane.Action).some((action) => action.startsWith('secretsmanager:')),
+    false,
+    'Secrets Manager permissions must not inherit the account-wide Resource:* grant',
+  )
+
+  const runtimeResource =
+    'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:' +
+    'secret:boxlite-${GitHubEnvironment}-runtime/*'
+  const readRuntimeSecrets = findStatement(statements, 'ReadSelectedStageRuntimeSecrets')
+  assert.equal(readRuntimeSecrets.Effect, 'Allow')
+  assert.deepEqual([...asArray(readRuntimeSecrets.Action)].sort(), [
+    'secretsmanager:DescribeSecret',
+    'secretsmanager:GetResourcePolicy',
+    'secretsmanager:GetSecretValue',
+  ])
+  assert.equal(readRuntimeSecrets.Resource, runtimeResource)
+
+  const denyRuntimeLifecycle = findStatement(statements, 'DenyRuntimeSecretLifecycleMutation')
+  assert.equal(denyRuntimeLifecycle.Effect, 'Deny')
+  assert.equal(denyRuntimeLifecycle.Action, undefined)
+  assert.deepEqual([...asArray(denyRuntimeLifecycle.NotAction)].sort(), [
+    'secretsmanager:DescribeSecret',
+    'secretsmanager:GetResourcePolicy',
+    'secretsmanager:GetSecretValue',
+    'secretsmanager:PutSecretValue',
+  ])
+  assert.equal(denyRuntimeLifecycle.Resource, runtimeResource)
+
+  const denyRuntimePut = findStatement(statements, 'DenyRuntimeSecretInitialization')
+  assert.equal(denyRuntimePut.Effect, 'Deny')
+  assert.deepEqual(asArray(denyRuntimePut.Action), ['secretsmanager:PutSecretValue'])
+  assert.equal(denyRuntimePut.Resource, runtimeResource)
+
+  const manageStackSecrets = findStatement(statements, 'ManageSelectedStageStackSecrets')
+  assert.equal(manageStackSecrets.Effect, 'Allow')
+  assert.equal(asArray(manageStackSecrets.Action).some((action) => action.includes('*')), false)
+  for (const action of [
+    'secretsmanager:CreateSecret',
+    'secretsmanager:DeleteSecret',
+    'secretsmanager:DescribeSecret',
+    'secretsmanager:GetResourcePolicy',
+    'secretsmanager:GetSecretValue',
+    'secretsmanager:PutSecretValue',
+    'secretsmanager:TagResource',
+    'secretsmanager:UntagResource',
+    'secretsmanager:UpdateSecret',
+  ]) {
+    assert.ok(asArray(manageStackSecrets.Action).includes(action), `${action} is required for SST-owned secrets`)
+  }
+  assert.deepEqual(manageStackSecrets.Resource, [
+    'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:' +
+      'secret:boxlite-${GitHubEnvironment}-DatabaseProxySecret-*',
+    'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:' +
+      'secret:boxlite-${GitHubEnvironment}-CacheProxySecret-*',
+    'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:' +
+      'secret:boxlite-${GitHubEnvironment}-GhcrPullToken-*',
+  ])
+
+  const denySecretSharing = findStatement(statements, 'DenyBoxLiteSecretResourcePolicyMutation')
+  assert.equal(denySecretSharing.Effect, 'Deny')
+  assert.deepEqual(
+    [...asArray(denySecretSharing.Action)].sort(),
+    ['secretsmanager:DeleteResourcePolicy', 'secretsmanager:PutResourcePolicy'],
+  )
+  assert.equal(
+    denySecretSharing.Resource,
+    'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:boxlite-*',
+  )
+
+  const resolved = resolvedDeployRoleStatements({ runtimeSecretInitializationEnabled: false })
+  const secretResource = (name) =>
+    `arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:${name}-a1b2c3`
+  const devRuntimeSecret = secretResource('boxlite-dev-runtime/encryption-key')
+  const prodRuntimeSecret = secretResource('boxlite-prod-runtime/encryption-key')
+  for (const action of [
+    'secretsmanager:DescribeSecret',
+    'secretsmanager:GetResourcePolicy',
+    'secretsmanager:GetSecretValue',
+  ]) {
+    assert.equal(
+      iamDecision(resolved, { action, resource: devRuntimeSecret }),
+      'Allow',
+      `${action} lost selected-stage runtime-secret read access`,
+    )
+    assert.equal(iamDecision(resolved, { action, resource: prodRuntimeSecret }), 'ImplicitDeny')
+  }
+  for (const action of [
+    'secretsmanager:CreateSecret',
+    'secretsmanager:DeleteSecret',
+    'secretsmanager:TagResource',
+    'secretsmanager:UntagResource',
+    'secretsmanager:UpdateSecret',
+  ]) {
+    assert.equal(iamDecision(resolved, { action, resource: devRuntimeSecret }), 'Deny')
+  }
+  assert.equal(iamDecision(resolved, { action: 'secretsmanager:PutSecretValue', resource: devRuntimeSecret }), 'Deny')
+
+  const initializationStatements = resolvedDeployRoleStatements({ runtimeSecretInitializationEnabled: true })
+  const pendingGeneratedContext = {
+    'secretsmanager:ResourceTag/boxlite:initial-value': 'generated',
+    'secretsmanager:ResourceTag/boxlite:initialization': 'pending',
+  }
+  assert.equal(
+    iamDecision(initializationStatements, {
+      action: 'secretsmanager:PutSecretValue',
+      resource: devRuntimeSecret,
+      context: pendingGeneratedContext,
+    }),
+    'Allow',
+  )
+  for (const context of [
+    {},
+    { ...pendingGeneratedContext, 'secretsmanager:ResourceTag/boxlite:initialization': 'sealed' },
+    { ...pendingGeneratedContext, 'secretsmanager:ResourceTag/boxlite:initial-value': 'explicit' },
+  ]) {
+    assert.equal(
+      iamDecision(initializationStatements, {
+        action: 'secretsmanager:PutSecretValue',
+        resource: devRuntimeSecret,
+        context,
+      }),
+      'ImplicitDeny',
+    )
+  }
+  assert.equal(
+    iamDecision(initializationStatements, {
+      action: 'secretsmanager:PutSecretValue',
+      resource: prodRuntimeSecret,
+      context: pendingGeneratedContext,
+    }),
+    'ImplicitDeny',
+  )
+
+  for (const prefix of ['DatabaseProxySecret', 'CacheProxySecret', 'GhcrPullToken']) {
+    for (const action of ['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:DeleteSecret']) {
+      assert.equal(
+        iamDecision(resolved, { action, resource: secretResource(`boxlite-dev-${prefix}`) }),
+        'Allow',
+      )
+      assert.equal(
+        iamDecision(resolved, { action, resource: secretResource(`boxlite-prod-${prefix}`) }),
+        'ImplicitDeny',
+      )
+    }
+  }
+  assert.equal(
+    iamDecision(resolved, {
+      action: 'secretsmanager:CreateSecret',
+      resource: secretResource('unrelated-service-key'),
+    }),
+    'ImplicitDeny',
+  )
+  for (const stage of ['dev', 'prod']) {
+    for (const action of ['secretsmanager:DeleteResourcePolicy', 'secretsmanager:PutResourcePolicy']) {
+      assert.equal(
+        iamDecision(resolved, { action, resource: secretResource(`boxlite-${stage}-runtime/encryption-key`) }),
+        'Deny',
+        `${action} must not share the ${stage} secret namespace`,
+      )
+    }
+  }
+})
+
+test('the operation lock and first-expand generation finalization have an explicit recovery runbook', () => {
+  const readme = readFileSync(join(REPO_ROOT, 'apps/infra/README.md'), 'utf8')
+
+  assert.match(readme, /\/boxlite\/<stage>\/deployment-operation-lock/)
+  assert.match(
+    readme,
+    /SIGINT[\s\S]*SIGTERM[\s\S]*SIGKILL[\s\S]*strand|strand[\s\S]*SIGINT[\s\S]*SIGTERM[\s\S]*SIGKILL/i,
+  )
+  assert.match(
+    readme,
+    /bootstrap[\s\S]*config activation[\s\S]*diff[\s\S]*deploy[\s\S]*remove[\s\S]*refresh[\s\S]*shell[\s\S]*(?:finished|running|owner)/i,
+  )
+  assert.match(readme, /aws ssm delete-parameter[\s\S]*deployment-operation-lock/)
+  assert.match(readme, /generated-pending[\s\S]*rerun[\s\S]*bootstrap/i)
+  assert.match(readme, /historical release[\s\S]*current runtime secret generations/i)
+  assert.match(readme, /bootstrap alone[\s\S]*does not[\s\S]*(?:restart|refresh)[\s\S]*ECS[\s\S]*Runner/i)
+  assert.match(readme, /first expand[\s\S]*apply[\s\S]*rerun[\s\S]*bootstrap[\s\S]*preview[\s\S]*apply/i)
 })
 
 test('package scripts disable long-running SST dev for the stateful stack', () => {
@@ -687,8 +1771,20 @@ test('the cloud E2E suite is reachable only from a deploy or a human', () => {
 test('release deployment consumes one published version for both components', () => {
   const source = readFileSync(RELEASE_DEPLOY_WORKFLOW, 'utf8')
   const workflow = load(source)
+  const configureAwsStep = workflow.jobs.deploy.steps.find(
+    (step) => step.name === 'Configure AWS credentials through OIDC',
+  )
+  const configReleaseStep = workflow.jobs.deploy.steps.find(
+    (step) => step.name === 'Resolve deployment config release',
+  )
   const deployStep = workflow.jobs.deploy.steps.find(
     (step) => step.name === 'Deploy published API and Runner artifacts',
+  )
+  const installStep = workflow.jobs.deploy.steps.find(
+    (step) => step.name === 'Install SST providers',
+  )
+  const previewStep = workflow.jobs.deploy.steps.find(
+    (step) => step.name === 'Preview published API and Runner artifacts',
   )
 
   // Read the parsed job env, not the file: these three must be on the *job* for the deploy step
@@ -702,6 +1798,11 @@ test('release deployment consumes one published version for both components', ()
   // The unanchored source match would have accepted `default: true` plus any later false.
   assert.equal(workflow.on.workflow_dispatch.inputs.allow_downgrade.default, false)
   assert.equal(workflow.on.workflow_dispatch.inputs.allow_downgrade.type, 'boolean')
+  const configReleaseInput = workflow.on.workflow_dispatch.inputs.config_release
+  assert.ok(configReleaseInput, 'the optional immutable config_release input is missing')
+  assert.equal(configReleaseInput.type, 'string')
+  assert.equal(configReleaseInput.required, false)
+  assert.equal(configReleaseInput.default, undefined)
   // These two carry the inputs into the deploy job; commented out, the defaults above become
   // decoration. Read the parsed job env rather than the file.
   assert.equal(workflow.jobs.deploy.env.ALLOW_DOWNGRADE, "${{ inputs.allow_downgrade && '1' || '' }}")
@@ -711,7 +1812,40 @@ test('release deployment consumes one published version for both components', ()
   // rather than merely wrong — the same allowlist rule deploy-infra.yml follows.
   assert.equal(workflow.on.workflow_dispatch.inputs.stage.type, 'choice')
   assert.deepEqual(workflow.on.workflow_dispatch.inputs.stage.options, ['dev', 'prod'])
+  assert.doesNotMatch(source, /\bDEPLOY_ENV\b/)
+  assert.doesNotMatch(source, /apps\/infra\/\.env/)
+  assert.doesNotMatch(source, /deploy-environment-validation/)
+  assert.equal(workflow.jobs.deploy.env.BOXLITE_DEPLOY_CONFIG_RELEASE, undefined)
+  assert.ok(configureAwsStep, 'the release deployment lost its AWS credential step')
+  assert.ok(configReleaseStep, 'the release deployment does not resolve an immutable config release')
+  assert.equal(configReleaseStep.id, 'deployment-config')
+  assert.equal(configReleaseStep.env.INPUT_CONFIG_RELEASE, '${{ inputs.config_release }}')
+  assert.doesNotMatch(configReleaseStep.run, /\$\{\{\s*inputs\.config_release/)
+  assertShellLine(configReleaseStep.run, /deployment-config-resolve\.mjs/)
+  assertShellLine(configReleaseStep.run, /--stage "\$STAGE"/)
+  assertShellLine(configReleaseStep.run, /--release "\$INPUT_CONFIG_RELEASE"/)
+  assertShellLine(configReleaseStep.run, /\^\[0-9a-f\]\{64\}\$/)
+  assertShellLine(configReleaseStep.run, />> "\$GITHUB_OUTPUT"/)
+  assertShellLine(configReleaseStep.run, />> "\$GITHUB_STEP_SUMMARY"/)
   assert.ok(deployStep)
+  assert.ok(installStep, 'the release deployment must install providers before preview')
+  assert.equal(installStep.run, 'npm run --silent sst -- install --stage "$STAGE"')
+  assert.ok(previewStep, 'the release deployment must preview the pinned release before applying it')
+  assert.equal(previewStep.if, undefined, 'release preview must not be conditional')
+  assert.equal(previewStep['continue-on-error'], undefined, 'release preview failure must stop deployment')
+  assert.equal(
+    previewStep.env.BOXLITE_DEPLOY_CONFIG_RELEASE,
+    '${{ steps.deployment-config.outputs.release }}',
+  )
+  assert.deepEqual(liveShell(previewStep.run).split('\n').filter(Boolean), [
+    'set -euo pipefail',
+    'npm run --silent sst -- diff --stage "$STAGE" --policy . --json |',
+    '  node scripts/deployment-preview.mjs',
+  ])
+  assert.equal(
+    deployStep.env.BOXLITE_DEPLOY_CONFIG_RELEASE,
+    '${{ steps.deployment-config.outputs.release }}',
+  )
   // The same guarded wrapper and the same pre-deploy gates the build path uses: a release
   // deploy reconciles the identical stack, so it owes the identical safety checks.
   assert.equal(deployStep.run, 'npm run deploy -- --stage "$STAGE" --policy .')
@@ -721,8 +1855,12 @@ test('release deployment consumes one published version for both components', ()
   )
   assert.ok(boundaryStep, 'the release deploy skips the IAM boundary preflight')
   assert.ok(
-    workflow.jobs.deploy.steps.indexOf(boundaryStep) < workflow.jobs.deploy.steps.indexOf(deployStep),
-    'the boundary preflight must run before the deploy it protects',
+    workflow.jobs.deploy.steps.indexOf(configureAwsStep) < workflow.jobs.deploy.steps.indexOf(configReleaseStep) &&
+      workflow.jobs.deploy.steps.indexOf(configReleaseStep) < workflow.jobs.deploy.steps.indexOf(installStep) &&
+      workflow.jobs.deploy.steps.indexOf(installStep) < workflow.jobs.deploy.steps.indexOf(previewStep) &&
+      workflow.jobs.deploy.steps.indexOf(boundaryStep) < workflow.jobs.deploy.steps.indexOf(previewStep) &&
+      workflow.jobs.deploy.steps.indexOf(previewStep) < workflow.jobs.deploy.steps.indexOf(deployStep),
+    'AWS auth, immutable-config resolution, provider install, boundary preflight, and structured preview must precede deployment',
   )
 })
 
@@ -757,6 +1895,7 @@ test('the deployment workflows cap the token they hand their jobs', () => {
       'build-c': ['contents'],
       'build-runner': ['contents'],
       'build-api': ['id-token'],
+      'deploy-role-contract': ['id-token'],
     }
     for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
       if (!job.permissions) continue
@@ -1034,8 +2173,8 @@ test('the stage bootstrap owns artifact stores needed before an SST deploy can s
     Type: 'String',
     Default: 'dev',
     MinLength: 1,
-    MaxLength: 32,
-    AllowedPattern: '^[a-z0-9][a-z0-9-]*$',
+    MaxLength: 20,
+    AllowedPattern: '^[a-z0-9]{1,20}$',
   })
   assert.deepEqual(resources.ApiImagesRepository, {
     Type: 'AWS::ECR::Repository',
@@ -1082,11 +2221,11 @@ test('one release selector resolves the API and Runner to the same published ver
   const source = readFileSync(SST_WRAPPER, 'utf8')
 
   assert.match(source, /const workspaceVersion = readWorkspaceVersion\(\)/)
-  assert.match(source, /resolvePublicDeploymentConfig\(process\.env, workspaceVersion\)/)
+  assert.match(source, /resolvePublicDeploymentConfig\(sstEnvironment, workspaceVersion\)/)
   // resolveArtifactSource uses the same resolveReleaseVersion(workspace, env) contract as the
   // public deployment config. VERSION therefore selects both artifacts instead of producing an
   // API/Runner split-brain release.
-  assert.match(source, /resolveArtifactSource\('runner'\)/)
+  assert.match(source, /resolveArtifactSource\('runner', sstEnvironment\)/)
   assert.match(source, /await verifyRunnerArtifact\(runnerSource/)
   assert.doesNotMatch(source, /verifyRunnerReleaseAssets\(publicDeploymentConfig\.releaseVersion\)/)
 })

@@ -1,4 +1,6 @@
 .sst/
 sst-env.d.ts
 .env
+.env.*
+!.env.example
 node_modules/

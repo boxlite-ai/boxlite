@@ -7,6 +7,18 @@ const RUNNER_RESOURCE_TYPE = 'aws:ec2/instance:Instance'
 const RUNNER_RESOURCE_NAME_PATTERN = /^Runner(?:-runner-[1-9][0-9]*)?$/
 const RUNNER_RESOURCE_CANDIDATE_PATTERN = /^Runner(?:-|$)/
 const CONTROL_PLANE_NAME_TAG = 'boxlite:control-plane-runner-name'
+const RUNNER_STAGE_TAG = 'boxlite:stage'
+const RUNNER_ROLE_TAG = 'boxlite:ssm-role'
+const RUNNER_ROLE_VALUE = 'runner'
+const SST_STAGE_PATTERN = /^[a-z0-9]{1,20}$/
+
+function extraRunnerInstanceProfileName(stage) {
+  const name = `boxlite-${stage}-extra-runner-profile`
+  if (typeof stage !== 'string' || !SST_STAGE_PATTERN.test(stage) || name.length > 128) {
+    throw new Error('invalid SST stage for the extra Runner instance profile')
+  }
+  return name
+}
 
 function hasRunnerIdentityTags(properties) {
   for (const tags of [properties?.tags, properties?.tagsAll]) {
@@ -75,9 +87,13 @@ function resolveRunnerInventory(environment = process.env) {
 
 module.exports = {
   CONTROL_PLANE_NAME_TAG,
+  RUNNER_ROLE_TAG,
+  RUNNER_ROLE_VALUE,
+  RUNNER_STAGE_TAG,
   RUNNER_RESOURCE_CANDIDATE_PATTERN,
   RUNNER_RESOURCE_NAME_PATTERN,
   RUNNER_RESOURCE_TYPE,
+  extraRunnerInstanceProfileName,
   hasRunnerIdentityTags,
   isRunnerLikeResource,
   resolveRunnerInventory,

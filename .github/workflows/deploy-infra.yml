@@ -7,9 +7,10 @@ run-name: Deploy ${{ inputs.components }} to ${{ inputs.stage }}
 #   Api    → Build commit Api image ───────────────→ per-commit ECR tag
 #   Runner → Build C SDK → Build Runner Binary ────→ private per-commit S3 object
 #
-# The two legs share only resolve-ref, so they run side by side. The final deploy sets one
-# BOXLITE_ARTIFACT_SOURCE=build selector for both and compiles neither. A release deploy uses the
-# other selector and consumes the Api image / Runner tarball published for VERSION instead.
+# The two legs share the resolved ref and its deployment-config capability gate, so they run side
+# by side only after the selected tree proves it understands immutable config releases. The final
+# deploy sets one BOXLITE_ARTIFACT_SOURCE=build selector for both and compiles neither. A release
+# deploy uses the other selector and consumes the Api image / Runner tarball published for VERSION.
 #
 # `components` narrows both halves at once: an unselected leg is neither built nor deployed. It
 # drops the build jobs here and becomes `--exclude <Component>` on the SST commands below, which
@@ -41,6 +42,10 @@ on:
         required: true
         default: false
         type: boolean
+      config_release:
+        description: 'Immutable deployment config SHA-256. Blank uses the stage current pointer.'
+        required: false
+        type: string
       ref:
         description: 'Full SHA of a commit on main. Mutually exclusive with pr. Defaults to current main.'
         required: false
@@ -149,11 +154,10 @@ jobs:
             # any ref. That part is unchanged: a fork head reaches those two jobs' secrets no more
             # easily than a same-repo head always could.
             #
-            # build-c/build-runner are the honest exception: neither declares an `environment:` or
-            # touches AWS credentials, so a fork's own Cargo/Go/make code now runs on a GitHub-hosted
-            # runner right after resolve-ref, with no second human look and nothing to steal. Risk
-            # there is compute abuse and build-time tampering (e.g. a rewritten .gitmodules URL), not
-            # credential theft — call it out rather than fold it into the build-api/deploy gate above.
+            # build-c/build-runner do not assume AWS themselves, but both wait for the stage-bound
+            # deploy-role-contract and its required reviewer. Their reusable workflows receive a
+            # write-scoped GitHub token for release publication, so the reviewer must treat fork
+            # Cargo/Go/make code as privileged rather than as a credential-free build.
             echo "PR #$INPUT_PR ($([ "$fork" = "true" ] && echo fork || echo same-repo)) head is $head_sha; deploying merge $sha"
             echo "sha=$sha" >> "$GITHUB_OUTPUT"
             exit 0
@@ -171,9 +175,69 @@ jobs:
           echo "$candidate is on main"
           echo "sha=$candidate" >> "$GITHUB_OUTPUT"
 
+  selected-ref-contract:
+    name: Require deployment config support in selected commit
+    needs: resolve-ref
+    runs-on: ubuntu-24.04
+    # Importing selected code is only a compatibility probe. Keep both the protected Environment
+    # and its OIDC credential out of this job; build/deploy jobs retain their existing gates.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout selected commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve-ref.outputs.sha }}
+          persist-credentials: false
+
+      - name: Require composed immutable deployment config support
+        shell: bash
+        run: |
+          set -euo pipefail
+          capability=apps/infra/scripts/deployment-config-capability.mjs
+          if [ ! -f "$capability" ]; then
+            echo "the selected commit predates the composed immutable deployment config loader" >&2
+            echo "choose a commit with the deployment config capability probe" >&2
+            exit 1
+          fi
+          node "$capability"
+
+  deploy-role-contract:
+    name: Verify bootstrapped deploy role contract
+    needs: [resolve-ref, selected-ref-contract]
+    if: github.ref == 'refs/heads/main'
+    environment: ${{ inputs.stage }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+      IAM_PERMISSIONS_BOUNDARY_STAGE: ${{ inputs.stage }}
+    steps:
+      # The verifier is part of the trusted workflow contract, not selected application code.
+      # A PR merge ref may change its own scripts, but cannot weaken this pre-artifact check.
+      - name: Checkout trusted workflow commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: verify-${{ inputs.stage }}-deploy-role-${{ github.run_id }}
+
+      - name: Verify completed stack, exact live policy, and bounded role namespace
+        working-directory: apps/infra
+        run: node scripts/verify-deploy-role-boundary.mjs
+
   build-api:
     name: Build commit Api image
-    needs: resolve-ref
+    needs: [resolve-ref, selected-ref-contract, deploy-role-contract]
     # `contains` rather than equality: the value is one of api+runner / api / runner, and no
     # option's name contains the other's, so a substring test reads as the membership it is.
     if: ${{ contains(inputs.components, 'api') }}
@@ -190,7 +254,7 @@ jobs:
 
   build-c:
     name: Build commit C SDK
-    needs: resolve-ref
+    needs: [resolve-ref, selected-ref-contract, deploy-role-contract]
     if: ${{ contains(inputs.components, 'runner') }}
     # The called workflow's release-upload job declares contents: write, and a callee cannot go
     # past what its caller grants (see the caller-grant test in release-deployment-safety.test.mjs
@@ -205,7 +269,7 @@ jobs:
 
   build-runner:
     name: Build commit Runner
-    needs: [resolve-ref, build-c]
+    needs: [resolve-ref, selected-ref-contract, deploy-role-contract, build-c]
     # Stated as well as inherited: a skipped build-c already cascades here, but the C SDK is an
     # input to this job rather than the reason it exists, so the scope is declared on both.
     if: ${{ contains(inputs.components, 'runner') }}
@@ -222,7 +286,7 @@ jobs:
 
   deploy:
     name: Deploy ${{ inputs.components }} to ${{ inputs.stage }}
-    needs: [resolve-ref, build-api, build-runner]
+    needs: [resolve-ref, selected-ref-contract, deploy-role-contract, build-api, build-runner]
     # A narrowed scope SKIPS a build job, and a skipped `needs` entry would cascade a skip to this
     # job under the implicit success(). Naming any status-check function turns that off, so the
     # states that must still stop the deploy — a build that failed or was cancelled — are listed.
@@ -256,6 +320,36 @@ jobs:
           ref: ${{ needs.resolve-ref.outputs.sha }}
           persist-credentials: false
 
+      # The selected checkout may contain a file or symlink with this name. Remove it with trusted
+      # workflow code before actions/checkout creates the independent verifier worktree.
+      - name: Prepare trusted deploy-role verifier checkout
+        shell: bash
+        run: /usr/bin/rm -rf -- "$GITHUB_WORKSPACE/.trusted-deploy-contract"
+
+      - name: Checkout trusted deploy-role verifier
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .trusted-deploy-contract
+          persist-credentials: false
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-${{ inputs.stage }}-stack-${{ github.run_id }}
+
+      # No selected program executes before this trusted workflow verifier. In particular, the
+      # selected component-capability import below cannot alter PATH or AWS_CLI_PATH first.
+      - name: Attest assumed deploy role contract
+        working-directory: .trusted-deploy-contract/apps/infra
+        run: node scripts/verify-deploy-role-boundary.mjs
+
+      - name: Remove trusted verifier checkout
+        shell: bash
+        run: /usr/bin/rm -rf -- "$GITHUB_WORKSPACE/.trusted-deploy-contract"
+
       # workflow_dispatch takes the workflow definition from the dispatch ref — main's tip — while
       # this job checks out the SELECTED commit, so the two halves are versioned independently and
       # a narrowed scope couples them: `--exclude` reaches a wrapper that may predate it.
@@ -272,8 +366,8 @@ jobs:
       # one export. A commit that knew `--exclude Runner` but not some later selector would pass
       # here and be refused by resolveDeployScope's own allowlist instead.
       #
-      # Runs before the AWS credential step on purpose: an unsupported scope is knowable from the
-      # checkout alone, so it should never reach the deploy role.
+      # Runs only after the trusted role attestation: importing selected code before that check
+      # would let it persist PATH or AWS_CLI_PATH overrides into the verifier step.
       #
       # Probes the export rather than grepping for it: the capability is what matters, and the
       # module is pure, so importing it costs nothing.
@@ -326,12 +420,24 @@ jobs:
           [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
-      - name: Configure AWS credentials through OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: deploy-${{ inputs.stage }}-stack-${{ github.run_id }}
+      # Resolve the mutable pointer at most once. Every later stack-evaluating command receives the
+      # exact immutable digest; neither preview nor apply may consult /current independently.
+      - name: Resolve deployment config release
+        id: deployment-config
+        shell: bash
+        env:
+          INPUT_CONFIG_RELEASE: ${{ inputs.config_release }}
+        run: |
+          set -euo pipefail
+          args=(--stage "$STAGE")
+          [ -z "$INPUT_CONFIG_RELEASE" ] || args+=(--release "$INPUT_CONFIG_RELEASE")
+          release=$(node apps/infra/scripts/deployment-config-resolve.mjs "${args[@]}")
+          [[ "$release" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "deployment config resolver returned an invalid release id" >&2
+            exit 1
+          }
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          printf '### Deployment configuration\n\n- Release: `%s`\n' "$release" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Download commit Runner artifact
         if: ${{ contains(inputs.components, 'runner') }}
@@ -400,38 +506,18 @@ jobs:
         working-directory: apps/infra
         run: npm test
 
-      - name: Verify deploy role IAM boundary permissions
-        working-directory: apps/infra
-        run: node scripts/verify-deploy-role-boundary.mjs
-
-      - name: Materialize stage configuration
-        shell: bash
-        env:
-          DEPLOY_ENV: ${{ secrets.DEPLOY_ENV }}
-        run: |
-          set -euo pipefail
-          test -n "$DEPLOY_ENV"
-          umask 077
-          printf '%s\n' "$DEPLOY_ENV" > apps/infra/.env
-          node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env
-
       - name: Install SST providers
         working-directory: apps/infra
         run: npm run --silent sst -- install --stage "$STAGE"
 
-      # These stay hand-made scoped API tokens. Cloudflare's `cf` CLI can mint
-      # an OAuth token carrying dns_records:edit, but it expires in about an
-      # hour and is renewed through a browser, which this unattended job has
-      # no way to complete. Supplying them as Environment secrets is optional:
-      # scripts/sst-with-cloudflare.mjs prefers an already-set env var and
-      # otherwise reads SSM, so a stage seeded via SSM keeps working with
-      # these unset.
+      # The wrapper loads bootstrap-owned Cloudflare credentials from the exact
+      # stage SSM SecureStrings. GitHub Environment secrets are not a second
+      # mutable source of truth.
       - name: Preview the selected components
         shell: bash
         working-directory: apps/infra
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
+          BOXLITE_DEPLOY_CONFIG_RELEASE: ${{ steps.deployment-config.outputs.release }}
         run: |
           set -euo pipefail
           # An array, so an empty scope contributes no argument at all rather than an empty string
@@ -449,18 +535,13 @@ jobs:
         shell: bash
         working-directory: apps/infra
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
+          BOXLITE_DEPLOY_CONFIG_RELEASE: ${{ steps.deployment-config.outputs.release }}
         run: |
           set -euo pipefail
           # Seeded for the same reason as the preview above: an empty array must never be expanded.
           args=(--stage "$STAGE" --policy .)
           [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
           npm run deploy -- "${args[@]}"
-
-      - name: Remove materialized configuration
-        if: always()
-        run: rm -f apps/infra/.env
 
   # E2E cloud has no automatic trigger of its own; a deploy is the one
   # event that makes running it meaningful, because only here are the

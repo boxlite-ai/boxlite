@@ -36,13 +36,11 @@ test('runtimeBoundaryPolicyArn rejects a malformed account id', () => {
   )
 })
 
-test('githubDeployRoleStackName rejects a stage CloudFormation cannot name', () => {
-  // CloudFormation stack names allow only alphanumerics and hyphens. An
-  // underscore has to be refused up front: bootstrap makes external changes
-  // before it ever calls `cloudformation deploy`, so accepting `dev_blue` here
-  // means failing partway through with a half-provisioned stage.
-  assert.throws(() => githubDeployRoleStackName('dev_blue'), /must match/)
-  assert.equal(githubDeployRoleStackName('dev-blue'), 'boxlite-dev-blue-github-deploy')
+test('githubDeployRoleStackName requires the unambiguous canonical stage grammar', () => {
+  for (const stage of ['dev_blue', 'dev-blue', 'Dev', 'a'.repeat(21)]) {
+    assert.throws(() => githubDeployRoleStackName(stage), /must match/)
+  }
+  assert.equal(githubDeployRoleStackName('devblue'), 'boxlite-devblue-github-deploy')
 })
 
 test('githubDeployRoleStackName stays stable per stage so a re-run updates one stack', () => {
@@ -53,7 +51,18 @@ test('cloudFormationParameterOverrides validates repo shape and stage', () => {
   assert.deepEqual(cloudFormationParameterOverrides({ repo: 'boxlite-ai/boxlite', stage: 'dev' }), [
     'GitHubRepository=boxlite-ai/boxlite',
     'GitHubEnvironment=dev',
+    'RunnerCommandTagGateEnabled=false',
+    'RuntimeSecretInitializationEnabled=false',
   ])
+  assert.deepEqual(
+    cloudFormationParameterOverrides({
+      repo: 'boxlite-ai/boxlite',
+      stage: 'dev',
+      runnerCommandTagGateEnabled: true,
+      runtimeSecretInitializationEnabled: true,
+    }).slice(-2),
+    ['RunnerCommandTagGateEnabled=true', 'RuntimeSecretInitializationEnabled=true'],
+  )
   assert.throws(() => cloudFormationParameterOverrides({ repo: 'not-a-repo', stage: 'dev' }), /must look like/)
 })
 

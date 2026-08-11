@@ -15,7 +15,7 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-const STAGE_LIKE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*$/
+const STAGE_LIKE_PATTERN = /^[a-z0-9]{1,20}$/
 const GITHUB_REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/
 const ACCOUNT_ID_PATTERN = /^\d{12}$/
 
@@ -61,10 +61,23 @@ export function githubDeployRoleStackName(stage) {
   return `boxlite-${stage}-github-deploy`
 }
 
-export function cloudFormationParameterOverrides({ repo, stage }) {
+export function cloudFormationParameterOverrides({
+  repo,
+  stage,
+  runnerCommandTagGateEnabled = false,
+  runtimeSecretInitializationEnabled = false,
+}) {
   validateGitHubRepo(repo)
   requireStageLike('stage', stage)
-  return [`GitHubRepository=${repo}`, `GitHubEnvironment=${stage}`]
+  if (typeof runnerCommandTagGateEnabled !== 'boolean' || typeof runtimeSecretInitializationEnabled !== 'boolean') {
+    throw new Error('CloudFormation safety gates must be boolean')
+  }
+  return [
+    `GitHubRepository=${repo}`,
+    `GitHubEnvironment=${stage}`,
+    `RunnerCommandTagGateEnabled=${runnerCommandTagGateEnabled}`,
+    `RuntimeSecretInitializationEnabled=${runtimeSecretInitializationEnabled}`,
+  ]
 }
 
 // `aws cloudformation deploy --no-fail-on-empty-changeset` exits 0 whether or

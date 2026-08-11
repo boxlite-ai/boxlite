@@ -51,6 +51,7 @@ function readSelectors(args) {
   const selectors = []
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]
+    if (argument === '--') break
     if (!PARTIAL_DEPLOY_SELECTOR.test(argument)) continue
     const separator = argument.indexOf('=')
     const inline = separator === -1 ? undefined : argument.slice(separator + 1)

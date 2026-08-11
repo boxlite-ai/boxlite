@@ -3,12 +3,17 @@
 
 const {
   CONTROL_PLANE_NAME_TAG,
+  RUNNER_ROLE_TAG,
+  RUNNER_ROLE_VALUE,
   RUNNER_RESOURCE_TYPE,
+  RUNNER_STAGE_TAG,
+  extraRunnerInstanceProfileName,
   isRunnerLikeResource,
   resolveRunnerInventory,
 } = require('../../scripts/runner-inventory.cjs')
 const {
   createRunnerIdentityFingerprint,
+  createRunnerProfileMigrationFingerprint,
   createRunnerSafetyFingerprint,
   hasExactIgnoredProperties,
 } = require('../../scripts/runner-state-baseline.cjs')
@@ -48,6 +53,14 @@ function isRunnerCandidate(resource, expectedByResourceName) {
   )
 }
 
+function isAllowedExtraRunnerProfileMigration(resource, currentProperties, baseline) {
+  if (!/^Runner-runner-[1-9][0-9]*$/.test(resource.name)) return false
+  if (resource.props?.iamInstanceProfile !== extraRunnerInstanceProfileName(baseline.stage)) return false
+  return (
+    createRunnerProfileMigrationFingerprint(resource.props) === currentProperties.profileMigrationFingerprint
+  )
+}
+
 function validateRunnerResource(resource, inventory, baseline) {
   inventory ??= resolveRunnerInventory()
   const expectedByResourceName = new Map(inventory.map((runner) => [runner.resourceName, runner]))
@@ -69,7 +82,9 @@ function validateRunnerResource(resource, inventory, baseline) {
     typeof tags === 'object' &&
     !Array.isArray(tags) &&
     readTagValue(tags, 'Name') === expected.nameTag &&
-    readTagValue(tags, CONTROL_PLANE_NAME_TAG) === expected.controlPlaneRunnerName
+    readTagValue(tags, CONTROL_PLANE_NAME_TAG) === expected.controlPlaneRunnerName &&
+    readTagValue(tags, RUNNER_STAGE_TAG) === baseline?.stage &&
+    readTagValue(tags, RUNNER_ROLE_TAG) === RUNNER_ROLE_VALUE
   if (!hasExpectedIdentity) {
     violations.push('Runner identity tags must match the deployment inventory.')
   }
@@ -87,7 +102,10 @@ function validateRunnerResource(resource, inventory, baseline) {
   } else {
     try {
       const desiredFingerprint = createRunnerSafetyFingerprint(resource.props)
-      if (desiredFingerprint !== currentProperties.inputFingerprint) {
+      if (
+        desiredFingerprint !== currentProperties.inputFingerprint &&
+        !isAllowedExtraRunnerProfileMigration(resource, currentProperties, baseline)
+      ) {
         violations.push('Runner protected properties must match the current deployment state.')
       }
     } catch {

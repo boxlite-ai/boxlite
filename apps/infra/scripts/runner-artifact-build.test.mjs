@@ -7,14 +7,21 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
-import { RunnerArtifactBuilder } from './runner-artifact-build.mjs'
+import { parseRunnerArtifactArgs, RunnerArtifactBuilder } from './runner-artifact-build.mjs'
 
 const REF = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
 const VERSION = '1.2.3'
 const ACCOUNT = '123456789012'
+const RELEASE = 'a'.repeat(64)
 const ARCHIVE = `boxlite-runner-v${VERSION}-${REF}-linux-amd64.tar.gz`
 
-function fakeBuilder({ dirty = '', submodules = ' e12b9b3 src/deps/libkrun-sys/vendor/libkrun', staged = '' } = {}) {
+function fakeBuilder({
+  dirty = '',
+  submodules = ' e12b9b3 src/deps/libkrun-sys/vendor/libkrun',
+  staged = '',
+  configStore,
+  loadEnvironment,
+} = {}) {
   const calls = []
   const run = (command, args, options = {}) => {
     calls.push({ command, args, options })
@@ -40,8 +47,8 @@ function fakeBuilder({ dirty = '', submodules = ' e12b9b3 src/deps/libkrun-sys/v
       run,
       readVersion: () => VERSION,
       awsCliPath: () => '/fake/aws',
-      accountId: async () => ACCOUNT,
-      loadEnvironment: () => calls.push({ command: 'loadDeploymentEnvironment', args: [] }),
+      ...(configStore ? { configStore } : { accountId: async () => ACCOUNT }),
+      ...(loadEnvironment ? { loadEnvironment } : {}),
     }),
   }
 }
@@ -84,16 +91,71 @@ test('builds Linux AMD64 with the commit in both the version and archive identit
   )
 })
 
-test('stages against the same AWS identity the printed deploy command will use', async () => {
-  // The deploy goes through sst-with-cloudflare.mjs, which loads apps/infra/.env. Resolving AWS
-  // from the bare shell instead could upload into one account and then read from another.
-  const { builder, calls } = fakeBuilder()
-  await builder.execute({ stage: 'dev' })
+test('requires explicit stage and region CLI inputs and accepts an optional pinned release', () => {
+  assert.throws(() => parseRunnerArtifactArgs(['node', 'script']), /--stage is required/)
+  assert.throws(
+    () => parseRunnerArtifactArgs(['node', 'script', '--stage', 'dev']),
+    /--region is required/,
+  )
+  assert.deepEqual(
+    parseRunnerArtifactArgs([
+      'node',
+      'script',
+      '--stage',
+      'dev',
+      '--region',
+      'ap-southeast-1',
+      '--release',
+      RELEASE,
+    ]),
+    { stage: 'dev', region: 'ap-southeast-1', releaseId: RELEASE },
+  )
+  assert.throws(
+    () =>
+      parseRunnerArtifactArgs([
+        'node',
+        'script',
+        '--stage',
+        'dev-blue',
+        '--region',
+        'ap-southeast-1',
+      ]),
+    /invalid stage/i,
+  )
+})
 
-  const loaded = calls.findIndex((call) => call.command === 'loadDeploymentEnvironment')
-  const firstAws = calls.findIndex((call) => call.command === '/fake/aws')
-  assert.notEqual(loaded, -1, 'the deployment environment is never loaded')
-  assert.ok(loaded < firstAws, 'the environment must load before any AWS call resolves an account')
+test('pins artifact staging to deployment config without exposing a dotenv setup hook', async () => {
+  const configCalls = []
+  let loadedEnvironment = false
+  const { builder, calls } = fakeBuilder({
+    loadEnvironment() {
+      loadedEnvironment = true
+    },
+    configStore(options) {
+      configCalls.push({ operation: 'create', options })
+      return {
+        resolve(selection) {
+          configCalls.push({ operation: 'resolve', selection })
+          return { releaseId: RELEASE, document: { accountId: ACCOUNT } }
+        },
+      }
+    },
+  })
+
+  const result = await builder.execute({
+    stage: 'dev',
+    region: 'ap-southeast-1',
+    releaseId: RELEASE,
+  })
+
+  assert.equal(loadedEnvironment, false, 'artifact staging must not expose a dotenv-loading hook')
+  assert.equal(result.releaseId, RELEASE)
+  assert.deepEqual(configCalls, [
+    { operation: 'create', options: { awsCliPath: '/fake/aws', region: 'ap-southeast-1' } },
+    { operation: 'resolve', selection: { stage: 'dev', releaseId: RELEASE } },
+  ])
+  const bucketLookup = calls.find((call) => call.command === '/fake/aws' && call.args[0] === 's3api')
+  assert.equal(bucketLookup.args[bucketLookup.args.indexOf('--region') + 1], 'ap-southeast-1')
 })
 
 test('refuses a dirty checkout instead of publishing bytes under the wrong commit', () => {
@@ -179,5 +241,6 @@ test('the printed next step scopes the ref to the Runner it just staged', () => 
   const source = readFileSync(fileURLToPath(new URL('./runner-artifact-build.mjs', import.meta.url)), 'utf8')
   const printed = source.slice(source.indexOf('console.log(\n'))
   assert.match(printed, /RUNNER_ARTIFACT_SOURCE=build RUNNER_ARTIFACT_REF=\$\{result\.ref\}/)
+  assert.match(printed, /BOXLITE_DEPLOY_CONFIG_RELEASE=\$\{result\.releaseId\}/)
   assert.doesNotMatch(printed, /BOXLITE_ARTIFACT_(SOURCE|REF)/)
 })

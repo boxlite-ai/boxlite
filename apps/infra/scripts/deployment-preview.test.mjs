@@ -10,13 +10,15 @@ const runnerChange = ({
   name = 'Runner',
   op = 'update',
   detailedDiff = { __provider: { diffKind: 'update', inputDiff: true } },
+  oldInputs,
+  newInputs,
   protect = true,
 } = {}) => ({
   op,
   urn: `urn:pulumi:dev::boxlite::aws:ec2/instance:Instance::${name}`,
   type: 'aws:ec2/instance:Instance',
-  old: { protect: true },
-  new: { protect },
+  old: { protect: true, ...(oldInputs ? { inputs: oldInputs } : {}) },
+  new: { protect, ...(newInputs ? { inputs: newInputs } : {}) },
   detailedDiff,
 })
 
@@ -64,6 +66,42 @@ test('rejects Runner creates even when they are protected', () => {
     () => validateDeploymentPreview(JSON.stringify([{ ...create, new: { protect: false } }])),
     /unsafe Runner deployment plan/,
   )
+})
+
+test('allows only extra Runners to migrate in place to the exact selected-stage profile', () => {
+  const migration = runnerChange({
+    name: 'Runner-runner-2',
+    detailedDiff: { iamInstanceProfile: { diffKind: 'update', inputDiff: true } },
+    oldInputs: { iamInstanceProfile: 'boxlite-dev-legacy-runner-profile' },
+    newInputs: { iamInstanceProfile: 'boxlite-dev-extra-runner-profile' },
+  })
+
+  assert.deepEqual(validateDeploymentPreview(JSON.stringify([migration]), { stage: 'dev' }), {
+    changeCount: 1,
+    runnerUpdates: [{ name: 'Runner-runner-2', paths: ['iamInstanceProfile'] }],
+  })
+
+  for (const rejected of [
+    { ...migration, urn: migration.urn.replace('::Runner-runner-2', '::Runner') },
+    { ...migration, new: { ...migration.new, inputs: { iamInstanceProfile: 'other-profile' } } },
+    {
+      ...migration,
+      detailedDiff: {
+        iamInstanceProfile: { diffKind: 'update', inputDiff: true },
+        instanceType: { diffKind: 'update', inputDiff: true },
+      },
+      new: {
+        ...migration.new,
+        inputs: { iamInstanceProfile: 'boxlite-dev-extra-runner-profile', instanceType: 'c8i.4xlarge' },
+      },
+    },
+  ]) {
+    assert.throws(
+      () => validateDeploymentPreview(JSON.stringify([rejected]), { stage: 'dev' }),
+      /unsafe Runner deployment plan/,
+    )
+  }
+  assert.throws(() => validateDeploymentPreview(JSON.stringify([migration]), { stage: '' }), /unsafe Runner/)
 })
 
 test('rejects disruptive or unexplained Runner operations', () => {

@@ -22,8 +22,19 @@ test('rejects duplicate stage options instead of guessing which one SST will use
   )
 })
 
+test('ignores application stage arguments after the shell separator', () => {
+  assert.equal(
+    resolveSstStage(['shell', '--stage', 'dev', '--', 'node', 'script.mjs', '--stage=production'], {}),
+    'dev',
+  )
+  assert.throws(
+    () => resolveSstStage(['shell', '--', 'node', 'script.mjs', '--stage', 'production'], {}),
+    /shell requires an explicit --stage or SST_STAGE/,
+  )
+})
+
 test('rejects unsafe CLI and environment stage values', () => {
-  for (const stage of ['dev/production', ' dev', 'dev ', '--production', '']) {
+  for (const stage of ['dev/production', ' dev', 'dev ', '--production', 'feature_42-test', 'dev-blue', 'Dev', 'a'.repeat(21), '']) {
     if (stage === '') {
       assert.throws(() => resolveSstStage(['deploy', '--stage='], {}), /--stage requires a value/)
       continue
@@ -32,7 +43,7 @@ test('rejects unsafe CLI and environment stage values', () => {
   }
 
   assert.throws(() => resolveSstStage(['deploy'], { SST_STAGE: 'dev/production' }), /invalid SST stage/)
-  assert.equal(resolveSstStage(['deploy', '--stage', 'feature_42-test'], {}), 'feature_42-test')
+  assert.equal(resolveSstStage(['deploy', '--stage', 'feature42'], {}), 'feature42')
 })
 
 test('requires an explicit stage for state-changing stack commands', () => {
@@ -40,8 +51,18 @@ test('requires an explicit stage for state-changing stack commands', () => {
   assert.throws(() => resolveSstStage(['remove'], {}), /remove requires an explicit --stage or SST_STAGE/)
 })
 
-test('retains the dev credential lookup default for non-deploy commands', () => {
-  assert.equal(resolveSstStage(['diff'], {}), 'dev')
+test('requires an explicit stage for every command that evaluates deployment config', () => {
+  for (const command of ['diff', 'deploy', 'remove', 'refresh', 'shell']) {
+    assert.throws(
+      () => resolveSstStage([command], {}),
+      new RegExp(`${command} requires an explicit --stage or SST_STAGE`),
+    )
+    assert.equal(resolveSstStage([command], { SST_STAGE: 'staging' }), 'staging')
+  }
+
+  for (const command of ['install', 'secret', 'unlock', 'version']) {
+    assert.equal(resolveSstStage([command], {}), 'dev')
+  }
 })
 
 test('requires the provisioned IAM boundary stage to match the SST stage', () => {

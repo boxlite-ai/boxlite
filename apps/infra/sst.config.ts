@@ -87,8 +87,7 @@ const runnerEndpoint = (override: string, port: number, scheme: string) => envOr
 // ── app config ───────────────────────────────────────────────────────────────
 export default $config({
   async app(input) {
-    const { loadDeploymentEnvironment, resolveAwsRegion } = await import('./scripts/deployment-environment.mjs')
-    loadDeploymentEnvironment()
+    const { resolveAwsRegion } = await import('./scripts/deployment-environment.mjs')
     const REGION = resolveAwsRegion()
 
     return {
@@ -114,18 +113,44 @@ export default $config({
     const { readWorkspaceVersion, resolveAwsRegion, resolvePublicDeploymentConfig } =
       await import('./scripts/deployment-environment.mjs')
     const { optionalPublicOidcIssuer, requireOidcIssuer } = await import('./scripts/oidc-issuer.mjs')
-    const { resolveRunnerInventory } = (await import('./scripts/runner-inventory.cjs')).default
+    const {
+      RUNNER_ROLE_TAG,
+      RUNNER_ROLE_VALUE,
+      RUNNER_STAGE_TAG,
+      extraRunnerInstanceProfileName,
+      resolveRunnerInventory,
+    } = (
+      await import('./scripts/runner-inventory.cjs')
+    ).default
+    const { parseRunnerStateBaseline } = (await import('./scripts/runner-state-baseline.cjs')).default
     const { requireIamPermissionsBoundaryStage } = await import('./scripts/sst-stage.mjs')
     const { apiImageReference } = await import('./scripts/api-artifact.mjs')
     const { resolveArtifactSource } = await import('./scripts/artifact-source.mjs')
     const { readDeployScope } = await import('./scripts/deployment-scope.mjs')
     const { resolveRunnerArtifact, runnerArtifactsBucketName } = await import('./scripts/runner-artifact.mjs')
+    const {
+      RUNTIME_SECRET_DEFINITIONS,
+      parseRuntimeSecretGenerations,
+      runtimeSecretGeneration,
+      runtimeSecretGenerationMarker,
+      runtimeSecretName,
+      runtimeSecretNeedsGeneratedInitialVersion,
+    } = await import('./scripts/runtime-secrets.mjs')
     const REGION = resolveAwsRegion()
     const { accountId } = await aws.getCallerIdentity()
     const workspaceVersion = readWorkspaceVersion()
     const deploymentConfig = resolvePublicDeploymentConfig(process.env, workspaceVersion)
     const { stackDomain, proxyDomain, proxyProtocol, proxyTemplateUrl, releaseVersion } = deploymentConfig
     const runnerInventory = resolveRunnerInventory(process.env)
+    const runnerStateBaseline = parseRunnerStateBaseline(process.env.BOXLITE_RUNNER_STATE_BASELINE)
+    if (runnerStateBaseline.stage !== $app.stage) {
+      throw new Error('Runner state baseline stage does not match the selected SST stage')
+    }
+    const defaultRunnerInstanceId = runnerStateBaseline.resources.Runner?.instanceId
+    if (!defaultRunnerInstanceId) {
+      throw new Error('Runner state baseline must include the protected default Runner')
+    }
+    const defaultRunnerSourceArn = `arn:aws:ec2:${REGION}:${accountId}:instance/${defaultRunnerInstanceId}`
     const oidcIssuer = requireOidcIssuer()
     const publicOidcIssuer = optionalPublicOidcIssuer()
 
@@ -144,18 +169,23 @@ export default $config({
 
     const clickHouseWriterEndpoint =
       process.env.CLICKHOUSE_WRITER_ENDPOINT || process.env.CLICKHOUSE_ENDPOINT || process.env.CLICKHOUSE_OTEL_ENDPOINT
-    const clickHouseWriterPassword = process.env.CLICKHOUSE_WRITER_PASSWORD || process.env.CLICKHOUSE_PASSWORD
     const clickHouseReaderUrl = process.env.CLICKHOUSE_READER_URL || process.env.CLICKHOUSE_URL
     const clickHouseReaderHost = process.env.CLICKHOUSE_READER_HOST || process.env.CLICKHOUSE_HOST
     const clickHouseExporterEnabled = process.env.CLICKHOUSE_EXPORTER_ENABLED === 'true'
+    const ghcrUsername = process.env.GHCR_USERNAME?.trim() || ''
+    const runtimeSecretGenerations = parseRuntimeSecretGenerations(
+      process.env.BOXLITE_RUNTIME_SECRET_GENERATIONS,
+    )
+    const runtimeSecretGenerationMarkerFor = (component: string) =>
+      runtimeSecretGenerationMarker(
+        runtimeSecretGenerations,
+        RUNTIME_SECRET_DEFINITIONS.filter(({ consumers }) =>
+          consumers.some((consumer) => consumer.component === component),
+        ).map(({ id }) => id),
+      )
     if (clickHouseExporterEnabled && !clickHouseWriterEndpoint) {
       throw new Error(
         'CLICKHOUSE_WRITER_ENDPOINT or CLICKHOUSE_ENDPOINT is required when CLICKHOUSE_EXPORTER_ENABLED=true',
-      )
-    }
-    if (clickHouseExporterEnabled && !clickHouseWriterPassword) {
-      throw new Error(
-        'CLICKHOUSE_WRITER_PASSWORD or CLICKHOUSE_PASSWORD is required when CLICKHOUSE_EXPORTER_ENABLED=true',
       )
     }
     const collectorExporters = clickHouseExporterEnabled ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
@@ -189,9 +219,87 @@ export default $config({
     const defaultRunnerName = defaultRunnerConfig.controlPlaneRunnerName
     const pgAdminPassword = randomKey('PgAdminPassword', 24)
 
-    // App secrets — set via `npm run sst -- secret set <NAME> --stage <stage>`
-    // (or bulk `npm run sst -- secret load <dotenv>`); stored encrypted in SST
-    // state and shared per-stage by anyone with deploy access. OIDC_CLIENT_ID is
+    // Bootstrap owns the stable stage-named containers. During the expand deploy,
+    // the legacy configuration handoff still resolves these expressions to exactly
+    // the values today's task definitions and default Runner use; generated values
+    // come from the retained RandomPassword resources. ignoreChanges then lets
+    // later bootstrap/operator rotations remain authoritative rather than being
+    // reverted by a routine software deploy.
+    // Secrets Manager rejects an empty SecretString, so disabled optional paths
+    // use explicit harmless values instead of an ambiguous whitespace sentinel.
+    const runtimeSecretInitialValues: Record<string, $util.Input<string>> = {
+      encryptionKey: envOr('ENCRYPTION_KEY', encryptionKey.result),
+      encryptionSalt: envOr('ENCRYPTION_SALT', encryptionSalt.result),
+      adminApiKey: envOr('ADMIN_API_KEY', adminApiKey.result),
+      proxyApiKey: envOr('PROXY_API_KEY', proxyApiKey.result),
+      defaultRunnerApiKey: envOr('DEFAULT_RUNNER_API_KEY', defaultRunnerApiKey.result),
+      pgAdminDefaultPassword: envOr('PGADMIN_DEFAULT_PASSWORD', pgAdminPassword.result),
+      ghcrPullToken: process.env.GHCR_TOKEN?.trim() || 'unused',
+      clickHouseWriterPassword:
+        process.env.CLICKHOUSE_WRITER_PASSWORD?.trim() || process.env.CLICKHOUSE_PASSWORD?.trim() || 'unused',
+      clickHouseReaderPassword:
+        process.env.CLICKHOUSE_READER_PASSWORD?.trim() || process.env.CLICKHOUSE_PASSWORD?.trim() || 'unused',
+      otelExporterOtlpHeaders:
+        process.env.OTEL_EXPORTER_OTLP_HEADERS?.trim() || 'x-boxlite-unconfigured=true',
+      otelCollectorApiKey: envOr(
+        'BOXLITE_API_KEY',
+        envOr('OTEL_COLLECTOR_API_KEY', envOr('ADMIN_API_KEY', adminApiKey.result)),
+      ),
+    }
+    const runtimeSecrets = Object.fromEntries(
+      await Promise.all(
+        RUNTIME_SECRET_DEFINITIONS.map(async ({ id }) => [
+          id,
+          await aws.secretsmanager.getSecret({ name: runtimeSecretName($app.stage, id) }),
+        ]),
+      ),
+    )
+    const requireExplicitRuntimeSecret = (id: string, why: string) => {
+      if (runtimeSecretNeedsGeneratedInitialVersion(runtimeSecrets[id]?.tags)) {
+        throw new Error(`${id} must be set explicitly ${why}`)
+      }
+    }
+    if (clickHouseExporterEnabled) {
+      requireExplicitRuntimeSecret('clickHouseWriterPassword', 'when CLICKHOUSE_EXPORTER_ENABLED=true')
+    }
+    if (clickHouseReaderUrl || clickHouseReaderHost) {
+      requireExplicitRuntimeSecret(
+        'clickHouseReaderPassword',
+        'when a ClickHouse reader URL or host is configured',
+      )
+    }
+    if (ghcrUsername) {
+      requireExplicitRuntimeSecret('ghcrPullToken', 'when GHCR_USERNAME is configured')
+    }
+    const runtimeSecretInitialVersions = Object.fromEntries(
+      RUNTIME_SECRET_DEFINITIONS.flatMap(({ id }) => {
+        if (!runtimeSecretNeedsGeneratedInitialVersion(runtimeSecrets[id].tags)) return []
+        const resourceName = `RuntimeSecret${id[0].toUpperCase()}${id.slice(1)}InitialValue`
+        const version = new aws.secretsmanager.SecretVersion(
+          resourceName,
+          {
+            secretId: runtimeSecrets[id].id,
+            secretString: $util.secret(runtimeSecretInitialValues[id]),
+          },
+          { ignoreChanges: ['secretString'], retainOnDelete: true },
+        )
+        return [[id, version]]
+      }),
+    )
+    const runtimeSecretArn = (id: string) => {
+      const secret = runtimeSecrets[id]
+      const initialVersion = runtimeSecretInitialVersions[id]
+      if (!secret) throw new Error(`unknown runtime secret id '${id}'`)
+      if (!initialVersion) return secret.arn
+      // Consumers must never race an unset bootstrap-created container. Including
+      // the version id in this Output makes the ARN carry the dependency without
+      // exposing the version contents or adding a separate edge at every caller.
+      return $resolve([secret.arn, initialVersion.versionId]).apply(([arn]) => arn)
+    }
+
+    // App secrets — set via `npm run sst -- secret set <NAME> --stage <stage>`;
+    // stored encrypted in SST state and shared per-stage by anyone with deploy
+    // access. OIDC_CLIENT_ID is
     // required and has no deployable fallback: a placeholder would let the stack
     // become healthy while every interactive login fails. Optional secrets carry
     // an empty-string fallback, where empty means that the feature is disabled.
@@ -215,8 +323,8 @@ export default $config({
     // tasks cannot reach another's secrets. ECS says so plainly when asked:
     // it refuses to place the task with "no permissions boundary allows the
     // secretsmanager:GetSecretValue action". (The deploy role is not the
-    // constraint — its boxlite-sst-deploy policy grants secretsmanager on
-    // every resource, and it carries no boundary at all.)
+    // constraint — the deploy role has a separate selected-stage lifecycle
+    // grant for this SST-owned secret and carries no runtime boundary.)
     //
     // Empty means the exporter stays off; see USAGE_EXPORT_ENABLED below.
     const usageExportToken = new sst.Secret('USAGE_EXPORT_TOKEN', '')
@@ -421,18 +529,18 @@ export default $config({
         },
       },
       environment: {
+        BOXLITE_RUNTIME_SECRET_GENERATION: runtimeSecretGenerationMarkerFor('OtelCollector'),
         CLICKHOUSE_ENDPOINT: clickHouseWriterEndpoint || 'https://clickhouse-disabled.invalid:443',
         CLICKHOUSE_DATABASE: envOr('CLICKHOUSE_WRITER_DATABASE', envOr('CLICKHOUSE_DATABASE', 'otel')),
         CLICKHOUSE_USERNAME: envOr('CLICKHOUSE_WRITER_USERNAME', envOr('CLICKHOUSE_USERNAME', 'default')),
-        CLICKHOUSE_PASSWORD: clickHouseWriterPassword || 'unused',
         CLICKHOUSE_CREATE_SCHEMA: envOr('CLICKHOUSE_CREATE_SCHEMA', 'false'),
         CLICKHOUSE_COMPRESS: envOr('CLICKHOUSE_COMPRESS', 'none'),
         BOXLITE_API_URL: envOr('BOXLITE_API_URL', `https://api.${stackDomain}/api`),
-        BOXLITE_API_KEY: envOr(
-          'BOXLITE_API_KEY',
-          envOr('OTEL_COLLECTOR_API_KEY', envOr('ADMIN_API_KEY', adminApiKey.result)),
-        ),
         JAEGER_OTLP_HTTP_ENDPOINT: jaegerOtlpHttpEndpoint,
+      },
+      ssm: {
+        CLICKHOUSE_PASSWORD: runtimeSecretArn('clickHouseWriterPassword'),
+        BOXLITE_API_KEY: runtimeSecretArn('otelCollectorApiKey'),
       },
     })
     const otelCollectorOtlpHttpUrl = stripTrailingSlash(otelCollector.url).apply((url) => `${url}:${PORTS.OTLP_HTTP}`)
@@ -526,6 +634,7 @@ export default $config({
       ],
       scaling: { min: 1, max: 4 },
       environment: {
+        BOXLITE_RUNTIME_SECRET_GENERATION: runtimeSecretGenerationMarkerFor('Api'),
         // Core
         NODE_ENV: 'production',
         PORT: String(PORTS.API),
@@ -539,9 +648,6 @@ export default $config({
         // straight from ghcr.io, and these three are public so no GHCR_TOKEN is required.
         // BOXLITE_SYSTEM_IMAGES appends more images
         // (comma-separated `name=ref`) without a code deploy — empty means built-ins only.
-        // IMAGE_TAG and the SOURCE_REGISTRY_* block are inert upstream-port residue (no consumer
-        // — see apps/api configuration.ts), kept only as reserved names for a future registry path.
-        BOXLITE_SYSTEM_IMAGE_TAG: envOr('BOXLITE_SYSTEM_IMAGE_TAG', 'v0.1.0'),
         BOXLITE_SYSTEM_BASE_IMAGE: envOr(
           'BOXLITE_SYSTEM_BASE_IMAGE',
           'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0',
@@ -555,16 +661,6 @@ export default $config({
           'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0',
         ),
         BOXLITE_SYSTEM_IMAGES: envOr('BOXLITE_SYSTEM_IMAGES', ''),
-        ...(process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_URL && {
-          BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME: envOr(
-            'BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME',
-            'BoxLite System Source Registry',
-          ),
-          BOXLITE_SYSTEM_SOURCE_REGISTRY_URL: process.env.BOXLITE_SYSTEM_SOURCE_REGISTRY_URL,
-          BOXLITE_SYSTEM_SOURCE_REGISTRY_USERNAME: envOr('BOXLITE_SYSTEM_SOURCE_REGISTRY_USERNAME', ''),
-          BOXLITE_SYSTEM_SOURCE_REGISTRY_PASSWORD: envOr('BOXLITE_SYSTEM_SOURCE_REGISTRY_PASSWORD', ''),
-          BOXLITE_SYSTEM_SOURCE_REGISTRY_PROJECT_ID: envOr('BOXLITE_SYSTEM_SOURCE_REGISTRY_PROJECT_ID', ''),
-        }),
 
         // Database (SST-linked)
         DB_HOST: db.host,
@@ -578,10 +674,6 @@ export default $config({
         REDIS_PORT: redis.port.apply(String),
         REDIS_PASSWORD: redis.password,
         REDIS_TLS: 'true',
-
-        // Encryption
-        ENCRYPTION_KEY: envOr('ENCRYPTION_KEY', encryptionKey.result),
-        ENCRYPTION_SALT: envOr('ENCRYPTION_SALT', encryptionSalt.result),
 
         // OIDC — external provider (Auth0/Okta/etc.)
         OIDC_CLIENT_ID: oidcClientId.value,
@@ -634,25 +726,17 @@ export default $config({
         // Proxy
         PROXY_DOMAIN: proxyDomain,
         PROXY_PROTOCOL: proxyProtocol,
-        PROXY_API_KEY: envOr('PROXY_API_KEY', proxyApiKey.result),
         PROXY_TEMPLATE_URL: proxyTemplateUrl,
-
-        // Admin
-        ADMIN_API_KEY: envOr('ADMIN_API_KEY', adminApiKey.result),
 
         // Observability read/write path. These stay server-side; never expose
         // ClickHouse credentials to the dashboard bundle.
         OTEL_ENABLED: envOr('OTEL_ENABLED', 'true'),
         OTEL_EXPORTER_OTLP_ENDPOINT: envOr('OTEL_EXPORTER_OTLP_ENDPOINT', otelCollectorOtlpHttpUrl),
-        ...(process.env.OTEL_EXPORTER_OTLP_HEADERS && {
-          OTEL_EXPORTER_OTLP_HEADERS: process.env.OTEL_EXPORTER_OTLP_HEADERS,
-        }),
         ...(clickHouseReaderUrl
           ? {
               CLICKHOUSE_URL: clickHouseReaderUrl,
               CLICKHOUSE_DATABASE: envOr('CLICKHOUSE_READER_DATABASE', envOr('CLICKHOUSE_DATABASE', 'otel')),
               CLICKHOUSE_USERNAME: envOr('CLICKHOUSE_READER_USERNAME', envOr('CLICKHOUSE_USERNAME', 'default')),
-              CLICKHOUSE_PASSWORD: envOr('CLICKHOUSE_READER_PASSWORD', envOr('CLICKHOUSE_PASSWORD', '')),
             }
           : clickHouseReaderHost
             ? {
@@ -660,7 +744,6 @@ export default $config({
                 CLICKHOUSE_PORT: envOr('CLICKHOUSE_READER_PORT', envOr('CLICKHOUSE_PORT', '443')),
                 CLICKHOUSE_DATABASE: envOr('CLICKHOUSE_READER_DATABASE', envOr('CLICKHOUSE_DATABASE', 'otel')),
                 CLICKHOUSE_USERNAME: envOr('CLICKHOUSE_READER_USERNAME', envOr('CLICKHOUSE_USERNAME', 'default')),
-                CLICKHOUSE_PASSWORD: envOr('CLICKHOUSE_READER_PASSWORD', envOr('CLICKHOUSE_PASSWORD', '')),
                 CLICKHOUSE_PROTOCOL: envOr('CLICKHOUSE_READER_PROTOCOL', envOr('CLICKHOUSE_PROTOCOL', 'https')),
               }
             : {}),
@@ -682,7 +765,6 @@ export default $config({
 
         // Default runner — the API auto-seeds it at boot; v2 runners self-report
         DEFAULT_RUNNER_NAME: defaultRunnerName,
-        DEFAULT_RUNNER_API_KEY: envOr('DEFAULT_RUNNER_API_KEY', defaultRunnerApiKey.result),
         DEFAULT_RUNNER_DOMAIN: runnerEndpoint('DEFAULT_RUNNER_DOMAIN', PORTS.RUNNER, ''),
         DEFAULT_RUNNER_API_URL: runnerEndpoint('DEFAULT_RUNNER_API_URL', PORTS.RUNNER, 'http://'),
         DEFAULT_RUNNER_PROXY_URL: runnerEndpoint('DEFAULT_RUNNER_PROXY_URL', PORTS.PROXY, 'http://'),
@@ -724,6 +806,16 @@ export default $config({
           // exporting yet. Setting the secret is what turns delivery on.
           USAGE_EXPORT_ENABLED: usageExportToken.value.apply((token) => (token.trim() ? 'true' : 'false')),
         }),
+      },
+      ssm: {
+        ENCRYPTION_KEY: runtimeSecretArn('encryptionKey'),
+        ENCRYPTION_SALT: runtimeSecretArn('encryptionSalt'),
+        ADMIN_API_KEY: runtimeSecretArn('adminApiKey'),
+        PROXY_API_KEY: runtimeSecretArn('proxyApiKey'),
+        DEFAULT_RUNNER_API_KEY: runtimeSecretArn('defaultRunnerApiKey'),
+        CLICKHOUSE_PASSWORD: runtimeSecretArn('clickHouseReaderPassword'),
+        OTEL_EXPORTER_OTLP_HEADERS: runtimeSecretArn('otelExporterOtlpHeaders'),
+        OTEL_COLLECTOR_API_KEY: runtimeSecretArn('otelCollectorApiKey'),
       },
     })
 
@@ -774,9 +866,9 @@ export default $config({
         rules: [{ listen: '443/tls', forward: `${PORTS.PROXY}/tcp` }],
       },
       environment: {
+        BOXLITE_RUNTIME_SECRET_GENERATION: runtimeSecretGenerationMarkerFor('Proxy'),
         PROXY_PORT: String(PORTS.PROXY),
         PROXY_PROTOCOL: proxyProtocol,
-        PROXY_API_KEY: envOr('PROXY_API_KEY', proxyApiKey.result),
         // api-client-go appends paths like "/config" directly → include /api suffix
         BOXLITE_API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
         OIDC_CLIENT_ID: oidcClientId.value,
@@ -787,6 +879,10 @@ export default $config({
         }),
         OTEL_TRACING_ENABLED: envOr('OTEL_TRACING_ENABLED', 'true'),
         OTEL_EXPORTER_OTLP_ENDPOINT: envOr('OTEL_EXPORTER_OTLP_ENDPOINT', otelCollectorOtlpHttpUrl),
+      },
+      ssm: {
+        PROXY_API_KEY: runtimeSecretArn('proxyApiKey'),
+        OTEL_EXPORTER_OTLP_HEADERS: runtimeSecretArn('otelExporterOtlpHeaders'),
       },
       transform: {
         loadBalancer: (_args, opts) => {
@@ -842,12 +938,15 @@ export default $config({
         health: { [`${PORTS.PGADMIN}/http`]: httpHealth('/', { successCodes: '200-399' }) },
       },
       environment: {
+        BOXLITE_RUNTIME_SECRET_GENERATION: runtimeSecretGenerationMarkerFor('PgAdmin'),
         PGADMIN_DEFAULT_EMAIL: envOr('PGADMIN_DEFAULT_EMAIL', 'admin@boxlite.dev'),
-        PGADMIN_DEFAULT_PASSWORD: envOr('PGADMIN_DEFAULT_PASSWORD', pgAdminPassword.result),
         // Server mode enables the login screen (desktop mode skips auth
         // entirely); master password gates saved server credentials.
         PGADMIN_CONFIG_SERVER_MODE: pgAdminServerMode,
         PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: pgAdminMasterPassword,
+      },
+      ssm: {
+        PGADMIN_DEFAULT_PASSWORD: runtimeSecretArn('pgAdminDefaultPassword'),
       },
     })
 
@@ -905,54 +1004,80 @@ export default $config({
       ],
     })
 
-    const runnerRole = new aws.iam.Role('RunnerRole', {
-      assumeRolePolicy: JSON.stringify({
-        Version: '2012-10-17',
-        Statement: [{ Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' }],
-      }),
+    const runnerAssumeRolePolicy = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [{ Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' }],
     })
-    new aws.iam.RolePolicyAttachment('RunnerSsmPolicy', {
+    const runnerVolumeS3PolicyDocument = JSON.stringify({
+      Version: '2012-10-17',
+      // Exactly Mountpoint for Amazon S3's documented permission set —
+      // mount-s3 is the runner's only S3 consumer (volumes.go). Bucket
+      // lifecycle (create/tag/delete) lives on the Api task role instead.
+      Statement: [
+        {
+          Effect: 'Allow',
+          Action: ['s3:ListBucket'],
+          Resource: ['arn:aws:s3:::boxlite-volume-*'],
+        },
+        {
+          Effect: 'Allow',
+          Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload'],
+          Resource: ['arn:aws:s3:::boxlite-volume-*/*'],
+        },
+      ],
+    })
+    const runnerArtifactS3PolicyDocument = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Effect: 'Allow',
+          Action: ['s3:GetObject'],
+          Resource: `arn:aws:s3:::${artifactsBucketName}/runner/*`,
+        },
+      ],
+    })
+
+    // Keep the historical RunnerRole/RunnerProfile on the protected default
+    // Runner. Its persistent host migration can then be rolled back while the
+    // same profile still has access to the stable default key. Extra runners
+    // move to the stage-bound role below so they can never read that key.
+    const runnerRole = new aws.iam.Role('RunnerRole', { assumeRolePolicy: runnerAssumeRolePolicy })
+    const runnerSsmPolicy = new aws.iam.RolePolicyAttachment('RunnerSsmPolicy', {
       role: runnerRole.name,
       policyArn: 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore',
     })
-    new aws.iam.RolePolicy('RunnerVolumeS3Policy', {
+    const runnerVolumeS3Policy = new aws.iam.RolePolicy('RunnerVolumeS3Policy', {
       role: runnerRole.name,
-      policy: JSON.stringify({
-        Version: '2012-10-17',
-        // Exactly Mountpoint for Amazon S3's documented permission set —
-        // mount-s3 is the runner's only S3 consumer (volumes.go). Bucket
-        // lifecycle (create/tag/delete) lives on the Api task role instead.
-        Statement: [
-          {
-            Effect: 'Allow',
-            Action: ['s3:ListBucket'],
-            Resource: ['arn:aws:s3:::boxlite-volume-*'],
-          },
-          {
-            Effect: 'Allow',
-            Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload'],
-            Resource: ['arn:aws:s3:::boxlite-volume-*/*'],
-          },
-        ],
-      }),
+      policy: runnerVolumeS3PolicyDocument,
     })
     const runnerArtifactPolicy = new aws.iam.RolePolicy('RunnerArtifactS3Policy', {
       role: runnerRole.name,
       // Read-only, and only under the prefix build-mode Runner binaries are staged in. This is
       // how a host installs a binary that was never published; nothing else in the bucket is
       // reachable, and the Runner can never write here.
-      policy: JSON.stringify({
-        Version: '2012-10-17',
-        Statement: [
-          {
-            Effect: 'Allow',
-            Action: ['s3:GetObject'],
-            Resource: `arn:aws:s3:::${artifactsBucketName}/runner/*`,
-          },
-        ],
-      }),
+      policy: runnerArtifactS3PolicyDocument,
     })
     const runnerInstanceProfile = new aws.iam.InstanceProfile('RunnerProfile', { role: runnerRole.name })
+
+    const extraRunnerRole = new aws.iam.Role('ExtraRunnerRole', {
+      assumeRolePolicy: runnerAssumeRolePolicy,
+    })
+    const extraRunnerSsmPolicy = new aws.iam.RolePolicyAttachment('ExtraRunnerSsmPolicy', {
+      role: extraRunnerRole.name,
+      policyArn: 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore',
+    })
+    const extraRunnerVolumeS3Policy = new aws.iam.RolePolicy('ExtraRunnerVolumeS3Policy', {
+      role: extraRunnerRole.name,
+      policy: runnerVolumeS3PolicyDocument,
+    })
+    const extraRunnerArtifactPolicy = new aws.iam.RolePolicy('ExtraRunnerArtifactS3Policy', {
+      role: extraRunnerRole.name,
+      policy: runnerArtifactS3PolicyDocument,
+    })
+    const extraRunnerInstanceProfile = new aws.iam.InstanceProfile('ExtraRunnerProfile', {
+      name: extraRunnerInstanceProfileName($app.stage),
+      role: extraRunnerRole.name,
+    })
 
     // Dedicated runner security group (least-privilege, explicit in IaC).
     // Without it the runner falls back to the VPC's shared default SG, which
@@ -987,54 +1112,88 @@ export default $config({
       ],
     })
 
-    // ── Runner ghcr pull credential (private image access) ────────────────────
-    // Runners pull box images straight from ghcr.io (the self-hosted registry
-    // was removed). The curated defaults (BOXLITE_SYSTEM_*_IMAGE, above) are
-    // public, so this credential is needed only for a private ref — whether set
-    // there or appended through BOXLITE_SYSTEM_IMAGES. When
-    // set, the pull TOKEN is stored in Secrets Manager and fetched by each
-    // runner at boot via its instance-role — NOT baked into user-data/IMDS — so
-    // scaled-out runners pick it up automatically and a rotated token only needs
-    // a secret update + a runner restart. The username (a non-secret bot
-    // account) is baked directly. Env-gated: set GHCR_TOKEN (+ GHCR_USERNAME)
-    // in apps/infra/.env to enable; unset = no ghcr auth wired.
-    const ghcrUsername = process.env.GHCR_USERNAME?.trim() || ''
+    // ── Runner ghcr pull credential (legacy rollback + stable runtime ARN) ───
+    // Keep the legacy GHCR container/version in v1 as rollback protection. New
+    // runner user data reads the stable stage-named runtime secret below, while
+    // the extra-runner role retains legacy read access until every
+    // protected instance has converged away from its ignored legacy user data.
     const ghcrToken = process.env.GHCR_TOKEN?.trim() || ''
-    const ghcrSecret =
-      ghcrUsername && ghcrToken
-        ? // 7-day recovery window: an accidental delete during rotation is undoable
-          // (vs 0 = immediate, irreversible — which would break all runner image pulls).
-          new aws.secretsmanager.Secret('GhcrPullToken', { recoveryWindowInDays: 7 })
-        : undefined
-    if (ghcrSecret) {
-      new aws.secretsmanager.SecretVersion('GhcrPullTokenValue', {
-        secretId: ghcrSecret.id,
-        secretString: $util.secret(ghcrToken),
-      })
-      new aws.iam.RolePolicy('RunnerGhcrSecretPolicy', {
-        role: runnerRole.name,
-        policy: ghcrSecret.arn.apply((arn) =>
+    const legacyGhcrSecret = new aws.secretsmanager.Secret(
+      'GhcrPullToken',
+      { recoveryWindowInDays: 7 },
+      { retainOnDelete: true },
+    )
+    new aws.secretsmanager.SecretVersion(
+      'GhcrPullTokenValue',
+      {
+        secretId: legacyGhcrSecret.id,
+        secretString: $util.secret(ghcrToken || 'unused'),
+      },
+      { ignoreChanges: ['secretString'], retainOnDelete: true },
+    )
+    const extraRunnerRuntimeSecretPolicy = new aws.iam.RolePolicy('ExtraRunnerRuntimeSecretPolicy', {
+      role: extraRunnerRole.name,
+      policy: $resolve([legacyGhcrSecret.arn, runtimeSecretArn('ghcrPullToken')]).apply(
+        ([legacyGhcrTokenArn, ghcrTokenArn]) =>
           JSON.stringify({
             Version: '2012-10-17',
-            Statement: [{ Effect: 'Allow', Action: ['secretsmanager:GetSecretValue'], Resource: arn }],
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: ['secretsmanager:GetSecretValue'],
+                Resource: [legacyGhcrTokenArn, ghcrTokenArn],
+              },
+            ],
           }),
-        ),
-      })
-    }
+      ),
+    })
+    const defaultRunnerRuntimeSecretPolicy = new aws.iam.RolePolicy('DefaultRunnerRuntimeSecretPolicy', {
+      role: runnerRole.name,
+      policy: $resolve([
+        legacyGhcrSecret.arn,
+        runtimeSecretArn('defaultRunnerApiKey'),
+        runtimeSecretArn('ghcrPullToken'),
+      ]).apply(([legacyGhcrTokenArn, runnerTokenArn, ghcrTokenArn]) =>
+        JSON.stringify({
+          Version: '2012-10-17',
+          Statement: [
+            {
+              Effect: 'Allow',
+              Action: ['secretsmanager:GetSecretValue'],
+              Resource: [legacyGhcrTokenArn, ghcrTokenArn],
+            },
+            {
+              // Extra runners briefly share this historical role while their
+              // protected profiles move forward or roll back. EC2 supplies this
+              // global request context from the role credentials, so only the
+              // protected default instance can use the default runner key.
+              Effect: 'Allow',
+              Action: ['secretsmanager:GetSecretValue'],
+              Resource: runnerTokenArn,
+              Condition: {
+                ArnEquals: {
+                  'ec2:SourceInstanceARN': defaultRunnerSourceArn,
+                },
+              },
+            },
+          ],
+        }),
+      ),
+    })
 
     const runnerUserData = $resolve([
       api.url,
-      defaultRunnerApiKey.result,
       otelCollectorOtlpHttpUrl,
-      ghcrSecret ? ghcrSecret.arn : '',
-    ]).apply(([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
+      runtimeSecretArn('defaultRunnerApiKey'),
+      runtimeSecretArn('ghcrPullToken'),
+    ]).apply(([apiUrl, otelEndpoint, tokenSecretArn, ghcrSecretArn]) =>
       buildRunnerUserData({
         apiUrl,
-        token,
+        tokenSecretArn,
         otelEndpoint,
         awsRegion: REGION,
         artifact: runnerArtifact,
-        ghcrSecretArn: ghcrSecretArn || undefined,
+        ghcrSecretArn: ghcrUsername ? ghcrSecretArn : undefined,
         ghcrUsername,
       }),
     )
@@ -1054,6 +1213,10 @@ export default $config({
       nameTag: string,
       controlPlaneRunnerName: string,
       userData: $util.Input<string>,
+      access: {
+        instanceProfile: $util.Input<string>
+        policies: $util.Resource[]
+      },
     ) =>
       new aws.ec2.Instance(
         resourceName,
@@ -1067,7 +1230,7 @@ export default $config({
           subnetId: vpc.publicSubnets[0],
           associatePublicIpAddress: true,
           vpcSecurityGroupIds: [runnerSecurityGroup.id],
-          iamInstanceProfile: runnerInstanceProfile.name,
+          iamInstanceProfile: access.instanceProfile,
           cpuOptions: { nestedVirtualization: 'enabled' },
           // Enforce IMDSv2 + a 1-hop limit so a container escape or SSRF on this
           // untrusted-code host can't read the instance-role creds (S3
@@ -1078,17 +1241,19 @@ export default $config({
           tags: {
             Name: nameTag,
             'boxlite:control-plane-runner-name': controlPlaneRunnerName,
+            [RUNNER_STAGE_TAG]: $app.stage,
+            [RUNNER_ROLE_TAG]: RUNNER_ROLE_VALUE,
           },
         },
         {
           ignoreChanges: ['ami', 'userDataBase64'],
           protect: true,
-          // First boot reads the staged artifact with this role. The grant is a sibling of the
-          // instance under runnerRole, not an ancestor, so without this edge Pulumi may create
+          // First boot reads the staged artifact with this role. The grants are siblings of the
+          // instance under its role, not ancestors, so without this edge Pulumi may create
           // the host first and its user-data dies on AccessDenied — permanently, because
           // protect + ignoreChanges('userDataBase64') mean it never runs again. Same edge the
           // UpgradeRunnerBinary commands declare for the SSM path.
-          dependsOn: [runnerArtifactPolicy],
+          dependsOn: access.policies,
         },
       )
 
@@ -1100,7 +1265,83 @@ export default $config({
       defaultRunnerConfig.nameTag,
       defaultRunnerConfig.controlPlaneRunnerName,
       runnerUserData,
+      {
+        instanceProfile: runnerInstanceProfile.name,
+        policies: [
+          runnerSsmPolicy,
+          runnerVolumeS3Policy,
+          runnerArtifactPolicy,
+          defaultRunnerRuntimeSecretPolicy,
+        ],
+      },
     )
+
+    // The migration below changes persistent host state. Keep an always-declared
+    // rollback guard so a Runner-excluded deploy cannot accidentally invoke it.
+    // The default Runner deliberately remains on the historical profile; during
+    // a software rollback the delete hook can therefore fetch the stable key
+    // before the dependent policy is removed in Pulumi's post-step delete phase.
+    // It restores the value-bearing unit contract expected by the old stack.
+    const defaultRunnerLegacyRollbackGuard = new command.local.Command(
+      'DefaultRunnerLegacyRollbackGuard',
+      {
+        dir: $cli.paths.root,
+        create: 'true',
+        update: 'true',
+        delete: 'node scripts/runtime-secrets-cli.mjs restore-default-runner-legacy',
+        addPreviousOutputInEnv: false,
+        logging: 'none',
+        environment: {
+          INSTANCE_ID: defaultRunner.id,
+          AWS_REGION: REGION,
+          SST_STAGE: $app.stage,
+          BOXLITE_RUNNER_TOKEN_SECRET_ARN: runtimeSecretArn('defaultRunnerApiKey'),
+          LEGACY_GHCR_SECRET_ARN: legacyGhcrSecret.arn,
+          GHCR_USERNAME: ghcrUsername,
+        },
+      },
+      { dependsOn: [defaultRunner, defaultRunnerRuntimeSecretPolicy] },
+    )
+
+    // Existing protected runners never replay user-data because the instance
+    // deliberately ignores userDataBase64. Converge the live systemd unit over
+    // SSM instead: the remote script first proves both ARN reads, replaces the
+    // plaintext token line with a start wrapper + ARN-only drop-in, then reloads
+    // and restarts atomically with rollback on failure. Bootstrap records each
+    // nonsecret AWSCURRENT generation in the immutable release, so rotating GHCR
+    // deliberately re-runs this command and the restarted service reads the new value.
+    let defaultRunnerRuntimeSecretMigration: $util.Resource | undefined
+    if (deploysRunner) {
+      const migrateDefaultRunnerRuntimeSecrets =
+        'node scripts/runtime-secrets-cli.mjs reconcile-default-runner'
+      defaultRunnerRuntimeSecretMigration = new command.local.Command(
+        'MigrateDefaultRunnerRuntimeSecrets',
+        {
+          dir: $cli.paths.root,
+          create: migrateDefaultRunnerRuntimeSecrets,
+          update: migrateDefaultRunnerRuntimeSecrets,
+          environment: {
+            INSTANCE_ID: defaultRunner.id,
+            AWS_REGION: REGION,
+            SST_STAGE: $app.stage,
+            BOXLITE_RUNNER_TOKEN_SECRET_ARN: runtimeSecretArn('defaultRunnerApiKey'),
+            GHCR_SECRET_ARN: runtimeSecretArn('ghcrPullToken'),
+            GHCR_USERNAME: ghcrUsername,
+          },
+          triggers: [
+            'runtime-secret-drop-in-v1',
+            defaultRunner.id,
+            runtimeSecretArn('defaultRunnerApiKey'),
+            runtimeSecretArn('ghcrPullToken'),
+            ghcrUsername,
+            ghcrUsername
+              ? runtimeSecretGeneration(runtimeSecretGenerations, 'ghcrPullToken')
+              : 'disabled',
+          ],
+        },
+        { dependsOn: [defaultRunnerLegacyRollbackGuard, defaultRunner, defaultRunnerRuntimeSecretPolicy] },
+      )
+    }
 
     // Multi-runner provisioning. Extra runners share the same OTel endpoint as
     // the default runner.
@@ -1123,7 +1364,7 @@ export default $config({
         runner.resourceName,
         runner.nameTag,
         runner.controlPlaneRunnerName,
-        $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
+        $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, runtimeSecretArn('ghcrPullToken')]).apply(
           ([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
             buildRunnerUserData({
               apiUrl,
@@ -1131,13 +1372,117 @@ export default $config({
               otelEndpoint,
               awsRegion: REGION,
               artifact: runnerArtifact,
-              ghcrSecretArn: ghcrSecretArn || undefined,
+              ghcrSecretArn: ghcrUsername ? ghcrSecretArn : undefined,
               ghcrUsername,
             }),
         ),
+        {
+          instanceProfile: extraRunnerInstanceProfile.name,
+          policies: [
+            extraRunnerSsmPolicy,
+            extraRunnerVolumeS3Policy,
+            extraRunnerArtifactPolicy,
+            extraRunnerRuntimeSecretPolicy,
+          ],
+        },
       )
       return { name: runner.controlPlaneRunnerName, apiKey, instance }
     })
+
+    // Protected extra runners retain their historical userDataBase64, including
+    // the legacy GhcrPullToken ARN. Converge that one non-secret reference over
+    // SSM before any binary restart. The remote transaction preserves the
+    // per-runner token line byte-for-byte. Enabled GHCR installs the stable ARN;
+    // disabled GHCR removes both known ARN spellings and the managed drop-in
+    // without reading a secret value.
+    const extraRunnerGhcrMigrations: $util.Resource[] = []
+    const extraRunnerGhcrRollbackGuards = new Map<string, $util.Resource>()
+    let previousRunnerRollbackGuard: $util.Resource = defaultRunnerLegacyRollbackGuard
+    for (const { name, instance } of extraRunners) {
+      const rollbackGuard = new command.local.Command(
+        `ExtraRunnerGhcrLegacyRollbackGuard-${name}`,
+        {
+          dir: $cli.paths.root,
+          create: 'true',
+          update: 'true',
+          delete: 'node scripts/runtime-secrets-cli.mjs restore-extra-runner-ghcr-legacy',
+          addPreviousOutputInEnv: false,
+          logging: 'none',
+          environment: {
+            INSTANCE_ID: instance.id,
+            AWS_REGION: REGION,
+            SST_STAGE: $app.stage,
+            GHCR_ENABLED: ghcrUsername ? 'true' : 'false',
+            GHCR_USERNAME: ghcrUsername,
+            LEGACY_GHCR_SECRET_ARN: legacyGhcrSecret.arn,
+            GHCR_SECRET_ARN: runtimeSecretArn('ghcrPullToken'),
+          },
+        },
+        {
+          // On rollback Pulumi first puts the host back on RunnerProfile, then
+          // performs deletions. That historical role still has both GHCR ARNs
+          // through DefaultRunnerRuntimeSecretPolicy. These dependencies keep
+          // both the current and rollback role grants alive until this host has
+          // restored the retained legacy ARN; the guard chain restarts one host
+          // at a time in reverse order.
+          dependsOn: [
+            instance,
+            extraRunnerRuntimeSecretPolicy,
+            defaultRunnerRuntimeSecretPolicy,
+            previousRunnerRollbackGuard,
+          ],
+        },
+      )
+      extraRunnerGhcrRollbackGuards.set(name, rollbackGuard)
+      previousRunnerRollbackGuard = rollbackGuard
+    }
+
+    let previousRunnerSecretMigration: $util.Resource | undefined = defaultRunnerRuntimeSecretMigration
+    if (deploysRunner) {
+      for (const { name, instance } of extraRunners) {
+        const rollbackGuard = extraRunnerGhcrRollbackGuards.get(name)!
+        const reconcileExtraRunnerGhcr = 'node scripts/runtime-secrets-cli.mjs reconcile-extra-runner-ghcr'
+        const migration = new command.local.Command(
+          `MigrateExtraRunnerGhcr-${name}`,
+          {
+            dir: $cli.paths.root,
+            create: reconcileExtraRunnerGhcr,
+            update: reconcileExtraRunnerGhcr,
+            environment: {
+              INSTANCE_ID: instance.id,
+              AWS_REGION: REGION,
+              SST_STAGE: $app.stage,
+              GHCR_ENABLED: ghcrUsername ? 'true' : 'false',
+              GHCR_USERNAME: ghcrUsername,
+              LEGACY_GHCR_SECRET_ARN: legacyGhcrSecret.arn,
+              GHCR_SECRET_ARN: ghcrUsername
+                ? runtimeSecretArn('ghcrPullToken')
+                : runtimeSecrets.ghcrPullToken.arn,
+            },
+            triggers: [
+              'extra-runner-ghcr-drop-in-v1',
+              instance.id,
+              legacyGhcrSecret.arn,
+              ghcrUsername,
+              ghcrUsername ? runtimeSecretArn('ghcrPullToken') : runtimeSecrets.ghcrPullToken.arn,
+              ghcrUsername
+                ? runtimeSecretGeneration(runtimeSecretGenerations, 'ghcrPullToken')
+                : 'disabled',
+            ],
+          },
+          {
+            dependsOn: [
+              rollbackGuard,
+              instance,
+              extraRunnerRuntimeSecretPolicy,
+              ...(previousRunnerSecretMigration ? [previousRunnerSecretMigration] : []),
+            ],
+          },
+        )
+        extraRunnerGhcrMigrations.push(migration)
+        previousRunnerSecretMigration = migration
+      }
+    }
 
     // Register the extra runners with the control plane once the API is healthy.
     // Idempotent (treats HTTP 409 as success), so redeploys are safe; only re-runs
@@ -1146,6 +1491,11 @@ export default $config({
       const runnersPayload = $resolve(extraRunners.map((r) => r.apiKey.result)).apply((keys) =>
         JSON.stringify(extraRunners.map((r, i) => ({ name: r.name, apiKey: keys[i] }))),
       )
+      const registerRunnersCommand =
+        'ADMIN_API_KEY="$("$AWS_CLI_PATH" secretsmanager get-secret-value --region "$AWS_REGION" ' +
+        '--secret-id "$ADMIN_API_KEY_SECRET_ARN" --query SecretString --output text)" && ' +
+        '[ -n "$ADMIN_API_KEY" ] && [ "$ADMIN_API_KEY" != "None" ] && ' +
+        '[ "$ADMIN_API_KEY" != "unused" ] && export ADMIN_API_KEY && node scripts/register-runners.mjs'
       new command.local.Command(
         'RegisterExtraRunners',
         {
@@ -1155,15 +1505,21 @@ export default $config({
           // "Cannot find module". $cli.paths.root is the same anchor SST uses
           // for user-relative paths (platform/src/components/component.ts).
           dir: $cli.paths.root,
-          create: 'node scripts/register-runners.mjs',
-          update: 'node scripts/register-runners.mjs',
+          create: registerRunnersCommand,
+          update: registerRunnersCommand,
           environment: {
             API_URL: api.url,
-            ADMIN_API_KEY: adminApiKey.result,
+            ADMIN_API_KEY_SECRET_ARN: runtimeSecretArn('adminApiKey'),
+            AWS_CLI_PATH: process.env.AWS_CLI_PATH || 'aws',
+            AWS_REGION: REGION,
             REGION_ID: envOr('DEFAULT_REGION_ID', 'us'),
             RUNNERS: runnersPayload,
           },
-          triggers: [api.url, runnersPayload],
+          triggers: [
+            api.url,
+            runnersPayload,
+            runtimeSecretGeneration(runtimeSecretGenerations, 'adminApiKey'),
+          ],
         },
         { dependsOn: extraRunners.map((r) => r.instance) },
       )
@@ -1213,12 +1569,19 @@ export default $config({
     // .Command has no `delete:` script, so the delete touches nothing on the host, and the next
     // full deploy recreates it — `create:` re-runs the same convergence-guarded script, a no-op
     // when the host already serves the target identity.
-    let previousUpgrade: $util.Resource | undefined
-    for (const { label, instance } of !deploysRunner
+    // The profile migration rewrites and restarts the default unit. It must
+    // finish before the binary roll so two sibling commands never mutate or
+    // restart that same protected host concurrently.
+    let previousUpgrade: $util.Resource | undefined = defaultRunnerRuntimeSecretMigration
+    for (const { label, instance, artifactPolicy } of !deploysRunner
       ? []
       : [
-          { label: 'default', instance: defaultRunner },
-          ...extraRunners.map((r) => ({ label: r.name, instance: r.instance })),
+          { label: 'default', instance: defaultRunner, artifactPolicy: runnerArtifactPolicy },
+          ...extraRunners.map((r) => ({
+            label: r.name,
+            instance: r.instance,
+            artifactPolicy: extraRunnerArtifactPolicy,
+          })),
         ]) {
       previousUpgrade = new command.local.Command(
         `UpgradeRunnerBinary-${label}`,
@@ -1228,6 +1591,7 @@ export default $config({
           update: 'node scripts/runner-update-binary.mjs',
           environment: {
             AWS_REGION: REGION,
+            SST_STAGE: $app.stage,
             INSTANCE_IDS: instance.id,
             RUNNER_VERSION: runnerTargetVersion,
             RUNNER_PORT: String(PORTS.RUNNER),
@@ -1244,7 +1608,12 @@ export default $config({
           // reads S3 with the instance role, so an upgrade started before the grant exists fails
           // AccessDenied and stops the roll. Pulumi has no implicit edge — the bucket reaches the
           // command as a plain string — so it is declared here.
-          dependsOn: [instance, runnerArtifactPolicy, ...(previousUpgrade ? [previousUpgrade] : [])],
+          dependsOn: [
+            instance,
+            artifactPolicy,
+            ...extraRunnerGhcrMigrations,
+            ...(previousUpgrade ? [previousUpgrade] : []),
+          ],
         },
       )
     }
@@ -1256,13 +1625,17 @@ export default $config({
 // and runs it directly with BoxLite VM isolation.
 async function buildRunnerUserData(input: {
   apiUrl: string
-  token: string
+  token?: string
+  tokenSecretArn?: string
   otelEndpoint: string
   awsRegion: string
   artifact: { tarballName: string; tarballUrl: string; checksumUrl: string; fetch: 'https' | 's3' }
   ghcrSecretArn?: string
   ghcrUsername?: string
 }): Promise<string> {
+  if (Boolean(input.token) === Boolean(input.tokenSecretArn)) {
+    throw new Error('runner user data requires exactly one token or tokenSecretArn')
+  }
   const { artifactFetchCommand } = await import('./scripts/runner-artifact.mjs')
   const tarballPath = `/tmp/${input.artifact.tarballName}`
   const fetchTarball = artifactFetchCommand(input.artifact, input.artifact.tarballUrl, tarballPath, input.awsRegion)
@@ -1273,35 +1646,43 @@ async function buildRunnerUserData(input: {
     input.awsRegion,
   )
 
-  // ghcr pull credential delivery (option B, rotation-capable): write a start-wrapper
-  // that re-fetches the TOKEN from Secrets Manager on EVERY service start — so
-  // `systemctl restart` picks up a rotated token — and is fail-CLOSED (refuses to run
-  // with anonymous pulls) with a bounded retry for instance-profile IAM propagation at
-  // first boot. The wrapper is exec'd as ExecStart; username + secret ARN + region come
-  // from the unit's Environment=. Only emitted when a ghcr secret is wired; the TOKEN is
-  // never baked into user-data. The AWS CLI it needs is installed unconditionally above.
-  const ghcrBlock = input.ghcrSecretArn
+  const runnerTokenFetch = input.tokenSecretArn
     ? `
-# ── ghcr pull credential setup: fail-closed start-wrapper ────────────────────
+for i in 1 2 3 4 5; do
+  BOXLITE_RUNNER_TOKEN=\$(aws secretsmanager get-secret-value --region "\$AWS_REGION" --secret-id "\$BOXLITE_RUNNER_TOKEN_SECRET_ARN" --query SecretString --output text 2>/dev/null || true)
+  { [ -n "\$BOXLITE_RUNNER_TOKEN" ] && [ "\$BOXLITE_RUNNER_TOKEN" != "None" ] && [ "\$BOXLITE_RUNNER_TOKEN" != "unused" ]; } && break
+  echo "runner token fetch attempt \$i failed; retrying in \$((i*5))s" >&2
+  sleep \$((i*5))
+done
+if [ -z "\${BOXLITE_RUNNER_TOKEN:-}" ] || [ "\$BOXLITE_RUNNER_TOKEN" = "None" ] || [ "\$BOXLITE_RUNNER_TOKEN" = "unused" ]; then
+  echo "FATAL: could not fetch the runner token; refusing to start" >&2
+  exit 1
+fi
+export BOXLITE_RUNNER_TOKEN
+`
+    : ''
+  const ghcrTokenFetch = input.ghcrSecretArn
+    ? `
+for i in 1 2 3 4 5; do
+  GHCR_TOKEN=\$(aws secretsmanager get-secret-value --region "\$AWS_REGION" --secret-id "\$GHCR_SECRET_ARN" --query SecretString --output text 2>/dev/null || true)
+  { [ -n "\$GHCR_TOKEN" ] && [ "\$GHCR_TOKEN" != "None" ] && [ "\$GHCR_TOKEN" != "unused" ]; } && break
+  echo "ghcr token fetch attempt \$i failed; retrying in \$((i*5))s" >&2
+  sleep \$((i*5))
+done
+if [ -z "\${GHCR_TOKEN:-}" ] || [ "\$GHCR_TOKEN" = "None" ] || [ "\$GHCR_TOKEN" = "unused" ]; then
+  echo "FATAL: could not fetch ghcr pull token; refusing to start with anonymous pulls" >&2
+  exit 1
+fi
+export GHCR_TOKEN
+`
+    : ''
+  const runtimeSecretBlock = input.tokenSecretArn || input.ghcrSecretArn
+    ? `
+# ── rotation-capable runtime credential setup ────────────────────────────────
 cat > /usr/local/bin/boxlite-runner-start.sh << 'STARTWRAP'
 #!/bin/bash
-# Re-fetch the ghcr pull token on every start (rotation), fail-closed (no anonymous
-# pulls), bounded retry for instance-profile IAM propagation. GHCR_USERNAME /
-# GHCR_SECRET_ARN / AWS_REGION come from the systemd Environment.
-set -o pipefail
-if [ -n "\${GHCR_SECRET_ARN:-}" ]; then
-  for i in 1 2 3 4 5; do
-    GHCR_TOKEN=\$(aws secretsmanager get-secret-value --region "\$AWS_REGION" --secret-id "\$GHCR_SECRET_ARN" --query SecretString --output text 2>/dev/null)
-    { [ -n "\$GHCR_TOKEN" ] && [ "\$GHCR_TOKEN" != "None" ]; } && break
-    echo "ghcr token fetch attempt \$i failed; retrying in \$((i*5))s" >&2
-    sleep \$((i*5))
-  done
-  if [ -z "\${GHCR_TOKEN:-}" ] || [ "\$GHCR_TOKEN" = "None" ]; then
-    echo "FATAL: could not fetch ghcr pull token from \$GHCR_SECRET_ARN; refusing to start with anonymous pulls" >&2
-    exit 1
-  fi
-  export GHCR_TOKEN
-fi
+set -euo pipefail
+${runnerTokenFetch}${ghcrTokenFetch}
 exec /usr/local/bin/boxlite-runner
 STARTWRAP
 chmod +x /usr/local/bin/boxlite-runner-start.sh
@@ -1356,7 +1737,7 @@ chmod +x /usr/local/bin/boxlite-runner
 # Get host IP via IMDSv2
 IMDS_TOKEN=\$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
 HOST_IP=\$(curl -s -H "X-aws-ec2-metadata-token: \$IMDS_TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
-${ghcrBlock}
+${runtimeSecretBlock}
 # Create systemd service for the BoxLite runner
 cat > /etc/systemd/system/boxlite-runner.service << UNIT
 [Unit]
@@ -1365,7 +1746,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${input.ghcrSecretArn ? '/usr/local/bin/boxlite-runner-start.sh' : '/usr/local/bin/boxlite-runner'}
+ExecStart=${input.tokenSecretArn || input.ghcrSecretArn ? '/usr/local/bin/boxlite-runner-start.sh' : '/usr/local/bin/boxlite-runner'}
 Restart=always
 RestartSec=5
 # Give the runner time to gracefully stop all VMs on SIGTERM (it budgets 30s
@@ -1373,7 +1754,11 @@ RestartSec=5
 # HTTP handlers + the deferred Close).
 TimeoutStopSec=60
 Environment=BOXLITE_API_URL=${input.apiUrl.replace(/\/$/, '')}/api
-Environment=BOXLITE_RUNNER_TOKEN=${input.token}
+${
+    input.tokenSecretArn
+      ? `Environment=BOXLITE_RUNNER_TOKEN_SECRET_ARN=${input.tokenSecretArn}`
+      : `Environment=BOXLITE_RUNNER_TOKEN=${input.token}`
+  }
 Environment=API_VERSION=2
 Environment=API_PORT=${PORTS.RUNNER}
 Environment=RUNNER_DOMAIN=\$HOST_IP

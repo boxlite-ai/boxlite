@@ -24,22 +24,26 @@
  * Seed the parameters once per stage with the README's non-echoing prompt and
  * `--value file:///dev/stdin`; never put credential values in process argv.
  *
- * A credential already in the environment is used as-is (works offline / before
- * the params are seeded). Missing creds are a warning, not a hard stop: commands
- * that don't touch Cloudflare (e.g. `unlock`) still run, and sst surfaces its own
- * error for one that does.
+ * Stack-evaluating commands always replace ambient values with the exact
+ * stage-scoped SSM SecureStrings. Commands that do not evaluate the stack do
+ * not retrieve provider credentials.
  */
 
 import { execFileSync, spawn } from 'node:child_process'
-import { constants as osConstants } from 'node:os'
+import { constants as osConstants, devNull } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import {
-  loadDeploymentEnvironment,
   readWorkspaceVersion,
   resolveAwsRegion,
   resolvePublicDeploymentConfig,
 } from './deployment-environment.mjs'
+import { resolveAndInjectDeploymentConfig } from './deployment-config-loader.mjs'
+import {
+  DEPLOYMENT_OPERATION_LOCK_OWNER_ENV,
+  DeploymentConfigStore,
+} from './deployment-config-store.mjs'
+import { DEPLOYMENT_CONFIG_REGISTRY, shieldSstEnvironment } from './deployment-config.mjs'
 import {
   exportDeployScope,
   resolveDeployScope,
@@ -57,18 +61,53 @@ import { resolveAwsAccountId, runnerArtifactsBucketName, verifyRunnerArtifact } 
 import { readRunnerStateBaseline } from './runner-policy-baseline.mjs'
 import { resolveSstExecutable } from './sst-executable.mjs'
 import { SstProcessTerminator } from './sst-process-termination.mjs'
+import { classifySstCommand } from './sst-command-contract.mjs'
+import {
+  assertNoSstStageEnvironmentFile,
+  assertSstBaseEnvironmentIsClassified,
+} from './sst-native-environment.mjs'
+import { SstSecretStatusStore, resolveTrackedSstSecretMutation } from './sst-secret-status.mjs'
 import { resolveSstStage } from './sst-stage.mjs'
-import { removePulumiEventLogs, withPulumiEventLogCleanup } from './sst-event-log-security.mjs'
+import { assertRuntimeSecretGenerationsCurrent } from './runtime-secret-generation-guard.mjs'
+import {
+  prepareSstLogSecurity,
+  removePulumiEventLogs,
+  withPulumiEventLogCleanup,
+  withSstLogSecurity,
+} from './sst-event-log-security.mjs'
 
 const APP = 'boxlite'
+const INFRA_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const PULUMI_EVENT_LOG_ROOT = fileURLToPath(new URL('../.sst/pulumi', import.meta.url))
 const TERMINATION_SIGNALS = ['SIGINT', 'SIGTERM']
+const CLASSIFIED_SST_ENVIRONMENT_NAMES = new Set(Object.keys(DEPLOYMENT_CONFIG_REGISTRY))
 
 let terminationSignal
 let artifactPreflightAbortController
-let runnerPolicyPreflightAbortController
+let runnerStateBaselineAbortController
 let deploymentVerificationAbortController
 const sstProcessTerminator = new SstProcessTerminator()
+let deploymentOperationLockStore
+let deploymentOperationLock
+
+function releaseDeploymentOperationLock() {
+  if (!deploymentOperationLock) return
+  const ownedLock = deploymentOperationLock
+  deploymentOperationLockStore.releaseDeploymentOperationLock(ownedLock)
+  deploymentOperationLock = undefined
+}
+
+// Every normal exit path is synchronous at this boundary, including the
+// process.exit() calls used by early preflight failures. SIGKILL can still
+// leave a stale lock; the acquisition error gives the deliberate recovery
+// command and the README requires checking that no owner remains first.
+process.on('exit', () => {
+  try {
+    releaseDeploymentOperationLock()
+  } catch (error) {
+    console.error(`sst-with-cloudflare: could not clean up the deployment operation lock: ${error.message}`)
+  }
+})
 
 function signalExitCode(signal) {
   return 128 + (osConstants.signals[signal] ?? 0)
@@ -80,7 +119,7 @@ for (const signal of TERMINATION_SIGNALS) {
     if (!terminationSignal) {
       terminationSignal = signal
       artifactPreflightAbortController?.abort(new Error(`Artifact preflight interrupted by ${signal}`))
-      runnerPolicyPreflightAbortController?.abort(new Error(`Runner policy preflight interrupted by ${signal}`))
+      runnerStateBaselineAbortController?.abort(new Error(`Runner state baseline interrupted by ${signal}`))
       deploymentVerificationAbortController?.abort(new Error(`Deployment verification interrupted by ${signal}`))
     }
     if (isRepeatedTermination) {
@@ -96,15 +135,13 @@ for (const signal of TERMINATION_SIGNALS) {
 // are already installed, so later cleanup cannot be bypassed by SIGINT/SIGTERM.
 try {
   await removePulumiEventLogs(PULUMI_EVENT_LOG_ROOT)
+  await prepareSstLogSecurity(INFRA_ROOT)
 } catch (error) {
-  console.error(`sst-with-cloudflare: secure event-log cleanup failed: ${error.message}`)
+  console.error(`sst-with-cloudflare: secure log preparation failed: ${error.message}`)
   process.exit(1)
 }
 if (terminationSignal) process.exit(signalExitCode(terminationSignal))
 
-loadDeploymentEnvironment()
-
-const REGION = resolveAwsRegion()
 let sstExecutable
 try {
   sstExecutable = resolveSstExecutable()
@@ -113,7 +150,7 @@ try {
   process.exit(1)
 }
 
-// SSM param consulted only when the matching env var is unset.
+// Bootstrap-owned SSM parameters are authoritative for stack evaluation.
 const CREDS = [
   { env: 'CLOUDFLARE_API_TOKEN', param: 'cloudflare-api-token' },
   { env: 'CLOUDFLARE_DEFAULT_ACCOUNT_ID', param: 'cloudflare-account-id' },
@@ -124,8 +161,14 @@ if (sstArgs.length === 0) {
   console.error('sst-with-cloudflare: expected an sst subcommand (e.g. "deploy --stage dev")')
   process.exit(1)
 }
+const sstEnvironment = { ...process.env }
 let deployScope
+let commandContract
+let sstSecretMutation
 try {
+  commandContract = classifySstCommand(sstArgs)
+  sstSecretMutation = resolveTrackedSstSecretMutation(sstArgs)
+  if (sstSecretMutation) sstArgs = sstSecretMutation.sstArgs
   requireSstSubcommandFirst(sstArgs)
   deployScope = resolveDeployScope(sstArgs)
   // Before sst is spawned, and unconditionally: sst inherits this process's env, and an excluded
@@ -133,23 +176,22 @@ try {
   // omits the instance but not UpgradeRunnerBinary-*, a sibling command whose artifact trigger
   // moves with the deployed commit — left declared, it would install a Runner binary this run
   // deliberately never built.
-  exportDeployScope(deployScope)
-  sstArgs = withRequiredRunnerPolicy(sstArgs)
+  exportDeployScope(deployScope, sstEnvironment)
+  sstArgs = withRequiredRunnerPolicy(sstArgs, INFRA_ROOT)
 } catch (error) {
   console.error(`sst-with-cloudflare: ${error.message}`)
   process.exit(1)
 }
 
-function fetchFromSsm(name) {
+function fetchRequiredProviderCredential(name, { awsCliPath, region }) {
   try {
-    const awsCliPath = resolveAwsCliPath()
     const out = execFileSync(
       awsCliPath,
       [
         'ssm',
         'get-parameter',
         '--region',
-        REGION,
+        region,
         '--name',
         name,
         '--with-decryption',
@@ -160,46 +202,140 @@ function fetchFromSsm(name) {
       ],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000, killSignal: 'SIGTERM' },
     ).trim()
-    return out && out !== 'None' ? out : null
-  } catch (err) {
-    if (err.code === 'ENOENT') console.warn('sst-with-cloudflare: `aws` CLI not found; skipping SSM lookup')
-    return null // ParameterNotFound / auth error → warn below and let sst decide
+    if (!out || out === 'None') throw new Error('parameter returned no value')
+    return out
+  } catch {
+    // AWS stderr and malformed output are untrusted and may contain provider
+    // material. Keep the operator error names-only and discard the raw cause.
+    throw new Error(`could not load required provider credential ${name} from SSM`)
   }
 }
 
 let stage
 try {
-  stage = resolveSstStage(sstArgs)
+  stage = resolveSstStage(sstArgs, sstEnvironment)
+  if (sstSecretMutation && stage !== sstSecretMutation.stage) {
+    throw new Error('validated SST secret mutation stage changed before execution')
+  }
 } catch (error) {
   console.error(`sst-with-cloudflare: ${error.message}`)
   process.exit(1)
 }
 
-for (const { env, param } of CREDS) {
-  if (process.env[env]) continue // already provided — don't touch
-  const name = `/boxlite/${stage}/${param}`
-  const value = fetchFromSsm(name)
-  if (value) {
-    process.env[env] = value
-  } else {
-    console.warn(
-      `sst-with-cloudflare: ${env} not in env and ${name} not in SSM (${REGION}); ` +
-        `seed it with the README's stdin-based aws ssm put-parameter procedure`,
-    )
+shieldSstEnvironment(sstEnvironment)
+try {
+  assertSstBaseEnvironmentIsClassified({
+    args: sstArgs,
+    workingDirectory: INFRA_ROOT,
+    classifiedNames: CLASSIFIED_SST_ENVIRONMENT_NAMES,
+  })
+  assertNoSstStageEnvironmentFile({ args: sstArgs, stage, workingDirectory: INFRA_ROOT })
+} catch (error) {
+  console.error(`sst-with-cloudflare: ${error.message}`)
+  process.exit(1)
+}
+
+let region = resolveAwsRegion(sstEnvironment)
+let awsCliPath
+let deploymentConfigRelease
+if (commandContract.needsDeploymentConfig) {
+  try {
+    awsCliPath = resolveAwsCliPath(sstEnvironment)
+    deploymentConfigRelease = resolveAndInjectDeploymentConfig({
+      stage,
+      region,
+      awsCliPath,
+      environment: sstEnvironment,
+    })
+    region = deploymentConfigRelease.document.region
+    console.error(`sst-with-cloudflare: deployment config ${deploymentConfigRelease.releaseId}`)
+  } catch (error) {
+    console.error(`sst-with-cloudflare: could not load deployment config: ${error.message}`)
+    process.exit(1)
+  }
+}
+
+// Native SST accepts executable, backend, logging, and runtime overrides under
+// SST_*. Both the initial shield and deployment-config injection clear that
+// whole namespace; restore only the stage chosen by this wrapper and the
+// audited null diagnostic path after the last shield. Pinned SST passes
+// SST_LOG directly to os.Create, so this must be the actual platform null
+// device rather than a symbolic sentinel string. Pulumi's two fixed files are
+// separately pinned to /dev/null.
+sstEnvironment.SST_STAGE = stage
+sstEnvironment.SST_LOG = devNull
+
+if (commandContract.needsDeploymentConfig) {
+  try {
+    deploymentOperationLockStore = new DeploymentConfigStore({ awsCliPath, region })
+    deploymentOperationLock = deploymentOperationLockStore.acquireDeploymentOperationLock({ stage })
+    sstEnvironment[DEPLOYMENT_OPERATION_LOCK_OWNER_ENV] = deploymentOperationLock.ownerId
+    assertRuntimeSecretGenerationsCurrent({
+      stage,
+      region,
+      awsCliPath,
+      expectedGenerations: deploymentConfigRelease.document.values.BOXLITE_RUNTIME_SECRET_GENERATIONS,
+    })
+  } catch (error) {
+    try {
+      releaseDeploymentOperationLock()
+    } catch (cleanupError) {
+      console.error(`sst-with-cloudflare: could not clean up the deployment operation lock: ${cleanupError.message}`)
+    }
+    console.error(`sst-with-cloudflare: ${error.message}`)
+    process.exit(1)
+  }
+}
+
+let sstSecretStatusStore
+if (sstSecretMutation) {
+  try {
+    awsCliPath ??= resolveAwsCliPath(sstEnvironment)
+    sstSecretStatusStore = new SstSecretStatusStore({ awsCliPath, region })
+    // A failed/interrupted SST mutation must never leave a stale definitive
+    // state. Mark UNKNOWN before invoking SST, then finalize only on exit 0.
+    sstSecretStatusStore.write({ stage, name: sstSecretMutation.name, status: 'UNKNOWN' })
+  } catch (error) {
+    console.error(`sst-with-cloudflare: ${error.message}`)
+    process.exit(1)
+  }
+}
+
+if (commandContract.needsProviderCredentials) {
+  for (const { env, param } of CREDS) {
+    const name = `/boxlite/${stage}/${param}`
+    try {
+      sstEnvironment[env] = fetchRequiredProviderCredential(name, { awsCliPath, region })
+    } catch (error) {
+      console.error(`sst-with-cloudflare: ${error.message}`)
+      process.exit(1)
+    }
   }
 }
 if (terminationSignal) process.exit(signalExitCode(terminationSignal))
 
 async function runSstCommand() {
   if (terminationSignal) return signalExitCode(terminationSignal)
+  try {
+    assertSstBaseEnvironmentIsClassified({
+      args: sstArgs,
+      workingDirectory: INFRA_ROOT,
+      classifiedNames: CLASSIFIED_SST_ENVIRONMENT_NAMES,
+    })
+    assertNoSstStageEnvironmentFile({ args: sstArgs, stage, workingDirectory: INFRA_ROOT })
+  } catch (error) {
+    console.error(`sst-with-cloudflare: ${error.message}`)
+    return 1
+  }
 
   // Run the native binary directly so this process can await SST's graceful
   // cancellation instead of losing it behind the JavaScript launcher shim.
   return new Promise((resolve) => {
     let isSettled = false
     const sstChild = spawn(sstExecutable, sstArgs, {
-      stdio: 'inherit',
-      env: process.env,
+      stdio: sstSecretMutation ? ['inherit', 'ignore', 'ignore'] : 'inherit',
+      cwd: INFRA_ROOT,
+      env: sstEnvironment,
       detached: process.platform !== 'win32',
     })
     sstProcessTerminator.attach(sstChild)
@@ -225,12 +361,12 @@ async function runSstCommand() {
 }
 
 let publicDeploymentConfig
-if (sstArgs[0] === 'deploy') {
+if (commandContract.subcommand === 'deploy') {
   artifactPreflightAbortController = new AbortController()
   try {
-    resolveAwsCliPath()
+    resolveAwsCliPath(sstEnvironment)
     const workspaceVersion = readWorkspaceVersion()
-    publicDeploymentConfig = resolvePublicDeploymentConfig(process.env, workspaceVersion)
+    publicDeploymentConfig = resolvePublicDeploymentConfig(sstEnvironment, workspaceVersion)
     const signal = artifactPreflightAbortController.signal
 
     // Only what this deploy declares. A scope that excludes a component omits its resources from
@@ -238,8 +374,12 @@ if (sstArgs[0] === 'deploy') {
     // asked to deploy — an Api-only run deliberately never builds a Runner for that commit.
     // resolveDeployScope answers "in scope?" for both the guard and here, so the plan and the
     // preflight cannot disagree about what is being deployed.
-    const apiSource = deployScope.components.includes('api') ? resolveArtifactSource('api') : undefined
-    const runnerSource = deployScope.components.includes('runner') ? resolveArtifactSource('runner') : undefined
+    const apiSource = deployScope.components.includes('api')
+      ? resolveArtifactSource('api', sstEnvironment)
+      : undefined
+    const runnerSource = deployScope.components.includes('runner')
+      ? resolveArtifactSource('runner', sstEnvironment)
+      : undefined
     // Across every component in scope, before any of them is verified. The Proxy and the
     // OtelCollector are built from this checkout on every path, so any ref that is not the
     // checkout deploys two commits — and nothing downstream would notice: the staged Runner object
@@ -253,11 +393,11 @@ if (sstArgs[0] === 'deploy') {
         {
           app: APP,
           stage,
-          region: REGION,
+          region,
           version: apiSource.version,
           ref: apiSource.kind === 'release' ? undefined : apiSource.ref,
         },
-        { awsCliPath: resolveAwsCliPath() },
+        { awsCliPath: resolveAwsCliPath(sstEnvironment) },
       )
       console.log(
         `sst-with-cloudflare: Api ${apiSource.kind} image verified (${image.repository}:${image.tag}, ${image.digest})`,
@@ -270,15 +410,20 @@ if (sstArgs[0] === 'deploy') {
       const artifactEnvironment =
         runnerSource.kind === 'build'
           ? {
-              ...process.env,
+              ...sstEnvironment,
+              AWS_REGION: region,
               RUNNER_ARTIFACT_BUCKET: runnerArtifactsBucketName({
                 app: APP,
                 stage,
-                accountId: await resolveAwsAccountId({ signal }),
+                accountId: await resolveAwsAccountId({ awsCliPath, environment: sstEnvironment, signal }),
               }),
             }
-          : process.env
-      const runnerArtifact = await verifyRunnerArtifact(runnerSource, { environment: artifactEnvironment, signal })
+          : { ...sstEnvironment, AWS_REGION: region }
+      const runnerArtifact = await verifyRunnerArtifact(runnerSource, {
+        awsCliPath,
+        environment: artifactEnvironment,
+        signal,
+      })
       console.log(
         `sst-with-cloudflare: Runner ${runnerSource.kind} artifact verified (${runnerArtifact.tarballUrl}, linux-amd64)`,
       )
@@ -298,38 +443,62 @@ if (sstArgs[0] === 'deploy') {
 }
 
 if (terminationSignal) process.exit(signalExitCode(terminationSignal))
-if (sstArgs[0] === 'diff' || sstArgs[0] === 'deploy') {
-  runnerPolicyPreflightAbortController = new AbortController()
+if (commandContract.needsRunnerStateBaseline) {
+  runnerStateBaselineAbortController = new AbortController()
   try {
-    process.env.BOXLITE_RUNNER_STATE_BASELINE = await readRunnerStateBaseline({
-      stage,
-      sstPath: sstExecutable,
-      sstArgs,
-      environment: process.env,
-      signal: runnerPolicyPreflightAbortController.signal,
+    assertSstBaseEnvironmentIsClassified({
+      args: sstArgs,
+      workingDirectory: INFRA_ROOT,
+      classifiedNames: CLASSIFIED_SST_ENVIRONMENT_NAMES,
     })
+    assertNoSstStageEnvironmentFile({ args: sstArgs, stage, workingDirectory: INFRA_ROOT })
+    sstEnvironment.BOXLITE_RUNNER_STATE_BASELINE = await withSstLogSecurity(INFRA_ROOT, () =>
+      readRunnerStateBaseline({
+        stage,
+        sstPath: sstExecutable,
+        sstArgs,
+        environment: sstEnvironment,
+        signal: runnerStateBaselineAbortController.signal,
+        workingDirectory: INFRA_ROOT,
+      }),
+    )
   } catch (error) {
     if (terminationSignal) process.exit(signalExitCode(terminationSignal))
-    console.error(`sst-with-cloudflare: Runner policy preflight failed: ${error.message}`)
+    console.error(`sst-with-cloudflare: Runner state baseline failed: ${error.message}`)
     process.exit(1)
   } finally {
-    runnerPolicyPreflightAbortController = undefined
+    runnerStateBaselineAbortController = undefined
   }
 }
 
 let exitCode
 try {
-  exitCode = await withPulumiEventLogCleanup(PULUMI_EVENT_LOG_ROOT, runSstCommand)
+  exitCode = await withSstLogSecurity(INFRA_ROOT, () =>
+    withPulumiEventLogCleanup(PULUMI_EVENT_LOG_ROOT, runSstCommand),
+  )
 } catch (error) {
-  console.error(`sst-with-cloudflare: secure event-log cleanup failed: ${error.message}`)
+  console.error(`sst-with-cloudflare: secure log cleanup failed: ${error.message}`)
   exitCode = 1
 }
 
-if (exitCode === 0 && !terminationSignal && sstArgs[0] === 'deploy') {
+if (exitCode === 0 && !terminationSignal && sstSecretMutation) {
+  try {
+    sstSecretStatusStore.write({
+      stage,
+      name: sstSecretMutation.name,
+      status: sstSecretMutation.finalStatus,
+    })
+  } catch (error) {
+    console.error(`sst-with-cloudflare: ${error.message}`)
+    exitCode = 1
+  }
+}
+
+if (exitCode === 0 && !terminationSignal && commandContract.subcommand === 'deploy') {
   deploymentVerificationAbortController = new AbortController()
   try {
     const verification = await verifyProxyDeploymentWithRetry(
-      { app: APP, stage, region: REGION },
+      { app: APP, stage, region },
       {
         signal: deploymentVerificationAbortController.signal,
         onRetry({ error, nextAttempt, attempts, delayMs }) {
@@ -372,4 +541,10 @@ if (exitCode === 0 && !terminationSignal && sstArgs[0] === 'deploy') {
 }
 
 if (terminationSignal) exitCode = signalExitCode(terminationSignal)
+try {
+  releaseDeploymentOperationLock()
+} catch (error) {
+  console.error(`sst-with-cloudflare: could not clean up the deployment operation lock: ${error.message}`)
+  exitCode = 1
+}
 process.exit(exitCode)
