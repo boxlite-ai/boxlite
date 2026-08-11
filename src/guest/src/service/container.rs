@@ -369,10 +369,11 @@ impl ContainerService for GuestServer {
                 // container.
                 let init_exit = match container.take_init_exec_handle() {
                     Ok(Some(handle)) => {
-                        let identity = crate::service::exec::identity::ProcessSignalTarget::capture(
-                            handle.pid(),
-                        );
-                        if identity.is_none() {
+                        let process =
+                            crate::service::exec::process_instance::ProcessInstance::capture(
+                                handle.pid(),
+                            );
+                        if process.is_none() {
                             warn!(
                                 container_id = %container_id,
                                 pid = handle.pid().as_raw(),
@@ -480,7 +481,7 @@ impl ContainerService for GuestServer {
                         let state = crate::service::exec::state::ExecutionState::new_init_session(
                             handle,
                             exit.clone(),
-                            identity,
+                            process,
                         );
                         self.registry
                             .register(init_execution_id.clone(), state)

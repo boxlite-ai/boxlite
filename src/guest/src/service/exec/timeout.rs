@@ -11,7 +11,7 @@ use nix::errno::Errno;
 use nix::sys::signal::Signal;
 use tracing::{info, warn};
 
-use crate::service::exec::identity::ProcessSignalTarget;
+use crate::service::exec::process_instance::ProcessInstance;
 
 /// Grace period between SIGTERM and SIGKILL on exec timeout.
 ///
@@ -22,17 +22,17 @@ use crate::service::exec::identity::ProcessSignalTarget;
 const TIMEOUT_GRACE: Duration = Duration::from_secs(2);
 
 pub(super) struct TimeoutTarget {
-    identity: Option<ProcessSignalTarget>,
+    process: Option<ProcessInstance>,
 }
 
 impl TimeoutTarget {
-    pub(super) fn new(identity: Option<ProcessSignalTarget>) -> Self {
-        Self { identity }
+    pub(super) fn new(process: Option<ProcessInstance>) -> Self {
+        Self { process }
     }
 
     fn signal_if_live(&self, signal: Signal) -> Result<bool, Errno> {
-        match self.identity {
-            Some(identity) => identity.signal(signal, false),
+        match self.process {
+            Some(process) => process.signal(signal, false),
             None => Ok(false),
         }
     }
@@ -86,7 +86,7 @@ mod tests {
 
     use super::TimeoutTarget;
     use crate::reaper::{reap_fence, reap_test_guard};
-    use crate::service::exec::identity::ProcessSignalTarget;
+    use crate::service::exec::process_instance::ProcessInstance;
 
     #[tokio::test]
     async fn timeout_target_signals_its_live_leader() {
@@ -96,7 +96,7 @@ mod tests {
             .spawn()
             .expect("spawn sleep");
         let leader = Pid::from_raw(child.id() as i32);
-        let target = TimeoutTarget::new(ProcessSignalTarget::capture(leader));
+        let target = TimeoutTarget::new(ProcessInstance::capture(leader));
 
         assert!(target
             .signal_if_live(Signal::SIGTERM)

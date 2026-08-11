@@ -1,7 +1,7 @@
 use crate::service::exec::error::ExecutionError;
 use crate::service::exec::exec_handle::ExecHandle;
-use crate::service::exec::identity::ProcessSignalTarget;
 use crate::service::exec::output::OutputManager;
+use crate::service::exec::process_instance::ProcessInstance;
 use boxlite_shared::ExecOutput;
 use futures::{Stream, StreamExt as _};
 use std::os::unix::io::AsRawFd;
@@ -64,7 +64,7 @@ pub(crate) struct ExecutionState {
     /// so every caller — concurrent or long after the fact — reads the same
     /// status, and one that arrives before the process exits simply waits.
     exit: crate::reaper::ExitSlot,
-    identity: Option<ProcessSignalTarget>,
+    process: Option<ProcessInstance>,
     shutdown_managed: bool,
 }
 
@@ -73,7 +73,7 @@ impl ExecutionState {
         mut handle: ExecHandle,
         init_health: Option<Arc<Mutex<dyn InitHealthCheck>>>,
         exit: crate::reaper::ExitSlot,
-        identity: Option<ProcessSignalTarget>,
+        process: Option<ProcessInstance>,
         shutdown_managed: bool,
     ) -> Self {
         Self {
@@ -87,7 +87,7 @@ impl ExecutionState {
                 init_health,
             })),
             exit,
-            identity,
+            process,
             shutdown_managed,
         }
     }
@@ -96,9 +96,9 @@ impl ExecutionState {
     pub(super) fn new(
         handle: ExecHandle,
         exit: crate::reaper::ExitSlot,
-        identity: Option<ProcessSignalTarget>,
+        process: Option<ProcessInstance>,
     ) -> Self {
-        Self::from_handle(handle, None, exit, identity, true)
+        Self::from_handle(handle, None, exit, process, true)
     }
 
     #[cfg(test)]
@@ -117,9 +117,9 @@ impl ExecutionState {
         handle: ExecHandle,
         init_health: Arc<Mutex<dyn InitHealthCheck>>,
         exit: crate::reaper::ExitSlot,
-        identity: Option<ProcessSignalTarget>,
+        process: Option<ProcessInstance>,
     ) -> Self {
-        Self::from_handle(handle, Some(init_health), exit, identity, true)
+        Self::from_handle(handle, Some(init_health), exit, process, true)
     }
 
     /// Create execution state for the container's init process itself.
@@ -133,9 +133,9 @@ impl ExecutionState {
     pub(crate) fn new_init_session(
         handle: ExecHandle,
         exit: crate::reaper::ExitSlot,
-        identity: Option<ProcessSignalTarget>,
+        process: Option<ProcessInstance>,
     ) -> Self {
-        Self::from_handle(handle, None, exit, identity, false)
+        Self::from_handle(handle, None, exit, process, false)
     }
 
     /// Check if the container init process died.
@@ -381,16 +381,16 @@ impl ExecutionState {
         if self.inner.lock().await.released {
             return Ok(false);
         }
-        let Some(identity) = self.identity else {
+        let Some(process) = self.process else {
             return Ok(false);
         };
-        identity.signal(signal, process_group)
+        process.signal(signal, process_group)
     }
 
     pub(crate) async fn owned_process_is_current(&self) -> bool {
         self.shutdown_managed
             && !self.inner.lock().await.released
-            && self.identity.is_some_and(|identity| identity.is_current())
+            && self.process.is_some_and(|process| process.is_current())
     }
 
     /// Kill process with signal.
@@ -445,7 +445,7 @@ mod release_tests {
     use super::*;
     use crate::reaper::ExitSlot;
     use crate::service::exec::exec_handle::{ExitStatus, PtyConfig};
-    use crate::service::exec::identity::ProcessSignalTarget;
+    use crate::service::exec::process_instance::ProcessInstance;
     use nix::unistd::{pipe, Pid};
     use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 
@@ -543,7 +543,7 @@ mod release_tests {
             .spawn()
             .expect("spawn sleep");
         let pid = Pid::from_raw(child.id() as i32);
-        let identity = ProcessSignalTarget::capture(pid).expect("read child identity");
+        let identity = ProcessInstance::capture(pid).expect("read child identity");
         let stale = identity.with_start_time_for_test(
             identity
                 .start_time()
@@ -578,7 +578,7 @@ mod release_tests {
             .arg("30")
             .spawn()
             .expect("spawn sleep");
-        let identity = ProcessSignalTarget::capture(Pid::from_raw(child.id() as i32))
+        let identity = ProcessInstance::capture(Pid::from_raw(child.id() as i32))
             .expect("read child identity");
 
         assert!(identity
@@ -615,7 +615,7 @@ mod release_tests {
         }
         let mut child = command.spawn().expect("spawn process-group leader");
         let pid = Pid::from_raw(child.id() as i32);
-        let identity = ProcessSignalTarget::capture(pid).expect("read child identity");
+        let identity = ProcessInstance::capture(pid).expect("read child identity");
         let stale = identity.with_start_time_for_test(
             identity
                 .start_time()

@@ -2,15 +2,15 @@ use nix::errno::Errno;
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::{getpgid, Pid};
 
-/// A process signal target that distinguishes a PID's current owner from a
-/// prior process that used the same number.
+/// A process instance distinguished from a prior process that used the same
+/// PID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ProcessSignalTarget {
+pub(crate) struct ProcessInstance {
     pid: Pid,
     start_time: u64,
 }
 
-impl ProcessSignalTarget {
+impl ProcessInstance {
     /// Capture the process start time immediately after its spawn returns.
     pub(crate) fn capture(pid: Pid) -> Option<Self> {
         Self::start_time_for(pid).map(|start_time| Self { pid, start_time })
@@ -70,7 +70,7 @@ mod tests {
     use std::process::{Child, Command, Stdio};
     use std::time::{Duration, Instant};
 
-    use super::ProcessSignalTarget;
+    use super::ProcessInstance;
     use nix::sys::signal::Signal;
     use nix::unistd::Pid;
 
@@ -108,7 +108,7 @@ mod tests {
             .spawn()
             .expect("spawn sleep");
         let pid = Pid::from_raw(child.id() as i32);
-        let identity = ProcessSignalTarget::capture(pid).expect("read child identity");
+        let identity = ProcessInstance::capture(pid).expect("read child identity");
 
         assert_ne!(nix::unistd::getpgid(Some(pid)).unwrap(), pid);
         assert!(!identity
@@ -162,7 +162,7 @@ mod tests {
         let descendant = Pid::from_raw(line.trim().parse::<i32>().expect("parse pid"));
         assert_eq!(nix::unistd::getpgid(Some(descendant)).unwrap(), leader);
 
-        let identity = ProcessSignalTarget::capture(leader).expect("read leader identity");
+        let identity = ProcessInstance::capture(leader).expect("read leader identity");
         assert!(identity
             .signal(Signal::SIGTERM, true)
             .expect("signal matching process group"));

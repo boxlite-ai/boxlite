@@ -20,8 +20,8 @@ pub(in crate::service) mod error;
 #[cfg(target_os = "linux")]
 pub mod exec_handle;
 pub(in crate::service) mod executor;
-pub(crate) mod identity;
 mod output;
+pub(crate) mod process_instance;
 pub(in crate::service) mod registry;
 pub(in crate::service) mod state;
 mod timeout;
@@ -319,8 +319,8 @@ async fn spawn_execution(
 
     let leader_pid = child.pid();
     let pid = leader_pid.as_raw() as u32;
-    let identity = identity::ProcessSignalTarget::capture(leader_pid);
-    if identity.is_none() {
+    let process = process_instance::ProcessInstance::capture(leader_pid);
+    if process.is_none() {
         warn!(
             execution_id = %execution_id,
             pid = leader_pid.as_raw(),
@@ -338,9 +338,9 @@ async fn spawn_execution(
     let state = match container_ref {
         Some(container) => {
             let health: std::sync::Arc<tokio::sync::Mutex<dyn InitHealthCheck>> = container;
-            state::ExecutionState::new_with_init_health(child, health, exit, identity)
+            state::ExecutionState::new_with_init_health(child, health, exit, process)
         }
-        None => state::ExecutionState::new(child, exit, identity),
+        None => state::ExecutionState::new(child, exit, process),
     };
     server
         .registry
@@ -350,7 +350,7 @@ async fn spawn_execution(
     // Step 3: Start timeout watcher (if requested)
     if req.timeout_ms > 0 {
         timeout::start_timeout_watcher(
-            timeout::TimeoutTarget::new(identity),
+            timeout::TimeoutTarget::new(process),
             execution_id.clone(),
             std::time::Duration::from_millis(req.timeout_ms),
         );
