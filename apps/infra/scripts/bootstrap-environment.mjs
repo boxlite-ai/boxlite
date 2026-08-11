@@ -327,25 +327,44 @@ function promptSecret(label) {
   })
 }
 
-export function ssmParameterExists(
+export function readSsmSecureParameter(
   awsCliPath,
   region,
   name,
   { execute = execFileSync } = {},
 ) {
   try {
-    execute(awsCliPath, ['ssm', 'get-parameter', '--region', region, '--name', name], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'ignore', 'pipe'],
-      timeout: 15_000,
-      killSignal: 'SIGTERM',
-      maxBuffer: 64 * 1024,
-    })
-    return true
+    const value = execute(
+      awsCliPath,
+      [
+        'ssm',
+        'get-parameter',
+        '--region',
+        region,
+        '--name',
+        name,
+        '--with-decryption',
+        '--query',
+        'Parameter.Value',
+        '--output',
+        'text',
+      ],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 15_000,
+        killSignal: 'SIGTERM',
+        maxBuffer: 64 * 1024,
+      },
+    ).trim()
+    if (!value || value === 'None') throw new Error('parameter returned no value')
+    return { exists: true, value }
   } catch (error) {
     const detail = `${error?.code ?? ''}\n${error?.stderr ?? ''}\n${error?.message ?? ''}`
-    if (/ParameterNotFound/i.test(detail)) return false
-    throw new Error(`could not inspect SecureString parameter ${name}`)
+    if (/ParameterNotFound/i.test(detail)) return { exists: false }
+    // AWS stderr and parsing errors are untrusted and may include provider
+    // material. The public error identifies only the parameter name.
+    throw new Error(`could not load SecureString parameter ${name}`)
   }
 }
 
@@ -798,40 +817,103 @@ export function ensureRuntimeSecrets({
   return applyRuntimeSecretPlan({ awsCliPath, region, plan, execute, log })
 }
 
-export async function ensureCloudflareCredentials({
+function validateCloudflareCredentialPlan(plan) {
+  if (!Array.isArray(plan) || plan.length !== CLOUDFLARE_CREDENTIALS.length) {
+    throw new Error('a complete Cloudflare credential plan is required')
+  }
+  for (const [index, definition] of CLOUDFLARE_CREDENTIALS.entries()) {
+    const item = plan[index]
+    if (
+      item?.envVar !== definition.envVar ||
+      item?.param !== definition.param ||
+      typeof item.name !== 'string' ||
+      !item.name.endsWith(`/${definition.param}`) ||
+      typeof item.value !== 'string' ||
+      !item.value ||
+      !['retain', 'put'].includes(item.action) ||
+      typeof item.overwrite !== 'boolean'
+    ) {
+      throw new Error('Cloudflare credential plan is invalid')
+    }
+  }
+  return plan
+}
+
+export async function planCloudflareCredentials({
   awsCliPath,
   region,
   stage,
   force,
   environment = process.env,
-  parameterExists = ssmParameterExists,
-  putParameter = putSsmSecureParameter,
+  readParameter = readSsmSecureParameter,
   prompt = promptSecret,
-  log = console.log,
 }) {
+  const plan = []
   for (const { envVar, param, label } of CLOUDFLARE_CREDENTIALS) {
     const name = ssmParameterName(stage, param)
     const fromEnv = environment[envVar]?.trim()
-    const exists = parameterExists(awsCliPath, region, name)
-    if (fromEnv) {
-      if (decideSsmOverwrite({ exists, force }) === 'skip') {
-        log(`[${SCRIPT_NAME}] ${label} ... already set (use --force to change)`)
-        continue
-      }
-      putParameter(awsCliPath, region, name, fromEnv, { overwrite: exists })
-      log(`[${SCRIPT_NAME}] ${label} ... set from ${envVar}`)
+    const current = readParameter(awsCliPath, region, name)
+    if (!current || typeof current.exists !== 'boolean') {
+      throw new Error(`could not inspect SecureString parameter ${name}`)
+    }
+    if (current.exists && decideSsmOverwrite({ exists: true, force }) === 'skip') {
+      plan.push({
+        envVar,
+        param,
+        label,
+        name,
+        value: requireNonEmptySecret(label, current.value),
+        action: 'retain',
+        overwrite: false,
+      })
       continue
     }
-
-    if (decideSsmOverwrite({ exists, force }) === 'skip') {
-      log(`[${SCRIPT_NAME}] ${label} ... already set (use --force to change)`)
-      continue
-    }
-
-    const value = requireNonEmptySecret(label, await prompt(`${label}: `))
-    putParameter(awsCliPath, region, name, value, { overwrite: exists })
-    log(`[${SCRIPT_NAME}] ${label} ... set`)
+    const value = fromEnv || requireNonEmptySecret(label, await prompt(`${label}: `))
+    plan.push({
+      envVar,
+      param,
+      label,
+      name,
+      value,
+      action: 'put',
+      overwrite: current.exists,
+      source: fromEnv ? envVar : 'prompt',
+    })
   }
+  return validateCloudflareCredentialPlan(plan)
+}
+
+export function injectCloudflareCredentialPlan(environment, plan) {
+  if (!environment || typeof environment !== 'object') {
+    throw new Error('Cloudflare credential injection requires an environment object')
+  }
+  const [apiToken, accountId] = validateCloudflareCredentialPlan(plan)
+  environment.CLOUDFLARE_API_TOKEN = apiToken.value
+  environment.CLOUDFLARE_DEFAULT_ACCOUNT_ID = accountId.value
+  return environment
+}
+
+export function applyCloudflareCredentialPlan({
+  awsCliPath,
+  region,
+  plan,
+  putParameter = putSsmSecureParameter,
+  log = console.log,
+}) {
+  for (const item of validateCloudflareCredentialPlan(plan)) {
+    if (item.action === 'retain') {
+      log(`[${SCRIPT_NAME}] ${item.label} ... already set (use --force to change)`)
+      continue
+    }
+    putParameter(awsCliPath, region, item.name, item.value, { overwrite: item.overwrite })
+    log(`[${SCRIPT_NAME}] ${item.label} ... ${item.source === item.envVar ? `set from ${item.envVar}` : 'set'}`)
+  }
+  return plan
+}
+
+export async function ensureCloudflareCredentials(options) {
+  const plan = await planCloudflareCredentials(options)
+  return applyCloudflareCredentialPlan({ ...options, plan })
 }
 
 const SST_PLATFORM_DIR = join(INFRA_ROOT, '.sst', 'platform')
@@ -1253,7 +1335,7 @@ function describeEc2Instances(awsCliPath, region, execute = execFileSync) {
   }
 }
 
-async function resolveRunnerCommandTagGate({ awsCliPath, region, stage, stackName }) {
+async function resolveRunnerCommandTagGate({ awsCliPath, region, stage, stackName, cloudflareCredentialPlan }) {
   const previousEnabled = readCloudFormationBooleanParameter({
     awsCliPath,
     region,
@@ -1263,6 +1345,7 @@ async function resolveRunnerCommandTagGate({ awsCliPath, region, stage, stackNam
   const nativeEnvironment = { ...process.env }
   const sstPath = resolveSstExecutable(nativeEnvironment)
   shieldSstEnvironment(nativeEnvironment)
+  injectCloudflareCredentialPlan(nativeEnvironment, cloudflareCredentialPlan)
   nativeEnvironment.SST_STAGE = stage
   nativeEnvironment.SST_LOG = devNull
   const serializedBaseline = await withSstLogSecurity(INFRA_ROOT, () =>
@@ -1462,6 +1545,12 @@ async function main() {
       runtimeSecretGenerations,
     })
     canonicalizeDeploymentConfig(deploymentConfigDocument)
+    const cloudflareCredentialPlan = await planCloudflareCredentials({
+      awsCliPath,
+      region,
+      stage,
+      force,
+    })
 
     // Default the reviewer to whoever is running this, so the environment comes
     // out actually protected rather than nominally so.
@@ -1475,6 +1564,7 @@ async function main() {
       region,
       stage,
       stackName: deployRoleStackName,
+      cloudflareCredentialPlan,
     })
 
     ensureGitHubOidcProvider({ awsCliPath, region })
@@ -1484,7 +1574,7 @@ async function main() {
       if (!stackDomain) throw new Error('STACK_DOMAIN must be set in .env before --provision-auth0 can build callback URLs')
       provisionAuth0({ stackDomain })
     }
-    await ensureCloudflareCredentials({ awsCliPath, region, stage, force })
+    applyCloudflareCredentialPlan({ awsCliPath, region, plan: cloudflareCredentialPlan })
     ensureConfiguredSstSecrets(stage, configuredKeys)
     await ensureOidcClientId(stage)
     const publication = commitBootstrapConfigRelease({

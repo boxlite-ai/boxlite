@@ -565,42 +565,49 @@ test('SecureString put failures discard captured value-bearing executor output',
   )
 })
 
-test('SecureString lookup treats only ParameterNotFound as absent and hides other AWS output', async () => {
-  const { ssmParameterExists } = await import('./bootstrap-environment.mjs')
-  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-cloudflare-parameter-lookup-'))
-  const fakeAws = join(fixture, 'aws')
-  const sentinel = 'S3CR3T42-access-denied-detail'
-  writeFileSync(
-    fakeAws,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2)
-const name = args[args.indexOf('--name') + 1]
-if (name.endsWith('/missing')) {
-  process.stderr.write('An error occurred (ParameterNotFound) when calling GetParameter')
-  process.exit(254)
-}
-if (name.endsWith('/denied')) {
-  process.stderr.write('${sentinel}')
-  process.exit(253)
-}
-`,
-  )
-  chmodSync(fakeAws, 0o755)
-
-  try {
-    assert.equal(ssmParameterExists(fakeAws, REGION, '/boxlite/dev/existing'), true)
-    assert.equal(ssmParameterExists(fakeAws, REGION, '/boxlite/dev/missing'), false)
-    assert.throws(
-      () => ssmParameterExists(fakeAws, REGION, '/boxlite/dev/denied'),
-      (error) => {
-        assert.match(error.message, /could not inspect SecureString parameter/i)
-        assert.doesNotMatch(error.message, new RegExp(sentinel))
-        return true
-      },
-    )
-  } finally {
-    rmSync(fixture, { recursive: true, force: true })
+test('SecureString value reads decrypt in memory, distinguish absence, and hide AWS output', async () => {
+  const { readSsmSecureParameter } = await import('./bootstrap-environment.mjs')
+  const calls = []
+  const execute = (command, args, options) => {
+    calls.push({ command, args, options })
+    return 'synthetic-existing-value\n'
   }
+  assert.deepEqual(
+    readSsmSecureParameter('/fake/aws', REGION, '/boxlite/dev/cloudflare-api-token', { execute }),
+    { exists: true, value: 'synthetic-existing-value' },
+  )
+  assert.deepEqual(calls[0].args.slice(0, 2), ['ssm', 'get-parameter'])
+  assert.ok(calls[0].args.includes('--with-decryption'))
+  assert.equal(calls[0].args.includes('synthetic-existing-value'), false)
+  assert.deepEqual(calls[0].options.stdio, ['ignore', 'pipe', 'pipe'])
+
+  const missing = new Error('missing')
+  missing.stderr = 'ParameterNotFound'
+  assert.deepEqual(
+    readSsmSecureParameter('/fake/aws', REGION, '/boxlite/dev/cloudflare-account-id', {
+      execute() {
+        throw missing
+      },
+    }),
+    { exists: false },
+  )
+
+  const sentinel = 'S3CR3T42-access-denied-detail'
+  const denied = new Error(sentinel)
+  denied.stderr = sentinel
+  assert.throws(
+    () =>
+      readSsmSecureParameter('/fake/aws', REGION, '/boxlite/dev/cloudflare-account-id', {
+        execute() {
+          throw denied
+        },
+      }),
+    (error) => {
+      assert.match(error.message, /could not load SecureString parameter/i)
+      assert.doesNotMatch(error.message, new RegExp(sentinel))
+      return true
+    },
+  )
 })
 
 test('SecureString creation is non-overwriting while an existing forced rotation opts into overwrite', async () => {
@@ -638,8 +645,8 @@ test('Cloudflare bootstrap retains existing SecureStrings unless force explicitl
       stage: STAGE,
       force,
       environment,
-      parameterExists() {
-        return exists
+      readParameter(_awsCliPath, _region, name) {
+        return exists ? { exists: true, value: `existing-value-for-${name}` } : { exists: false }
       },
       putParameter(...args) {
         puts.push(args)
@@ -659,6 +666,106 @@ test('Cloudflare bootstrap retains existing SecureStrings unless force explicitl
       assert.equal(args[4]?.overwrite, expectedOverwrite)
     }
   }
+})
+
+test('Cloudflare bootstrap prepares authoritative credentials before state inspection and applies the same plan later', async () => {
+  const {
+    applyCloudflareCredentialPlan,
+    injectCloudflareCredentialPlan,
+    planCloudflareCredentials,
+  } = await import('./bootstrap-environment.mjs')
+  const localEnvironment = {
+    CLOUDFLARE_API_TOKEN: 'stale-local-token',
+    CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'stale-local-account',
+  }
+  const authoritative = new Map([
+    ['/boxlite/dev/cloudflare-api-token', 'authoritative-token'],
+    ['/boxlite/dev/cloudflare-account-id', 'authoritative-account'],
+  ])
+  const prompts = []
+  const plan = await planCloudflareCredentials({
+    awsCliPath: '/fake/aws',
+    region: REGION,
+    stage: STAGE,
+    force: false,
+    environment: localEnvironment,
+    readParameter(_awsCliPath, _region, name) {
+      return { exists: true, value: authoritative.get(name) }
+    },
+    async prompt(label) {
+      prompts.push(label)
+      return 'unexpected-prompt-value'
+    },
+  })
+
+  const stateExportEnvironment = {
+    CLOUDFLARE_API_TOKEN: '',
+    CLOUDFLARE_DEFAULT_ACCOUNT_ID: '',
+  }
+  injectCloudflareCredentialPlan(stateExportEnvironment, plan)
+  assert.deepEqual(prompts, [])
+  assert.equal(stateExportEnvironment.CLOUDFLARE_API_TOKEN, 'authoritative-token')
+  assert.equal(stateExportEnvironment.CLOUDFLARE_DEFAULT_ACCOUNT_ID, 'authoritative-account')
+
+  const puts = []
+  applyCloudflareCredentialPlan({
+    awsCliPath: '/fake/aws',
+    region: REGION,
+    plan,
+    putParameter(...args) {
+      puts.push(args)
+    },
+    log() {},
+  })
+  assert.deepEqual(puts, [], 'retained credentials must not be rewritten after state inspection')
+})
+
+test('Cloudflare bootstrap uses one prepared value for first-stage state inspection and the later SecureString write', async () => {
+  const {
+    applyCloudflareCredentialPlan,
+    injectCloudflareCredentialPlan,
+    planCloudflareCredentials,
+  } = await import('./bootstrap-environment.mjs')
+  const environment = {
+    CLOUDFLARE_API_TOKEN: 'first-stage-token',
+    CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'first-stage-account',
+  }
+  const plan = await planCloudflareCredentials({
+    awsCliPath: '/fake/aws',
+    region: REGION,
+    stage: STAGE,
+    force: false,
+    environment,
+    readParameter() {
+      return { exists: false }
+    },
+    async prompt() {
+      assert.fail('explicit first-stage credentials must not prompt')
+    },
+  })
+  const stateExportEnvironment = {}
+  injectCloudflareCredentialPlan(stateExportEnvironment, plan)
+
+  const puts = []
+  applyCloudflareCredentialPlan({
+    awsCliPath: '/fake/aws',
+    region: REGION,
+    plan,
+    putParameter(...args) {
+      puts.push(args)
+    },
+    log() {},
+  })
+  assert.equal(puts.length, 2)
+  assert.deepEqual(
+    puts.map((args) => ({ name: args[2], value: args[3], overwrite: args[4]?.overwrite })),
+    [
+      { name: '/boxlite/dev/cloudflare-api-token', value: 'first-stage-token', overwrite: false },
+      { name: '/boxlite/dev/cloudflare-account-id', value: 'first-stage-account', overwrite: false },
+    ],
+  )
+  assert.equal(stateExportEnvironment.CLOUDFLARE_API_TOKEN, puts[0][3])
+  assert.equal(stateExportEnvironment.CLOUDFLARE_DEFAULT_ACCOUNT_ID, puts[1][3])
 })
 
 test('rejects an explicit-tagged secret without AWSCURRENT unless a local seed repairs it', async () => {

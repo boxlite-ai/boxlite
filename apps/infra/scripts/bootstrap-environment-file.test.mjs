@@ -190,6 +190,9 @@ test('bootstrap publishes the release and no longer uploads DEPLOY_ENV', () => {
   )
   const documentCanonicalization = mainSource.indexOf('canonicalizeDeploymentConfig(deploymentConfigDocument)')
   const runtimeSecretPlan = mainSource.indexOf('const runtimeSecretPlan = planRuntimeSecrets({')
+  const cloudflareCredentialPlan = mainSource.indexOf(
+    'const cloudflareCredentialPlan = await planCloudflareCredentials({',
+  )
   const platformInstall = mainSource.indexOf('ensureSstPlatform(stage)')
   const runnerGateRead = mainSource.indexOf('const runnerCommandTagGateEnabled = await resolveRunnerCommandTagGate({')
   const releaseCommit = mainSource.indexOf('commitBootstrapConfigRelease({')
@@ -211,8 +214,26 @@ test('bootstrap publishes the release and no longer uploads DEPLOY_ENV', () => {
     'typed bootstrap input, runtime secret refusal checks, and final release size must be validated before mutation',
   )
   assert.ok(
-    platformInstall !== -1 && platformInstall < runnerGateRead && runnerGateRead < firstMutation,
-    'live CloudFormation, SST state, and EC2 gate reads must finish before the first GitHub/AWS mutation',
+    cloudflareCredentialPlan !== -1 &&
+      cloudflareCredentialPlan < platformInstall &&
+      platformInstall < runnerGateRead &&
+      runnerGateRead < firstMutation,
+    'provider credential planning and live CloudFormation, SST state, and EC2 gate reads must finish before mutation',
+  )
+  const runnerGateSource = source.slice(
+    source.indexOf('async function resolveRunnerCommandTagGate('),
+    source.indexOf('function deployGithubDeployRoleStack('),
+  )
+  const shieldRunnerStateEnvironment = runnerGateSource.indexOf('shieldSstEnvironment(nativeEnvironment)')
+  const injectRunnerStateCredentials = runnerGateSource.indexOf(
+    'injectCloudflareCredentialPlan(nativeEnvironment, cloudflareCredentialPlan)',
+  )
+  const exportRunnerState = runnerGateSource.indexOf('readRunnerStateBaseline({')
+  assert.ok(
+    shieldRunnerStateEnvironment !== -1 &&
+      shieldRunnerStateEnvironment < injectRunnerStateCredentials &&
+      injectRunnerStateCredentials < exportRunnerState,
+    'the shielded state-export child must receive the precomputed authoritative provider credentials',
   )
   assert.ok(
     releaseCommit < githubWiring && githubWiring < mainRuntimeApplyCallback,
