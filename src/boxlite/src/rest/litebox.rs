@@ -652,25 +652,45 @@ async fn attach_ws(
 /// over in `pending` instead of replacing it with U+FFFD.
 fn decode_utf8_streaming(pending: &mut Vec<u8>, payload: &[u8]) -> String {
     pending.extend_from_slice(payload);
-    match std::str::from_utf8(pending) {
-        Ok(s) => {
-            let text = s.to_string();
-            pending.clear();
-            text
-        }
-        Err(e) => {
-            let valid_up_to = e.valid_up_to();
-            let text = std::str::from_utf8(&pending[..valid_up_to])
-                .expect("bytes before valid_up_to are always valid UTF-8")
-                .to_string();
-            if e.error_len().is_none() {
-                pending.drain(..valid_up_to);
-            } else {
+    let mut text = String::new();
+    loop {
+        match std::str::from_utf8(pending) {
+            Ok(s) => {
+                text.push_str(s);
                 pending.clear();
+                break;
             }
-            text
+            Err(e) => {
+                let valid_up_to = e.valid_up_to();
+                text.push_str(
+                    std::str::from_utf8(&pending[..valid_up_to])
+                        .expect("bytes before valid_up_to are always valid UTF-8"),
+                );
+                match e.error_len() {
+                    Some(invalid_len) => {
+                        text.push('\u{FFFD}');
+                        pending.drain(..valid_up_to + invalid_len);
+                    }
+                    None => {
+                        pending.drain(..valid_up_to);
+                        break;
+                    }
+                }
+            }
         }
     }
+    text
+}
+
+/// Lossily flushes and clears whatever partial sequence is still buffered.
+/// Called on terminal returns, where there is no next payload to complete it.
+fn flush_pending(pending: &mut Vec<u8>) -> Option<String> {
+    if pending.is_empty() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(pending).into_owned();
+    pending.clear();
+    Some(text)
 }
 
 /// Pump stdin/stdout/stderr/control over a WebSocket attach. On transient
@@ -848,6 +868,12 @@ async fn attach_ws_pump(
                         Message::Text(text) => match parse_control_frame(&text) {
                             ControlFrame::Exit { exit_code } => {
                                 tracing::debug!(exit_code, "WS attach: exit control frame");
+                                if let Some(text) = flush_pending(&mut stdout_pending) {
+                                    let _ = stdout_tx.send(text);
+                                }
+                                if let Some(text) = flush_pending(&mut stderr_pending) {
+                                    let _ = stderr_tx.send(text);
+                                }
                                 let _ = result_tx.send(ExecResult {
                                     exit_code,
                                     error_message: None,
@@ -883,6 +909,12 @@ async fn attach_ws_pump(
                     cause = %disconnect_cause,
                     "WS attach: disconnected without an exit frame — taking exit code from status probe (any unstreamed stdout/stderr is lost)"
                 );
+                if let Some(text) = flush_pending(&mut stdout_pending) {
+                    let _ = stdout_tx.send(text);
+                }
+                if let Some(text) = flush_pending(&mut stderr_pending) {
+                    let _ = stderr_tx.send(text);
+                }
                 let _ = result_tx.send(result);
                 return;
             }
@@ -1792,6 +1824,217 @@ mod tests {
                 server.abort();
             }
         }
+    }
+
+    // ─── ws_stderr_utf8_split_across_frames ────────────────────────────────
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_stderr_utf8_split_across_frames() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, None, |mut ws, _state| async move {
+                ws.send(Message::Binary(vec![0x02, 0xE2, 0x82]))
+                    .await
+                    .unwrap();
+                ws.send(Message::Binary(vec![0x02, 0xAC])).await.unwrap();
+                ws.send(Message::Text(r#"{"type":"exit","exit_code":0}"#.into()))
+                    .await
+                    .unwrap();
+                let _ = ws.close(None).await;
+            })
+            .await;
+        });
+
+        let client = client_for(port);
+        let (stdout_tx, _stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let attach = tokio::spawn(async move {
+            attach_ws(
+                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+            )
+            .await;
+        });
+
+        tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+            .await
+            .expect("result channel timed out")
+            .expect("result channel closed without value");
+
+        let mut received = String::new();
+        while let Ok(Some(chunk)) =
+            tokio::time::timeout(Duration::from_millis(200), stderr_rx.recv()).await
+        {
+            received.push_str(&chunk);
+        }
+        assert_eq!(received, "€");
+
+        attach.await.unwrap();
+        server.abort();
+    }
+
+    // ─── ws_stdout_stderr_pending_buffers_stay_isolated ────────────────────
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_stdout_stderr_pending_buffers_stay_isolated() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, None, |mut ws, _state| async move {
+                ws.send(Message::Binary(vec![0x01, 0xE2, 0x82]))
+                    .await
+                    .unwrap();
+                ws.send(Message::Binary(vec![0x02, 0xE2, 0x94]))
+                    .await
+                    .unwrap();
+                ws.send(Message::Binary(vec![0x01, 0xAC])).await.unwrap();
+                ws.send(Message::Binary(vec![0x02, 0x80])).await.unwrap();
+                ws.send(Message::Text(r#"{"type":"exit","exit_code":0}"#.into()))
+                    .await
+                    .unwrap();
+                let _ = ws.close(None).await;
+            })
+            .await;
+        });
+
+        let client = client_for(port);
+        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let attach = tokio::spawn(async move {
+            attach_ws(
+                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+            )
+            .await;
+        });
+
+        tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+            .await
+            .expect("result channel timed out")
+            .expect("result channel closed without value");
+
+        let mut stdout_received = String::new();
+        while let Ok(Some(chunk)) =
+            tokio::time::timeout(Duration::from_millis(200), stdout_rx.recv()).await
+        {
+            stdout_received.push_str(&chunk);
+        }
+        let mut stderr_received = String::new();
+        while let Ok(Some(chunk)) =
+            tokio::time::timeout(Duration::from_millis(200), stderr_rx.recv()).await
+        {
+            stderr_received.push_str(&chunk);
+        }
+        assert_eq!(stdout_received, "€");
+        assert_eq!(stderr_received, "─");
+
+        attach.await.unwrap();
+        server.abort();
+    }
+
+    // ─── ws_stdout_pending_flushed_on_exit ─────────────────────────────────
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_stdout_pending_flushed_on_exit() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, None, |mut ws, _state| async move {
+                ws.send(Message::Binary(vec![0x01, 0xE2, 0x82]))
+                    .await
+                    .unwrap();
+                ws.send(Message::Text(r#"{"type":"exit","exit_code":0}"#.into()))
+                    .await
+                    .unwrap();
+                let _ = ws.close(None).await;
+            })
+            .await;
+        });
+
+        let client = client_for(port);
+        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let attach = tokio::spawn(async move {
+            attach_ws(
+                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+            )
+            .await;
+        });
+
+        tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+            .await
+            .expect("result channel timed out")
+            .expect("result channel closed without value");
+
+        let out = tokio::time::timeout(Duration::from_secs(1), stdout_rx.recv())
+            .await
+            .expect("stdout timed out")
+            .expect("stdout channel closed");
+        assert_eq!(out, "\u{FFFD}");
+
+        attach.await.unwrap();
+        server.abort();
+    }
+
+    // ─── ws_stdout_valid_bytes_survive_malformed_sequence ──────────────────
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_stdout_valid_bytes_survive_malformed_sequence() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, None, |mut ws, _state| async move {
+                let mut frame = vec![0x01];
+                frame.extend_from_slice(b"ab");
+                frame.push(0xFF);
+                frame.extend_from_slice(b"cd");
+                ws.send(Message::Binary(frame)).await.unwrap();
+                ws.send(Message::Text(r#"{"type":"exit","exit_code":0}"#.into()))
+                    .await
+                    .unwrap();
+                let _ = ws.close(None).await;
+            })
+            .await;
+        });
+
+        let client = client_for(port);
+        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let attach = tokio::spawn(async move {
+            attach_ws(
+                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+            )
+            .await;
+        });
+
+        tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+            .await
+            .expect("result channel timed out")
+            .expect("result channel closed without value");
+
+        let out = tokio::time::timeout(Duration::from_secs(1), stdout_rx.recv())
+            .await
+            .expect("stdout timed out")
+            .expect("stdout channel closed");
+        assert_eq!(out, "ab\u{FFFD}cd");
+
+        attach.await.unwrap();
+        server.abort();
     }
 
     // ─── ws_close_without_exit_falls_back_to_status ──────────────────────
