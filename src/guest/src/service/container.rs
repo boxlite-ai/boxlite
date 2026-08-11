@@ -369,8 +369,10 @@ impl ContainerService for GuestServer {
                 // container.
                 let init_exit = match container.take_init_exec_handle() {
                     Ok(Some(handle)) => {
-                        // Claim init's exit slot and register the follow-up the
-                        // reaper fires on delivery (docker semantics: the box
+                        let identity =
+                            crate::service::exec::identity::ProcessIdentity::capture(handle.pid());
+                        // Register init's exit slot and the follow-up the reaper
+                        // fires on delivery (docker semantics: the box
                         // stops when init exits). Init is created but not yet
                         // started here — it blocks on libcontainer's exec fifo —
                         // so it cannot have exited, and `now` is a sound cutoff:
@@ -464,14 +466,13 @@ impl ContainerService for GuestServer {
                         let reaper = crate::reaper::REAPER
                             .get()
                             .expect("reaper installed at startup");
-                        let claim = reaper
+                        let exit = reaper
                             .on_exit(handle.pid(), std::time::Instant::now(), action)
                             .await;
-                        let exit = claim.slot();
-                        let state = crate::service::exec::state::ExecutionState::new_init_session_with_signal_target(
+                        let state = crate::service::exec::state::ExecutionState::new_init_session(
                             handle,
-                            std::sync::Arc::clone(reaper),
-                            claim,
+                            exit.clone(),
+                            identity,
                         );
                         self.registry
                             .register(init_execution_id.clone(), state)

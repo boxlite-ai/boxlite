@@ -1,5 +1,6 @@
 use crate::service::exec::error::ExecutionError;
 use crate::service::exec::exec_handle::ExecHandle;
+use crate::service::exec::identity::ProcessIdentity;
 use crate::service::exec::output::OutputManager;
 use boxlite_shared::ExecOutput;
 use futures::{Stream, StreamExt as _};
@@ -8,31 +9,6 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::{AbortHandle, JoinHandle};
 use tonic::Status;
-
-/// Who owns the reaper claim this state signals through.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ExitClaimRole {
-    /// This state owns the claim: it may release it, and registry shutdown may
-    /// signal through it.
-    Owned,
-    /// The container lifecycle owns the claim. This state may signal through it
-    /// on an explicit Kill, but must never release it or be swept by shutdown.
-    SignalOnly,
-}
-
-#[derive(Clone)]
-struct ExitClaimTarget {
-    reaper: Arc<crate::reaper::Reaper>,
-    claim: crate::reaper::ExitClaim,
-    leader_pid: nix::unistd::Pid,
-    role: ExitClaimRole,
-}
-
-impl ExitClaimTarget {
-    fn owned(&self) -> Option<&Self> {
-        (self.role == ExitClaimRole::Owned).then_some(self)
-    }
-}
 
 /// Abstraction for checking container init health.
 ///
@@ -84,11 +60,12 @@ pub(crate) struct ExecutionExit {
 #[derive(Clone)]
 pub(crate) struct ExecutionState {
     inner: Arc<Mutex<Inner>>,
-    /// This execution's exit, claimed from the reaper at spawn. Level-triggered,
+    /// This execution's exit, registered with the reaper at spawn. Level-triggered,
     /// so every caller — concurrent or long after the fact — reads the same
     /// status, and one that arrives before the process exits simply waits.
     exit: crate::reaper::ExitSlot,
-    exit_claim: Option<ExitClaimTarget>,
+    identity: Option<ProcessIdentity>,
+    shutdown_managed: bool,
 }
 
 impl ExecutionState {
@@ -96,7 +73,8 @@ impl ExecutionState {
         mut handle: ExecHandle,
         init_health: Option<Arc<Mutex<dyn InitHealthCheck>>>,
         exit: crate::reaper::ExitSlot,
-        exit_claim: Option<ExitClaimTarget>,
+        identity: Option<ProcessIdentity>,
+        shutdown_managed: bool,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
@@ -109,25 +87,18 @@ impl ExecutionState {
                 init_health,
             })),
             exit,
-            exit_claim,
+            identity,
+            shutdown_managed,
         }
     }
 
     /// Create new execution state for a guest-side process.
-    pub(super) fn new_claimed(
+    pub(super) fn new(
         handle: ExecHandle,
-        reaper: Arc<crate::reaper::Reaper>,
-        claim: crate::reaper::ExitClaim,
+        exit: crate::reaper::ExitSlot,
+        identity: Option<ProcessIdentity>,
     ) -> Self {
-        let leader_pid = handle.pid();
-        let exit = claim.slot();
-        let target = ExitClaimTarget {
-            reaper,
-            claim,
-            leader_pid,
-            role: ExitClaimRole::Owned,
-        };
-        Self::from_handle(handle, None, exit, Some(target))
+        Self::from_handle(handle, None, exit, identity, true)
     }
 
     #[cfg(test)]
@@ -135,33 +106,20 @@ impl ExecutionState {
         handle: ExecHandle,
         exit: crate::reaper::ExitSlot,
     ) -> Self {
-        Self::from_handle(handle, None, exit, None)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_init_session(handle: ExecHandle, exit: crate::reaper::ExitSlot) -> Self {
-        Self::from_handle(handle, None, exit, None)
+        Self::from_handle(handle, None, exit, None, false)
     }
 
     /// Create execution state with an init health checker.
     ///
     /// Enables detection of container init death when the exec'd process
     /// receives SIGKILL (PID namespace teardown).
-    pub(super) fn new_claimed_with_init_health(
+    pub(super) fn new_with_init_health(
         handle: ExecHandle,
         init_health: Arc<Mutex<dyn InitHealthCheck>>,
-        reaper: Arc<crate::reaper::Reaper>,
-        claim: crate::reaper::ExitClaim,
+        exit: crate::reaper::ExitSlot,
+        identity: Option<ProcessIdentity>,
     ) -> Self {
-        let leader_pid = handle.pid();
-        let exit = claim.slot();
-        let target = ExitClaimTarget {
-            reaper,
-            claim,
-            leader_pid,
-            role: ExitClaimRole::Owned,
-        };
-        Self::from_handle(handle, Some(init_health), exit, Some(target))
+        Self::from_handle(handle, Some(init_health), exit, identity, true)
     }
 
     /// Create execution state for the container's init process itself.
@@ -170,26 +128,14 @@ impl ExecutionState {
     /// reparents to guest main (the boxlite-guest agent process), which owns
     /// `waitpid(-1)`. See `wait_process`.
     ///
-    /// The claim is a signal target only. The container lifecycle owns it, so
-    /// this state must neither release it nor be signalled by registry shutdown.
-    pub(crate) fn new_init_session_with_signal_target(
+    /// The container lifecycle owns shutdown for init, so registry shutdown must
+    /// leave this session alone while an explicit Kill may still signal it.
+    pub(crate) fn new_init_session(
         handle: ExecHandle,
-        reaper: Arc<crate::reaper::Reaper>,
-        claim: crate::reaper::ExitClaim,
+        exit: crate::reaper::ExitSlot,
+        identity: Option<ProcessIdentity>,
     ) -> Self {
-        let leader_pid = handle.pid();
-        let exit = claim.slot();
-        Self::from_handle(
-            handle,
-            None,
-            exit,
-            Some(ExitClaimTarget {
-                reaper,
-                claim,
-                leader_pid,
-                role: ExitClaimRole::SignalOnly,
-            }),
-        )
+        Self::from_handle(handle, None, exit, identity, false)
     }
 
     /// Check if the container init process died.
@@ -408,70 +354,52 @@ impl ExecutionState {
             task.abort();
         }
         output.shutdown_drains().await;
-        self.release_exit_claim().await;
+        if self.shutdown_managed {
+            if let Some(reaper) = crate::reaper::REAPER.get() {
+                reaper.release_slot(&self.exit);
+            }
+        }
         true
     }
 
-    /// Give the claim back to the reaper. Returns false when this state does not
-    /// own one, which is how a container-init session is left to its lifecycle.
-    pub(crate) async fn release_exit_claim(&self) -> bool {
-        let Some(owner) = self.exit_claim.as_ref().and_then(ExitClaimTarget::owned) else {
-            return false;
-        };
-        owner.reaper.release_claim(&owner.claim).await;
-        true
-    }
-
-    /// Signal the leader only while this state still owns a live claim on it.
-    pub(crate) fn signal_owned_leader_if_live(
+    /// Signal this execution only while it remains registered for shutdown.
+    pub(crate) async fn signal_owned_process_if_current(
         &self,
         signal: nix::sys::signal::Signal,
     ) -> Result<bool, nix::errno::Errno> {
-        let Some(owner) = self.exit_claim.as_ref().and_then(ExitClaimTarget::owned) else {
+        if !self.shutdown_managed {
             return Ok(false);
-        };
-        owner
-            .reaper
-            .signal_leader_if_live(&owner.claim, owner.leader_pid, signal)
+        }
+        self.signal_if_current(signal, false).await
     }
 
-    fn signal_leader_if_live(
+    async fn signal_if_current(
         &self,
         signal: nix::sys::signal::Signal,
+        process_group: bool,
     ) -> Result<bool, nix::errno::Errno> {
-        let Some(target) = &self.exit_claim else {
+        if self.inner.lock().await.released {
+            return Ok(false);
+        }
+        let Some(identity) = self.identity else {
             return Ok(false);
         };
-        target
-            .reaper
-            .signal_leader_if_live(&target.claim, target.leader_pid, signal)
+        identity.signal(signal, process_group)
     }
 
-    pub(crate) fn owned_leader_is_live(&self) -> bool {
-        self.exit_claim
-            .as_ref()
-            .and_then(ExitClaimTarget::owned)
-            .is_some_and(|owner| owner.reaper.claim_is_live(&owner.claim))
+    pub(crate) async fn owned_process_is_current(&self) -> bool {
+        self.shutdown_managed
+            && !self.inner.lock().await.released
+            && self.identity.is_some_and(|identity| identity.is_current())
     }
 
     /// Kill process with signal.
     ///
     /// Returns true if signal was sent, false if already exited.
     pub async fn kill(&self, signal: nix::sys::signal::Signal, process_group: bool) -> bool {
-        if !process_group {
-            return self.signal_leader_if_live(signal).unwrap_or(false);
-        }
-
-        // Only the single-pid path above is claim-guarded. The group path trusts
-        // the handle's own leader check, so a recycled pid that leads its own
-        // group can still be signalled here.
-        let inner = self.inner.lock().await;
-
-        if let Some(ref handle) = inner.handle {
-            handle.kill_process_group(signal).is_ok()
-        } else {
-            false
-        }
+        self.signal_if_current(signal, process_group)
+            .await
+            .unwrap_or(false)
     }
 
     /// Resize PTY window.
@@ -517,6 +445,7 @@ mod release_tests {
     use super::*;
     use crate::reaper::ExitSlot;
     use crate::service::exec::exec_handle::{ExitStatus, PtyConfig};
+    use crate::service::exec::identity::ProcessIdentity;
     use nix::unistd::{pipe, Pid};
     use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 
@@ -605,7 +534,7 @@ mod release_tests {
     }
 
     #[tokio::test]
-    async fn direct_kill_does_not_signal_a_released_claim() {
+    async fn process_identity_refuses_a_changed_start_time() {
         use std::os::unix::process::ExitStatusExt;
 
         let _test_guard = crate::reaper::reap_test_guard().await;
@@ -613,23 +542,18 @@ mod release_tests {
             .arg("30")
             .spawn()
             .expect("spawn sleep");
-        let leader = Pid::from_raw(child.id() as i32);
-        let reaper = crate::reaper::Reaper::new_for_test();
-        let claim = reaper
-            .register_claim(leader, std::time::Instant::now())
-            .await;
-        let (stdin_peer, stdin) = pipe().unwrap();
-        let (stdout, stdout_peer) = pipe().unwrap();
-        let (stderr, stderr_peer) = pipe().unwrap();
-        let state = ExecutionState::new_claimed(
-            ExecHandle::new(leader, stdin, stdout, Some(stderr))
-                .expect("test pipes must register with Tokio"),
-            reaper,
-            claim,
+        let pid = Pid::from_raw(child.id() as i32);
+        let identity = ProcessIdentity::capture(pid).expect("read child identity");
+        let stale = identity.with_start_time_for_test(
+            identity
+                .start_time()
+                .checked_sub(1)
+                .expect("process start time must be nonzero"),
         );
 
-        assert!(state.release_exit_claim().await);
-        assert!(!state.kill(nix::sys::signal::Signal::SIGTERM, false).await);
+        assert!(!stale
+            .signal(nix::sys::signal::Signal::SIGTERM, false)
+            .expect("stale identity must be rejected"));
         assert!(child.try_wait().expect("check child status").is_none());
 
         child.kill().expect("kill test child");
@@ -643,7 +567,77 @@ mod release_tests {
             status.signal(),
             Some(nix::sys::signal::Signal::SIGKILL as i32)
         );
-        assert!(state.release_resources().await);
-        drop((stdin_peer, stdout_peer, stderr_peer));
+    }
+
+    #[tokio::test]
+    async fn process_identity_signals_the_matching_process() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let _test_guard = crate::reaper::reap_test_guard().await;
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let identity = ProcessIdentity::capture(Pid::from_raw(child.id() as i32))
+            .expect("read child identity");
+
+        assert!(identity
+            .signal(nix::sys::signal::Signal::SIGTERM, false)
+            .expect("signal matching identity"));
+        let status = tokio::task::spawn_blocking(move || {
+            let _fence = crate::reaper::reap_fence();
+            child.wait().expect("wait for test child")
+        })
+        .await
+        .expect("wait task must not panic");
+        assert_eq!(
+            status.signal(),
+            Some(nix::sys::signal::Signal::SIGTERM as i32)
+        );
+    }
+
+    #[tokio::test]
+    async fn process_group_kill_refuses_a_changed_start_time() {
+        use std::os::unix::process::{CommandExt as _, ExitStatusExt};
+
+        let _test_guard = crate::reaper::reap_test_guard().await;
+        let mut command = std::process::Command::new("/bin/sleep");
+        command.arg("30");
+        // SAFETY: `setpgid` is async-signal-safe and this closure performs no
+        // allocation or locking between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                if nix::libc::setpgid(0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().expect("spawn process-group leader");
+        let pid = Pid::from_raw(child.id() as i32);
+        let identity = ProcessIdentity::capture(pid).expect("read child identity");
+        let stale = identity.with_start_time_for_test(
+            identity
+                .start_time()
+                .checked_sub(1)
+                .expect("process start time must be nonzero"),
+        );
+
+        assert!(!stale
+            .signal(nix::sys::signal::Signal::SIGTERM, true)
+            .expect("stale identity must be rejected"));
+        assert!(child.try_wait().expect("check child status").is_none());
+
+        child.kill().expect("kill test child");
+        let status = tokio::task::spawn_blocking(move || {
+            let _fence = crate::reaper::reap_fence();
+            child.wait().expect("wait for test child")
+        })
+        .await
+        .expect("wait task must not panic");
+        assert_eq!(
+            status.signal(),
+            Some(nix::sys::signal::Signal::SIGKILL as i32)
+        );
     }
 }

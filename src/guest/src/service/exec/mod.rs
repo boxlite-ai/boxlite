@@ -20,6 +20,7 @@ pub(in crate::service) mod error;
 #[cfg(target_os = "linux")]
 pub mod exec_handle;
 pub(in crate::service) mod executor;
+pub(crate) mod identity;
 mod output;
 pub(in crate::service) mod registry;
 pub(in crate::service) mod state;
@@ -310,10 +311,6 @@ async fn spawn_execution(
 ) -> Result<ExecResponse, ExecResponse> {
     let started_at_ms = now_ms();
 
-    // Read the clock before the spawn: the tenant is built in the zygote and is
-    // already running when its pid comes back over IPC, so it can exit before we
-    // ever see the pid. Anything reaped after this instant is therefore ours;
-    // anything older belongs to a previous owner of a recycled pid.
     let spawned_at = std::time::Instant::now();
 
     // Step 1: Spawn process using executor selected by BOXLITE_EXECUTOR env var
@@ -322,30 +319,21 @@ async fn spawn_execution(
 
     let leader_pid = child.pid();
     let pid = leader_pid.as_raw() as u32;
+    let identity = identity::ProcessIdentity::capture(leader_pid);
 
-    // Claim this pid's exit slot. A detached exec sends no Wait until its caller
-    // chooses to, so the slot must exist from the spawn rather than from the
-    // wait, or the exit would age out as an ownerless stray in between.
     let reaper = crate::reaper::REAPER
         .get()
         .expect("reaper installed at startup");
-    let claim = reaper.register_claim(leader_pid, spawned_at).await;
+    let exit = reaper.register(leader_pid, spawned_at).await;
 
     // Step 2: Create execution state and register
     // If running inside a container, pass the init health checker for death detection
     let state = match container_ref {
         Some(container) => {
             let health: std::sync::Arc<tokio::sync::Mutex<dyn InitHealthCheck>> = container;
-            state::ExecutionState::new_claimed_with_init_health(
-                child,
-                health,
-                std::sync::Arc::clone(reaper),
-                claim.clone(),
-            )
+            state::ExecutionState::new_with_init_health(child, health, exit, identity)
         }
-        None => {
-            state::ExecutionState::new_claimed(child, std::sync::Arc::clone(reaper), claim.clone())
-        }
+        None => state::ExecutionState::new(child, exit, identity),
     };
     server
         .registry
@@ -355,7 +343,7 @@ async fn spawn_execution(
     // Step 3: Start timeout watcher (if requested)
     if req.timeout_ms > 0 {
         timeout::start_timeout_watcher(
-            timeout::TimeoutTarget::new(std::sync::Arc::clone(reaper), claim, leader_pid),
+            timeout::TimeoutTarget::new(identity),
             execution_id.clone(),
             std::time::Duration::from_millis(req.timeout_ms),
         );

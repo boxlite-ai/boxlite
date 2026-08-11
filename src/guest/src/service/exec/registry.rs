@@ -71,7 +71,7 @@ impl ExecutionRegistry {
     ///
     /// Sends SIGTERM first, waits for exit with timeout, then SIGKILL if needed.
     pub async fn shutdown_all(&self, timeout_ms: u64) {
-        // Step 1: SIGTERM every execution whose claim is still live
+        // Step 1: SIGTERM every execution whose process identity is current.
         let mut states_to_wait = Vec::new();
 
         let states: Vec<_> = self
@@ -82,7 +82,7 @@ impl ExecutionRegistry {
             .map(|(exec_id, state)| (exec_id.clone(), state.clone()))
             .collect();
         for (exec_id, state) in states {
-            match state.signal_owned_leader_if_live(Signal::SIGTERM) {
+            match state.signal_owned_process_if_current(Signal::SIGTERM).await {
                 Ok(true) => {
                     info!(exec_id = %exec_id, "Sending SIGTERM to execution");
                     states_to_wait.push((exec_id, state));
@@ -102,7 +102,13 @@ impl ExecutionRegistry {
         while start.elapsed().as_millis() < timeout_ms as u128 {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-            states_to_wait.retain(|(_, state)| state.owned_leader_is_live());
+            let mut still_running = Vec::new();
+            for (exec_id, state) in states_to_wait {
+                if state.owned_process_is_current().await {
+                    still_running.push((exec_id, state));
+                }
+            }
+            states_to_wait = still_running;
 
             if states_to_wait.is_empty() {
                 info!("All executions exited gracefully");
@@ -112,7 +118,7 @@ impl ExecutionRegistry {
 
         // Step 3: SIGKILL remaining executions
         for (exec_id, state) in &states_to_wait {
-            match state.signal_owned_leader_if_live(Signal::SIGKILL) {
+            match state.signal_owned_process_if_current(Signal::SIGKILL).await {
                 Ok(true) => {
                     warn!(exec_id = %exec_id, "Execution didn't exit gracefully, sending SIGKILL");
                 }
@@ -138,7 +144,7 @@ mod release_tests {
             .expect("test pipe must register with Tokio");
         let exit = ExitSlot::settled_for_test(ExitStatus::Code(7));
         if is_init {
-            ExecutionState::new_init_session(handle, exit)
+            ExecutionState::new_init_session(handle, exit, None)
         } else {
             ExecutionState::new_for_test(handle, exit)
         }
@@ -188,7 +194,7 @@ mod release_tests {
     }
 
     #[tokio::test]
-    async fn shutdown_does_not_signal_an_unclaimed_execution() {
+    async fn shutdown_does_not_signal_an_execution_without_identity() {
         use std::os::unix::process::ExitStatusExt;
 
         let _test_guard = crate::reaper::reap_test_guard().await;
@@ -199,14 +205,14 @@ mod release_tests {
         let pid = child.id() as i32;
         let registry = ExecutionRegistry::new();
         registry
-            .register("unclaimed".into(), settled_state(pid, false))
+            .register("without-identity".into(), settled_state(pid, false))
             .await;
 
         registry.shutdown_all(0).await;
 
         assert!(
             child.try_wait().expect("check child status").is_none(),
-            "registry must not signal a state without an exit claim"
+            "registry must not signal a state without process identity"
         );
         child.kill().expect("kill test child");
         let status = tokio::task::spawn_blocking(move || {
@@ -219,7 +225,7 @@ mod release_tests {
             status.signal(),
             Some(nix::sys::signal::Signal::SIGKILL as i32),
             "child must die from this test's SIGKILL; SIGTERM means shutdown_all \
-             signalled a state that holds no exit claim"
+             signalled a state that has no process identity"
         );
     }
 }
