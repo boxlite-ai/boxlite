@@ -45,15 +45,17 @@ import { RegionBoxAccessGuard } from './guards/region-box-access.guard'
 import { ProxyGuard } from './guards/proxy.guard'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { BoxLastActivity } from './entities/box-last-activity.entity'
+import { BoxMigration } from './entities/box-migration.entity'
 import { BoxActivityService } from './services/box-activity.service'
 import { BoxStateWaiterService } from './services/box-state-waiter.service'
+import { BoxMigrationService } from './services/box-migration.service'
 
 @Module({
   imports: [
     UserModule,
     OrganizationModule,
     RegionModule,
-    TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, Region, Job, BoxLastActivity]),
+    TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, Region, Job, BoxLastActivity, BoxMigration]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
   providers: [
@@ -75,6 +77,7 @@ import { BoxStateWaiterService } from './services/box-state-waiter.service'
     JobStateHandlerService,
     BoxActivityService,
     BoxStateWaiterService,
+    BoxMigrationService,
     BoxAccessGuard,
     RunnerAccessGuard,
     RegionRunnerAccessGuard,
