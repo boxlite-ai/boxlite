@@ -45,7 +45,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// The execution core, addressed in native types.
 ///
@@ -320,6 +320,13 @@ async fn spawn_execution(
     let leader_pid = child.pid();
     let pid = leader_pid.as_raw() as u32;
     let identity = identity::ProcessIdentity::capture(leader_pid);
+    if identity.is_none() {
+        warn!(
+            execution_id = %execution_id,
+            pid = leader_pid.as_raw(),
+            "failed to capture process identity; signals will be skipped"
+        );
+    }
 
     let reaper = crate::reaper::REAPER
         .get()

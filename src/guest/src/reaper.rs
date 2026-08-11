@@ -189,13 +189,6 @@ impl Inner {
 }
 
 impl Reaper {
-    #[cfg(test)]
-    pub(crate) fn new_for_test() -> Arc<Self> {
-        Arc::new(Self {
-            inner: Mutex::new(Inner::default()),
-        })
-    }
-
     /// Become a child-subreaper and spawn the reap loop. Call once, inside the
     /// tokio runtime, before any container init is created.
     pub(crate) fn install() -> Arc<Reaper> {
@@ -400,7 +393,6 @@ mod tests {
     //! the race handling — without the OS-level `waitpid(-1)`/SIGCHLD loop. We
     //! drive `deliver()` directly to stand in for what `drain()` would do.
 
-    use std::os::unix::process::ExitStatusExt;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 

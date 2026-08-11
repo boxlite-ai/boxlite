@@ -371,6 +371,13 @@ impl ContainerService for GuestServer {
                     Ok(Some(handle)) => {
                         let identity =
                             crate::service::exec::identity::ProcessIdentity::capture(handle.pid());
+                        if identity.is_none() {
+                            warn!(
+                                container_id = %container_id,
+                                pid = handle.pid().as_raw(),
+                                "failed to capture init process identity; signals will be skipped"
+                            );
+                        }
                         // Register init's exit slot and the follow-up the reaper
                         // fires on delivery (docker semantics: the box
                         // stops when init exits). Init is created but not yet
