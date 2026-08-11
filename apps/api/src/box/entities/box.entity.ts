@@ -266,7 +266,7 @@ export class Box {
     if (this.pending && String(this.state) === String(this.desiredState)) {
       changes.pending = false
     }
-    if (this.state === BoxState.ERROR) {
+    if (this.state === BoxState.ERROR && this.desiredState !== BoxDesiredState.DESTROYED) {
       changes.pending = false
     }
 

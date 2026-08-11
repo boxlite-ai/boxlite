@@ -312,6 +312,10 @@ const configuration = {
     apiVersion: (process.env.DEFAULT_RUNNER_API_VERSION || '2') as '0' | '2',
     name: process.env.DEFAULT_RUNNER_NAME,
   },
+  draining: {
+    // Running boxes are left untouched unless operators explicitly opt in.
+    force: process.env.DRAINING_FORCE === 'true',
+  },
   runnerScore: {
     thresholds: {
       declarativeBuild: parseInt(process.env.RUNNER_DECLARATIVE_BUILD_SCORE_THRESHOLD || '10', 10),

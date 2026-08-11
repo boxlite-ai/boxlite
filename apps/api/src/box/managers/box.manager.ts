@@ -6,7 +6,10 @@
 
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common'
 import { Cron, CronExpression } from '@nestjs/schedule'
+import { InjectRedis } from '@nestjs-modules/ioredis'
 import { randomUUID } from 'crypto'
+import { Redis } from 'ioredis'
+import { In, Not } from 'typeorm'
 
 import { BoxConflictError } from '../errors/box-conflict.error'
 import { JobConflictError } from '../errors/job-conflict.error'
@@ -41,6 +44,7 @@ import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { sanitizeBoxError } from '../utils/sanitize-error.util'
 import { Box } from '../entities/box.entity'
+import { TypedConfigService } from '../../config/typed-config.service'
 
 @Injectable()
 export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown {
@@ -56,6 +60,8 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
     private readonly boxStartAction: BoxStartAction,
     private readonly boxStopAction: BoxStopAction,
     private readonly boxDestroyAction: BoxDestroyAction,
+    @InjectRedis() private readonly redis: Redis,
+    private readonly configService: TypedConfigService,
   ) {}
 
   async onApplicationShutdown() {
@@ -224,6 +230,102 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
     }
   }
 
+  @Cron(CronExpression.EVERY_10_SECONDS, { name: 'draining-runner-boxes-check' })
+  @TrackJobExecution()
+  @LogExecution('draining-runner-boxes-check')
+  @WithInstrumentation()
+  async drainingRunnerBoxesCheck(): Promise<void> {
+    const lockKey = 'draining-runner-boxes-check'
+    if (!(await this.redisLockProvider.lock(lockKey, 10 * 60))) {
+      return
+    }
+
+    try {
+      const cursorKey = 'draining-runner-boxes-skip'
+      const skip = Number((await this.redis.get(cursorKey)) || 0)
+      const drainingRunners = await this.runnerService.findDrainingPaginated(skip, 10)
+
+      if (drainingRunners.length === 0) {
+        await this.redis.set(cursorKey, 0)
+        return
+      }
+
+      await this.redis.set(cursorKey, skip + drainingRunners.length)
+      const force = this.configService.get('draining.force')
+
+      await Promise.allSettled(
+        drainingRunners.map(async (runner) => {
+          try {
+            const states = force
+              ? [BoxState.STARTED, BoxState.STOPPED, BoxState.ERROR]
+              : [BoxState.STOPPED, BoxState.ERROR]
+            const boxes = await this.boxRepository.find({
+              where: {
+                runnerId: runner.id,
+                state: In(states),
+                desiredState: Not(BoxDesiredState.DESTROYED),
+                pending: false,
+              },
+              take: 100,
+            })
+
+            await Promise.allSettled(boxes.map((box) => this.drainBox(box, force)))
+          } catch (error) {
+            this.logger.error(`Error draining boxes from runner ${runner.id}:`, error)
+          }
+        }),
+      )
+    } finally {
+      await this.redisLockProvider.unlock(lockKey)
+    }
+  }
+
+  private async drainBox(box: Box, force: boolean): Promise<void> {
+    const lockKey = getStateChangeLockKey(box.id)
+    if (!(await this.redisLockProvider.lock(lockKey, 30))) {
+      return
+    }
+
+    let forceStop = false
+    let shouldSync = false
+    try {
+      if (box.state === BoxState.STARTED && force) {
+        await this.boxRepository.updateWhere(box.id, {
+          updateData: { desiredState: BoxDesiredState.STOPPED, pending: true },
+          whereCondition: {
+            state: BoxState.STARTED,
+            desiredState: BoxDesiredState.STARTED,
+            pending: false,
+          },
+        })
+        forceStop = true
+        shouldSync = true
+      } else if ([BoxState.STOPPED, BoxState.ERROR].includes(box.state)) {
+        await this.boxRepository.updateWhere(box.id, {
+          updateData: Box.getSoftDeleteUpdate(box),
+          whereCondition: {
+            state: box.state,
+            desiredState: box.desiredState,
+            pending: false,
+          },
+        })
+        shouldSync = true
+      }
+    } catch (error) {
+      this.logger.error(`Error preparing box ${box.id} for runner drain:`, error)
+    } finally {
+      await this.redisLockProvider.unlock(lockKey)
+    }
+
+    if (shouldSync) {
+      try {
+        await this.syncInstanceState(box.id, forceStop)
+      } catch (error) {
+        this.logger.error(`Error syncing box ${box.id} during runner drain:`, error)
+      }
+    }
+  }
+
   @Cron(CronExpression.EVERY_10_SECONDS, { name: 'sync-states' })
   @TrackJobExecution()
   @WithInstrumentation()
@@ -331,7 +433,10 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
       })
 
       while (new Date().getTime() - startedAt.getTime() <= 10000) {
-        if ([BoxState.DESTROYED, BoxState.RESIZING].includes(box.state) || box.state === BoxState.ERROR) {
+        if (
+          [BoxState.DESTROYED, BoxState.RESIZING].includes(box.state) ||
+          (box.state === BoxState.ERROR && box.desiredState !== BoxDesiredState.DESTROYED)
+        ) {
           // Break sync loop if box reaches a terminal state.
           break
         }
