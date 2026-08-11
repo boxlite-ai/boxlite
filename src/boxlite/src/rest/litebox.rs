@@ -648,10 +648,8 @@ async fn attach_ws(
     .await;
 }
 
-/// Decode as much of `payload` as forms valid UTF-8, prepending any bytes
-/// carried over from a previous call. A codepoint split across two frames
-/// stays buffered in `pending` until the rest arrives, instead of the
-/// incomplete tail being replaced with U+FFFD.
+/// Decodes `payload` as UTF-8, carrying an incomplete trailing codepoint
+/// over in `pending` instead of replacing it with U+FFFD.
 fn decode_utf8_streaming(pending: &mut Vec<u8>, payload: &[u8]) -> String {
     pending.extend_from_slice(payload);
     match std::str::from_utf8(pending) {
@@ -666,11 +664,8 @@ fn decode_utf8_streaming(pending: &mut Vec<u8>, payload: &[u8]) -> String {
                 .expect("bytes before valid_up_to are always valid UTF-8")
                 .to_string();
             if e.error_len().is_none() {
-                // Incomplete sequence at the end of the buffer -- keep it
-                // for the next frame.
                 pending.drain(..valid_up_to);
             } else {
-                // Genuinely invalid bytes; buffering them won't help.
                 pending.clear();
             }
             text
@@ -717,8 +712,7 @@ async fn attach_ws_pump(
     // Sticky across reconnects: once the server has ever sent a frame the
     // exec is real, so a later reconnect uses the steady-state watchdog.
     let mut first_frame_seen = false;
-    // Trailing bytes of a UTF-8 codepoint split across two frames, held
-    // here until the rest arrives. Independent per channel.
+    // Per-channel carry buffers for decode_utf8_streaming.
     let mut stdout_pending: Vec<u8> = Vec::new();
     let mut stderr_pending: Vec<u8> = Vec::new();
 
@@ -1624,10 +1618,6 @@ mod tests {
     }
 
     // ─── ws_stdout_utf8_split_across_frames ───────────────────────────────
-    //
-    // A multi-byte UTF-8 codepoint (€, bytes E2 82 AC) is split across two
-    // stdout binary frames. The client must reassemble it instead of
-    // replacing the incomplete tail with U+FFFD per frame.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ws_stdout_utf8_split_across_frames() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1679,10 +1669,6 @@ mod tests {
     }
 
     // ─── ws_stdout_utf8_split_across_frames_4byte ──────────────────────────
-    //
-    // A 4-byte UTF-8 codepoint (😀, bytes F0 9F 98 80) is split across two
-    // stdout binary frames at every possible boundary (after 1, 2, or 3
-    // bytes). The client must reassemble it in every case.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ws_stdout_utf8_split_across_frames_4byte() {
         let emoji: [u8; 4] = [0xF0, 0x9F, 0x98, 0x80]; // 😀
@@ -1741,6 +1727,70 @@ mod tests {
 
             attach.await.unwrap();
             server.abort();
+        }
+    }
+
+    // ─── ws_stdout_utf8_split_across_frames_tui_chars ──────────────────────
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_stdout_utf8_split_across_frames_tui_chars() {
+        let cases: [(&str, [u8; 3]); 2] = [("─", [0xE2, 0x94, 0x80]), ("⠋", [0xE2, 0xA0, 0x8B])];
+
+        for (expected, bytes) in cases {
+            for split_at in 1..3 {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+                let state_clone = state.clone();
+                let (first, second) = bytes.split_at(split_at);
+                let mut first_frame = vec![0x01];
+                first_frame.extend_from_slice(first);
+                let mut second_frame = vec![0x01];
+                second_frame.extend_from_slice(second);
+
+                let server = tokio::spawn(async move {
+                    run_server(listener, state_clone, None, |mut ws, _state| async move {
+                        ws.send(Message::Binary(first_frame)).await.unwrap();
+                        ws.send(Message::Binary(second_frame)).await.unwrap();
+                        ws.send(Message::Text(r#"{"type":"exit","exit_code":0}"#.into()))
+                            .await
+                            .unwrap();
+                        let _ = ws.close(None).await;
+                    })
+                    .await;
+                });
+
+                let client = client_for(port);
+                let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+                let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+                let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+                let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+                let attach = tokio::spawn(async move {
+                    attach_ws(
+                        &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+                    )
+                    .await;
+                });
+
+                tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+                    .await
+                    .expect("result channel timed out")
+                    .expect("result channel closed without value");
+
+                let mut received = String::new();
+                while let Ok(Some(chunk)) =
+                    tokio::time::timeout(Duration::from_millis(200), stdout_rx.recv()).await
+                {
+                    received.push_str(&chunk);
+                }
+                assert_eq!(
+                    received, expected,
+                    "{expected:?} split at byte {split_at} failed to reassemble"
+                );
+
+                attach.await.unwrap();
+                server.abort();
+            }
         }
     }
 
