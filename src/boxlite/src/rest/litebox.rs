@@ -1678,6 +1678,72 @@ mod tests {
         server.abort();
     }
 
+    // ─── ws_stdout_utf8_split_across_frames_4byte ──────────────────────────
+    //
+    // A 4-byte UTF-8 codepoint (😀, bytes F0 9F 98 80) is split across two
+    // stdout binary frames at every possible boundary (after 1, 2, or 3
+    // bytes). The client must reassemble it in every case.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_stdout_utf8_split_across_frames_4byte() {
+        let emoji: [u8; 4] = [0xF0, 0x9F, 0x98, 0x80]; // 😀
+
+        for split_at in 1..4 {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+            let state_clone = state.clone();
+            let (first, second) = emoji.split_at(split_at);
+            let mut first_frame = vec![0x01];
+            first_frame.extend_from_slice(first);
+            let mut second_frame = vec![0x01];
+            second_frame.extend_from_slice(second);
+
+            let server = tokio::spawn(async move {
+                run_server(listener, state_clone, None, |mut ws, _state| async move {
+                    ws.send(Message::Binary(first_frame)).await.unwrap();
+                    ws.send(Message::Binary(second_frame)).await.unwrap();
+                    ws.send(Message::Text(r#"{"type":"exit","exit_code":0}"#.into()))
+                        .await
+                        .unwrap();
+                    let _ = ws.close(None).await;
+                })
+                .await;
+            });
+
+            let client = client_for(port);
+            let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+            let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+            let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+            let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+            let attach = tokio::spawn(async move {
+                attach_ws(
+                    &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+                )
+                .await;
+            });
+
+            tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+                .await
+                .expect("result channel timed out")
+                .expect("result channel closed without value");
+
+            let mut received = String::new();
+            while let Ok(Some(chunk)) =
+                tokio::time::timeout(Duration::from_millis(200), stdout_rx.recv()).await
+            {
+                received.push_str(&chunk);
+            }
+            assert_eq!(
+                received, "😀",
+                "split at byte {split_at} failed to reassemble"
+            );
+
+            attach.await.unwrap();
+            server.abort();
+        }
+    }
+
     // ─── ws_close_without_exit_falls_back_to_status ──────────────────────
     //
     // Server sends one stdout frame, then closes WITHOUT an exit frame.
