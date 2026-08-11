@@ -426,6 +426,12 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
     default: false,
     type: 'boolean',
   })
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.approve_dev_commerce_teardown, {
+    description: 'One-run approval for the reviewed dev Commerce resource teardown',
+    required: true,
+    default: false,
+    type: 'boolean',
+  })
   const configReleaseInput = workflow.on.workflow_dispatch.inputs.config_release
   assert.ok(configReleaseInput, 'the optional immutable config_release input is missing')
   assert.equal(configReleaseInput.type, 'string')
@@ -723,6 +729,10 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
     previewStep.env.BOXLITE_DEPLOY_CONFIG_RELEASE,
     '${{ steps.deployment-config.outputs.release }}',
   )
+  assert.equal(
+    previewStep.env.APPROVE_DEV_COMMERCE_TEARDOWN,
+    "${{ inputs.approve_dev_commerce_teardown && 'true' || 'false' }}",
+  )
   // Every executed line and its order, comments stripped: the scope must reach SST, and nothing
   // may be appended alongside it. Compared as lines rather than one string so rewording a comment
   // does not churn the pin, while adding or dropping a command still fails.
@@ -735,8 +745,10 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
     'args=(diff --stage "$STAGE" --policy .)',
     '[ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")',
     'args+=(--json)',
+    'preview_guard=(node scripts/deployment-preview.mjs)',
+    '[ "$APPROVE_DEV_COMMERCE_TEARDOWN" != "true" ] || preview_guard+=(--approve-dev-commerce-teardown)',
     'npm run --silent sst -- "${args[@]}" |',
-    '  node scripts/deployment-preview.mjs',
+    '  "${preview_guard[@]}"',
   ])
   assert.ok(deployStep, 'the deployment step is missing')
   assert.equal(deployStep.if, '${{ inputs.apply }}')
@@ -1798,6 +1810,12 @@ test('release deployment consumes one published version for both components', ()
   // The unanchored source match would have accepted `default: true` plus any later false.
   assert.equal(workflow.on.workflow_dispatch.inputs.allow_downgrade.default, false)
   assert.equal(workflow.on.workflow_dispatch.inputs.allow_downgrade.type, 'boolean')
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.approve_dev_commerce_teardown, {
+    description: 'One-run approval for the reviewed dev Commerce resource teardown.',
+    required: true,
+    default: false,
+    type: 'boolean',
+  })
   const configReleaseInput = workflow.on.workflow_dispatch.inputs.config_release
   assert.ok(configReleaseInput, 'the optional immutable config_release input is missing')
   assert.equal(configReleaseInput.type, 'string')
@@ -1837,10 +1855,16 @@ test('release deployment consumes one published version for both components', ()
     previewStep.env.BOXLITE_DEPLOY_CONFIG_RELEASE,
     '${{ steps.deployment-config.outputs.release }}',
   )
+  assert.equal(
+    previewStep.env.APPROVE_DEV_COMMERCE_TEARDOWN,
+    "${{ inputs.approve_dev_commerce_teardown && 'true' || 'false' }}",
+  )
   assert.deepEqual(liveShell(previewStep.run).split('\n').filter(Boolean), [
     'set -euo pipefail',
+    'preview_guard=(node scripts/deployment-preview.mjs)',
+    '[ "$APPROVE_DEV_COMMERCE_TEARDOWN" != "true" ] || preview_guard+=(--approve-dev-commerce-teardown)',
     'npm run --silent sst -- diff --stage "$STAGE" --policy . --json |',
-    '  node scripts/deployment-preview.mjs',
+    '  "${preview_guard[@]}"',
   ])
   assert.equal(
     deployStep.env.BOXLITE_DEPLOY_CONFIG_RELEASE,

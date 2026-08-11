@@ -140,6 +140,7 @@ const { writeFileSync } = require('node:fs')
 writeFileSync(process.env.SYNTHETIC_SST_CAPTURE, JSON.stringify({
   args: process.argv.slice(2),
   configRelease: process.env.BOXLITE_DEPLOY_CONFIG_RELEASE,
+  installProviders: process.env.BOXLITE_SST_INSTALL_PROVIDERS,
   stackDomain: process.env.STACK_DOMAIN,
 }))
 `,
@@ -167,6 +168,7 @@ writeFileSync(process.env.SYNTHETIC_SST_CAPTURE, JSON.stringify({
     assert.deepEqual(JSON.parse(await readFile(sstCapture, 'utf8')), {
       args: ['install', '--stage', 'ci'],
       configRelease: '',
+      installProviders: '1',
       stackDomain: '',
     })
   } finally {

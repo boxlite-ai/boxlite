@@ -3,6 +3,8 @@
 
 import { createHash } from 'node:crypto'
 
+import { isRuntimeSecretVersionId } from './runtime-secret-version-stages.mjs'
+
 export const DEPLOYMENT_CONFIG_SCHEMA_VERSION = 1
 export const MAX_DEPLOYMENT_CONFIG_BYTES = 4096
 export const DEPLOYMENT_CONFIG_RELEASE_ENV = 'BOXLITE_DEPLOY_CONFIG_RELEASE'
@@ -29,7 +31,6 @@ const STAGE_PATTERN = /^[a-z0-9]{1,20}$/
 const REGION_PATTERN = /^[a-z]{2}(?:-gov)?-[a-z]+-\d+$/
 const ACCOUNT_ID_PATTERN = /^\d{12}$/
 const RELEASE_ID_PATTERN = /^[0-9a-f]{64}$/
-const SECRET_VERSION_ID_PATTERN = /^[A-Za-z0-9-]{32,64}$/
 const SST_AMBIENT_DERIVED_ALLOWLIST = new Set([
   DEPLOYMENT_CONFIG_RELEASE_ENV,
   'BOXLITE_DEPLOY_SCOPE',
@@ -192,6 +193,7 @@ export const DEPLOYMENT_CONFIG_REGISTRY = Object.freeze({
   BOXLITE_RUNNER_STATE_BASELINE: classified('derived'),
   BOXLITE_DEPLOY_SCOPE: classified('derived'),
   BOXLITE_DEPLOYMENT_OPERATION_LOCK_OWNER: classified('derived', { rejectIfConfigured: true }),
+  BOXLITE_SST_INSTALL_PROVIDERS: classified('derived', { rejectIfConfigured: true }),
   API_URL: classified('derived'),
   GHCR_ENABLED: classified('derived'),
   LEGACY_GHCR_SECRET_ARN: classified('derived'),
@@ -423,7 +425,7 @@ export function validateRuntimeSecretGenerations(runtimeSecretGenerations) {
     const generation = runtimeSecretGenerations[name]
     if (
       generation !== PENDING_RUNTIME_SECRET_GENERATION &&
-      (typeof generation !== 'string' || !SECRET_VERSION_ID_PATTERN.test(generation))
+      !isRuntimeSecretVersionId(generation)
     ) {
       throw new Error(`runtime secret generation ${name} must be an AWS Secrets Manager VersionId or pending marker`)
     }

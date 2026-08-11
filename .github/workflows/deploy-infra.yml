@@ -42,6 +42,11 @@ on:
         required: true
         default: false
         type: boolean
+      approve_dev_commerce_teardown:
+        description: 'One-run approval for the reviewed dev Commerce resource teardown'
+        required: true
+        default: false
+        type: boolean
       config_release:
         description: 'Immutable deployment config SHA-256. Blank uses the stage current pointer.'
         required: false
@@ -518,6 +523,7 @@ jobs:
         working-directory: apps/infra
         env:
           BOXLITE_DEPLOY_CONFIG_RELEASE: ${{ steps.deployment-config.outputs.release }}
+          APPROVE_DEV_COMMERCE_TEARDOWN: ${{ inputs.approve_dev_commerce_teardown && 'true' || 'false' }}
         run: |
           set -euo pipefail
           # An array, so an empty scope contributes no argument at all rather than an empty string
@@ -527,8 +533,10 @@ jobs:
           args=(diff --stage "$STAGE" --policy .)
           [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
           args+=(--json)
+          preview_guard=(node scripts/deployment-preview.mjs)
+          [ "$APPROVE_DEV_COMMERCE_TEARDOWN" != "true" ] || preview_guard+=(--approve-dev-commerce-teardown)
           npm run --silent sst -- "${args[@]}" |
-            node scripts/deployment-preview.mjs
+            "${preview_guard[@]}"
 
       - name: Deploy the selected components
         if: ${{ inputs.apply }}

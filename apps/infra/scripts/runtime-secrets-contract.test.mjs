@@ -306,7 +306,7 @@ test('validates the exact nonsecret AWSCURRENT generation map and consumer marke
     () => parseRuntimeSecretGenerations(JSON.stringify({ ...generations, unregistered: 'a'.repeat(32) })),
     /generation|unregistered/i,
   )
-  const invalidSentinel = 'synthetic-generation-value-that-must-not-be-echoed!'
+  const invalidSentinel = `synthetic-generation-value-that-must-not-be-echoed-${'x'.repeat(65)}`
   assert.throws(
     () => parseRuntimeSecretGenerations(JSON.stringify({ ...generations, adminApiKey: invalidSentinel })),
     (error) => /generation|adminApiKey/i.test(error.message) && !error.message.includes(invalidSentinel),
@@ -426,6 +426,11 @@ test('wires every ECS runtime credential through Service.ssm by Secrets Manager 
 
   assert.match(LIVE_SST_CONFIG, /const runtimeSecrets\s*=/)
   assert.match(LIVE_SST_CONFIG, /const runtimeSecretArn\s*=/)
+  assert.match(
+    LIVE_SST_CONFIG,
+    /await import\('\.\/scripts\/runtime-secret-ecs-bindings\.mjs'\)/,
+  )
+  assert.match(LIVE_SST_CONFIG, /const runtimeSecretEcsBindings = new RuntimeSecretEcsBindings\(/)
 
   for (const [component, expectedConsumers] of Object.entries(expectedByService)) {
     const source = serviceSource(component)
@@ -440,7 +445,7 @@ test('wires every ECS runtime credential through Service.ssm by Secrets Manager 
     for (const { id, environmentKey } of expectedConsumers) {
       assert.match(
         ssm,
-        new RegExp(`^\\s*${environmentKey}\\s*:\\s*runtimeSecretArn\\('${id}'\\)\\s*,?`, 'm'),
+        new RegExp(`^\\s*${environmentKey}\\s*:\\s*runtimeSecretEcsBindings\\.arn\\('${id}'\\)\\s*,?`, 'm'),
         `${component}.${environmentKey} must resolve the stable Secrets Manager ARN`,
       )
       assert.doesNotMatch(
@@ -449,6 +454,13 @@ test('wires every ECS runtime credential through Service.ssm by Secrets Manager 
         `${component}.${environmentKey} must not also carry a plaintext task environment value`,
       )
     }
+    assert.match(
+      source,
+      new RegExp(
+        `taskDefinition:\\s*\\([^)]*opts[^)]*\\)\\s*=>\\s*\\{[\\s\\S]*opts\\.dependsOn\\s*=\\s*runtimeSecretEcsBindings\\.initialVersionsFor\\('${component}'\\)`,
+      ),
+      `${component} task definition must wait for every generated initial secret version`,
+    )
   }
 })
 

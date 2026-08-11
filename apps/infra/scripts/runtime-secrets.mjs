@@ -2,9 +2,9 @@
 // Copyright (c) 2026 BoxLite AI
 
 import { PENDING_RUNTIME_SECRET_GENERATION, validateDeploymentConfigStage } from './deployment-config.mjs'
+import { isRuntimeSecretVersionId } from './runtime-secret-version-stages.mjs'
 
 const RESERVED_SECRET_VALUES = new Set(['None', 'unused'])
-const SECRET_VERSION_ID_PATTERN = /^[A-Za-z0-9-]{32,64}$/
 
 export const RUNTIME_SECRET_INITIAL_VALUE_TAG = 'boxlite:initial-value'
 export const RUNTIME_SECRET_INITIALIZATION_TAG = 'boxlite:initialization'
@@ -104,7 +104,7 @@ function isPlainObject(value) {
 function validateRuntimeSecretGeneration(id, value) {
   if (
     typeof value !== 'string' ||
-    (value !== PENDING_RUNTIME_SECRET_GENERATION && !SECRET_VERSION_ID_PATTERN.test(value))
+    (value !== PENDING_RUNTIME_SECRET_GENERATION && !isRuntimeSecretVersionId(value))
   ) {
     throw new Error(`runtime secret generation for ${id} must be an AWSCURRENT version id or generated-pending`)
   }

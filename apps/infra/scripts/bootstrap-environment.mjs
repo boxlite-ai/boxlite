@@ -122,6 +122,10 @@ import {
   resolveRuntimeSecretSeedValues,
   runtimeSecretName,
 } from './runtime-secrets.mjs'
+import {
+  currentRuntimeSecretVersionId,
+  normalizeRuntimeSecretVersionStages,
+} from './runtime-secret-version-stages.mjs'
 import { validateSstSecretMutationArgs } from './sst-command-contract.mjs'
 import { withSstLogSecurity } from './sst-event-log-security.mjs'
 import { resolveSstExecutable } from './sst-executable.mjs'
@@ -412,14 +416,12 @@ function inspectRuntimeSecret(execute, awsCliPath, region, name) {
         killSignal: 'SIGTERM',
       }),
     )
-    const currentVersionIds = Object.entries(metadata.VersionIdsToStages ?? {})
-      .filter(([, stages]) => Array.isArray(stages) && stages.includes('AWSCURRENT'))
-      .map(([versionId]) => versionId)
-    if (currentVersionIds.length > 1) {
-      throw new Error('runtime secret metadata contains multiple AWSCURRENT versions')
-    }
-    const currentVersionId = currentVersionIds[0]
+    const versionStages = normalizeRuntimeSecretVersionStages(metadata, { allowOmitted: true })
+    const currentVersionId = currentRuntimeSecretVersionId(versionStages)
     const hasCurrentValue = currentVersionId !== undefined
+    if (!hasCurrentValue && Object.keys(versionStages).length !== 0) {
+      throw new Error('runtime secret metadata has a staged version without AWSCURRENT')
+    }
     if (!Array.isArray(metadata.Tags)) throw new Error('runtime secret metadata contains invalid tags')
     const readExactTag = (key) => {
       const matches = metadata.Tags.filter((tag) => tag?.Key === key)

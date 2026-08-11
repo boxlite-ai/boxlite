@@ -87,6 +87,55 @@ test('allows pending only for generated ownership and rejects missing, explicit,
     pending,
     Object.fromEntries(RUNTIME_SECRET_DEFINITIONS.map(({ id }) => [id, 'generated-pending'])),
   )
+  const awsEmptyContainerShape = readWithFirstSecret(
+    JSON.stringify({
+      Tags: [
+        { Key: 'boxlite:initial-value', Value: 'generated' },
+        { Key: 'boxlite:initialization', Value: 'pending' },
+      ],
+      VersionIdsToStages: null,
+    }),
+  )
+  assert.deepEqual(awsEmptyContainerShape, pending)
+
+  for (const VersionIdsToStages of [
+    { ['c'.repeat(64)]: ['AWSPENDING'] },
+    { ['c'.repeat(64)]: [] },
+    { ['c'.repeat(64)]: null },
+  ]) {
+    assert.throws(
+      () =>
+        readWithFirstSecret(
+          JSON.stringify({
+            Tags: [
+              { Key: 'boxlite:initial-value', Value: 'generated' },
+              { Key: 'boxlite:initialization', Value: 'pending' },
+            ],
+            VersionIdsToStages,
+          }),
+        ),
+      /could not verify runtime secret generations from AWS metadata/i,
+    )
+  }
+
+  for (const malformedStages of [null, ['x'.repeat(257)]]) {
+    assert.throws(
+      () =>
+        readWithFirstSecret(
+          JSON.stringify({
+            Tags: [
+              { Key: 'boxlite:initial-value', Value: 'explicit' },
+              { Key: 'boxlite:initialization', Value: 'sealed' },
+            ],
+            VersionIdsToStages: {
+              [EXPECTED_VERSION]: ['AWSCURRENT'],
+              ['c'.repeat(64)]: malformedStages,
+            },
+          }),
+        ),
+      /could not verify runtime secret generations from AWS metadata/i,
+    )
+  }
 
   for (const initialValue of [undefined, 'explicit', 'updating', 'unknown-owner-sentinel']) {
     assert.throws(

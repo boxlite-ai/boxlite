@@ -49,6 +49,84 @@ test('pins the AWS provider used by the deployed stack', () => {
   assert.match(liveConfig, /aws:\s*\{\s*version: '7\.24\.0',\s*region: REGION,/)
 })
 
+test('registers Cloudflare only when the credential pair is present', async () => {
+  const { resolveCloudflareProviderRegistration } = await import('./cloudflare-provider-registration.mjs')
+  assert.deepEqual(resolveCloudflareProviderRegistration({}), {})
+  assert.deepEqual(
+    resolveCloudflareProviderRegistration({ BOXLITE_SST_INSTALL_PROVIDERS: '1' }),
+    { cloudflare: '6.15.0' },
+    'credential-free sst install must still declare every pinned provider',
+  )
+  assert.deepEqual(
+    resolveCloudflareProviderRegistration({
+      CLOUDFLARE_API_TOKEN: 'synthetic-token',
+      CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-account',
+    }),
+    { cloudflare: '6.15.0' },
+  )
+  for (const environment of [
+    { CLOUDFLARE_API_TOKEN: 'secret-token-sentinel' },
+    { CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'secret-account-sentinel' },
+  ]) {
+    assert.throws(
+      () => resolveCloudflareProviderRegistration(environment),
+      (error) => {
+        assert.match(error.message, /must be supplied together/)
+        assert.doesNotMatch(error.message, /secret-(?:token|account)-sentinel/)
+        return true
+      },
+    )
+  }
+
+  const appSource = configSection('async app(input)', 'async run()')
+  assert.match(appSource, /resolveCloudflareProviderRegistration/)
+  assert.match(appSource, /\.\.\.cloudflareProviderRegistration/)
+  assert.doesNotMatch(appSource, /cloudflare:\s*'6\.15\.0'/)
+})
+
+test('pins only the historical load-balancer type secrecy and removes container dependencies', () => {
+  const services = [
+    {
+      name: 'Jaeger',
+      source: configSection("const jaeger = new sst.aws.Service('Jaeger'", 'const jaegerOtlpHttpEndpoint'),
+      type: /loadBalancerType\s*=\s*'application'/,
+    },
+    {
+      name: 'OtelCollector',
+      source: configSection(
+        "const otelCollector = new sst.aws.Service('OtelCollector'",
+        'const otelCollectorOtlpHttpUrl',
+      ),
+      type: /loadBalancerType\s*=\s*\$util\.secret\('application'\)/,
+    },
+    {
+      name: 'Api',
+      source: configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role'),
+      type: /loadBalancerType\s*=\s*\$util\.secret\('application'\)/,
+    },
+    {
+      name: 'Proxy',
+      source: configSection("new sst.aws.Service('Proxy'", '// ─── 8.'),
+      type: /loadBalancerType\s*=\s*\$util\.secret\('network'\)/,
+    },
+    {
+      name: 'PgAdmin',
+      source: configSection("new sst.aws.Service('PgAdmin'", '// MailDev is an unauthenticated'),
+      type: /loadBalancerType\s*=\s*\$util\.secret\('application'\)/,
+    },
+    {
+      name: 'MailDev',
+      source: configSection("new sst.aws.Service('MailDev'", '// ─── 9.'),
+      type: /loadBalancerType\s*=\s*'application'/,
+    },
+  ]
+
+  for (const service of services) {
+    assert.doesNotMatch(service.source, /loadBalancer:\s*\$util\.secret\(/, `${service.name} over-taints its LB`)
+    assert.match(service.source, service.type, `${service.name} does not preserve its exact LB type shape`)
+  }
+})
+
 test('applies the deployment permissions boundary to every SST-created IAM role', () => {
   assert.match(liveConfig, /const runtimePermissionsBoundaryArn =/)
   assert.match(liveConfig, /requireIamPermissionsBoundaryStage\(\$app\.stage\)/)

@@ -88,7 +88,11 @@ const runnerEndpoint = (override: string, port: number, scheme: string) => envOr
 export default $config({
   async app(input) {
     const { resolveAwsRegion } = await import('./scripts/deployment-environment.mjs')
+    const { resolveCloudflareProviderRegistration } = await import(
+      './scripts/cloudflare-provider-registration.mjs'
+    )
     const REGION = resolveAwsRegion()
+    const cloudflareProviderRegistration = resolveCloudflareProviderRegistration(process.env)
 
     return {
       name: 'boxlite',
@@ -100,7 +104,7 @@ export default $config({
           region: REGION,
           ...(process.env.AWS_PROFILE ? { profile: process.env.AWS_PROFILE } : {}),
         },
-        cloudflare: '6.15.0',
+        ...cloudflareProviderRegistration,
         random: '4.16.6',
         // command provider: multi-runner post-deploy registration
         // (see RegisterExtraRunners in run()).
@@ -136,6 +140,7 @@ export default $config({
       runtimeSecretName,
       runtimeSecretNeedsGeneratedInitialVersion,
     } = await import('./scripts/runtime-secrets.mjs')
+    const { RuntimeSecretEcsBindings } = await import('./scripts/runtime-secret-ecs-bindings.mjs')
     const REGION = resolveAwsRegion()
     const { accountId } = await aws.getCallerIdentity()
     const workspaceVersion = readWorkspaceVersion()
@@ -296,7 +301,14 @@ export default $config({
       // exposing the version contents or adding a separate edge at every caller.
       return $resolve([secret.arn, initialVersion.versionId]).apply(([arn]) => arn)
     }
-
+    // Keep ECS valueFrom ARNs known during preview. Ordering belongs on each
+    // task definition; hiding it in the ARN makes SST's whole container unknown
+    // and causes its apply-created listeners and targets to appear deleted.
+    const runtimeSecretEcsBindings = new RuntimeSecretEcsBindings({
+      definitions: RUNTIME_SECRET_DEFINITIONS,
+      initialVersions: runtimeSecretInitialVersions,
+      secrets: runtimeSecrets,
+    })
     // App secrets — set via `npm run sst -- secret set <NAME> --stage <stage>`;
     // stored encrypted in SST state and shared per-stage by anyone with deploy
     // access. OIDC_CLIENT_ID is
@@ -494,6 +506,11 @@ export default $config({
         },
       },
       environment: { COLLECTOR_OTLP_ENABLED: 'true' },
+      transform: {
+        loadBalancer: (args) => {
+          args.loadBalancerType = 'application'
+        },
+      },
     })
     const jaegerOtlpHttpEndpoint = stripTrailingSlash(jaeger.url).apply((url) => `${url}:${PORTS.OTLP_HTTP}`)
 
@@ -539,8 +556,19 @@ export default $config({
         JAEGER_OTLP_HTTP_ENDPOINT: jaegerOtlpHttpEndpoint,
       },
       ssm: {
-        CLICKHOUSE_PASSWORD: runtimeSecretArn('clickHouseWriterPassword'),
-        BOXLITE_API_KEY: runtimeSecretArn('otelCollectorApiKey'),
+        CLICKHOUSE_PASSWORD: runtimeSecretEcsBindings.arn('clickHouseWriterPassword'),
+        BOXLITE_API_KEY: runtimeSecretEcsBindings.arn('otelCollectorApiKey'),
+      },
+      transform: {
+        loadBalancer: (args) => {
+          // SST derives this immutable field from the whole Service, so the
+          // legacy task secrets tainted it in state. Preserve only that exact
+          // historical shape while cutting every container dependency.
+          args.loadBalancerType = $util.secret('application')
+        },
+        taskDefinition: (_args, opts) => {
+          opts.dependsOn = runtimeSecretEcsBindings.initialVersionsFor('OtelCollector')
+        },
       },
     })
     const otelCollectorOtlpHttpUrl = stripTrailingSlash(otelCollector.url).apply((url) => `${url}:${PORTS.OTLP_HTTP}`)
@@ -595,7 +623,13 @@ export default $config({
       // guidance: target keep-alive must be >= LB idle).
       transform: {
         loadBalancer: (lbArgs) => {
+          // Preserve the legacy secret bit without retaining dependencies on
+          // the task's generated credentials or downstream Services.
+          lbArgs.loadBalancerType = $util.secret('application')
           lbArgs.idleTimeout = 3600
+        },
+        taskDefinition: (_args, opts) => {
+          opts.dependsOn = runtimeSecretEcsBindings.initialVersionsFor('Api')
         },
       },
       // storage is deliberately NOT linked: the link grant is s3:* on the
@@ -808,14 +842,14 @@ export default $config({
         }),
       },
       ssm: {
-        ENCRYPTION_KEY: runtimeSecretArn('encryptionKey'),
-        ENCRYPTION_SALT: runtimeSecretArn('encryptionSalt'),
-        ADMIN_API_KEY: runtimeSecretArn('adminApiKey'),
-        PROXY_API_KEY: runtimeSecretArn('proxyApiKey'),
-        DEFAULT_RUNNER_API_KEY: runtimeSecretArn('defaultRunnerApiKey'),
-        CLICKHOUSE_PASSWORD: runtimeSecretArn('clickHouseReaderPassword'),
-        OTEL_EXPORTER_OTLP_HEADERS: runtimeSecretArn('otelExporterOtlpHeaders'),
-        OTEL_COLLECTOR_API_KEY: runtimeSecretArn('otelCollectorApiKey'),
+        ENCRYPTION_KEY: runtimeSecretEcsBindings.arn('encryptionKey'),
+        ENCRYPTION_SALT: runtimeSecretEcsBindings.arn('encryptionSalt'),
+        ADMIN_API_KEY: runtimeSecretEcsBindings.arn('adminApiKey'),
+        PROXY_API_KEY: runtimeSecretEcsBindings.arn('proxyApiKey'),
+        DEFAULT_RUNNER_API_KEY: runtimeSecretEcsBindings.arn('defaultRunnerApiKey'),
+        CLICKHOUSE_PASSWORD: runtimeSecretEcsBindings.arn('clickHouseReaderPassword'),
+        OTEL_EXPORTER_OTLP_HEADERS: runtimeSecretEcsBindings.arn('otelExporterOtlpHeaders'),
+        OTEL_COLLECTOR_API_KEY: runtimeSecretEcsBindings.arn('otelCollectorApiKey'),
       },
     })
 
@@ -881,12 +915,18 @@ export default $config({
         OTEL_EXPORTER_OTLP_ENDPOINT: envOr('OTEL_EXPORTER_OTLP_ENDPOINT', otelCollectorOtlpHttpUrl),
       },
       ssm: {
-        PROXY_API_KEY: runtimeSecretArn('proxyApiKey'),
-        OTEL_EXPORTER_OTLP_HEADERS: runtimeSecretArn('otelExporterOtlpHeaders'),
+        PROXY_API_KEY: runtimeSecretEcsBindings.arn('proxyApiKey'),
+        OTEL_EXPORTER_OTLP_HEADERS: runtimeSecretEcsBindings.arn('otelExporterOtlpHeaders'),
       },
       transform: {
-        loadBalancer: (_args, opts) => {
+        loadBalancer: (args, opts) => {
+          // Proxy's NLB type was secret-tainted through Api and Collector.
+          // Keep the historical bit but pin the actual type independently.
+          args.loadBalancerType = $util.secret('network')
           opts.protect = true
+        },
+        taskDefinition: (_args, opts) => {
+          opts.dependsOn = runtimeSecretEcsBindings.initialVersionsFor('Proxy')
         },
         listener: (_args, opts) => {
           opts.protect = true
@@ -946,7 +986,17 @@ export default $config({
         PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: pgAdminMasterPassword,
       },
       ssm: {
-        PGADMIN_DEFAULT_PASSWORD: runtimeSecretArn('pgAdminDefaultPassword'),
+        PGADMIN_DEFAULT_PASSWORD: runtimeSecretEcsBindings.arn('pgAdminDefaultPassword'),
+      },
+      transform: {
+        loadBalancer: (args) => {
+          // Preserve only the legacy password-derived secret bit on the
+          // immutable type; the rest of the load-balancer stays plain.
+          args.loadBalancerType = $util.secret('application')
+        },
+        taskDefinition: (_args, opts) => {
+          opts.dependsOn = runtimeSecretEcsBindings.initialVersionsFor('PgAdmin')
+        },
       },
     })
 
@@ -965,6 +1015,11 @@ export default $config({
       cluster,
       image: IMAGES.maildev,
       loadBalancer: { public: false, rules: [{ listen: '80/http', forward: `${PORTS.MAILDEV_UI}/http` }] },
+      transform: {
+        loadBalancer: (args) => {
+          args.loadBalancerType = 'application'
+        },
+      },
     })
 
     // ─── 9. CDN ROUTES ───────────────────────────────────────────────────────

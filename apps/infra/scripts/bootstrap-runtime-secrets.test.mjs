@@ -57,9 +57,13 @@ class FakeSecretsManager {
             ? [{ Key: 'boxlite:initialization', Value: secret.initialization }]
             : []),
         ],
-        VersionIdsToStages: secret.hasCurrentValue
-          ? { [secret.versionId ?? EXISTING_VERSION_ID]: ['AWSCURRENT'] }
-          : {},
+        ...(secret.omitVersionStages
+          ? {}
+          : {
+              VersionIdsToStages:
+                secret.versionStages ??
+                (secret.hasCurrentValue ? { [secret.versionId ?? EXISTING_VERSION_ID]: ['AWSCURRENT'] } : {}),
+            }),
       })
     }
     if (operation === 'get-secret-value') {
@@ -97,6 +101,88 @@ class FakeSecretsManager {
     )
   }
 }
+
+test('refuses a generated pending container that already has an unexpected staged version', async () => {
+  const { planRuntimeSecrets } = await import('./bootstrap-environment.mjs')
+  const aws = new FakeSecretsManager()
+  const name = runtimeSecretName(STAGE, RUNTIME_SECRET_DEFINITIONS[0].id)
+  aws.secrets.set(name, {
+    initialValue: 'generated',
+    initialization: 'pending',
+    hasCurrentValue: false,
+    versionStages: { [ROTATED_VERSION_ID]: ['AWSPENDING'] },
+  })
+
+  assert.throws(
+    () =>
+      planRuntimeSecrets({
+        awsCliPath: '/fake/aws',
+        region: REGION,
+        stage: STAGE,
+        seeds: [],
+        force: false,
+        execute: aws.execute,
+      }),
+    /could not inspect runtime secret container/i,
+  )
+  assert.deepEqual(aws.mutations(), [], 'unexpected staged metadata must fail during read-only planning')
+})
+
+test('accepts the AWS DescribeSecret shape that omits versions for an empty generated container', async () => {
+  const { planRuntimeSecrets, runtimeSecretGenerationsFromPlan } = await import('./bootstrap-environment.mjs')
+  const aws = new FakeSecretsManager()
+  const definition = RUNTIME_SECRET_DEFINITIONS[0]
+  const name = runtimeSecretName(STAGE, definition.id)
+  aws.secrets.set(name, {
+    initialValue: 'generated',
+    initialization: 'pending',
+    hasCurrentValue: false,
+    omitVersionStages: true,
+  })
+
+  const plan = planRuntimeSecrets({
+    awsCliPath: '/fake/aws',
+    region: REGION,
+    stage: STAGE,
+    seeds: [],
+    force: false,
+    execute: aws.execute,
+  })
+  assert.equal(runtimeSecretGenerationsFromPlan(plan)[definition.id], 'generated-pending')
+  assert.deepEqual(aws.mutations(), [])
+})
+
+test('refuses malformed staged metadata beside an otherwise valid AWSCURRENT version', async () => {
+  const { planRuntimeSecrets } = await import('./bootstrap-environment.mjs')
+  const aws = new FakeSecretsManager()
+  const definition = RUNTIME_SECRET_DEFINITIONS[0]
+  const name = runtimeSecretName(STAGE, definition.id)
+  for (const malformedStages of [null, ['x'.repeat(257)]]) {
+    aws.secrets.set(name, {
+      initialValue: 'explicit',
+      initialization: 'sealed',
+      hasCurrentValue: true,
+      versionStages: {
+        [EXISTING_VERSION_ID]: ['AWSCURRENT'],
+        [ROTATED_VERSION_ID]: malformedStages,
+      },
+    })
+
+    assert.throws(
+      () =>
+        planRuntimeSecrets({
+          awsCliPath: '/fake/aws',
+          region: REGION,
+          stage: STAGE,
+          seeds: [],
+          force: false,
+          execute: aws.execute,
+        }),
+      /could not inspect runtime secret container/i,
+    )
+  }
+  assert.deepEqual(aws.mutations(), [])
+})
 
 test('pins a complete generation map to observed and preplanned AWSCURRENT version ids', async () => {
   const {

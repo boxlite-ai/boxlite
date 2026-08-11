@@ -264,6 +264,7 @@ if (commandContract.needsDeploymentConfig) {
 // separately pinned to /dev/null.
 sstEnvironment.SST_STAGE = stage
 sstEnvironment.SST_LOG = devNull
+sstEnvironment.BOXLITE_SST_INSTALL_PROVIDERS = commandContract.subcommand === 'install' ? '1' : ''
 
 if (commandContract.needsDeploymentConfig) {
   try {

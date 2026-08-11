@@ -14,6 +14,10 @@ import {
   runtimeSecretName,
   runtimeSecretNeedsGeneratedInitialVersion,
 } from './runtime-secrets.mjs'
+import {
+  currentRuntimeSecretVersionId,
+  normalizeRuntimeSecretVersionStages,
+} from './runtime-secret-version-stages.mjs'
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -26,10 +30,10 @@ function parseCurrentGeneration(source) {
   } catch {
     throw new Error('could not verify runtime secret generations from AWS metadata')
   }
-  const versionStages = metadata?.VersionIdsToStages
-  if (!isPlainObject(versionStages)) {
+  if (!isPlainObject(metadata)) {
     throw new Error('could not verify runtime secret generations from AWS metadata')
   }
+  const versionStages = normalizeRuntimeSecretVersionStages(metadata)
   if (!Array.isArray(metadata.Tags)) {
     throw new Error('could not verify runtime secret generations from AWS metadata')
   }
@@ -43,22 +47,17 @@ function parseCurrentGeneration(source) {
   }
   const needsGeneratedInitialVersion = runtimeSecretNeedsGeneratedInitialVersion(requiredTagValues)
 
-  const currentVersionIds = Object.entries(versionStages)
-    .filter(([, stages]) => Array.isArray(stages) && stages.includes('AWSCURRENT'))
-    .map(([versionId]) => versionId)
-  if (currentVersionIds.length === 0) {
-    if (!needsGeneratedInitialVersion) {
+  const currentVersionId = currentRuntimeSecretVersionId(versionStages)
+  if (currentVersionId === undefined) {
+    if (!needsGeneratedInitialVersion || Object.keys(versionStages).length !== 0) {
       throw new Error('could not verify runtime secret generations from AWS metadata')
     }
     return PENDING_RUNTIME_SECRET_GENERATION
   }
-  if (currentVersionIds.length !== 1) {
-    throw new Error('could not verify runtime secret generations from AWS metadata')
-  }
   if (needsGeneratedInitialVersion) {
     throw new Error('could not verify runtime secret generations from AWS metadata')
   }
-  return currentVersionIds[0]
+  return currentVersionId
 }
 
 export function readRuntimeSecretGenerations({

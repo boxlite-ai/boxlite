@@ -2,7 +2,9 @@
 // Copyright (c) 2026 BoxLite AI
 
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import { validateDeploymentPreview } from './deployment-preview.mjs'
 
@@ -20,6 +22,14 @@ const runnerChange = ({
   old: { protect: true, ...(oldInputs ? { inputs: oldInputs } : {}) },
   new: { protect, ...(newInputs ? { inputs: newInputs } : {}) },
   detailedDiff,
+})
+
+const plainDelete = (name, type) => ({
+  op: 'delete',
+  urn: `urn:pulumi:dev::boxlite::${type}::${name}`,
+  type,
+  old: { protect: false },
+  detailedDiff: {},
 })
 
 test('accepts provider and tag-only updates to protected Runner instances', () => {
@@ -121,6 +131,110 @@ test('rejects disruptive or unexplained Runner operations', () => {
   for (const change of unsafeChanges) {
     assert.throws(() => validateDeploymentPreview(JSON.stringify([change])), /unsafe Runner deployment plan/)
   }
+})
+
+test('rejects the real unknown-container plain-delete shape outside an exact reviewed removal', () => {
+  const omittedServiceChildren = [
+    plainDelete('OtelCollectorListenerHTTP4318', 'aws:lb/listener:Listener'),
+    plainDelete('ApiTargetApiHTTP3000', 'aws:lb/targetGroup:TargetGroup'),
+    plainDelete('PgAdminLogGroupPgAdmin', 'aws:cloudwatch/logGroup:LogGroup'),
+    plainDelete('ProxyImageProxy', 'docker-build:index:Image'),
+  ]
+
+  assert.throws(
+    () => validateDeploymentPreview(JSON.stringify(omittedServiceChildren), { stage: 'dev' }),
+    (error) => {
+      assert.match(error.message, /unreviewed resource deletion/)
+      for (const change of omittedServiceChildren) {
+        assert.match(error.message, new RegExp(change.urn.slice(change.urn.lastIndexOf('::') + 2)))
+      }
+      return true
+    },
+  )
+})
+
+test('requires one-run operator approval before accepting a reviewed dev Commerce deletion', () => {
+  const reviewed = plainDelete('CommerceService', 'aws:ecs/service:Service')
+
+  assert.throws(
+    () => validateDeploymentPreview(JSON.stringify([reviewed]), { stage: 'dev' }),
+    /explicit.*approval|approval.*required/i,
+  )
+})
+
+test('allows only the exact dev Commerce teardown and reports it separately', () => {
+  const reviewed = plainDelete('CommerceService', 'aws:ecs/service:Service')
+
+  assert.deepEqual(
+    validateDeploymentPreview(JSON.stringify([reviewed]), {
+      stage: 'dev',
+      approveDevCommerceTeardown: true,
+    }),
+    {
+      changeCount: 1,
+      runnerUpdates: [],
+      reviewedDeletes: [{ name: 'CommerceService', type: 'aws:ecs/service:Service' }],
+    },
+  )
+  for (const rejected of [
+    { ...reviewed, urn: reviewed.urn.replace('::CommerceService', '::CommerceServiceCopy') },
+    { ...reviewed, type: 'aws:iam/role:Role' },
+  ]) {
+    assert.throws(
+      () =>
+        validateDeploymentPreview(JSON.stringify([rejected]), {
+          stage: 'dev',
+          approveDevCommerceTeardown: true,
+        }),
+      /unreviewed resource deletion/,
+    )
+  }
+  assert.throws(
+    () =>
+      validateDeploymentPreview(JSON.stringify([reviewed]), {
+        stage: 'prod',
+        approveDevCommerceTeardown: true,
+      }),
+    /unreviewed resource deletion/,
+  )
+})
+
+test('the CLI accepts only the exact one-run Commerce teardown approval flag', () => {
+  const reviewed = JSON.stringify([plainDelete('CommerceService', 'aws:ecs/service:Service')])
+  const script = fileURLToPath(new URL('./deployment-preview.mjs', import.meta.url))
+  const options = { encoding: 'utf8', env: { ...process.env, SST_STAGE: 'dev' }, input: reviewed }
+
+  const unapproved = spawnSync(process.execPath, [script], options)
+  assert.notEqual(unapproved.status, 0)
+  assert.match(unapproved.stderr, /requires explicit one-run approval/)
+
+  const approved = spawnSync(process.execPath, [script, '--approve-dev-commerce-teardown'], options)
+  assert.equal(approved.status, 0, approved.stderr)
+  assert.match(approved.stdout, /explicitly reviewed dev Commerce deletion/)
+
+  const unknown = spawnSync(process.execPath, [script, '--approve-dev-commerce-teardown=true'], options)
+  assert.notEqual(unknown.status, 0)
+  assert.match(unknown.stderr, /expected no arguments or exactly/)
+})
+
+test('allows replacement cleanup without treating it as an unreviewed plain delete', () => {
+  const cleanup = { ...plainDelete('ApiTask', 'aws:ecs/taskDefinition:TaskDefinition'), op: 'delete-replaced' }
+
+  assert.deepEqual(validateDeploymentPreview(JSON.stringify([cleanup]), { stage: 'dev' }), {
+    changeCount: 1,
+    runnerUpdates: [],
+  })
+})
+
+test('reports the composed deployment safety gate instead of the old Runner-only claim', () => {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./deployment-preview.mjs', import.meta.url))], {
+    encoding: 'utf8',
+    input: '[]',
+  })
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /passed the deployment safety gate/)
+  assert.doesNotMatch(result.stdout, /passed the Runner safety gate/)
 })
 
 test('rejects malformed SST diff output', () => {
