@@ -552,6 +552,7 @@ impl<S: Sandbox> Jailer<S> {
         SandboxContext {
             id: &self.box_id,
             paths,
+            device_paths: self.security.device_paths.clone(),
             resource_limits: &self.security.resource_limits,
             network_enabled: self.security.network_enabled,
             sandbox_profile: self.security.sandbox_profile.as_deref(),

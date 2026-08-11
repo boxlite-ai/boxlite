@@ -951,6 +951,13 @@ pub struct ManagementFlags {
     /// Starting the box fails if the host cannot provide it.
     #[arg(long = "nested-virtualization", hide = true)]
     pub nested_virtualization: bool,
+
+    /// Allow FUSE filesystems in the box.
+    ///
+    /// Grants only the minimum runtime permissions needed by tools such as
+    /// mount-s3: CAP_SYS_ADMIN plus /dev/fuse.
+    #[arg(long)]
+    pub fuse: bool,
 }
 
 impl ManagementFlags {
@@ -975,6 +982,9 @@ impl ManagementFlags {
         }
         if self.nested_virtualization {
             opts.advanced.nested_virtualization = true;
+        }
+        if self.fuse {
+            opts.advanced.fuse = true;
         }
         Ok(())
     }
@@ -1247,6 +1257,7 @@ mod tests {
             detach: false,
             rm: false,
             security: None,
+            fuse: false,
         };
 
         let error = flags
@@ -1856,6 +1867,7 @@ mod tests {
             rm: false,
             security: Some("disable".to_string()),
             nested_virtualization: false,
+            fuse: false,
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts).expect("setting must apply");
@@ -1874,6 +1886,7 @@ mod tests {
             rm: false,
             security: None,
             nested_virtualization: false,
+            fuse: false,
         };
         let mut opts = BoxOptions::default();
         flags
@@ -1894,6 +1907,7 @@ mod tests {
             rm: false,
             security: Some("ultra".to_string()),
             nested_virtualization: false,
+            fuse: false,
         };
         let mut opts = BoxOptions::default();
         let err = flags
@@ -1919,5 +1933,22 @@ mod tests {
             .expect("nested virtualization should apply");
 
         assert!(opts.advanced.nested_virtualization);
+    }
+
+    #[test]
+    fn fuse_flag_applies_minimal_box_options() {
+        let cli = Cli::try_parse_from(["boxlite", "run", "--fuse", "alpine:latest"])
+            .expect("fuse flag should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+
+        let mut opts = BoxOptions::default();
+        args.management
+            .apply_to(&mut opts)
+            .expect("fuse should apply");
+
+        assert!(opts.advanced.fuse);
+        assert_eq!(opts.advanced.security, boxlite::SecurityOptions::default());
     }
 }

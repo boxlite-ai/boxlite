@@ -167,6 +167,13 @@ pub struct SecurityOptions {
     /// If None, uses the built-in modular sandbox profile.
     pub sandbox_profile: Option<PathBuf>,
 
+    /// Linux device nodes to expose to the host-side shim sandbox.
+    ///
+    /// Empty by default. Expert features such as FUSE opt in explicitly so
+    /// ordinary boxes do not inherit extra device access.
+    #[serde(default)]
+    pub device_paths: Vec<PathBuf>,
+
     /// Allow network access inside the sandbox profile.
     ///
     /// Cross-platform: feeds the macOS seatbelt network policy and the Linux
@@ -242,6 +249,7 @@ impl Default for SecurityOptions {
                 max_cpu_time: None, // VM config handles this
             },
             sandbox_profile: None,
+            device_paths: Vec::new(),
             network_enabled: default_network_enabled(),
         }
     }
@@ -273,6 +281,7 @@ impl SecurityOptions {
             env_allowlist: Vec::new(),
             resource_limits: ResourceLimits::default(),
             sandbox_profile: None,
+            device_paths: Vec::new(),
             network_enabled: default_network_enabled(),
         }
     }
@@ -489,6 +498,12 @@ impl SecurityOptionsBuilder {
     /// Add an environment variable to the allowlist.
     pub fn allow_env(&mut self, var: impl Into<String>) -> &mut Self {
         self.inner.env_allowlist.push(var.into());
+        self
+    }
+
+    /// Expose one Linux device node to the host-side shim sandbox.
+    pub fn allow_device(&mut self, path: impl Into<PathBuf>) -> &mut Self {
+        self.inner.device_paths.push(path.into());
         self
     }
 
@@ -717,4 +732,13 @@ pub struct AdvancedBoxOptions {
     #[doc(hidden)]
     #[serde(default)]
     pub nested_virtualization: bool,
+
+    /// Allow FUSE filesystems inside the box.
+    ///
+    /// This is intentionally narrower than disabling the sandbox: it grants the
+    /// container `CAP_SYS_ADMIN` and republishes `/dev/fuse`, while leaving the
+    /// rest of the security profile intact. Use for workloads such as
+    /// `mount-s3` that mount a userspace filesystem.
+    #[serde(default)]
+    pub fuse: bool,
 }

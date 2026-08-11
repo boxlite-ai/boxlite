@@ -10,7 +10,9 @@ use super::{InitCtx, log_task_error, task_start};
 use crate::net::constants::{GATEWAY_IP, GUEST_CIDR, GUEST_INTERFACE};
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
+use crate::portal::interfaces::container::ContainerAdvancedConfig;
 use crate::portal::interfaces::{ContainerInitConfig, GuestInitConfig, NetworkInitConfig};
+use crate::runtime::advanced_options::ContainerCapabilities;
 use async_trait::async_trait;
 use boxlite_shared::ContainerDevice;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -71,6 +73,11 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                 }),
                 crate::runtime::options::NetworkSpec::Disabled => None,
             };
+            let devices = requested_devices(&ctx.config.options);
+            let capabilities = requested_capabilities(
+                &ctx.config.options.advanced.capabilities,
+                ctx.config.options.advanced.fuse,
+            );
             let bootstrap = GuestBootstrapConfig {
                 guest: GuestInitConfig {
                     volumes: volume_mgr.build_guest_mounts(),
@@ -83,14 +90,8 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     mounts: container_mounts.clone(),
                     ca_certs: ctx.ca_cert_pem.iter().cloned().collect(),
                     tty: ctx.config.options.tty,
-                    devices: if ctx.config.options.advanced.nested_virtualization {
-                        vec![kvm_device()]
-                    } else {
-                        Vec::new()
-                    },
-                    advanced: crate::portal::interfaces::container::ContainerAdvancedConfig {
-                        capabilities: ctx.config.options.advanced.capabilities.clone(),
-                    },
+                    devices,
+                    advanced: ContainerAdvancedConfig { capabilities },
                 },
             };
 
@@ -164,4 +165,41 @@ fn kvm_device() -> ContainerDevice {
         destination: "/dev/kvm".to_string(),
         file_mode: Some(0o666),
     }
+}
+
+/// The guest VM's FUSE character device, republished into the OCI workload so
+/// a process such as `mount-s3` can create a userspace filesystem.
+fn fuse_device() -> ContainerDevice {
+    ContainerDevice {
+        source: "/dev/fuse".to_string(),
+        destination: "/dev/fuse".to_string(),
+        file_mode: Some(0o666),
+    }
+}
+
+fn requested_devices(options: &crate::runtime::options::BoxOptions) -> Vec<ContainerDevice> {
+    let mut devices = Vec::new();
+    if options.advanced.nested_virtualization {
+        devices.push(kvm_device());
+    }
+    if options.advanced.fuse {
+        devices.push(fuse_device());
+    }
+    devices
+}
+
+fn requested_capabilities(
+    capabilities: &ContainerCapabilities,
+    fuse: bool,
+) -> ContainerCapabilities {
+    let mut capabilities = capabilities.clone();
+    if fuse
+        && !capabilities.add.iter().any(|capability| {
+            capability.eq_ignore_ascii_case("SYS_ADMIN")
+                || capability.eq_ignore_ascii_case("CAP_SYS_ADMIN")
+        })
+    {
+        capabilities.add.push("SYS_ADMIN".to_string());
+    }
+    capabilities
 }

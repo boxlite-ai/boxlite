@@ -107,6 +107,10 @@ impl Sandbox for BwrapSandbox {
             .dev_bind_if_exists("/dev/net/tun", "/dev/net/tun")
             .with_proc()
             .tmpfs("/tmp");
+        for device in &ctx.device_paths {
+            bwrap_cmd.dev_bind_if_exists(device, device);
+            tracing::debug!(path = %device.display(), "bwrap: dev-bind");
+        }
 
         // =====================================================================
         // Bind all pre-computed paths (system dirs + user volumes)
@@ -193,6 +197,7 @@ mod tests {
         let ctx = SandboxContext {
             id: "test-box",
             paths: vec![],
+            device_paths: vec![],
             resource_limits: limits,
             network_enabled: false,
             sandbox_profile: None,
@@ -237,6 +242,7 @@ mod tests {
             let ctx = SandboxContext {
                 id: "test-box",
                 paths: vec![],
+                device_paths: vec![],
                 resource_limits: limits,
                 network_enabled: false,
                 sandbox_profile: None,

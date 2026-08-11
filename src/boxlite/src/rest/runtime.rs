@@ -127,7 +127,7 @@ impl RuntimeBackend for RestRuntime {
 
         // A server that does not advertise the capability policy would accept
         // the request and drop the field, silently granting default privileges.
-        if !options.advanced.capabilities.is_empty() {
+        if !options.advanced.capabilities.is_empty() || options.advanced.fuse {
             self.client.require_linux_capabilities_enabled().await?;
         }
 
@@ -308,6 +308,16 @@ mod tests {
         }
     }
 
+    fn fuse_options() -> BoxOptions {
+        BoxOptions {
+            advanced: crate::AdvancedBoxOptions {
+                fuse: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     async fn json_server(bodies: Vec<&'static str>) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -393,6 +403,21 @@ mod tests {
         let error = match RuntimeBackend::create(&runtime, capability_options(), None).await {
             Err(error) => error,
             Ok(_) => panic!("an old server must not silently ignore a capability policy"),
+        };
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn fuse_requires_server_capability_advertisement_before_create() {
+        let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let error = match RuntimeBackend::create(&runtime, fuse_options(), None).await {
+            Err(error) => error,
+            Ok(_) => panic!("an old server must not silently ignore fuse policy"),
         };
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));

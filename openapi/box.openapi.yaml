@@ -1594,8 +1594,6 @@ components:
       properties:
         advanced:
           $ref: "#/components/schemas/CreateBoxAdvancedOptions"
-        security:
-          $ref: "#/components/schemas/SecurityPreset"
         name:
           type: string
           description: Unique name within the workspace
@@ -1692,6 +1690,13 @@ components:
       properties:
         capabilities:
           $ref: "#/components/schemas/CreateContainerCapabilities"
+        fuse:
+          type: boolean
+          default: false
+          description: |
+            Allow FUSE filesystems in the box. The server expands this to the
+            minimum required runtime permissions: CAP_SYS_ADMIN and /dev/fuse,
+            while keeping the server-side sandbox security policy in force.
 
     CreateContainerCapabilities:
       type: object

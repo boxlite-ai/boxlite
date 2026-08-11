@@ -1728,6 +1728,8 @@ async fn sanitize_local_options(
     features: &ExperimentalFeatures,
     options: BoxOptions,
 ) -> BoxliteResult<BoxOptions> {
+    let mut options = options;
+    options.apply_advanced_feature_defaults();
     features.require_for_options(&options)?;
     tokio::task::spawn_blocking(move || {
         options.sanitize()?;

@@ -605,12 +605,36 @@ impl BoxOptions {
     }
 
     pub fn sanitize(&self) -> BoxliteResult<()> {
-        self.sanitize_common()?;
+        let mut normalized = self.clone();
+        normalized.apply_advanced_feature_defaults();
+        normalized.sanitize_common()?;
 
-        if let Some(kernel) = &self.advanced.kernel {
+        if let Some(kernel) = &normalized.advanced.kernel {
             kernel.sanitize()?;
         }
         Ok(())
+    }
+
+    /// Apply derived expert settings for opt-in features.
+    pub(crate) fn apply_advanced_feature_defaults(&mut self) {
+        if self.advanced.fuse {
+            if !self.advanced.capabilities.add.iter().any(|capability| {
+                capability.eq_ignore_ascii_case("SYS_ADMIN")
+                    || capability.eq_ignore_ascii_case("CAP_SYS_ADMIN")
+            }) {
+                self.advanced.capabilities.add.push("SYS_ADMIN".into());
+            }
+            let fuse = PathBuf::from("/dev/fuse");
+            if !self
+                .advanced
+                .security
+                .device_paths
+                .iter()
+                .any(|path| path == &fuse)
+            {
+                self.advanced.security.device_paths.push(fuse);
+            }
+        }
     }
 }
 
@@ -1282,6 +1306,29 @@ mod tests {
 
         let legacy: BoxOptions = serde_json::from_str("{}").unwrap();
         assert!(!legacy.advanced.nested_virtualization);
+    }
+
+    #[test]
+    fn fuse_applies_minimal_derived_permissions() {
+        let mut options = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                fuse: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let default_security = options.advanced.security.clone();
+
+        options.apply_advanced_feature_defaults();
+
+        assert_eq!(options.advanced.capabilities.add, vec!["SYS_ADMIN"]);
+        assert_eq!(
+            options.advanced.security.device_paths,
+            vec![PathBuf::from("/dev/fuse")]
+        );
+        let mut expected_security = default_security;
+        expected_security.device_paths = vec![PathBuf::from("/dev/fuse")];
+        assert_eq!(options.advanced.security, expected_security);
     }
 
     #[test]

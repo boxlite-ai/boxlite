@@ -66,6 +66,7 @@ pub(super) struct CreateBoxRequest {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct CreateBoxAdvancedOptions {
     pub capabilities: ContainerCapabilitiesRequest,
+    pub fuse: bool,
 }
 
 #[derive(Clone, Default, Deserialize)]

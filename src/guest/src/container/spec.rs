@@ -70,6 +70,7 @@ fn resolve_device(device: ProtoContainerDevice) -> BoxliteResult<LinuxDevice> {
         }
     }
 
+    ensure_well_known_device(&source)?;
     let metadata = std::fs::symlink_metadata(&source)
         .map_err(|error| unsupported_device(&source, format!("is unavailable: {error}")))?;
     let typ = if metadata.file_type().is_char_device() {
@@ -111,6 +112,21 @@ fn resolve_device(device: ProtoContainerDevice) -> BoxliteResult<LinuxDevice> {
 
 fn unsupported_device(path: &Path, problem: String) -> BoxliteError {
     BoxliteError::Unsupported(format!("container device {} {problem}", path.display()))
+}
+
+fn ensure_well_known_device(path: &Path) -> BoxliteResult<()> {
+    if path != Path::new("/dev/fuse") || path.exists() {
+        return Ok(());
+    }
+
+    nix::sys::stat::mknod(
+        path,
+        nix::sys::stat::SFlag::S_IFCHR,
+        nix::sys::stat::Mode::from_bits_truncate(0o666),
+        nix::sys::stat::makedev(10, 229),
+    )
+    .or_else(|error| if path.exists() { Ok(()) } else { Err(error) })
+    .map_err(|error| unsupported_device(path, format!("could not be created: {error}")))
 }
 
 /// A device path must be absolute, free of `.`/`..`, and name something strictly

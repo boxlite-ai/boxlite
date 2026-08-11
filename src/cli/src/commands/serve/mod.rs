@@ -771,6 +771,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                 add: req.advanced.capabilities.add.clone(),
                 drop: req.advanced.capabilities.drop.clone(),
             },
+            fuse: req.advanced.fuse,
             ..Default::default()
         },
         auto_stop: req.auto_stop,
@@ -1344,6 +1345,21 @@ mod tests {
         let opts = build_box_options(&req).expect("build capability options");
         assert_eq!(opts.advanced.capabilities.add, vec!["SYS_ADMIN"]);
         assert_eq!(opts.advanced.capabilities.drop, vec!["CAP_NET_RAW"]);
+    }
+
+    #[test]
+    fn build_box_options_carries_fuse_from_the_wire_without_security_override() {
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(r#"{"image":"alpine:latest","advanced":{"fuse":true}}"#)
+                .expect("fuse request must deserialize");
+
+        let opts = build_box_options(&req).expect("build fuse options");
+        assert!(opts.advanced.fuse);
+        assert_eq!(
+            opts.advanced.security,
+            boxlite::SecurityOptions::default(),
+            "REST clients may request fuse, but not override server sandbox policy"
+        );
     }
 
     #[test]

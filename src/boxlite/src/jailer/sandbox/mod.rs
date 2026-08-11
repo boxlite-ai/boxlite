@@ -119,6 +119,8 @@ pub struct SandboxContext<'a> {
     pub id: &'a str,
     /// Pre-computed filesystem path access rules.
     pub paths: Vec<PathAccess>,
+    /// Device nodes explicitly allowed inside the sandbox.
+    pub device_paths: Vec<PathBuf>,
     /// Resource limits (for cgroup configuration).
     pub resource_limits: &'a ResourceLimits,
     /// Whether network access is enabled.

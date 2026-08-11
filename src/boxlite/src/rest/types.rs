@@ -182,11 +182,12 @@ impl CreateBoxRequest {
             secrets,
             detach: Some(options.detach),
             tty: options.tty.then_some(true),
-            advanced: (!options.advanced.capabilities.is_empty()).then(|| {
-                CreateBoxAdvancedOptions {
+            advanced: (!options.advanced.capabilities.is_empty() || options.advanced.fuse).then(
+                || CreateBoxAdvancedOptions {
                     capabilities: options.advanced.capabilities.clone(),
-                }
-            }),
+                    fuse: options.advanced.fuse,
+                },
+            ),
             // The deprecated remove-on-stop flag was never applied by the cloud
             // control-plane mapper. Keep remote defaults unchanged and only send
             // the modern lifecycle fields when callers explicitly configure them.
@@ -200,6 +201,12 @@ impl CreateBoxRequest {
 #[derive(Debug, Serialize)]
 pub(crate) struct CreateBoxAdvancedOptions {
     pub capabilities: ContainerCapabilities,
+    #[serde(skip_serializing_if = "is_false")]
+    pub fuse: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Serialize)]
@@ -686,16 +693,40 @@ mod tests {
         let advanced = req.advanced.as_ref().expect("custom policy is serialized");
         assert_eq!(advanced.capabilities.add, ["SYS_ADMIN"]);
         assert_eq!(advanced.capabilities.drop, ["CAP_NET_RAW"]);
+        assert!(!advanced.fuse);
 
         let json = serde_json::to_value(&req).expect("serialize create request");
         assert_eq!(
             json["advanced"]["capabilities"],
             serde_json::json!({"add": ["SYS_ADMIN"], "drop": ["CAP_NET_RAW"]})
         );
+        assert!(json["advanced"].get("fuse").is_none());
 
         let defaults = CreateBoxRequest::from_options(&BoxOptions::default(), None);
         let defaults_json = serde_json::to_value(defaults).expect("serialize defaults");
         assert!(defaults_json.get("advanced").is_none());
+    }
+
+    #[test]
+    fn test_create_box_request_carries_fuse_without_security() {
+        let opts = BoxOptions {
+            advanced: crate::AdvancedBoxOptions {
+                fuse: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let req = CreateBoxRequest::from_options(&opts, None);
+        let advanced = req.advanced.as_ref().expect("fuse policy is serialized");
+        assert!(advanced.fuse);
+
+        let json = serde_json::to_string(&req).expect("serialize create request");
+        assert!(json.contains("\"fuse\":true"));
+        assert!(
+            !json.contains("security"),
+            "fuse must not carry a REST security override: {json}"
+        );
     }
 
     #[test]

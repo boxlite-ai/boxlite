@@ -125,6 +125,7 @@ mod tests {
         SandboxContext {
             id: "test",
             paths: vec![],
+            device_paths: vec![],
             resource_limits: limits,
             network_enabled: false,
             sandbox_profile: None,
