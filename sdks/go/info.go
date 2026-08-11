@@ -38,9 +38,15 @@ type PublishedPort struct {
 }
 
 // NetworkInfo describes the box network and its resolved local publications.
-type NetworkInfo struct {
+// NetworkDirectionInfo is the mode and allowlist for one traffic direction.
+type NetworkDirectionInfo struct {
 	Mode     NetworkMode
 	AllowNet []string
+}
+
+type NetworkInfo struct {
+	Outbound NetworkDirectionInfo
+	Inbound  NetworkDirectionInfo
 	// PublishedPorts is nil when this handle does not know the bindings. A
 	// non-nil empty slice means that the box has no active publications.
 	PublishedPorts []PublishedPort
@@ -188,16 +194,22 @@ func portProtocolFromCValue(protocol uint32) PortProtocol {
 	}
 }
 
+func cNetworkDirectionInfoToGo(direction C.CNetworkDirectionInfo) NetworkDirectionInfo {
+	allowNet := make([]string, 0, int(direction.allow_net_count))
+	if direction.allow_net != nil && direction.allow_net_count > 0 {
+		for _, host := range unsafe.Slice(direction.allow_net, int(direction.allow_net_count)) {
+			allowNet = append(allowNet, cString(host))
+		}
+	}
+	return NetworkDirectionInfo{
+		Mode:     networkModeFromCValue(direction.mode),
+		AllowNet: allowNet,
+	}
+}
+
 func cNetworkInfoToGo(network *C.CNetworkInfo) *NetworkInfo {
 	if network == nil {
 		return nil
-	}
-
-	allowNet := make([]string, 0, int(network.allow_net_count))
-	if network.allow_net != nil && network.allow_net_count > 0 {
-		for _, host := range unsafe.Slice(network.allow_net, int(network.allow_net_count)) {
-			allowNet = append(allowNet, cString(host))
-		}
 	}
 
 	var publishedPorts []PublishedPort
@@ -217,8 +229,8 @@ func cNetworkInfoToGo(network *C.CNetworkInfo) *NetworkInfo {
 	}
 
 	return &NetworkInfo{
-		Mode:           networkModeFromCValue(network.mode),
-		AllowNet:       allowNet,
+		Outbound:       cNetworkDirectionInfoToGo(network.outbound),
+		Inbound:        cNetworkDirectionInfoToGo(network.inbound),
 		PublishedPorts: publishedPorts,
 	}
 }

@@ -264,6 +264,14 @@ typedef struct CImageInfoList {
 // Image list completion.
 typedef void (*CBoxImageListCb)(struct CImageInfoList*, CBoxliteError*, void*);
 
+// Mode and allowlist for one traffic direction. `allow_net` points to
+// `allow_net_count` owned strings, owned by the enclosing [`CNetworkInfo`].
+typedef struct CNetworkDirectionInfo {
+  enum BoxliteNetworkMode mode;
+  char **allow_net;
+  int allow_net_count;
+} CNetworkDirectionInfo;
+
 // A concrete host listener published to a guest port.
 //
 // `host_ip` is owned by the enclosing [`CBoxInfo`].
@@ -286,14 +294,12 @@ typedef struct CPublishedPortList {
 
 // Typed network metadata owned by an enclosing [`CBoxInfo`].
 //
-// `allow_net` points to `allow_net_count` owned strings. `published_ports`
-// is null when the current handle does not know the bindings, non-null and
-// empty when there are no active publications, and otherwise contains
-// concrete bindings.
+// `published_ports` is null when the current handle does not know the
+// bindings, non-null and empty when there are no active publications, and
+// otherwise contains concrete bindings.
 typedef struct CNetworkInfo {
-  enum BoxliteNetworkMode mode;
-  char **allow_net;
-  int allow_net_count;
+  struct CNetworkDirectionInfo outbound;
+  struct CNetworkDirectionInfo inbound;
   struct CPublishedPortList *published_ports;
 } CNetworkInfo;
 

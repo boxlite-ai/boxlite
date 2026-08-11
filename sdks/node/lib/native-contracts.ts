@@ -247,9 +247,14 @@ export interface JsPublishedPort {
   protocol: "tcp" | "udp";
 }
 
-export interface JsNetworkInfo {
+export interface JsNetworkDirectionInfo {
   mode: "enabled" | "disabled";
   allowNet: string[];
+}
+
+export interface JsNetworkInfo {
+  outbound: JsNetworkDirectionInfo;
+  inbound: JsNetworkDirectionInfo;
   /** `null` means unknown to this handle; `[]` means no active publications. */
   publishedPorts: JsPublishedPort[] | null;
 }

@@ -326,16 +326,30 @@ pub struct PublishedPort {
     pub protocol: PortProtocol,
 }
 
+/// Mode and allowlist for one traffic direction, mirroring the shape of
+/// [`crate::runtime::options::OutboundNetworkSpec`] /
+/// [`crate::runtime::options::InboundNetworkSpec`] on the output side.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkDirectionInfo {
+    /// Whether this direction is enabled.
+    pub mode: NetworkMode,
+
+    /// Configured allowlist. Empty means unrestricted when [`Self::mode`] is
+    /// [`NetworkMode::Enabled`]. For `inbound`, this is accepted but not yet
+    /// enforced — see `InboundNetworkSpec`.
+    #[serde(default)]
+    pub allow_net: Vec<String>,
+}
+
 /// Public network metadata for a box.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkInfo {
-    /// Whether the guest network interface is enabled.
-    pub mode: NetworkMode,
+    /// Guest egress: whether the box can reach out, and to where.
+    pub outbound: NetworkDirectionInfo,
 
-    /// Configured outbound network allowlist. Empty means unrestricted when
-    /// [`Self::mode`] is [`NetworkMode::Enabled`].
-    #[serde(default)]
-    pub allow_net: Vec<String>,
+    /// External reachability: whether the box's exposed ports/preview are
+    /// public, and (once enforced) which callers may reach in.
+    pub inbound: NetworkDirectionInfo,
 
     /// Concrete publications for the current runtime lifecycle.
     ///
@@ -424,8 +438,14 @@ impl BoxInfo {
             cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
             network: Some(NetworkInfo {
-                mode: network_config.outbound.mode,
-                allow_net: network_config.outbound.allow_net,
+                outbound: NetworkDirectionInfo {
+                    mode: network_config.outbound.mode,
+                    allow_net: network_config.outbound.allow_net,
+                },
+                inbound: NetworkDirectionInfo {
+                    mode: network_config.inbound.mode,
+                    allow_net: network_config.inbound.allow_net,
+                },
                 published_ports: crate::litebox::ports::resolved_from_state(config, state),
             }),
             labels: HashMap::new(),
@@ -656,12 +676,23 @@ mod tests {
         let info = BoxInfo::new(&config, &BoxState::new());
         let network = info.network.as_ref().expect("local network metadata");
 
-        assert_eq!(network.mode, crate::runtime::options::NetworkMode::Enabled);
-        assert_eq!(network.allow_net, vec!["api.example.com".to_string()]);
+        assert_eq!(
+            network.outbound.mode,
+            crate::runtime::options::NetworkMode::Enabled
+        );
+        assert_eq!(
+            network.outbound.allow_net,
+            vec!["api.example.com".to_string()]
+        );
+        assert_eq!(
+            network.inbound.mode,
+            crate::runtime::options::NetworkMode::Enabled
+        );
         assert_eq!(network.published_ports, Some(Vec::new()));
 
         let serialized = serde_json::to_value(&info).unwrap();
-        assert_eq!(serialized["network"]["mode"], "enabled");
+        assert_eq!(serialized["network"]["outbound"]["mode"], "enabled");
+        assert_eq!(serialized["network"]["inbound"]["mode"], "enabled");
         assert_eq!(
             serialized["network"]["published_ports"],
             serde_json::json!([])

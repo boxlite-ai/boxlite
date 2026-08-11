@@ -1,7 +1,9 @@
 use boxlite::NetworkMode;
 use boxlite::litebox::HealthState as CoreHealthState;
 use boxlite::runtime::options::PortProtocol;
-use boxlite::runtime::types::{BoxInfo, BoxStateInfo, BoxStatus, NetworkInfo, PublishedPort};
+use boxlite::runtime::types::{
+    BoxInfo, BoxStateInfo, BoxStatus, NetworkDirectionInfo, NetworkInfo, PublishedPort,
+};
 use napi::bindgen_prelude::{Either, Null};
 use napi_derive::napi;
 
@@ -48,12 +50,28 @@ impl From<PublishedPort> for JsPublishedPort {
     }
 }
 
-#[napi(object, use_nullable = true)]
+#[napi(object)]
 #[derive(Clone, Debug)]
-pub struct JsNetworkInfo {
+pub struct JsNetworkDirectionInfo {
     pub mode: String,
     #[napi(js_name = "allowNet")]
     pub allow_net: Vec<String>,
+}
+
+impl From<NetworkDirectionInfo> for JsNetworkDirectionInfo {
+    fn from(direction: NetworkDirectionInfo) -> Self {
+        Self {
+            mode: network_mode_to_string(direction.mode),
+            allow_net: direction.allow_net,
+        }
+    }
+}
+
+#[napi(object, use_nullable = true)]
+#[derive(Clone, Debug)]
+pub struct JsNetworkInfo {
+    pub outbound: JsNetworkDirectionInfo,
+    pub inbound: JsNetworkDirectionInfo,
     /// `None` becomes `null` when this handle does not know the bindings; an
     /// empty array means there are no active publications.
     #[napi(js_name = "publishedPorts")]
@@ -63,8 +81,8 @@ pub struct JsNetworkInfo {
 impl From<NetworkInfo> for JsNetworkInfo {
     fn from(network: NetworkInfo) -> Self {
         Self {
-            mode: network_mode_to_string(network.mode),
-            allow_net: network.allow_net,
+            outbound: network.outbound.into(),
+            inbound: network.inbound.into(),
             published_ports: network
                 .published_ports
                 .map(|ports| ports.into_iter().map(JsPublishedPort::from).collect()),
@@ -248,7 +266,8 @@ mod tests {
 
     use boxlite::runtime::options::PortProtocol;
     use boxlite::{
-        BoxID, BoxInfo, BoxStatus, HealthStatus, NetworkInfo, NetworkMode, PublishedPort,
+        BoxID, BoxInfo, BoxStatus, HealthStatus, NetworkDirectionInfo, NetworkInfo, NetworkMode,
+        PublishedPort,
     };
 
     use napi::bindgen_prelude::Either;
@@ -279,8 +298,14 @@ mod tests {
     #[test]
     fn box_info_conversion_preserves_network_and_publication_state() {
         let resolved = JsBoxInfo::from(core_info(Some(NetworkInfo {
-            mode: NetworkMode::Enabled,
-            allow_net: vec!["api.example.com".to_string()],
+            outbound: NetworkDirectionInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: vec!["api.example.com".to_string()],
+            },
+            inbound: NetworkDirectionInfo {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+            },
             published_ports: Some(vec![PublishedPort {
                 guest_port: 3000,
                 host_ip: "127.0.0.1".to_string(),
@@ -293,8 +318,9 @@ mod tests {
             Either::A(network) => network,
             Either::B(_) => panic!("network metadata missing"),
         };
-        assert_eq!(network.mode, "enabled");
-        assert_eq!(network.allow_net, vec!["api.example.com"]);
+        assert_eq!(network.outbound.mode, "enabled");
+        assert_eq!(network.outbound.allow_net, vec!["api.example.com"]);
+        assert_eq!(network.inbound.mode, "disabled");
         let ports = network.published_ports.expect("resolved publications");
         assert_eq!(ports.len(), 1);
         assert_eq!(ports[0].guest_port, 3000);
@@ -303,8 +329,14 @@ mod tests {
         assert_eq!(ports[0].protocol, "tcp");
 
         let resolved_empty = JsBoxInfo::from(core_info(Some(NetworkInfo {
-            mode: NetworkMode::Disabled,
-            allow_net: Vec::new(),
+            outbound: NetworkDirectionInfo {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+            },
+            inbound: NetworkDirectionInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: Vec::new(),
+            },
             published_ports: Some(Vec::new()),
         })));
         let network = match resolved_empty.network {
@@ -319,8 +351,14 @@ mod tests {
         );
 
         let unresolved = JsBoxInfo::from(core_info(Some(NetworkInfo {
-            mode: NetworkMode::Enabled,
-            allow_net: Vec::new(),
+            outbound: NetworkDirectionInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: Vec::new(),
+            },
+            inbound: NetworkDirectionInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: Vec::new(),
+            },
             published_ports: None,
         })));
         let network = match unresolved.network {
