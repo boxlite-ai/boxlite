@@ -378,13 +378,16 @@ impl ExecutionState {
         signal: nix::sys::signal::Signal,
         process_group: bool,
     ) -> Result<bool, nix::errno::Errno> {
-        if self.inner.lock().await.released {
+        let inner = self.inner.lock().await;
+        if inner.released {
             return Ok(false);
         }
         let Some(process) = self.process else {
             return Ok(false);
         };
-        process.signal(signal, process_group)
+        let result = process.signal(signal, process_group);
+        drop(inner);
+        result
     }
 
     pub(crate) async fn owned_process_is_current(&self) -> bool {
