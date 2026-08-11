@@ -90,6 +90,23 @@ describe('BoxManager runner draining', () => {
     expect(manager.syncInstanceState).toHaveBeenCalledWith('started', true)
   })
 
+  it('uses the safe destroy path for recoverable errors until stopped recovery is supported', async () => {
+    const { manager, boxRepository } = createManager()
+    const errored = createBox('recoverable', BoxState.ERROR)
+    errored.recoverable = true
+    boxRepository.find.mockResolvedValue([errored])
+    jest.spyOn(manager, 'syncInstanceState').mockResolvedValue(undefined)
+
+    await manager.drainingRunnerBoxesCheck()
+
+    expect(boxRepository.updateWhere).toHaveBeenCalledWith(
+      errored.id,
+      expect.objectContaining({
+        updateData: expect.objectContaining({ desiredState: BoxDesiredState.DESTROYED }),
+      }),
+    )
+  })
+
   it('does no work when another worker owns the draining lock', async () => {
     const { manager, boxRepository, runnerService, redisLockProvider } = createManager()
     redisLockProvider.lock.mockResolvedValueOnce(false)

@@ -25,7 +25,7 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerAdapterFactory, RunnerInfo } from '../runner-adapter/runnerAdapter'
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { RedisLockProvider, withRedisLockLease } from '../common/redis-lock.provider'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
@@ -43,6 +43,7 @@ import Redis from 'ioredis'
 import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import { getRunnerAssignmentLockKey } from '../utils/lock-key.util'
 
 @Injectable()
 export class RunnerService {
@@ -680,12 +681,31 @@ export class RunnerService {
               const count = currentCount ? parseInt(currentCount, 10) + 1 : 1
 
               if (count >= 3) {
-                // Decommission the runner
-                await this.updateRunner(runner.id, {
-                  state: RunnerState.DECOMMISSIONED,
+                const assignmentLockKey = getRunnerAssignmentLockKey(runner.id)
+                const assignmentLease = await this.redisLockProvider.acquireLease(assignmentLockKey, 30)
+                if (!assignmentLease) {
+                  return
+                }
+
+                await withRedisLockLease(assignmentLease, async (signal) => {
+                  const finalAssignedBoxCount = await this.boxRepository.count({
+                    where: { runnerId: runner.id },
+                  })
+                  if (finalAssignedBoxCount > 0) {
+                    await this.redis.set(redisKey, '0', 'EX', 600)
+                    this.logger.warn(
+                      `Runner ${runner.id} received ${finalAssignedBoxCount} box assignments during decommission verification`,
+                    )
+                    return
+                  }
+
+                  signal.throwIfAborted()
+                  await this.updateRunner(runner.id, {
+                    state: RunnerState.DECOMMISSIONED,
+                  })
+                  await this.redis.del(redisKey)
+                  this.logger.log(`Runner ${runner.id} has been decommissioned after 3 successful draining checks`)
                 })
-                await this.redis.del(redisKey)
-                this.logger.log(`Runner ${runner.id} has been decommissioned after 3 successful draining checks`)
               } else {
                 await this.redis.set(redisKey, count.toString(), 'EX', 600) // 10 minute TTL
                 this.logger.debug(`Runner ${runner.id} draining check passed (${count}/3), no boxes remain assigned`)

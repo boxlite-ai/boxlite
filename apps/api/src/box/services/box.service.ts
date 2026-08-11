@@ -12,8 +12,9 @@ import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
+import { RunnerState } from '../enums/runner-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
-import { RunnerService } from './runner.service'
+import { GetRunnerParams, RunnerService } from './runner.service'
 import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
@@ -50,11 +51,12 @@ import {
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { RedisLockProvider, withRedisLockLease } from '../common/redis-lock.provider'
 import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { validateMountPaths, validateSubpaths } from '../utils/volume-mount-path-validation.util'
 import { BoxRepository } from '../repositories/box.repository'
+import { getRunnerAssignmentLockKey } from '../utils/lock-key.util'
 import { Job } from '../entities/job.entity'
 import { JobService } from './job.service'
 import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
@@ -122,6 +124,42 @@ export class BoxService {
     return `box:${id}:state-change`
   }
 
+  private async persistWithRunnerAssignmentFence(
+    box: Box,
+    runnerParams: GetRunnerParams,
+    persist: () => Promise<Box>,
+  ): Promise<Box> {
+    const excludedRunnerIds = [...(runnerParams.excludedRunnerIds ?? [])]
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const runner = await this.runnerService.getRandomAvailableRunner({ ...runnerParams, excludedRunnerIds })
+      const lockKey = getRunnerAssignmentLockKey(runner.id)
+      const lease = await this.redisLockProvider.acquireLease(lockKey, 30)
+      if (!lease) {
+        excludedRunnerIds.push(runner.id)
+        continue
+      }
+
+      const inserted = await withRedisLockLease(lease, async (signal) => {
+        const currentRunner = await this.runnerService.findOneOrFail(runner.id)
+        if (currentRunner.draining || currentRunner.state !== RunnerState.READY) {
+          excludedRunnerIds.push(runner.id)
+          return null
+        }
+
+        signal.throwIfAborted()
+        box.runnerId = currentRunner.id
+        const result = await persist()
+        signal.throwIfAborted()
+        return result
+      })
+      if (inserted) {
+        return inserted
+      }
+    }
+
+    throw new BadRequestError('No runner remained available while assigning the box')
+  }
+
   private assertBoxNotErrored(box: Box): void {
     if (box.state === BoxState.ERROR) {
       throw new BoxError('Box is in an errored state')
@@ -144,17 +182,13 @@ export class BoxService {
     box.mem = warmPoolItem.mem
     box.disk = warmPoolItem.disk
 
-    // TODO(image-rewrite): box image resolution removed with the image subsystem; rebuild here.
-    const runner = await this.runnerService.getRandomAvailableRunner({
-      regions: [box.region],
-      boxClass: box.class,
-    })
-
-    box.runnerId = runner.id
     box.pending = true
 
-    await this.boxRepository.insert(box)
-    return box
+    return this.persistWithRunnerAssignmentFence(
+      box,
+      { regions: [box.region], boxClass: box.class },
+      () => this.boxRepository.insert(box),
+    )
   }
 
   async create(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
@@ -219,11 +253,6 @@ export class BoxService {
         }
       }
 
-      const runner = await this.runnerService.getRandomAvailableRunner({
-        regions: [region.id],
-        boxClass,
-      })
-
       const box = new Box(region.id, createBoxDto.name)
 
       box.organizationId = organization.id
@@ -264,18 +293,22 @@ export class BoxService {
         box.volumes = this.resolveVolumes(createBoxDto.volumes)
       }
 
-      box.runnerId = runner.id
       box.pending = true
 
       // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),
       // falling back to "cozy-otter-{boxId}" if it collides with the per-org
       // @Unique(['organizationId', 'name']) constraint.
-      const insertedBox = createBoxDto.name
-        ? await this.boxRepository.insert(box)
-        : await persistWithGeneratedBoxName(box.id, (name) => {
-            box.name = name
-            return this.boxRepository.insert(box)
-          })
+      const insertedBox = await this.persistWithRunnerAssignmentFence(
+        box,
+        { regions: [region.id], boxClass },
+        () =>
+          createBoxDto.name
+            ? this.boxRepository.insert(box)
+            : persistWithGeneratedBoxName(box.id, (name) => {
+                box.name = name
+                return this.boxRepository.insert(box)
+              }),
+      )
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))

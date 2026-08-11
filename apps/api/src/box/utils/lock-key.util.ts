@@ -7,3 +7,7 @@
 export function getStateChangeLockKey(id: string): string {
   return `box:${id}:state-change`
 }
+
+export function getRunnerAssignmentLockKey(id: string): string {
+  return `runner:${id}:box-assignment`
+}

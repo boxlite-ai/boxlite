@@ -7,6 +7,7 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common'
 import { BoxService } from './box.service'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { RunnerState } from '../enums/runner-state.enum'
 import { BoxEvents } from '../constants/box-events.constants'
 
 // ensureStartedForProxy touches boxRepository + eventEmitter +
@@ -293,6 +294,17 @@ describe('BoxService network tunnel URLs', () => {
 describe('BoxService public defaults', () => {
   function makeCreateService() {
     const boxRepository = { insert: jest.fn(async (box: any) => box) } as any
+    const runner = { id: 'runner-1', draining: false, state: RunnerState.READY }
+    const runnerService = {
+      getRandomAvailableRunner: jest.fn().mockResolvedValue(runner),
+      findOneOrFail: jest.fn().mockResolvedValue(runner),
+    }
+    const redisLockProvider = {
+      acquireLease: jest.fn().mockResolvedValue({
+        signal: new AbortController().signal,
+        release: jest.fn().mockResolvedValue(undefined),
+      }),
+    }
     const service = Object.create(BoxService.prototype) as BoxService
     Object.assign(service as any, {
       getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
@@ -303,12 +315,13 @@ describe('BoxService public defaults', () => {
         rollbackPendingUsage: jest.fn().mockResolvedValue(undefined),
       },
       redis: { exists: jest.fn().mockResolvedValue(1) },
-      runnerService: { getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: 'runner-1' }) },
+      runnerService,
+      redisLockProvider,
       boxRepository,
       eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
       toBoxDto: jest.fn((box) => box),
     })
-    return { service, boxRepository }
+    return { service, boxRepository, runnerService, redisLockProvider }
   }
 
   it.each([
@@ -320,6 +333,19 @@ describe('BoxService public defaults', () => {
     await service.create({ name: 'fresh-box', public: requestedPublic } as any, { id: 'org-1' } as any)
 
     expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }))
+  })
+
+  it('rechecks runner eligibility under the assignment fence before inserting', async () => {
+    const { service, boxRepository, runnerService, redisLockProvider } = makeCreateService()
+    runnerService.findOneOrFail
+      .mockResolvedValueOnce({ id: 'runner-1', draining: true, state: RunnerState.READY })
+      .mockResolvedValueOnce({ id: 'runner-1', draining: false, state: RunnerState.READY })
+
+    await service.create({ name: 'fenced-box' } as any, { id: 'org-1' } as any)
+
+    expect(redisLockProvider.acquireLease).toHaveBeenCalledWith('runner:runner-1:box-assignment', 30)
+    expect(runnerService.findOneOrFail).toHaveBeenCalledTimes(2)
+    expect(boxRepository.insert).toHaveBeenCalledTimes(1)
   })
 
   it.each([

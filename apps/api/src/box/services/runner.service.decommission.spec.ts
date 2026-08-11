@@ -21,6 +21,10 @@ describe('RunnerService decommission verification', () => {
     const redisLockProvider = {
       lock: jest.fn().mockResolvedValue(true),
       unlock: jest.fn().mockResolvedValue(undefined),
+      acquireLease: jest.fn().mockResolvedValue({
+        signal: new AbortController().signal,
+        release: jest.fn().mockResolvedValue(undefined),
+      }),
     }
     const configService = { getOrThrow: jest.fn().mockReturnValue(1) }
     const redis = {
@@ -79,5 +83,16 @@ describe('RunnerService decommission verification', () => {
     await service.updateDrainingStatus('runner-1', false)
 
     expect(redis.del).toHaveBeenCalledWith('runner:draining-check:runner-1')
+  })
+
+  it('does not publish decommission when an assignment appears after taking the assignment fence', async () => {
+    const { service, runnerRepository, boxRepository, redis, redisLockProvider } = createService(0, '2')
+    boxRepository.count.mockResolvedValueOnce(0).mockResolvedValueOnce(1)
+
+    await (service as any).handleCheckDecommissionRunners()
+
+    expect(runnerRepository.update).not.toHaveBeenCalled()
+    expect(redis.set).toHaveBeenCalledWith('runner:draining-check:runner-1', '0', 'EX', 600)
+    expect(redisLockProvider.acquireLease).toHaveBeenCalledWith('runner:runner-1:box-assignment', 30)
   })
 })
