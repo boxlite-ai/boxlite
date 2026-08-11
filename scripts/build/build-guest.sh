@@ -20,10 +20,12 @@ SCRIPT_DIR="$(cd "$SCRIPT_BUILD_DIR/.." && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/setup/setup-common.sh"
+# shellcheck source=../util.sh
+source "$SCRIPT_DIR/util.sh"
 
 # Parse command-line arguments
 parse_args() {
-    PROFILE="release"
+    PROFILE="${PROFILE:-release}"
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -51,20 +53,18 @@ parse_args "$@"
 
 # Detect OS
 OS=$(detect_os)
-print_header "Building boxlite-guest on $OS..."
 
 # Verify prerequisites (fail fast)
 check_prerequisites() {
     print_section "Checking prerequisites..."
     require_command "rustc" "Run: scripts/setup/setup-macos.sh (or setup-ubuntu.sh)"
-    require_musl
+    init_musl_toolchain "$GUEST_TARGET"
     print_success "All prerequisites satisfied"
     echo ""
 }
 
 # Ensure Rust target is added
 setup_rust_target() {
-    source "$SCRIPT_DIR/util.sh"
     print_step "Checking Rust target $GUEST_TARGET... "
     if rustup target list | grep -q "$GUEST_TARGET (installed)"; then
         print_success "Already installed"
@@ -75,8 +75,7 @@ setup_rust_target() {
     fi
 }
 
-# Build the guest binary
-build_guest_binary() {
+_build_guest_binary_with_libseccomp() {
     cd "$PROJECT_ROOT"
     echo "🔨 Building guest binary for $GUEST_TARGET $PROFILE..."
     local build_flag=""
@@ -84,62 +83,50 @@ build_guest_binary() {
         build_flag="--release"
     fi
 
-    # macOS cross-compilation needs musl-cross linker.
-    # The project .cargo/config.toml is platform-agnostic (no linker).
-    # Set the linker via env var as fallback if ~/.cargo/config.toml isn't configured.
-    if [ "$OS" = "macos" ]; then
-        local arch_prefix
-        arch_prefix=$(echo "$GUEST_TARGET" | cut -d'-' -f1)
-        local env_var_name
-        env_var_name="CARGO_TARGET_$(echo "$GUEST_TARGET" | tr '[:lower:]-' '[:upper:]_')_LINKER"
-        if [ -z "${!env_var_name:-}" ]; then
-            export "$env_var_name=${arch_prefix}-linux-musl-gcc"
-        fi
-    fi
+    cargo build $build_flag --target "$GUEST_TARGET" -p boxlite-guest
+}
 
-    # libseccomp is enabled in src/guest/Cargo.toml ("libseccomp" feature on
-    # libcontainer). The Rust libseccomp-sys crate needs libseccomp.a built for
-    # the *target* triple. Build/cache it and export the env vars libseccomp-sys
-    # reads in its build.rs.
+# Build the guest binary while Cargo and libseccomp-sys consume one immutable
+# cache generation. The physical path also makes Cargo rerun libseccomp-sys when
+# publication selects a different generation.
+build_guest_binary() {
     # shellcheck source=./build-libseccomp.sh
     source "$SCRIPT_BUILD_DIR/build-libseccomp.sh"
-    ensure_libseccomp_for_target "$GUEST_TARGET"
+    with_libseccomp_for_target \
+        "$GUEST_TARGET" _build_guest_binary_with_libseccomp
+}
 
-    cargo build $build_flag --target "$GUEST_TARGET" -p boxlite-guest
+build_guest_tools() {
+    # shellcheck source=./build-e2fsprogs-guest.sh
+    source "$SCRIPT_BUILD_DIR/build-e2fsprogs-guest.sh"
+    ensure_guest_e2fsprogs_for_target "$GUEST_TARGET" "$PROFILE"
+}
 
-    # Verify guest binary is statically linked
-    local guest_binary="$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/boxlite-guest"
-    local file_output
-    file_output=$(file "$guest_binary")
-    if echo "$file_output" | grep -q "dynamically linked"; then 
-        local musl_arch
-        musl_arch=$(echo "$GUEST_TARGET" | cut -d'-' -f1)
-        local musl_gcc="${musl_arch}-linux-musl-gcc"
+verify_guest_artifacts() {
+    # shellcheck source=./verify-guest-elf.sh
+    source "$SCRIPT_BUILD_DIR/verify-guest-elf.sh"
 
-        print_error "boxlite-guest is dynamically linked, but must be statically linked"
-        echo ""
-        echo "❌ Error: The boxlite-guest binary must be statically linked."
-        echo ""
-        echo "The guest binary at $guest_binary is dynamically linked, which means"
-        echo "it depends on shared libraries that won't be available inside the VM."
-        echo ""
-        echo "🔧 To fix this issue:"
-        echo "  Check your $musl_gcc version:"
-        echo "  $ $musl_gcc --version"
-        echo "  Verify whether your C compiler is a gnu-gcc wrapper instead of true musl-gcc"
-        echo ""
-        exit 1
-    fi
+    local output_dir="$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE"
+    local guest_binary="$output_dir/boxlite-guest"
+    local tools_dir="$output_dir/guest-tools"
+
+    verify_guest_elf "$GUEST_TARGET" "$guest_binary"
+    verify_guest_elf "$GUEST_TARGET" "$tools_dir/mke2fs"
+    verify_guest_elf "$GUEST_TARGET" "$tools_dir/resize2fs"
 }
 
 # Main execution
 main() {
+    print_header "Building boxlite-guest and guest tools on $OS..."
     check_prerequisites
     setup_rust_target
+    build_guest_tools
     build_guest_binary
+    verify_guest_artifacts
 
-    echo "✅ Guest binary built successfully"
+    echo "✅ Guest artifacts built successfully"
     echo "Binary location: $PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/boxlite-guest"
+    echo "Tools location:  $PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/guest-tools"
 
     echo ""
     print_success "Done! Guest binary is ready for packaging."

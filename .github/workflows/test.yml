@@ -19,13 +19,29 @@ on:
       - 'src/shared/**'
       - 'src/cli/**'
       - 'src/guest/**'
+      - 'src/deps/e2fsprogs-sys/**'
+      - '.gitmodules'
+      - 'Makefile'
+      - 'make/**'
+      - 'scripts/colors.sh'
+      - 'scripts/common.sh'
+      - 'scripts/setup/**'
+      - 'scripts/build/build-guest.sh'
+      - 'scripts/build/build-libseccomp.sh'
+      - 'scripts/build/build-e2fsprogs-guest.sh'
+      - 'scripts/build/verify-guest-elf.sh'
+      - 'scripts/test/test-guest-tools.sh'
+      - 'scripts/test/test-guest-native-cache.sh'
+      - 'scripts/util.sh'
+      - '.cargo/config.toml'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/test.yml'
+      - '.github/workflows/config.yml'
       - 'sdks/**'
       - 'apps/**'
       - '!apps/e2e/**' # Stack e2e runs in e2e-stack.yml / e2e-cloud.yml, not this unit matrix.
       - '**/Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/test.yml'
-      - '.github/workflows/config.yml'
   # No path filter on pull_request: the `Test (conclusion)` job is a required
   # status check, so this workflow must run on EVERY PR and report it. A
   # path-skipped workflow leaves the required check stuck "Pending" → PR blocked.
@@ -55,6 +71,7 @@ jobs:
       node: ${{ steps.filter.outputs.node }}
       go: ${{ steps.filter.outputs.go }}
       apps: ${{ steps.filter.outputs.apps }}
+      guest_tools: ${{ steps.filter.outputs.guest_tools }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v4
@@ -88,6 +105,29 @@ jobs:
               # apps/e2e-<something> sibling would drop out of this filter too.
               - 'apps/*'
               - 'apps/!(e2e)/**'
+            guest_tools:
+              - '.cargo/config.toml'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/config.yml'
+              - '.gitmodules'
+              - 'Makefile'
+              - 'make/**'
+              - 'src/guest/**'
+              - 'src/shared/**'
+              - 'src/deps/e2fsprogs-sys/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'scripts/colors.sh'
+              - 'scripts/common.sh'
+              - 'scripts/setup/**'
+              - 'scripts/build/build-guest.sh'
+              - 'scripts/build/build-libseccomp.sh'
+              - 'scripts/build/build-e2fsprogs-guest.sh'
+              - 'scripts/build/verify-guest-elf.sh'
+              - 'scripts/test/test-guest-tools.sh'
+              - 'scripts/test/test-guest-native-cache.sh'
+              - 'scripts/util.sh'
+              - '.github/workflows/test.yml'
 
   # Rust unit tests (boxlite-shared only - boxlite requires native libs not available in CI)
   rust:
@@ -365,6 +405,86 @@ jobs:
       - name: Run apps/api unit tests
         run: yarn nx run api:test
 
+  # Build and qualify the guest agent plus its static filesystem utilities on
+  # every supported host/guest architecture pair. Linux runners execute the
+  # tools; macOS validates the cross-built ELF structure only.
+  guest-tools:
+    name: Guest Tools (${{ matrix.name }})
+    needs: [config, changes]
+    if: ${{ needs.changes.outputs.guest_tools == 'true' }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            guest_target: x86_64-unknown-linux-musl
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            guest_target: aarch64-unknown-linux-musl
+          - name: macos-arm64-cross
+            os: macos-15
+            guest_target: aarch64-unknown-linux-musl
+    env:
+      GUEST_TARGET: ${{ matrix.guest_target }}
+    steps:
+      - name: Checkout code and vendored sources
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ needs.config.outputs.rust-toolchain }}
+          rustflags: ""
+
+      - name: Install build dependencies
+        run: make setup:build
+
+      - name: Install native guest test dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y jq libseccomp-dev
+
+      - name: Build guest agent and static tools
+        run: make guest PROFILE=release
+
+      - name: Verify guest tools
+        run: make test:guest-tools PROFILE=release
+
+      - name: Run guest ownership tests
+        if: runner.os == 'Linux'
+        run: make test:guest-perms
+
+      # upload-artifact normalizes file modes. Tar a fixed allowlist so modes are
+      # preserved and no unverified file from guest-tools can enter the artifact.
+      - name: Package qualified guest artifacts
+        if: runner.os == 'Linux'
+        run: >-
+          tar -cvf "guest-tools-p1a-${{ matrix.name }}.tar"
+          -C "target/${GUEST_TARGET}/release"
+          boxlite-guest
+          guest-tools/mke2fs
+          guest-tools/resize2fs
+          guest-tools/NOTICE
+          guest-tools/source-metadata.json
+          guest-tools/build-metadata.json
+          guest-tools/guest-tools-manifest.json
+          guest-tools/SHA256SUMS
+
+      - name: Upload qualified guest artifacts
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-tools-p1a-${{ matrix.name }}
+          path: guest-tools-p1a-${{ matrix.name }}.tar
+          if-no-files-found: error
+          retention-days: 7
+
   # Single required status check for branch protection / merge queue.
   # Passes only if every job above succeeded or was skipped (path-filtered).
   # `if: !cancelled()` is required: without it a failed dependency would skip
@@ -372,7 +492,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [config, changes, rust, cli, python, node, go, apps]
+    needs: [config, changes, rust, cli, python, node, go, apps, guest-tools]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

@@ -1,7 +1,12 @@
-PHONY_TARGETS += guest shim runtime cli cli\:release skillbox-image build\:apps
+PHONY_TARGETS += guest guest-tools shim runtime cli cli\:release skillbox-image build\:apps
+
+PROFILE ?= release
 
 guest:
-	@bash $(SCRIPT_DIR)/build/build-guest.sh
+	@bash $(SCRIPT_DIR)/build/build-guest.sh --profile "$(PROFILE)"
+
+guest-tools:
+	@bash $(SCRIPT_DIR)/build/build-e2fsprogs-guest.sh --profile "$(PROFILE)"
 
 shim:
 	@bash $(SCRIPT_DIR)/build/build-shim.sh
