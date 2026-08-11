@@ -40,7 +40,6 @@ import { generateApiKeyValue } from '../../common/utils/api-key'
 import { RunnerFullDto } from '../dto/runner-full.dto'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
-import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
@@ -660,22 +659,21 @@ export class RunnerService {
       await Promise.allSettled(
         drainingRunners.map(async (runner) => {
           try {
-            // Check if runner has any boxes with desiredState != DESTROYED
-            const nonDestroyedBoxCount = await this.boxRepository.count({
+            // A box releases runnerId only after runtime destruction is confirmed.
+            // Treat every remaining assignment as a blocker, including boxes whose
+            // desired state is already DESTROYED but are still being reconciled.
+            const assignedBoxCount = await this.boxRepository.count({
               where: {
                 runnerId: runner.id,
-                desiredState: Not(BoxDesiredState.DESTROYED),
               },
             })
 
             const redisKey = `runner:draining-check:${runner.id}`
 
-            if (nonDestroyedBoxCount > 0) {
-              // Reset counter if there are non-destroyed boxes
+            if (assignedBoxCount > 0) {
+              // Reset counter while any box still references this runner.
               await this.redis.set(redisKey, '0', 'EX', 600) // 10 minute TTL
-              this.logger.debug(
-                `Runner ${runner.id} has ${nonDestroyedBoxCount} boxes with desiredState != DESTROYED, reset counter`,
-              )
+              this.logger.debug(`Runner ${runner.id} still has ${assignedBoxCount} assigned boxes, reset counter`)
             } else {
               // Increment counter
               const currentCount = await this.redis.get(redisKey)
@@ -690,9 +688,7 @@ export class RunnerService {
                 this.logger.log(`Runner ${runner.id} has been decommissioned after 3 successful draining checks`)
               } else {
                 await this.redis.set(redisKey, count.toString(), 'EX', 600) // 10 minute TTL
-                this.logger.debug(
-                  `Runner ${runner.id} draining check passed (${count}/3), all boxes have desiredState = DESTROYED`,
-                )
+                this.logger.debug(`Runner ${runner.id} draining check passed (${count}/3), no boxes remain assigned`)
               }
             }
           } catch (e) {
@@ -714,6 +710,7 @@ export class RunnerService {
 
   async updateDrainingStatus(id: string, draining: boolean): Promise<Runner> {
     const runner = await this.findOneOrFail(id)
+    await this.redis.del(`runner:draining-check:${id}`)
     runner.draining = draining
     await this.runnerRepository.save(runner)
     return runner
