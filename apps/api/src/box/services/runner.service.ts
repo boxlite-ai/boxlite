@@ -184,20 +184,6 @@ export class RunnerService {
     return runners.map(RunnerDto.fromRunner)
   }
 
-  async findDrainingPaginated(skip: number, take: number): Promise<Runner[]> {
-    return this.runnerRepository.find({
-      where: {
-        draining: true,
-        state: Not(RunnerState.DECOMMISSIONED),
-      },
-      order: {
-        id: 'ASC',
-      },
-      skip,
-      take,
-    })
-  }
-
   async findAllReady(): Promise<Runner[]> {
     return this.runnerRepository.find({
       where: {
