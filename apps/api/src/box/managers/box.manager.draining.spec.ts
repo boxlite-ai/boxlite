@@ -39,7 +39,12 @@ describe('BoxManager runner draining', () => {
       get: jest.fn().mockResolvedValue(cursor),
       set: jest.fn().mockResolvedValue('OK'),
     }
-    const configService = { get: jest.fn().mockReturnValue(force) }
+    const configService = {
+      get: jest.fn((key: string) => {
+        if (key === 'draining.force') return force
+        return key === 'draining.runnerConcurrency' ? 2 : 10
+      }),
+    }
     const destroyAction = { run: jest.fn().mockResolvedValue(DONT_SYNC_AGAIN) }
     const manager = new BoxManager(
       boxRepository as any,
@@ -179,5 +184,24 @@ describe('BoxManager runner draining', () => {
 
     expect(boxRepository.find).toHaveBeenCalledTimes(2)
     expect(boxRepository.updateWhere).toHaveBeenCalledWith(stopped.id, expect.any(Object))
+  })
+
+  it('limits concurrent box draining operations', async () => {
+    const { manager, boxRepository } = createManager()
+    boxRepository.find
+      .mockResolvedValueOnce(Array.from({ length: 20 }, (_, index) => createBox(`box-${index}`, BoxState.STOPPED)))
+      .mockResolvedValueOnce([])
+    let active = 0
+    let maxActive = 0
+    jest.spyOn(manager as any, 'drainBox').mockImplementation(async () => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await new Promise((resolve) => setImmediate(resolve))
+      active -= 1
+    })
+
+    await manager.drainingRunnerBoxesCheck()
+
+    expect(maxActive).toBe(10)
   })
 })

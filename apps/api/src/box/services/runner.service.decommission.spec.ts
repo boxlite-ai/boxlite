@@ -37,6 +37,7 @@ describe('RunnerService decommission verification', () => {
       del: jest.fn().mockResolvedValue(1),
     }
     const dataSource = { queryResultCache: undefined }
+    const eventEmitter = { emit: jest.fn() }
     const service = new RunnerService(
       runnerRepository as any,
       {} as any,
@@ -44,12 +45,12 @@ describe('RunnerService decommission verification', () => {
       redisLockProvider as any,
       configService as any,
       {} as any,
-      { emit: jest.fn() } as any,
+      eventEmitter as any,
       dataSource as any,
       redis as any,
     )
 
-    return { service, runnerRepository, boxRepository, redisLockProvider, redis }
+    return { service, runnerRepository, boxRepository, redisLockProvider, redis, eventEmitter }
   }
 
   it('resets verification while any box is still assigned to the draining runner', async () => {
@@ -135,6 +136,15 @@ describe('RunnerService decommission verification', () => {
       }),
       expect.objectContaining({ state: RunnerState.READY }),
     )
+  })
+
+  it('does not emit a stale state event when the guarded health update loses the race', async () => {
+    const { service, runnerRepository, eventEmitter } = createService(0)
+    runnerRepository.update.mockResolvedValue({ affected: 0 })
+
+    await service.updateRunnerHealth('runner-1')
+
+    expect(eventEmitter.emit).not.toHaveBeenCalled()
   })
 
   it('translates a missing uncached runner into NotFoundException', async () => {

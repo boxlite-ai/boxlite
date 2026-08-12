@@ -455,7 +455,9 @@ export class RunnerService {
       })
     }
 
-    await this.updateRunnerUnlessDecommissioned(runnerId, updateData)
+    if (!(await this.updateRunnerUnlessDecommissioned(runnerId, updateData))) {
+      return
+    }
     this.logger.debug(`Updated health for runner ${runnerId}`)
 
     this.eventEmitter.emit(
@@ -477,10 +479,14 @@ export class RunnerService {
       return
     }
 
-    await this.updateRunnerUnlessDecommissioned(runnerId, {
-      state: newState,
-      lastChecked: new Date(),
-    })
+    if (
+      !(await this.updateRunnerUnlessDecommissioned(runnerId, {
+        state: newState,
+        lastChecked: new Date(),
+      }))
+    ) {
+      return
+    }
 
     this.eventEmitter.emit(RunnerEvents.STATE_UPDATED, new RunnerStateUpdatedEvent(runner, runner.state, newState))
   }
@@ -801,10 +807,10 @@ export class RunnerService {
   private async updateRunnerUnlessDecommissioned(
     id: string,
     data: Partial<Omit<Runner, 'id' | 'createdAt' | 'updatedAt'>>,
-  ): Promise<UpdateResult> {
+  ): Promise<boolean> {
     const result = await this.runnerRepository.update({ id, state: Not(RunnerState.DECOMMISSIONED) }, data)
     this.invalidateRunnerCache(id)
-    return result
+    return (result.affected ?? 0) > 0
   }
 
   private invalidateRunnerCache(runnerId: string): void {

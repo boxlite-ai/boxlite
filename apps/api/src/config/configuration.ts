@@ -315,6 +315,8 @@ const configuration = {
   draining: {
     // Running boxes are left untouched unless operators explicitly opt in.
     force: process.env.DRAINING_FORCE === 'true',
+    runnerConcurrency: requiredCount(process.env.DRAINING_RUNNER_CONCURRENCY, 2, 'DRAINING_RUNNER_CONCURRENCY'),
+    boxConcurrency: requiredCount(process.env.DRAINING_BOX_CONCURRENCY, 10, 'DRAINING_BOX_CONCURRENCY'),
   },
   runnerScore: {
     thresholds: {

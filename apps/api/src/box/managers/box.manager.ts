@@ -252,43 +252,58 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
 
       await this.redis.set(cursorKey, skip + drainingRunners.length)
       const force = this.configService.get('draining.force')
+      const runnerConcurrency = this.configService.get('draining.runnerConcurrency')
+      const boxConcurrency = this.configService.get('draining.boxConcurrency')
 
-      await Promise.allSettled(
-        drainingRunners.map(async (runner) => {
-          try {
-            const states = force
-              ? [BoxState.STARTED, BoxState.STOPPED, BoxState.ERROR]
-              : [BoxState.STOPPED, BoxState.ERROR]
-            const [boxes, destroyRetries] = await Promise.all([
-              this.boxRepository.find({
-                where: {
-                  runnerId: runner.id,
-                  state: In(states),
-                  desiredState: Not(BoxDesiredState.DESTROYED),
-                  pending: false,
-                },
-                take: 100,
-              }),
-              this.boxRepository.find({
-                where: {
-                  runnerId: runner.id,
-                  state: BoxState.ERROR,
-                  desiredState: BoxDesiredState.DESTROYED,
-                  pending: true,
-                },
-                take: 100,
-              }),
-            ])
+      await this.forEachConcurrent(drainingRunners, runnerConcurrency, async (runner) => {
+        try {
+          const states = force
+            ? [BoxState.STARTED, BoxState.STOPPED, BoxState.ERROR]
+            : [BoxState.STOPPED, BoxState.ERROR]
+          const [boxes, destroyRetries] = await Promise.all([
+            this.boxRepository.find({
+              where: {
+                runnerId: runner.id,
+                state: In(states),
+                desiredState: Not(BoxDesiredState.DESTROYED),
+                pending: false,
+              },
+              take: 100,
+            }),
+            this.boxRepository.find({
+              where: {
+                runnerId: runner.id,
+                state: BoxState.ERROR,
+                desiredState: BoxDesiredState.DESTROYED,
+                pending: true,
+              },
+              take: 100,
+            }),
+          ])
 
-            await Promise.allSettled([...boxes, ...destroyRetries].map((box) => this.drainBox(box, force)))
-          } catch (error) {
-            this.logger.error(`Error draining boxes from runner ${runner.id}:`, error)
-          }
-        }),
-      )
+          await this.forEachConcurrent([...boxes, ...destroyRetries], boxConcurrency, (box) =>
+            this.drainBox(box, force),
+          )
+        } catch (error) {
+          this.logger.error(`Error draining boxes from runner ${runner.id}:`, error)
+        }
+      })
     } finally {
       await this.redisLockProvider.unlock(lockKey)
     }
+  }
+
+  private async forEachConcurrent<T>(items: T[], concurrency: number, process: (item: T) => Promise<void>) {
+    const queue = [...items]
+    const worker = async () => {
+      while (queue.length > 0) {
+        const item = queue.shift()
+        if (item !== undefined) {
+          await process(item).catch((error) => this.logger.error('Error processing draining item:', error))
+        }
+      }
+    }
+    await Promise.allSettled(Array.from({ length: Math.min(Math.max(concurrency, 1), items.length) }, worker))
   }
 
   private async drainBox(box: Box, force: boolean): Promise<void> {
