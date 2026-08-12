@@ -76,14 +76,20 @@ function validateRunnerResource(resource, inventory, baseline) {
     violations.push('Runner resources must remain EC2 instances.')
   }
 
+  // The stage comes from the baseline, which this function accepts as optional.
+  // Comparing the tag against `baseline?.stage` directly would let two
+  // undefineds satisfy the assertion, so require an actual stage string first.
+  const expectedStage = baseline?.stage
   const tags = readTags(resource)
   const hasExpectedIdentity =
+    typeof expectedStage === 'string' &&
+    expectedStage !== '' &&
     tags &&
     typeof tags === 'object' &&
     !Array.isArray(tags) &&
     readTagValue(tags, 'Name') === expected.nameTag &&
     readTagValue(tags, CONTROL_PLANE_NAME_TAG) === expected.controlPlaneRunnerName &&
-    readTagValue(tags, RUNNER_STAGE_TAG) === baseline?.stage &&
+    readTagValue(tags, RUNNER_STAGE_TAG) === expectedStage &&
     readTagValue(tags, RUNNER_ROLE_TAG) === RUNNER_ROLE_VALUE
   if (!hasExpectedIdentity) {
     violations.push('Runner identity tags must match the deployment inventory.')

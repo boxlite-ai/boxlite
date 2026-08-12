@@ -137,6 +137,14 @@ const SCRIPT_NAME = 'bootstrap-environment'
 // The one stage that must never end up with an unreviewed deploy path. Matches
 // PRODUCTION_STAGE in sst.config.ts, which gates retain-on-removal.
 const PROTECTED_STAGE = 'prod'
+// Three of the five no-seed runtime-secret actions retag the container. Sealing
+// in particular closes the PutSecretValue grant, so reporting any of them as a
+// mere "retained" would hide a security-relevant transition from the operator.
+const RETAG_MESSAGES = {
+  'seal-generated': 'generated value sealed',
+  'tag-generated-pending': 'generated value tagged pending',
+  'seal-explicit': 'explicit value sealed',
+}
 const INFRA_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const TEMPLATE_PATH = join(INFRA_ROOT, 'ci', 'github-deploy-role.yaml')
 const ENV_PATH = join(INFRA_ROOT, '.env')
@@ -422,9 +430,16 @@ function inspectRuntimeSecret(execute, awsCliPath, region, name) {
     if (!hasCurrentValue && Object.keys(versionStages).length !== 0) {
       throw new Error('runtime secret metadata has a staged version without AWSCURRENT')
     }
-    if (!Array.isArray(metadata.Tags)) throw new Error('runtime secret metadata contains invalid tags')
+    // Secrets Manager omits Tags entirely for an untagged secret. That is a
+    // legitimate response shape, not malformed metadata: an untagged container
+    // simply carries no bootstrap ownership, which ownership validation reports
+    // with its own message. Only a present-but-not-a-list Tags is invalid.
+    if (metadata.Tags !== undefined && !Array.isArray(metadata.Tags)) {
+      throw new Error('runtime secret metadata contains invalid tags')
+    }
+    const tags = metadata.Tags ?? []
     const readExactTag = (key) => {
-      const matches = metadata.Tags.filter((tag) => tag?.Key === key)
+      const matches = tags.filter((tag) => tag?.Key === key)
       if (matches.length > 1 || (matches[0] && typeof matches[0].Value !== 'string')) {
         throw new Error('runtime secret metadata contains ambiguous ownership tags')
       }
@@ -664,7 +679,7 @@ export function planRuntimeSecrets({
         name,
         action,
         generation: ownership.currentVersionId ?? PENDING_RUNTIME_SECRET_GENERATION,
-        message: `${initialValue} value retained`,
+        message: RETAG_MESSAGES[action] ?? `${initialValue} value retained`,
       }
     }
 

@@ -302,6 +302,8 @@ if (sstSecretMutation) {
   }
 }
 
+// Every command that needs provider credentials also needs the deployment
+// config (sst-command-contract.mjs), so awsCliPath is already resolved here.
 if (commandContract.needsProviderCredentials) {
   for (const { env, param } of CREDS) {
     const name = `/boxlite/${stage}/${param}`
@@ -365,7 +367,7 @@ let publicDeploymentConfig
 if (commandContract.subcommand === 'deploy') {
   artifactPreflightAbortController = new AbortController()
   try {
-    resolveAwsCliPath(sstEnvironment)
+    awsCliPath ??= resolveAwsCliPath(sstEnvironment)
     const workspaceVersion = readWorkspaceVersion()
     publicDeploymentConfig = resolvePublicDeploymentConfig(sstEnvironment, workspaceVersion)
     const signal = artifactPreflightAbortController.signal
@@ -398,7 +400,7 @@ if (commandContract.subcommand === 'deploy') {
           version: apiSource.version,
           ref: apiSource.kind === 'release' ? undefined : apiSource.ref,
         },
-        { awsCliPath: resolveAwsCliPath(sstEnvironment) },
+        { awsCliPath },
       )
       console.log(
         `sst-with-cloudflare: Api ${apiSource.kind} image verified (${image.repository}:${image.tag}, ${image.digest})`,

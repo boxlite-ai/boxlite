@@ -25,11 +25,15 @@ const EXPECTED_RUNTIME_SECRET_DEFINITIONS = [
     id: 'encryptionKey',
     environmentKeys: ['ENCRYPTION_KEY'],
     consumers: [{ component: 'Api', environmentKey: 'ENCRYPTION_KEY' }],
+    rotationPolicy: 'non-rotatable-v1',
+    rotationBlockReason: 'persisted ciphertext has no key-version or re-encryption path',
   },
   {
     id: 'encryptionSalt',
     environmentKeys: ['ENCRYPTION_SALT'],
     consumers: [{ component: 'Api', environmentKey: 'ENCRYPTION_SALT' }],
+    rotationPolicy: 'non-rotatable-v1',
+    rotationBlockReason: 'persisted ciphertext has no key-version or re-encryption path',
   },
   {
     id: 'adminApiKey',
@@ -54,6 +58,8 @@ const EXPECTED_RUNTIME_SECRET_DEFINITIONS = [
       { component: 'Api', environmentKey: 'DEFAULT_RUNNER_API_KEY' },
       { component: 'DefaultRunner', environmentKey: 'BOXLITE_RUNNER_TOKEN' },
     ],
+    rotationPolicy: 'non-rotatable-v1',
+    rotationBlockReason: 'the API database still stores the current default Runner key',
   },
   {
     id: 'pgAdminDefaultPassword',
@@ -237,11 +243,19 @@ async function withIsolatedSstDiagnosticLog(callback) {
 
 test('publishes the exact runtime-secret registry, legacy source precedence, and consumers', async () => {
   const { RUNTIME_SECRET_DEFINITIONS, runtimeSecretName } = await runtimeSecretsModule()
-  const projection = RUNTIME_SECRET_DEFINITIONS.map(({ id, environmentKeys, consumers }) => ({
-    id,
-    environmentKeys,
-    consumers,
-  }))
+  // rotationPolicy is load-bearing, not descriptive: planRuntimeSecrets refuses a
+  // rotation on `non-rotatable-v1`, and dropping it from a definition would let
+  // bootstrap re-key an encryption secret whose ciphertext has no re-encryption
+  // path. This projection is the registry's change detector, so it must pin it.
+  const projection = RUNTIME_SECRET_DEFINITIONS.map(
+    ({ id, environmentKeys, consumers, rotationPolicy, rotationBlockReason }) => ({
+      id,
+      environmentKeys,
+      consumers,
+      ...(rotationPolicy === undefined ? {} : { rotationPolicy }),
+      ...(rotationBlockReason === undefined ? {} : { rotationBlockReason }),
+    }),
+  )
 
   assert.deepEqual(projection, EXPECTED_RUNTIME_SECRET_DEFINITIONS)
   assert.deepEqual(
@@ -1077,6 +1091,10 @@ test('converges the existing default runner to an ARN-only systemd drop-in', asy
   const mutationBoundary = script.indexOf('WORK=$(mktemp -d)')
   const propagationPreflight = script.slice(0, mutationBoundary)
   assert.ok(mutationBoundary > 0)
+  // The work directory holds the unit file that still carries the plaintext
+  // token this migration scrubs. mktemp -d is already 0700 on GNU coreutils, so
+  // this pins the explicit narrowing rather than relying on that default.
+  assert.match(script, /WORK=\$\(mktemp -d\)\nchmod 0700 "\$WORK"/)
   assert.equal((propagationPreflight.match(/for i in \$\(seq 1 30\)/g) ?? []).length, 2)
   assert.match(propagationPreflight, /\[ "\$i" -eq 30 \] \|\| sleep 10/)
   assert.match(propagationPreflight, /get-secret-value[\s\S]*2>\/dev\/null \|\| true/)
@@ -1159,6 +1177,8 @@ test('restores a legacy-compatible default Runner and can migrate it forward aga
     assert.match(rollback, /get-secret-value[\s\S]*--secret-id "\$BOXLITE_RUNNER_TOKEN_SECRET_ARN"/)
     assert.match(rollback, /trap rollback EXIT/)
     assert.match(rollback, /rm -f "\$DROPIN"/)
+    // $WORK/unit-restored is written with the plaintext token in it.
+    assert.match(rollback, /WORK=\$\(mktemp -d\)\nchmod 0700 "\$WORK"/)
 
     for (const failAfterRestart of [false, true]) {
       const fixture = await mkdtemp(join(tmpdir(), 'boxlite-default-runner-legacy-rollback-'))
@@ -1570,6 +1590,78 @@ else process.exit(91)
   }
 })
 
+// verifyRunnerCommandTargets proves the instance is this stage's; nothing there
+// proves the ARNs are. An unbound reconcile installs another stage's credential
+// into the drop-in, and the host then fetches it at every start.
+test('every runner transaction refuses a secret ARN from another stage', async () => {
+  const fixture = await mkdtemp(join(tmpdir(), 'boxlite-runner-secret-stage-binding-'))
+  const fakeAws = join(fixture, 'aws')
+  const awsMarker = join(fixture, 'aws-called')
+
+  const dev = (suffix) => `arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:boxlite-dev-runtime/${suffix}-AbCdEf`
+  const other = (suffix) =>
+    `arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:boxlite-prod-runtime/${suffix}-AbCdEf`
+  const legacy = 'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:boxlite-dev-ghcr-legacy-AbCdEf'
+
+  try {
+    await writeFile(fakeAws, '#!/bin/sh\nprintf called > "$SYNTHETIC_AWS_MARKER"\n', 'utf8')
+    await chmod(fakeAws, 0o755)
+
+    const base = {
+      PATH: `${fixture}:${process.env.PATH}`,
+      AWS_REGION: 'ap-southeast-1',
+      SST_STAGE: 'dev',
+      INSTANCE_ID: 'i-0123456789abcdef0',
+      GHCR_ENABLED: 'true',
+      GHCR_USERNAME: 'boxlite-ai',
+      LEGACY_GHCR_SECRET_ARN: legacy,
+      SYNTHETIC_AWS_MARKER: awsMarker,
+    }
+    const rejected = [
+      {
+        command: 'reconcile-default-runner',
+        environment: {
+          BOXLITE_RUNNER_TOKEN_SECRET_ARN: other('default-runner-api-key'),
+          GHCR_SECRET_ARN: dev('ghcr-pull-token'),
+        },
+        expected: /BOXLITE_RUNNER_TOKEN_SECRET_ARN does not belong to the selected SST stage/,
+      },
+      {
+        command: 'reconcile-default-runner',
+        environment: {
+          BOXLITE_RUNNER_TOKEN_SECRET_ARN: dev('default-runner-api-key'),
+          GHCR_SECRET_ARN: other('ghcr-pull-token'),
+        },
+        expected: /GHCR_SECRET_ARN does not belong to the selected SST stage/,
+      },
+      {
+        command: 'restore-default-runner-legacy',
+        environment: { BOXLITE_RUNNER_TOKEN_SECRET_ARN: other('default-runner-api-key') },
+        expected: /BOXLITE_RUNNER_TOKEN_SECRET_ARN does not belong to the selected SST stage/,
+      },
+      {
+        command: 'reconcile-extra-runner-ghcr',
+        environment: { GHCR_SECRET_ARN: other('ghcr-pull-token') },
+        expected: /GHCR_SECRET_ARN does not belong to the selected SST stage/,
+      },
+      {
+        command: 'restore-extra-runner-ghcr-legacy',
+        environment: { GHCR_SECRET_ARN: other('ghcr-pull-token') },
+        expected: /GHCR_SECRET_ARN does not belong to the selected SST stage/,
+      },
+    ]
+
+    for (const { command, environment, expected } of rejected) {
+      const result = runInfraScript(['scripts/runtime-secrets-cli.mjs', command], { ...base, ...environment })
+      assert.equal(result.status, 1, `${command} must reject a cross-stage ARN`)
+      assert.match(result.stderr, expected)
+      assert.equal(existsSync(awsMarker), false, `${command} must reject before any AWS call`)
+    }
+  } finally {
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
+
 test('rejects raw sst secret list before AWS lookup or SST execution', async () => {
   const fixture = await mkdtemp(join(tmpdir(), 'boxlite-secret-list-guard-'))
   const fakeSst = join(fixture, 'sst')
@@ -1702,6 +1794,50 @@ if (args[0] === 'secretsmanager' && args[1] === 'describe-secret') {
       assert.equal(call.includes('--with-decryption'), false)
       assert.equal(call.includes('get-parameters-by-path'), false)
     }
+  } finally {
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
+
+// The status writer resolves its region from the environment and cannot consult
+// a deployment config release, because bootstrap sets SST secrets before the
+// stage has one. A reader on a different region reports UNKNOWN for secrets that
+// are in fact set, so both sides must share one region rule.
+test('status reads the environment-resolved region when none is given', async () => {
+  const fixture = await mkdtemp(join(tmpdir(), 'boxlite-secret-status-region-'))
+  const fakeAws = join(fixture, 'aws')
+  const callsPath = join(fixture, 'aws-calls.jsonl')
+  const writerRegion = 'us-west-2'
+
+  try {
+    await writeFile(
+      fakeAws,
+      `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+const args = process.argv.slice(2)
+appendFileSync(process.env.SYNTHETIC_AWS_CALLS_PATH, JSON.stringify(args) + '\\n')
+if (args[0] === 'secretsmanager') process.stdout.write(JSON.stringify({ VersionIdsToStages: {} }))
+else process.stdout.write('UNSET\\n')
+`,
+      'utf8',
+    )
+    await chmod(fakeAws, 0o755)
+
+    const result = runInfraScript(['scripts/runtime-secrets-cli.mjs', 'status', '--stage', 'dev'], {
+      AWS_CLI_PATH: fakeAws,
+      AWS_REGION: writerRegion,
+      SYNTHETIC_AWS_CALLS_PATH: callsPath,
+    })
+    assert.equal(result.status, 0, result.stderr)
+
+    const regions = new Set(
+      (await readFile(callsPath, 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+        .map((call) => call[call.indexOf('--region') + 1]),
+    )
+    assert.deepEqual([...regions], [writerRegion], 'every read must target the environment-resolved region')
   } finally {
     await rm(fixture, { recursive: true, force: true })
   }

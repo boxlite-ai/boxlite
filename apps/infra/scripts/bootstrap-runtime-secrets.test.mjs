@@ -2,9 +2,6 @@
 // Copyright (c) 2026 BoxLite AI
 
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import test from 'node:test'
 
 import { RUNTIME_SECRET_DEFINITIONS, runtimeSecretName } from './runtime-secrets.mjs'
@@ -49,14 +46,20 @@ class FakeSecretsManager {
         throw error
       }
       return JSON.stringify({
-        Tags: [
-          ...(secret.initialValue
-            ? [{ Key: 'boxlite:initial-value', Value: secret.initialValue }]
-            : []),
-          ...(secret.initialization
-            ? [{ Key: 'boxlite:initialization', Value: secret.initialization }]
-            : []),
-        ],
+        // AWS omits Tags altogether for an untagged secret, so the fixture can
+        // reproduce that shape as well as an empty list.
+        ...(secret.omitTags
+          ? {}
+          : {
+              Tags: [
+                ...(secret.initialValue
+                  ? [{ Key: 'boxlite:initial-value', Value: secret.initialValue }]
+                  : []),
+                ...(secret.initialization
+                  ? [{ Key: 'boxlite:initialization', Value: secret.initialization }]
+                  : []),
+              ],
+            }),
         ...(secret.omitVersionStages
           ? {}
           : {
@@ -126,6 +129,73 @@ test('refuses a generated pending container that already has an unexpected stage
     /could not inspect runtime secret container/i,
   )
   assert.deepEqual(aws.mutations(), [], 'unexpected staged metadata must fail during read-only planning')
+})
+
+// An untagged container is a real DescribeSecret shape, so it must be reported
+// as missing bootstrap ownership rather than as malformed AWS metadata.
+test('reports an untagged container as unowned rather than as invalid AWS metadata', async () => {
+  const { planRuntimeSecrets } = await import('./bootstrap-environment.mjs')
+  const aws = new FakeSecretsManager()
+  const name = runtimeSecretName(STAGE, RUNTIME_SECRET_DEFINITIONS[0].id)
+  aws.secrets.set(name, { hasCurrentValue: true, omitTags: true })
+
+  assert.throws(
+    () =>
+      planRuntimeSecrets({
+        awsCliPath: '/fake/aws',
+        region: REGION,
+        stage: STAGE,
+        seeds: [],
+        force: false,
+        execute: aws.execute,
+      }),
+    new RegExp(`runtime secret ${name} has invalid bootstrap ownership metadata`),
+  )
+  assert.deepEqual(aws.mutations(), [], 'an unowned container must fail during read-only planning')
+})
+
+// Sealing closes the PutSecretValue grant. Reporting it as "retained" would hide
+// that transition from the operator reading the bootstrap log.
+test('names the retag it performs instead of reporting every action as retained', async () => {
+  const { planRuntimeSecrets } = await import('./bootstrap-environment.mjs')
+  const aws = new FakeSecretsManager()
+  const [sealGenerated, tagPending, sealExplicit] = RUNTIME_SECRET_DEFINITIONS
+  aws.secrets.set(runtimeSecretName(STAGE, sealGenerated.id), {
+    initialValue: 'generated',
+    initialization: 'pending',
+    hasCurrentValue: true,
+  })
+  aws.secrets.set(runtimeSecretName(STAGE, tagPending.id), {
+    initialValue: 'generated',
+    initialization: undefined,
+    hasCurrentValue: false,
+  })
+  aws.secrets.set(runtimeSecretName(STAGE, sealExplicit.id), {
+    initialValue: 'explicit',
+    initialization: undefined,
+    hasCurrentValue: true,
+  })
+
+  const plan = planRuntimeSecrets({
+    awsCliPath: '/fake/aws',
+    region: REGION,
+    stage: STAGE,
+    seeds: [],
+    force: false,
+    execute: aws.execute,
+  })
+  const messageById = new Map(plan.map(({ id, message }) => [id, message]))
+  assert.equal(messageById.get(sealGenerated.id), 'generated value sealed')
+  assert.equal(messageById.get(tagPending.id), 'generated value tagged pending')
+  assert.equal(messageById.get(sealExplicit.id), 'explicit value sealed')
+
+  const actionById = new Map(plan.map(({ id, action }) => [id, action]))
+  assert.equal(actionById.get(sealGenerated.id), 'seal-generated')
+  assert.equal(actionById.get(tagPending.id), 'tag-generated-pending')
+  assert.equal(actionById.get(sealExplicit.id), 'seal-explicit')
+  // A genuinely unchanged container keeps the retained wording.
+  const retained = plan.find(({ action }) => action === 'retain-generated')
+  assert.equal(retained?.message, 'generated value retained')
 })
 
 test('accepts the AWS DescribeSecret shape that omits versions for an empty generated container', async () => {

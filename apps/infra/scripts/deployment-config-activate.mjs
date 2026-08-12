@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-import { fileURLToPath } from 'node:url'
+import { realpathSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 
 import { DeploymentConfigStore } from './deployment-config-store.mjs'
 import { resolveAwsRegion } from './deployment-environment.mjs'
@@ -103,10 +104,24 @@ export async function activateDeploymentConfig(
         `for ${stage} in ${region}`,
     )
   }
+  // Activation means the release is current. A pointer write whose readback
+  // disagreed changed nothing, so returning normally would tell the operator —
+  // and any workflow reading the exit status — that a rollback took effect when
+  // it did not. Log first: the losing release id is what makes it diagnosable.
+  if (!result.isCurrent) {
+    throw new Error(
+      `release ${result.releaseId} did not become current for ${stage} in ${region}; ` +
+        'another writer moved the pointer, so nothing was activated — rerun to retry',
+    )
+  }
   return result
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+// Compare resolved real paths, as deployment-config-resolve.mjs does: Node
+// absolutizes process.argv[1] but leaves its symlinks intact, so a run reached
+// through a symlinked worktree would otherwise skip this block and exit 0
+// without activating anything.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   try {
     await activateDeploymentConfig(process.argv.slice(2))
   } catch (error) {

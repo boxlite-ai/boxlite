@@ -427,6 +427,31 @@ test('releases the operation lock in finally but never deletes another owner loc
   )
 })
 
+// A deploy that fails while its lock is stolen produces two errors. The lock
+// complaint must not become the one the operator reads, or the reason the
+// deploy aborted is lost.
+test('a failing lock release does not replace the operation failure', async () => {
+  const { aws, store } = await storeFixture()
+  const operationFailure = new Error('synthetic deploy operation failed')
+
+  await assert.rejects(
+    store.withDeploymentOperationLock({ stage: STAGE, ownerId: FIRST_LOCK_OWNER }, async () => {
+      aws.parameters.set(OPERATION_LOCK_PARAMETER, SECOND_LOCK_OWNER)
+      throw operationFailure
+    }),
+    (error) => {
+      assert.equal(error, operationFailure, 'the operation failure must reach the caller unchanged')
+      assert.match(error.cause?.message ?? '', /owner|ownership|changed/i)
+      return true
+    },
+  )
+  assert.equal(
+    aws.parameters.get(OPERATION_LOCK_PARAMETER),
+    SECOND_LOCK_OWNER,
+    'the replacement lock must remain intact',
+  )
+})
+
 test('validates a nested operation owner without acquiring or releasing the parent lock', async () => {
   const { aws, store } = await storeFixture()
   const lock = store.acquireDeploymentOperationLock({ stage: STAGE, ownerId: FIRST_LOCK_OWNER })

@@ -117,20 +117,37 @@ function readDeployRoleStatements({
   )
 }
 
-function resolvedDeployRolePolicy(options = {}) {
-  const accountId = '123456789012'
-  const region = 'ap-southeast-1'
-  const stage = 'dev'
+/*
+ * The one resolver these callers share, so they all render the same bytes.
+ * CLOUDFORMATION_SCHEMA above constructs `!Ref` as a bare scalar, so
+ * BoxLiteRuntimePermissionsBoundary arrives as its 33-character logical id
+ * rather than as the ARN CloudFormation emits: a resolver that leaves it there
+ * compares statements the deploy role never sees, and under-measures the
+ * 10,240-byte inline policy limit — by 45 bytes per occurrence at the
+ * 20-character stage the size assertion uses, and more as the stage grows.
+ */
+function resolveDeployRolePlaceholders({
+  accountId = '123456789012',
+  region = 'ap-southeast-1',
+  stage = 'dev',
+  runnerCommandTagGateEnabled = true,
+  runtimeSecretInitializationEnabled = false,
+} = {}) {
   const boundaryArn = `arn:aws:iam::${accountId}:policy/boxlite-${stage}-runtime-boundary`
-  const policyDocument = JSON.parse(
-    JSON.stringify({ Version: '2012-10-17', Statement: readDeployRoleStatements(options) })
+  const statements = JSON.parse(
+    JSON.stringify(readDeployRoleStatements({ runnerCommandTagGateEnabled, runtimeSecretInitializationEnabled }))
       .replaceAll('${AWS::Partition}', 'aws')
       .replaceAll('${AWS::Region}', region)
       .replaceAll('${AWS::AccountId}', accountId)
       .replaceAll('${GitHubEnvironment}', stage)
       .replaceAll('"BoxLiteRuntimePermissionsBoundary"', JSON.stringify(boundaryArn)),
   )
-  return { accountId, region, stage, policyDocument }
+  return { accountId, region, stage, boundaryArn, statements }
+}
+
+function resolvedDeployRolePolicy(options = {}) {
+  const { accountId, region, stage, statements } = resolveDeployRolePlaceholders(options)
+  return { accountId, region, stage, policyDocument: { Version: '2012-10-17', Statement: statements } }
 }
 
 function findStatement(statements, sid) {
@@ -192,29 +209,8 @@ function iamDecision(statements, request) {
   return 'ImplicitDeny'
 }
 
-function resolvedDeployRoleStatements({
-  accountId = '123456789012',
-  region = 'ap-southeast-1',
-  runnerCommandTagGateEnabled = true,
-  runtimeSecretInitializationEnabled = false,
-  stage = 'dev',
-} = {}) {
-  const replacements = new Map([
-    ['${AWS::Partition}', 'aws'],
-    ['${AWS::Region}', region],
-    ['${AWS::AccountId}', accountId],
-    ['${GitHubEnvironment}', stage],
-  ])
-  return JSON.parse(
-    JSON.stringify(
-      readDeployRoleStatements({ runnerCommandTagGateEnabled, runtimeSecretInitializationEnabled }),
-      (_key, value) => {
-      if (typeof value !== 'string') return value
-      for (const [placeholder, replacement] of replacements) value = value.replaceAll(placeholder, replacement)
-      return value
-      },
-    ),
-  )
+function resolvedDeployRoleStatements(options = {}) {
+  return resolveDeployRolePlaceholders(options).statements
 }
 
 test('SST deploy verifies the selected Runner artifact before invoking SST', () => {

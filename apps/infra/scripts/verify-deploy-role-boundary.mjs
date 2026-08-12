@@ -29,7 +29,6 @@ import {
   assertDeployRoleTopology,
   assertSelectedStageRolesBounded,
   parseAssumedRoleIdentity,
-  parseAssumedRoleName,
   verifyDeployRoleGrantsBoundaryPermission,
 } from './deploy-role-boundary.mjs'
 import { githubDeployRoleStackName } from './environment-bootstrap.mjs'

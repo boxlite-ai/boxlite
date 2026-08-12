@@ -11,7 +11,7 @@ const REBASED_RELEASE_ID = 'b'.repeat(64)
 const EXPECTED_GENERATIONS = Object.freeze({ synthetic: 'not-inspected-by-this-boundary-test' })
 const CURRENT_GENERATIONS = Object.freeze({ synthetic: 'current-generation-metadata' })
 
-function fixture({ guardFailure } = {}) {
+function fixture({ guardFailure, pointerRaceLost = false } = {}) {
   const events = []
   const release = {
     releaseId: RELEASE_ID,
@@ -32,7 +32,7 @@ function fixture({ guardFailure } = {}) {
     },
     activate(options) {
       events.push(['activate', options])
-      return { ...release, releaseId: options.releaseId, isCurrent: true }
+      return { ...release, releaseId: options.releaseId, isCurrent: !pointerRaceLost }
     },
     prepareDocument(options) {
       events.push(['prepare-document', options])
@@ -91,6 +91,27 @@ test('config activation leaves current untouched when the selected release has s
     /--rebase-runtime-generations/,
   )
   assert.deepEqual(events.map(([event]) => event), ['create-store', 'lock-enter', 'resolve', 'guard', 'lock-exit'])
+})
+
+// A rollback whose pointer readback disagreed activated nothing. Returning
+// normally would report success to the operator and to the workflow reading the
+// exit status, so the losing release id must be logged and the call must fail.
+test('config activation fails when the release does not become current', async () => {
+  for (const args of [
+    ['--stage', 'dev', '--release', RELEASE_ID],
+    ['--stage', 'dev', '--release', RELEASE_ID, '--rebase-runtime-generations'],
+  ]) {
+    const { dependencies, events } = fixture({ pointerRaceLost: true })
+
+    await assert.rejects(
+      activateDeploymentConfig(args, { AWS_CLI_PATH: '/synthetic/aws', AWS_REGION: 'ap-southeast-1' }, dependencies),
+      /did not become current for dev in ap-southeast-1/,
+    )
+    const logMessage = events.find(([event]) => event === 'log')?.[1]
+    assert.ok(logMessage, 'the losing activation must still be logged before the failure')
+    assert.match(logMessage, /lost a concurrent pointer update|another concurrent pointer update won/)
+    assert.deepEqual(events.at(-2), ['lock-exit'], 'the operation lock must be released before failing')
+  }
 })
 
 test('explicit generation rebase creates and activates a new release without mutating the source document', async () => {

@@ -13,15 +13,28 @@
 import { githubDeployRoleStackName, runtimeBoundaryPolicyArn } from './environment-bootstrap.mjs'
 
 const ASSUMED_ROLE_ARN_PATTERN = /^arn:(aws(?:-us-gov|-cn)?):sts::(\d{12}):assumed-role\/([^/]+)\/[^/]+$/
+const SUPPORTED_PARTITION = 'aws'
 export const DEPLOY_POLICY_CONTRACT_TAG = 'boxlite:deploy-policy-contract'
 export const DEPLOY_POLICY_CONTRACT_VERSION = 'v1'
 
+/*
+ * The stack itself is commercial-partition-only: sst.config.ts interpolates the
+ * runtime boundary as a literal `arn:aws:iam::…` (apps/infra/sst.config.ts:166),
+ * and environment-bootstrap.mjs mirrors that literal so the two agree. A
+ * GovCloud or China identity would therefore be measured against a boundary ARN
+ * this stack never creates, so reject the partition here — at the boundary where
+ * the identity enters — instead of failing later as an unexplained mismatch.
+ */
 export function parseAssumedRoleIdentity(arn) {
   const match = typeof arn === 'string' ? arn.match(ASSUMED_ROLE_ARN_PATTERN) : null
   if (!match) {
     throw new Error(`'${arn}' is not an assumed-role ARN (expected arn:<partition>:sts::<account>:assumed-role/<role>/<session>)`)
   }
-  return { partition: match[1], accountId: match[2], roleName: match[3] }
+  const [, partition, accountId, roleName] = match
+  if (partition !== SUPPORTED_PARTITION) {
+    throw new Error(`partition '${partition}' is not supported; this stack provisions arn:aws boundaries only`)
+  }
+  return { partition, accountId, roleName }
 }
 
 export const parseAssumedRoleName = (arn) => parseAssumedRoleIdentity(arn).roleName

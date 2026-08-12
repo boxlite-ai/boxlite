@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-import { fileURLToPath } from 'node:url'
-import { resolve } from 'node:path'
+import { realpathSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 
 import runnerInventory from './runner-inventory.cjs'
 
@@ -199,7 +199,10 @@ async function main() {
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Resolve symlinks, as the other scripts' guards do: `resolve` absolutizes but
+// keeps symlinks intact, so a run reached through a symlinked worktree would
+// skip this block and let the preview gate exit 0 having checked nothing.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   try {
     await main()
   } catch (error) {

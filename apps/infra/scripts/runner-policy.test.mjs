@@ -149,6 +149,24 @@ test('rejects missing or changed Runner stage and role tags', () => {
   }
 })
 
+// An untagged resource compared against a baseline that carries no stage must
+// not satisfy the stage assertion by matching undefined against undefined.
+test('rejects an untagged Runner stage even when the baseline carries no stage', () => {
+  const inventory = resolveRunnerInventory({})
+  const [spec] = inventory
+  const missingStage = runnerResource(spec)
+  delete missingStage.props.tags['boxlite:stage']
+
+  for (const baseline of [undefined, { version: 4, resources: {} }, { version: 4, stage: '', resources: {} }]) {
+    assert.ok(
+      validateRunnerResource(missingStage, inventory, baseline).includes(
+        'Runner identity tags must match the deployment inventory.',
+      ),
+      'a stage-less baseline must not vacuously satisfy the stage assertion',
+    )
+  }
+})
+
 test('rejects unsafe Runner lifecycle options without reporting property values', () => {
   const inventory = resolveRunnerInventory({})
   const baseline = runnerBaseline(inventory)

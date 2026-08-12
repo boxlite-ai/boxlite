@@ -29,8 +29,13 @@ function secretMetadata({
   generation,
   initialValue,
   initialization = generation === undefined ? 'pending' : 'sealed',
+  // Real DescribeSecret output carries operator-authored fields the guard never
+  // reads. Tests that assert no AWS output leaks set this so the assertion has
+  // something to catch.
+  description,
 }) {
   return JSON.stringify({
+    ...(description === undefined ? {} : { Description: description }),
     Tags: [
       ...(initialValue === undefined ? [] : [{ Key: 'boxlite:initial-value', Value: initialValue }]),
       ...(initialization === undefined ? [] : [{ Key: 'boxlite:initialization', Value: initialization }]),
@@ -186,6 +191,7 @@ test('rejects a stale pinned generation without exposing either version or any A
           return secretMetadata({
             generation: isProxy ? ACTUAL_VERSION : EXPECTED_VERSION,
             initialValue: 'explicit',
+            description: awsOutputSentinel,
           })
         },
       }),

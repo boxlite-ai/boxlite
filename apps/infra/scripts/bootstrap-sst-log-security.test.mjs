@@ -201,28 +201,33 @@ test('secret mutation accepts only a name plus an explicit validated stage in ar
   ]
   let executions = 0
 
-  for (const args of malformedArgv) {
-    assert.throws(
-      () =>
-        runBootstrapSstSecretMutation(args, {
-          input: 'synthetic-secret-input-that-must-not-print',
-          timeout: 1000,
-          label: 'set synthetic SST secret',
-          execute() {
-            executions += 1
-          },
-        }),
-      (error) => {
-        assert.match(error.message, /argument|explicit|fallback|positional|secret name|stage/i)
-        assert.doesNotMatch(error.message, new RegExp(positionalSecret))
-        return true
-      },
-    )
-  }
-  assert.equal(executions, 0, 'invalid secret argv must be rejected before starting the wrapper')
-
+  // Every call needs its own infraRoot, rejected ones included: the wrapper
+  // deletes <infraRoot>/.sst/log/sst.log, and it survives today only because
+  // argv validation happens to run first. An ordering change would otherwise
+  // make this loop delete the working tree's diagnostic log.
   const infraRoot = mkdtempSync(join(tmpdir(), 'boxlite-bootstrap-secret-argv-'))
   try {
+    for (const args of malformedArgv) {
+      assert.throws(
+        () =>
+          runBootstrapSstSecretMutation(args, {
+            input: 'synthetic-secret-input-that-must-not-print',
+            timeout: 1000,
+            label: 'set synthetic SST secret',
+            infraRoot,
+            execute() {
+              executions += 1
+            },
+          }),
+        (error) => {
+          assert.match(error.message, /argument|explicit|fallback|positional|secret name|stage/i)
+          assert.doesNotMatch(error.message, new RegExp(positionalSecret))
+          return true
+        },
+      )
+    }
+    assert.equal(executions, 0, 'invalid secret argv must be rejected before starting the wrapper')
+
     let wrapperArgs
     const result = runBootstrapSstSecretMutation(['secret', 'set', REGISTERED_SECRET_NAME, '--stage=dev'], {
       input: 'synthetic-secret-input-that-must-not-print',

@@ -235,8 +235,14 @@ test('bootstrap publishes the release and no longer uploads DEPLOY_ENV', () => {
       injectRunnerStateCredentials < exportRunnerState,
     'the shielded state-export child must receive the precomputed authoritative provider credentials',
   )
+  // Guard both left operands: an absent `releaseCommit` is -1, and -1 is less
+  // than any real offset, so an unguarded ordering check would pass precisely
+  // when the sequence it protects has been renamed away.
   assert.ok(
-    releaseCommit < githubWiring && githubWiring < mainRuntimeApplyCallback,
+    releaseCommit !== -1 &&
+      githubWiring !== -1 &&
+      releaseCommit < githubWiring &&
+      githubWiring < mainRuntimeApplyCallback,
     'GitHub wiring must succeed inside the commit prerequisite before runtime mutation and pointer activation',
   )
   const commitSource = source.slice(

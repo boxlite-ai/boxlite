@@ -6,6 +6,7 @@ import { realpathSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { parseFlag } from './cli-flags.mjs'
+import { resolveAwsRegion } from './deployment-environment.mjs'
 import { resolveAwsCliPath } from './proxy-deployment-verify.mjs'
 import {
   RUNTIME_SECRET_DEFINITIONS,
@@ -65,9 +66,17 @@ function describeSecretWithoutValue({ awsCliPath, name, region }) {
   }
 }
 
+/*
+ * The status writer (scripts/sst-with-cloudflare.mjs) records SST secret status
+ * under the region `resolveAwsRegion` yields, and it cannot consult a deployment
+ * config release: bootstrap's ensureConfiguredSstSecrets and ensureOidcClientId
+ * both run before commitBootstrapConfigRelease, so on a first bootstrap there is
+ * no release to read. Default the reader to that same rule so the two sides
+ * cannot silently disagree and report UNKNOWN; --region still overrides it.
+ */
 function printStatus(args) {
   const stage = requiredFlag(args, 'stage')
-  const region = validateRegion(requiredFlag(args, 'region'))
+  const region = validateRegion(parseFlag(args, 'region') ?? resolveAwsRegion())
   const awsCliPath = resolveAwsCliPath()
 
   for (const { id } of RUNTIME_SECRET_DEFINITIONS) {
@@ -119,6 +128,24 @@ const SECRETS_MANAGER_ARN_PATTERN =
 
 function validateSecretsManagerArn(name, arn) {
   if (!SECRETS_MANAGER_ARN_PATTERN.test(arn)) throw new Error(`${name} must be a Secrets Manager ARN`)
+  return arn
+}
+
+/*
+ * verifyRunnerCommandTargets proves the *instance* belongs to the selected
+ * stage; this proves the *credential* does. Without it a reconcile can install
+ * another stage's secret ARN into a runner's systemd drop-in, and the host then
+ * fetches that credential on every start. Secrets Manager appends a 6-character
+ * random suffix to the resource segment, so a stage-owned ARN is either the
+ * exact registered name or that name followed by `-`.
+ */
+function validateStageRuntimeSecretArn(name, arn, { stage, secretId }) {
+  validateSecretsManagerArn(name, arn)
+  const expectedName = runtimeSecretName(stage, secretId)
+  const resourceName = arn.split(':secret:')[1]
+  if (resourceName !== expectedName && !resourceName.startsWith(`${expectedName}-`)) {
+    throw new Error(`${name} does not belong to the selected SST stage`)
+  }
   return arn
 }
 
@@ -420,6 +447,7 @@ fi
 unset BOXLITE_RUNNER_TOKEN
 ${ghcrPreflight}
 WORK=$(mktemp -d)
+chmod 0700 "$WORK"
 cp -a "$UNIT" "$WORK/unit"
 [ ! -f "$WRAPPER" ] || cp -a "$WRAPPER" "$WORK/wrapper"
 [ ! -f "$DROPIN" ] || cp -a "$DROPIN" "$WORK/dropin"
@@ -586,6 +614,7 @@ if [ -z "\${BOXLITE_RUNNER_TOKEN//[[:space:]]/}" ] || [[ "$BOXLITE_RUNNER_TOKEN"
 fi
 
 WORK=$(mktemp -d)
+chmod 0700 "$WORK"
 cp -a "$UNIT" "$WORK/unit"
 [ ! -f "$WRAPPER" ] || cp -a "$WRAPPER" "$WORK/wrapper"
 [ ! -f "$DROPIN" ] || cp -a "$DROPIN" "$WORK/dropin"
@@ -660,7 +689,6 @@ function reconcileExtraRunnerGhcr() {
   const instanceId = validateInstanceId(requiredEnvironment('INSTANCE_ID'))
   const region = validateRegion(requiredEnvironment('AWS_REGION'))
   const stage = requiredEnvironment('SST_STAGE')
-  const expectedStableName = runtimeSecretName(stage, 'ghcrPullToken')
   const ghcrEnabledValue = requiredEnvironment('GHCR_ENABLED')
   if (ghcrEnabledValue !== 'true' && ghcrEnabledValue !== 'false') {
     throw new Error('GHCR_ENABLED must be true or false')
@@ -671,13 +699,13 @@ function reconcileExtraRunnerGhcr() {
     'LEGACY_GHCR_SECRET_ARN',
     requiredEnvironment('LEGACY_GHCR_SECRET_ARN'),
   )
-  const ghcrSecretArn = validateSecretsManagerArn('GHCR_SECRET_ARN', requiredEnvironment('GHCR_SECRET_ARN'))
+  const ghcrSecretArn = validateStageRuntimeSecretArn(
+    'GHCR_SECRET_ARN',
+    requiredEnvironment('GHCR_SECRET_ARN'),
+    { stage, secretId: 'ghcrPullToken' },
+  )
   if (legacyGhcrSecretArn === ghcrSecretArn) {
     throw new Error('legacy and stable GHCR secret ARNs must differ')
-  }
-  const stableResourceName = ghcrSecretArn.split(':secret:')[1]
-  if (stableResourceName !== expectedStableName && !stableResourceName.startsWith(`${expectedStableName}-`)) {
-    throw new Error('GHCR_SECRET_ARN does not belong to the selected SST stage')
   }
 
   verifyRunnerCommandTargets([instanceId], { region, stage })
@@ -711,11 +739,16 @@ function reconcileDefaultRunner() {
   const instanceId = validateInstanceId(requiredEnvironment('INSTANCE_ID'))
   const region = validateRegion(requiredEnvironment('AWS_REGION'))
   const stage = requiredEnvironment('SST_STAGE')
-  const runnerTokenSecretArn = validateSecretsManagerArn(
+  const runnerTokenSecretArn = validateStageRuntimeSecretArn(
     'BOXLITE_RUNNER_TOKEN_SECRET_ARN',
     requiredEnvironment('BOXLITE_RUNNER_TOKEN_SECRET_ARN'),
+    { stage, secretId: 'defaultRunnerApiKey' },
   )
-  const ghcrSecretArn = validateSecretsManagerArn('GHCR_SECRET_ARN', requiredEnvironment('GHCR_SECRET_ARN'))
+  const ghcrSecretArn = validateStageRuntimeSecretArn(
+    'GHCR_SECRET_ARN',
+    requiredEnvironment('GHCR_SECRET_ARN'),
+    { stage, secretId: 'ghcrPullToken' },
+  )
   const ghcrUsername = process.env.GHCR_USERNAME || ''
   if (ghcrUsername && !/^[A-Za-z0-9_.-]+$/.test(ghcrUsername)) {
     throw new Error('GHCR_USERNAME contains unsupported characters')
@@ -746,10 +779,13 @@ function restoreDefaultRunnerLegacy() {
   const instanceId = validateInstanceId(requiredEnvironment('INSTANCE_ID'))
   const region = validateRegion(requiredEnvironment('AWS_REGION'))
   const stage = requiredEnvironment('SST_STAGE')
-  const runnerTokenSecretArn = validateSecretsManagerArn(
+  const runnerTokenSecretArn = validateStageRuntimeSecretArn(
     'BOXLITE_RUNNER_TOKEN_SECRET_ARN',
     requiredEnvironment('BOXLITE_RUNNER_TOKEN_SECRET_ARN'),
+    { stage, secretId: 'defaultRunnerApiKey' },
   )
+  // The legacy GHCR secret predates the stage-scoped registry, so it has no
+  // runtimeSecretName to bind against; only its ARN shape can be checked.
   const legacyGhcrSecretArn = validateSecretsManagerArn(
     'LEGACY_GHCR_SECRET_ARN',
     requiredEnvironment('LEGACY_GHCR_SECRET_ARN'),
@@ -789,7 +825,6 @@ function restoreExtraRunnerGhcrLegacy() {
   const instanceId = validateInstanceId(requiredEnvironment('INSTANCE_ID'))
   const region = validateRegion(requiredEnvironment('AWS_REGION'))
   const stage = requiredEnvironment('SST_STAGE')
-  const expectedStableName = runtimeSecretName(stage, 'ghcrPullToken')
   const ghcrEnabledValue = requiredEnvironment('GHCR_ENABLED')
   if (ghcrEnabledValue !== 'true' && ghcrEnabledValue !== 'false') {
     throw new Error('GHCR_ENABLED must be true or false')
@@ -800,16 +835,13 @@ function restoreExtraRunnerGhcrLegacy() {
     'LEGACY_GHCR_SECRET_ARN',
     requiredEnvironment('LEGACY_GHCR_SECRET_ARN'),
   )
-  const stableGhcrSecretArn = validateSecretsManagerArn(
+  const stableGhcrSecretArn = validateStageRuntimeSecretArn(
     'GHCR_SECRET_ARN',
     requiredEnvironment('GHCR_SECRET_ARN'),
+    { stage, secretId: 'ghcrPullToken' },
   )
   if (legacyGhcrSecretArn === stableGhcrSecretArn) {
     throw new Error('legacy and stable GHCR secret ARNs must differ')
-  }
-  const stableResourceName = stableGhcrSecretArn.split(':secret:')[1]
-  if (stableResourceName !== expectedStableName && !stableResourceName.startsWith(`${expectedStableName}-`)) {
-    throw new Error('GHCR_SECRET_ARN does not belong to the selected SST stage')
   }
 
   verifyRunnerCommandTargets([instanceId], { region, stage })
@@ -844,10 +876,12 @@ function main(args) {
   const commandArgs = args.slice(1)
   if (command === 'status') return printStatus(commandArgs)
   if (command === 'remove-stale') return removeStale(commandArgs)
-  if (command === 'reconcile-default-runner') return reconcileDefaultRunner(commandArgs)
-  if (command === 'restore-default-runner-legacy') return restoreDefaultRunnerLegacy(commandArgs)
-  if (command === 'reconcile-extra-runner-ghcr') return reconcileExtraRunnerGhcr(commandArgs)
-  if (command === 'restore-extra-runner-ghcr-legacy') return restoreExtraRunnerGhcrLegacy(commandArgs)
+  // The four runner transactions take every input from the environment so no
+  // credential-adjacent value ever reaches process argv.
+  if (command === 'reconcile-default-runner') return reconcileDefaultRunner()
+  if (command === 'restore-default-runner-legacy') return restoreDefaultRunnerLegacy()
+  if (command === 'reconcile-extra-runner-ghcr') return reconcileExtraRunnerGhcr()
+  if (command === 'restore-extra-runner-ghcr-legacy') return restoreExtraRunnerGhcrLegacy()
   throw new Error(
     'expected status, remove-stale, reconcile-default-runner, restore-default-runner-legacy, reconcile-extra-runner-ghcr, or restore-extra-runner-ghcr-legacy',
   )

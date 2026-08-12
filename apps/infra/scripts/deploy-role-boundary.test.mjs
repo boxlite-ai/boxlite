@@ -56,6 +56,18 @@ test('parseAssumedRoleName rejects a non-assumed-role ARN', () => {
   )
 })
 
+// Every boundary ARN this stack can compare against is a literal `arn:aws:`
+// (sst.config.ts:166). An identity from another partition must be rejected by
+// name here rather than reappearing downstream as a boundary mismatch.
+test('parseAssumedRoleName rejects a non-commercial partition', () => {
+  for (const partition of ['aws-us-gov', 'aws-cn']) {
+    assert.throws(
+      () => parseAssumedRoleName(`arn:${partition}:sts::${ACCOUNT_ID}:assumed-role/boxlite-app-dev-deploy/session`),
+      /partition 'aws-(us-gov|cn)' is not supported/,
+    )
+  }
+})
+
 test('the deploy-role verifier accepts only a completed exact stage stack', () => {
   assert.deepEqual(
     assertDeployRoleStackComplete({

@@ -188,8 +188,11 @@ export class DeploymentConfigStore {
       )
     } catch (cause) {
       if (awsErrorIs(cause, 'ParameterAlreadyExists')) {
+        // Point at the README rather than repeating the owner set: an operator
+        // who trusts a partial list here can delete a lock a running `remove`
+        // or `refresh` still holds.
         throw new Error(
-          `a deployment operation for stage ${stage} is already in progress; if no bootstrap, config activation, preview, or deploy owns it, delete ${name} in ${this.region} deliberately and retry`,
+          `a deployment operation for stage ${stage} is already in progress; confirm no documented owner is still running (apps/infra/README.md, "already in progress"), then delete ${name} in ${this.region} deliberately and retry`,
         )
       }
       throw new Error(`could not acquire the deployment operation lock for stage ${stage}`, { cause })
@@ -232,10 +235,29 @@ export class DeploymentConfigStore {
   async withDeploymentOperationLock(options, operation) {
     if (typeof operation !== 'function') throw new Error('deployment operation lock callback is required')
     const lock = this.acquireDeploymentOperationLock(options)
+    let operationError
     try {
       return await operation()
+    } catch (error) {
+      operationError = error
+      throw error
     } finally {
-      this.releaseDeploymentOperationLock(lock)
+      try {
+        this.releaseDeploymentOperationLock(lock)
+      } catch (releaseError) {
+        // Releasing reads and deletes an SSM parameter, so it can fail on its
+        // own. Letting that replace a failed operation's error would show the
+        // operator a lock complaint instead of the deploy failure they need, so
+        // the operation's error stays the thrown one. A stranded lock still
+        // surfaces on the next acquisition, which names the recovery step.
+        if (!operationError) throw releaseError
+        // Only attach where a new property can be defined: a thrown primitive,
+        // or a sealed or frozen Error, would make this assignment throw from the
+        // finally and replace the very error this branch exists to preserve.
+        if (operationError instanceof Error && Object.isExtensible(operationError)) {
+          operationError.cause ??= releaseError
+        }
+      }
     }
   }
 
