@@ -225,7 +225,11 @@ export class RunnerService {
   }
 
   async findOneUncachedOrFail(id: string): Promise<Runner> {
-    return this.runnerRepository.findOneOrFail({ where: { id } })
+    const runner = await this.runnerRepository.findOne({ where: { id } })
+    if (!runner) {
+      throw new NotFoundException(`Runner with ID ${id} not found`)
+    }
+    return runner
   }
 
   async findOneFullOrFail(id: string): Promise<RunnerFullDto> {
@@ -451,7 +455,7 @@ export class RunnerService {
       })
     }
 
-    await this.updateRunner(runnerId, updateData)
+    await this.updateRunnerUnlessDecommissioned(runnerId, updateData)
     this.logger.debug(`Updated health for runner ${runnerId}`)
 
     this.eventEmitter.emit(
@@ -473,7 +477,7 @@ export class RunnerService {
       return
     }
 
-    await this.updateRunner(runnerId, {
+    await this.updateRunnerUnlessDecommissioned(runnerId, {
       state: newState,
       lastChecked: new Date(),
     })
@@ -790,6 +794,15 @@ export class RunnerService {
     data: Partial<Omit<Runner, 'id' | 'createdAt' | 'updatedAt'>>,
   ): Promise<UpdateResult> {
     const result = await this.runnerRepository.update(id, data)
+    this.invalidateRunnerCache(id)
+    return result
+  }
+
+  private async updateRunnerUnlessDecommissioned(
+    id: string,
+    data: Partial<Omit<Runner, 'id' | 'createdAt' | 'updatedAt'>>,
+  ): Promise<UpdateResult> {
+    const result = await this.runnerRepository.update({ id, state: Not(RunnerState.DECOMMISSIONED) }, data)
     this.invalidateRunnerCache(id)
     return result
   }

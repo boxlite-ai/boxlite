@@ -44,7 +44,7 @@ describe('RunnerService decommission verification', () => {
       redisLockProvider as any,
       configService as any,
       {} as any,
-      {} as any,
+      { emit: jest.fn() } as any,
       dataSource as any,
       redis as any,
     )
@@ -102,7 +102,7 @@ describe('RunnerService decommission verification', () => {
 
   it('does not decommission when draining is cleared before final verification', async () => {
     const { service, runnerRepository, boxRepository } = createService(0, '2')
-    runnerRepository.findOneOrFail.mockResolvedValue({ id: 'runner-1', draining: false, state: RunnerState.READY })
+    runnerRepository.findOne.mockResolvedValue({ id: 'runner-1', draining: false, state: RunnerState.READY })
 
     await (service as any).handleCheckDecommissionRunners()
 
@@ -120,5 +120,27 @@ describe('RunnerService decommission verification', () => {
       30,
       expect.any(AbortSignal),
     )
+  })
+
+  it('keeps a runner decommissioned when an in-flight health write completes later', async () => {
+    const { service, runnerRepository } = createService(0)
+    runnerRepository.findOne.mockResolvedValue({ id: 'runner-1', state: RunnerState.READY })
+
+    await service.updateRunnerHealth('runner-1')
+
+    expect(runnerRepository.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'runner-1',
+        state: expect.any(Object),
+      }),
+      expect.objectContaining({ state: RunnerState.READY }),
+    )
+  })
+
+  it('translates a missing uncached runner into NotFoundException', async () => {
+    const { service, runnerRepository } = createService(0)
+    runnerRepository.findOne.mockResolvedValue(null)
+
+    await expect(service.findOneUncachedOrFail('missing')).rejects.toMatchObject({ status: 404 })
   })
 })

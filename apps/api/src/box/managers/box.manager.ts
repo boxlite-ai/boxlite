@@ -259,25 +259,28 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
             const states = force
               ? [BoxState.STARTED, BoxState.STOPPED, BoxState.ERROR]
               : [BoxState.STOPPED, BoxState.ERROR]
-            const boxes = await this.boxRepository.find({
-              where: [
-                {
+            const [boxes, destroyRetries] = await Promise.all([
+              this.boxRepository.find({
+                where: {
                   runnerId: runner.id,
                   state: In(states),
                   desiredState: Not(BoxDesiredState.DESTROYED),
                   pending: false,
                 },
-                {
+                take: 100,
+              }),
+              this.boxRepository.find({
+                where: {
                   runnerId: runner.id,
                   state: BoxState.ERROR,
                   desiredState: BoxDesiredState.DESTROYED,
                   pending: true,
                 },
-              ],
-              take: 100,
-            })
+                take: 100,
+              }),
+            ])
 
-            await Promise.allSettled(boxes.map((box) => this.drainBox(box, force)))
+            await Promise.allSettled([...boxes, ...destroyRetries].map((box) => this.drainBox(box, force)))
           } catch (error) {
             this.logger.error(`Error draining boxes from runner ${runner.id}:`, error)
           }

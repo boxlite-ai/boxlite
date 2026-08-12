@@ -60,12 +60,12 @@ describe('BoxManager runner draining', () => {
     const { manager, boxRepository } = createManager()
     const stopped = createBox('stopped', BoxState.STOPPED)
     const errored = createBox('errored', BoxState.ERROR)
-    boxRepository.find.mockResolvedValue([stopped, errored])
+    boxRepository.find.mockResolvedValueOnce([stopped, errored]).mockResolvedValueOnce([])
     jest.spyOn(manager, 'syncInstanceState').mockResolvedValue(undefined)
 
     await manager.drainingRunnerBoxesCheck()
 
-    expect(boxRepository.find).toHaveBeenCalledTimes(1)
+    expect(boxRepository.find).toHaveBeenCalledTimes(2)
     expect(boxRepository.updateWhere).toHaveBeenCalledTimes(2)
     expect(boxRepository.updateWhere).toHaveBeenCalledWith(
       'stopped',
@@ -76,7 +76,7 @@ describe('BoxManager runner draining', () => {
   it('requests a stop for started boxes when force draining is enabled', async () => {
     const { manager, boxRepository } = createManager(true)
     const started = createBox('started', BoxState.STARTED)
-    boxRepository.find.mockResolvedValue([started])
+    boxRepository.find.mockResolvedValueOnce([started]).mockResolvedValueOnce([])
     jest.spyOn(manager, 'syncInstanceState').mockResolvedValue(undefined)
 
     await manager.drainingRunnerBoxesCheck()
@@ -94,7 +94,7 @@ describe('BoxManager runner draining', () => {
     const { manager, boxRepository } = createManager()
     const errored = createBox('recoverable', BoxState.ERROR)
     errored.recoverable = true
-    boxRepository.find.mockResolvedValue([errored])
+    boxRepository.find.mockResolvedValueOnce([errored]).mockResolvedValueOnce([])
     jest.spyOn(manager, 'syncInstanceState').mockResolvedValue(undefined)
 
     await manager.drainingRunnerBoxesCheck()
@@ -154,12 +154,30 @@ describe('BoxManager runner draining', () => {
     const box = createBox('retry-destroy', BoxState.ERROR)
     box.desiredState = BoxDesiredState.DESTROYED
     box.pending = true
-    boxRepository.find.mockResolvedValue([box])
+    boxRepository.find.mockResolvedValueOnce([]).mockResolvedValueOnce([box])
     const sync = jest.spyOn(manager, 'syncInstanceState').mockResolvedValue(undefined)
 
     await manager.drainingRunnerBoxesCheck()
 
     expect(sync).toHaveBeenCalledWith(box.id, false)
     expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+  })
+
+  it('keeps fresh drain candidates separate from a full destroy-retry batch', async () => {
+    const { manager, boxRepository } = createManager()
+    const stopped = createBox('fresh-stopped', BoxState.STOPPED)
+    const retries = Array.from({ length: 100 }, (_, index) => {
+      const box = createBox(`retry-${index}`, BoxState.ERROR)
+      box.desiredState = BoxDesiredState.DESTROYED
+      box.pending = true
+      return box
+    })
+    boxRepository.find.mockResolvedValueOnce([stopped]).mockResolvedValueOnce(retries)
+    jest.spyOn(manager, 'syncInstanceState').mockResolvedValue(undefined)
+
+    await manager.drainingRunnerBoxesCheck()
+
+    expect(boxRepository.find).toHaveBeenCalledTimes(2)
+    expect(boxRepository.updateWhere).toHaveBeenCalledWith(stopped.id, expect.any(Object))
   })
 })

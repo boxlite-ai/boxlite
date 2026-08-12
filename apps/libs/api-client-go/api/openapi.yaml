@@ -6188,6 +6188,11 @@ components:
       - INSPECT_ARTIFACT_IN_REGISTRY
       - REMOVE_ARTIFACT
       - UPDATE_BOX_NETWORK_SETTINGS
+      - EXPORT_BOX
+      - IMPORT_BOX
+      - ROLLBACK_EXPORT_BOX
+      - ROLLBACK_IMPORT_BOX
+      - DISCARD_EXPORTED_BOX
       type: string
     Job:
       example:
