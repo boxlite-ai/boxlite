@@ -1,12 +1,12 @@
 use crate::service::exec::error::ExecutionError;
 use crate::service::exec::exec_handle::ExecHandle;
-use crate::service::exec::output::OutputManager;
+use crate::service::exec::output::{OutputManager, OutputTerminalSummary};
 use crate::service::exec::process_instance::ProcessInstance;
 use boxlite_shared::ExecOutput;
 use futures::{Stream, StreamExt as _};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, OnceCell};
 use tokio::task::{AbortHandle, JoinHandle};
 use tonic::Status;
 
@@ -31,16 +31,18 @@ struct Inner {
     output: OutputManager,
     /// Abort handles for stdin forwarding tasks that may own the taken stdin FD.
     input_tasks: Vec<AbortHandle>,
-    /// Stdout/stderr forwarding tasks (set on attach)
-    output_tasks: Vec<JoinHandle<()>>,
+    output_task: Option<JoinHandle<()>>,
+    timeout_task: Option<JoinHandle<()>>,
     /// Set once ephemeral callers explicitly release this execution's resources.
     released: bool,
-    /// Timeout flag
-    #[allow(dead_code)] // Will be used for timeout handling
-    timed_out: bool,
     /// Optional init health checker for the container this exec runs in.
     /// Used to detect container init death when exec gets SIGKILL.
     init_health: Option<Arc<Mutex<dyn InitHealthCheck>>>,
+}
+
+enum OutputAttachMode {
+    Live,
+    Retained,
 }
 
 /// How an execution ended, already classified.
@@ -52,6 +54,12 @@ pub(crate) struct ExecutionExit {
     pub exit_code: i32,
     pub signal: i32,
     pub error_message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TerminalSnapshot {
+    pub(crate) exit: ExecutionExit,
+    pub(crate) output: OutputTerminalSummary,
 }
 
 /// Execution state.
@@ -66,6 +74,10 @@ pub(crate) struct ExecutionState {
     exit: crate::reaper::ExitSlot,
     process: Option<ProcessInstance>,
     shutdown_managed: bool,
+    consumer_lease: Arc<std::sync::atomic::AtomicBool>,
+    /// Classified once: the container-death diagnosis drains init's pipes, so a
+    /// second reader would get a different answer.
+    terminal_exit: Arc<OnceCell<ExecutionExit>>,
 }
 
 impl ExecutionState {
@@ -76,20 +88,33 @@ impl ExecutionState {
         process: Option<ProcessInstance>,
         shutdown_managed: bool,
     ) -> Self {
+        let output = OutputManager::new(handle.stdout(), handle.stderr());
+        let consumer_lease = output.consumer_lease_flag();
         Self {
             inner: Arc::new(Mutex::new(Inner {
-                output: OutputManager::new(handle.stdout(), handle.stderr()),
+                output,
                 handle: Some(handle),
                 input_tasks: Vec::new(),
-                output_tasks: Vec::new(),
+                output_task: None,
+                timeout_task: None,
                 released: false,
-                timed_out: false,
                 init_health,
             })),
             exit,
             process,
             shutdown_managed,
+            consumer_lease,
+            terminal_exit: Arc::new(OnceCell::new()),
         }
+    }
+
+    /// Whether a reader is currently streaming this execution's output.
+    ///
+    /// Kept outside `inner` so eviction can ask while holding the registry lock,
+    /// which must not await on a state's own mutex.
+    pub(crate) fn has_active_reader(&self) -> bool {
+        self.consumer_lease
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Create new execution state for a guest-side process.
@@ -243,6 +268,63 @@ impl ExecutionState {
         self.exit.get().await
     }
 
+    pub(crate) async fn wait_terminal_output_summary(&self) -> OutputTerminalSummary {
+        let output = self.inner.lock().await.output.clone();
+        let summary = output.wait_terminal_summary().await;
+        let sealed = output.seal().await;
+        debug_assert!(sealed, "terminal output must be sealable after its summary");
+        summary
+    }
+
+    pub(crate) async fn sealed_terminal_output_summary(&self) -> Option<OutputTerminalSummary> {
+        let output = self.inner.lock().await.output.clone();
+        output.sealed_terminal_summary().await
+    }
+
+    pub(crate) async fn retained_output_bytes(&self) -> usize {
+        let output = self.inner.lock().await.output.clone();
+        output.retained_bytes().await
+    }
+
+    pub(crate) async fn set_timeout_task(&self, task: JoinHandle<()>) {
+        let task_to_abort = {
+            let mut inner = self.inner.lock().await;
+            if inner.released {
+                Some(task)
+            } else {
+                debug_assert!(inner.timeout_task.is_none());
+                inner.timeout_task = Some(task);
+                None
+            }
+        };
+        if let Some(task) = task_to_abort {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+
+    pub(crate) async fn cancel_timeout_task(&self) {
+        let task = self.inner.lock().await.timeout_task.take();
+        if let Some(task) = task {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+
+    pub(crate) async fn abort_unpublished(&self) {
+        let _ = self
+            .signal_owned_process_if_current(nix::sys::signal::Signal::SIGKILL)
+            .await;
+        self.release_resources().await;
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn wait_terminal_snapshot(&self, exec_id: &str) -> TerminalSnapshot {
+        let (exit, output) =
+            tokio::join!(self.wait_exit(exec_id), self.wait_terminal_output_summary(),);
+        TerminalSnapshot { exit, output }
+    }
+
     /// Wait for exit and classify it.
     ///
     /// The SIGKILL diagnosis lives here rather than in a caller because
@@ -251,6 +333,13 @@ impl ExecutionState {
     /// the same answer, including the reason a tenant was killed by pid-namespace
     /// teardown rather than by its own exit.
     pub(crate) async fn wait_exit(&self, exec_id: &str) -> ExecutionExit {
+        self.terminal_exit
+            .get_or_init(|| self.classify_exit(exec_id))
+            .await
+            .clone()
+    }
+
+    async fn classify_exit(&self, exec_id: &str) -> ExecutionExit {
         use crate::service::exec::exec_handle::ExitStatus;
 
         match self.wait_process().await {
@@ -294,6 +383,24 @@ impl ExecutionState {
         &self,
         exec_id: &str,
     ) -> Result<mpsc::Receiver<Result<ExecOutput, Status>>, ExecutionError> {
+        self.attach_output(exec_id, OutputAttachMode::Live).await
+    }
+
+    pub(crate) async fn attach_retained(
+        &self,
+        exec_id: &str,
+    ) -> Result<mpsc::Receiver<Result<ExecOutput, Status>>, ExecutionError> {
+        self.attach_output(exec_id, OutputAttachMode::Retained)
+            .await
+    }
+
+    async fn attach_output(
+        &self,
+        exec_id: &str,
+        mode: OutputAttachMode,
+    ) -> Result<mpsc::Receiver<Result<ExecOutput, Status>>, ExecutionError> {
+        self.join_finished_output_task().await;
+
         let output = {
             let inner = self.inner.lock().await;
             if inner.released {
@@ -301,10 +408,11 @@ impl ExecutionState {
             }
             inner.output.clone()
         };
-        let mut output = output
-            .attach()
-            .await
-            .map_err(|_| ExecutionError::AlreadyAttached)?;
+        let mut output = match mode {
+            OutputAttachMode::Live => output.attach().await,
+            OutputAttachMode::Retained => output.attach_retained().await,
+        }
+        .map_err(|_| ExecutionError::AlreadyAttached)?;
         let (tx, rx) = mpsc::channel(100);
         let execution_id = exec_id.to_owned();
         let task = tokio::spawn(async move {
@@ -316,13 +424,53 @@ impl ExecutionState {
             tracing::info!(%execution_id, "execution output forwarding ended");
         });
 
-        let mut inner = self.inner.lock().await;
-        if inner.released {
+        let (task_to_abort, displaced) = {
+            let mut inner = self.inner.lock().await;
+            if inner.released {
+                (Some(task), None)
+            } else {
+                (None, inner.output_task.replace(task))
+            }
+        };
+        // A forwarder releases the consumer lease when its stream drops, which
+        // happens before its handle reports finished. So a displaced forwarder is
+        // already ending, and this join cannot wait on live output.
+        if let Some(displaced) = displaced {
+            let _ = displaced.await;
+        }
+        if let Some(task) = task_to_abort {
             task.abort();
+            let _ = task.await;
             return Err(ExecutionError::HandleUnavailable);
         }
-        inner.output_tasks.push(task);
         Ok(rx)
+    }
+
+    async fn join_finished_output_task(&self) {
+        let task = {
+            let mut inner = self.inner.lock().await;
+            if inner
+                .output_task
+                .as_ref()
+                .is_some_and(JoinHandle::is_finished)
+            {
+                inner.output_task.take()
+            } else {
+                None
+            }
+        };
+        if let Some(task) = task {
+            let _ = task.await;
+        }
+    }
+
+    #[cfg(test)]
+    async fn output_task_count(&self) -> usize {
+        if self.inner.lock().await.output_task.is_some() {
+            1
+        } else {
+            0
+        }
     }
 
     /// Drop every resource owned by an explicitly ephemeral execution.
@@ -333,7 +481,7 @@ impl ExecutionState {
     /// clone still exists. Forwarders are aborted because stdin may already have
     /// moved out of the handle into one of those tasks.
     pub(super) async fn release_resources(&self) -> bool {
-        let (output, input_tasks, output_tasks) = {
+        let (output, input_tasks, output_task, timeout_task) = {
             let mut inner = self.inner.lock().await;
             if inner.released {
                 return false;
@@ -341,17 +489,23 @@ impl ExecutionState {
             inner.released = true;
             let output = inner.output.clone();
             let input_tasks = std::mem::take(&mut inner.input_tasks);
-            let output_tasks = std::mem::take(&mut inner.output_tasks);
+            let output_task = inner.output_task.take();
+            let timeout_task = inner.timeout_task.take();
             drop(inner.handle.take());
             drop(inner.init_health.take());
-            (output, input_tasks, output_tasks)
+            (output, input_tasks, output_task, timeout_task)
         };
 
         for task in input_tasks {
             task.abort();
         }
-        for task in output_tasks {
+        if let Some(task) = output_task {
             task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = timeout_task {
+            task.abort();
+            let _ = task.await;
         }
         output.shutdown_drains().await;
         if self.shutdown_managed {
@@ -451,6 +605,7 @@ mod release_tests {
     use crate::service::exec::process_instance::ProcessInstance;
     use nix::unistd::{pipe, Pid};
     use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn fd_is_open(fd: RawFd) -> bool {
         (unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) }) != -1
@@ -537,6 +692,15 @@ mod release_tests {
     }
 
     #[tokio::test]
+    async fn release_aborts_the_timeout_task() {
+        let (state, _tracked_fds, _peers) = state_with_tracked_handle();
+        let task = tokio::spawn(std::future::pending::<()>());
+        state.set_timeout_task(task).await;
+
+        assert!(state.release_resources().await);
+    }
+
+    #[tokio::test]
     async fn process_identity_refuses_a_changed_start_time() {
         use std::os::unix::process::ExitStatusExt;
 
@@ -570,6 +734,83 @@ mod release_tests {
             status.signal(),
             Some(nix::sys::signal::Signal::SIGKILL as i32)
         );
+    }
+
+    #[tokio::test]
+    async fn aborting_an_unpublished_execution_kills_its_process() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let _test_guard = crate::reaper::reap_test_guard().await;
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let leader = Pid::from_raw(child.id() as i32);
+        let process = ProcessInstance::capture(leader).expect("read child identity");
+        let (stdin_peer, stdin) = pipe().unwrap();
+        let (stdout, stdout_peer) = pipe().unwrap();
+        let (stderr, stderr_peer) = pipe().unwrap();
+        let (exit, _exit_tx) = ExitSlot::pending_for_test();
+        let state = ExecutionState::new(
+            ExecHandle::new(leader, stdin, stdout, Some(stderr))
+                .expect("test pipes must register with Tokio"),
+            exit,
+            Some(process),
+        );
+
+        state.abort_unpublished().await;
+
+        let status = tokio::task::spawn_blocking(move || {
+            let _fence = crate::reaper::reap_fence();
+            child.wait().expect("aborted leader must exit")
+        })
+        .await
+        .expect("wait task must not panic");
+        assert_eq!(
+            status.signal(),
+            Some(nix::sys::signal::Signal::SIGKILL as i32)
+        );
+        drop((stdin_peer, stdout_peer, stderr_peer));
+    }
+
+    #[tokio::test]
+    async fn direct_kill_does_not_signal_a_released_execution() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let _test_guard = crate::reaper::reap_test_guard().await;
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let leader = Pid::from_raw(child.id() as i32);
+        let process = ProcessInstance::capture(leader).expect("read child identity");
+        let (stdin_peer, stdin) = pipe().unwrap();
+        let (stdout, stdout_peer) = pipe().unwrap();
+        let (stderr, stderr_peer) = pipe().unwrap();
+        let (exit, _exit_tx) = ExitSlot::pending_for_test();
+        let state = ExecutionState::new(
+            ExecHandle::new(leader, stdin, stdout, Some(stderr))
+                .expect("test pipes must register with Tokio"),
+            exit,
+            Some(process),
+        );
+
+        assert!(state.release_resources().await);
+        assert!(!state.kill(nix::sys::signal::Signal::SIGTERM, false).await);
+        assert!(child.try_wait().expect("check child status").is_none());
+
+        child.kill().expect("kill test child");
+        let status = tokio::task::spawn_blocking(move || {
+            let _fence = crate::reaper::reap_fence();
+            child.wait().expect("wait for test child")
+        })
+        .await
+        .expect("wait task must not panic");
+        assert_eq!(
+            status.signal(),
+            Some(nix::sys::signal::Signal::SIGKILL as i32)
+        );
+        drop((stdin_peer, stdout_peer, stderr_peer));
     }
 
     #[tokio::test]
@@ -642,5 +883,151 @@ mod release_tests {
             status.signal(),
             Some(nix::sys::signal::Signal::SIGKILL as i32)
         );
+    }
+
+    /// Init is exempt from registry shutdown, not from an explicit Kill.
+    #[tokio::test]
+    async fn direct_kill_signals_an_init_session() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let _test_guard = crate::reaper::reap_test_guard().await;
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let leader = Pid::from_raw(child.id() as i32);
+        let process = ProcessInstance::capture(leader).expect("read child identity");
+        let (stdin_peer, stdin) = pipe().unwrap();
+        let (stdout, stdout_peer) = pipe().unwrap();
+        let (stderr, stderr_peer) = pipe().unwrap();
+        let (exit, _exit_tx) = ExitSlot::pending_for_test();
+        let state = ExecutionState::new_init_session(
+            ExecHandle::new(leader, stdin, stdout, Some(stderr))
+                .expect("test pipes must register with Tokio"),
+            exit,
+            Some(process),
+        );
+
+        assert!(!state
+            .signal_owned_process_if_current(nix::sys::signal::Signal::SIGTERM)
+            .await
+            .expect("shutdown must skip an init session"));
+        assert!(state.kill(nix::sys::signal::Signal::SIGTERM, false).await);
+
+        let status = tokio::task::spawn_blocking(move || {
+            let _fence = crate::reaper::reap_fence();
+            child.wait().expect("wait for test child")
+        })
+        .await
+        .expect("wait task must not panic");
+        assert_eq!(
+            status.signal(),
+            Some(nix::sys::signal::Signal::SIGTERM as i32)
+        );
+        assert!(state.release_resources().await);
+        drop((stdin_peer, stdout_peer, stderr_peer));
+    }
+
+    #[tokio::test]
+    async fn state_waits_for_its_terminal_output_summary() {
+        let (state, _tracked_fds, peers) = state_with_tracked_handle();
+        drop(peers);
+
+        let summary = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            state.wait_terminal_output_summary(),
+        )
+        .await
+        .expect("closed output peers must finish the summary wait");
+        assert!(summary.stdout.enabled);
+        assert!(summary.stderr.enabled);
+    }
+
+    #[tokio::test]
+    async fn terminal_output_summary_seals_the_output_before_retention() {
+        let (state, _tracked_fds, peers) = state_with_tracked_handle();
+        drop(peers);
+
+        state.wait_terminal_output_summary().await;
+
+        assert!(matches!(
+            state.attach("sealed-exec").await,
+            Err(ExecutionError::AlreadyAttached)
+        ));
+    }
+
+    #[tokio::test]
+    async fn terminal_snapshot_caches_exit_with_completed_output() {
+        let (state, _tracked_fds, peers) = state_with_tracked_handle();
+        drop(peers);
+
+        let snapshot = state.wait_terminal_snapshot("test-exec").await;
+        assert_eq!(snapshot.exit.exit_code, 0);
+        assert!(snapshot.output.stdout.enabled);
+        assert!(snapshot.output.stderr.enabled);
+    }
+
+    struct DeadInit {
+        diagnoses: Arc<AtomicUsize>,
+    }
+
+    impl InitHealthCheck for DeadInit {
+        fn is_running(&self) -> bool {
+            false
+        }
+
+        fn diagnose_exit(&mut self) -> String {
+            self.diagnoses.fetch_add(1, Ordering::SeqCst);
+            "init exited".into()
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_wait_caches_the_init_exit_diagnosis() {
+        let (stdin_peer, stdin) = pipe().unwrap();
+        let (stdout, stdout_peer) = pipe().unwrap();
+        let (stderr, stderr_peer) = pipe().unwrap();
+        let handle = ExecHandle::new(Pid::from_raw(42_424), stdin, stdout, Some(stderr))
+            .expect("test pipe must register with Tokio");
+        let diagnoses = Arc::new(AtomicUsize::new(0));
+        let health: Arc<Mutex<dyn InitHealthCheck>> = Arc::new(Mutex::new(DeadInit {
+            diagnoses: diagnoses.clone(),
+        }));
+        let state = ExecutionState::new_with_init_health(
+            handle,
+            health,
+            ExitSlot::settled_for_test(ExitStatus::Signal(nix::sys::signal::Signal::SIGKILL)),
+            None,
+        );
+
+        assert_eq!(state.wait_exit("exec").await.error_message, "init exited");
+        assert_eq!(state.wait_exit("exec").await.error_message, "init exited");
+        assert_eq!(diagnoses.load(Ordering::SeqCst), 1);
+
+        drop((stdin_peer, stdout_peer, stderr_peer));
+    }
+
+    #[tokio::test]
+    async fn repeated_attach_does_not_retain_finished_forwarding_tasks() {
+        let (state, _tracked_fds, peers) = state_with_tracked_handle();
+
+        let first = state.attach("exec-1").await.unwrap();
+        drop(first);
+        drop(peers);
+
+        let second = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                match state.attach("exec-1").await {
+                    Ok(receiver) => break receiver,
+                    Err(ExecutionError::AlreadyAttached) => tokio::task::yield_now().await,
+                    Err(error) => panic!("second attach must not fail: {error:?}"),
+                }
+            }
+        })
+        .await
+        .expect("completed attach must release its output lease");
+        drop(second);
+
+        assert_eq!(state.output_task_count().await, 1);
     }
 }

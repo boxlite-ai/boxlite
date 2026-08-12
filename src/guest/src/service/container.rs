@@ -483,9 +483,24 @@ impl ContainerService for GuestServer {
                             exit.clone(),
                             process,
                         );
-                        self.registry
-                            .register(init_execution_id.clone(), state)
-                            .await;
+                        if !self
+                            .registry
+                            .register(init_execution_id.clone(), state.clone())
+                            .await
+                        {
+                            state.abort_unpublished().await;
+                            // Init's session is not shutdown-managed, so the
+                            // teardown above leaves the slot — and the power-off
+                            // action parked on it — in place.
+                            reaper.release_slot(&exit);
+                            return Ok(Response::new(ContainerInitResponse {
+                                result: Some(container_init_response::Result::Error(
+                                    internal_init_error(
+                                        "Execution registry is shutting down or already owns the init session",
+                                    ),
+                                )),
+                            }));
+                        }
                         exit
                     }
                     Ok(None) => {

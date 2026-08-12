@@ -4,6 +4,7 @@ use boxlite_shared::{exec_output, ExecOutput, Stderr, Stdout};
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
@@ -14,10 +15,24 @@ const BUFFER_CAPACITY_BYTES: usize = 1024 * 1024;
 
 pub(crate) type AttachStream = Pin<Box<dyn Stream<Item = Result<ExecOutput, Status>> + Send>>;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OutputTerminalSummary {
+    pub(crate) stdout: OutputStreamSummary,
+    pub(crate) stderr: OutputStreamSummary,
+    pub(crate) reader_failure: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OutputStreamSummary {
+    pub(crate) enabled: bool,
+    pub(crate) total_bytes: u64,
+}
+
 #[derive(Clone)]
 pub(crate) struct OutputManager {
     inner: Arc<Mutex<OutputState>>,
     updated: watch::Sender<()>,
+    consumer_lease: Arc<AtomicBool>,
     drain_tasks: Arc<StdMutex<Vec<JoinHandle<()>>>>,
 }
 
@@ -27,9 +42,21 @@ struct OutputState {
     oldest_sequence: u64,
     next_sequence: u64,
     failure: Option<ReaderFailure>,
-    attached: bool,
+    sealed: bool,
     stdout: StreamState,
     stderr: StreamState,
+}
+
+struct ConsumerLease {
+    claimed: Arc<AtomicBool>,
+    updated: watch::Sender<()>,
+}
+
+impl Drop for ConsumerLease {
+    fn drop(&mut self) {
+        self.claimed.store(false, Ordering::Release);
+        self.updated.send_replace(());
+    }
 }
 
 struct ReaderFailure {
@@ -68,7 +95,7 @@ impl OutputManager {
                 oldest_sequence: 0,
                 next_sequence: 0,
                 failure: None,
-                attached: false,
+                sealed: false,
                 stdout: StreamState {
                     enabled: stdout_enabled,
                     finished: !stdout_enabled,
@@ -83,6 +110,7 @@ impl OutputManager {
                 },
             })),
             updated,
+            consumer_lease: Arc::new(AtomicBool::new(false)),
             drain_tasks: Arc::new(StdMutex::new(Vec::new())),
         };
 
@@ -112,16 +140,45 @@ impl OutputManager {
     }
 
     pub(crate) async fn attach(&self) -> Result<AttachStream, Status> {
+        let lease = self.claim_consumer().await?;
+        if self.inner.lock().await.sealed {
+            return Err(Status::failed_precondition(
+                "execution output is finalizing",
+            ));
+        }
+        Ok(self.attach_stream(lease))
+    }
+
+    pub(crate) async fn attach_retained(&self) -> Result<AttachStream, Status> {
+        let lease = self.claim_consumer().await?;
+        Ok(self.attach_stream(lease))
+    }
+
+    /// The lease flag itself, so a holder can test it without taking any lock.
+    pub(crate) fn consumer_lease_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.consumer_lease)
+    }
+
+    async fn claim_consumer(&self) -> Result<ConsumerLease, Status> {
+        if self
+            .consumer_lease
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
         {
-            let mut state = self.inner.lock().await;
-            if state.attached {
-                return Err(Status::already_exists("Already attached"));
-            }
-            state.attached = true;
+            return Err(Status::already_exists("Already attached"));
         }
 
+        let lease = ConsumerLease {
+            claimed: Arc::clone(&self.consumer_lease),
+            updated: self.updated.clone(),
+        };
+        Ok(lease)
+    }
+
+    fn attach_stream(&self, lease: ConsumerLease) -> AttachStream {
         let manager = self.clone();
         let output = stream! {
+            let _lease = lease;
             let mut next_sequence = 0;
             let mut stdout_end_sent = false;
             let mut stderr_end_sent = false;
@@ -184,7 +241,78 @@ impl OutputManager {
             }
         };
 
-        Ok(Box::pin(output))
+        Box::pin(output)
+    }
+
+    pub(crate) async fn seal(&self) -> bool {
+        let mut state = self.inner.lock().await;
+        if !state.stdout.finished || !state.stderr.finished {
+            return false;
+        }
+        state.sealed = true;
+        drop(state);
+        self.updated.send_replace(());
+        true
+    }
+
+    pub(crate) async fn terminal_summary(&self) -> Option<OutputTerminalSummary> {
+        let state = self.inner.lock().await;
+        if !state.stdout.finished || !state.stderr.finished {
+            return None;
+        }
+
+        Some(OutputTerminalSummary {
+            stdout: OutputStreamSummary {
+                enabled: state.stdout.enabled,
+                total_bytes: state.stdout.total_bytes,
+            },
+            stderr: OutputStreamSummary {
+                enabled: state.stderr.enabled,
+                total_bytes: state.stderr.total_bytes,
+            },
+            reader_failure: state
+                .failure
+                .as_ref()
+                .map(|failure| failure.message.clone()),
+        })
+    }
+
+    pub(crate) async fn sealed_terminal_summary(&self) -> Option<OutputTerminalSummary> {
+        let state = self.inner.lock().await;
+        if !state.sealed {
+            return None;
+        }
+        Some(OutputTerminalSummary {
+            stdout: OutputStreamSummary {
+                enabled: state.stdout.enabled,
+                total_bytes: state.stdout.total_bytes,
+            },
+            stderr: OutputStreamSummary {
+                enabled: state.stderr.enabled,
+                total_bytes: state.stderr.total_bytes,
+            },
+            reader_failure: state
+                .failure
+                .as_ref()
+                .map(|failure| failure.message.clone()),
+        })
+    }
+
+    pub(crate) async fn wait_terminal_summary(&self) -> OutputTerminalSummary {
+        let mut updates = self.updated.subscribe();
+        loop {
+            if let Some(summary) = self.terminal_summary().await {
+                return summary;
+            }
+            updates
+                .changed()
+                .await
+                .expect("output manager must outlive its waiters");
+        }
+    }
+
+    pub(crate) async fn retained_bytes(&self) -> usize {
+        self.inner.lock().await.buffered_bytes
     }
 
     fn spawn<S>(&self, stream: S, source: OutputSource)
@@ -324,6 +452,17 @@ fn end_output(source: OutputSource, total_bytes: u64) -> ExecOutput {
     ExecOutput { event: Some(event) }
 }
 
+pub(crate) fn terminal_events(summary: &OutputTerminalSummary) -> Vec<ExecOutput> {
+    let mut events = Vec::new();
+    if summary.stdout.enabled {
+        events.push(end_output(OutputSource::Stdout, summary.stdout.total_bytes));
+    }
+    if summary.stderr.enabled {
+        events.push(end_output(OutputSource::Stderr, summary.stderr.total_bytes));
+    }
+    events
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,6 +490,23 @@ mod tests {
         assert!(end.data.is_empty());
         assert_eq!(end.offset, Some(b"already sent".len() as u64));
         assert_eq!(end.total_bytes, Some(b"already sent".len() as u64));
+    }
+
+    #[tokio::test]
+    async fn waiting_for_a_terminal_summary_returns_after_both_streams_finish() {
+        let manager = OutputManager::new(None, None);
+
+        let summary = manager.wait_terminal_summary().await;
+        assert_eq!(summary.stdout.total_bytes, 0);
+        assert_eq!(summary.stderr.total_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn retained_bytes_reports_the_shared_ring_size() {
+        let manager = OutputManager::new(None, None);
+        manager.push(OutputSource::Stdout, b"ring".to_vec()).await;
+
+        assert_eq!(manager.retained_bytes().await, 4);
     }
 
     #[tokio::test]
@@ -472,5 +628,99 @@ mod tests {
 
         let error = output.next().await.unwrap().unwrap_err();
         assert!(error.message().contains("stdout failure"));
+    }
+
+    #[tokio::test]
+    async fn dropping_attach_stream_releases_consumer_lease() {
+        let manager = OutputManager::new(None, None);
+
+        let first = manager.attach().await.unwrap();
+        let error = manager
+            .attach()
+            .await
+            .err()
+            .expect("the second Attach must be rejected");
+        assert_eq!(error.code(), tonic::Code::AlreadyExists);
+
+        drop(first);
+
+        assert!(manager.attach().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn terminal_summary_records_enabled_stream_totals() {
+        let (stdout_read, stdout_write) = nix::unistd::pipe().unwrap();
+        let manager = OutputManager::new(Some(ExecStdout::new(stdout_read).unwrap()), None);
+        assert!(manager.terminal_summary().await.is_none());
+
+        nix::unistd::write(&stdout_write, b"stdout").unwrap();
+        drop(stdout_write);
+
+        let summary = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if let Some(summary) = manager.terminal_summary().await {
+                    break summary;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stdout EOF must produce a terminal summary");
+        assert!(summary.stdout.enabled);
+        assert_eq!(summary.stdout.total_bytes, 6);
+        assert!(!summary.stderr.enabled);
+        assert_eq!(summary.stderr.total_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn seal_requires_terminal_output_and_rejects_new_attach() {
+        let (stdout_read, stdout_write) = nix::unistd::pipe().unwrap();
+        let manager = OutputManager::new(Some(ExecStdout::new(stdout_read).unwrap()), None);
+        assert!(!manager.seal().await);
+
+        drop(stdout_write);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if manager.terminal_summary().await.is_some() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stdout EOF must make sealing possible");
+        assert!(manager.seal().await);
+
+        let error = manager
+            .attach()
+            .await
+            .err()
+            .expect("sealed output must reject Attach");
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    }
+
+    #[tokio::test]
+    async fn sealing_keeps_an_existing_attach_stream_until_it_emits_terminal_output() {
+        let (stdout_read, stdout_write) = nix::unistd::pipe().unwrap();
+        let manager = OutputManager::new(Some(ExecStdout::new(stdout_read).unwrap()), None);
+        let mut output = manager.attach().await.unwrap();
+
+        nix::unistd::write(&stdout_write, b"buffered").unwrap();
+        drop(stdout_write);
+        manager.wait_terminal_summary().await;
+        assert!(manager.seal().await);
+
+        let data = output.next().await.unwrap().unwrap();
+        let Some(exec_output::Event::Stdout(stdout)) = data.event else {
+            panic!("sealed stream must retain buffered stdout");
+        };
+        assert_eq!(stdout.data, b"buffered");
+
+        let end = output.next().await.unwrap().unwrap();
+        let Some(exec_output::Event::Stdout(stdout)) = end.event else {
+            panic!("sealed stream must emit stdout terminal event");
+        };
+        assert!(stdout.data.is_empty());
+        assert_eq!(stdout.total_bytes, Some(8));
     }
 }

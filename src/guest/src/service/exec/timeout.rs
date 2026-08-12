@@ -44,7 +44,14 @@ impl TimeoutTarget {
 /// for the process to exit, then escalates to SIGKILL. SIGKILL is
 /// uncatchable, so a workload that installs `SIG_IGN`/handlers for
 /// SIGTERM (or SIGALRM, etc.) cannot outlive its deadline.
-pub(super) fn start_timeout_watcher(target: TimeoutTarget, exec_id: String, timeout: Duration) {
+///
+/// The handle is returned so a retained session can cancel the watcher instead
+/// of leaving a task parked on a deadline its process already beat.
+pub(super) fn start_timeout_watcher(
+    target: TimeoutTarget,
+    exec_id: String,
+    timeout: Duration,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         tokio::time::sleep(timeout).await;
 
@@ -74,7 +81,7 @@ pub(super) fn start_timeout_watcher(target: TimeoutTarget, exec_id: String, time
             Ok(false) => info!(execution_id = %exec_id, "exited within grace after SIGTERM"),
             Err(error) => warn!(execution_id = %exec_id, %error, "timeout SIGKILL failed"),
         }
-    });
+    })
 }
 
 #[cfg(test)]
