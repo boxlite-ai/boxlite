@@ -631,6 +631,14 @@ export default $config({
         S3_ACCOUNT_ID: aws.getCallerIdentityOutput().accountId,
         S3_ROLE_NAME: s3AccessRoleName,
 
+        // Where box-migration archives are keyed. Unset means the API's own
+        // default namespace inside each runner's bucket; set it to
+        // s3://<bucket>/<prefix> when the archive has to live in a bucket the
+        // runners do not share.
+        ...(process.env.BOX_MIGRATION_ARCHIVE_PREFIX && {
+          BOX_MIGRATION_ARCHIVE_PREFIX: process.env.BOX_MIGRATION_ARCHIVE_PREFIX,
+        }),
+
         // Proxy
         PROXY_DOMAIN: proxyDomain,
         PROXY_PROTOCOL: proxyProtocol,

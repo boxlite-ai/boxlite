@@ -15,6 +15,7 @@ import { RunnerService } from './services/runner.service'
 import { Runner } from './entities/runner.entity'
 import { RunnerController } from './controllers/runner.controller'
 import { BoxManager } from './managers/box.manager'
+import { BoxMigrationManager } from './managers/box-migration.manager'
 import { RedisLockProvider } from './common/redis-lock.provider'
 import { OrganizationModule } from '../organization/organization.module'
 import { BoxWarmPoolService } from './services/box-warm-pool.service'
@@ -78,6 +79,7 @@ import { BoxMigrationService } from './services/box-migration.service'
     BoxActivityService,
     BoxStateWaiterService,
     BoxMigrationService,
+    BoxMigrationManager,
     BoxAccessGuard,
     RunnerAccessGuard,
     RegionRunnerAccessGuard,

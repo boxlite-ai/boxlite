@@ -147,6 +147,58 @@ export function usageExportConfig(env: NodeJS.ProcessEnv = process.env) {
   return { ...settings, url: requiredHttpUrl(rawUrl, 'USAGE_EXPORT_URL') }
 }
 
+// The object-store key namespace migration archives land in by default, inside
+// whichever bucket each runner is configured with.
+const DEFAULT_MIGRATION_ARCHIVE_PREFIX = 'box-migrations/'
+
+// An arcPath that names its own bucket instead of using the runner's own
+// (runner: pkg/storage/archive_store.go, resolveArcPath).
+const S3_URI_SCHEME = 's3://'
+
+// One segment of an archive prefix: alphanumeric first, then object-store-safe
+// characters. Requiring the first character is what rejects an empty segment —
+// a leading or doubled slash — along with ".", ".." and anything whitespace.
+const ARCHIVE_PREFIX_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+/**
+ * Where a box migration's archive lives in the object store: the prefix the
+ * exporting runner writes under and the importing one reads back.
+ *
+ * A bare prefix keys into the bucket each runner is configured with; an
+ * `s3://<bucket>/…` prefix carries the bucket in the key, which is what lets one
+ * migration span two runners whose own buckets differ. The runner resolves both
+ * forms, so both are accepted here.
+ *
+ * The shape is checked at boot because the alternative is learning about it one
+ * migration at a time: a prefix the runner cannot resolve fails every export job
+ * it is handed, and one with a leading or doubled slash uploads to a key nobody
+ * would look under. Only the trailing slash is normalized, so `box-migrations`
+ * and `box-migrations/` name the same namespace.
+ *
+ * Changing it with migrations in flight is safe: only the export leg derives a
+ * key, and every leg after it acts on the one recorded in `box_migration.arcPath`.
+ *
+ * Exported so its rules can be tested directly rather than through an import
+ * whose side effect is reading the process environment.
+ */
+export function boxMigrationConfig(env: NodeJS.ProcessEnv = process.env) {
+  const raw = env.BOX_MIGRATION_ARCHIVE_PREFIX?.trim()
+  if (!raw) {
+    return { archivePrefix: DEFAULT_MIGRATION_ARCHIVE_PREFIX }
+  }
+
+  const scheme = raw.startsWith(S3_URI_SCHEME) ? S3_URI_SCHEME : ''
+  const segments = raw.slice(scheme.length).replace(/\/+$/, '').split('/')
+  if (!segments.every((segment) => ARCHIVE_PREFIX_SEGMENT.test(segment))) {
+    throw new Error(
+      'BOX_MIGRATION_ARCHIVE_PREFIX must be a slash-separated object-store prefix, optionally ' +
+        `bucket-qualified — "box-migrations" or "s3://bucket/box-migrations" — got "${env.BOX_MIGRATION_ARCHIVE_PREFIX}"`,
+    )
+  }
+
+  return { archivePrefix: `${scheme}${segments.join('/')}/` }
+}
+
 const configuration = {
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
@@ -449,6 +501,7 @@ const configuration = {
     throttleTtlSeconds: parseInt(process.env.BOX_ACTIVITY_THROTTLE_TTL_SECONDS || '5', 10),
     flushBatchSize: parseInt(process.env.BOX_ACTIVITY_FLUSH_BATCH_SIZE || '1000', 10),
   },
+  boxMigration: boxMigrationConfig(),
   boxSync: {
     // How long a claimed startup job may sit without completing before a
     // runner reporting the box as started is allowed to close it out. This is

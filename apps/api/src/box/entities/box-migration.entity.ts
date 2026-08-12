@@ -4,7 +4,9 @@
  */
 
 import { Column, Entity, Index, JoinColumn, OneToOne, PrimaryColumn } from 'typeorm'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
+import { BoxState } from '../enums/box-state.enum'
 import { Box } from './box.entity'
 
 /**
@@ -58,4 +60,25 @@ export class BoxMigration {
   @OneToOne(() => Box, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'boxId' })
   box?: Box
+
+  /**
+   * ValidCheck — whether this migration is still the only writer of its box.
+   *
+   * The box has to still be parked, and `updatedAt` has to still be the copy
+   * the migration took: any write from outside the migration (a user starting
+   * the box, a reconciler) moves `box.updatedAt` past that copy, and the
+   * migration must roll back rather than move a box someone else is using.
+   *
+   * Callers must run this on a box row they hold, immediately before the
+   * irreversible action it guards.
+   */
+  isUndisturbedBy(box: Box): boolean {
+    if (box.state !== BoxState.STOPPED || box.desiredState !== BoxDesiredState.STOPPED) {
+      return false
+    }
+    if (!this.updatedAt || !box.updatedAt) {
+      return false
+    }
+    return this.updatedAt.getTime() === box.updatedAt.getTime()
+  }
 }
