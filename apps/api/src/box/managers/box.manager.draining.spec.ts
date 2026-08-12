@@ -148,4 +148,18 @@ describe('BoxManager runner draining', () => {
 
     expect(destroyAction.run).toHaveBeenCalled()
   })
+
+  it('retries scheduled destruction for an errored box with an existing destroy intent', async () => {
+    const { manager, boxRepository } = createManager()
+    const box = createBox('retry-destroy', BoxState.ERROR)
+    box.desiredState = BoxDesiredState.DESTROYED
+    box.pending = true
+    boxRepository.find.mockResolvedValue([box])
+    const sync = jest.spyOn(manager, 'syncInstanceState').mockResolvedValue(undefined)
+
+    await manager.drainingRunnerBoxesCheck()
+
+    expect(sync).toHaveBeenCalledWith(box.id, false)
+    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+  })
 })

@@ -260,12 +260,20 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
               ? [BoxState.STARTED, BoxState.STOPPED, BoxState.ERROR]
               : [BoxState.STOPPED, BoxState.ERROR]
             const boxes = await this.boxRepository.find({
-              where: {
-                runnerId: runner.id,
-                state: In(states),
-                desiredState: Not(BoxDesiredState.DESTROYED),
-                pending: false,
-              },
+              where: [
+                {
+                  runnerId: runner.id,
+                  state: In(states),
+                  desiredState: Not(BoxDesiredState.DESTROYED),
+                  pending: false,
+                },
+                {
+                  runnerId: runner.id,
+                  state: BoxState.ERROR,
+                  desiredState: BoxDesiredState.DESTROYED,
+                  pending: true,
+                },
+              ],
               take: 100,
             })
 
@@ -299,6 +307,12 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
           },
         })
         forceStop = true
+        shouldSync = true
+      } else if (
+        box.state === BoxState.ERROR &&
+        box.desiredState === BoxDesiredState.DESTROYED &&
+        box.pending
+      ) {
         shouldSync = true
       } else if ([BoxState.STOPPED, BoxState.ERROR].includes(box.state)) {
         await this.boxRepository.updateWhere(box.id, {

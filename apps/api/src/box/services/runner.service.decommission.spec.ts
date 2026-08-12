@@ -25,6 +25,10 @@ describe('RunnerService decommission verification', () => {
         signal: new AbortController().signal,
         release: jest.fn().mockResolvedValue(undefined),
       }),
+      waitForLease: jest.fn().mockResolvedValue({
+        signal: new AbortController().signal,
+        release: jest.fn().mockResolvedValue(undefined),
+      }),
     }
     const configService = { getOrThrow: jest.fn().mockReturnValue(1) }
     const redis = {
@@ -94,5 +98,27 @@ describe('RunnerService decommission verification', () => {
     expect(runnerRepository.update).not.toHaveBeenCalled()
     expect(redis.set).toHaveBeenCalledWith('runner:draining-check:runner-1', '0', 'EX', 600)
     expect(redisLockProvider.acquireLease).toHaveBeenCalledWith('runner:runner-1:box-assignment', 30)
+  })
+
+  it('does not decommission when draining is cleared before final verification', async () => {
+    const { service, runnerRepository, boxRepository } = createService(0, '2')
+    runnerRepository.findOneOrFail.mockResolvedValue({ id: 'runner-1', draining: false, state: RunnerState.READY })
+
+    await (service as any).handleCheckDecommissionRunners()
+
+    expect(boxRepository.count).toHaveBeenCalledTimes(1)
+    expect(runnerRepository.update).not.toHaveBeenCalled()
+  })
+
+  it('updates draining while holding the runner assignment lease', async () => {
+    const { service, redisLockProvider } = createService(0)
+
+    await service.updateDrainingStatus('runner-1', false)
+
+    expect(redisLockProvider.waitForLease).toHaveBeenCalledWith(
+      'runner:runner-1:box-assignment',
+      30,
+      expect.any(AbortSignal),
+    )
   })
 })

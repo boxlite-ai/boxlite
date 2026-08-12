@@ -224,6 +224,10 @@ export class RunnerService {
     return runner
   }
 
+  async findOneUncachedOrFail(id: string): Promise<Runner> {
+    return this.runnerRepository.findOneOrFail({ where: { id } })
+  }
+
   async findOneFullOrFail(id: string): Promise<RunnerFullDto> {
     const runner = await this.findOneOrFail(id)
     const region = await this.regionService.findOne(runner.region)
@@ -688,6 +692,12 @@ export class RunnerService {
                 }
 
                 await withRedisLockLease(assignmentLease, async (signal) => {
+                  const currentRunner = await this.findOneUncachedOrFail(runner.id)
+                  if (!currentRunner.draining || currentRunner.state === RunnerState.DECOMMISSIONED) {
+                    await this.redis.del(redisKey)
+                    return
+                  }
+
                   const finalAssignedBoxCount = await this.boxRepository.count({
                     where: { runnerId: runner.id },
                   })
@@ -729,11 +739,21 @@ export class RunnerService {
   }
 
   async updateDrainingStatus(id: string, draining: boolean): Promise<Runner> {
-    const runner = await this.findOneOrFail(id)
-    await this.redis.del(`runner:draining-check:${id}`)
-    runner.draining = draining
-    await this.runnerRepository.save(runner)
-    return runner
+    const lease = await this.redisLockProvider.waitForLease(
+      getRunnerAssignmentLockKey(id),
+      30,
+      new AbortController().signal,
+    )
+    return withRedisLockLease(lease, async (signal) => {
+      const runner = await this.findOneUncachedOrFail(id)
+      if (runner.state === RunnerState.DECOMMISSIONED) {
+        throw new ConflictException('Cannot update draining status of a decommissioned runner')
+      }
+      signal.throwIfAborted()
+      await this.redis.del(`runner:draining-check:${id}`)
+      runner.draining = draining
+      return this.runnerRepository.save(runner)
+    })
   }
 
   async getRandomAvailableRunner(params: GetRunnerParams): Promise<Runner> {

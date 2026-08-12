@@ -297,7 +297,7 @@ describe('BoxService public defaults', () => {
     const runner = { id: 'runner-1', draining: false, state: RunnerState.READY }
     const runnerService = {
       getRandomAvailableRunner: jest.fn().mockResolvedValue(runner),
-      findOneOrFail: jest.fn().mockResolvedValue(runner),
+      findOneUncachedOrFail: jest.fn().mockResolvedValue(runner),
     }
     const redisLockProvider = {
       acquireLease: jest.fn().mockResolvedValue({
@@ -337,15 +337,32 @@ describe('BoxService public defaults', () => {
 
   it('rechecks runner eligibility under the assignment fence before inserting', async () => {
     const { service, boxRepository, runnerService, redisLockProvider } = makeCreateService()
-    runnerService.findOneOrFail
+    runnerService.findOneUncachedOrFail
       .mockResolvedValueOnce({ id: 'runner-1', draining: true, state: RunnerState.READY })
       .mockResolvedValueOnce({ id: 'runner-1', draining: false, state: RunnerState.READY })
 
     await service.create({ name: 'fenced-box' } as any, { id: 'org-1' } as any)
 
     expect(redisLockProvider.acquireLease).toHaveBeenCalledWith('runner:runner-1:box-assignment', 30)
-    expect(runnerService.findOneOrFail).toHaveBeenCalledTimes(2)
+    expect(runnerService.findOneUncachedOrFail).toHaveBeenCalledTimes(2)
     expect(boxRepository.insert).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns a committed box when the assignment lease aborts immediately after insert', async () => {
+    const { service, boxRepository, redisLockProvider } = makeCreateService()
+    const controller = new AbortController()
+    redisLockProvider.acquireLease.mockResolvedValue({
+      signal: controller.signal,
+      release: jest.fn().mockResolvedValue(undefined),
+    })
+    boxRepository.insert.mockImplementation(async (box: any) => {
+      controller.abort(new Error('lease lost after commit'))
+      return box
+    })
+
+    await expect(service.create({ name: 'committed-box' } as any, { id: 'org-1' } as any)).resolves.toEqual(
+      expect.objectContaining({ name: 'committed-box' }),
+    )
   })
 
   it.each([

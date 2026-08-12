@@ -139,21 +139,30 @@ export class BoxService {
         continue
       }
 
-      const inserted = await withRedisLockLease(lease, async (signal) => {
-        const currentRunner = await this.runnerService.findOneOrFail(runner.id)
-        if (currentRunner.draining || currentRunner.state !== RunnerState.READY) {
-          excludedRunnerIds.push(runner.id)
-          return null
-        }
+      let committed: Box | null = null
+      try {
+        const inserted = await withRedisLockLease(lease, async (signal) => {
+          const currentRunner = await this.runnerService.findOneUncachedOrFail(runner.id)
+          if (currentRunner.draining || currentRunner.state !== RunnerState.READY) {
+            excludedRunnerIds.push(runner.id)
+            return null
+          }
 
-        signal.throwIfAborted()
-        box.runnerId = currentRunner.id
-        const result = await persist()
-        signal.throwIfAborted()
-        return result
-      })
-      if (inserted) {
-        return inserted
+          signal.throwIfAborted()
+          box.runnerId = currentRunner.id
+          committed = await persist()
+          return committed
+        })
+        if (inserted) {
+          return inserted
+        }
+      } catch (error) {
+        // Once insert committed, returning the entity keeps quota realization
+        // and CREATED event handling consistent even if the lease is lost while releasing.
+        if (committed) {
+          return committed
+        }
+        throw error
       }
     }
 
