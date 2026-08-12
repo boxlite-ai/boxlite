@@ -1,4 +1,4 @@
-PHONY_TARGETS += test test\:unit\:guest _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config
+PHONY_TARGETS += test test\:unit\:guest test\:guest-perms _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -222,6 +222,55 @@ test\:unit\:guest:
 		cargo nextest run --no-tests=fail -p boxlite-guest; \
 	else \
 		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests; \
+	fi
+
+# Keep ordinary ownership tests unprivileged. Only explicitly ignored tests
+# whose names contain `privileged_` run as root, inside a private mount
+# namespace so bind mounts cannot escape into the host namespace.
+test\:guest-perms:
+	@if [ "$$(uname)" != "Linux" ]; then \
+		echo "⏭️  Guest ownership tests require Linux"; \
+		exit 0; \
+	fi; \
+	echo "🧪 Running guest ownership tests..."; \
+	cargo test -p boxlite-guest --bin boxlite-guest 'storage::perms::tests' -- \
+		--test-threads=1 --skip privileged_ || exit $$?; \
+	if ! command -v jq >/dev/null 2>&1; then \
+		echo "❌ jq is required to locate the prebuilt guest test executable"; \
+		exit 1; \
+	fi; \
+	if ! test_metadata=$$(mktemp "$${TMPDIR:-/tmp}/boxlite-guest-perms.XXXXXX"); then \
+		echo "❌ Could not create temporary Cargo metadata file"; \
+		exit 1; \
+	fi; \
+	trap 'rm -f -- "$$test_metadata"' EXIT; \
+	if ! cargo test -p boxlite-guest --bin boxlite-guest --no-run \
+		--message-format=json >"$$test_metadata"; then \
+		echo "❌ Failed to build the boxlite-guest test executable"; \
+		exit 1; \
+	fi; \
+	if ! test_binary=$$(jq --slurp --raw-output --exit-status \
+		'[.[] | select(.reason == "compiler-artifact" and .profile.test == true and .target.name == "boxlite-guest" and .executable != null) | .executable] | last' \
+		"$$test_metadata"); then \
+		echo "❌ Could not parse the prebuilt boxlite-guest test executable"; \
+		exit 1; \
+	fi; \
+	if [ -z "$$test_binary" ] || [ ! -x "$$test_binary" ]; then \
+		echo "❌ Could not locate the prebuilt boxlite-guest test executable"; \
+		exit 1; \
+	fi; \
+	echo "🔐 Running privileged guest ownership tests..."; \
+	if [ "$$(id -u)" -eq 0 ]; then \
+		unshare --mount --propagation private -- \
+			"$$test_binary" 'storage::perms::tests::privileged_' \
+			--ignored --test-threads=1; \
+	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then \
+		sudo -n unshare --mount --propagation private -- \
+			"$$test_binary" 'storage::perms::tests::privileged_' \
+			--ignored --test-threads=1; \
+	else \
+		echo "❌ Privileged ownership tests require root or passwordless sudo"; \
+		exit 1; \
 	fi
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).

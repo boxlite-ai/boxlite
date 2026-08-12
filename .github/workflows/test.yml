@@ -19,6 +19,7 @@ on:
       - 'src/shared/**'
       - 'src/cli/**'
       - 'src/guest/**'
+      - 'make/test.mk'
       - 'sdks/**'
       - 'apps/**'
       - '!apps/e2e/**' # Stack e2e runs in e2e-stack.yml / e2e-cloud.yml, not this unit matrix.
@@ -69,6 +70,7 @@ jobs:
               - 'src/boxlite/**'
               - 'src/shared/**'
               - 'src/guest/**'
+              - 'make/test.mk'
               - '**/Cargo.toml'
               - 'Cargo.lock'
             cli:
@@ -113,7 +115,7 @@ jobs:
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y jq libseccomp-dev protobuf-compiler util-linux
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
@@ -132,6 +134,10 @@ jobs:
       - name: Run guest unit tests
         if: runner.os == 'Linux'
         run: make test:unit:guest
+
+      - name: Run guest ownership tests
+        if: runner.os == 'Linux'
+        run: make test:guest-perms
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

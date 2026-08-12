@@ -39,6 +39,7 @@ help:
 	@echo "    make test:unit:sdk          - Run SDK unit suites (Python + Node + C + Go)"
 	@echo "    make test:integration:sdk   - Run SDK integration suites (Python + Node + C)"
 	@echo "    make test:unit:rust         - Run Rust unit tests (nextest when available)"
+	@echo "    make test:guest-perms       - Run guest ownership tests (privileged cases use sudo)"
 	@echo "    make test:warm-cache:rust   - Pre-warm Rust integration image cache"
 	@echo "    make test:integration:rust  - Run Rust integration tests (requires VM, FILTER=<pattern>)"
 	@echo "    make test:unit:ffi          - Run BoxLite FFI unit tests"
