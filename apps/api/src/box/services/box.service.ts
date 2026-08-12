@@ -91,6 +91,9 @@ const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
 const TERMINAL_PREVIEW_PORT = 22222
+const NETWORK_TUNNEL_TOKEN_PREFIX = 't-'
+const NETWORK_TUNNEL_TOKEN_LENGTH = 32
+const NETWORK_TUNNEL_TOKEN_TTL_SECONDS = 60
 
 @Injectable()
 export class BoxService {
@@ -241,7 +244,7 @@ export class BoxService {
       box.mem = mem
       box.disk = disk
 
-      box.public = createBoxDto.public ?? true
+      box.public = createBoxDto.public ?? false
 
       if (createBoxDto.networkBlockAll !== undefined) {
         box.networkBlockAll = createBoxDto.networkBlockAll
@@ -306,7 +309,7 @@ export class BoxService {
   ): Promise<BoxDto> {
     const now = new Date()
     const updateData: Partial<Box> = {
-      public: createBoxDto.public ?? true,
+      public: createBoxDto.public ?? false,
       labels: createBoxDto.labels || {},
       organizationId: organization.id,
       createdAt: now,
@@ -783,12 +786,15 @@ export class BoxService {
     const proxyDomain = this.configService.getOrThrow('proxy.domain')
     const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-    const endpointId = encodeDirectPreviewBoxId(box.id)
+    const token =
+      NETWORK_TUNNEL_TOKEN_PREFIX +
+      customNanoid(urlAlphabet.replace('_', '').replace('-', ''))(NETWORK_TUNNEL_TOKEN_LENGTH).toLowerCase()
+    await this.redis.setex(networkTunnelTokenKey(port, token), NETWORK_TUNNEL_TOKEN_TTL_SECONDS, box.id)
 
-    let url = `${proxyProtocol}://${port}-${endpointId}.${proxyDomain}`
+    let url = `${proxyProtocol}://${port}-${token}.${proxyDomain}`
     const region = await this.regionService.findOne(box.region, true)
     if (region?.proxyUrl) {
-      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${endpointId}.`)
+      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${token}.`)
     }
     return url
   }
@@ -837,7 +843,9 @@ export class BoxService {
   }
 
   async getBoxIdFromSignedPreviewUrlToken(token: string, port: number): Promise<string> {
-    const lockKey = `box:signed-preview-url-token:${port}:${token}`
+    const lockKey = token.startsWith(NETWORK_TUNNEL_TOKEN_PREFIX)
+      ? networkTunnelTokenKey(port, token)
+      : `box:signed-preview-url-token:${port}:${token}`
     const boxId = await this.redis.get(lockKey)
     if (!boxId) {
       throw new ForbiddenException('Invalid or expired token')
@@ -1500,6 +1508,10 @@ export class BoxService {
 
     return volumes
   }
+}
+
+function networkTunnelTokenKey(port: number, token: string): string {
+  return `box:network-tunnel-token:${port}:${token}`
 }
 
 function encodeDirectPreviewBoxId(boxId: string): string {

@@ -5,7 +5,10 @@
  */
 
 import { ForbiddenException } from '@nestjs/common'
+import { Reflector } from '@nestjs/core'
 import { createProxyMiddleware } from 'http-proxy-middleware'
+import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
+import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 
 jest.mock('http-proxy-middleware', () => ({
@@ -60,6 +63,14 @@ describe('BoxliteProxyController', () => {
 
     expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
     expect(result).toEqual({ uri: 'https://3000-box.proxy.test' })
+  })
+
+  it('requires write:boxes permission to mint a network tunnel capability', () => {
+    const reflector = new Reflector()
+
+    expect(
+      reflector.get(RequiredOrganizationResourcePermissions, BoxliteProxyController.prototype.proxyNetworkTunnel),
+    ).toEqual([OrganizationResourcePermission.WRITE_BOXES])
   })
 
   it('auto-resumes exec and files but treats metrics as observation-only', async () => {

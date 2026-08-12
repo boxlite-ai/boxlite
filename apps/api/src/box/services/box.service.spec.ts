@@ -252,6 +252,7 @@ function makeNetworkTunnelService() {
       throw new Error(`unexpected config key ${key}`)
     }),
   } as any
+  const redis = { setex: jest.fn(), get: jest.fn() } as any
   const regionService = { findOne: jest.fn().mockResolvedValue(null) } as any
   const noop = {} as any
   const service = new BoxService(
@@ -266,7 +267,7 @@ function makeNetworkTunnelService() {
     noop, // organizationUsageService
     noop,
     noop,
-    noop,
+    redis,
     regionService,
     noop,
     noop,
@@ -277,16 +278,38 @@ function makeNetworkTunnelService() {
     id: 'MixedCaseBox',
     region: 'region-1',
   } as any)
-  return service
+  return { service, redis }
 }
 
 describe('BoxService network tunnel URLs', () => {
-  it('creates a case-safe endpoint for an SDK tunnel', async () => {
-    const service = makeNetworkTunnelService()
+  it('mints a short-lived capability bound to the tenant-owned box and guest port', async () => {
+    const { service, redis } = makeNetworkTunnelService()
 
     const result = await service.getNetworkTunnelUrl('MixedCaseBox', 'org-1', 3000)
 
-    expect(result).toBe('https://3000-d-4d6978656443617365426f78.proxy.example.test')
+    const token = result.match(/^https:\/\/3000-(t-[a-z0-9]{32})\.proxy\.example\.test$/)?.[1]
+    expect(token).toBeDefined()
+    expect(service.findOneByIdOrName).toHaveBeenCalledWith('MixedCaseBox', 'org-1')
+    expect(redis.setex).toHaveBeenCalledWith(`box:network-tunnel-token:3000:${token}`, 60, 'MixedCaseBox')
+  })
+
+  it.each([0, 65536])('rejects out-of-range guest port %s before looking up a box', async (port) => {
+    const { service } = makeNetworkTunnelService()
+
+    await expect(service.getNetworkTunnelUrl('MixedCaseBox', 'org-1', port)).rejects.toThrow('Invalid port')
+
+    expect(service.findOneByIdOrName).not.toHaveBeenCalled()
+  })
+
+  it('resolves a capability only from its port-bound tunnel key', async () => {
+    const { service, redis } = makeNetworkTunnelService()
+    const token = 't-0123456789abcdef0123456789abcdef'
+    redis.get.mockImplementation(async (key: string) =>
+      key === `box:network-tunnel-token:3000:${token}` ? 'MixedCaseBox' : null,
+    )
+
+    await expect(service.getBoxIdFromSignedPreviewUrlToken(token, 3000)).resolves.toBe('MixedCaseBox')
+    await expect(service.getBoxIdFromSignedPreviewUrlToken(token, 3001)).rejects.toThrow('Invalid or expired token')
   })
 })
 
@@ -312,8 +335,9 @@ describe('BoxService public defaults', () => {
   }
 
   it.each([
-    [undefined, true],
+    [undefined, false],
     [false, false],
+    [true, true],
   ])('defaults a fresh box to public=%s', async (requestedPublic, expectedPublic) => {
     const { service, boxRepository } = makeCreateService()
 
@@ -323,8 +347,9 @@ describe('BoxService public defaults', () => {
   })
 
   it.each([
-    [undefined, true],
+    [undefined, false],
     [false, false],
+    [true, true],
   ])('defaults an assigned warm-pool box to public=%s', async (requestedPublic, expectedPublic) => {
     const warmPoolBox = { id: 'warm-box', runnerId: 'runner-1', name: 'warm-box' } as any
     const update = jest.fn().mockResolvedValue(warmPoolBox)

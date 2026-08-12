@@ -32,6 +32,8 @@ import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
+import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
+import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { BoxAutoResumeService } from './box-auto-resume.service'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
@@ -200,6 +202,7 @@ export class BoxliteProxyController {
 
   @Post(':boxId/network/tunnel')
   @HttpCode(HttpStatus.OK)
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   async proxyNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,

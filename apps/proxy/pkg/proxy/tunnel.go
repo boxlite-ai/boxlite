@@ -8,7 +8,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -17,31 +17,38 @@ import (
 	"strings"
 	"time"
 
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
+	"github.com/boxlite-ai/common-go/pkg/utils"
 	log "github.com/sirupsen/logrus"
 )
 
 const runnerTunnelSetupTimeout = 10 * time.Second
 
-const tunnelBoxIDPrefix = "d-"
+const (
+	networkTunnelTokenPrefix       = "t-"
+	networkTunnelTokenRandomLength = 32
+)
+
+var errInvalidNetworkTunnelToken = errors.New("invalid or expired network tunnel capability")
 
 func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodConnect {
 		http.Error(writer, "CONNECT required", http.StatusMethodNotAllowed)
 		return
 	}
-	boxID, port, err := p.tunnelTarget(request)
+	token, port, err := p.tunnelTarget(request)
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
 	}
-	isPublic, err := p.getBoxPublic(request.Context(), boxID)
+	boxID, err := p.resolveNetworkTunnelToken(request.Context(), token, port)
 	if err != nil {
-		http.Error(writer, "box visibility unavailable", http.StatusBadGateway)
-		return
-	}
-	if !*isPublic {
-		http.Error(writer, "box is not public", http.StatusForbidden)
+		if errors.Is(err, errInvalidNetworkTunnelToken) {
+			http.Error(writer, "invalid or expired network tunnel capability", http.StatusForbidden)
+		} else {
+			http.Error(writer, "network tunnel authorization unavailable", http.StatusBadGateway)
+		}
 		return
 	}
 	runnerInfo, err := p.getBoxRunnerInfo(request.Context(), boxID)
@@ -69,39 +76,70 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 }
 
 func (p *Proxy) tunnelTarget(request *http.Request) (string, uint16, error) {
-	port, boxID, _, err := p.parseHost(request.Host)
-	if err != nil || boxID == "" {
+	port, token, _, err := p.parseHost(request.Host)
+	if err != nil || !isNetworkTunnelToken(token) {
 		return "", 0, fmt.Errorf("invalid tunnel host")
-	}
-	if decoded, ok, decodeErr := decodeTunnelBoxID(boxID); decodeErr != nil {
-		return "", 0, decodeErr
-	} else if ok {
-		boxID = decoded
 	}
 	value, err := strconv.ParseUint(port, 10, 16)
 	if err != nil || value == 0 {
 		return "", 0, fmt.Errorf("invalid tunnel port")
 	}
-	return boxID, uint16(value), nil
+	return token, uint16(value), nil
 }
 
-func decodeTunnelBoxID(value string) (string, bool, error) {
-	encoded, ok := strings.CutPrefix(value, tunnelBoxIDPrefix)
-	if !ok {
-		return value, false, nil
+func isNetworkTunnelToken(token string) bool {
+	if len(token) != len(networkTunnelTokenPrefix)+networkTunnelTokenRandomLength ||
+		!strings.HasPrefix(token, networkTunnelTokenPrefix) {
+		return false
 	}
-	decoded, err := hex.DecodeString(encoded)
-	if err != nil || len(decoded) != 12 {
-		return "", true, fmt.Errorf("invalid tunnel box ID")
-	}
-	boxID := string(decoded)
-	for _, ch := range boxID {
-		if (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+	for _, ch := range token[len(networkTunnelTokenPrefix):] {
+		if (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') {
 			continue
 		}
-		return "", true, fmt.Errorf("invalid tunnel box ID")
+		return false
 	}
-	return boxID, true, nil
+	return true
+}
+
+func (p *Proxy) resolveNetworkTunnelToken(ctx context.Context, token string, port uint16) (string, error) {
+	var boxID string
+	err := utils.RetryWithExponentialBackoff(
+		ctx,
+		"resolve network tunnel capability",
+		proxyMaxRetries,
+		proxyBaseDelay,
+		proxyMaxDelay,
+		func() error {
+			resolvedBoxID, response, err := p.apiclient.PreviewAPI.
+				GetBoxIdFromSignedPreviewUrlToken(ctx, token, float32(port)).
+				Execute()
+			if err == nil {
+				if resolvedBoxID == "" {
+					return &utils.NonRetryableError{Err: errInvalidNetworkTunnelToken}
+				}
+				boxID = resolvedBoxID
+				return nil
+			}
+
+			if response != nil &&
+				response.StatusCode >= http.StatusBadRequest &&
+				response.StatusCode < http.StatusInternalServerError &&
+				response.StatusCode != http.StatusRequestTimeout &&
+				response.StatusCode != http.StatusTooManyRequests {
+				return &utils.NonRetryableError{Err: errInvalidNetworkTunnelToken}
+			}
+
+			openapiErr := common_errors.ConvertOpenAPIError(err)
+			if openapiErr != nil && !common_errors.IsRetryableOpenAPIError(openapiErr) {
+				return &utils.NonRetryableError{Err: openapiErr}
+			}
+			return openapiErr
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+	return boxID, nil
 }
 
 func dialRunnerTunnel(ctx context.Context, runnerInfo *RunnerInfo, boxID string, port uint16) (net.Conn, error) {

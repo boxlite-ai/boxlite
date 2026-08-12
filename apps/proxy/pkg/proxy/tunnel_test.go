@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
 )
@@ -84,18 +85,18 @@ func TestConnectHandlerTracksTunnelForShutdown(t *testing.T) {
 
 func TestTunnelTargetUsesPreviewAuthority(t *testing.T) {
 	request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
-	request.Host = "3000-d-416243644566313233343536.proxy.test:443"
+	request.Host = "3000-t-0123456789abcdef0123456789abcdef.proxy.test:443"
 
-	boxID, port, err := (&Proxy{}).tunnelTarget(request)
+	token, port, err := (&Proxy{}).tunnelTarget(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if boxID != "AbCdEf123456" || port != 3000 {
-		t.Fatalf("unexpected tunnel target: %s:%d", boxID, port)
+	if token != "t-0123456789abcdef0123456789abcdef" || port != 3000 {
+		t.Fatalf("unexpected tunnel target: %s:%d", token, port)
 	}
 }
 
-func TestTunnelConnectRejectsPrivateBoxBeforeRunnerDial(t *testing.T) {
+func TestTunnelConnectRejectsDirectBoxIDBeforeRunnerDial(t *testing.T) {
 	ctx := context.Background()
 	publicCache := common_cache.NewMapCache[bool](ctx)
 	if err := publicCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
@@ -108,8 +109,58 @@ func TestTunnelConnectRejectsPrivateBoxBeforeRunnerDial(t *testing.T) {
 
 	proxy.handleTunnelConnect(response, request)
 
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
+func TestTunnelConnectResolvesCapabilityBeforeRunnerDial(t *testing.T) {
+	const token = "t-0123456789abcdef0123456789abcdef"
+	requestPath := make(chan string, 1)
+	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/preview/"+token+"/3000/box-id" {
+			requestPath <- request.URL.Path
+			writer.Header().Set("Content-Type", "text/plain")
+			_, _ = writer.Write([]byte("AbCdEf123456"))
+			return
+		}
+		http.NotFound(writer, request)
+	}))
+	defer apiServer.Close()
+
+	clientConfig := apiclient.NewConfiguration()
+	clientConfig.Servers = apiclient.ServerConfigurations{{URL: apiServer.URL}}
+	ctx := context.Background()
+	runnerCache := common_cache.NewMapCache[RunnerInfo](ctx)
+	if err := runnerCache.Set(
+		ctx,
+		"AbCdEf123456",
+		RunnerInfo{ApiUrl: "http://127.0.0.1:1", ApiKey: "runner-key"},
+		time.Minute,
+	); err != nil {
+		t.Fatal(err)
+	}
+	proxy := &Proxy{
+		apiclient:      apiclient.NewAPIClient(clientConfig),
+		boxRunnerCache: runnerCache,
+		boxPublicCache: common_cache.NewMapCache[bool](ctx),
+	}
+	request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
+	request.Host = "3000-" + token + ".proxy.test:443"
+	response := httptest.NewRecorder()
+
+	proxy.handleTunnelConnect(response, request)
+
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d after capability resolution", response.Code, http.StatusBadGateway)
+	}
+	select {
+	case got := <-requestPath:
+		if got != "/preview/"+token+"/3000/box-id" {
+			t.Fatalf("capability lookup path = %q", got)
+		}
+	default:
+		t.Fatal("capability was not resolved through the control plane")
 	}
 }
 
