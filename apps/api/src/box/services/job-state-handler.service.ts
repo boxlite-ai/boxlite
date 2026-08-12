@@ -16,6 +16,7 @@ import { Box } from '../entities/box.entity'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { ResourceType } from '../enums/resource-type.enum'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
+import { BoxMigrationJobReceiver, isMigrationJobType } from './box-migration-job-receiver.service'
 
 /**
  * Service for handling entity state updates based on job completion (v2 runners only).
@@ -28,6 +29,7 @@ export class JobStateHandlerService {
   constructor(
     private readonly boxRepository: BoxRepository,
     private readonly redisLockProvider: RedisLockProvider,
+    private readonly boxMigrationJobReceiver: BoxMigrationJobReceiver,
   ) {}
 
   /**
@@ -40,6 +42,15 @@ export class JobStateHandlerService {
     }
 
     if (!job.resourceId) {
+      return
+    }
+
+    // A migration job carries its own lock — taken by the loop that submitted
+    // it, released by the receiver below — and never the box's state-change
+    // lock. Handing it to the tail of this method would delete a lock a
+    // concurrent start or stop of the same box is holding.
+    if (isMigrationJobType(job.type)) {
+      await this.boxMigrationJobReceiver.handleJobCompletion(job)
       return
     }
 

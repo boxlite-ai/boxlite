@@ -390,7 +390,7 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
   private async submitReclaimJob(
     migration: BoxMigration,
     jobType: JobType,
-    runnerId: string | undefined,
+    runnerId: string | null | undefined,
     payload?: MigrateArchivePayload,
   ): Promise<void> {
     if (!runnerId) {

@@ -50,6 +50,7 @@ import { BoxMigration } from './entities/box-migration.entity'
 import { BoxActivityService } from './services/box-activity.service'
 import { BoxStateWaiterService } from './services/box-state-waiter.service'
 import { BoxMigrationService } from './services/box-migration.service'
+import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.service'
 
 @Module({
   imports: [
@@ -80,6 +81,7 @@ import { BoxMigrationService } from './services/box-migration.service'
     BoxStateWaiterService,
     BoxMigrationService,
     BoxMigrationManager,
+    BoxMigrationJobReceiver,
     BoxAccessGuard,
     RunnerAccessGuard,
     RegionRunnerAccessGuard,

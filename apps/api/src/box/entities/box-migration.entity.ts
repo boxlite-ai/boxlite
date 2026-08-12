@@ -45,7 +45,7 @@ export class BoxMigration {
     type: 'uuid',
     nullable: true,
   })
-  runnerId?: string
+  runnerId?: string | null
 
   //  A copy of `box.updatedAt`, taken by every migration step while it holds the
   //  box row, so `box_migration.updatedAt = box.updatedAt` reads as "nothing
