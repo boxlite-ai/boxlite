@@ -7,6 +7,20 @@ import { BoxState } from '../../box/enums/box-state.enum'
 import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 
 describe('BoxLite lifecycle policy mapper', () => {
+  it.each([
+    ['enabled', true],
+    ['disabled', false],
+  ])('maps inbound.mode=%s to control-plane public=%s', (mode, expected) => {
+    const mapped = createBoxToCreateBox({
+      network: {
+        outbound: { mode: 'enabled' },
+        inbound: { mode: mode as 'enabled' | 'disabled' },
+      },
+    })
+
+    expect(mapped.public).toBe(expected)
+  })
+
   it('maps second-based create fields into the control-plane DTO', () => {
     const mapped = createBoxToCreateBox({
       auto_stop: 1800,

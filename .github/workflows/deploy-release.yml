@@ -138,7 +138,18 @@ jobs:
 
       - name: Deploy published API and Runner artifacts
         working-directory: apps/infra
-        run: npm run deploy -- --stage "$STAGE" --policy policies/runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node -e "const pkg = require('./package.json'); process.exit(pkg.scripts?.['validate-preview'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then
+            policy=policies/runner
+          elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then
+            policy=.
+          else
+            echo 'selected commit has no supported deployment preview contract' >&2
+            exit 1
+          fi
+          npm run deploy -- --stage "$STAGE" --policy "$policy"
 
       - name: Remove materialized configuration
         if: always()

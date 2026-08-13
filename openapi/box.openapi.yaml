@@ -1913,7 +1913,38 @@ components:
 
     NetworkSpec:
       type: object
-      description: Structured network configuration for the box
+      description: |
+        Structured network configuration for the box.
+
+        Send the nested `outbound`/`inbound` shape. The pre-split flat
+        `mode`/`allow_net` pair is still accepted for already-deployed
+        callers and normalized server side, but is deprecated and will be
+        removed; mixing it with the nested fields in one request is
+        rejected with 400.
+      additionalProperties: false
+      properties:
+        outbound:
+          $ref: "#/components/schemas/OutboundNetworkSpec"
+        inbound:
+          $ref: "#/components/schemas/InboundNetworkSpec"
+        mode:
+          deprecated: true
+          type: string
+          enum: [enabled, disabled]
+          description: |
+            Deprecated: use `outbound.mode`. Legacy flat outbound mode.
+        allow_net:
+          deprecated: true
+          type: array
+          items:
+            type: string
+          description: |
+            Deprecated: use `outbound.allow_net`. Legacy flat outbound
+            allowlist; implies `mode=enabled` when sent without `mode`.
+
+    OutboundNetworkSpec:
+      type: object
+      description: Outbound guest network policy
       additionalProperties: false
       required: [mode]
       properties:
@@ -1930,6 +1961,30 @@ components:
             Optional outbound allowlist used only when `mode=enabled`.
             Empty or omitted means full outbound access.
             Supports hostnames, wildcard hostnames, IPs, and CIDRs.
+
+    InboundNetworkSpec:
+      type: object
+      description: >
+        Inbound service access policy. Aligned field-for-field with
+        OutboundNetworkSpec.
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [enabled, disabled]
+          description: |
+            `enabled` means service endpoints exposed from the box are publicly
+            reachable through the remote proxy. `disabled` means private.
+        allow_net:
+          type: array
+          items:
+            type: string
+          description: |
+            Not supported yet: a non-empty value is rejected with 400. The
+            field exists for shape symmetry with `OutboundNetworkSpec`; no
+            layer enforces an inbound allowlist today, so inbound access is
+            controlled by `mode` alone. Omit it, or send an empty array.
 
     SecretSpec:
       type: object

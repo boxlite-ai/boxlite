@@ -51,9 +51,14 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     mountPath: volume.guest_path,
   }))
   if (dto.network) {
-    const allowNet = dto.network.allow_net?.map((entry) => entry.trim()).filter(Boolean)
-    createDto.networkBlockAll = dto.network.mode === 'disabled'
-    createDto.networkAllowList = dto.network.mode === 'enabled' && allowNet?.length ? allowNet.join(',') : undefined
+    const allowNet = dto.network.outbound?.allow_net?.map((entry) => entry.trim()).filter(Boolean)
+    createDto.networkBlockAll = dto.network.outbound?.mode === 'disabled'
+    createDto.networkAllowList =
+      dto.network.outbound?.mode === 'enabled' && allowNet?.length ? allowNet.join(',') : undefined
+    // The runner DTO only has a public/private boolean; a non-empty
+    // inbound.allow_net never reaches here — the DTO rejects it at the
+    // request boundary until enforcement exists.
+    createDto.public = dto.network.inbound?.mode ? dto.network.inbound.mode === 'enabled' : undefined
   }
   return createDto
 }
