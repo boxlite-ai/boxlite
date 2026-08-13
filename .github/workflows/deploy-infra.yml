@@ -425,7 +425,14 @@ jobs:
           test -n "$DEPLOY_ENV"
           umask 077
           printf '%s\n' "$DEPLOY_ENV" > apps/infra/.env
-          node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env
+          if node -e "const pkg = require('./apps/infra/package.json'); process.exit(pkg.scripts?.['validate-environment'] ? 0 : 1)"; then
+            npm --prefix apps/infra run --silent validate-environment -- .env
+          elif [ -f apps/infra/scripts/deploy-environment-validation.mjs ]; then
+            node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env
+          else
+            echo 'selected commit has no supported deployment environment validator' >&2
+            exit 1
+          fi
 
       - name: Install SST providers
         working-directory: apps/infra

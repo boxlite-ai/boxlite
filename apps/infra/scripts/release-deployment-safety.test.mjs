@@ -50,6 +50,29 @@ const assertShellLine = (run, pattern, message) =>
 const assertLiveLine = (text, pattern, message) =>
   assert.match(liveText('script', text), pattern, message ?? `missing live line: ${pattern}`)
 
+function assertEnvironmentValidatorCompatibility(materializeStep) {
+  assert.ok(materializeStep, 'the stage configuration step is missing')
+  assertShellLine(
+    materializeStep.run,
+    /if node -e .*scripts\?\.\['validate-environment'\].*; then/,
+    'the workflow must prefer the selected commit validator facade',
+  )
+  assertShellLine(
+    materializeStep.run,
+    /npm --prefix apps\/infra run --silent validate-environment -- \.env/,
+  )
+  assertShellLine(
+    materializeStep.run,
+    /elif \[ -f apps\/infra\/scripts\/deploy-environment-validation\.mjs \]; then/,
+    'the workflow must support historical commits',
+  )
+  assertShellLine(
+    materializeStep.run,
+    /node apps\/infra\/scripts\/deploy-environment-validation\.mjs apps\/infra\/\.env/,
+  )
+  assertShellLine(materializeStep.run, /selected commit has no supported deployment environment validator/)
+}
+
 function readDeployTemplate() {
   return load(readFileSync(DEV_DEPLOY_ROLE, 'utf8'), { schema: CLOUDFORMATION_SCHEMA })
 }
@@ -440,16 +463,13 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // run with an empty stage.
   assert.equal(workflow.jobs.deploy.env.STAGE, '${{ inputs.stage }}')
   assert.equal(workflow.jobs.deploy.env.IAM_PERMISSIONS_BOUNDARY_STAGE, '${{ inputs.stage }}')
-  assert.match(source, /node apps\/infra\/scripts\/deploy-environment-validation\.mjs apps\/infra\/\.env/)
+  assertEnvironmentValidatorCompatibility(materializeStep)
   assert.doesNotMatch(materializeStep.run, /grep/)
   assert.ok(safetyTestStep, 'the deployment safety test step is missing')
   assert.equal(safetyTestStep.run, 'npm test')
-  assert.ok(materializeStep, 'the stage configuration step is missing')
   const liveMaterialize = liveShell(materializeStep.run)
   const materializeConfigIndex = liveMaterialize.indexOf('printf \'%s\\n\' "$DEPLOY_ENV" > apps/infra/.env')
-  const validateConfigIndex = liveMaterialize.indexOf(
-    'node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env',
-  )
+  const validateConfigIndex = liveMaterialize.indexOf("if node -e")
   assert.notEqual(materializeConfigIndex, -1, 'the stage configuration is not materialized')
   assert.ok(validateConfigIndex > materializeConfigIndex, 'DEPLOY_ENV must be validated after it is materialized')
   assert.ok(installStep, 'the SST provider installation step is missing')
@@ -691,6 +711,7 @@ test('the cloud E2E suite is reachable only from a deploy or a human', () => {
 test('release deployment consumes one published version for both components', () => {
   const source = readFileSync(RELEASE_DEPLOY_WORKFLOW, 'utf8')
   const workflow = load(source)
+  const materializeStep = workflow.jobs.deploy.steps.find((step) => step.name === 'Materialize stage configuration')
   const deployStep = workflow.jobs.deploy.steps.find(
     (step) => step.name === 'Deploy published API and Runner artifacts',
   )
@@ -716,6 +737,7 @@ test('release deployment consumes one published version for both components', ()
   assert.equal(workflow.on.workflow_dispatch.inputs.stage.type, 'choice')
   assert.deepEqual(workflow.on.workflow_dispatch.inputs.stage.options, ['dev', 'prod'])
   assert.ok(deployStep)
+  assertEnvironmentValidatorCompatibility(materializeStep)
   // The same guarded wrapper and the same pre-deploy gates the build path uses: a release
   // deploy reconciles the identical stack, so it owes the identical safety checks.
   assert.equal(deployStep.run, 'npm run deploy -- --stage "$STAGE" --policy .')
