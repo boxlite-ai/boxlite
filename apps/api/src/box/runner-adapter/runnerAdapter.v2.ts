@@ -17,7 +17,7 @@ import { JobStatus } from '../enums/job-status.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
-import { UpdateNetworkSettingsDTO, RecoverBoxDTO } from '@boxlite-ai/runner-api-client'
+import { UpdateNetworkSettingsDTO } from '@boxlite-ai/runner-api-client'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -179,26 +179,8 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     this.logger.debug(`Created DESTROY_BOX job for box ${boxId} on runner ${this.runner.id}`)
   }
 
-  async recoverBox(box: Box): Promise<void> {
-    const recoverBoxDTO: RecoverBoxDTO = {
-      osUser: box.osUser,
-      cpuQuota: box.cpu,
-      gpuQuota: box.gpu,
-      memoryQuota: box.mem,
-      storageQuota: box.disk,
-      env: box.env,
-      volumes: box.volumes?.map((volume) => ({
-        volumeId: volume.volumeId,
-        mountPath: volume.mountPath,
-        subpath: volume.subpath,
-      })),
-      networkBlockAll: box.networkBlockAll,
-      networkAllowList: box.networkAllowList,
-      errorReason: box.errorReason,
-    }
-    await this.jobService.createJob(null, JobType.RECOVER_BOX, this.runner.id, ResourceType.BOX, box.id, recoverBoxDTO)
-
-    this.logger.debug(`Created RECOVER_BOX job for box ${box.id} on runner ${this.runner.id}`)
+  async recoverBox(): Promise<void> {
+    throw new Error('Recovering boxes with runner API version 2 is not supported')
   }
 
   async updateNetworkSettings(

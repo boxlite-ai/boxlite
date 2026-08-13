@@ -25,25 +25,7 @@ export interface JobTypeMap {
   [JobType.DESTROY_BOX]: {
     resourceType: [ResourceType.BOX]
   }
-  [JobType.RESIZE_BOX]: {
-    resourceType: [ResourceType.BOX]
-  }
-  [JobType.CREATE_BACKUP]: {
-    resourceType: [ResourceType.BOX]
-  }
-  [JobType.PULL_ARTIFACT]: {
-    resourceType: [ResourceType.ARTIFACT]
-  }
-  [JobType.REMOVE_ARTIFACT]: {
-    resourceType: [ResourceType.ARTIFACT]
-  }
   [JobType.UPDATE_BOX_NETWORK_SETTINGS]: {
-    resourceType: [ResourceType.BOX]
-  }
-  [JobType.INSPECT_ARTIFACT_IN_REGISTRY]: {
-    resourceType: [ResourceType.ARTIFACT]
-  }
-  [JobType.RECOVER_BOX]: {
     resourceType: [ResourceType.BOX]
   }
   [JobType.EXPORT_BOX]: {

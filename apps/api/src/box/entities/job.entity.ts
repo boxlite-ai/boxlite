@@ -5,7 +5,6 @@
  */
 
 import {
-  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -25,11 +24,7 @@ import { v4 } from 'uuid'
 @Index(['resourceType', 'resourceId'])
 @Index('IDX_UNIQUE_INCOMPLETE_JOB', ['resourceType', 'resourceId', 'runnerId'], {
   unique: true,
-  where: `"completedAt" IS NULL AND "type" != '${JobType.CREATE_BACKUP}'`,
-})
-@Index('IDX_UNIQUE_INCOMPLETE_BACKUP_JOB', ['resourceType', 'resourceId', 'runnerId'], {
-  unique: true,
-  where: `"completedAt" IS NULL AND "type" = '${JobType.CREATE_BACKUP}'`,
+  where: `"completedAt" IS NULL`,
 })
 // FIXME: Add this once https://github.com/typeorm/typeorm/issues/11714 is resolved
 // @Check(

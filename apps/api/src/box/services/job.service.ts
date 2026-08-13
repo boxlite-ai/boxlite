@@ -22,14 +22,6 @@ const REDIS_BLOCKING_COMMAND_TIMEOUT_BUFFER_MS = 3_000
 
 const DEFAULT_STALE_TIMEOUT_MINUTES = 10
 
-/**
- * Per-job-type stale timeout overrides in minutes.
- * Jobs not listed here use DEFAULT_STALE_TIMEOUT_MINUTES.
- */
-const JOB_STALE_TIMEOUT_MINUTES: Partial<Record<JobType, number>> = {
-  [JobType.PULL_ARTIFACT]: 120,
-}
-
 @Injectable()
 export class JobService {
   private readonly logger = new Logger(JobService.name)
@@ -399,53 +391,41 @@ export class JobService {
   /**
    * Cron job to check for stale jobs and mark them as failed
    * Runs every minute to find jobs that have been IN_PROGRESS for too long
-   * Different job types can have different timeout thresholds (see JOB_STALE_TIMEOUT_MINUTES)
    */
   @Cron(CronExpression.EVERY_MINUTE)
   async handleStaleJobs(): Promise<void> {
     try {
-      // Group job types by their timeout value to minimize queries
-      const timeoutGroups = new Map<number, JobType[]>()
+      const threshold = new Date(Date.now() - DEFAULT_STALE_TIMEOUT_MINUTES * 60 * 1000)
+      const staleJobs = await this.jobRepository.find({
+        where: {
+          status: JobStatus.IN_PROGRESS,
+          type: In(Object.values(JobType)),
+          updatedAt: LessThan(threshold),
+        },
+        take: 500,
+      })
 
-      for (const jobType of Object.values(JobType)) {
-        const timeout = JOB_STALE_TIMEOUT_MINUTES[jobType] ?? DEFAULT_STALE_TIMEOUT_MINUTES
-        const group = timeoutGroups.get(timeout) ?? []
-        group.push(jobType)
-        timeoutGroups.set(timeout, group)
+      if (staleJobs.length === 0) {
+        return
       }
 
-      for (const [timeoutMinutes, jobTypes] of timeoutGroups) {
-        const threshold = new Date(Date.now() - timeoutMinutes * 60 * 1000)
+      this.logger.warn(
+        `Found ${staleJobs.length} stale jobs for timeout ${DEFAULT_STALE_TIMEOUT_MINUTES}m, marking as failed`,
+      )
 
-        const staleJobs = await this.jobRepository.find({
-          where: {
-            status: JobStatus.IN_PROGRESS,
-            type: In(jobTypes),
-            updatedAt: LessThan(threshold),
-          },
-          take: 500,
-        })
+      for (const job of staleJobs) {
+        try {
+          await this.updateJobStatus(
+            job.id,
+            JobStatus.FAILED,
+            `Job timed out - no update received for ${DEFAULT_STALE_TIMEOUT_MINUTES} minutes`,
+          )
 
-        if (staleJobs.length === 0) {
-          continue
-        }
-
-        this.logger.warn(`Found ${staleJobs.length} stale jobs for timeout ${timeoutMinutes}m, marking as failed`)
-
-        for (const job of staleJobs) {
-          try {
-            await this.updateJobStatus(
-              job.id,
-              JobStatus.FAILED,
-              `Job timed out - no update received for ${timeoutMinutes} minutes`,
-            )
-
-            this.logger.warn(
-              `Marked job ${job.id} (type: ${job.type}, resource: ${job.resourceType} ${job.resourceId}) as failed due to timeout`,
-            )
-          } catch (error) {
-            this.logger.error(`Error marking job ${job.id} as failed: ${error.message}`, error.stack)
-          }
+          this.logger.warn(
+            `Marked job ${job.id} (type: ${job.type}, resource: ${job.resourceType} ${job.resourceId}) as failed due to timeout`,
+          )
+        } catch (error) {
+          this.logger.error(`Error marking job ${job.id} as failed: ${error.message}`, error.stack)
         }
       }
     } catch (error) {
