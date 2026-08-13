@@ -6,7 +6,7 @@ patterns. Defined in [`sst.config.ts`](./sst.config.ts) §2 PLATFORM + §10 RUNN
 
 ## Layout (ap-southeast-1, 2 AZs)
 
-```
+```text
                               ☁  INTERNET
                    (users ↓)        (↑ ghcr.io, Auth0, ClickHouse, ECR…)
                         │                         ▲
@@ -41,9 +41,8 @@ patterns. Defined in [`sst.config.ts`](./sst.config.ts) §2 PLATFORM + §10 RUNN
 | Runner → internet (egress) | runner (public IP) → IGW (**no NAT**) |
 | API → external, reply back | stateful return through the NAT (API initiated) |
 
-The NAT and ALB are asymmetric on purpose: the **ALB is the only inbound door**;
-the **NAT is egress-only**. The service hosts themselves are never directly
-addressable from the internet.
+The public ALB and NLB are the inbound paths; the **NAT is egress-only**. The
+service hosts themselves are never directly addressable from the internet.
 
 ## Two egress patterns (and why)
 
@@ -51,7 +50,7 @@ Both let a host reach the internet *outbound-only* — because both NAT and
 security groups are **stateful** (return traffic for a flow you started is
 allowed). The difference is the failure mode.
 
-```
+```text
  A — PRIVATE subnet + NAT            B — PUBLIC subnet + public IP + SG
  (Api, Proxy, DB, Redis …)          (Runner — must be EC2 w/ direct egress)
 
