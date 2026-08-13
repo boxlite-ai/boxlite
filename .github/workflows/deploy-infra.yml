@@ -457,11 +457,21 @@ jobs:
           # SST would read as a component name. The fixed arguments seed it because expanding an
           # EMPTY array under `set -u` is an unbound-variable error before bash 4.4 — seeded, it
           # is never empty, so the line does not depend on the runner image's bash version.
-          args=(diff --stage "$STAGE" --policy .)
+          if node -e "const pkg = require('./package.json'); process.exit(pkg.scripts?.['validate-preview'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then
+            policy=policies/runner
+            validator=(npm run --silent validate-preview)
+          elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then
+            policy=.
+            validator=(node scripts/deployment-preview.mjs)
+          else
+            echo 'selected commit has no supported deployment preview contract' >&2
+            exit 1
+          fi
+          args=(diff --stage "$STAGE" --policy "$policy")
           [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
           args+=(--json)
           npm run --silent sst -- "${args[@]}" |
-            node scripts/deployment-preview.mjs
+            "${validator[@]}"
 
       - name: Deploy the selected components
         if: ${{ inputs.apply }}
@@ -473,7 +483,15 @@ jobs:
         run: |
           set -euo pipefail
           # Seeded for the same reason as the preview above: an empty array must never be expanded.
-          args=(--stage "$STAGE" --policy .)
+          if node -e "const pkg = require('./package.json'); process.exit(pkg.scripts?.['validate-preview'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then
+            policy=policies/runner
+          elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then
+            policy=.
+          else
+            echo 'selected commit has no supported deployment preview contract' >&2
+            exit 1
+          fi
+          args=(--stage "$STAGE" --policy "$policy")
           [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
           npm run deploy -- "${args[@]}"
 

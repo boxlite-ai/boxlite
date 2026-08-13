@@ -487,17 +487,35 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // bash rather than on anything about this stack. Verified against bash 3.2.
   assert.deepEqual(liveCommands(previewStep.run), [
     'set -euo pipefail',
-    'args=(diff --stage "$STAGE" --policy .)',
+    'if node -e "const pkg = require(\'./package.json\'); process.exit(pkg.scripts?.[\'validate-preview\'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then',
+    '  policy=policies/runner',
+    '  validator=(npm run --silent validate-preview)',
+    'elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then',
+    '  policy=.',
+    '  validator=(node scripts/deployment-preview.mjs)',
+    'else',
+    "  echo 'selected commit has no supported deployment preview contract' >&2",
+    '  exit 1',
+    'fi',
+    'args=(diff --stage "$STAGE" --policy "$policy")',
     '[ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")',
     'args+=(--json)',
     'npm run --silent sst -- "${args[@]}" |',
-    '  node scripts/deployment-preview.mjs',
+    '  "${validator[@]}"',
   ])
   assert.ok(deployStep, 'the deployment step is missing')
   assert.equal(deployStep.if, '${{ inputs.apply }}')
   assert.deepEqual(liveCommands(deployStep.run), [
     'set -euo pipefail',
-    'args=(--stage "$STAGE" --policy .)',
+    'if node -e "const pkg = require(\'./package.json\'); process.exit(pkg.scripts?.[\'validate-preview\'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then',
+    '  policy=policies/runner',
+    'elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then',
+    '  policy=.',
+    'else',
+    "  echo 'selected commit has no supported deployment preview contract' >&2",
+    '  exit 1',
+    'fi',
+    'args=(--stage "$STAGE" --policy "$policy")',
     '[ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")',
     'npm run deploy -- "${args[@]}"',
   ])
@@ -740,7 +758,19 @@ test('release deployment consumes one published version for both components', ()
   assertEnvironmentValidatorCompatibility(materializeStep)
   // The same guarded wrapper and the same pre-deploy gates the build path uses: a release
   // deploy reconciles the identical stack, so it owes the identical safety checks.
-  assert.equal(deployStep.run, 'npm run deploy -- --stage "$STAGE" --policy .')
+  assert.equal(deployStep.shell, 'bash')
+  assert.deepEqual(liveShell(deployStep.run).split('\n').filter(Boolean), [
+    'set -euo pipefail',
+    'if node -e "const pkg = require(\'./package.json\'); process.exit(pkg.scripts?.[\'validate-preview\'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then',
+    '  policy=policies/runner',
+    'elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then',
+    '  policy=.',
+    'else',
+    "  echo 'selected commit has no supported deployment preview contract' >&2",
+    '  exit 1',
+    'fi',
+    'npm run deploy -- --stage "$STAGE" --policy "$policy"',
+  ])
   assert.ok(workflow.jobs.deploy.steps.find((step) => step.name === 'Run deployment safety tests'))
   const boundaryStep = workflow.jobs.deploy.steps.find(
     (step) => step.name === 'Verify deploy role IAM boundary permissions',
