@@ -12,7 +12,6 @@ The type of the job
 
 * `DESTROY_BOX` (value: `'DESTROY_BOX'`)
 
-
 * `EXPORT_BOX` (value: `'EXPORT_BOX'`)
 
 * `IMPORT_BOX` (value: `'IMPORT_BOX'`)
