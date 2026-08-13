@@ -17,8 +17,8 @@ UNSAFE_PATTERNS = [
     (re.compile(r"(?im)^\s*click\s+"), "click directives"),
     (re.compile(r"(?i)javascript\s*:"), "javascript URLs"),
     (re.compile(r"(?i)https?://|\bhref\s*="), "external links"),
-    (re.compile(r"<\s*/?\s*[A-Za-z][^>]*>"), "raw HTML"),
 ]
+MERMAID_LEFT_ARROWS = ("<-->", "<-.->", "<==>")
 NODE_RE = re.compile(r'^\s*([a-z][a-z0-9_]*)\s*(?:\[\[|\[\(|\[|\(\(|\(|\{\{\{|\{\{|\{|>)\s*["\']?(.+?)["\']?\s*(?:\]\]|\)\]|\]|\)\)|\)|\}\}\}|\}\}|\}|\])\s*$')
 EDGE_RE = re.compile(
     r'^\s*([a-z][a-z0-9_]*)\s+([a-z][a-z0-9_]*)@(?:-->|---|-.->|==>|--o|--x|o--o|x--x|<-->|<-.->|<==>)'
@@ -42,6 +42,8 @@ def validate_mermaid(ctx: ValidationContext) -> None:
         for pattern, description in UNSAFE_PATTERNS:
             if pattern.search(block.content):
                 errors.append(f"{view}/{state} contains forbidden {description}")
+        if _contains_html_markup(block.content):
+            errors.append(f"{view}/{state} contains forbidden raw HTML")
         if view == "architecture":
             _parse_architecture(ctx, state, block, errors)
         else:
@@ -219,6 +221,24 @@ def _find_chrome() -> str | None:
         if found:
             candidates.append(found)
     return next((candidate for candidate in candidates if Path(candidate).is_file()), None)
+
+
+def _contains_html_markup(content: str) -> bool:
+    for index, character in enumerate(content):
+        if character != "<":
+            continue
+        suffix = content[index:]
+        if suffix.startswith(MERMAID_LEFT_ARROWS):
+            continue
+        candidate = content[index + 1 :].lstrip()
+        if not candidate:
+            continue
+        if candidate[0] in "/!?":
+            return True
+        tag = re.match(r"[A-Za-z][A-Za-z0-9:-]*", candidate)
+        if tag and len(candidate) > tag.end() and candidate[tag.end()] in " \t\r\n/>":
+            return True
+    return False
 
 
 def _looks_like_tool_failure(detail: str) -> bool:

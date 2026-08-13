@@ -188,6 +188,19 @@ class DiagramValidatorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assert_check_failed(report, "mermaid.structure_security")
 
+    def test_malformed_html_comment_is_rejected(self) -> None:
+        document, manifest = overview_fixture(self.head)
+        document = document.replace('start["start"]', 'start["start<!-- unsafe --!>"]', 1)
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "mermaid.structure_security")
+
+    def test_mermaid_left_arrow_is_not_treated_as_html(self) -> None:
+        document, manifest = overview_fixture(self.head)
+        document = document.replace("start_load@-->", "start_load@<-->", 1)
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 0, json.dumps(report, indent=2))
+
     def test_proposed_behavior_without_issue_evidence_is_rejected(self) -> None:
         document, manifest = issue_fixture(self.head)
         for item in manifest["nodes"] + manifest["edges"]:
