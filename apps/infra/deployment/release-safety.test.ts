@@ -364,6 +364,8 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // probe. Both paths inspect behavior rather than grepping source comments.
   assertShellLine(scopeSupportStep.run, /capability=apps\/infra\/deployment\/capabilities\.json/)
   assertShellLine(scopeSupportStep.run, /if \[ -f "\$capability" \]; then/)
+  assertShellLine(scopeSupportStep.run, /if ! status=\$\(node -e .* "\$capability"\); then/)
+  assertShellLine(scopeSupportStep.run, /status=unreadable/)
   assertShellLine(scopeSupportStep.run, /c\.version === 1 && c\.componentSelection === true/)
   assertShellLine(scopeSupportStep.run, /elif \[ -f "\$legacy_module" \]; then/)
   assertShellLine(scopeSupportStep.run, /typeof m\.resolveDeployScope === 'function'/)
