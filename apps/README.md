@@ -94,3 +94,8 @@ flowchart TB
 
 The deployment runbook and operational constraints live in
 [`infra/docs/deployment.md`](./infra/docs/deployment.md).
+
+## API catalog
+
+See [`API.md`](./API.md) for the categorized inventory of every registered
+application API, including its method, path, owning service, and purpose.
