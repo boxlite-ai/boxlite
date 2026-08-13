@@ -47,6 +47,10 @@ test('retains the dev credential lookup default for non-deploy commands', () => 
 test('requires the provisioned IAM boundary stage to match the SST stage', () => {
   assert.equal(requireIamPermissionsBoundaryStage('dev', { IAM_PERMISSIONS_BOUNDARY_STAGE: 'dev' }), 'dev')
   assert.throws(
+    () => requireIamPermissionsBoundaryStage(0, { IAM_PERMISSIONS_BOUNDARY_STAGE: '0' }),
+    /invalid SST stage/,
+  )
+  assert.throws(
     () => requireIamPermissionsBoundaryStage('production', { IAM_PERMISSIONS_BOUNDARY_STAGE: 'dev' }),
     /IAM permissions boundary stage dev does not match SST stage production/,
   )

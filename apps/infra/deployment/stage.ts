@@ -5,14 +5,14 @@
 // generated AWS name: its 35 non-stage characters leave 28 of S3's 63.
 const SST_STAGE_PATTERN = /^[a-z0-9][a-z0-9-]{0,27}$/
 
-function validateSstStage(stage: any) {
-  if (!SST_STAGE_PATTERN.test(stage)) {
-    throw new Error(`invalid SST stage '${stage}' (expected 1-28 lowercase letters, numbers, or hyphens)`)
+function validateSstStage(stage: unknown): string {
+  if (typeof stage !== 'string' || !SST_STAGE_PATTERN.test(stage)) {
+    throw new Error(`invalid SST stage '${String(stage)}' (expected 1-28 lowercase letters, numbers, or hyphens)`)
   }
   return stage
 }
 
-export function resolveSstStage(args: any, environment = process.env) {
+export function resolveSstStage(args: readonly string[], environment: NodeJS.ProcessEnv = process.env): string {
   let configuredStage
 
   for (let index = 0; index < args.length; index++) {
@@ -43,7 +43,10 @@ export function resolveSstStage(args: any, environment = process.env) {
   return 'dev'
 }
 
-export function requireIamPermissionsBoundaryStage(stage: any, environment = process.env) {
+export function requireIamPermissionsBoundaryStage(
+  stage: unknown,
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
   const selectedStage = validateSstStage(stage)
   const configuredStage = environment.IAM_PERMISSIONS_BOUNDARY_STAGE
   if (!configuredStage) {
