@@ -8,7 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest import mock
+import unittest.mock
 from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
@@ -303,7 +303,7 @@ class DiagramValidatorTests(unittest.TestCase):
     def test_report_writes_use_unique_temporary_files(self) -> None:
         report_path = self.root / "concurrent" / "validation.json"
         barrier = threading.Barrier(2)
-        failures: list[BaseException] = []
+        failures: list[Exception] = []
         original_write_text = Path.write_text
 
         def synchronized_write(path: Path, *args: object, **kwargs: object) -> int:
@@ -315,10 +315,10 @@ class DiagramValidatorTests(unittest.TestCase):
         def write(value: int) -> None:
             try:
                 _write_report(report_path, {"value": value})
-            except BaseException as error:
+            except Exception as error:
                 failures.append(error)
 
-        with mock.patch.object(Path, "write_text", synchronized_write):
+        with unittest.mock.patch.object(Path, "write_text", synchronized_write):
             threads = [threading.Thread(target=write, args=(value,)) for value in (1, 2)]
             for thread in threads:
                 thread.start()
