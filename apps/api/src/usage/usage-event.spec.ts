@@ -145,6 +145,7 @@ describe('usage period validation', () => {
     ['a negative quantity', { disk: -1 }],
     ['a blank organizationId', { organizationId: '  ' }],
     ['a blank boxId', { boxId: '' }],
+    ['a boxId longer than Commerce accepts', { boxId: 'b'.repeat(201) }],
     ['an invalid startAt', { startAt: new Date('nonsense') }],
     ['an end before the start', { endAt: new Date('2026-07-01T00:00:00.000Z') }],
     ['a quantity past the encodable ceiling', { mem: 1e16 }],
@@ -157,6 +158,10 @@ describe('usage period validation', () => {
 
   it('accepts a quantity at the ceiling', () => {
     expect(() => usageEventKey(period({ mem: 1e15 }))).not.toThrow()
+  })
+
+  it('accepts an identity at the Commerce boundary', () => {
+    expect(() => usageEventKey(period({ region: 'r'.repeat(200) }))).not.toThrow()
   })
 
   it('accepts the smallest quantity the encoding can still carry', () => {

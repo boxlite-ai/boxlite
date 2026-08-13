@@ -531,6 +531,10 @@ test('usage is exported to the ingest origin, never to the dashboard billing URL
     liveConfig,
     /USAGE_EXPORT_ENABLED: usageExportToken\.value\.apply\(\(token(?:: string)?\) => \(token\.trim\(\) \? 'true' : 'false'\)\)/,
   )
+  assert.match(
+    liveConfig,
+    /USAGE_ALLOCATION_SNAPSHOT_ENABLED: usageExportToken\.value\.apply\(\(token(?:: string)?\) =>\s*\(token\.trim\(\) \? 'true' : 'false'\),?\s*\)/,
+  )
   assert.match(liveConfig, /const usageExportToken = new sst\.Secret\('USAGE_EXPORT_TOKEN', ''\)/)
 
   // Nothing here can discover the receiving half — it belongs to the billing service's own stack —

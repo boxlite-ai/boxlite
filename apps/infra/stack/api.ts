@@ -346,6 +346,11 @@ const api = new sst.aws.Service('Api', {
       // shared secret would crash-loop on deploy instead of simply not
       // exporting yet. Setting the secret is what turns delivery on.
       USAGE_EXPORT_ENABLED: usageExportToken.value.apply((token: string) => (token.trim() ? 'true' : 'false')),
+      // The same destination and credential carry the five-minute full
+      // snapshot used by Commerce to estimate still-open usage.
+      USAGE_ALLOCATION_SNAPSHOT_ENABLED: usageExportToken.value.apply((token: string) =>
+        (token.trim() ? 'true' : 'false'),
+      ),
     }),
   },
 })
