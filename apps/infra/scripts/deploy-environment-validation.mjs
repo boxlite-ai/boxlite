@@ -45,6 +45,28 @@ const FORBIDDEN_DEPLOYMENT_KEYS = new Set([
   'SST_BIN_PATH',
 ])
 
+const EXTERNAL_STAGE_KEYS = new Set([
+  'BILLING_API_URL',
+  'BOXLITE_SYSTEM_IMAGES',
+  'CLOUDFLARE_API_TOKEN',
+  'OIDC_AUDIENCE',
+  'OIDC_CLIENT_ID',
+  'OIDC_ISSUER_BASE_URL',
+  'OIDC_MANAGEMENT_API_AUDIENCE',
+  'OIDC_MANAGEMENT_API_CLIENT_ID',
+  'OIDC_MANAGEMENT_API_CLIENT_SECRET',
+  'OIDC_MANAGEMENT_API_ENABLED',
+  'POSTHOG_API_KEY',
+  'POSTHOG_HOST',
+  'PROXY_DOMAIN',
+  'PROXY_PROTOCOL',
+  'PROXY_TEMPLATE_URL',
+  'PUBLIC_OIDC_DOMAIN',
+  'STACK_DOMAIN',
+  'SVIX_AUTH_TOKEN',
+  'USAGE_EXPORT_TOKEN',
+])
+
 export function validateDeployEnvironment(source) {
   for (const [index, rawLine] of source.split(/\r?\n/).entries()) {
     const line = rawLine.trim()
@@ -55,6 +77,12 @@ export function validateDeployEnvironment(source) {
   }
 
   const configuredKeys = Object.keys(parse(source))
+  const externalKeys = configuredKeys.filter((key) => EXTERNAL_STAGE_KEYS.has(key)).sort()
+  if (externalKeys.length > 0) {
+    throw new Error(
+      `${externalKeys.join(', ')} must not be stored in DEPLOY_ENV; use dedicated GitHub variables or AWS/SST secrets`,
+    )
+  }
   const forbiddenKeys = configuredKeys
     .filter((key) => FORBIDDEN_DEPLOYMENT_KEYS.has(key) || key.startsWith('AWS_ENDPOINT_URL_'))
     .sort()

@@ -6,12 +6,10 @@ import test from 'node:test'
 
 import { validateDeployEnvironment } from './deploy-environment-validation.mjs'
 
-test('accepts ordinary dotenv deployment configuration', () => {
+test('accepts an inactive compatibility payload', () => {
   assert.doesNotThrow(() =>
     validateDeployEnvironment(`
-STACK_DOMAIN=dev.boxlite.ai
-OIDC_AUDIENCE=https://dev.boxlite.ai/api
-RUNNERS=1
+# Dedicated GitHub variables own active stage configuration.
 `),
   )
 })
@@ -56,6 +54,37 @@ test('rejects every forbidden workflow override', () => {
         assert.equal(error.message.includes(secretValue), false)
         return true
       },
+    )
+  }
+})
+
+test('rejects configuration migrated to dedicated GitHub variables or AWS secrets', () => {
+  const migratedKeys = [
+    'BILLING_API_URL',
+    'BOXLITE_SYSTEM_IMAGES',
+    'CLOUDFLARE_API_TOKEN',
+    'OIDC_AUDIENCE',
+    'OIDC_CLIENT_ID',
+    'OIDC_ISSUER_BASE_URL',
+    'OIDC_MANAGEMENT_API_AUDIENCE',
+    'OIDC_MANAGEMENT_API_CLIENT_ID',
+    'OIDC_MANAGEMENT_API_CLIENT_SECRET',
+    'OIDC_MANAGEMENT_API_ENABLED',
+    'POSTHOG_API_KEY',
+    'POSTHOG_HOST',
+    'PROXY_DOMAIN',
+    'PROXY_PROTOCOL',
+    'PROXY_TEMPLATE_URL',
+    'PUBLIC_OIDC_DOMAIN',
+    'STACK_DOMAIN',
+    'SVIX_AUTH_TOKEN',
+    'USAGE_EXPORT_TOKEN',
+  ]
+
+  for (const key of migratedKeys) {
+    assert.throws(
+      () => validateDeployEnvironment(`${key}=synthetic-value`),
+      new RegExp(`${key}.*must not be stored in DEPLOY_ENV`),
     )
   }
 })

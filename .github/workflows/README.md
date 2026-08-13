@@ -249,7 +249,10 @@ Required Environment configuration (per stage):
 
 - Variable `AWS_DEPLOY_ROLE_ARN`
 - Variable `AWS_REGION` (defaults to `ap-southeast-1`)
-- Secret `DEPLOY_ENV` containing the stage's dotenv configuration
+- Dedicated variables for stage configuration (`STACK_DOMAIN`, `OIDC_*`, proxy,
+  billing, image, and feature settings)
+- AWS-backed SST secrets for application credentials
+- Secret `DEPLOY_ENV` retained as an inactive compatibility payload
 
 Bootstrap the scoped role, runtime permissions boundary, immutable API ECR
 repository, and private Runner artifact bucket with

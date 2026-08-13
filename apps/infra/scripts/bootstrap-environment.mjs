@@ -74,6 +74,7 @@ import {
 } from './auth0-provisioning.mjs'
 import {
   environmentApiPath,
+  configuredGithubStageVariables,
   githubEnvironmentPayload,
   isProtectionUnavailableError,
   parseReviewerIds,
@@ -634,15 +635,12 @@ function ghVariableSet({ repo, stage, name, value }) {
 /*
  * The gh installed here (2.92.0) has no --body-file, and passing it makes gh
  * print usage and exit non-zero. It takes --body, or reads the value from
- * stdin when --body is omitted; --env-file is a different feature entirely
- * (many secrets named by a dotenv file, not one secret whose value is that
- * file). Passing the whole file on stdin is what stores DEPLOY_ENV as a single
- * secret, and keeps the contents out of argv where other processes could read
- * them.
+ * stdin when --body is omitted. The compatibility payload goes through stdin so
+ * future secret content cannot accidentally become process-list-visible.
  */
-function ghSecretSetFromFile({ repo, stage, name, filePath }) {
+function ghSecretSet({ repo, stage, name, value }) {
   execFileSync('gh', ['secret', 'set', name, '--repo', repo, '--env', stage], {
-    input: readFileSync(filePath),
+    input: value,
     stdio: ['pipe', 'inherit', 'inherit'],
     timeout: 30_000,
     killSignal: 'SIGTERM',
@@ -652,8 +650,16 @@ function ghSecretSetFromFile({ repo, stage, name, filePath }) {
 function wireGithubEnvironment({ repo, stage, region, roleArn }) {
   ghVariableSet({ repo, stage, name: 'AWS_DEPLOY_ROLE_ARN', value: roleArn })
   ghVariableSet({ repo, stage, name: 'AWS_REGION', value: region })
-  ghSecretSetFromFile({ repo, stage, name: 'DEPLOY_ENV', filePath: requireStageEnvFile() })
-  console.log(`[${SCRIPT_NAME}] GitHub ${stage} environment ... AWS_DEPLOY_ROLE_ARN, AWS_REGION, DEPLOY_ENV set`)
+  for (const [name, value] of Object.entries(configuredGithubStageVariables())) {
+    ghVariableSet({ repo, stage, name, value })
+  }
+  ghSecretSet({
+    repo,
+    stage,
+    name: 'DEPLOY_ENV',
+    value: '# Compatibility fallback only; stage configuration uses dedicated GitHub variables.\n',
+  })
+  console.log(`[${SCRIPT_NAME}] GitHub ${stage} environment ... dedicated variables and DEPLOY_ENV fallback set`)
 }
 
 async function main() {

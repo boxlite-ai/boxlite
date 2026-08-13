@@ -213,8 +213,10 @@ runs before deployment.
 
 The workflows are manual/serialized, restricted to `main`, and bound to protected
 GitHub Environments. GitHub OIDC supplies short-lived AWS credentials; no AWS
-access keys are stored in GitHub. `DEPLOY_ENV` materializes the stage's gitignored
-`.env` only for the job and is deleted even if deployment fails.
+access keys are stored in GitHub. Dedicated Environment variables provide active
+stage configuration. The inactive `DEPLOY_ENV` compatibility payload still
+materializes a gitignored `.env` only for the job and is deleted even if deployment
+fails.
 
 `ci/github-deploy-role.yaml` bootstraps three things that must exist **before** an
 SST deploy: the OIDC role, the immutable Api ECR repository, and the private
@@ -243,10 +245,19 @@ each stage you run.
 | --- | --- | --- |
 | App secrets (`OIDC_CLIENT_ID`, Auth0 Management API, Svix, PostHog, `USAGE_EXPORT_TOKEN`) | SST secret store | `npm run bootstrap`; others via `npm run sst -- secret set <NAME> --stage <stage>` reading stdin |
 | Cloudflare creds (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`) | AWS SSM SecureString, or GitHub Environment secrets (which win) | `npm run bootstrap` |
-| Stage config (`STACK_DOMAIN`, `OIDC_*`, toggles) | GitHub Environment secret `DEPLOY_ENV` | `npm run bootstrap` |
+| Stage config (`STACK_DOMAIN`, `OIDC_*`, billing, proxy, and feature toggles) | Dedicated GitHub Environment variables | `npm run bootstrap`; operator-managed values are preserved when absent locally |
+| Compatibility fallback | GitHub Environment secret `DEPLOY_ENV` | `npm run bootstrap`; contains no active configuration |
 
-Never pass secret values as command arguments or echo them. Rotate on any
-suspected disclosure. `npm run secrets -- --stage dev` lists what is set.
+Never pass secret values as command arguments or echo them. Do not use a secret
+listing command that prints values; verify presence through AWS secret metadata
+only. Rotate on any suspected disclosure.
+
+Both dev-capable deployment workflows read public stage configuration from
+dedicated Environment variables. `DEPLOY_ENV` remains as an inactive compatibility
+fallback and must contain no migrated configuration. Runtime credentials — including
+`OIDC_CLIENT_ID`, Auth0 Management API credentials, PostHog, Svix, and
+`USAGE_EXPORT_TOKEN` — remain AWS-backed SST secrets and must never be stored in a
+GitHub variable or in `DEPLOY_ENV`.
 
 Run SST through the npm scripts, never bare `npx sst` — the wrapper loads
 Cloudflare creds from SSM, enforces the Runner safety policy, and scrubs

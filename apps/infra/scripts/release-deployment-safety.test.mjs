@@ -42,6 +42,20 @@ const CLOUDFORMATION_SCHEMA = DEFAULT_SCHEMA.extend([
   }),
 ])
 const requireFromTest = createRequire(import.meta.url)
+const DEDICATED_STAGE_VARIABLES = [
+  'BILLING_API_URL',
+  'BOXLITE_SYSTEM_IMAGES',
+  'OIDC_AUDIENCE',
+  'OIDC_ISSUER_BASE_URL',
+  'OIDC_MANAGEMENT_API_AUDIENCE',
+  'OIDC_MANAGEMENT_API_ENABLED',
+  'POSTHOG_HOST',
+  'PROXY_DOMAIN',
+  'PROXY_PROTOCOL',
+  'PROXY_TEMPLATE_URL',
+  'PUBLIC_OIDC_DOMAIN',
+  'STACK_DOMAIN',
+]
 
 // One decision per artifact kind, made where the text is read (see live-source.mjs).
 const liveShell = (run) => liveText('shell', run)
@@ -190,6 +204,10 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   })
   assert.equal(workflow.on.workflow_dispatch.inputs.runner_create_allowlist, undefined)
   assert.match(source, /environment: \$\{\{ inputs\.stage \}\}/)
+  for (const name of DEDICATED_STAGE_VARIABLES) {
+    assert.equal(workflow.jobs.deploy.env[name], `\${{ vars.${name} }}`)
+  }
+  assert.doesNotMatch(source, /secrets\.BILLING_API_URL/)
   assert.equal(workflow.permissions['id-token'], 'write')
   assert.equal(workflow.jobs.deploy['runs-on'], 'ubuntu-24.04')
 
@@ -707,6 +725,10 @@ test('release deployment consumes one published version for both components', ()
   assert.equal(workflow.jobs.deploy.env.ALLOW_DOWNGRADE, "${{ inputs.allow_downgrade && '1' || '' }}")
   assert.equal(workflow.jobs.deploy.env.VERSION, '${{ inputs.version }}')
   assert.match(source, /environment: \$\{\{ inputs\.stage \}\}/)
+  for (const name of DEDICATED_STAGE_VARIABLES) {
+    assert.equal(workflow.jobs.deploy.env[name], `\${{ vars.${name} }}`)
+  }
+  assert.doesNotMatch(source, /secrets\.BILLING_API_URL/)
   // `stage` picks the protected Environment holding the AWS role, so it must be untypable
   // rather than merely wrong — the same allowlist rule deploy-infra.yml follows.
   assert.equal(workflow.on.workflow_dispatch.inputs.stage.type, 'choice')

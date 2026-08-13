@@ -19,6 +19,30 @@
 // unprotected environment — so a 422 here must not abort the bootstrap.
 const PROTECTION_UNAVAILABLE_PATTERN = /(only available|not available|upgrade|advanced security|payment)/i
 
+const GITHUB_STAGE_VARIABLES = [
+  'BILLING_API_URL',
+  'BOXLITE_SYSTEM_IMAGES',
+  'OIDC_AUDIENCE',
+  'OIDC_ISSUER_BASE_URL',
+  'OIDC_MANAGEMENT_API_AUDIENCE',
+  'OIDC_MANAGEMENT_API_ENABLED',
+  'POSTHOG_HOST',
+  'PROXY_DOMAIN',
+  'PROXY_PROTOCOL',
+  'PROXY_TEMPLATE_URL',
+  'PUBLIC_OIDC_DOMAIN',
+  'STACK_DOMAIN',
+]
+
+export function configuredGithubStageVariables(environment = process.env) {
+  return Object.fromEntries(
+    GITHUB_STAGE_VARIABLES.flatMap((name) => {
+      const value = environment[name]?.trim()
+      return value ? [[name, value]] : []
+    }),
+  )
+}
+
 export function githubEnvironmentPayload({ reviewerIds = [] } = {}) {
   if (!Array.isArray(reviewerIds)) throw new Error('reviewerIds must be an array of numeric GitHub actor ids')
   for (const id of reviewerIds) {

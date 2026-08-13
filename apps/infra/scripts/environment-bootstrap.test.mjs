@@ -21,6 +21,22 @@ import {
   sstPlatformState,
   validateGitHubRepo,
 } from './environment-bootstrap.mjs'
+import { configuredGithubStageVariables } from './github-environment.mjs'
+
+test('configuredGithubStageVariables exports public stage config but no runtime secrets', () => {
+  assert.deepEqual(
+    configuredGithubStageVariables({
+      STACK_DOMAIN: 'dev.example.test',
+      BILLING_API_URL: 'https://billing.example.test/api/billing',
+      OIDC_CLIENT_ID: 'must-stay-in-sst',
+      SVIX_AUTH_TOKEN: 'must-stay-in-sst',
+    }),
+    {
+      BILLING_API_URL: 'https://billing.example.test/api/billing',
+      STACK_DOMAIN: 'dev.example.test',
+    },
+  )
+})
 
 test('runtimeBoundaryPolicyArn matches sst.config.ts interpolation', () => {
   assert.equal(
