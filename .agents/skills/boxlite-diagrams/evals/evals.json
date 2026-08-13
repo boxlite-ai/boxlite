@@ -28,12 +28,12 @@
     {
       "id": 3,
       "prompt": "Explain bug-fix PR #1200 for split UTF-8 PTY frames. Produce diagram.md, evidence.json, and validation.json in the requested output directory. Show a complete Before and After and link the fixed issue. Do not change production source.",
-      "expected_output": "A validated bug-fix PR package with the faulty Before hop marked BUG, the corrected After path marked FIX, and Fixes #1155.",
+      "expected_output": "A validated bug-fix PR package with the faulty Before hop marked ← BUG:, the corrected After path marked FIX, and Fixes #1155.",
       "files": [],
       "expectations": [
         "The output directory contains diagram.md, evidence.json, and validation.json, and validation.json reports valid=true with exit_code=0.",
         "All three views contain complete adjacent Before and After states grounded in the PR base and head revisions.",
-        "BUG appears only on the faulty Before call-graph hop, FIX appears on the corrected After behavior, and diagram.md contains Fixes #1155.",
+        "← BUG: appears only on the faulty Before call-graph hop, FIX appears on the corrected After behavior, and diagram.md contains Fixes #1155.",
         "Every call-graph relationship has concrete source evidence and the canonical nodes and edges agree across all three views."
       ]
     }

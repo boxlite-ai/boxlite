@@ -93,7 +93,12 @@ def _check_labels(ctx: ValidationContext, view: str, state: str, errors: list[st
 
 def _check_mermaid_annotations(ctx: ValidationContext, errors: list[str]) -> None:
     for annotation in ctx.manifest.get("annotations", []):
-        item_type, item_id = annotation["target"].split(":", 1)
+        target = annotation.get("target")
+        if not isinstance(target, str) or ":" not in target:
+            continue
+        item_type, item_id = target.split(":", 1)
+        if item_type not in {"node", "edge"}:
+            continue
         item = ctx.item_map(item_type).get(item_id, {})
         marker = f"{annotation['kind']}: {annotation['text']}".lower()
         for view in ("architecture", "sequence"):

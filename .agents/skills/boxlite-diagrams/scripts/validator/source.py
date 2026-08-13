@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -50,6 +51,12 @@ def validate_manifest(ctx: ValidationContext) -> None:
         errors.append("context.sources must be an object")
     else:
         _reject_extra_keys(sources, SOURCE_KEYS, "context.sources", errors)
+        for key in ("repository", "base_revision", "head_revision"):
+            if key in sources and not _valid_non_option_string(sources[key]):
+                errors.append(f"context.sources.{key} must be a non-empty, non-option string")
+        for key in ("issue", "pr"):
+            if key in sources and not _positive_integer(sources[key]):
+                errors.append(f"context.sources.{key} must be a positive integer")
 
     states = manifest.get("states")
     if not isinstance(states, list) or not 1 <= len(states) <= 2:
@@ -73,8 +80,8 @@ def validate_manifest(ctx: ValidationContext) -> None:
             errors.append(f"{where}.label must be non-empty")
         else:
             state_labels.append(label)
-        if not isinstance(state.get("revision"), str) or not state.get("revision"):
-            errors.append(f"{where}.revision must be non-empty")
+        if not _valid_non_option_string(state.get("revision")):
+            errors.append(f"{where}.revision must be a non-empty, non-option string")
         if not isinstance(state.get("proposed"), bool):
             errors.append(f"{where}.proposed must be boolean")
     if len(state_ids) != len(set(state_ids)):
@@ -191,6 +198,13 @@ def validate_source_evidence(ctx: ValidationContext) -> None:
     for item_type, item in ctx.items():
         for entry in item.get("evidence", []):
             if entry["type"] == "source":
+                state = ctx.state_map()[entry["state"]]
+                if entry["revision"] != state["revision"]:
+                    errors.append(
+                        f"{item_type}:{item['id']} evidence revision {entry['revision']!r} does not match "
+                        f"state {entry['state']!r} revision {state['revision']!r}"
+                    )
+                    continue
                 window = _read_source_window(ctx, entry, errors)
                 if window is None:
                     continue
@@ -272,9 +286,11 @@ def _validate_evidence_shape(entry: Any, where: str, states: set[str], errors: l
         errors.append(f"{where}.tokens must be a non-empty string array")
     if entry.get("type") == "source":
         _reject_extra_keys(entry, SOURCE_EVIDENCE_KEYS, where, errors)
-        for key in ("revision", "path", "symbol"):
+        for key in ("path", "symbol"):
             if not isinstance(entry.get(key), str) or not entry.get(key):
                 errors.append(f"{where}.{key} must be non-empty")
+        if not _valid_non_option_string(entry.get("revision")):
+            errors.append(f"{where}.revision must be a non-empty, non-option string")
         for key in ("line_start", "line_end"):
             if not isinstance(entry.get(key), int) or entry.get(key, 0) < 1:
                 errors.append(f"{where}.{key} must be a positive integer")
@@ -286,7 +302,7 @@ def _validate_evidence_shape(entry: Any, where: str, states: set[str], errors: l
             errors.append(f"{where}.path must be a safe repository-relative path")
     elif entry.get("type") == "issue":
         _reject_extra_keys(entry, ISSUE_EVIDENCE_KEYS, where, errors)
-        if not isinstance(entry.get("issue"), int) or entry.get("issue", 0) < 1:
+        if not _positive_integer(entry.get("issue")):
             errors.append(f"{where}.issue must be a positive integer")
     else:
         errors.append(f"{where}.type must be 'source' or 'issue'")
@@ -311,7 +327,7 @@ def _read_source_window(ctx: ValidationContext, entry: dict[str, Any], errors: l
             errors.append(f"cannot read WORKTREE:{path}: {error}")
             return None
     else:
-        result = _run(ctx.repo, ["git", "show", f"{revision}:{path}"])
+        result = _run(ctx.repo, ["git", "show", "--end-of-options", f"{revision}:{path}"])
         if result.returncode != 0:
             errors.append(f"cannot resolve {revision}:{path}: {result.stderr.strip()}")
             return None
@@ -334,6 +350,9 @@ def _load_issue(ctx: ValidationContext, number: int, errors: list[str]) -> dict[
         ctx.add("tool.gh", "error", "gh is required for issue or PR evidence")
         return None
     result = _run(ctx.repo, ["gh", "issue", "view", str(number), "--json", "number,title,body,state,url"])
+    if result.returncode == 124:
+        ctx.add("tool.gh", "error", result.stderr.strip())
+        return None
     if result.returncode != 0:
         errors.append(f"cannot load issue #{number}: {result.stderr.strip()}")
         return None
@@ -362,6 +381,9 @@ def _validate_remote_context(ctx: ValidationContext, errors: list[str]) -> None:
             ctx.add("tool.gh", "error", "gh is required for issue or PR evidence")
         else:
             result = _run(ctx.repo, ["gh", "pr", "view", str(number), "--json", "number,title,body,url,baseRefOid,headRefOid"])
+            if result.returncode == 124:
+                ctx.add("tool.gh", "error", result.stderr.strip())
+                return
             if result.returncode != 0:
                 errors.append(f"cannot load PR #{number}: {result.stderr.strip()}")
             else:
@@ -394,7 +416,7 @@ def _symbol_leaf(symbol: str) -> str:
 
 def _has_call_expression(window: str, symbol: str) -> bool:
     pattern = re.compile(rf"\b{re.escape(symbol)}\s*\(")
-    for line in window.splitlines():
+    for line in _strip_non_code(window).splitlines():
         if not pattern.search(line):
             continue
         if re.search(rf"\b(?:def|fn|function|class)\s+{re.escape(symbol)}\s*\(", line):
@@ -404,7 +426,88 @@ def _has_call_expression(window: str, symbol: str) -> bool:
 
 
 def _run(repo: Path, command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, cwd=repo, text=True, capture_output=True, check=False)
+    try:
+        return subprocess.run(
+            command, cwd=repo, text=True, capture_output=True, check=False, timeout=_command_timeout()
+        )
+    except subprocess.TimeoutExpired as error:
+        executable = Path(command[0]).name
+        message = f"{executable} exceeded {_command_timeout():g} seconds: {error}"
+        return subprocess.CompletedProcess(command, 124, "", message)
+
+
+def _strip_non_code(source: str) -> str:
+    output: list[str] = []
+    index = 0
+    quote: str | None = None
+    block_comment = False
+    while index < len(source):
+        current = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if block_comment:
+            if current == "*" and following == "/":
+                output.extend("  ")
+                index += 2
+                block_comment = False
+            else:
+                output.append("\n" if current == "\n" else " ")
+                index += 1
+            continue
+        if quote is not None:
+            if current == "\\" and index + 1 < len(source):
+                output.extend("  ")
+                index += 2
+            elif current == quote:
+                output.append(" ")
+                index += 1
+                quote = None
+            else:
+                output.append("\n" if current == "\n" else " ")
+                index += 1
+            continue
+        if current == "/" and following == "*":
+            output.extend("  ")
+            index += 2
+            block_comment = True
+        elif current == "/" and following == "/":
+            newline = source.find("\n", index)
+            if newline < 0:
+                output.extend(" " * (len(source) - index))
+                break
+            output.extend(" " * (newline - index))
+            index = newline
+        elif current == "#":
+            newline = source.find("\n", index)
+            if newline < 0:
+                output.extend(" " * (len(source) - index))
+                break
+            output.extend(" " * (newline - index))
+            index = newline
+        elif current in {'"', "'", "`"}:
+            quote = current
+            output.append(" ")
+            index += 1
+        else:
+            output.append(current)
+            index += 1
+    return "".join(output)
+
+
+def _valid_non_option_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and not value.startswith("-")
+
+
+def _positive_integer(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _command_timeout() -> float:
+    raw = os.environ.get("BOXLITE_DIAGRAM_COMMAND_TIMEOUT", "120")
+    try:
+        value = float(raw)
+    except ValueError:
+        return 120.0
+    return value if value > 0 else 120.0
 
 
 def _reject_extra_keys(value: dict[str, Any], allowed: set[str], where: str, errors: list[str]) -> None:

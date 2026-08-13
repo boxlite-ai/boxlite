@@ -59,7 +59,7 @@ def validate_mermaid(ctx: ValidationContext) -> None:
 def _parse_architecture(ctx: ValidationContext, state: str, block: StateBlock, errors: list[str]) -> None:
     for offset, line in enumerate(block.content.splitlines()[1:], start=1):
         stripped = line.strip()
-        if not stripped or stripped.startswith("%%") or stripped.startswith(("subgraph ", "end", "direction ", "classDef ", "class ")):
+        if not stripped or stripped.startswith("%%") or stripped == "end" or stripped.startswith(("subgraph ", "direction ", "classDef ", "class ")):
             continue
         edge = EDGE_RE.match(line)
         if edge:
@@ -146,7 +146,11 @@ def _render_all(ctx: ValidationContext) -> None:
         input_path = artifacts_dir / f"{view}-{state}.mmd"
         output_path = artifacts_dir / f"{view}-{state}.svg"
         input_path.write_text(block.content, encoding="utf-8")
-        result = _run_mmdc(input_path, output_path, artifacts_dir)
+        try:
+            result = _run_mmdc(input_path, output_path, artifacts_dir)
+        except subprocess.TimeoutExpired:
+            ctx.add("tool.mermaid_cli", "error", f"Mermaid rendering exceeded {_command_timeout():g} seconds")
+            return
         if result is None:
             ctx.add("tool.mermaid_cli", "error", "pinned Mermaid CLI could not be launched")
             return
@@ -187,7 +191,7 @@ def _run_mmdc(input_path: Path, output_path: Path, artifacts_dir: Path) -> subpr
     if override:
         command = [*shlex.split(override), "-i", str(input_path), "-o", str(output_path), "-q"]
         try:
-            return subprocess.run(command, text=True, capture_output=True, check=False)
+            return subprocess.run(command, text=True, capture_output=True, check=False, timeout=_command_timeout())
         except OSError:
             return None
     mermaid_config = artifacts_dir / "mermaid-config.json"
@@ -207,7 +211,9 @@ def _run_mmdc(input_path: Path, output_path: Path, artifacts_dir: Path) -> subpr
         command.extend(["-p", str(puppeteer_config)])
         environment["PUPPETEER_SKIP_DOWNLOAD"] = "true"
     try:
-        return subprocess.run(command, text=True, capture_output=True, check=False, env=environment)
+        return subprocess.run(
+            command, text=True, capture_output=True, check=False, env=environment, timeout=_command_timeout()
+        )
     except OSError:
         return None
 
@@ -257,6 +263,15 @@ def _looks_like_tool_failure(detail: str) -> bool:
             "command not found",
         )
     )
+
+
+def _command_timeout() -> float:
+    raw = os.environ.get("BOXLITE_DIAGRAM_COMMAND_TIMEOUT", "120")
+    try:
+        value = float(raw)
+    except ValueError:
+        return 120.0
+    return value if value > 0 else 120.0
 
 
 def _expected_labels(ctx: ValidationContext, view: str, state: str) -> list[str]:

@@ -53,7 +53,7 @@ Choose state labels from the evidence:
 Apply annotations to the exact affected node or edge:
 
 - `ISSUE`: verified current gap described by a non-bug issue;
-- `BUG`: faulty hop in `Current` or `Before`;
+- `← BUG: <description>`: faulty hop in `Current` or `Before`;
 - `FIX`: corrected behavior in `Expected (proposed)` or `After`;
 - `PROPOSED`: behavior required by an issue but absent from source;
 - `ADDED`, `CHANGED`, `REMOVED`: behavior grounded in the corresponding diff.

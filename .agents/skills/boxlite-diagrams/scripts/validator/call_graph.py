@@ -8,7 +8,10 @@ HOP_RE = re.compile(
     r"^(?P<indent> +)(?:(?P<branch>[├└])─ )?"
     r"(?P<symbol>[^\s(]+) \((?P<type>[^·()]+?) · (?P<path>[^:()]+):(?P<line>[1-9][0-9]*)\) — (?P<role>.+)$"
 )
-MARKER_RE = re.compile(r"(?:^|\s)(?:←\s*)?(ISSUE|BUG|FIX|PROPOSED|ADDED|CHANGED|REMOVED):\s*(.+?)(?=$|\s+←\s*[A-Z]+:)")
+MARKER_RE = re.compile(
+    r"(?:^|\s)(?:(?P<arrow>←)\s*)?(?P<kind>ISSUE|BUG|FIX|PROPOSED|ADDED|CHANGED|REMOVED):\s*"
+    r"(?P<text>.+?)(?=$|\s+←\s*[A-Z]+:)"
+)
 
 
 def validate_call_graph(ctx: ValidationContext) -> None:
@@ -134,13 +137,16 @@ def _validate_markers(ctx: ValidationContext, errors: list[str]) -> None:
     }
     for (state, item_id), hop in node_lookup.items():
         for marker in MARKER_RE.finditer(hop["role"]):
-            node_key = (marker.group(1), f"node:{item_id}", state)
+            kind = marker.group("kind")
+            if kind == "BUG" and marker.group("arrow") is None:
+                errors.append(f"call_graph/{state} BUG marker on node:{item_id} must use '← BUG:'")
+            node_key = (kind, f"node:{item_id}", state)
             edge_id = child_edges.get((state, item_id))
-            edge_key = (marker.group(1), f"edge:{edge_id}", state) if edge_id else None
+            edge_key = (kind, f"edge:{edge_id}", state) if edge_id else None
             key = node_key if node_key in expected else edge_key
             if key is None or key not in expected:
-                errors.append(f"call_graph/{state} has undeclared marker {marker.group(1)} on node:{item_id}")
-            elif expected[key] not in marker.group(2):
+                errors.append(f"call_graph/{state} has undeclared marker {kind} on node:{item_id}")
+            elif expected[key] not in marker.group("text"):
                 errors.append(f"call_graph/{state} marker text disagrees for node:{item_id}")
             else:
                 seen.add(key)
@@ -161,7 +167,7 @@ def _validate_markers(ctx: ValidationContext, errors: list[str]) -> None:
             if child is None:
                 continue
             matches = list(MARKER_RE.finditer(child["role"]))
-            if not any(match.group(1) == kind and text in match.group(2) for match in matches):
+            if not any(match.group("kind") == kind and text in match.group("text") for match in matches):
                 errors.append(f"call_graph/{state} is missing {kind}: {text} on child hop for {target}")
             else:
                 seen.add(key)

@@ -54,7 +54,7 @@ class ValidationContext:
     document_path: Path
     evidence_path: Path
     report_path: Path
-    manifest: dict[str, Any]
+    manifest: Any
     checks: list[Check] = field(default_factory=list)
     parsed: ParsedDocument | None = None
     source_windows: dict[tuple[str, str, int, int], str] = field(default_factory=dict)
@@ -80,13 +80,19 @@ class ValidationContext:
         return any(check.status == "error" for check in self.checks)
 
     def items(self) -> list[tuple[str, dict[str, Any]]]:
+        if not isinstance(self.manifest, dict):
+            return []
         return [
             ("node", item) for item in self.manifest.get("nodes", [])
         ] + [("edge", item) for item in self.manifest.get("edges", [])]
 
     def item_map(self, item_type: str) -> dict[str, dict[str, Any]]:
+        if item_type not in {"node", "edge"} or not isinstance(self.manifest, dict):
+            return {}
         key = "nodes" if item_type == "node" else "edges"
         return {item["id"]: item for item in self.manifest.get(key, []) if "id" in item}
 
     def state_map(self) -> dict[str, dict[str, Any]]:
+        if not isinstance(self.manifest, dict):
+            return {}
         return {state["id"]: state for state in self.manifest.get("states", []) if "id" in state}

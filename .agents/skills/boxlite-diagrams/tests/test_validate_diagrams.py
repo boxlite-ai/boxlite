@@ -6,11 +6,17 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = SKILL_ROOT / "scripts" / "validate_diagrams.py"
+sys.path.insert(0, str(SKILL_ROOT / "scripts"))
+
+from validate_diagrams import _write_report
+from validator.changes import _parse_diff
 
 
 class DiagramValidatorTests(unittest.TestCase):
@@ -93,6 +99,43 @@ class DiagramValidatorTests(unittest.TestCase):
         result, report = self.validate(document, manifest)
         self.assertEqual(result.returncode, 1)
         self.assert_check_failed(report, "manifest.shape")
+
+    def test_array_manifest_writes_machine_readable_report(self) -> None:
+        document, _manifest = overview_fixture(self.head)
+        result, report = self.validate(document, [])
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "manifest.shape")
+
+    def test_malformed_annotation_target_writes_machine_readable_report(self) -> None:
+        document, manifest = issue_fixture(self.head)
+        manifest["annotations"][0]["target"] = "edge"
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "manifest.shape")
+
+    def test_context_source_values_follow_schema_types(self) -> None:
+        document, manifest = overview_fixture(self.head)
+        manifest["context"]["sources"]["repository"] = 1
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "manifest.shape")
+
+    def test_option_like_revision_is_rejected_at_manifest_boundary(self) -> None:
+        document, manifest = overview_fixture(self.head)
+        manifest["states"][0]["revision"] = "--help"
+        for item in manifest["nodes"] + manifest["edges"]:
+            for evidence in item["evidence"]:
+                evidence["revision"] = "--help"
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "manifest.shape")
+
+    def test_source_revision_must_match_its_state(self) -> None:
+        document, manifest = feature_pr_fixture(self.base, self.head)
+        manifest["nodes"][0]["evidence"][0]["revision"] = self.head
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "source.evidence")
 
     def test_stale_line_is_rejected(self) -> None:
         document, manifest = overview_fixture(self.head)
@@ -201,6 +244,96 @@ class DiagramValidatorTests(unittest.TestCase):
         result, report = self.validate(document, manifest)
         self.assertEqual(result.returncode, 0, json.dumps(report, indent=2))
 
+    def test_closing_fence_with_trailing_whitespace_is_accepted(self) -> None:
+        document, manifest = overview_fixture(self.head)
+        document = document.replace("```\n\n## Sequence", "``` \n\n## Sequence", 1)
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 0, json.dumps(report, indent=2))
+
+    def test_architecture_ids_starting_with_end_are_parsed(self) -> None:
+        document, manifest = overview_fixture(self.head)
+        document = document.replace('start["start"]', 'endpoint["start"]')
+        document = document.replace('load["load"]', 'end_state["load"]')
+        document = document.replace('start start_load@-->|"load"| load', 'endpoint endpoint_end_state@-->|"load"| end_state')
+        document = document.replace('participant start as start', 'participant endpoint as start')
+        document = document.replace('participant load as load', 'participant end_state as load')
+        document = document.replace('%% edge:start_load', '%% edge:endpoint_end_state')
+        document = document.replace('start->>load: load', 'endpoint->>end_state: load')
+        manifest["nodes"][0]["id"] = "endpoint"
+        manifest["nodes"][1]["id"] = "end_state"
+        manifest["edges"][0].update({"id": "endpoint_end_state", "from": "endpoint", "to": "end_state"})
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 0, json.dumps(report, indent=2))
+
+    def test_direct_call_in_python_comment_is_not_evidence(self) -> None:
+        self._assert_non_code_call_is_rejected("# load()", "comments.py")
+
+    def test_direct_call_in_rust_string_is_not_evidence(self) -> None:
+        self._assert_non_code_call_is_rejected('let note = "load()";', "comments.rs")
+
+    def test_mermaid_timeout_returns_tool_error(self) -> None:
+        document, manifest = overview_fixture(self.head)
+        sleeper = self.bin / "slow-mmdc"
+        sleeper.write_text("#!/bin/sh\nsleep 1\n", encoding="utf-8")
+        sleeper.chmod(0o755)
+        environment = self.env | {
+            "BOXLITE_DIAGRAM_MMDC": str(sleeper),
+            "BOXLITE_DIAGRAM_COMMAND_TIMEOUT": "0.05",
+        }
+        result, report = self.validate(document, manifest, environment=environment)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(report["exit_code"], 2)
+
+    def test_gh_timeout_returns_tool_error(self) -> None:
+        document, manifest = issue_fixture(self.head)
+        (self.bin / "gh").write_text("#!/bin/sh\nsleep 1\n", encoding="utf-8")
+        environment = self.env | {"BOXLITE_DIAGRAM_COMMAND_TIMEOUT": "0.05"}
+        result, report = self.validate(document, manifest, environment=environment)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(report["exit_code"], 2)
+
+    def test_deleted_file_hunks_use_the_deleted_path(self) -> None:
+        diff = _parse_diff(
+            "diff --git a/first.py b/first.py\n--- a/first.py\n+++ b/first.py\n@@ -1 +1 @@\n"
+            "diff --git a/deleted.py b/deleted.py\n--- a/deleted.py\n+++ /dev/null\n@@ -7,2 +0,0 @@\n"
+        )
+        self.assertEqual(diff["deleted.py"]["before"], [(7, 8)])
+        self.assertNotIn((7, 8), diff["first.py"]["before"])
+
+    def test_report_writes_use_unique_temporary_files(self) -> None:
+        report_path = self.root / "concurrent" / "validation.json"
+        barrier = threading.Barrier(2)
+        failures: list[BaseException] = []
+        original_write_text = Path.write_text
+
+        def synchronized_write(path: Path, *args: object, **kwargs: object) -> int:
+            written = original_write_text(path, *args, **kwargs)
+            if path.parent == report_path.parent and path != report_path:
+                barrier.wait(timeout=2)
+            return written
+
+        def write(value: int) -> None:
+            try:
+                _write_report(report_path, {"value": value})
+            except BaseException as error:
+                failures.append(error)
+
+        with mock.patch.object(Path, "write_text", synchronized_write):
+            threads = [threading.Thread(target=write, args=(value,)) for value in (1, 2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=3)
+        self.assertFalse(failures)
+        self.assertIn(json.loads(report_path.read_text(encoding="utf-8"))["value"], {1, 2})
+
+    def test_bug_marker_contract_requires_left_arrow(self) -> None:
+        contract = (SKILL_ROOT / "references" / "output-contract.md").read_text(encoding="utf-8")
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        evals = (SKILL_ROOT / "evals" / "evals.json").read_text(encoding="utf-8")
+        for content in (contract, skill, evals):
+            self.assertIn("← BUG:", content)
+
     def test_proposed_behavior_without_issue_evidence_is_rejected(self) -> None:
         document, manifest = issue_fixture(self.head)
         for item in manifest["nodes"] + manifest["edges"]:
@@ -227,7 +360,7 @@ class DiagramValidatorTests(unittest.TestCase):
         self.assertIn("@11.16.0", render["message"])
 
     def validate(
-        self, document: str, manifest: dict[str, object], environment: dict[str, str] | None = None
+        self, document: str, manifest: object, environment: dict[str, str] | None = None
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
         case = self.root / f"case-{len(list(self.root.glob('case-*')))}"
         case.mkdir()
@@ -242,6 +375,37 @@ class DiagramValidatorTests(unittest.TestCase):
             text=True, capture_output=True, check=False, env=environment or self.env,
         )
         return result, json.loads(report_path.read_text(encoding="utf-8"))
+
+    def _assert_non_code_call_is_rejected(self, body: str, path: str) -> None:
+        (self.repo / path).write_text(f"def fake():\n    {body}\n", encoding="utf-8")
+        self._run("git", "add", path)
+        self._run("git", "commit", "-q", "-m", f"add {path}")
+        revision = self._run("git", "rev-parse", "HEAD").stdout.strip()
+        states = [{"id": "current", "label": "Current", "revision": revision, "proposed": False}]
+        nodes = [
+            node("fake", "fake", ["current"], [
+                {"type": "source", "state": "current", "revision": revision, "path": path,
+                 "line_start": 1, "line_end": 2, "symbol": "fake", "tokens": ["fake", "load()"]}
+            ]),
+            node("load", "load", ["current"], [source_evidence("current", revision, "load", 8, 9, "def load")]),
+        ]
+        edges = [edge("fake_load", "load", "fake", "load", ["current"], [
+            {"type": "source", "state": "current", "revision": revision, "path": path,
+             "line_start": 1, "line_end": 2, "symbol": "fake", "tokens": ["load()"]}
+        ])]
+        document = diagrams(
+            [("current", "Current")],
+            {"current": [f"  fake (Module · {path}:1) — entry", "    └─ load (Module · app.py:8) — result"]},
+            {"current": [("fake_load", "fake", "load", "load")]},
+            {"current": [("fake", "fake"), ("load", "load")]},
+        )
+        data = manifest(
+            {"kind": "overview", "change_kind": "none", "sources": {"repository": "local"}},
+            states, nodes, edges,
+        )
+        result, report = self.validate(document, data)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "source.evidence")
 
     def assert_check_failed(self, report: dict[str, object], name: str) -> None:
         checks = {value["name"]: value for value in report["checks"]}

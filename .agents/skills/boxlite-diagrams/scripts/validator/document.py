@@ -51,7 +51,7 @@ def validate_document(ctx: ValidationContext) -> None:
     for line_number, line in enumerate(lines, start=1):
         if fence is not None:
             language, start_line, content = fence
-            if line == "```":
+            if line.rstrip() == "```":
                 if current_view is None or current_state is None or current_label is None:
                     errors.append(f"line {start_line}: fenced block is outside a view/state section")
                 else:

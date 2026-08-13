@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from collections import defaultdict
@@ -80,7 +81,13 @@ def _load_diff(ctx: ValidationContext, errors: list[str]) -> dict[str, dict[str,
     command = ["git", "diff", "--unified=0", "--no-ext-diff", base]
     if head != "WORKTREE":
         command.append(head)
-    result = subprocess.run(command, cwd=ctx.repo, text=True, capture_output=True, check=False)
+    try:
+        result = subprocess.run(
+            command, cwd=ctx.repo, text=True, capture_output=True, check=False, timeout=_command_timeout()
+        )
+    except subprocess.TimeoutExpired:
+        errors.append(f"diff command exceeded {_command_timeout():g} seconds")
+        return None
     if result.returncode != 0:
         errors.append(f"cannot resolve diff {base}..{head}: {result.stderr.strip()}")
         return None
@@ -91,6 +98,9 @@ def _parse_diff(text: str) -> dict[str, dict[str, list[tuple[int, int]]]]:
     ranges: dict[str, dict[str, list[tuple[int, int]]]] = defaultdict(lambda: {"before": [], "after": []})
     path: str | None = None
     for line in text.splitlines():
+        if line.startswith("diff --git "):
+            path = None
+            continue
         if line.startswith("+++ b/"):
             path = line[6:]
             continue
@@ -155,3 +165,12 @@ def _validate_annotation_hunk(
 
 def _intersects(left_start: int, left_end: int, right_start: int, right_end: int) -> bool:
     return left_start <= right_end and right_start <= left_end
+
+
+def _command_timeout() -> float:
+    raw = os.environ.get("BOXLITE_DIAGRAM_COMMAND_TIMEOUT", "120")
+    try:
+        value = float(raw)
+    except ValueError:
+        return 120.0
+    return value if value > 0 else 120.0

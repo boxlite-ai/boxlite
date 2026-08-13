@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Sequence
 
@@ -48,12 +50,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest=manifest,
     )
     validate_manifest(ctx)
-    validate_document(ctx)
-    validate_source_evidence(ctx)
-    validate_mermaid(ctx)
-    validate_call_graph(ctx)
-    validate_changes(ctx)
-    validate_consistency(ctx)
+    if not any(check.name == "manifest.shape" and check.status == "fail" for check in ctx.checks):
+        validate_document(ctx)
+        validate_source_evidence(ctx)
+        validate_mermaid(ctx)
+        validate_call_graph(ctx)
+        validate_changes(ctx)
+        validate_consistency(ctx)
     exit_code = 2 if ctx.has_tool_errors else (1 if ctx.has_failures else 0)
     summary = {status: sum(check.status == status for check in ctx.checks) for status in ("pass", "fail", "error")}
     report = {
@@ -69,9 +72,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _write_report(path: Path, report: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 if __name__ == "__main__":

@@ -59,7 +59,7 @@ Rules:
 - a child uses `└─` or `├─` after its indentation;
 - the displayed line must be inside the matching manifest evidence range;
 - indentation creates a caller-to-callee edge that must exist in the manifest;
-- `BUG:` belongs on a faulty `Before`/`Current` hop, never on a standalone line;
+- `← BUG: <description>` belongs on a faulty `Before`/`Current` hop, never on a standalone line;
 - future behavior has no invented hop—annotate the last real boundary instead.
 
 ## Evidence types
