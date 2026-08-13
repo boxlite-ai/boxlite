@@ -207,7 +207,7 @@ Api-only change need not rebuild the Runner. Its ref-independent scaffolding
 exclusion covers `sst.config.ts` as well as the SST command line — the
 `UpgradeRunnerBinary-*` commands are siblings of the Runner instance rather
 than children, so `--exclude Runner` alone would leave them firing against an
-artifact the skipped build never published. `apps/infra/scripts/deployment-scope.mjs`
+artifact the skipped build never published. `apps/infra/deployment/capabilities.json`
 is the allowlist for both halves. A narrowed deploy leaves the excluded leg on
 whatever commit an earlier run put there, so the stack is then mixed-commit.
 
@@ -253,7 +253,7 @@ Required Environment configuration (per stage):
 
 Bootstrap the scoped role, runtime permissions boundary, immutable API ECR
 repository, and private Runner artifact bucket with
-`apps/infra/ci/github-deploy-role.yaml`. Redeploy that CloudFormation stack when
+`apps/infra/bootstrap/aws/github-deploy-role.yaml`. Redeploy that CloudFormation stack when
 its policy/resources change, then require reviewers before enabling deployments.
 
 ### `e2e-local.yml`

@@ -106,7 +106,7 @@ jobs:
 
       - name: Verify deploy role IAM boundary permissions
         working-directory: apps/infra
-        run: node scripts/verify-deploy-role-boundary.mjs
+        run: npm run --silent verify-deploy-role
 
       - name: Materialize stage configuration
         shell: bash
@@ -117,11 +117,11 @@ jobs:
           test -n "$DEPLOY_ENV"
           umask 077
           printf '%s\n' "$DEPLOY_ENV" > apps/infra/.env
-          node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env
+          npm --prefix apps/infra run --silent validate-environment -- .env
 
       - name: Deploy published API and Runner artifacts
         working-directory: apps/infra
-        run: npm run deploy -- --stage "$STAGE" --policy .
+        run: npm run deploy -- --stage "$STAGE" --policy policies/runner
 
       - name: Remove materialized configuration
         if: always()

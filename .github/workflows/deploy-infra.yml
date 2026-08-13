@@ -13,7 +13,7 @@ run-name: Deploy ${{ inputs.components }} to ${{ inputs.stage }}
 #
 # `components` narrows both halves at once: an unselected leg is neither built nor deployed. It
 # drops the build jobs here and becomes `--exclude <Component>` on the SST commands below, which
-# apps/infra/scripts/deployment-scope.mjs accepts as one of exactly two reviewed partial shapes.
+# apps/infra/deployment/scope.ts accepts as one of exactly two reviewed partial shapes.
 # Never `--target`: PR #1095 stalled this stack mid-provider-migration that way, because a targeted
 # update omits the shared resources it still depends on. `--exclude` keeps them in the plan.
 
@@ -275,24 +275,24 @@ jobs:
       # Runs before the AWS credential step on purpose: an unsupported scope is knowable from the
       # checkout alone, so it should never reach the deploy role.
       #
-      # Probes the export rather than grepping for it: the capability is what matters, and the
-      # module is pure, so importing it costs nothing.
-      #
-      # Absence is checked before the probe, not inferred from an import failure. The module only
-      # exists from PR #1095 onward, so a `ref` older than that has no such file — the ordinary
-      # "too old" case, sharing a remedy with a module that lacks the export. Folding it into the
-      # load-failure arm instead would answer "the module is present but unreadable" for a file
-      # that is simply not there.
+      # New trees declare capabilities as data. Historical trees fall back to the original pure
+      # module probe so supported commits remain deployable without teaching them the new layout.
       - name: Require component selection support in the selected commit
         if: ${{ env.DEPLOY_EXCLUDE != '' }}
         shell: bash
         run: |
           set -euo pipefail
-          module=apps/infra/scripts/deployment-scope.mjs
-          if [ ! -f "$module" ]; then
-            status=unsupported
+          capability=apps/infra/deployment/capabilities.json
+          legacy_module=apps/infra/scripts/deployment-scope.mjs
+          if [ -f "$capability" ]; then
+            status=$(node -e "const fs=require('node:fs'); const c=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); console.log(c.version === 1 && c.componentSelection === true ? 'supported' : 'unsupported')" "$capability")
+            source_path=$capability
+          elif [ -f "$legacy_module" ]; then
+            status=$(node -e "import('./$legacy_module').then(m => console.log(typeof m.resolveDeployScope === 'function' ? 'supported' : 'unsupported')).catch(e => { console.log('unreadable'); console.error(e.message) })")
+            source_path=$legacy_module
           else
-            status=$(node -e "import('./$module').then(m => console.log(typeof m.resolveDeployScope === 'function' ? 'supported' : 'unsupported')).catch(e => { console.log('unreadable'); console.error(e.message) })")
+            status=unsupported
+            source_path=$capability
           fi
           case "$status" in
             supported) ;;
@@ -300,11 +300,11 @@ jobs:
               echo "commit $BOXLITE_ARTIFACT_REF predates component selection, so it cannot honour" >&2
               echo "--exclude $DEPLOY_EXCLUDE and would deploy the full stack instead." >&2
               echo "Redispatch with components=api+runner, or name a newer ref: this needs a commit" >&2
-              echo "whose $module exports resolveDeployScope." >&2
+              echo "whose $source_path declares component selection support." >&2
               exit 1
               ;;
             *)
-              echo "$module exists at commit $BOXLITE_ARTIFACT_REF but failed to load (reason" >&2
+              echo "$source_path exists at commit $BOXLITE_ARTIFACT_REF but failed to load (reason" >&2
               echo "above). That is not an age problem, so fix the module rather than widening" >&2
               echo "the scope to api+runner." >&2
               exit 1
@@ -353,7 +353,7 @@ jobs:
           test -f "dist/runner/$archive"
           test -f "dist/runner/$archive.sha256"
           if ! aws s3api head-bucket --bucket "$bucket" >/dev/null 2>&1; then
-            echo "artifact bucket $bucket is missing; bootstrap $STAGE from apps/infra/ci/github-deploy-role.yaml first" >&2
+            echo "artifact bucket $bucket is missing; bootstrap $STAGE from apps/infra/bootstrap/aws/github-deploy-role.yaml first" >&2
             exit 1
           fi
           # Write-once: the Pulumi trigger and the host's health-route comparison treat
@@ -361,7 +361,7 @@ jobs:
           # already-installed hosts on the old build. S3 returns 412 rather than overwriting.
           #
           # Decided over the ref as a whole, never per key — the same rule
-          # apps/infra/scripts/runner-artifact-build.mjs applies locally. A fully published ref is
+          # apps/infra/artifacts/runner-build.ts applies locally. A fully published ref is
           # the desired end state. A half-published one is not completed here: the rebuild is not
           # byte-identical (tar czf alone stamps a gzip mtime), so writing the absent manifest
           # would describe bytes that are not the ones stored, and write-once then makes that
@@ -402,7 +402,7 @@ jobs:
 
       - name: Verify deploy role IAM boundary permissions
         working-directory: apps/infra
-        run: node scripts/verify-deploy-role-boundary.mjs
+        run: npm run --silent verify-deploy-role
 
       - name: Materialize stage configuration
         shell: bash
@@ -413,7 +413,7 @@ jobs:
           test -n "$DEPLOY_ENV"
           umask 077
           printf '%s\n' "$DEPLOY_ENV" > apps/infra/.env
-          node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env
+          npm --prefix apps/infra run --silent validate-environment -- .env
 
       - name: Install SST providers
         working-directory: apps/infra
@@ -423,7 +423,7 @@ jobs:
       # an OAuth token carrying dns_records:edit, but it expires in about an
       # hour and is renewed through a browser, which this unattended job has
       # no way to complete. Supplying them as Environment secrets is optional:
-      # scripts/sst-with-cloudflare.mjs prefers an already-set env var and
+      # deployment/sst.ts prefers an already-set env var and
       # otherwise reads SSM, so a stage seeded via SSM keeps working with
       # these unset.
       - name: Preview the selected components
@@ -438,11 +438,11 @@ jobs:
           # SST would read as a component name. The fixed arguments seed it because expanding an
           # EMPTY array under `set -u` is an unbound-variable error before bash 4.4 — seeded, it
           # is never empty, so the line does not depend on the runner image's bash version.
-          args=(diff --stage "$STAGE" --policy .)
+          args=(diff --stage "$STAGE" --policy policies/runner)
           [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
           args+=(--json)
           npm run --silent sst -- "${args[@]}" |
-            node scripts/deployment-preview.mjs
+            npm run --silent validate-preview
 
       - name: Deploy the selected components
         if: ${{ inputs.apply }}
@@ -454,7 +454,7 @@ jobs:
         run: |
           set -euo pipefail
           # Seeded for the same reason as the preview above: an empty array must never be expanded.
-          args=(--stage "$STAGE" --policy .)
+          args=(--stage "$STAGE" --policy policies/runner)
           [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
           npm run deploy -- "${args[@]}"
 

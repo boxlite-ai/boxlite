@@ -3,24 +3,30 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "main": "policies/runner/index.js",
   "scripts": {
-    "deploy": "node scripts/sst-with-cloudflare.mjs deploy",
-    "remove": "node scripts/sst-with-cloudflare.mjs remove",
-    "test": "node --test scripts/*.test.mjs",
-    "sst": "node scripts/sst-with-cloudflare.mjs",
-    "secrets": "node scripts/sst-with-cloudflare.mjs secret list",
-    "runner:update": "node scripts/runner-update-binary.mjs",
-    "login": "node scripts/login.mjs",
-    "bootstrap": "node scripts/bootstrap-environment.mjs",
-    "verify-deploy-role": "node scripts/verify-deploy-role-boundary.mjs",
-    "runner:build-artifact": "node scripts/runner-artifact-build.mjs"
+    "deploy": "tsx deployment/sst.ts deploy",
+    "remove": "tsx deployment/sst.ts remove",
+    "test": "tsx --test artifacts/*.test.ts bootstrap/*.test.ts deployment/*.test.ts policies/runner/*.test.ts runner/*.test.ts runner/model/*.test.ts shared/*.test.ts stack/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "sst": "tsx deployment/sst.ts",
+    "secrets": "tsx deployment/sst.ts secret list",
+    "runner:update": "tsx runner/update.ts",
+    "login": "tsx bootstrap/login.ts",
+    "bootstrap": "tsx bootstrap/bootstrap.ts",
+    "verify-deploy-role": "tsx deployment/verify-role.ts",
+    "validate-environment": "tsx deployment/validate-environment.ts",
+    "validate-preview": "tsx deployment/preview.ts",
+    "runner:build-artifact": "tsx artifacts/runner-build.ts"
   },
   "devDependencies": {
+    "@types/node": "^22.13.4",
     "@pulumi/aws": "^7.24.0",
     "@pulumi/policy": "1.21.0",
     "js-yaml": "^4.1.0",
-    "sst": "^4.6.11"
+    "sst": "^4.6.11",
+    "ts-node": "10.9.1",
+    "tsx": "^4.20.5",
+    "typescript": "5.8.3"
   },
   "dependencies": {
     "@pulumi/random": "^4.19.2",

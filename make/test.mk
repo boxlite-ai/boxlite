@@ -430,8 +430,7 @@ test\:apps\:infra: _ensure-infra-deps
 test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 	@echo "🧪 Installing and type-checking the SST deployment config..."
 	@cd apps/infra && IAM_PERMISSIONS_BOUNDARY_STAGE=ci npm run sst -- install --stage ci
-	@cd apps/infra && ../node_modules/.bin/tsc --noEmit --allowJs --checkJs false \
-		--module NodeNext --moduleResolution NodeNext --target ES2022 --skipLibCheck sst.config.ts
+	@cd apps/infra && npm run typecheck
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."

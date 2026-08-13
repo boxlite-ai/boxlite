@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "ts-node": {
+    "esm": true,
+    "experimentalResolver": true,
+    "transpileOnly": true
+  },
+  "include": [
+    "sst.config.ts",
+    "artifacts/**/*.ts",
+    "bootstrap/**/*.ts",
+    "deployment/**/*.ts",
+    "policies/**/*.ts",
+    "runner/**/*.ts",
+    "shared/**/*.ts",
+    "stack/**/*.ts"
+  ]
+}
