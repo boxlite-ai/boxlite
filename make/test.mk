@@ -1,4 +1,4 @@
-PHONY_TARGETS += test test\:unit\:guest test\:guest-perms _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
+PHONY_TARGETS += test test\:unit\:guest test\:guest-perms test\:guest-tools _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -279,6 +279,13 @@ test\:guest-perms:
 		echo "❌ Privileged ownership tests require root or passwordless sudo"; \
 		exit 1; \
 	fi
+
+# Build and qualify the statically linked e2fsprogs utilities. Native Linux
+# targets also create and resize an ext4 image; cross builds run ELF checks only.
+test\:guest-tools: export _BOXLITE_GUEST_TARGET_ARG := $(value GUEST_TARGET)
+test\:guest-tools: export _BOXLITE_PROFILE_ARG := $(value PROFILE)
+test\:guest-tools: guest-tools
+	@bash "$$PWD/scripts/test/test-guest-tools.sh" --target "$${_BOXLITE_GUEST_TARGET_ARG:-}" --profile "$${_BOXLITE_PROFILE_ARG:-release}"
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
 test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)

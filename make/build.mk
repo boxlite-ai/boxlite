@@ -1,7 +1,12 @@
-PHONY_TARGETS += guest shim runtime cli cli\:release skillbox-image build\:apps
+PHONY_TARGETS += guest guest-tools shim runtime cli cli\:release skillbox-image build\:apps
 
 guest:
 	@bash $(SCRIPT_DIR)/build/build-guest.sh
+
+guest-tools: export _BOXLITE_GUEST_TARGET_ARG := $(value GUEST_TARGET)
+guest-tools: export _BOXLITE_PROFILE_ARG := $(value PROFILE)
+guest-tools:
+	@bash "$$PWD/scripts/build/build-guest-deps.sh" --target "$${_BOXLITE_GUEST_TARGET_ARG:-}" --profile "$${_BOXLITE_PROFILE_ARG:-release}"
 
 shim:
 	@bash $(SCRIPT_DIR)/build/build-shim.sh
