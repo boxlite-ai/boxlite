@@ -106,7 +106,17 @@ jobs:
 
       - name: Verify deploy role IAM boundary permissions
         working-directory: apps/infra
-        run: npm run --silent verify-deploy-role
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node -e "const pkg = require('./package.json'); process.exit(pkg.scripts?.['verify-deploy-role'] ? 0 : 1)"; then
+            npm run --silent verify-deploy-role
+          elif [ -f scripts/verify-deploy-role-boundary.mjs ]; then
+            node scripts/verify-deploy-role-boundary.mjs
+          else
+            echo 'selected release has no supported deploy-role verifier' >&2
+            exit 1
+          fi
 
       - name: Materialize stage configuration
         shell: bash
