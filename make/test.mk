@@ -1,4 +1,4 @@
-PHONY_TARGETS += test test\:unit\:guest test\:guest-perms _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config
+PHONY_TARGETS += test test\:unit\:guest test\:guest-perms _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -83,6 +83,13 @@ endef
 # Default test target runs only changed components.
 test:
 	@$(MAKE) test:changed
+
+# Repo-local BoxLite diagram skill validator. This suite is deterministic: it
+# uses local stand-ins for gh and Mermaid CLI while exercising the real parser,
+# source, diff, and cross-view validation code.
+test\:skill\:boxlite-diagrams:
+	@echo "🧪 Running BoxLite diagrams skill validator tests..."
+	@python3 -m unittest discover -s .agents/skills/boxlite-diagrams/tests -v
 
 # Smart test: only test components with changes, fall back to full matrix.
 test\:changed:

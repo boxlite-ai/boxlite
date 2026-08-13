@@ -54,15 +54,19 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   async handleBoxDesiredStateUpdate(event: BoxDesiredStateUpdatedEvent) {
     const lease = await this.waitForLock(event.box.id)
 
-    await this.withLease(lease, async (signal) => {
-      signal.throwIfAborted()
-      switch (event.newDesiredState) {
-        case BoxDesiredState.DESTROYED: {
-          await this.closeUsagePeriod(event.box.id)
-          break
+    await this.withLease(
+      lease,
+      async (signal) => {
+        signal.throwIfAborted()
+        switch (event.newDesiredState) {
+          case BoxDesiredState.DESTROYED: {
+            await this.closeUsagePeriod(event.box.id)
+            break
+          }
         }
-      }
-    }, `box ${event.box.id}`)
+      },
+      `box ${event.box.id}`,
+    )
   }
 
   @OnEvent(BoxEvents.STATE_UPDATED)
@@ -70,51 +74,55 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   async handleBoxStateUpdate(event: BoxStateUpdatedEvent) {
     const lease = await this.waitForLock(event.box.id)
 
-    await this.withLease(lease, async (signal) => {
-      signal.throwIfAborted()
-      switch (event.newState) {
-        case BoxState.STARTED: {
-          await this.closeUsagePeriod(event.box.id)
-          signal.throwIfAborted()
-          await this.createUsagePeriod(event)
-          break
-        }
-        // Billing stops charging compute the moment a stop is requested, while
-        // quota keeps counting it (BOX_STATES_CONSUMING_COMPUTE includes
-        // STOPPING) because the runner has not released cpu/memory yet. The two
-        // answer different questions; do not "reconcile" them without a pricing
-        // decision.
-        case BoxState.STOPPING:
-          await this.closeUsagePeriod(event.box.id)
-          signal.throwIfAborted()
-          await this.createUsagePeriod(event, true)
-          break
-        // Safeguards if STOPPING state is skipped
-        case BoxState.STOPPED: {
-          const cpuUsagePeriod = await this.boxUsagePeriodRepository.findOne({
-            where: {
-              boxId: event.box.id,
-              endAt: IsNull(),
-              cpu: Not(0),
-            },
-          })
-          signal.throwIfAborted()
-          if (cpuUsagePeriod) {
+    await this.withLease(
+      lease,
+      async (signal) => {
+        signal.throwIfAborted()
+        switch (event.newState) {
+          case BoxState.STARTED: {
+            await this.closeUsagePeriod(event.box.id)
+            signal.throwIfAborted()
+            await this.createUsagePeriod(event)
+            break
+          }
+          // Billing stops charging compute the moment a stop is requested, while
+          // quota keeps counting it (BOX_STATES_CONSUMING_COMPUTE includes
+          // STOPPING) because the runner has not released cpu/memory yet. The two
+          // answer different questions; do not "reconcile" them without a pricing
+          // decision.
+          case BoxState.STOPPING:
             await this.closeUsagePeriod(event.box.id)
             signal.throwIfAborted()
             await this.createUsagePeriod(event, true)
+            break
+          // Safeguards if STOPPING state is skipped
+          case BoxState.STOPPED: {
+            const cpuUsagePeriod = await this.boxUsagePeriodRepository.findOne({
+              where: {
+                boxId: event.box.id,
+                endAt: IsNull(),
+                cpu: Not(0),
+              },
+            })
+            signal.throwIfAborted()
+            if (cpuUsagePeriod) {
+              await this.closeUsagePeriod(event.box.id)
+              signal.throwIfAborted()
+              await this.createUsagePeriod(event, true)
+            }
+            break
           }
-          break
+          case BoxState.ERROR:
+          case BoxState.ARCHIVED:
+          case BoxState.DESTROYING:
+          case BoxState.DESTROYED: {
+            await this.closeUsagePeriod(event.box.id)
+            break
+          }
         }
-        case BoxState.ERROR:
-        case BoxState.ARCHIVED:
-        case BoxState.DESTROYING:
-        case BoxState.DESTROYED: {
-          await this.closeUsagePeriod(event.box.id)
-          break
-        }
-      }
-    }, `box ${event.box.id}`)
+      },
+      `box ${event.box.id}`,
+    )
   }
 
   private async createUsagePeriod(event: BoxStateUpdatedEvent, diskOnly = false) {
@@ -163,64 +171,72 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
       return
     }
 
-    await this.withLease(lease, async (signal) => {
-      const usagePeriods = await this.boxUsagePeriodRepository.find({
-        where: {
-          endAt: IsNull(),
-          // 1 day ago
-          startAt: LessThan(new Date(Date.now() - 1000 * 60 * 60 * 24)),
-          organizationId: Not(BOX_WARM_POOL_UNASSIGNED_ORGANIZATION),
-        },
-        order: {
-          startAt: 'ASC',
-        },
-        take: 100,
-      })
-
-      for (const usagePeriod of usagePeriods) {
-        signal.throwIfAborted()
-        const boxLease = await this.acquireLease(usagePeriod.boxId)
-        if (!boxLease) {
-          continue
-        }
-
-        // validate that the usage period should remain active just in case
-        await this.withLease(boxLease, async (boxSignal) => {
-          const box = await this.boxRepository.findOne({
-            where: {
-              id: usagePeriod.boxId,
-            },
-          })
-
-          await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
-            boxSignal.throwIfAborted()
-            // Close usage period
-            const closeTime = new Date()
-            usagePeriod.endAt = closeTime
-            await transactionalEntityManager.save(usagePeriod)
-
-            if (
-              box &&
-              (box.state === BoxState.STARTED || box.state === BoxState.STOPPED || box.state === BoxState.STOPPING)
-            ) {
-              // Create new usage period
-              const newUsagePeriod = BoxUsagePeriod.fromUsagePeriod(usagePeriod)
-              newUsagePeriod.startAt = closeTime
-              newUsagePeriod.endAt = null
-              if (box.state === BoxState.STOPPED) {
-                newUsagePeriod.cpu = 0
-                newUsagePeriod.gpu = 0
-                newUsagePeriod.mem = 0
-              }
-              await transactionalEntityManager.save(newUsagePeriod)
-            }
-            boxSignal.throwIfAborted()
-          })
-        }, `usage period ${usagePeriod.boxId}`).catch((error) => {
-          this.logger.error(`Error closing and reopening usage period ${usagePeriod.boxId}`, error)
+    await this.withLease(
+      lease,
+      async (signal) => {
+        const usagePeriods = await this.boxUsagePeriodRepository.find({
+          where: {
+            endAt: IsNull(),
+            // 1 day ago
+            startAt: LessThan(new Date(Date.now() - 1000 * 60 * 60 * 24)),
+            organizationId: Not(BOX_WARM_POOL_UNASSIGNED_ORGANIZATION),
+          },
+          order: {
+            startAt: 'ASC',
+          },
+          take: 100,
         })
-      }
-    }, lockKey)
+
+        for (const usagePeriod of usagePeriods) {
+          signal.throwIfAborted()
+          const boxLease = await this.acquireLease(usagePeriod.boxId)
+          if (!boxLease) {
+            continue
+          }
+
+          // validate that the usage period should remain active just in case
+          await this.withLease(
+            boxLease,
+            async (boxSignal) => {
+              const box = await this.boxRepository.findOne({
+                where: {
+                  id: usagePeriod.boxId,
+                },
+              })
+
+              await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
+                boxSignal.throwIfAborted()
+                // Close usage period
+                const closeTime = new Date()
+                usagePeriod.endAt = closeTime
+                await transactionalEntityManager.save(usagePeriod)
+
+                if (
+                  box &&
+                  (box.state === BoxState.STARTED || box.state === BoxState.STOPPED || box.state === BoxState.STOPPING)
+                ) {
+                  // Create new usage period
+                  const newUsagePeriod = BoxUsagePeriod.fromUsagePeriod(usagePeriod)
+                  newUsagePeriod.startAt = closeTime
+                  newUsagePeriod.endAt = null
+                  if (box.state === BoxState.STOPPED) {
+                    newUsagePeriod.cpu = 0
+                    newUsagePeriod.gpu = 0
+                    newUsagePeriod.mem = 0
+                  }
+                  await transactionalEntityManager.save(newUsagePeriod)
+                }
+                boxSignal.throwIfAborted()
+              })
+            },
+            `usage period ${usagePeriod.boxId}`,
+          ).catch((error) => {
+            this.logger.error(`Error closing and reopening usage period ${usagePeriod.boxId}`, error)
+          })
+        }
+      },
+      lockKey,
+    )
   }
 
   @Cron(CronExpression.EVERY_MINUTE, { name: 'archive-usage-periods' })
@@ -234,36 +250,40 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
       return
     }
 
-    await this.withLease(lease, async (signal) => {
-      await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
-        signal.throwIfAborted()
-        const usagePeriods = await transactionalEntityManager.find(BoxUsagePeriod, {
-          where: {
-            endAt: Not(IsNull()),
-          },
-          order: {
-            startAt: 'ASC',
-          },
-          take: 1000,
+    await this.withLease(
+      lease,
+      async (signal) => {
+        await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
+          signal.throwIfAborted()
+          const usagePeriods = await transactionalEntityManager.find(BoxUsagePeriod, {
+            where: {
+              endAt: Not(IsNull()),
+            },
+            order: {
+              startAt: 'ASC',
+            },
+            take: 1000,
+          })
+
+          if (usagePeriods.length === 0) {
+            return
+          }
+
+          this.logger.debug(`Found ${usagePeriods.length} usage periods to archive`)
+
+          await transactionalEntityManager.delete(
+            BoxUsagePeriod,
+            usagePeriods.map((usagePeriod) => usagePeriod.id),
+          )
+          await transactionalEntityManager.save(usagePeriods.map(BoxUsagePeriodArchive.fromUsagePeriod))
+          // Same transaction as the archive write, so a usage period can never be
+          // archived without an export intent, nor an intent survive a rollback.
+          await this.usageExportOutboxService.enqueue(transactionalEntityManager, usagePeriods)
+          signal.throwIfAborted()
         })
-
-        if (usagePeriods.length === 0) {
-          return
-        }
-
-        this.logger.debug(`Found ${usagePeriods.length} usage periods to archive`)
-
-        await transactionalEntityManager.delete(
-          BoxUsagePeriod,
-          usagePeriods.map((usagePeriod) => usagePeriod.id),
-        )
-        await transactionalEntityManager.save(usagePeriods.map(BoxUsagePeriodArchive.fromUsagePeriod))
-        // Same transaction as the archive write, so a usage period can never be
-        // archived without an export intent, nor an intent survive a rollback.
-        await this.usageExportOutboxService.enqueue(transactionalEntityManager, usagePeriods)
-        signal.throwIfAborted()
-      })
-    }, lockKey)
+      },
+      lockKey,
+    )
   }
 
   private async waitForLock(boxId: string): Promise<RedisLockLease> {

@@ -193,10 +193,8 @@ export class BoxService {
 
     box.pending = true
 
-    return this.persistWithRunnerAssignmentFence(
-      box,
-      { regions: [box.region], boxClass: box.class },
-      () => this.boxRepository.insert(box),
+    return this.persistWithRunnerAssignmentFence(box, { regions: [box.region], boxClass: box.class }, () =>
+      this.boxRepository.insert(box),
     )
   }
 
@@ -307,16 +305,13 @@ export class BoxService {
       // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),
       // falling back to "cozy-otter-{boxId}" if it collides with the per-org
       // @Unique(['organizationId', 'name']) constraint.
-      const insertedBox = await this.persistWithRunnerAssignmentFence(
-        box,
-        { regions: [region.id], boxClass },
-        () =>
-          createBoxDto.name
-            ? this.boxRepository.insert(box)
-            : persistWithGeneratedBoxName(box.id, (name) => {
-                box.name = name
-                return this.boxRepository.insert(box)
-              }),
+      const insertedBox = await this.persistWithRunnerAssignmentFence(box, { regions: [region.id], boxClass }, () =>
+        createBoxDto.name
+          ? this.boxRepository.insert(box)
+          : persistWithGeneratedBoxName(box.id, (name) => {
+              box.name = name
+              return this.boxRepository.insert(box)
+            }),
       )
 
       this.eventEmitter

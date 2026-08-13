@@ -105,6 +105,13 @@ test('uses the shared AWS region resolver and waits for the critical API service
   assert.match(apiService, /wait: true,/)
 })
 
+test('passes an explicitly configured box migration archive prefix to the API', () => {
+  assert.match(
+    liveConfig,
+    /process\.env\.BOX_MIGRATION_ARCHIVE_PREFIX[\s\S]*BOX_MIGRATION_ARCHIVE_PREFIX:\s*process\.env\.BOX_MIGRATION_ARCHIVE_PREFIX/,
+  )
+})
+
 test('uses the canonical deployment config for every Proxy-facing SST value', () => {
   const runSource = configSection('async run()', '// ── runner bootstrap')
 
