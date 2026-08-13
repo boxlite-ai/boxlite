@@ -275,24 +275,26 @@ jobs:
       # Runs before the AWS credential step on purpose: an unsupported scope is knowable from the
       # checkout alone, so it should never reach the deploy role.
       #
-      # Probes the export rather than grepping for it: the capability is what matters, and the
-      # module is pure, so importing it costs nothing.
-      #
-      # Absence is checked before the probe, not inferred from an import failure. The module only
-      # exists from PR #1095 onward, so a `ref` older than that has no such file — the ordinary
-      # "too old" case, sharing a remedy with a module that lacks the export. Folding it into the
-      # load-failure arm instead would answer "the module is present but unreadable" for a file
-      # that is simply not there.
+      # New trees declare capabilities as data. Historical trees fall back to the original pure
+      # module probe so supported commits remain deployable without teaching them the new layout.
       - name: Require component selection support in the selected commit
         if: ${{ env.DEPLOY_EXCLUDE != '' }}
         shell: bash
         run: |
           set -euo pipefail
-          module=apps/infra/scripts/deployment-scope.mjs
-          if [ ! -f "$module" ]; then
-            status=unsupported
+          capability=apps/infra/deployment/capabilities.json
+          legacy_module=apps/infra/scripts/deployment-scope.mjs
+          if [ -f "$capability" ]; then
+            if ! status=$(node -e "const fs=require('node:fs'); const c=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); console.log(c.version === 1 && c.componentSelection === true ? 'supported' : 'unsupported')" "$capability"); then
+              status=unreadable
+            fi
+            source_path=$capability
+          elif [ -f "$legacy_module" ]; then
+            status=$(node -e "import('./$legacy_module').then(m => console.log(typeof m.resolveDeployScope === 'function' ? 'supported' : 'unsupported')).catch(e => { console.log('unreadable'); console.error(e.message) })")
+            source_path=$legacy_module
           else
-            status=$(node -e "import('./$module').then(m => console.log(typeof m.resolveDeployScope === 'function' ? 'supported' : 'unsupported')).catch(e => { console.log('unreadable'); console.error(e.message) })")
+            status=unsupported
+            source_path=$capability
           fi
           case "$status" in
             supported) ;;
@@ -300,11 +302,11 @@ jobs:
               echo "commit $BOXLITE_ARTIFACT_REF predates component selection, so it cannot honour" >&2
               echo "--exclude $DEPLOY_EXCLUDE and would deploy the full stack instead." >&2
               echo "Redispatch with components=api+runner, or name a newer ref: this needs a commit" >&2
-              echo "whose $module exports resolveDeployScope." >&2
+              echo "whose $source_path declares component selection support." >&2
               exit 1
               ;;
             *)
-              echo "$module exists at commit $BOXLITE_ARTIFACT_REF but failed to load (reason" >&2
+              echo "$source_path exists at commit $BOXLITE_ARTIFACT_REF but failed to load (reason" >&2
               echo "above). That is not an age problem, so fix the module rather than widening" >&2
               echo "the scope to api+runner." >&2
               exit 1

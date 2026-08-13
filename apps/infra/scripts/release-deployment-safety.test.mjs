@@ -353,13 +353,17 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   )
   assert.ok(scopeSupportStep, 'the component-selection capability check is missing')
   assert.equal(scopeSupportStep.if, "${{ env.DEPLOY_EXCLUDE != '' }}", 'the check must run only for a narrowed scope')
-  // Probing the export, not grepping for it: a checkout can carry the identifier in a comment.
+  // Current commits use versioned data; historical commits retain the executable capability
+  // probe. Both paths inspect behavior rather than grepping source comments.
+  assertShellLine(scopeSupportStep.run, /capability=apps\/infra\/deployment\/capabilities\.json/)
+  assertShellLine(scopeSupportStep.run, /if \[ -f "\$capability" \]; then/)
+  assertShellLine(scopeSupportStep.run, /if ! status=\$\(node -e .* "\$capability"\); then/)
+  assertShellLine(scopeSupportStep.run, /status=unreadable/)
+  assertShellLine(scopeSupportStep.run, /c\.version === 1 && c\.componentSelection === true/)
+  assertShellLine(scopeSupportStep.run, /elif \[ -f "\$legacy_module" \]; then/)
   assertShellLine(scopeSupportStep.run, /typeof m\.resolveDeployScope === 'function'/)
-  // Absence is its own decision, taken before the probe. The module only exists from PR #1095
-  // onward, so most open pull-request heads do not have it at all — inferring that from an import
-  // failure lands them in the load-failure arm, which answers "present but failed to load" about
-  // a file that is not there and points at the wrong remedy.
-  assertShellLine(scopeSupportStep.run, /if \[ ! -f "\$module" \]; then/)
+  // Absence of both formats is its own decision, not an import failure.
+  assertShellLine(scopeSupportStep.run, /else\s+status=unsupported/)
   assertShellLine(scopeSupportStep.run, /status=unsupported/)
   // Each arm, and the claim that distinguishes it. Pinning only the `if` leaves an arm free to
   // carry another arm's message, which a passing suite would not notice: the arms differ solely
