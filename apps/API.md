@@ -21,7 +21,7 @@ The inventory is implementation-grounded:
 `openapi/box.openapi.yaml` also describes portable capabilities that the hosted
 service does not currently register, including snapshots, clone, export,
 import, images, and runtime-wide metrics. They are intentionally absent below;
-`GET /api/v1/config` reports those optional capabilities as disabled.
+`GET /api/v1/config` reports snapshots, clone, export, and import as disabled.
 
 ## Control-plane API
 
@@ -219,8 +219,9 @@ user, organization, runner, or admin credentials.
 Most resource paths accept both an unprefixed form and an organization-prefixed
 form. The tables write that as `[/{prefix}]`; clients can discover their prefix
 through `GET /api/v1/me`. Except for configuration discovery, these routes use
-the same combined bearer authentication and organization authorization as the
-hosted control plane.
+combined bearer authentication. The box and volume resource routes also apply
+organization authorization; identity discovery at `GET /api/v1/me` can return
+`path_prefix: null` for an authenticated user with no organization membership.
 
 ### Discovery
 
