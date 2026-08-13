@@ -35,9 +35,9 @@ const HEALTH_DEFAULTS = {
 } as const
 
 export function envOr(key: string, fallback: string): string
-export function envOr<T>(key: string, fallback: T): T
-export function envOr<T>(key: string, fallback: T): T {
-  return (process.env[key] || fallback) as T
+export function envOr<T>(key: string, fallback: T): string | T
+export function envOr<T>(key: string, fallback: T): string | T {
+  return process.env[key] || fallback
 }
 
 export const httpHealth = (path: string, overrides: Partial<{ successCodes: string }> = {}) => ({

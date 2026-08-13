@@ -23,7 +23,7 @@ test('rejects duplicate stage options instead of guessing which one SST will use
 })
 
 test('rejects unsafe CLI and environment stage values', () => {
-  for (const stage of ['dev/production', ' dev', 'dev ', '--production', '']) {
+  for (const stage of ['dev/production', ' dev', 'dev ', '--production', 'Feature', 'feature_42-test', 'a'.repeat(29), '']) {
     if (stage === '') {
       assert.throws(() => resolveSstStage(['deploy', '--stage='], {}), /--stage requires a value/)
       continue
@@ -32,7 +32,7 @@ test('rejects unsafe CLI and environment stage values', () => {
   }
 
   assert.throws(() => resolveSstStage(['deploy'], { SST_STAGE: 'dev/production' }), /invalid SST stage/)
-  assert.equal(resolveSstStage(['deploy', '--stage', 'feature_42-test'], {}), 'feature_42-test')
+  assert.equal(resolveSstStage(['deploy', '--stage', `feature-${'a'.repeat(20)}`], {}), `feature-${'a'.repeat(20)}`)
 })
 
 test('requires an explicit stage for state-changing stack commands', () => {

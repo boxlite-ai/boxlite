@@ -45,7 +45,7 @@ const FORBIDDEN_DEPLOYMENT_KEYS = new Set([
   'SST_BIN_PATH',
 ])
 
-export function validateDeployEnvironment(source: any) {
+export function validateDeployEnvironment(source: string) {
   for (const [index, rawLine] of source.split(/\r?\n/).entries()) {
     const line = rawLine.trim()
     if (line === '' || line.startsWith('#')) continue
@@ -65,7 +65,7 @@ export function validateDeployEnvironment(source: any) {
   }
 }
 
-async function main(args: any) {
+async function main(args: string[]) {
   if (args.length !== 1) throw new Error('expected exactly one DEPLOY_ENV file path')
   validateDeployEnvironment(await readFile(args[0], 'utf8'))
 }

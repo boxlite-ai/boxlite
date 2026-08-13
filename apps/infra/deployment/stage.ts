@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-const SST_STAGE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
+// The fixed `boxlite-app-<stage>-artifacts-<account>` bucket is the strictest
+// generated AWS name: its 35 non-stage characters leave 28 of S3's 63.
+const SST_STAGE_PATTERN = /^[a-z0-9][a-z0-9-]{0,27}$/
 
 function validateSstStage(stage: any) {
   if (!SST_STAGE_PATTERN.test(stage)) {
-    throw new Error(`invalid SST stage '${stage}' (expected letters, numbers, underscores, or hyphens)`)
+    throw new Error(`invalid SST stage '${stage}' (expected 1-28 lowercase letters, numbers, or hyphens)`)
   }
   return stage
 }

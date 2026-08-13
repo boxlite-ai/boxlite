@@ -45,7 +45,7 @@ const load = (source: string, options?: LoadOptions): any => loadYaml(source, op
 const values = (record: any): any[] => Object.values(record ?? {})
 const entries = (record: any): Array<[string, any]> => Object.entries(record ?? {})
 
-// One decision per artifact kind, made where the text is read (see live-source.mjs).
+// One decision per artifact kind, made where the text is read (see shared/live-source.ts).
 const liveShell = (run: string) => liveText('shell', run)
 const assertShellLine = (run: string, pattern: RegExp, message?: string) =>
   assert.match(liveShell(run), pattern, message ?? `missing live shell: ${pattern}`)
@@ -426,7 +426,7 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
 
   // Staging decides over the ref, not per key: completing a half-published ref would pair a
   // freshly built (non-byte-identical) manifest with the already-stored tarball, and write-once
-  // makes that unrepairable. runner-artifact-build.mjs refuses the same case locally.
+  // makes that unrepairable. artifacts/runner-build.ts refuses the same case locally.
   const stageStep = workflow.jobs.deploy.steps.find((step: any) => step.name === 'Stage commit Runner artifact')
   assert.ok(stageStep, 'the artifact staging step is missing')
   assertShellLine(stageStep.run, /if \[ "\$present" -eq 2 \]; then/)

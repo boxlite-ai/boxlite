@@ -36,6 +36,8 @@ if (!API_URL || !ADMIN_API_KEY) {
 
 const base = API_URL.replace(/\/+$/, '')
 const sleep = (ms: any) => new Promise((resolve) => setTimeout(resolve, ms))
+const REQUEST_TIMEOUT_MS = 10_000
+const isRetryableStatus = (status: number) => status === 429 || status >= 500
 
 // Wait for the API to start serving. /api/health returns 200 only after the
 // HTTP server is listening, which (in onApplicationBootstrap) is after the
@@ -44,7 +46,7 @@ const sleep = (ms: any) => new Promise((resolve) => setTimeout(resolve, ms))
 async function waitForApi() {
   for (let attempt = 1; attempt <= 60; attempt++) {
     try {
-      const res = await fetch(`${base}/api/health`)
+      const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
       if (res.ok) return
     } catch {
       // not up yet
@@ -55,7 +57,7 @@ async function waitForApi() {
 }
 
 async function register({ name, apiKey }: any) {
-  // 201 = created, 409 = already exists (idempotent). A 5xx or a network error is
+  // 201 = created, 409 = already exists (idempotent). A 429, 5xx, or network error is
   // transient — the API passed /api/health but a single request can still blip — so
   // retry with backoff before failing the deploy. A 4xx (bad payload / auth) is a real
   // client error and fails immediately; no retry would help.
@@ -65,6 +67,7 @@ async function register({ name, apiKey }: any) {
     try {
       res = await fetch(`${base}/api/admin/runners`, {
         method: 'POST',
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         headers: {
           'content-type': 'application/json',
           authorization: `Bearer ${ADMIN_API_KEY}`,
@@ -86,7 +89,7 @@ async function register({ name, apiKey }: any) {
       return
     }
     const body = await res.text().catch(() => '')
-    if (res.status >= 500 && attempt < maxAttempts) {
+    if (isRetryableStatus(res.status) && attempt < maxAttempts) {
       console.warn(`register-runners: ${name} attempt ${attempt} got ${res.status}; retrying`)
       await sleep(attempt * 2000)
       continue

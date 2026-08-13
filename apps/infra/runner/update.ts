@@ -434,7 +434,7 @@ export function waitForTerminalStatus(invocation: any, instanceId: any, { run = 
     } else {
       lastFailure = stderr || '(no stderr)'
     }
-    sleep(SSM_POLL_INTERVAL_SECONDS)
+    if (attempt < SSM_COMPLETION_ATTEMPTS) sleep(SSM_POLL_INTERVAL_SECONDS)
   }
   const why = lastFailure ? `last polling error: ${lastFailure}` : `last status: ${lastStatus || 'unknown'}`
   throw new Error(

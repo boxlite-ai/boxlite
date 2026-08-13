@@ -30,7 +30,7 @@ const DEPLOY_COMPONENTS = ['api', 'runner']
 const COMPONENT_EXCLUSIONS = { Api: 'api', Runner: 'runner' }
 type ComponentExclusion = keyof typeof COMPONENT_EXCLUSIONS
 const isComponentExclusion = (value: string | undefined): value is ComponentExclusion =>
-  value !== undefined && value in COMPONENT_EXCLUSIONS
+  value !== undefined && Object.prototype.hasOwnProperty.call(COMPONENT_EXCLUSIONS, value)
 
 const PARTIAL_DEPLOY_SELECTOR = /^--(?:target|exclude)(?:=|$)/
 const RUNNER_POLICY_ROOT = resolve(fileURLToPath(new URL('../policies/runner', import.meta.url)))

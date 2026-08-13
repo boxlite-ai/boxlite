@@ -19,7 +19,7 @@
 // open one. `<` `>` `)` are delimiters too: bash reads `>#x` and `x)#y` as a redirect/case-arm
 // followed by a comment, while `>out#x` keeps its `#` because a word character precedes it —
 // same reason `$#` and `sha#tag` do.
-const stripShell = (text: any) => text.replace(/(^|[\s;|&(<>)])#.*$/gm, '$1')
+const stripShell = (text: string) => text.replace(/(^|[\s;|&(<>)])#.*$/gm, '$1')
 
 // A block comment is only recognized when `/*` opens a line. `/*` also occurs mid-line in prose
 // and in string literals — `routing /* to Api` in a comment, `/assets/*)` in another — and the
@@ -28,7 +28,7 @@ const stripShell = (text: any) => text.replace(/(^|[\s;|&(<>)])#.*$/gm, '$1')
 // document with the code they pin already deleted from it.
 // Line comments: only a preceding `:` suppresses the rule, so `https://…` inside a string
 // survives while a trailing `},  // x` does not.
-const stripScript = (text: any) => text.replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+const stripScript = (text: string) => text.replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
 
 const STRIPPERS = {
   // A workflow `run:` body, or a payload this repo emits and a host executes.
@@ -37,7 +37,7 @@ const STRIPPERS = {
   script: stripScript,
   // TypeScript whose template literals emit bash — sst.config.ts's user-data. Both syntaxes are
   // live in the same text, and stripping only one leaves the other's comments matchable.
-  scriptEmittingShell: (text: any) => stripShell(stripScript(text)),
+  scriptEmittingShell: (text: string) => stripShell(stripScript(text)),
 }
 type ContractSourceKind = keyof typeof STRIPPERS
 

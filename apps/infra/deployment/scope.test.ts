@@ -102,6 +102,9 @@ test('rejects any scope that is not one of the reviewed shapes', () => {
   for (const args of [
     ['deploy', '--stage', 'dev', '--exclude', 'Proxy'],
     ['deploy', '--stage', 'dev', '--exclude', 'Storage'],
+    ['deploy', '--stage', 'dev', '--exclude', 'constructor'],
+    ['deploy', '--stage', 'dev', '--exclude', 'toString'],
+    ['deploy', '--stage', 'dev', '--exclude', '__proto__'],
     ['deploy', '--stage', 'dev', '--exclude'],
     // A flag is a missing value, not the value — otherwise this excludes a component named
     // `--stage` and silently deploys everything while reporting a narrowed scope.

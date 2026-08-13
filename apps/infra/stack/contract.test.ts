@@ -119,7 +119,10 @@ test('keeps the AWS region in run scope and passes it into Runner user data', ()
   const runnerUserDataSource = configSection('async function buildRunnerUserData')
 
   assert.match(runSource, /const REGION = resolveAwsRegion\(\)/)
-  assert.equal(runSource.match(/awsRegion: REGION/g)?.length, 2)
+  assert.equal(runSource.match(/awsRegion: REGION/g)?.length, 1)
+  assert.match(runSource, /const runnerUserDataFor[\s\S]*awsRegion: REGION/)
+  assert.match(runSource, /runnerUserDataFor\(defaultRunnerApiKey\.result\)/)
+  assert.match(runSource, /runnerUserDataFor\(apiKey\.result\)/)
   assert.match(runnerUserDataSource, /awsRegion: string/)
   assert.match(runnerUserDataSource, /Environment=AWS_REGION=\$\{input\.awsRegion\}/)
 })
@@ -134,7 +137,7 @@ test('tags Runner instances with their exact control-plane identity', () => {
     runnerResources,
     /makeRunner\([\s\S]*defaultRunnerConfig\.resourceName,[\s\S]*defaultRunnerConfig\.nameTag,[\s\S]*defaultRunnerConfig\.controlPlaneRunnerName,[\s\S]*runnerUserData/,
   )
-  assert.match(runnerResources, /runnerInventory\.slice\(1\)\.map\([\s\S]*runner\.nameTag,[\s\S]*buildRunnerUserData/)
+  assert.match(runnerResources, /runnerInventory\.slice\(1\)\.map\([\s\S]*runner\.nameTag,[\s\S]*runnerUserDataFor\(apiKey\.result\)/)
 })
 
 test('keeps every Runner instance protected from replacement during full-stack deploys', () => {
@@ -277,6 +280,15 @@ test('does not restore the removed SSH gateway deployment', () => {
   assert.doesNotMatch(liveConfig, /SshGateway|SSH_GATEWAY|SSH_PRIVATE_KEY_B64|SSH_HOST_KEY_B64/)
   assert.doesNotMatch(environmentExample, /SSH_GATEWAY|SSH_PRIVATE_KEY_B64|SSH_HOST_KEY_B64/)
   assert.doesNotMatch(readme, /SshGateway|SSH_GATEWAY|SSH_PRIVATE_KEY_B64|SSH_HOST_KEY_B64/)
+})
+
+test('refuses to expose pgAdmin over its plain-HTTP listener', () => {
+  const pgAdmin = configSection('// pgAdmin security gate', '// MailDev is an unauthenticated mail catcher')
+
+  assert.match(pgAdmin, /envOr\('PGADMIN_PUBLIC', 'false'\) === 'true'/)
+  assert.match(pgAdmin, /PGADMIN_PUBLIC is not supported/)
+  assert.match(pgAdmin, /public: false/)
+  assert.doesNotMatch(pgAdmin, /public: pgAdminPublic/)
 })
 
 test('passes explicit management API endpoints into the API service', () => {

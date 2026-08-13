@@ -57,6 +57,11 @@ test('decideMissingCliAction offers an install only when the manager is there', 
 test('decideMissingCliAction reports a provider it has no recipe for', () => {
   assert.equal(decideMissingCliAction({ install: undefined, managerAvailable: true }), 'report')
   assert.equal(decideMissingCliAction({ install: { manager: 'apt', formula: 'auth0' }, managerAvailable: true }), 'report')
+  assert.equal(
+    decideMissingCliAction({ install: { manager: 'constructor', formula: 'auth0' }, managerAvailable: true }),
+    'report',
+  )
+  assert.equal(installCommand({ manager: 'constructor', formula: 'auth0' }), null)
 })
 
 test('installCommand names the formula, which differs from the binary', () => {

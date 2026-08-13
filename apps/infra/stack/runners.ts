@@ -176,22 +176,21 @@ if (ghcrSecret) {
   })
 }
 
-const runnerUserData = $resolve([
-  api.url,
-  defaultRunnerApiKey.result,
-  otelCollectorOtlpHttpUrl,
-  ghcrSecret ? ghcrSecret.arn : '',
-]).apply(([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-  buildRunnerUserData({
-    apiUrl,
-    token,
-    otelEndpoint,
-    awsRegion: REGION,
-    artifact: runnerArtifact,
-    ghcrSecretArn: ghcrSecretArn || undefined,
-    ghcrUsername,
-  }),
-)
+const runnerUserDataFor = (token: $util.Input<string>) =>
+  $resolve([api.url, token, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
+    ([apiUrl, resolvedToken, otelEndpoint, ghcrSecretArn]) =>
+      buildRunnerUserData({
+        apiUrl,
+        token: resolvedToken,
+        otelEndpoint,
+        awsRegion: REGION,
+        artifact: runnerArtifact,
+        ghcrSecretArn: ghcrSecretArn || undefined,
+        ghcrUsername,
+      }),
+  )
+
+const runnerUserData = runnerUserDataFor(defaultRunnerApiKey.result)
 
 // Runners hold load-bearing box state (/var/lib/boxlite + in-memory libkrun VMs).
 // The default runner and every extra runner are identical except for resource
@@ -277,18 +276,7 @@ const extraRunners = runnerInventory.slice(1).map((runner) => {
     runner.resourceName,
     runner.nameTag,
     runner.controlPlaneRunnerName,
-    $resolve([api.url, apiKey.result, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
-      ([apiUrl, token, otelEndpoint, ghcrSecretArn]) =>
-        buildRunnerUserData({
-          apiUrl,
-          token,
-          otelEndpoint,
-          awsRegion: REGION,
-          artifact: runnerArtifact,
-          ghcrSecretArn: ghcrSecretArn || undefined,
-          ghcrUsername,
-        }),
-    ),
+    runnerUserDataFor(apiKey.result),
   )
   return { name: runner.controlPlaneRunnerName, apiKey, instance }
 })

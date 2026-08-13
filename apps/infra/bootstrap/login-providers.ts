@@ -53,6 +53,10 @@ export const INSTALL_MANAGERS = {
 }
 type InstallManager = keyof typeof INSTALL_MANAGERS
 
+function isInstallManager(value: unknown): value is InstallManager {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(INSTALL_MANAGERS, value)
+}
+
 /**
  * What to do about a provider whose CLI is absent.
  *
@@ -63,15 +67,15 @@ type InstallManager = keyof typeof INSTALL_MANAGERS
  *                    manager as a side effect of logging in
  */
 export function decideMissingCliAction({ install, managerAvailable }: any) {
-  if (!install || !(install.manager in INSTALL_MANAGERS)) return 'report'
+  if (!install || !isInstallManager(install.manager)) return 'report'
   return managerAvailable ? 'offer-install' : 'report'
 }
 
 /** The exact command line for a recipe, for both running and printing. */
 export function installCommand(install: any) {
-  if (!install || !(install.manager in INSTALL_MANAGERS)) return null
-  const manager = INSTALL_MANAGERS[install.manager as InstallManager]
-  if (!manager) return null
+  const managerName = install?.manager
+  if (!isInstallManager(managerName)) return null
+  const manager = INSTALL_MANAGERS[managerName]
   return { command: manager.command, args: manager.args(install.formula), label: manager.label }
 }
 

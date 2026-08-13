@@ -7,7 +7,7 @@ npm run login
 npm run bootstrap -- --stage dev
 npm run sst -- diff --stage dev --policy policies/runner --json | npm run --silent validate-preview
 npm run deploy -- --stage dev --policy policies/runner
-npm run runner:update
+npm run runner:update -- --stage dev
 ```
 
 `deploy`, `remove`, `sst`, and `secrets` all pass through the guarded deployment facade. Do not call

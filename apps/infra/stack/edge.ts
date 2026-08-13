@@ -99,31 +99,24 @@ new sst.aws.Service('Proxy', {
 })
 
 // ─── 8. ADMIN UIs ────────────────────────────────────────────────────────
-// pgAdmin security gate. pgAdmin is a
-// Postgres admin console one hop from RDS. Knobs are overridable via env;
-// unset falls back to the secure default below (internal ALB + login
-// enabled). The two values are coupled, not independent: exposing it
-// publicly is only allowed with auth on, so a single misconfigured flag
-// can't recreate the public + no-auth hole.
-const pgAdminPublic = envOr('PGADMIN_PUBLIC', 'false') === 'true'
-const pgAdminServerMode = envOr('PGADMIN_CONFIG_SERVER_MODE', 'True')
-const pgAdminMasterPassword = envOr('PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED', 'True')
-if (pgAdminPublic && (pgAdminServerMode !== 'True' || pgAdminMasterPassword !== 'True')) {
+// pgAdmin security gate. pgAdmin is a Postgres admin console one hop from RDS
+// and its listener is plain HTTP, so it must remain VPC-internal regardless of
+// its login settings. Reach it through a private path such as SSM forwarding.
+if (envOr('PGADMIN_PUBLIC', 'false') === 'true') {
   throw new Error(
-    'PGADMIN_PUBLIC=true requires PGADMIN_CONFIG_SERVER_MODE=True and ' +
-      'PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=True — refusing to expose a ' +
-      'Postgres admin console to the internet without login auth. Reach ' +
-      'pgAdmin via VPN / bastion / `aws ssm start-session` instead.',
+    'PGADMIN_PUBLIC is not supported: pgAdmin serves plain HTTP, so public exposure ' +
+      'would disclose credentials and session cookies. Reach it via VPN / bastion / ' +
+      '`aws ssm start-session` instead.',
   )
 }
+const pgAdminServerMode = envOr('PGADMIN_CONFIG_SERVER_MODE', 'True')
+const pgAdminMasterPassword = envOr('PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED', 'True')
 new sst.aws.Service('PgAdmin', {
   cluster,
   image: IMAGES.pgadmin,
   loadBalancer: {
-    // Internal ALB by default: reachable only from inside the VPC (VPN /
-    // bastion / `aws ssm start-session` port-forward). PGADMIN_PUBLIC=true
-    // exposes it publicly — gated above to require login auth.
-    public: pgAdminPublic,
+    // Reachable only from inside the VPC (VPN / bastion / SSM port-forward).
+    public: false,
     rules: [{ listen: '80/http', forward: `${PORTS.PGADMIN}/http` }],
     health: { [`${PORTS.PGADMIN}/http`]: httpHealth('/', { successCodes: '200-399' }) },
   },

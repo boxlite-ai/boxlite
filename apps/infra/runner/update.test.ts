@@ -308,7 +308,12 @@ test('a persistent polling failure surfaces its cause, not a bare timeout', () =
 
 test('a stalled-but-healthy command reports the status it was stuck on', () => {
   const run = () => ({ ok: true, stdout: 'InProgress', stderr: '' })
-  assert.throws(() => waitForTerminalStatus([], 'i-1', { run, sleep: () => {} }), /last status: InProgress/)
+  let sleeps = 0
+  assert.throws(
+    () => waitForTerminalStatus([], 'i-1', { run, sleep: () => (sleeps += 1) }),
+    /last status: InProgress/,
+  )
+  assert.equal(sleeps, 359, 'does not sleep after the final poll')
 })
 
 test('a recovered transient poll error does not outlive the stall it preceded', () => {
