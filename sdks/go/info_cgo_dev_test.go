@@ -66,6 +66,9 @@ func TestCNetworkInfoToGoTraversesNativeStruct(t *testing.T) {
 	}
 }
 
+// TestCBoxInfoToGoTraversesExitCode checks that the has_exit_code flag, not the
+// code's value, decides whether ExitCode is set — a recorded 0 is a successful
+// workload, not an absent result.
 func TestCBoxInfoToGoTraversesExitCode(t *testing.T) {
 	fixtures := cBoxInfoExitCodeTestFixtures()
 	zero, three := 0, 3

@@ -286,17 +286,21 @@ mod tests {
         }
     }
 
+    /// `Some(0)` must survive as `Some(0)`: a successful workload is the common
+    /// case, and collapsing it to `None` would report success as "never ran".
     #[test]
     fn box_state_conversion_preserves_recorded_exit_code() {
-        let mut exited = core_info(None);
-        exited.status = BoxStatus::Stopped;
-        exited.pid = None;
-        exited.exit_code = Some(3);
+        for recorded in [Some(0), Some(3)] {
+            let mut exited = core_info(None);
+            exited.status = BoxStatus::Stopped;
+            exited.pid = None;
+            exited.exit_code = recorded;
 
-        let resolved = JsBoxInfo::from(exited);
-        assert_eq!(resolved.state.status, "stopped");
-        assert!(!resolved.state.running);
-        assert_eq!(resolved.state.exit_code, Some(3));
+            let resolved = JsBoxInfo::from(exited);
+            assert_eq!(resolved.state.status, "stopped");
+            assert!(!resolved.state.running);
+            assert_eq!(resolved.state.exit_code, recorded);
+        }
 
         let running = JsBoxInfo::from(core_info(None));
         assert_eq!(running.state.exit_code, None);

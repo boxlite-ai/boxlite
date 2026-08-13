@@ -236,6 +236,12 @@ fn status_to_str(status: BoxStatus) -> &'static str {
 }
 
 impl CBoxInfo {
+    /// Build the C view of a box, allocating the owned strings and network
+    /// metadata the caller must release with `boxlite_free_box_info`.
+    ///
+    /// The optional init exit code becomes a value/flag pair: `None` yields
+    /// `exit_code = 0` with `has_exit_code = 0`, while `Some(code)` — `0`
+    /// included — yields that code with `has_exit_code = 1`.
     pub fn from_box_info(info: &boxlite::runtime::types::BoxInfo) -> Self {
         CBoxInfo {
             id: to_c_str(info.id.as_ref()),
@@ -510,10 +516,55 @@ mod tests {
     use boxlite::runtime::options::PortProtocol;
     use boxlite::{NetworkInfo, NetworkMode, PublishedPort};
 
+    use std::collections::HashMap;
+    use std::time::SystemTime;
+
+    use boxlite::{BoxID, BoxInfo, BoxStatus, HealthStatus};
+
     use crate::options::BoxlitePortProtocol;
     use crate::{FREE_STR_CALLS, FREE_STR_LOCK};
 
-    use super::{BoxliteNetworkMode, free_network_info, network_to_c_ptr};
+    use super::{BoxliteNetworkMode, CBoxInfo, free_box_info, free_network_info, network_to_c_ptr};
+
+    /// A stopped box carrying the given init exit code, with every other field
+    /// held constant so the exit-code mapping is what varies.
+    fn stopped_box(exit_code: Option<i32>) -> BoxInfo {
+        BoxInfo {
+            id: BoxID::parse("box-c-info").unwrap(),
+            name: Some("c-info".to_string()),
+            status: BoxStatus::Stopped,
+            created_at: SystemTime::UNIX_EPOCH.into(),
+            last_updated: SystemTime::UNIX_EPOCH.into(),
+            pid: None,
+            image: "alpine:latest".to_string(),
+            cpus: 2,
+            memory_mib: 512,
+            network: None,
+            labels: HashMap::new(),
+            auto_stop: 0,
+            auto_delete: 0,
+            auto_resume: true,
+            health_status: HealthStatus::default(),
+            exit_code,
+            started_at: None,
+        }
+    }
+
+    /// The flag is what separates "no code recorded" from a recorded `0`, which
+    /// `exit_code` alone cannot express.
+    #[test]
+    fn box_info_maps_exit_code_through_the_has_exit_code_flag() {
+        let _guard = FREE_STR_LOCK.lock().unwrap();
+
+        for (recorded, expected_code, expected_flag) in
+            [(None, 0, 0), (Some(0), 0, 1), (Some(3), 3, 1)]
+        {
+            let mut c_info = CBoxInfo::from_box_info(&stopped_box(recorded));
+            assert_eq!(c_info.exit_code, expected_code, "code for {recorded:?}");
+            assert_eq!(c_info.has_exit_code, expected_flag, "flag for {recorded:?}");
+            unsafe { free_box_info(&mut c_info) };
+        }
+    }
 
     #[test]
     fn typed_network_info_preserves_network_and_publication_state() {
