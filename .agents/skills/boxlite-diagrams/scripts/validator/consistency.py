@@ -2,16 +2,13 @@ from __future__ import annotations
 
 from .models import ValidationContext
 
-VIEWS = ("architecture", "sequence", "call_graph")
-
-
 def validate_consistency(ctx: ValidationContext) -> None:
     if ctx.parsed is None:
         ctx.add("consistency.cross_view", "fail", "cross-view consistency requires a parsed document")
         return
     errors: list[str] = []
     for state in ctx.state_map():
-        for view in VIEWS:
+        for view in ctx.view_ids():
             expected_nodes = {
                 item["id"] for item in ctx.manifest.get("nodes", [])
                 if state in item.get("states", []) and view in item.get("views", [])
@@ -32,13 +29,19 @@ def validate_consistency(ctx: ValidationContext) -> None:
                     f"{view}/{state} edges disagree: missing={sorted(expected_edges - actual_edges)}, "
                     f"undeclared={sorted(actual_edges - expected_edges)}"
                 )
+            if view == "architecture" and "boundaries" in ctx.manifest:
+                _check_boundaries(ctx, state, errors)
             _check_endpoints(ctx, view, state, errors)
             _check_labels(ctx, view, state, errors)
     _check_mermaid_annotations(ctx, errors)
     if errors:
         ctx.add("consistency.cross_view", "fail", "diagram views disagree with the evidence manifest", errors)
     else:
-        ctx.add("consistency.cross_view", "pass", "canonical nodes and edges agree across all declared views")
+        ctx.add(
+            "consistency.cross_view",
+            "pass",
+            "canonical nodes, edges, boundaries, and immediate containment agree across all declared views",
+        )
 
 
 def _actual_node_ids(ctx: ValidationContext, view: str, state: str) -> set[str]:
@@ -89,6 +92,54 @@ def _check_labels(ctx: ValidationContext, view: str, state: str, errors: list[st
             expected = ctx.item_map("edge")[item_id]["label"]
             if expected.lower() not in label.lower():
                 errors.append(f"{view}/{state} edge {item_id!r} label does not contain {expected!r}")
+
+
+def _check_boundaries(ctx: ValidationContext, state: str, errors: list[str]) -> None:
+    expected_boundaries = {
+        item["id"] for item in ctx.manifest.get("boundaries", [])
+        if state in item.get("states", []) and "architecture" in item.get("views", [])
+    }
+    actual_boundaries = {
+        boundary_id
+        for (boundary_state, boundary_id) in ctx.parsed.architecture_boundaries
+        if boundary_state == state
+    }
+    if actual_boundaries != expected_boundaries:
+        errors.append(
+            f"architecture/{state} boundaries disagree: "
+            f"missing={sorted(expected_boundaries - actual_boundaries)}, "
+            f"undeclared={sorted(actual_boundaries - expected_boundaries)}"
+        )
+
+    expected_parents: dict[str, str] = {}
+    for boundary in ctx.manifest.get("boundaries", []):
+        if state not in boundary.get("states", []):
+            continue
+        for membership in boundary.get("members", []):
+            if state in membership.get("states", []):
+                expected_parents[membership["target"]] = boundary["id"]
+    actual_parents = {
+        target: parent
+        for (parent_state, target), parent in ctx.parsed.architecture_parents.items()
+        if parent_state == state
+    }
+    if actual_parents != expected_parents:
+        differences = sorted(
+            f"{target}: expected={expected_parents.get(target)!r}, actual={actual_parents.get(target)!r}"
+            for target in set(expected_parents) | set(actual_parents)
+            if expected_parents.get(target) != actual_parents.get(target)
+        )
+        errors.append(f"architecture/{state} immediate containment disagrees: {differences}")
+
+    boundary_map = ctx.item_map("boundary")
+    for (boundary_state, boundary_id), label in ctx.parsed.architecture_boundaries.items():
+        if boundary_state != state or boundary_id not in boundary_map:
+            continue
+        expected = boundary_map[boundary_id]["label"]
+        if expected.lower() not in label.lower():
+            errors.append(
+                f"architecture/{state} boundary {boundary_id!r} label does not contain {expected!r}"
+            )
 
 
 def _check_mermaid_annotations(ctx: ValidationContext, errors: list[str]) -> None:

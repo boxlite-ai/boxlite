@@ -32,9 +32,10 @@ def validate_document(ctx: ValidationContext) -> None:
     parsed = ParsedDocument(text=text)
     ctx.parsed = parsed
     states = ctx.manifest.get("states", [])
+    selected_views = ctx.view_ids()
     state_by_label = {state.get("label"): state.get("id") for state in states}
     expected_pairs = {
-        (view, state.get("id")) for view in VIEW_ORDER for state in states if state.get("id")
+        (view, state.get("id")) for view in selected_views for state in states if state.get("id")
     }
 
     lines = text.splitlines()
@@ -86,6 +87,12 @@ def validate_document(ctx: ValidationContext) -> None:
                 current_label = None
                 continue
             current_view = VIEW_HEADINGS[heading]
+            if current_view not in selected_views:
+                errors.append(f"line {line_number}: view {current_view!r} is not selected by the manifest")
+                current_view = None
+                current_state = None
+                current_label = None
+                continue
             current_state = None
             current_label = None
             view_counts[current_view] += 1
@@ -108,9 +115,9 @@ def validate_document(ctx: ValidationContext) -> None:
     if fence is not None:
         errors.append(f"line {fence[1]}: unterminated fenced block")
 
-    if view_order != VIEW_ORDER:
-        errors.append(f"view order must be {VIEW_ORDER}; found {view_order}")
-    for view in VIEW_ORDER:
+    if view_order != selected_views:
+        errors.append(f"view order must be {selected_views}; found {view_order}")
+    for view in selected_views:
         if view_counts[view] != 1:
             errors.append(f"view {view!r} must occur exactly once; found {view_counts[view]}")
         expected_state_order = [state.get("id") for state in states if state.get("id")]
@@ -138,7 +145,7 @@ def validate_document(ctx: ValidationContext) -> None:
         ctx.add(
             "document.structure",
             "pass",
-            "all required views and states have exactly one correctly typed block",
+            "all selected views and states have exactly one correctly typed block",
             [f"{view}/{state}" for view, state in sorted(expected_pairs)],
         )
 
@@ -158,4 +165,4 @@ def _validate_diagram_kinds(ctx: ValidationContext) -> None:
     if errors:
         ctx.add("document.diagram_kinds", "fail", "unsupported Mermaid diagram kind", errors)
     else:
-        ctx.add("document.diagram_kinds", "pass", "architecture and sequence diagram kinds are supported")
+        ctx.add("document.diagram_kinds", "pass", "all selected Mermaid diagram kinds are supported")

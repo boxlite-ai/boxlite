@@ -40,6 +40,8 @@ class ParsedDocument:
     architecture_nodes: dict[tuple[str, str], str] = field(default_factory=dict)
     architecture_edges: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
     architecture_edge_labels: dict[tuple[str, str], str] = field(default_factory=dict)
+    architecture_boundaries: dict[tuple[str, str], str] = field(default_factory=dict)
+    architecture_parents: dict[tuple[str, str], str] = field(default_factory=dict)
     sequence_nodes: dict[tuple[str, str], str] = field(default_factory=dict)
     sequence_edges: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
     sequence_edge_labels: dict[tuple[str, str], str] = field(default_factory=dict)
@@ -84,15 +86,27 @@ class ValidationContext:
             return []
         return [
             ("node", item) for item in self.manifest.get("nodes", [])
-        ] + [("edge", item) for item in self.manifest.get("edges", [])]
+        ] + [
+            ("edge", item) for item in self.manifest.get("edges", [])
+        ] + [
+            ("boundary", item) for item in self.manifest.get("boundaries", [])
+        ]
 
     def item_map(self, item_type: str) -> dict[str, dict[str, Any]]:
-        if item_type not in {"node", "edge"} or not isinstance(self.manifest, dict):
+        if item_type not in {"node", "edge", "boundary"} or not isinstance(self.manifest, dict):
             return {}
-        key = "nodes" if item_type == "node" else "edges"
+        key = {"node": "nodes", "edge": "edges", "boundary": "boundaries"}[item_type]
         return {item["id"]: item for item in self.manifest.get(key, []) if "id" in item}
 
     def state_map(self) -> dict[str, dict[str, Any]]:
         if not isinstance(self.manifest, dict):
             return {}
         return {state["id"]: state for state in self.manifest.get("states", []) if "id" in state}
+
+    def view_ids(self) -> list[str]:
+        if not isinstance(self.manifest, dict):
+            return []
+        views = self.manifest.get("views")
+        if isinstance(views, list):
+            return [view for view in views if isinstance(view, str)]
+        return ["architecture", "sequence", "call_graph"]

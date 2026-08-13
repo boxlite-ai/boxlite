@@ -14,14 +14,18 @@ ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 KINDS = {"overview", "issue", "pr", "commit", "branch", "working-tree-change"}
 CHANGE_KINDS = {"none", "bug", "feature", "refactor", "docs"}
 VIEWS = {"architecture", "sequence", "call_graph"}
+VIEW_ORDER = ["architecture", "sequence", "call_graph"]
 EDGE_KINDS = {"call", "rpc", "dispatch", "spawn", "data", "state-transition", "proposed"}
 ANNOTATIONS = {"ISSUE", "BUG", "FIX", "PROPOSED", "ADDED", "CHANGED", "REMOVED"}
-ROOT_KEYS = {"schema_version", "context", "states", "nodes", "edges", "annotations"}
+ROOT_KEYS = {"schema_version", "context", "views", "states", "nodes", "edges", "boundaries", "annotations"}
 CONTEXT_KEYS = {"kind", "change_kind", "sources"}
 SOURCE_KEYS = {"repository", "issue", "pr", "base_revision", "head_revision"}
 STATE_KEYS = {"id", "label", "revision", "proposed"}
 ITEM_KEYS = {"id", "label", "states", "views", "proposed", "evidence"}
 EDGE_KEYS = ITEM_KEYS | {"from", "to", "kind"}
+BOUNDARY_KEYS = ITEM_KEYS | {"members"}
+MEMBERSHIP_KEYS = {"target", "states"}
+MEMBERSHIP_TARGET_RE = re.compile(r"^(node|boundary):([a-z][a-z0-9_]*)$")
 SOURCE_EVIDENCE_KEYS = {"type", "state", "revision", "path", "line_start", "line_end", "symbol", "tokens"}
 ISSUE_EVIDENCE_KEYS = {"type", "state", "issue", "tokens"}
 ANNOTATION_KEYS = {"kind", "target", "state", "text"}
@@ -36,6 +40,13 @@ def validate_manifest(ctx: ValidationContext) -> None:
     if manifest.get("schema_version") != 1:
         errors.append("schema_version must be 1")
     _reject_extra_keys(manifest, ROOT_KEYS, "manifest", errors)
+
+    selected_views = manifest.get("views", VIEW_ORDER)
+    if not _unique_nonempty_subset(selected_views, VIEWS):
+        errors.append(f"views must be a non-empty unique subset of {sorted(VIEWS)}")
+        selected_views = []
+    elif selected_views != [view for view in VIEW_ORDER if view in selected_views]:
+        errors.append(f"views must use canonical order {VIEW_ORDER}")
 
     context = manifest.get("context")
     if not isinstance(context, dict):
@@ -89,12 +100,15 @@ def validate_manifest(ctx: ValidationContext) -> None:
     if len(state_labels) != len(set(state_labels)):
         errors.append("state labels must be unique")
 
+    collections = (
+        ("nodes", "node", 1, ITEM_KEYS),
+        ("edges", "edge", 0, EDGE_KEYS),
+        ("boundaries", "boundary", 0, BOUNDARY_KEYS),
+    )
+    declared_ids: dict[str, set[str]] = {"node": set(), "edge": set(), "boundary": set()}
     seen_item_ids: dict[str, str] = {}
-    node_ids: set[str] = set()
-    edge_ids: set[str] = set()
-    for collection, item_type in (("nodes", "node"), ("edges", "edge")):
-        values = manifest.get(collection)
-        minimum = 1 if collection == "nodes" else 0
+    for collection, item_type, minimum, _allowed_keys in collections:
+        values = manifest.get(collection, [])
         if not isinstance(values, list) or len(values) < minimum:
             errors.append(f"{collection} must be an array with at least {minimum} entries")
             continue
@@ -103,7 +117,6 @@ def validate_manifest(ctx: ValidationContext) -> None:
             if not isinstance(item, dict):
                 errors.append(f"{where} must be an object")
                 continue
-            _reject_extra_keys(item, EDGE_KEYS if item_type == "edge" else ITEM_KEYS, where, errors)
             item_id = item.get("id")
             if not isinstance(item_id, str) or not ID_RE.fullmatch(item_id):
                 errors.append(f"{where}.id must be lowercase snake case")
@@ -111,7 +124,27 @@ def validate_manifest(ctx: ValidationContext) -> None:
             if item_id in seen_item_ids:
                 errors.append(f"canonical ID {item_id!r} is reused by a {seen_item_ids[item_id]} and {item_type}")
             seen_item_ids[item_id] = item_type
-            (node_ids if item_type == "node" else edge_ids).add(item_id)
+            declared_ids[item_type].add(item_id)
+
+    target_states: dict[str, set[str]] = {}
+    for collection, item_type, _minimum, _allowed_keys in collections:
+        for item in manifest.get(collection, []) if isinstance(manifest.get(collection, []), list) else []:
+            if isinstance(item, dict) and isinstance(item.get("id"), str):
+                target_states[f"{item_type}:{item['id']}"] = set(item.get("states", []))
+
+    membership_parents: dict[tuple[str, str], str] = {}
+    for collection, item_type, _minimum, allowed_keys in collections:
+        values = manifest.get(collection, [])
+        if not isinstance(values, list):
+            continue
+        for index, item in enumerate(values):
+            where = f"{collection}[{index}]"
+            if not isinstance(item, dict):
+                continue
+            _reject_extra_keys(item, allowed_keys, where, errors)
+            item_id = item.get("id")
+            if not isinstance(item_id, str) or not ID_RE.fullmatch(item_id):
+                continue
             if not isinstance(item.get("label"), str) or not item.get("label"):
                 errors.append(f"{where}.label must be non-empty")
             item_states = item.get("states")
@@ -121,6 +154,10 @@ def validate_manifest(ctx: ValidationContext) -> None:
             views = item.get("views")
             if not _unique_nonempty_subset(views, VIEWS):
                 errors.append(f"{where}.views must be a non-empty unique subset of {sorted(VIEWS)}")
+            elif not set(views).issubset(set(selected_views)):
+                errors.append(f"{where}.views must be a subset of manifest views")
+            if item_type == "boundary" and views != ["architecture"]:
+                errors.append(f"{where}.views must be exactly ['architecture']")
             if not isinstance(item.get("proposed"), bool):
                 errors.append(f"{where}.proposed must be boolean")
             elif item["proposed"]:
@@ -133,27 +170,37 @@ def validate_manifest(ctx: ValidationContext) -> None:
             evidence = item.get("evidence")
             if not isinstance(evidence, list) or not evidence:
                 errors.append(f"{where}.evidence must be a non-empty array")
-                continue
-            evidence_states: set[str] = set()
-            for evidence_index, entry in enumerate(evidence):
-                evidence_where = f"{where}.evidence[{evidence_index}]"
-                _validate_evidence_shape(entry, evidence_where, set(state_ids), errors)
-                if isinstance(entry, dict) and isinstance(entry.get("state"), str):
-                    evidence_states.add(entry["state"])
-            for state_id in item_states:
-                if state_id not in evidence_states:
-                    errors.append(f"{where} has no evidence for state {state_id!r}")
+            else:
+                evidence_states: set[str] = set()
+                for evidence_index, entry in enumerate(evidence):
+                    evidence_where = f"{where}.evidence[{evidence_index}]"
+                    _validate_evidence_shape(entry, evidence_where, set(state_ids), errors)
+                    if isinstance(entry, dict) and isinstance(entry.get("state"), str):
+                        evidence_states.add(entry["state"])
+                for state_id in item_states:
+                    if state_id not in evidence_states:
+                        errors.append(f"{where} has no evidence for state {state_id!r}")
             if item_type == "edge":
-                if item.get("from") not in node_ids and item.get("from") not in {
-                    node.get("id") for node in manifest.get("nodes", []) if isinstance(node, dict)
-                }:
+                if item.get("from") not in declared_ids["node"]:
                     errors.append(f"{where}.from must reference a declared node")
-                if item.get("to") not in {
-                    node.get("id") for node in manifest.get("nodes", []) if isinstance(node, dict)
-                }:
+                if item.get("to") not in declared_ids["node"]:
                     errors.append(f"{where}.to must reference a declared node")
                 if item.get("kind") not in EDGE_KINDS:
                     errors.append(f"{where}.kind must be one of {sorted(EDGE_KINDS)}")
+            elif item_type == "boundary":
+                _validate_boundary_members(
+                    item,
+                    where,
+                    set(item_states),
+                    target_states,
+                    membership_parents,
+                    errors,
+                )
+
+    _validate_boundary_cycles(membership_parents, state_ids, errors)
+
+    node_ids = declared_ids["node"]
+    edge_ids = declared_ids["edge"]
 
     annotations = manifest.get("annotations")
     if not isinstance(annotations, list):
@@ -187,6 +234,83 @@ def validate_manifest(ctx: ValidationContext) -> None:
         ctx.add("manifest.shape", "fail", "evidence manifest is invalid", errors)
     else:
         ctx.add("manifest.shape", "pass", "evidence manifest has valid IDs, memberships, and references")
+
+
+def _validate_boundary_members(
+    boundary: dict[str, Any],
+    where: str,
+    boundary_states: set[str],
+    target_states: dict[str, set[str]],
+    membership_parents: dict[tuple[str, str], str],
+    errors: list[str],
+) -> None:
+    members = boundary.get("members")
+    if not isinstance(members, list) or not members:
+        errors.append(f"{where}.members must be a non-empty array")
+        return
+    covered_states: set[str] = set()
+    for index, membership in enumerate(members):
+        member_where = f"{where}.members[{index}]"
+        if not isinstance(membership, dict):
+            errors.append(f"{member_where} must be an object")
+            continue
+        _reject_extra_keys(membership, MEMBERSHIP_KEYS, member_where, errors)
+        target = membership.get("target")
+        match = MEMBERSHIP_TARGET_RE.fullmatch(target) if isinstance(target, str) else None
+        if match is None:
+            errors.append(f"{member_where}.target must be node:<id> or boundary:<id>")
+            continue
+        target_type, target_id = match.groups()
+        if target not in target_states:
+            errors.append(f"{member_where}.target must reference a declared node or boundary")
+            continue
+        if target == f"boundary:{boundary['id']}":
+            errors.append(f"{member_where}.target cannot contain its own boundary")
+            continue
+        states = membership.get("states")
+        allowed_states = boundary_states & target_states[target]
+        if not _unique_nonempty_subset(states, allowed_states):
+            errors.append(
+                f"{member_where}.states must be a non-empty unique subset of both the container and target states"
+            )
+            continue
+        for state in states:
+            parent_key = (state, target)
+            previous = membership_parents.get(parent_key)
+            if previous is not None:
+                errors.append(
+                    f"{member_where} gives {target} two immediate parents in {state!r}: "
+                    f"{previous!r} and {boundary['id']!r}"
+                )
+            else:
+                membership_parents[parent_key] = boundary["id"]
+            covered_states.add(state)
+    missing_states = boundary_states - covered_states
+    if missing_states:
+        errors.append(f"{where}.members leave the boundary empty in states {sorted(missing_states)}")
+
+
+def _validate_boundary_cycles(
+    membership_parents: dict[tuple[str, str], str],
+    state_ids: list[str],
+    errors: list[str],
+) -> None:
+    for state in state_ids:
+        parent_by_boundary = {
+            target.removeprefix("boundary:"): parent
+            for (membership_state, target), parent in membership_parents.items()
+            if membership_state == state and target.startswith("boundary:")
+        }
+        for start in parent_by_boundary:
+            seen: list[str] = []
+            current = start
+            while current in parent_by_boundary:
+                if current in seen:
+                    cycle = seen[seen.index(current):] + [current]
+                    errors.append(f"boundary containment cycle in {state!r}: {' -> '.join(cycle)}")
+                    break
+                seen.append(current)
+                current = parent_by_boundary[current]
 
 
 def validate_source_evidence(ctx: ValidationContext) -> None:

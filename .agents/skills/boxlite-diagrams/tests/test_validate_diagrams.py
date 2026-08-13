@@ -57,6 +57,81 @@ class DiagramValidatorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + json.dumps(report, indent=2))
         self.assertTrue(report["valid"])
 
+    def test_valid_architecture_only_overview(self) -> None:
+        document, manifest = architecture_only_fixture(self.head)
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 0, result.stderr + json.dumps(report, indent=2))
+        self.assertTrue(report["valid"])
+        artifacts = [Path(value).suffix for value in report["artifacts"]]
+        self.assertIn(".svg", artifacts)
+        self.assertIn(".png", artifacts)
+
+    def test_valid_source_grounded_boundary_containment(self) -> None:
+        result, report = self.validate(*contained_architecture_fixture(self.head))
+        self.assertEqual(result.returncode, 0, result.stderr + json.dumps(report, indent=2))
+        consistency = next(check for check in report["checks"] if check["name"] == "consistency.cross_view")
+        self.assertIn("boundaries", consistency["message"])
+
+    def test_wrong_immediate_boundary_is_rejected(self) -> None:
+        document, manifest = contained_architecture_fixture(self.head)
+        document = document.replace(
+            '    start["start"]\n    load["load"]\n  end',
+            '    start["start"]\n  end\n  load["load"]',
+            1,
+        )
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "consistency.cross_view")
+
+    def test_undeclared_mermaid_boundary_is_rejected(self) -> None:
+        document, manifest = contained_architecture_fixture(self.head)
+        document = document.replace(
+            '  subgraph inner["Inner"]',
+            '  subgraph extra["Extra"]\n    subgraph inner["Inner"]',
+            1,
+        ).replace('  end\nend', '    end\n  end\nend', 1)
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "consistency.cross_view")
+
+    def test_member_cannot_have_two_immediate_boundaries(self) -> None:
+        document, manifest = contained_architecture_fixture(self.head)
+        manifest["boundaries"][0]["members"].append({"target": "node:start", "states": ["current"]})
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "manifest.shape")
+
+    def test_boundary_cycle_is_rejected(self) -> None:
+        document, manifest = contained_architecture_fixture(self.head)
+        manifest["boundaries"][1]["members"].append(
+            {"target": "boundary:outer", "states": ["current"]}
+        )
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "manifest.shape")
+
+    def test_unselected_view_is_rejected(self) -> None:
+        document, manifest = architecture_only_fixture(self.head)
+        document += "\n## Sequence\n\n### Current\n\n```mermaid\nsequenceDiagram\n```\n"
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "document.structure")
+
+    def test_item_view_outside_selected_views_is_rejected(self) -> None:
+        document, manifest = architecture_only_fixture(self.head)
+        manifest["nodes"][0]["views"] = ["sequence"]
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "manifest.shape")
+
+    def test_valid_call_graph_only_without_mermaid_tool(self) -> None:
+        document, manifest = call_graph_only_fixture(self.head)
+        environment = self.env | {"PATH": f"{self.bin}:/usr/bin:/bin", "BOXLITE_DIAGRAM_MMDC": ""}
+        result, report = self.validate(document, manifest, environment=environment)
+        self.assertEqual(result.returncode, 0, result.stderr + json.dumps(report, indent=2))
+        render = next(check for check in report["checks"] if check["name"] == "mermaid.render")
+        self.assertEqual(render["message"], "no Mermaid view was selected")
+
     def test_valid_unimplemented_issue(self) -> None:
         document, manifest = issue_fixture(self.head)
         result, report = self.validate(document, manifest)
@@ -231,12 +306,25 @@ class DiagramValidatorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assert_check_failed(report, "mermaid.structure_security")
 
+    def test_fixed_mermaid_styling_is_rejected_for_adaptive_themes(self) -> None:
+        document, manifest = architecture_only_fixture(self.head)
+        document = document.replace("flowchart LR", "flowchart LR\n  classDef fixed fill:#fff,color:#000")
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "mermaid.structure_security")
+
     def test_malformed_html_comment_is_rejected(self) -> None:
         document, manifest = overview_fixture(self.head)
         document = document.replace('start["start"]', 'start["start<!-- unsafe --!>"]', 1)
         result, report = self.validate(document, manifest)
         self.assertEqual(result.returncode, 1)
         self.assert_check_failed(report, "mermaid.structure_security")
+
+    def test_mermaid_br_line_break_is_accepted(self) -> None:
+        document, manifest = architecture_only_fixture(self.head)
+        document = document.replace('start["start"]', 'start["start<br/>entry"]')
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 0, json.dumps(report, indent=2))
 
     def test_mermaid_left_arrow_is_not_treated_as_html(self) -> None:
         document, manifest = overview_fixture(self.head)
@@ -333,6 +421,17 @@ class DiagramValidatorTests(unittest.TestCase):
         evals = (SKILL_ROOT / "evals" / "evals.json").read_text(encoding="utf-8")
         for content in (contract, skill, evals):
             self.assertIn("← BUG:", content)
+
+    def test_cloud_architecture_contract_requires_real_containment_and_adaptive_theme(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        composition = (SKILL_ROOT / "references" / "architecture-composition.md").read_text(encoding="utf-8")
+        contract = (SKILL_ROOT / "references" / "output-contract.md").read_text(encoding="utf-8")
+        evals = (SKILL_ROOT / "evals" / "evals.json").read_text(encoding="utf-8")
+        for content in (skill, composition, contract, evals):
+            self.assertIn("Runner fleet", content)
+            self.assertIn("EC2", content)
+            self.assertIn("embedded BoxLite", content)
+            self.assertIn("light/dark", content)
 
     def test_proposed_behavior_without_issue_evidence_is_rejected(self) -> None:
         document, manifest = issue_fixture(self.head)
@@ -452,6 +551,12 @@ def edge(item_id: str, label: str, source: str, target: str, states: list[str], 
             "views": ["architecture", "sequence", "call_graph"], "proposed": False, "evidence": evidence}
 
 
+def boundary(item_id: str, label: str, states: list[str], evidence: list[dict[str, object]],
+             members: list[dict[str, object]]) -> dict[str, object]:
+    return {"id": item_id, "label": label, "states": states, "views": ["architecture"],
+            "proposed": False, "evidence": evidence, "members": members}
+
+
 def manifest(context: dict[str, object], states: list[dict[str, object]], nodes: list[dict[str, object]],
              edges: list[dict[str, object]], annotations: list[dict[str, object]] | None = None) -> dict[str, object]:
     return {"schema_version": 1, "context": context, "states": states, "nodes": nodes, "edges": edges,
@@ -494,6 +599,67 @@ def overview_fixture(head: str) -> tuple[str, dict[str, object]]:
         {"current": [("start_load", "start", "load", "load")]},
         {"current": [("start", "start"), ("load", "load")]})
     return doc, manifest({"kind": "overview", "change_kind": "none", "sources": {"repository": "local"}}, states, nodes, edges)
+
+
+def architecture_only_fixture(head: str) -> tuple[str, dict[str, object]]:
+    document, data = overview_fixture(head)
+    data = copy.deepcopy(data)
+    data["views"] = ["architecture"]
+    for item in data["nodes"] + data["edges"]:
+        item["views"] = ["architecture"]
+    document = document[:document.index("## Sequence")].rstrip() + "\n"
+    return document, data
+
+
+def contained_architecture_fixture(head: str) -> tuple[str, dict[str, object]]:
+    document, data = architecture_only_fixture(head)
+    document = """# Diagram
+
+## Architecture
+
+### Current
+
+```mermaid
+flowchart TB
+subgraph outer["Outer"]
+  subgraph inner["Inner"]
+    start["start"]
+    load["load"]
+  end
+end
+start start_load@-->|"load"| load
+```
+"""
+    data["boundaries"] = [
+        boundary(
+            "outer",
+            "Outer",
+            ["current"],
+            [source_evidence("current", head, "start", 1, 3, "def start")],
+            [{"target": "boundary:inner", "states": ["current"]}],
+        ),
+        boundary(
+            "inner",
+            "Inner",
+            ["current"],
+            [source_evidence("current", head, "load", 8, 9, "def load")],
+            [
+                {"target": "node:start", "states": ["current"]},
+                {"target": "node:load", "states": ["current"]},
+            ],
+        ),
+    ]
+    return document, data
+
+
+def call_graph_only_fixture(head: str) -> tuple[str, dict[str, object]]:
+    document, data = overview_fixture(head)
+    data = copy.deepcopy(data)
+    data["views"] = ["call_graph"]
+    for item in data["nodes"] + data["edges"]:
+        item["views"] = ["call_graph"]
+    call_graph = document[document.index("## Call graph"):]
+    return f"# Diagram\n\n{call_graph}", data
 
 
 def issue_fixture(head: str) -> tuple[str, dict[str, object]]:

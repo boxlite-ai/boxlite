@@ -18,6 +18,9 @@ def validate_call_graph(ctx: ValidationContext) -> None:
     if ctx.parsed is None:
         ctx.add("call_graph.structure", "fail", "call graph cannot be checked until the document is parsed")
         return
+    if "call_graph" not in ctx.view_ids():
+        ctx.add("call_graph.structure", "pass", "call-graph view was not selected")
+        return
     errors: list[str] = []
     for state in ctx.state_map():
         block = ctx.parsed.blocks.get(("call_graph", state))

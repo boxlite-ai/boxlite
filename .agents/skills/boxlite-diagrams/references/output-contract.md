@@ -1,19 +1,58 @@
 # BoxLite diagram output contract
 
+## Select only the useful views
+
+`evidence.json` may declare a non-empty `views` array in this canonical order:
+
+1. `architecture`
+2. `sequence`
+3. `call_graph`
+
+Omitting `views` keeps backward compatibility and selects all three. Every
+node and edge membership must be a subset of the selected views.
+
+Choose views from the user's question:
+
+- deployment, topology, boundary, overview, or rendered picture:
+  `['architecture']` by default;
+- ordering, retries, concurrency, or failure: `['sequence']`;
+- source mechanics or a function path: `['call_graph']`, adding sequence only
+  when time or concurrency matters;
+- before/after change: the smallest view set that makes the change unambiguous.
+
+Three views are useful only when each answers a different question. Repeating
+the same inventory three ways makes the result harder to understand.
+
 ## Document
 
-`diagram.md` contains exactly three level-two sections in this order:
-
-1. `Architecture`
-2. `Sequence`
-3. `Call graph`
-
-Each section contains exactly one level-three subsection for every state listed
-in `evidence.json`, in the same order. Architecture and sequence state sections
-contain one `mermaid` fence. Call-graph state sections contain one `text` fence.
+`diagram.md` contains exactly the selected level-two sections in canonical
+order. Each section contains exactly one level-three subsection for every state
+listed in `evidence.json`, in the same order. Architecture and sequence state
+sections contain one `mermaid` fence. Call-graph state sections contain one
+`text` fence.
 
 Architecture fences start with `flowchart` or `graph`. Sequence fences start
 with `sequenceDiagram`.
+
+An architecture-only overview is valid:
+
+````markdown
+## Architecture
+
+### Current
+
+```mermaid
+flowchart TB
+  browser(["Browser"])
+  subgraph private["VPC · private subnets"]
+    api["Api · NestJS<br/>:3000"]
+  end
+  browser browser_api@-->|"/api/*"| api
+```
+````
+
+For bug-fix PRs, put `Fixes #<number>` on a standalone line after the last
+selected view.
 
 ## Architecture IDs
 
@@ -26,7 +65,53 @@ flowchart LR
   runtime create_box@-->|"create"| box
 ```
 
-The Mermaid edge ID (`create_box`) is also the manifest edge ID.
+The Mermaid edge ID (`create_box`) is also the manifest edge ID. `<br/>` is the
+only allowed HTML-like tag and is used only for deliberate label wrapping.
+
+## Architecture boundaries
+
+Give every meaningful subgraph a lowercase snake-case ID and declare it in the
+manifest. Use nested subgraphs for hosting or embedding, and arrows only for
+communication. The BoxLite deployment's execution containment is:
+
+`Runner fleet → EC2 instance × N → Runner daemon → embedded BoxLite runtime → box microVMs`
+
+```mermaid
+flowchart TB
+subgraph runner_fleet["Runner fleet · × N"]
+  subgraph ec2_runner["EC2 instance · representative"]
+    subgraph runner_process["Runner daemon"]
+      runner_api["Runner API · :3003"]
+      subgraph embedded_boxlite["embedded BoxLite runtime"]
+        boxlite_core["BoxLite"]
+        boxes[["box microVMs"]]
+      end
+    end
+  end
+end
+```
+
+Declare each immediate parent-child relationship; do not skip from fleet
+directly to Runner or place BoxLite beside Runner:
+
+```json
+{
+  "id": "runner_process",
+  "label": "Runner daemon",
+  "states": ["current"],
+  "views": ["architecture"],
+  "proposed": false,
+  "members": [
+    {"target": "node:runner_api", "states": ["current"]},
+    {"target": "boundary:embedded_boxlite", "states": ["current"]}
+  ],
+  "evidence": []
+}
+```
+
+In a real manifest, every boundary has revision-aware source or issue evidence,
+just like a node or edge. One target may have only one immediate parent per
+state, and boundary cycles are invalid.
 
 ## Sequence IDs
 
@@ -59,7 +144,8 @@ Rules:
 - a child uses `└─` or `├─` after its indentation;
 - the displayed line must be inside the matching manifest evidence range;
 - indentation creates a caller-to-callee edge that must exist in the manifest;
-- `← BUG: <description>` belongs on a faulty `Before`/`Current` hop, never on a standalone line;
+- `← BUG: <description>` belongs on a faulty `Before`/`Current` hop, never on a
+  standalone line;
 - future behavior has no invented hop—annotate the last real boundary instead.
 
 ## Evidence types
@@ -95,13 +181,14 @@ case-insensitive substrings of the issue title/body.
 
 ## Manifest membership
 
-Each node and edge declares the states and views where it appears. Allowed view
-IDs are `architecture`, `sequence`, and `call_graph`. Shared entities reuse the
-same canonical ID; view-specific context is allowed when it materially improves
-that view.
+Each node, edge, and boundary declares the states and selected views where it
+appears. Shared entities reuse the same canonical ID; view-specific context is
+allowed when it materially improves that view.
 
 Every parsed Mermaid node, Mermaid edge, sequence participant/message, and call
-graph hop/relationship must map to exactly one declared manifest item.
+graph hop/relationship must map to exactly one declared manifest item. When the
+manifest declares `boundaries`, every Mermaid subgraph and every immediate
+node/subgraph parent must match it exactly.
 
 ## Annotation targets
 
@@ -116,6 +203,15 @@ Annotations target `node:<id>` or `edge:<id>` and include one state:
 }
 ```
 
-Use `ISSUE`, `BUG`, `FIX`, `PROPOSED`, `ADDED`, `CHANGED`, or `REMOVED`.
-For diff annotations, the target's evidence must intersect the correct base/head
+Use `ISSUE`, `BUG`, `FIX`, `PROPOSED`, `ADDED`, `CHANGED`, or `REMOVED`. For
+diff annotations, the target's evidence must intersect the correct base/head
 diff hunk.
+
+## Rendered artifacts
+
+The validator emits `.mmd`, `.svg`, and `.png` artifacts for every Mermaid
+block. The PNG exists for visual inspection. A successful validation report
+proves syntax and traceability, not composition; inspect the PNG before calling
+the result ready. Keep README Mermaid free of fixed themes and styles so GitHub
+controls light/dark rendering. Treat a PNG as a static preview and inspect both
+light and dark renders when the destination's contrast is important.

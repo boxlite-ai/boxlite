@@ -15,12 +15,20 @@ VERSION = "11.16.0"
 UNSAFE_PATTERNS = [
     (re.compile(r"%%\{"), "initialization directives"),
     (re.compile(r"(?im)^\s*click\s+"), "click directives"),
+    (
+        re.compile(r"(?im)^\s*(?:classDef|class|style|linkStyle)\b"),
+        "fixed styling that breaks host-controlled light/dark themes",
+    ),
+    (re.compile(r"(?i)\bthemeVariables\b"), "fixed theme variables"),
     (re.compile(r"(?i)javascript\s*:"), "javascript URLs"),
     (re.compile(r"(?i)https?://|\bhref\s*="), "external links"),
 ]
 MERMAID_LEFT_ARROWS = ("<-->", "<-.->", "<==>")
 MERMAID_RIGHT_ARROWS = ("-->", "---", "-.->", "==>", "--o", "--x")
 NODE_RE = re.compile(r'^\s*([a-z][a-z0-9_]*)\s*(?:\[\[|\[\(|\[|\(\(|\(|\{\{\{|\{\{|\{|>)\s*["\']?(.+?)["\']?\s*(?:\]\]|\)\]|\]|\)\)|\)|\}\}\}|\}\}|\}|\])\s*$')
+SUBGRAPH_RE = re.compile(
+    r'^\s*subgraph\s+([a-z][a-z0-9_]*)\s*(?:\[\s*["\']?(.+?)["\']?\s*\])?\s*$'
+)
 EDGE_RE = re.compile(
     r'^\s*([a-z][a-z0-9_]*)\s+([a-z][a-z0-9_]*)@(?:-->|---|-.->|==>|--o|--x|o--o|x--x|<-->|<-.->|<==>)'
     r'(?:\|["\']?([^|]+?)["\']?\|)?\s*([a-z][a-z0-9_]*)\s*$'
@@ -57,9 +65,33 @@ def validate_mermaid(ctx: ValidationContext) -> None:
 
 
 def _parse_architecture(ctx: ValidationContext, state: str, block: StateBlock, errors: list[str]) -> None:
+    boundary_stack: list[str] = []
     for offset, line in enumerate(block.content.splitlines()[1:], start=1):
         stripped = line.strip()
-        if not stripped or stripped.startswith("%%") or stripped == "end" or stripped.startswith(("subgraph ", "direction ", "classDef ", "class ")):
+        if not stripped or stripped.startswith("%%") or stripped.startswith("direction "):
+            continue
+        if stripped == "end":
+            if not boundary_stack:
+                errors.append(f"architecture/{state} line {block.start_line + offset} has an unmatched 'end'")
+            else:
+                boundary_stack.pop()
+            continue
+        if stripped.startswith("subgraph "):
+            boundary = SUBGRAPH_RE.match(line)
+            if boundary is None:
+                errors.append(
+                    f"architecture/{state} line {block.start_line + offset} has a subgraph without a "
+                    "lowercase snake-case boundary ID"
+                )
+                continue
+            boundary_id, label = boundary.groups()
+            key = (state, boundary_id)
+            if key in ctx.parsed.architecture_boundaries:
+                errors.append(f"architecture/{state} duplicates boundary ID {boundary_id!r}")
+            ctx.parsed.architecture_boundaries[key] = _clean_label(label or boundary_id)
+            if boundary_stack:
+                ctx.parsed.architecture_parents[(state, f"boundary:{boundary_id}")] = boundary_stack[-1]
+            boundary_stack.append(boundary_id)
             continue
         edge = EDGE_RE.match(line)
         if edge:
@@ -77,9 +109,15 @@ def _parse_architecture(ctx: ValidationContext, state: str, block: StateBlock, e
             if key in ctx.parsed.architecture_nodes:
                 errors.append(f"architecture/{state} duplicates node ID {node_id!r}")
             ctx.parsed.architecture_nodes[key] = _clean_label(label)
+            if boundary_stack:
+                ctx.parsed.architecture_parents[(state, f"node:{node_id}")] = boundary_stack[-1]
             continue
         if any(arrow in line for arrow in MERMAID_RIGHT_ARROWS):
             errors.append(f"architecture/{state} line {block.start_line + offset} has an arrow without a canonical edge ID")
+    if boundary_stack:
+        errors.append(
+            f"architecture/{state} leaves boundaries open at end of block: {boundary_stack}"
+        )
 
 
 def _parse_sequence(ctx: ValidationContext, state: str, block: StateBlock, errors: list[str]) -> None:
@@ -126,10 +164,18 @@ def _parse_sequence(ctx: ValidationContext, state: str, block: StateBlock, error
 
 
 def _render_all(ctx: ValidationContext) -> None:
+    if ctx.parsed is None:
+        return
+    blocks = [
+        ((view, state), block)
+        for (view, state), block in ctx.parsed.blocks.items()
+        if view in {"architecture", "sequence"}
+    ]
+    if not blocks:
+        ctx.add("mermaid.render", "pass", "no Mermaid view was selected")
+        return
     if shutil.which("npx") is None:
         ctx.add("tool.mermaid_cli", "error", "npx is required to fetch pinned Mermaid CLI")
-        return
-    if ctx.parsed is None:
         return
     artifacts_dir = ctx.report_path.parent / f"{ctx.report_path.stem}-artifacts"
     try:
@@ -140,11 +186,10 @@ def _render_all(ctx: ValidationContext) -> None:
     errors: list[str] = []
     tool_errors: list[str] = []
     rendered: list[str] = []
-    for (view, state), block in ctx.parsed.blocks.items():
-        if view not in {"architecture", "sequence"}:
-            continue
+    for (view, state), block in blocks:
         input_path = artifacts_dir / f"{view}-{state}.mmd"
         output_path = artifacts_dir / f"{view}-{state}.svg"
+        preview_path = artifacts_dir / f"{view}-{state}.png"
         input_path.write_text(block.content, encoding="utf-8")
         try:
             result = _run_mmdc(input_path, output_path, artifacts_dir)
@@ -175,9 +220,27 @@ def _render_all(ctx: ValidationContext) -> None:
         if missing:
             errors.append(f"{view}/{state}: SVG is missing manifest labels {missing}")
             continue
+        try:
+            preview_result = _run_mmdc(input_path, preview_path, artifacts_dir)
+        except subprocess.TimeoutExpired:
+            ctx.add("tool.mermaid_cli", "error", f"Mermaid preview rendering exceeded {_command_timeout():g} seconds")
+            return
+        if preview_result is None:
+            ctx.add("tool.mermaid_cli", "error", "pinned Mermaid CLI could not render a PNG preview")
+            return
+        if preview_result.returncode != 0:
+            detail = preview_result.stderr.strip() or preview_result.stdout.strip()
+            if _looks_like_tool_failure(detail):
+                tool_errors.append(f"{view}/{state} PNG: {detail}")
+            else:
+                errors.append(f"{view}/{state} PNG: {detail}")
+            continue
+        if not preview_path.is_file() or preview_path.stat().st_size == 0:
+            errors.append(f"{view}/{state}: rendered PNG preview is empty")
+            continue
         ctx.parsed.rendered_svgs[(view, state)] = output_path
-        ctx.artifacts.extend([input_path, output_path])
-        rendered.append(str(output_path))
+        ctx.artifacts.extend([input_path, output_path, preview_path])
+        rendered.extend([str(output_path), str(preview_path)])
     if tool_errors:
         ctx.add("tool.mermaid_cli", "error", "pinned Mermaid CLI is unavailable", tool_errors)
     elif errors:
@@ -236,6 +299,8 @@ def _contains_html_markup(content: str) -> bool:
             continue
         suffix = content[index:]
         if suffix.startswith(MERMAID_LEFT_ARROWS):
+            continue
+        if re.match(r"(?i)^<br\s*/?>", suffix):
             continue
         candidate = content[index + 1 :].lstrip()
         if not candidate:
