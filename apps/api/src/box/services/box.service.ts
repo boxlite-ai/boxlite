@@ -223,6 +223,10 @@ export class BoxService {
       // Restrict box creation to the supported pinned images; reject anything else
       // at the request boundary (defaults undefined -> base image).
       const image = assertSupportedImage(createBoxDto.image)
+      const requiresFreshBoxForNetworkPolicy =
+        createBoxDto.networkBlockAll !== undefined ||
+        createBoxDto.networkAllowList !== undefined ||
+        organization.boxLimitedNetworkEgress
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
@@ -237,7 +241,7 @@ export class BoxService {
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
         await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
-      } else if (image) {
+      } else if (image && !requiresFreshBoxForNetworkPolicy) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec
         //  before creating a fresh one.
         const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
@@ -283,6 +287,8 @@ export class BoxService {
 
       if (createBoxDto.networkBlockAll !== undefined) {
         box.networkBlockAll = createBoxDto.networkBlockAll
+      } else if (organization.boxLimitedNetworkEgress) {
+        box.networkBlockAll = true
       }
 
       if (createBoxDto.networkAllowList !== undefined) {
@@ -373,21 +379,6 @@ export class BoxService {
 
     if (!warmPoolBox.runnerId) {
       throw new BoxError('Runner not found for warm pool box')
-    }
-
-    if (
-      createBoxDto.networkBlockAll !== undefined ||
-      createBoxDto.networkAllowList !== undefined ||
-      organization.boxLimitedNetworkEgress
-    ) {
-      const runner = await this.runnerService.findOneOrFail(warmPoolBox.runnerId)
-      const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-      await runnerAdapter.updateNetworkSettings(
-        warmPoolBox.id,
-        createBoxDto.networkBlockAll,
-        createBoxDto.networkAllowList,
-        organization.boxLimitedNetworkEgress,
-      )
     }
 
     // Resolve the name at persist time. A caller-provided name updates in one
