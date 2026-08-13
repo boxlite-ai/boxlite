@@ -221,6 +221,9 @@ pub struct PyBoxStateInfo {
     pub(crate) running: bool,
     #[pyo3(get)]
     pub(crate) pid: Option<u32>,
+    /// Init exit code, when the box stopped because its command exited.
+    #[pyo3(get)]
+    pub(crate) exit_code: Option<i32>,
 }
 
 #[pymethods]
@@ -230,6 +233,7 @@ impl PyBoxStateInfo {
             "status": self.status,
             "running": self.running,
             "pid": self.pid,
+            "exit_code": self.exit_code,
         }))
         .unwrap_or_default()
     }
@@ -265,6 +269,7 @@ impl From<BoxStateInfo> for PyBoxStateInfo {
             status: status_to_string(state_info.status),
             running: state_info.running,
             pid: state_info.pid,
+            exit_code: state_info.exit_code,
         }
     }
 }
@@ -394,6 +399,22 @@ mod tests {
             exit_code: None,
             started_at: None,
         }
+    }
+
+    #[test]
+    fn box_state_conversion_preserves_recorded_exit_code() {
+        let mut exited = core_info(None);
+        exited.status = BoxStatus::Stopped;
+        exited.pid = None;
+        exited.exit_code = Some(3);
+
+        let resolved = PyBoxInfo::from(exited);
+        assert_eq!(resolved.state.status, "stopped");
+        assert!(!resolved.state.running);
+        assert_eq!(resolved.state.exit_code, Some(3));
+
+        let running = PyBoxInfo::from(core_info(None));
+        assert_eq!(running.state.exit_code, None);
     }
 
     #[test]

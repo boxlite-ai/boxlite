@@ -136,6 +136,10 @@ pub struct JsBoxStateInfo {
 
     /// Process ID of the VMM subprocess (undefined if not running)
     pub pid: Option<u32>,
+
+    /// Init exit code, when the box stopped because its command exited
+    #[napi(js_name = "exitCode")]
+    pub exit_code: Option<i32>,
 }
 
 fn status_to_string(status: BoxStatus) -> String {
@@ -157,6 +161,7 @@ impl From<BoxStateInfo> for JsBoxStateInfo {
             status: status_to_string(state_info.status),
             running: state_info.running,
             pid: state_info.pid,
+            exit_code: state_info.exit_code,
         }
     }
 }
@@ -279,6 +284,22 @@ mod tests {
             exit_code: None,
             started_at: None,
         }
+    }
+
+    #[test]
+    fn box_state_conversion_preserves_recorded_exit_code() {
+        let mut exited = core_info(None);
+        exited.status = BoxStatus::Stopped;
+        exited.pid = None;
+        exited.exit_code = Some(3);
+
+        let resolved = JsBoxInfo::from(exited);
+        assert_eq!(resolved.state.status, "stopped");
+        assert!(!resolved.state.running);
+        assert_eq!(resolved.state.exit_code, Some(3));
+
+        let running = JsBoxInfo::from(core_info(None));
+        assert_eq!(running.state.exit_code, None);
     }
 
     #[test]

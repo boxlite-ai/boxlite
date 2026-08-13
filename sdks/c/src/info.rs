@@ -84,6 +84,12 @@ pub struct CBoxInfo {
     /// PID. Milliseconds — not `created_at`'s seconds — preserve sub-second
     /// ordering against a job's timeline.
     pub started_at: i64,
+    /// Init exit code, when the box stopped because its command exited. Read it
+    /// only when [`Self::has_exit_code`] is nonzero — `0` is a valid exit code,
+    /// so it cannot double as "none recorded" the way [`Self::pid`] does.
+    pub exit_code: c_int,
+    /// Nonzero when [`Self::exit_code`] holds a recorded exit code.
+    pub has_exit_code: c_int,
 }
 
 #[repr(C)]
@@ -250,6 +256,8 @@ impl CBoxInfo {
             created_at: info.created_at.timestamp(),
             network: network_to_c_ptr(&info.network),
             started_at: info.started_at.map(|at| at.timestamp_millis()).unwrap_or(0),
+            exit_code: info.exit_code.unwrap_or(0) as c_int,
+            has_exit_code: if info.exit_code.is_some() { 1 } else { 0 },
         }
     }
 }

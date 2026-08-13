@@ -217,7 +217,7 @@ Metadata about a box.
 |-------|------|-------------|
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| undefined` | User-defined name |
-| `state` | `JsBoxStateInfo` | Runtime state with `status`, `running`, and optional `pid` fields |
+| `state` | `JsBoxStateInfo` | Runtime state with `status`, `running`, and optional `pid` and `exitCode` fields |
 | `createdAt` | `string` | Creation timestamp (ISO 8601) |
 | `startedAt` | `string \| undefined` | Most recent successful container start timestamp (RFC 3339); absent if not recorded or unavailable over REST |
 | `image` | `string` | OCI image reference or rootfs path |

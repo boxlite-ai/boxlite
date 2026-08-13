@@ -65,3 +65,17 @@ func cNetworkInfoTraversalTestFixtures() [4]*NetworkInfo {
 		cNetworkInfoToGo(&populated),
 	}
 }
+
+// A zero CBoxInfo traverses safely — cString and cNetworkInfoToGo both tolerate
+// NULL — so these fixtures vary only the exit-code fields.
+func cBoxInfoExitCodeTestFixtures() [3]*int {
+	unrecorded := C.CBoxInfo{}
+	exitedNonZero := C.CBoxInfo{exit_code: 3, has_exit_code: 1}
+	exitedZero := C.CBoxInfo{has_exit_code: 1}
+
+	return [3]*int{
+		cBoxInfoToGo(&unrecorded).ExitCode,
+		cBoxInfoToGo(&exitedNonZero).ExitCode,
+		cBoxInfoToGo(&exitedZero).ExitCode,
+	}
+}
