@@ -19,6 +19,7 @@ UNSAFE_PATTERNS = [
     (re.compile(r"(?i)https?://|\bhref\s*="), "external links"),
 ]
 MERMAID_LEFT_ARROWS = ("<-->", "<-.->", "<==>")
+MERMAID_RIGHT_ARROWS = ("-->", "---", "-.->", "==>", "--o", "--x")
 NODE_RE = re.compile(r'^\s*([a-z][a-z0-9_]*)\s*(?:\[\[|\[\(|\[|\(\(|\(|\{\{\{|\{\{|\{|>)\s*["\']?(.+?)["\']?\s*(?:\]\]|\)\]|\]|\)\)|\)|\}\}\}|\}\}|\}|\])\s*$')
 EDGE_RE = re.compile(
     r'^\s*([a-z][a-z0-9_]*)\s+([a-z][a-z0-9_]*)@(?:-->|---|-.->|==>|--o|--x|o--o|x--x|<-->|<-.->|<==>)'
@@ -77,7 +78,7 @@ def _parse_architecture(ctx: ValidationContext, state: str, block: StateBlock, e
                 errors.append(f"architecture/{state} duplicates node ID {node_id!r}")
             ctx.parsed.architecture_nodes[key] = _clean_label(label)
             continue
-        if re.search(r"(?:-->|---|-.->|==>|--o|--x)", line):
+        if any(arrow in line for arrow in MERMAID_RIGHT_ARROWS):
             errors.append(f"architecture/{state} line {block.start_line + offset} has an arrow without a canonical edge ID")
 
 
