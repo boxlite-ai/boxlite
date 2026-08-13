@@ -54,7 +54,7 @@ function makeJob(type: JobType, overrides: Partial<ConstructorParameters<typeof 
     type,
     status: JobStatus.COMPLETED,
     runnerId: TARGET_RUNNER,
-    resourceType: ResourceType.BOX,
+    resourceType: ResourceType.BACKUP,
     resourceId: BOX_ID,
     ...overrides,
   })

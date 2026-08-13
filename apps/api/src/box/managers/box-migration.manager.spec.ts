@@ -133,7 +133,7 @@ describe('BoxMigrationManager submitter loop', () => {
       h.entityManager,
       JobType.EXPORT_BOX,
       SOURCE_RUNNER,
-      ResourceType.BOX,
+      ResourceType.BACKUP,
       BOX_ID,
       { arcPath: 'box-migrations/box-1.boxlite' },
     )
@@ -154,7 +154,7 @@ describe('BoxMigrationManager submitter loop', () => {
       h.entityManager,
       JobType.EXPORT_BOX,
       SOURCE_RUNNER,
-      ResourceType.BOX,
+      ResourceType.BACKUP,
       BOX_ID,
       { arcPath: 's3://archives/tenant-a/box-1.boxlite' },
     )
@@ -213,7 +213,7 @@ describe('BoxMigrationManager submitter loop', () => {
       h.entityManager,
       JobType.IMPORT_BOX,
       TARGET_RUNNER,
-      ResourceType.BOX,
+      ResourceType.BACKUP,
       BOX_ID,
       { arcPath: 'box-migrations/box-1.boxlite' },
     )
@@ -272,7 +272,7 @@ describe('BoxMigrationManager rollback submitter loop', () => {
       null,
       JobType.ROLLBACK_EXPORT_BOX,
       SOURCE_RUNNER,
-      ResourceType.BOX,
+      ResourceType.BACKUP,
       BOX_ID,
       { arcPath: 'box-migrations/box-1.boxlite' },
     )
@@ -280,7 +280,7 @@ describe('BoxMigrationManager rollback submitter loop', () => {
       null,
       JobType.ROLLBACK_IMPORT_BOX,
       TARGET_RUNNER,
-      ResourceType.BOX,
+      ResourceType.BACKUP,
       BOX_ID,
       undefined,
     )
@@ -318,7 +318,7 @@ describe('BoxMigrationManager rollback submitter loop', () => {
       null,
       JobType.DISCARD_EXPORTED_BOX,
       SOURCE_RUNNER,
-      ResourceType.BOX,
+      ResourceType.BACKUP,
       BOX_ID,
       { arcPath: 'box-migrations/box-1.boxlite' },
     )

@@ -313,7 +313,7 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
           entityManager,
           jobType,
           target.runnerId,
-          ResourceType.BOX,
+          ResourceType.BACKUP,
           box.id,
           target.payload,
         )
@@ -404,7 +404,7 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
     }
 
     try {
-      await this.jobService.createJob(null, jobType, runnerId, ResourceType.BOX, migration.boxId, payload)
+      await this.jobService.createJob(null, jobType, runnerId, ResourceType.BACKUP, migration.boxId, payload)
       this.logger.log(`Submitted ${jobType} for box ${migration.boxId} to runner ${runnerId}`)
     } catch (error) {
       this.logger.error(`Error submitting ${jobType} for box ${migration.boxId}:`, error)

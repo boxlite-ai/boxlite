@@ -11,6 +11,12 @@ import { ResourceType } from '../enums/resource-type.enum'
  * Type-safe mapping between JobType and its corresponding ResourceType(s) + Payload
  * This ensures compile-time safety when creating jobs
  * resourceType is an array of allowed ResourceTypes - the user can supply any of them
+ *
+ * The resource type is also a namespace: IDX_UNIQUE_INCOMPLETE_JOB allows one
+ * incomplete job per (resourceType, resourceId, runnerId). A migration's jobs act
+ * on the archive the box travels in rather than on the box itself, and they run
+ * against a box a user may start or stop at the same time, so they are namespaced
+ * under BACKUP to keep out of the box's own lifecycle slot.
  */
 export interface JobTypeMap {
   [JobType.CREATE_BOX]: {
@@ -26,19 +32,19 @@ export interface JobTypeMap {
     resourceType: [ResourceType.BOX]
   }
   [JobType.EXPORT_BOX]: {
-    resourceType: [ResourceType.BOX]
+    resourceType: [ResourceType.BACKUP]
   }
   [JobType.IMPORT_BOX]: {
-    resourceType: [ResourceType.BOX]
+    resourceType: [ResourceType.BACKUP]
   }
   [JobType.ROLLBACK_EXPORT_BOX]: {
-    resourceType: [ResourceType.BOX]
+    resourceType: [ResourceType.BACKUP]
   }
   [JobType.ROLLBACK_IMPORT_BOX]: {
-    resourceType: [ResourceType.BOX]
+    resourceType: [ResourceType.BACKUP]
   }
   [JobType.DISCARD_EXPORTED_BOX]: {
-    resourceType: [ResourceType.BOX]
+    resourceType: [ResourceType.BACKUP]
   }
 }
 
