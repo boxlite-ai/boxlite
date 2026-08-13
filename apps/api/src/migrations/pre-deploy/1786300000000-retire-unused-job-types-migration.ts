@@ -13,7 +13,7 @@ export class RetireUnusedJobTypes1786300000000 implements MigrationInterface {
       `UPDATE "box" SET "state" = CASE "desiredState" WHEN 'started' THEN 'started'::"public"."box_state_enum" WHEN 'stopped' THEN 'stopped'::"public"."box_state_enum" ELSE 'error'::"public"."box_state_enum" END, "pending" = false, "errorReason" = CASE WHEN "desiredState" IN ('started', 'stopped') THEN "errorReason" ELSE 'Legacy resize job had an invalid desired state' END, "updatedAt" = NOW() WHERE "state" = 'resizing' AND EXISTS (SELECT 1 FROM "job" WHERE "job"."resourceId" = "box"."id" AND "job"."type" = 'RESIZE_BOX' AND "job"."completedAt" IS NULL)`,
     )
     await queryRunner.query(
-      `UPDATE "job" SET "status" = 'FAILED', "completedAt" = NOW(), "updatedAt" = NOW(), "errorMessage" = 'Job type is no longer supported' WHERE "completedAt" IS NULL AND "type" IN ('RESIZE_BOX', 'CREATE_BACKUP', 'PULL_ARTIFACT', 'RECOVER_BOX', 'INSPECT_ARTIFACT_IN_REGISTRY', 'REMOVE_ARTIFACT')`,
+      `UPDATE "job" SET "status" = 'FAILED', "completedAt" = NOW(), "updatedAt" = NOW(), "errorMessage" = 'Job type is no longer supported' WHERE "completedAt" IS NULL AND "type" IN ('RESIZE_BOX', 'CREATE_BACKUP', 'PULL_ARTIFACT', 'RECOVER_BOX', 'INSPECT_ARTIFACT_IN_REGISTRY', 'REMOVE_ARTIFACT', 'UPDATE_BOX_NETWORK_SETTINGS')`,
     )
   }
 

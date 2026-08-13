@@ -23,7 +23,6 @@ export const JobType = {
     START_BOX: 'START_BOX',
     STOP_BOX: 'STOP_BOX',
     DESTROY_BOX: 'DESTROY_BOX',
-    UPDATE_BOX_NETWORK_SETTINGS: 'UPDATE_BOX_NETWORK_SETTINGS',
     EXPORT_BOX: 'EXPORT_BOX',
     IMPORT_BOX: 'IMPORT_BOX',
     ROLLBACK_EXPORT_BOX: 'ROLLBACK_EXPORT_BOX',
@@ -33,4 +32,3 @@ export const JobType = {
 } as const;
 
 export type JobType = typeof JobType[keyof typeof JobType];
-

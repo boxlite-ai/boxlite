@@ -12,7 +12,6 @@ The type of the job
 
 * `DESTROY_BOX` (value: `'DESTROY_BOX'`)
 
-* `UPDATE_BOX_NETWORK_SETTINGS` (value: `'UPDATE_BOX_NETWORK_SETTINGS'`)
 
 * `EXPORT_BOX` (value: `'EXPORT_BOX'`)
 

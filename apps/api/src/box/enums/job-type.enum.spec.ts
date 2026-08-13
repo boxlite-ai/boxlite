@@ -13,7 +13,6 @@ describe('JobType', () => {
       'START_BOX',
       'STOP_BOX',
       'DESTROY_BOX',
-      'UPDATE_BOX_NETWORK_SETTINGS',
       'EXPORT_BOX',
       'IMPORT_BOX',
       'ROLLBACK_EXPORT_BOX',

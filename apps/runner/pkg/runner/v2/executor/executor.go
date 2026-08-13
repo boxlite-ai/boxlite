@@ -147,8 +147,6 @@ func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, err
 		resultMetadata, err = e.stopBox(ctx, job)
 	case apiclient.JOBTYPE_DESTROY_BOX:
 		resultMetadata, err = e.destroyBox(ctx, job)
-	case apiclient.JOBTYPE_UPDATE_BOX_NETWORK_SETTINGS:
-		resultMetadata, err = e.updateNetworkSettings(ctx, job)
 	case apiclient.JOBTYPE_EXPORT_BOX:
 		resultMetadata, err = e.exportBox(ctx, job)
 	case apiclient.JOBTYPE_IMPORT_BOX:

@@ -76,13 +76,3 @@ func (e *Executor) destroyBox(ctx context.Context, job *apiclient.Job) (any, err
 
 	return nil, nil
 }
-
-func (e *Executor) updateNetworkSettings(ctx context.Context, job *apiclient.Job) (any, error) {
-	var updateNetworkSettingsDto dto.UpdateNetworkSettingsDTO
-	err := e.parsePayload(job.Payload, &updateNetworkSettingsDto)
-	if err != nil {
-		return nil, common.FormatRecoverableError(fmt.Errorf("failed to unmarshal payload: %w", err))
-	}
-
-	return nil, e.backend.UpdateNetworkSettings(ctx, job.ResourceId, updateNetworkSettingsDto)
-}

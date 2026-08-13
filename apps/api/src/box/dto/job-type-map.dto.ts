@@ -25,9 +25,6 @@ export interface JobTypeMap {
   [JobType.DESTROY_BOX]: {
     resourceType: [ResourceType.BOX]
   }
-  [JobType.UPDATE_BOX_NETWORK_SETTINGS]: {
-    resourceType: [ResourceType.BOX]
-  }
   [JobType.EXPORT_BOX]: {
     resourceType: [ResourceType.BOX]
   }

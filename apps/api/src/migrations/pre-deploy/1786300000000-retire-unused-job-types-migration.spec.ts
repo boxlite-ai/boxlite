@@ -14,5 +14,6 @@ describe('RetireUnusedJobTypes1786300000000', () => {
     expect(query.mock.calls[0][0]).toContain(`WHERE "state" = 'resizing'`)
     expect(query.mock.calls[0][0]).toContain(`"job"."type" = 'RESIZE_BOX'`)
     expect(query.mock.calls[1][0]).toContain(`UPDATE "job" SET "status" = 'FAILED'`)
+    expect(query.mock.calls[1][0]).toContain(`'UPDATE_BOX_NETWORK_SETTINGS'`)
   })
 })

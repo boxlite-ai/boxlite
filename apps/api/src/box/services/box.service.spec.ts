@@ -294,6 +294,7 @@ describe('BoxService network tunnel URLs', () => {
 describe('BoxService public defaults', () => {
   function makeCreateService() {
     const boxRepository = { insert: jest.fn(async (box: any) => box) } as any
+    const warmPoolService = { fetchWarmPoolBox: jest.fn().mockResolvedValue(undefined) }
     const runner = { id: 'runner-1', draining: false, state: RunnerState.READY }
     const runnerService = {
       getRandomAvailableRunner: jest.fn().mockResolvedValue(runner),
@@ -315,14 +316,32 @@ describe('BoxService public defaults', () => {
         rollbackPendingUsage: jest.fn().mockResolvedValue(undefined),
       },
       redis: { exists: jest.fn().mockResolvedValue(1) },
+      warmPoolService,
       runnerService,
       redisLockProvider,
       boxRepository,
       eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
       toBoxDto: jest.fn((box) => box),
     })
-    return { service, boxRepository, runnerService, redisLockProvider }
+    return { service, boxRepository, runnerService, redisLockProvider, warmPoolService }
   }
+
+  it.each([
+    [{ networkBlockAll: true }, { boxLimitedNetworkEgress: false }, { networkBlockAll: true }],
+    [{ networkAllowList: '10.0.0.0/8' }, { boxLimitedNetworkEgress: false }, { networkAllowList: '10.0.0.0/8' }],
+    [{}, { boxLimitedNetworkEgress: true }, { networkBlockAll: true }],
+  ])('creates a fresh box instead of claiming a warm box when network policy is required', async (request, org, expected) => {
+    const { service, boxRepository, warmPoolService } = makeCreateService()
+    ;(service as any).redis.exists.mockResolvedValue(0)
+
+    await service.create(
+      { name: 'restricted-box', image: 'base', ...request } as any,
+      { id: 'org-1', ...org } as any,
+    )
+
+    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining(expected))
+  })
 
   it.each([
     [undefined, true],

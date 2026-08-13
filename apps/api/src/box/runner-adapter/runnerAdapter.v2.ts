@@ -17,7 +17,6 @@ import { JobStatus } from '../enums/job-status.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
-import { UpdateNetworkSettingsDTO } from '@boxlite-ai/runner-api-client'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -184,26 +183,11 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   }
 
   async updateNetworkSettings(
-    boxId: string,
-    networkBlockAll?: boolean,
-    networkAllowList?: string,
-    networkLimitEgress?: boolean,
+    _boxId: string,
+    _networkBlockAll?: boolean,
+    _networkAllowList?: string,
+    _networkLimitEgress?: boolean,
   ): Promise<void> {
-    const payload: UpdateNetworkSettingsDTO = {
-      networkBlockAll: networkBlockAll,
-      networkAllowList: networkAllowList,
-      networkLimitEgress: networkLimitEgress,
-    }
-
-    await this.jobService.createJob(
-      null,
-      JobType.UPDATE_BOX_NETWORK_SETTINGS,
-      this.runner.id,
-      ResourceType.BOX,
-      boxId,
-      payload,
-    )
-
-    this.logger.debug(`Created UPDATE_BOX_NETWORK_SETTINGS job for box ${boxId} on runner ${this.runner.id}`)
+    throw new Error('Live network settings updates with runner API version 2 are not supported')
   }
 }
