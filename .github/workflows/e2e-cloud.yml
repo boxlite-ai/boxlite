@@ -87,8 +87,8 @@ on:
     secrets:
       BOXLITE_DEV_API_KEY:
         # Named rather than inherited. `inherit` passes every secret the
-        # caller holds, which for deploy-infra means DEPLOY_ENV and the
-        # Cloudflare API token as well — none of the suite's business.
+        # caller holds, whatever that turns out to be — none of the suite's
+        # business, and the list is not this file's to track.
         # Its AWS access is not a secret and so was never at stake here;
         # that comes from OIDC, and `permissions` below is what withholds
         # it.

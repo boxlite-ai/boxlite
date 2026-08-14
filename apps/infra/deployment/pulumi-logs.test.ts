@@ -11,6 +11,25 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
 import { removePulumiEventLogs, withPulumiEventLogCleanup } from './pulumi-logs.js'
+import { STAGE_CONFIG_BOOKKEEPING_KEYS, stageConfigDigest } from './stage-config.js'
+
+/*
+ * The lines a synthetic `sst secret list` prints, digest included.
+ *
+ * The wrapper refuses a manifest with no matching digest — that shape is a `secret load` that tore
+ * between the two — so a fixture that omits it makes every one of these tests fail on the refusal
+ * rather than on what it means to check. The digest comes from the production function for the same
+ * reason bootstrap uses it: a hand-written constant here would be asserting the wrapper agrees with
+ * this file rather than with bootstrap.
+ */
+function syntheticSecretList(manifest: readonly string[], values: Record<string, string>) {
+  return [
+    '# boxlite/ci',
+    `BOXLITE_STAGE_CONFIG=${manifest.join(',')}`,
+    `BOXLITE_STAGE_CONFIG_DIGEST=${stageConfigDigest(manifest, values)}`,
+    ...Object.entries(values).map(([key, value]) => `${key}=${value}`),
+  ]
+}
 
 const SYNTHETIC_PROVIDER_TOKEN = 'synthetic-provider-token-for-regression-only'
 const INFRA_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
@@ -346,6 +365,13 @@ test('forwards one canonical Runner policy path to the SST process', async () =>
 const { appendFileSync } = require('node:fs')
 const args = process.argv.slice(2)
 appendFileSync(process.env.SYNTHETIC_SST_CALLS_PATH, JSON.stringify(args) + '\\n')
+if (args[0] === 'secret' && args[1] === 'list') {
+  const NL = String.fromCharCode(10)
+  process.stdout.write(${JSON.stringify(
+    syntheticSecretList(['STACK_DOMAIN'], { STACK_DOMAIN: 'ci.example.test' }),
+  )}.join(NL) + NL)
+  process.exit(0)
+}
 if (args[0] === 'state' && args[1] === 'export') {
   process.stdout.write(JSON.stringify({ stack: 'ci', latest: { resources: [] } }))
 }
@@ -374,12 +400,338 @@ if (args[0] === 'state' && args[1] === 'export') {
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line))
+    // The store read comes first and exactly once: everything after it — the Runner state baseline
+    // and the diff itself — is planned from the configuration it loads, so a second read would mean
+    // two answers for one command, and a later one would mean the plan was built without it.
     assert.deepEqual(calls, [
+      ['secret', 'list', '--stage', 'ci'],
       ['state', 'export', '--stage', 'ci', '--print-logs'],
       ['diff', '--stage', 'ci', '--policy', policyRoot],
     ])
   } finally {
     if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL')
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
+
+test('a manifested store with no digest stops the deploy instead of hydrating it', async () => {
+  // The shape a first `secret load` leaves if it tears between the values and the digest. Every
+  // manifest name is present, so nothing short of the digest can see it — and a wrapper that treated
+  // the absence as "cannot verify, carry on" would hydrate a configuration that never existed whole.
+  // Asserted end to end because the refusal lives in the wrapper: a unit test on hydrateStageConfig
+  // can only show the mismatch is detectable, not that anything acts on it.
+  const fixture = await fixtureRoot()
+  const fakeBin = join(fixture, 'bin')
+  const fakeSst = join(fakeBin, 'sst')
+  const capturedEnv = join(fixture, 'child-env.json')
+
+  await mkdir(fakeBin, { recursive: true })
+  await writeFile(
+    fakeSst,
+    `#!/usr/bin/env node
+const { writeFileSync } = require('node:fs')
+const args = process.argv.slice(2)
+if (args[0] === 'secret' && args[1] === 'list') {
+  const NL = String.fromCharCode(10)
+  // Deliberately no BOXLITE_STAGE_CONFIG_DIGEST line.
+  process.stdout.write(['# boxlite/ci', 'BOXLITE_STAGE_CONFIG=STACK_DOMAIN', 'STACK_DOMAIN=torn.example.test'].join(NL) + NL)
+  process.exit(0)
+}
+if (args[0] === 'state' && args[1] === 'export') {
+  process.stdout.write(JSON.stringify({ stack: 'ci', latest: { resources: [] } }))
+  process.exit(0)
+}
+writeFileSync(process.env.SYNTHETIC_ENV_PATH, JSON.stringify(process.env))
+`,
+    'utf8',
+  )
+  await chmod(fakeSst, 0o755)
+
+  const wrapper = spawnWrapper(['diff', '--stage', 'ci'], {
+    env: {
+      ...inheritedEnvironment(),
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      SST_BIN_PATH: fakeSst,
+      CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
+      CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
+      RUNNERS: '1',
+      DEFAULT_RUNNER_NAME: 'default',
+      SYNTHETIC_ENV_PATH: capturedEnv,
+    },
+    stdio: ['ignore', 'inherit', 'inherit'],
+  })
+
+  try {
+    assert.deepEqual(await waitForExit(wrapper), { code: 1, signal: null }, 'the wrapper must refuse')
+    // The refusal has to happen before sst is spawned to build anything — the env file is only written
+    // by the fake sst's fall-through, so its absence is the proof no plan was started.
+    assert.equal(await fileExists(capturedEnv), false, 'sst must not be invoked with a torn configuration')
+  } finally {
+    if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL')
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
+
+test('a stored stage configuration reaches the spawned SST process', async () => {
+  // The end-to-end claim the unit tests cannot make: a value that exists only in the secret store is
+  // read by the wrapper and present in the environment of the sst child that builds the plan. The
+  // fake sst answers `secret list` with a store and then records its own environment.
+  const fixture = await fixtureRoot()
+  const fakeBin = join(fixture, 'bin')
+  const fakeSst = join(fakeBin, 'sst')
+  const capturedEnv = join(fixture, 'child-env.json')
+
+  await mkdir(fakeBin, { recursive: true })
+  await writeFile(
+    fakeSst,
+    `#!/usr/bin/env node
+const { writeFileSync } = require('node:fs')
+const args = process.argv.slice(2)
+if (args[0] === 'secret' && args[1] === 'list') {
+  // String.fromCharCode(10), not an escape: this script lives in a template literal, so a
+  // backslash-n would be resolved before the file is written and leave a real newline inside a
+  // string literal — which is a syntax error in the generated script, not a line separator.
+  const NL = String.fromCharCode(10)
+  process.stdout.write(${JSON.stringify([
+    ...syntheticSecretList(['STACK_DOMAIN', 'APP_URL', 'NODE_OPTIONS'], {
+      STACK_DOMAIN: 'stored.example.test',
+      APP_URL: 'https://stored.example.test',
+      NODE_OPTIONS: '--require /tmp/synthetic-evil.js',
+    }),
+    // Present in the store but absent from the manifest, so outside the digest as well as hydration.
+    'PROXY_DOMAIN=stale.example.test',
+  ])}.join(NL) + NL)
+  process.exit(0)
+}
+if (args[0] === 'state' && args[1] === 'export') {
+  process.stdout.write(JSON.stringify({ stack: 'ci', latest: { resources: [] } }))
+  process.exit(0)
+}
+writeFileSync(process.env.SYNTHETIC_ENV_PATH, JSON.stringify(process.env))
+`,
+    'utf8',
+  )
+  await chmod(fakeSst, 0o755)
+
+  const wrapper = spawnWrapper(['diff', '--stage', 'ci'], {
+    env: {
+      ...inheritedEnvironment(),
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      SST_BIN_PATH: fakeSst,
+      CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
+      CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
+      RUNNERS: '1',
+      DEFAULT_RUNNER_NAME: 'default',
+      APP_URL: 'https://environment-wins.example.test',
+      SYNTHETIC_ENV_PATH: capturedEnv,
+    },
+    stdio: ['ignore', 'inherit', 'inherit'],
+  })
+
+  try {
+    assert.deepEqual(await waitForExit(wrapper), { code: 0, signal: null })
+    const childEnv = JSON.parse(await readFile(capturedEnv, 'utf8'))
+    assert.equal(childEnv.STACK_DOMAIN, 'stored.example.test', 'a stored value must reach the sst child')
+    assert.equal(childEnv.APP_URL, 'https://environment-wins.example.test', 'the environment must beat the store')
+    assert.equal(childEnv.PROXY_DOMAIN, undefined, 'a key off the manifest must not be hydrated')
+    assert.equal(childEnv.NODE_OPTIONS, undefined, 'a process control must not be hydrated even if manifested')
+  } finally {
+    if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL')
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
+
+test('an unreadable stage configuration store stops every command that builds a plan', async () => {
+  // `diff` included, though it only reads. A preview built from defaults is not a preview of the
+  // deploy that follows: the operator approves that plan, the apply then reads the store fine, and
+  // reconciles something nobody reviewed. Both fail or neither does.
+  const fixture = await fixtureRoot()
+  const fakeBin = join(fixture, 'bin')
+  const fakeSst = join(fakeBin, 'sst')
+  const planCalled = join(fixture, 'plan-called')
+
+  await mkdir(fakeBin, { recursive: true })
+  await writeFile(
+    fakeSst,
+    `#!/usr/bin/env node
+const { writeFileSync } = require('node:fs')
+const args = process.argv.slice(2)
+if (args[0] === 'secret' && args[1] === 'list') process.exit(7)
+if (args[0] === 'state' && args[1] === 'export') {
+  process.stdout.write(JSON.stringify({ stack: 'ci', latest: { resources: [] } }))
+  process.exit(0)
+}
+writeFileSync(process.env.SYNTHETIC_PLAN_PATH, args[0])
+`,
+    'utf8',
+  )
+  await chmod(fakeSst, 0o755)
+
+  const environment = {
+    ...inheritedEnvironment(),
+    PATH: `${fakeBin}:${process.env.PATH}`,
+    SST_BIN_PATH: fakeSst,
+    CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
+    CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
+    RUNNERS: '1',
+    DEFAULT_RUNNER_NAME: 'default',
+    SYNTHETIC_PLAN_PATH: planCalled,
+  }
+
+  try {
+    const deploying = spawnWrapper(['deploy', '--stage', 'ci'], { env: environment, stdio: 'ignore' })
+    assert.deepEqual(await waitForExit(deploying), { code: 1, signal: null }, 'a deploy must stop when the store cannot be read')
+    assert.equal(await fileExists(planCalled), false, 'no plan may run without the stage configuration')
+
+    // Each subcommand individually rather than assumed from `deploy`: remove tears the stack down,
+    // refresh rewrites its state, and diff feeds the review the apply is judged against.
+    for (const writing of ['remove', 'refresh']) {
+      const child = spawnWrapper([writing, '--stage', 'ci'], { env: environment, stdio: 'ignore' })
+      assert.deepEqual(
+        await waitForExit(child),
+        { code: 1, signal: null },
+        `${writing} writes, so it must stop when the store cannot be read`,
+      )
+      assert.equal(await fileExists(planCalled), false, `${writing} must not reach sst`)
+    }
+
+    const diffing = spawnWrapper(['diff', '--stage', 'ci'], { env: environment, stdio: 'ignore' })
+    assert.deepEqual(
+      await waitForExit(diffing),
+      { code: 1, signal: null },
+      'a preview against defaults would not describe the deploy that follows it',
+    )
+    assert.equal(await fileExists(planCalled), false, 'no plan may run without the stage configuration')
+  } finally {
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
+
+test('a failed store read never repeats what sst printed', async () => {
+  // execFileSync builds its error message from the failed command line and the captured stdio, and
+  // for `secret list` that output is the store's contents. The wrapper must report the exit status
+  // only. The fake sst fails after printing a recognisable secret to both streams, and neither may
+  // appear in anything the wrapper writes.
+  const fixture = await fixtureRoot()
+  const fakeBin = join(fixture, 'bin')
+  const fakeSst = join(fakeBin, 'sst')
+  const leaked = 'synthetic-store-value-that-must-not-be-echoed'
+
+  await mkdir(fakeBin, { recursive: true })
+  await writeFile(
+    fakeSst,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2)
+if (args[0] === 'secret' && args[1] === 'list') {
+  process.stdout.write('STACK_DOMAIN=${leaked}')
+  process.stderr.write('sst: ${leaked}')
+  process.exit(9)
+}
+process.exit(0)
+`,
+    'utf8',
+  )
+  await chmod(fakeSst, 0o755)
+
+  const wrapper = spawnWrapper(['diff', '--stage', 'ci'], {
+    env: {
+      ...inheritedEnvironment(),
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      SST_BIN_PATH: fakeSst,
+      CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
+      CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
+      RUNNERS: '1',
+      DEFAULT_RUNNER_NAME: 'default',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  let captured = ''
+  wrapper.stdout.on('data', (chunk: any) => {
+    captured += chunk
+  })
+  wrapper.stderr.on('data', (chunk: any) => {
+    captured += chunk
+  })
+
+  try {
+    await waitForExit(wrapper)
+    assert.ok(captured.includes('could not read the ci stage configuration'), 'the failure must still be reported')
+    assert.equal(captured.includes(leaked), false, "the wrapper must not repeat sst's captured output")
+    assert.ok(captured.includes('sst exited 9'), 'the exit status is what identifies the failure')
+  } finally {
+    if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL')
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
+
+test('npm run secrets prints names without values or the manifest', async () => {
+  // The command exists because `sst secret list` inherited sst's stdio and printed every value, which
+  // now means the whole stage configuration. Asserted at the CLI, not on the parser: the leak this
+  // replaces was in how the process was wired, so only running it proves anything.
+  const fixture = await fixtureRoot()
+  const fakeBin = join(fixture, 'bin')
+  const fakeSst = join(fakeBin, 'sst')
+  const value = 'synthetic-value-that-must-stay-hidden'
+
+  await mkdir(fakeBin, { recursive: true })
+  await writeFile(
+    fakeSst,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2)
+if (args[0] === 'secret' && args[1] === 'list') {
+  const NL = String.fromCharCode(10)
+  process.stdout.write(${JSON.stringify([
+    ...syntheticSecretList(['STACK_DOMAIN'], { STACK_DOMAIN: value }),
+    // An app secret sst resolves itself; named by nothing here, so never hydrated.
+    `OIDC_CLIENT_ID=${value}`,
+  ])}.join(NL) + NL)
+  process.exit(0)
+}
+process.exit(0)
+`,
+    'utf8',
+  )
+  await chmod(fakeSst, 0o755)
+
+  const listing = spawn(process.execPath, ['--import', 'tsx', 'deployment/secret-names.ts', '--stage', 'ci'], {
+    cwd: INFRA_ROOT,
+    env: {
+      ...inheritedEnvironment(),
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      SST_BIN_PATH: fakeSst,
+      CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
+      CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  let output = ''
+  listing.stdout.on('data', (chunk: any) => {
+    output += chunk
+  })
+  listing.stderr.on('data', (chunk: any) => {
+    output += chunk
+  })
+
+  try {
+    assert.deepEqual(await waitForExit(listing), { code: 0, signal: null })
+    assert.ok(output.includes('STACK_DOMAIN'), 'the names are the point of the command')
+    assert.ok(output.includes('OIDC_CLIENT_ID'), 'an app secret is still worth listing by name')
+    assert.equal(output.includes(value), false, 'no value may be printed')
+    // Each bookkeeping key by name, from the exported list. A single `includes('BOXLITE_STAGE_CONFIG')`
+    // passed for the wrong reason once the digest key arrived: its name contains the manifest's, so the
+    // check could not tell "neither is printed" from "one of them is".
+    for (const bookkeeping of STAGE_CONFIG_BOOKKEEPING_KEYS) {
+      assert.equal(output.includes(bookkeeping), false, `${bookkeeping} is bookkeeping, not a secret`)
+    }
+
+    // Spawning the script directly proves the script is safe, not that `npm run secrets` uses it.
+    // Without this, restoring the old `sst secret list` wiring — the leak this replaced — stays green.
+    const scripts = JSON.parse(await readFile(join(INFRA_ROOT, 'package.json'), 'utf8')).scripts
+    assert.equal(scripts.secrets, 'tsx deployment/secret-names.ts')
+  } finally {
+    if (listing.exitCode === null && listing.signalCode === null) listing.kill('SIGKILL')
     await rm(fixture, { recursive: true, force: true })
   }
 })
@@ -396,7 +748,15 @@ test('interrupts a pending Runner state export when the wrapper is terminated', 
     fakeSst,
     `#!/usr/bin/env node
 const { writeFileSync } = require('node:fs')
-if (process.argv[2] !== 'state' || process.argv[3] !== 'export') process.exit(99)
+const args = process.argv.slice(2)
+if (args[0] === 'secret' && args[1] === 'list') {
+  const NL = String.fromCharCode(10)
+  process.stdout.write(${JSON.stringify(
+    syntheticSecretList(['STACK_DOMAIN'], { STACK_DOMAIN: 'ci.example.test' }),
+  )}.join(NL) + NL)
+  process.exit(0)
+}
+if (args[0] !== 'state' || args[1] !== 'export') process.exit(99)
 writeFileSync(process.env.SYNTHETIC_SST_PID_PATH, String(process.pid))
 // The wrapper must still terminate a state export that refuses graceful shutdown.
 process.on('SIGTERM', () => {})
@@ -459,7 +819,25 @@ test('interrupts Runner release preflight without starting SST', async () => {
   let curlPid: any
 
   await mkdir(fakeBin, { recursive: true })
-  await writeFile(fakeSst, `#!/bin/sh\nprintf called > "$SYNTHETIC_SST_CALL_PATH"\n`, 'utf8')
+  // Records what it was asked to do, not merely that it ran: the wrapper legitimately reads the
+  // stage's configuration out of the secret store before the preflight, so "sst was never spawned"
+  // is no longer the property under test. What must hold is that nothing which MUTATES the stack
+  // ran — asserted below on the recorded subcommands.
+  //
+  // `secret list` answers with a manifest because a deploy against a store that names nothing now
+  // stops before it reaches the preflight this test is about.
+  await writeFile(
+    fakeSst,
+    `#!/bin/sh
+echo "$@" >> "$SYNTHETIC_SST_CALL_PATH"
+if [ "$1" = "secret" ] && [ "$2" = "list" ]; then
+${syntheticSecretList(['STACK_DOMAIN'], { STACK_DOMAIN: 'ci.example.test' })
+  .map((line) => `  echo ${JSON.stringify(line)}`)
+  .join('\n')}
+fi
+`,
+    'utf8',
+  )
   await writeFile(fakeAws, '#!/bin/sh\nexit 0\n', 'utf8')
   await writeFile(
     fakeCurl,
@@ -507,7 +885,18 @@ setInterval(() => {}, 1_000)
         throw error
       }
     }, 'the synthetic release preflight to exit')
-    assert.equal(await fileExists(sstCallFile), false, 'SST must not start after an interrupted release preflight')
+    const sstInvocations = (await fileExists(sstCallFile))
+      ? (await readFile(sstCallFile, 'utf8')).trim().split('\n').filter(Boolean)
+      : []
+    // Reading the store is fine and expected; nothing else is. Matched on the whole invocation rather
+    // than its first word, because `secret set`, `secret load` and `secret remove` all write — an
+    // assertion that allowed any `secret` subcommand would have passed them too.
+    const unexpected = sstInvocations.filter((invocation) => !/^secret list( |$)/.test(invocation))
+    assert.deepEqual(
+      unexpected,
+      [],
+      `only \`secret list\` may run after an interrupted release preflight (ran: ${sstInvocations.join(' | ')})`,
+    )
   } finally {
     if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL')
     if (Number.isSafeInteger(curlPid)) {

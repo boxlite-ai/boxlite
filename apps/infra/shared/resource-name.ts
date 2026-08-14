@@ -26,8 +26,11 @@
  *
  * Deliberately NOT applied to the other AWS names this repository owns, each for its own reason:
  *
- *   boxlite-<stage>-github-deploy    live, and its ARN is stored in the dev GitHub environment
- *                                    variable AWS_DEPLOY_ROLE_ARN, so renaming needs a re-bootstrap
+ *   boxlite-<stage>-github-deploy    live, and the deploy workflows compose its ARN from this exact
+ *                                    spelling (bootstrap/environment.ts's githubDeployRoleName,
+ *                                    pinned against the CloudFormation template by a test), so
+ *                                    renaming it means a CloudFormation replacement plus an edit
+ *                                    to every workflow — worth doing, but on its own
  *   boxlite-<stage>-runtime-boundary live, and attached as a permissions boundary to existing
  *                                    roles, so renaming the policy is a migration
  *   SST-managed resources            SST derives <app>-<stage>-<LogicalId>-<hash> from the app

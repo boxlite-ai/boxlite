@@ -8,7 +8,18 @@ import { fileURLToPath } from 'node:url'
 
 import { optionalPublicOidcIssuer, requireOidcIssuer } from './oidc.js'
 
-const DEFAULT_AWS_REGION = 'ap-southeast-1'
+// Exported because the deploy workflows carry it as a literal: `configure-aws-credentials` needs a
+// region before any AWS access exists, so it cannot come from the stage's secret store. A contract
+// test pins the YAML against this constant so the two cannot drift.
+export const DEFAULT_AWS_REGION = 'ap-southeast-1'
+
+/*
+ * The SST app name. One definition, because it is load-bearing in three unrelated places: the app
+ * SST deploys (stack/app.ts), the `<app>/<stage>` section header `sst secret list` prints
+ * (deployment/stage-config.ts), and the artifact resource names the preflights verify. SST derives
+ * every resource name from it, so the three must never disagree.
+ */
+export const SST_APP_NAME = 'boxlite'
 const STABLE_SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const DEFAULT_MODULE_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 

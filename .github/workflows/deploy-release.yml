@@ -85,7 +85,7 @@ jobs:
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage }}-github-deploy
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: deploy-release-${{ github.run_id }}
 
@@ -118,27 +118,15 @@ jobs:
             exit 1
           fi
 
-      - name: Materialize stage configuration
-        shell: bash
-        env:
-          DEPLOY_ENV: ${{ secrets.DEPLOY_ENV }}
-        run: |
-          set -euo pipefail
-          test -n "$DEPLOY_ENV"
-          umask 077
-          printf '%s\n' "$DEPLOY_ENV" > apps/infra/.env
-          if node -e "const pkg = require('./apps/infra/package.json'); process.exit(pkg.scripts?.['validate-environment'] ? 0 : 1)"; then
-            npm --prefix apps/infra run --silent validate-environment -- .env
-          elif [ -f apps/infra/scripts/deploy-environment-validation.mjs ]; then
-            node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env
-          else
-            echo 'selected commit has no supported deployment environment validator' >&2
-            exit 1
-          fi
-
       - name: Deploy published API and Runner artifacts
         working-directory: apps/infra
         shell: bash
+        # Same reason as deploy-infra: the wrapper reads the stage's SST secret store before invoking
+        # sst, and reading it initializes the Cloudflare provider. Without these the store read fails
+        # and a release deploy stops rather than reconciling against defaults.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           if node -e "const pkg = require('./package.json'); process.exit(pkg.scripts?.['validate-preview'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then
@@ -150,7 +138,3 @@ jobs:
             exit 1
           fi
           npm run deploy -- --stage "$STAGE" --policy "$policy"
-
-      - name: Remove materialized configuration
-        if: always()
-        run: rm -f apps/infra/.env

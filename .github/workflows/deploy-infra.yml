@@ -313,6 +313,37 @@ jobs:
               ;;
           esac
 
+      # Unconditional, unlike the component-selection probe above: this job deploys any commit on
+      # main and checks out THAT commit's apps/infra, and a commit predating the stage configuration
+      # store has a wrapper that still expects apps/infra/.env from the DEPLOY_ENV secret this
+      # workflow no longer writes. It would deploy with whatever defaults survived, so refuse here,
+      # before the deploy role is assumed, rather than half-way through a reconcile.
+      - name: Require stage configuration store support in the selected commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          capability=apps/infra/deployment/capabilities.json
+          status=unsupported
+          if [ -f "$capability" ]; then
+            if ! status=$(node -e "const fs=require('node:fs'); const c=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); console.log(c.version === 1 && c.stageConfigStore === true ? 'supported' : 'unsupported')" "$capability"); then
+              status=unreadable
+            fi
+          fi
+          case "$status" in
+            supported) ;;
+            unsupported)
+              echo "commit $BOXLITE_ARTIFACT_REF reads its stage configuration from apps/infra/.env," >&2
+              echo "which this workflow no longer materializes — it lives in the stage's SST secret" >&2
+              echo "store now. Deploy a commit whose $capability declares stageConfigStore." >&2
+              exit 1
+              ;;
+            *)
+              echo "$capability exists at commit $BOXLITE_ARTIFACT_REF but failed to load (reason" >&2
+              echo "above); fix the file rather than deploying without its configuration." >&2
+              exit 1
+              ;;
+          esac
+
       - name: Verify native AMD64 Docker
         shell: bash
         run: |
@@ -331,7 +362,10 @@ jobs:
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          # Composed from the stage's AWS_ACCOUNT_ID, not a stored AWS_DEPLOY_ROLE_ARN: the role
+          # name is fixed per stage (apps/infra/bootstrap/environment.ts's githubDeployRoleName, pinned
+          # against the CloudFormation template by a test), so only the account id has to be configured.
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage }}-github-deploy
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: deploy-${{ inputs.stage }}-stack-${{ github.run_id }}
 
@@ -416,35 +450,15 @@ jobs:
             exit 1
           fi
 
-      - name: Materialize stage configuration
-        shell: bash
-        env:
-          DEPLOY_ENV: ${{ secrets.DEPLOY_ENV }}
-        run: |
-          set -euo pipefail
-          test -n "$DEPLOY_ENV"
-          umask 077
-          printf '%s\n' "$DEPLOY_ENV" > apps/infra/.env
-          if node -e "const pkg = require('./apps/infra/package.json'); process.exit(pkg.scripts?.['validate-environment'] ? 0 : 1)"; then
-            npm --prefix apps/infra run --silent validate-environment -- .env
-          elif [ -f apps/infra/scripts/deploy-environment-validation.mjs ]; then
-            node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env
-          else
-            echo 'selected commit has no supported deployment environment validator' >&2
-            exit 1
-          fi
-
       - name: Install SST providers
         working-directory: apps/infra
         run: npm run --silent sst -- install --stage "$STAGE"
 
-      # These stay hand-made scoped API tokens. Cloudflare's `cf` CLI can mint
-      # an OAuth token carrying dns_records:edit, but it expires in about an
-      # hour and is renewed through a browser, which this unattended job has
-      # no way to complete. Supplying them as Environment secrets is optional:
-      # scripts/sst-with-cloudflare.mjs prefers an already-set env var and
-      # otherwise reads SSM, so a stage seeded via SSM keeps working with
-      # these unset.
+      # These stay hand-made scoped API tokens, and they stay GitHub Environment secrets rather than
+      # joining the stage's SST secret store: reading that store initializes the Cloudflare provider,
+      # so a token kept there would be needed in order to read itself. Whether this job could instead
+      # read the SSM copy apps/infra/deployment/sst.ts uses locally is untested — see the note there.
+      # Cloudflare also has no machine-to-machine OAuth grant to automate these with.
       - name: Preview the selected components
         shell: bash
         working-directory: apps/infra
@@ -494,10 +508,6 @@ jobs:
           args=(--stage "$STAGE" --policy "$policy")
           [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
           npm run deploy -- "${args[@]}"
-
-      - name: Remove materialized configuration
-        if: always()
-        run: rm -f apps/infra/.env
 
   # E2E cloud has no automatic trigger of its own; a deploy is the one
   # event that makes running it meaningful, because only here are the

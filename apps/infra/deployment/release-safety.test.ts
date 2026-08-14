@@ -2,13 +2,17 @@
 // Copyright (c) 2026 BoxLite AI
 
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { DEFAULT_SCHEMA, Type, load as loadYaml, type LoadOptions } from 'js-yaml'
 
+import { DEFAULT_AWS_REGION } from './environment.js'
 import { verifyDeployRoleGrantsBoundaryPermission } from './role-boundary.js'
+import { githubDeployRoleName } from '../bootstrap/environment.js'
 import { liveText } from '../shared/live-source.js'
 import { apiImageRepository } from '../artifacts/api.js'
 import { runnerArtifactsBucketName } from '../artifacts/runner.js'
@@ -52,27 +56,47 @@ const assertShellLine = (run: string, pattern: RegExp, message?: string) =>
 const assertLiveLine = (text: string, pattern: RegExp, message?: string) =>
   assert.match(liveText('script', text), pattern, message ?? `missing live line: ${pattern}`)
 
-function assertEnvironmentValidatorCompatibility(materializeStep: any) {
-  assert.ok(materializeStep, 'the stage configuration step is missing')
-  assertShellLine(
-    materializeStep.run,
-    /if node -e .*scripts\?\.\['validate-environment'\].*; then/,
-    'the workflow must prefer the selected commit validator facade',
+/*
+ * The stage's configuration reaches a deploy through the SST secret store, which
+ * deployment/sst.ts reads with the AWS credentials the job already holds. Nothing may reintroduce
+ * the GitHub half of that: `DEPLOY_ENV` put stage config in a second control plane, and writing it
+ * out as apps/infra/.env made a gitignored local file a CI transport format.
+ *
+ * Asserted as an absence, over the whole file rather than one step, because the failure this guards
+ * is a step being *added* back — anywhere in the job.
+ */
+function assertNoMaterializedStageConfig(workflow: any, source: string) {
+  assert.doesNotMatch(source, /secrets\.DEPLOY_ENV/, 'stage config must come from the SST secret store, not DEPLOY_ENV')
+  // The redirect specifically, not any mention of the path: the capability gate's own refusal message
+  // names apps/infra/.env to explain what an old commit expects, and a guard that cannot tell prose
+  // from a write would forbid explaining the thing it protects.
+  assert.doesNotMatch(source, />\s*apps\/infra\/\.env/, 'no workflow step may write apps/infra/.env')
+  assert.doesNotMatch(source, /rm -f apps\/infra\/\.env/, 'nothing should need to clean up a materialized .env')
+  assert.doesNotMatch(source, /validate-environment/, 'the DEPLOY_ENV validator went away with DEPLOY_ENV')
+  for (const step of workflow.jobs.deploy.steps) {
+    assert.notEqual(step.name, 'Materialize stage configuration')
+    assert.notEqual(step.name, 'Remove materialized configuration')
+  }
+}
+
+/*
+ * The deploy role ARN is read before any AWS credentials exist, so it cannot come from the store.
+ * Only the account id is unknown though — the role name is githubDeployRoleName(stage) — so the
+ * workflows compose it from the stage's AWS_ACCOUNT_ID instead of a per-stage AWS_DEPLOY_ROLE_ARN.
+ * Pinned against the same helper bootstrap uses, so the two cannot drift.
+ */
+function assertComposedDeployRoleArn(source: string, stageExpression: string) {
+  const expected = `role-to-assume: arn:aws:iam::\${{ vars.AWS_ACCOUNT_ID }}:role/${githubDeployRoleName('STAGE').replace('STAGE', stageExpression)}`
+  assert.ok(source.includes(expected), `missing composed deploy role ARN: ${expected}`)
+  assert.doesNotMatch(source, /vars\.AWS_DEPLOY_ROLE_ARN/, 'the per-stage role ARN variable is gone')
+  // The region keeps its optional per-stage override — a stage in another region has no other way to
+  // say so, since it is read before any AWS access exists and so cannot come from the secret store.
+  // What matters is that the DEFAULT is the wrapper's own constant, so a stage that configures nothing
+  // deploys where every local command resolves to.
+  assert.ok(
+    source.includes(`\${{ vars.AWS_REGION || '${DEFAULT_AWS_REGION}' }}`),
+    `missing the defaulted region expression for ${DEFAULT_AWS_REGION}`,
   )
-  assertShellLine(
-    materializeStep.run,
-    /npm --prefix apps\/infra run --silent validate-environment -- \.env/,
-  )
-  assertShellLine(
-    materializeStep.run,
-    /elif \[ -f apps\/infra\/scripts\/deploy-environment-validation\.mjs \]; then/,
-    'the workflow must support historical commits',
-  )
-  assertShellLine(
-    materializeStep.run,
-    /node apps\/infra\/scripts\/deploy-environment-validation\.mjs apps\/infra\/\.env/,
-  )
-  assertShellLine(materializeStep.run, /selected commit has no supported deployment environment validator/)
 }
 
 function readDeployTemplate() {
@@ -179,6 +203,61 @@ test('SST deploy verifies the selected API image before invoking SST', () => {
   assertLiveLine(source, /if \(apiSource && \(apiSource\.kind === 'release' \|\| apiSource\.ref\)\) \{/)
 })
 
+test('what bootstrap stores is the .env it validated, read once', () => {
+  // Over live source: nothing executes bootstrap in a test. main() validates a snapshot before any
+  // external mutation, then ensureStageConfig runs after the OIDC provider, the GitHub Environment and
+  // possibly an Auth0 app exist — minutes later. A second read there would store whatever the file says
+  // by then, which is not what was checked.
+  const source = liveText('script', readFileSync(join(REPO_ROOT, 'apps/infra/bootstrap/bootstrap.ts'), 'utf8'))
+  const start = source.indexOf('function ensureStageConfig(')
+  assert.notEqual(start, -1, 'ensureStageConfig is missing')
+  const body = source.slice(start, source.indexOf('\n}\n', start))
+
+  assert.doesNotMatch(body, /readFileSync|requireStageEnvFile/, 'the payload must be handed in, not re-read')
+  assert.doesNotMatch(body, /prepareStageConfigLoad/, 'preparing it here would be the second read again')
+  // Exactly one read in the whole script, and it is the one main() validates.
+  assert.equal(
+    source.match(/readFileSync\(requireStageEnvFile\(\)/g)?.length,
+    1,
+    'the stage .env must be read in exactly one place',
+  )
+})
+
+test('every unusable stage configuration store stops the deploy rather than warning', () => {
+  // Over live source, for the reason the API-image test gives: nothing executes this path in a test,
+  // so a branch downgraded to a warning would leave every unit test passing. The store is now the only
+  // source of a stage's configuration, so "read it, and continue if that failed" would deploy against
+  // defaults — a stage silently reconciled to something nobody wrote.
+  const source = liveText('script', readFileSync(SST_WRAPPER, 'utf8'))
+  const start = source.indexOf('function loadStageConfig(')
+  assert.notEqual(start, -1, 'loadStageConfig is missing from the wrapper')
+  // To the function's own closing brace at column 0 — every declaration here is top-level, and a
+  // boundary guessed at the next function would silently count another one's branches.
+  const body = source.slice(start, source.indexOf('\n}\n', start))
+
+  // Unreadable, unbootstrapped, torn, half-written, and applying-nothing. Five refusals, each an error
+  // paired with an exit: downgrading any one to a warning drops both counts and fails here.
+  assert.equal(body.match(/process\.exit\(1\)/g)?.length, 5, 'a store the wrapper cannot use must exit')
+  assert.equal(body.match(/console\.error\(/g)?.length, 5, 'every refusal must say which one it is')
+  // Exactly one, and it is not a refusal: an unlisted key is a stale or hand-written entry that will
+  // never take effect, worth surfacing but not worth failing a deploy over.
+  assert.equal(body.match(/console\.warn\(/g)?.length, 1, 'only the unlisted-keys notice may warn')
+
+  // `diff` reads only, but a preview built from defaults is not a preview of the apply that follows —
+  // the operator approves that plan and the apply then reads the store successfully.
+  assertLiveLine(source, /STAGE_CONFIG_SUBCOMMANDS = new Set\(\[[^\]]*'diff'/)
+
+  /*
+   * No refusal may echo a value. Every one of them names keys — missing.join, manifestNames(stored) —
+   * and a future edit adding "…but the store holds <value>" would put a live credential in CI logs,
+   * which is exactly the leak the DEPLOY_ENV design was criticized for. `stored[` and `apply[` are the
+   * two ways a value gets into that string, so neither may appear in the messages.
+   */
+  for (const message of body.match(/console\.error\([\s\S]*?\)\n/g) ?? []) {
+    assert.doesNotMatch(message, /stored\[|apply\[/, 'a refusal must report key names, never a value')
+  }
+})
+
 test('SST deploy does not depend on a laptop-managed remote builder', () => {
   const source = readFileSync(SST_WRAPPER, 'utf8')
   const packageSource = readFileSync(join(REPO_ROOT, 'apps/infra/package.json'), 'utf8')
@@ -204,7 +283,6 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   const boundaryCheckStep = workflow.jobs.deploy.steps.find(
     (step: any) => step.name === 'Verify deploy role IAM boundary permissions',
   )
-  const materializeStep = workflow.jobs.deploy.steps.find((step: any) => step.name === 'Materialize stage configuration')
   const installStep = workflow.jobs.deploy.steps.find((step: any) => step.name === 'Install SST providers')
   const previewStep = workflow.jobs.deploy.steps.find((step: any) => step.name === 'Preview the selected components')
   const deployStep = workflow.jobs.deploy.steps.find((step: any) => step.name === 'Deploy the selected components')
@@ -332,7 +410,7 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.equal(workflow.jobs.e2e.uses, './.github/workflows/e2e-cloud.yml')
   assert.equal(workflow.jobs.e2e.with.ref, '${{ needs.resolve-ref.outputs.sha }}')
   assert.equal(workflow.jobs.e2e.if, '${{ inputs.apply }}')
-  // Named, not `inherit` — which would also hand the suite DEPLOY_ENV and the Cloudflare token.
+  // Named, not `inherit` — which would hand the suite every secret this job can reach.
   assert.equal(workflow.jobs.e2e.secrets.BOXLITE_DEV_API_KEY, '${{ secrets.BOXLITE_DEV_API_KEY }}')
   // `needs` carries the ordering the `if` relies on: no status-check function appears in that
   // expression, so the default success() is what stops the suite running behind a failed deploy.
@@ -433,8 +511,12 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.match(workflow.jobs.deploy.if, /!contains\(needs\.\*\.result, 'cancelled'\)/)
   assert.match(workflow.jobs.deploy.if, /github\.ref == 'refs\/heads\/main'/)
 
-  // Both components resolve to the one commit the build jobs actually produced. The stage secret
-  // cannot redirect that: deploy-environment-validation.mjs rejects the selector keys outright.
+  // Both components resolve to the one commit the build jobs actually produced. The stage's store
+  // cannot redirect that, at either boundary: bootstrap refuses to store the selector keys
+  // (deployableStageConfig), and hydration refuses them even if one is written by hand and named by
+  // the manifest — by the allowlist and the local-only denylist alike, so relaxing either one on its
+  // own does not open the door. The workflow's own env: block is a real environment variable too,
+  // which always beats a stored value.
   for (const selector of ['BOXLITE_ARTIFACT_SOURCE', 'API_ARTIFACT_SOURCE', 'RUNNER_ARTIFACT_SOURCE']) {
     assert.equal(workflow.jobs.deploy.env[selector], 'build', `${selector} must be set on the deploy job`)
   }
@@ -463,22 +545,34 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assertShellLine(archStep.run, /test "\$\(uname -m\)" = "x86_64"/)
   assertShellLine(archStep.run, /test "\$\(docker info --format '\{\{\.Architecture\}\}'\)" = "x86_64"/)
   assert.match(source, /aws-actions\/configure-aws-credentials@/)
-  assert.match(source, /role-to-assume: \$\{\{ vars\.AWS_DEPLOY_ROLE_ARN \}\}/)
-  assert.match(source, /secrets\.DEPLOY_ENV/)
+  assertComposedDeployRoleArn(source, '${{ inputs.stage }}')
   assert.equal(workflow.jobs.deploy.env.RUNNER_CREATE_ALLOWLIST, undefined)
   // Every sst step passes --stage "$STAGE"; without this job env they would all
   // run with an empty stage.
   assert.equal(workflow.jobs.deploy.env.STAGE, '${{ inputs.stage }}')
   assert.equal(workflow.jobs.deploy.env.IAM_PERMISSIONS_BOUNDARY_STAGE, '${{ inputs.stage }}')
-  assertEnvironmentValidatorCompatibility(materializeStep)
-  assert.doesNotMatch(materializeStep.run, /grep/)
+  assertNoMaterializedStageConfig(workflow, source)
+  // Any commit on main is deployable, and this job checks out THAT commit's apps/infra. One predating
+  // the store still expects apps/infra/.env, so it must be refused rather than deployed with whatever
+  // defaults survive — and refused before the deploy role is assumed.
+  const stageConfigGate = workflow.jobs.deploy.steps.find(
+    (step: any) => step.name === 'Require stage configuration store support in the selected commit',
+  )
+  assert.ok(stageConfigGate, 'the stage configuration capability gate is missing')
+  assert.equal(stageConfigGate.if, undefined, 'the gate must apply to every deploy, not just a narrowed scope')
+  assertShellLine(stageConfigGate.run, /c\.stageConfigStore === true/)
+  const credentialStep = workflow.jobs.deploy.steps.findIndex(
+    (step: any) => step.name === 'Configure AWS credentials through OIDC',
+  )
+  assert.ok(
+    workflow.jobs.deploy.steps.indexOf(stageConfigGate) < credentialStep,
+    'an unsupported commit must be refused before the deploy role is assumed',
+  )
+  // The capability this repo declares, so the gate cannot pass against a tree that lacks it.
+  const capabilities = JSON.parse(readFileSync(join(REPO_ROOT, 'apps/infra/deployment/capabilities.json'), 'utf8'))
+  assert.equal(capabilities.stageConfigStore, true)
   assert.ok(safetyTestStep, 'the deployment safety test step is missing')
   assert.equal(safetyTestStep.run, 'npm test')
-  const liveMaterialize = liveShell(materializeStep.run)
-  const materializeConfigIndex = liveMaterialize.indexOf('printf \'%s\\n\' "$DEPLOY_ENV" > apps/infra/.env')
-  const validateConfigIndex = liveMaterialize.indexOf("if node -e")
-  assert.notEqual(materializeConfigIndex, -1, 'the stage configuration is not materialized')
-  assert.ok(validateConfigIndex > materializeConfigIndex, 'DEPLOY_ENV must be validated after it is materialized')
   assert.ok(installStep, 'the SST provider installation step is missing')
   assert.equal(installStep.run, 'npm run --silent sst -- install --stage "$STAGE"')
   assert.ok(previewStep, 'the full-stack preview step is missing')
@@ -544,9 +638,8 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
     'The IAM boundary preflight must run after safety tests and before the deployment preview',
   )
   assert.ok(
-    workflow.jobs.deploy.steps.indexOf(materializeStep) < workflow.jobs.deploy.steps.indexOf(installStep) &&
-      workflow.jobs.deploy.steps.indexOf(installStep) < workflow.jobs.deploy.steps.indexOf(previewStep),
-    'SST providers must be installed after stage config and before the deployment preview',
+    workflow.jobs.deploy.steps.indexOf(installStep) < workflow.jobs.deploy.steps.indexOf(previewStep),
+    'SST providers must be installed before the deployment preview',
   )
   // A selector may name a component only through DEPLOY_EXCLUDE, whose value the `components`
   // choice allowlists. Hardcoding one here would deploy a fixed partial scope on every dispatch,
@@ -733,12 +826,124 @@ test('the cloud E2E suite is reachable only from a deploy or a human', () => {
   assert.equal(checkout.with.ref, '${{ inputs.ref || github.sha }}')
 })
 
+test('the deploy role cannot reach another stage in the SST backing store', () => {
+  // One bucket and one parameter tree hold every stage's state and secrets — the live bucket carries
+  // secret/boxlite/dev.json beside secret/boxlite/prod.json. With s3:* and ssm:* on '*', a job bound to
+  // the dev Environment could read prod's. This change makes the stage configuration authoritative in
+  // that store, so it is the whole stack's config now, not just its app secrets.
+  const template = readDeployTemplate()
+  const statements = template.Resources.GitHubDeployRole.Properties.Policies[0].PolicyDocument.Statement
+  const asArray = (value: any) => (Array.isArray(value) ? value : [value])
+
+  // No statement may grant either service account-wide again.
+  for (const statement of statements) {
+    const actions = asArray(statement.Action)
+    const wide = asArray(statement.Resource).includes('*')
+    const storeReaching = actions.some((action: string) => /^(s3|ssm):/.test(action) && action.endsWith(':*'))
+    assert.equal(
+      wide && storeReaching,
+      false,
+      `${statement.Sid} grants ${actions.filter((a: string) => /^(s3|ssm):/.test(a)).join(', ')} on every resource`,
+    )
+  }
+
+  // Every state object names the stage. `!Sub` is parsed to its literal body by CLOUDFORMATION_SCHEMA,
+  // so the interpolation is visible as text.
+  const stateObjects = statements.find((statement: any) => statement.Sid === 'SstStateObjectsForThisStage')
+  assert.ok(stateObjects, 'the stage-scoped state grant is missing')
+  for (const resource of asArray(stateObjects.Resource)) {
+    const scoped = resource.includes('${GitHubEnvironment}') || resource.includes('sst-asset-')
+    assert.ok(scoped, `${resource} is not scoped to the stage`)
+  }
+
+  // All seven prefixes SST writes. lock/ and summary/ are in this list precisely because a live
+  // `list-objects` could not see them — a lock exists only while an update runs — so they came from
+  // sst's own provider.go. A policy built from the listing alone fails when a deploy takes its lock.
+  for (const prefix of ['app/', 'secret/', 'eventlog/', 'snapshot/', 'update/', 'lock/', 'summary/']) {
+    assert.ok(
+      asArray(stateObjects.Resource).some((resource: string) => resource.includes(`/${prefix}boxlite/`)),
+      `no grant covers the ${prefix} state prefix, so a deploy cannot write it`,
+    )
+  }
+
+  // `_fallback` belongs to the app, not a stage, so it cannot be scoped — it is read-only instead.
+  const fallback = statements.find((statement: any) => statement.Sid === 'SstFallbackSecretsRead')
+  assert.ok(fallback, 'the fallback secret grant is missing, so a stage using fallbacks cannot deploy')
+  assert.deepEqual([...asArray(fallback.Action)].sort(), ['s3:GetObject', 's3:GetObjectVersion'])
+
+  const parameters = statements.find((statement: any) => statement.Sid === 'SstParametersForThisStage')
+  assert.ok(parameters, 'the stage-scoped parameter grant is missing')
+
+  /*
+   * /sst/bootstrap names the state and asset buckets every stage shares, and it is read before SST
+   * knows its stage, so it cannot be stage-scoped — which makes it the one parameter a stage must not
+   * be able to write. Rewriting it repoints every other stage's state; deleting it breaks them all.
+   */
+  const sharedBootstrap = '/sst/bootstrap'
+  for (const statement of statements) {
+    const touchesSharedBootstrap = asArray(statement.Resource).some(
+      (resource: any) => typeof resource === 'string' && resource.endsWith(`parameter${sharedBootstrap}`),
+    )
+    if (!touchesSharedBootstrap) continue
+    const mutating = asArray(statement.Action).filter((action: string) => !/^ssm:(Get|List|Describe)/.test(action))
+    assert.deepEqual(mutating, [], `${statement.Sid} may not mutate the shared ${sharedBootstrap}`)
+  }
+  const passphrase = asArray(parameters.Resource).find((resource: string) => resource.includes('/sst/passphrase/'))
+  assert.ok(
+    passphrase && passphrase.includes('${GitHubEnvironment}'),
+    'the passphrase decrypts one stage of state and must not be shared',
+  )
+})
+
+test('the stage configuration capability probe answers each selected-commit shape', () => {
+  // The gate is shell inside YAML, so the contract assertions above can only prove it is present.
+  // This runs the probe's own `node -e` expression against the three trees a dispatch can select: one
+  // that declares the capability, one from before it existed, and one whose file is corrupt. The last
+  // must not read as "supported" — a parse failure falling through to the happy path would deploy
+  // exactly the commit the gate exists to refuse.
+  const workflow = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
+  const gate = workflow.jobs.deploy.steps.find(
+    (step: any) => step.name === 'Require stage configuration store support in the selected commit',
+  )
+  assert.ok(gate, 'the capability gate is missing')
+  const probe = liveShell(gate.run)
+    .split('\n')
+    .map((line: string) => line.trim())
+    .find((line: string) => line.startsWith('if ! status=$(node -e'))
+  assert.ok(probe, 'the capability probe is not a node -e expression any more')
+  const expression = probe.slice(probe.indexOf('"') + 1, probe.lastIndexOf('" "$capability"'))
+
+  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-capability-probe-'))
+  const capability = join(fixture, 'capabilities.json')
+  try {
+    const cases: Array<[string, string]> = [
+      ['supported', JSON.stringify({ version: 1, componentSelection: true, stageConfigStore: true })],
+      ['unsupported', JSON.stringify({ version: 1, componentSelection: true })],
+      ['unsupported', JSON.stringify({ version: 2, stageConfigStore: true })],
+    ]
+    for (const [expected, contents] of cases) {
+      writeFileSync(capability, contents)
+      const status = execFileSync(process.execPath, ['-e', expression, capability], { encoding: 'utf8' }).trim()
+      assert.equal(status, expected, `probe answered '${status}' for ${contents}`)
+    }
+
+    // Corrupt JSON must throw rather than print a status: that is what makes the workflow's
+    // `if ! status=$(...)` branch set `unreadable` and refuse instead of falling through.
+    writeFileSync(capability, '{ not json')
+    assert.throws(() =>
+      execFileSync(process.execPath, ['-e', expression, capability], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }),
+    )
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
 test('release deployment consumes one published version for both components', () => {
   const source = readFileSync(RELEASE_DEPLOY_WORKFLOW, 'utf8')
   const workflow = load(source)
-  const materializeStep = workflow.jobs.deploy.steps.find(
-    (step: any) => step.name === 'Materialize stage configuration',
-  )
   const deployStep = workflow.jobs.deploy.steps.find(
     (step: any) => step.name === 'Deploy published API and Runner artifacts',
   )
@@ -764,7 +969,8 @@ test('release deployment consumes one published version for both components', ()
   assert.equal(workflow.on.workflow_dispatch.inputs.stage.type, 'choice')
   assert.deepEqual(workflow.on.workflow_dispatch.inputs.stage.options, ['dev', 'prod'])
   assert.ok(deployStep)
-  assertEnvironmentValidatorCompatibility(materializeStep)
+  assertNoMaterializedStageConfig(workflow, source)
+  assertComposedDeployRoleArn(source, '${{ inputs.stage }}')
   // The same guarded wrapper and the same pre-deploy gates the build path uses: a release
   // deploy reconciles the identical stack, so it owes the identical safety checks.
   assert.equal(deployStep.shell, 'bash')

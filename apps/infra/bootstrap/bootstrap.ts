@@ -4,9 +4,24 @@
 /*
  * Idempotent, human-run environment preparation for a BoxLite SST
  * deployment: the GitHub OIDC deploy role + runtime IAM boundary
- * (bootstrap/aws/github-deploy-role.yaml), the Cloudflare provider credentials in SSM,
- * the OIDC_CLIENT_ID SST secret, and the GitHub `<stage>` Environment
- * variables/secret the deploy workflow reads. See apps/infra/README.md's
+ * (bootstrap/aws/github-deploy-role.yaml), the GitHub `<stage>` Environment the
+ * deploy workflow binds to, the Cloudflare provider credentials in SSM, and the
+ * stage's own configuration — OIDC_CLIENT_ID, and every key from .env that is not
+ * local-only (deployableStageConfig) — in its SST secret store.
+ *
+ * Four things are written on the GitHub side, all on the stage's own Environment
+ * rather than the repository, so two stages never share them: the variables
+ * AWS_ACCOUNT_ID and AWS_REGION, and the secrets CLOUDFLARE_API_TOKEN and
+ * CLOUDFLARE_DEFAULT_ACCOUNT_ID. None of the four can come from the store: the
+ * workflow composes the deploy role ARN from the account id before any AWS
+ * credentials exist, and reading the store initializes the Cloudflare provider, so
+ * a token kept there would be needed in order to read itself.
+ *
+ * A local deploy reads the Cloudflare pair from SSM instead — or straight from
+ * .env, which wins over both, along with the rest of the local-only keys
+ * (deployment/sst.ts). Everything else, either way, comes from the store.
+ *
+ * See apps/infra/README.md's
  * "Deploy an existing stack" section for the full prerequisite list this
  * script does NOT cover (Cloudflare domain, Auth0/OIDC tenant, an existing
  * Runner — first-Runner provisioning is a separate, not-yet-built operation).
@@ -28,7 +43,8 @@
  *                a community fork resolves to itself automatically)
  *   --reviewers  Comma-separated numeric GitHub user ids required to approve a
  *                deployment (default: whoever is authenticated with `gh`)
- *   --force      see decideSsmOverwrite() in environment-bootstrap.mjs
+ *   --force      re-prompt for a Cloudflare credential that is already seeded
+ *                (decideCredentialRotation() in bootstrap/cloudflare-credentials.ts)
  *   --provision-auth0
  *                Create the Auth0 SPA app, custom API, and post-login Action
  *                (requires `npm run login` first). NOT idempotent — Auth0 has no
@@ -50,20 +66,24 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { hasFlag, parseFlag } from '../shared/cli-flags.js'
+import { decideCredentialRotation, writeCloudflareCredential } from './cloudflare-credentials.js'
+import { withStageConfigFile } from './stage-config-file.js'
 import { loadDeploymentEnvironment, resolveAwsRegion } from '../deployment/environment.js'
 import {
   GITHUB_OIDC_PROVIDER_URL,
   MINIMUM_AWS_CLI_VERSION,
   cloudFormationDeployChanged,
   cloudFormationParameterOverrides,
-  decideSsmOverwrite,
   githubDeployRoleStackName,
   hasGitHubOidcProvider,
   isAwsCliVersionAtLeast,
+  prepareStageConfigLoad,
+  serializeStageConfig,
   ssmParameterName,
   sstPlatformState,
   validateGitHubRepo,
 } from './environment.js'
+import { validateDotenvSyntax } from '../deployment/validate-environment.js'
 import {
   bindActionArgs,
   createActionArgs,
@@ -292,26 +312,94 @@ function putSsmSecureParameter(awsCliPath: any, region: any, name: any, value: a
   )
 }
 
-async function ensureCloudflareCredentials({ awsCliPath, region, stage, force }: any) {
+function setStageSecret({ stage, name, value }: any) {
+  // 120s, not 60s: this writes to the stage's secret store over the network, and a slow link should
+  // not look like a broken one. The value goes in on stdin — never in argv, where another process
+  // on the machine could read it.
+  runSst(['secret', 'set', name, '--stage', stage], {
+    input: value,
+    timeout: 120_000,
+    label: `set the ${name} secret`,
+  })
+}
+
+/*
+ * The Cloudflare provider credentials, in SSM rather than the stage's SST secret store with
+ * everything else.
+ *
+ * Not an oversight and not inertia: reading the SST store initializes every provider sst.config.ts
+ * declares, Cloudflare included, so `sst secret list` exits with "Cloudflare API not initialized"
+ * before printing anything. A token kept there would be required in order to read itself.
+ *
+ * The deploy workflow does not use these parameters either; it supplies the same two values as
+ * Environment secrets. Whether it could read them instead is untested — see the note in
+ * deployment/sst.ts.
+ */
+async function ensureCloudflareCredentials({ awsCliPath, region, stage, repo, force }: any) {
   for (const { envVar, param, label } of CLOUDFLARE_CREDENTIALS) {
     const name = ssmParameterName(stage, param)
     const fromEnv = process.env[envVar]?.trim()
     if (fromEnv) {
-      putSsmSecureParameter(awsCliPath, region, name, fromEnv)
+      storeCloudflareCredential({ awsCliPath, region, stage, repo, name, envVar, value: fromEnv })
       console.log(`[${SCRIPT_NAME}] ${label} ... set from ${envVar}`)
       continue
     }
 
-    const exists = ssmParameterExists(awsCliPath, region, name)
-    if (decideSsmOverwrite({ exists, force }) === 'skip') {
-      console.log(`[${SCRIPT_NAME}] ${label} ... already set (use --force to change)`)
+    // Both destinations, not just SSM: a rerun has to be able to repair a pair torn by a failed
+    // GitHub write, and keying this on SSM alone made that state permanent.
+    const rotation = decideCredentialRotation({
+      parameterExists: ssmParameterExists(awsCliPath, region, name),
+      environmentSecretExists: ghEnvironmentSecretExists({ repo, stage, name: envVar }),
+      force,
+    })
+    if (rotation === 'skip') {
+      console.log(`[${SCRIPT_NAME}] ${label} ... already set in both stores (use --force to change)`)
       continue
     }
 
     const value = requireNonEmptySecret(label, await promptSecret(`${label}: `))
-    putSsmSecureParameter(awsCliPath, region, name, value)
+    storeCloudflareCredential({ awsCliPath, region, stage, repo, name, envVar, value })
     console.log(`[${SCRIPT_NAME}] ${label} ... set`)
   }
+}
+
+/*
+ * Whether the stage's Environment already holds this secret. Only presence — GitHub never returns a
+ * secret's value — which is what decideCredentialRotation needs to spot a half-written pair.
+ */
+function ghEnvironmentSecretExists({ repo, stage, name }: any) {
+  try {
+    const listed = execFileSync('gh', ['secret', 'list', '--repo', repo, '--env', stage, '--json', 'name'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30_000,
+      killSignal: 'SIGTERM',
+    })
+    return JSON.parse(listed).some((secret: any) => secret.name === name)
+  } catch {
+    // Unreadable is treated as absent, which biases toward writing. Costing a retyped token is the
+    // right way to be wrong here; the opposite mistake leaves a revoked credential in place.
+    return false
+  }
+}
+
+function ghEnvironmentSecretSet({ repo, stage, name, value }: any) {
+  // The value on stdin, never in argv, where any process on the machine could read it from /proc.
+  execFileSync('gh', ['secret', 'set', name, '--repo', repo, '--env', stage], {
+    input: value,
+    stdio: ['pipe', 'inherit', 'inherit'],
+    timeout: 30_000,
+    killSignal: 'SIGTERM',
+  })
+}
+
+// The rule about which destinations get a rotated credential lives in cloudflare-credentials.ts, so
+// it is reachable from a test; this only supplies the two writers.
+function storeCloudflareCredential({ awsCliPath, region, stage, repo, name, envVar, value }: any) {
+  writeCloudflareCredential(value, {
+    writeParameter: (stored: string) => putSsmSecureParameter(awsCliPath, region, name, stored),
+    writeEnvironmentSecret: (stored: string) => ghEnvironmentSecretSet({ repo, stage, name: envVar, value: stored }),
+  })
 }
 
 const SST_PLATFORM_DIR = join(INFRA_ROOT, '.sst', 'platform')
@@ -402,15 +490,64 @@ async function ensureOidcClientId(stage: any) {
   // accept it and seed an empty secret that only fails at deploy time.
   const fromEnv = process.env.OIDC_CLIENT_ID?.trim() || undefined
   const value = requireNonEmptySecret('OIDC client ID', fromEnv ?? (await promptSecret('OIDC client ID: ')))
-  // 120s, not 60s: the platform is warm by now, but this still writes to the
-  // stage's secret store over the network and a slow link should not look like
-  // a broken one.
-  runSst(['secret', 'set', 'OIDC_CLIENT_ID', '--stage', stage], {
-    input: value,
-    timeout: 120_000,
-    label: 'set the OIDC_CLIENT_ID secret',
-  })
+  setStageSecret({ stage, name: 'OIDC_CLIENT_ID', value })
   console.log(`[${SCRIPT_NAME}] OIDC_CLIENT_ID ... set${fromEnv ? ' from OIDC_CLIENT_ID env' : ''}`)
+}
+
+/*
+ * Put the stage's configuration where a deploy can read it with nothing but AWS credentials.
+ *
+ * This same .env used to travel to CI as the GitHub Environment secret DEPLOY_ENV, which put stage
+ * config in a second control plane: a repository administrator could change what gets deployed with
+ * no AWS access at all, and offboarding meant revoking both. The SST secret store is reachable by
+ * exactly the people who can already deploy the stage.
+ *
+ * So deployment/sst.ts reads this store before it invokes sst, and the only stage configuration left
+ * on the GitHub side is what cannot be read from the store at all: the AWS_ACCOUNT_ID and AWS_REGION
+ * variables, needed before any AWS credentials exist, and the two Cloudflare secrets, needed in order
+ * to read the store.
+ *
+ * One secret per key, not the file as a single blob. A blob would be the DEPLOY_ENV design again —
+ * replaceable only wholesale, invisible to `npm run secrets` — and it would have to carry newlines,
+ * which serializeStageConfig cannot represent. Per-key also keeps `sst.Secret` usable: the store
+ * already holds OIDC_CLIENT_ID and friends under their own names (stack/deploy.ts).
+ *
+ * `sst secret load` merges into the stage's existing secrets rather than replacing them, which is
+ * what keeps this from clobbering those. The cost of merging is that a key REMOVED from .env stays in
+ * the store, so the manifest written alongside the values — STAGE_CONFIG_MANIFEST_KEY, naming exactly
+ * the keys this step owns — is what makes the leftover inert: deployment/sst.ts hydrates only the
+ * names the manifest lists. That is also why the manifest cannot simply be "everything in the store":
+ * the same store holds the hand-set `sst.Secret` values, which the stack reads through sst.Secret and
+ * must never see as process.env.
+ */
+/*
+ * Takes the already-prepared load rather than reading .env again.
+ *
+ * main() validates one snapshot of the file before anything external happens, and this runs after the
+ * OIDC provider, the GitHub Environment and possibly an Auth0 app have been created — minutes later on
+ * a first bootstrap. Re-reading would store whatever the file says by then, which is not what was
+ * validated: an operator editing it while the script runs, or a half-saved buffer, would land in the
+ * stage's store unchecked. One read, one validation, one thing stored.
+ *
+ * The Cloudflare credentials are deliberately not part of this: reading the store initializes the
+ * Cloudflare provider, so a token kept there would be needed in order to read itself. They go to SSM
+ * and the GitHub Environment instead (storeCloudflareCredential).
+ */
+function ensureStageConfig(stage: any, { payload: config, storedKeys, excluded }: any) {
+  // A temp file, because `secret load` takes a path and has no stdin form. It gets a directory of
+  // its own so mkdtemp's 0700 keeps the values unreadable to other users for the seconds they
+  // exist, and the removal is in `finally` so a failed load does not leave them behind.
+  withStageConfigFile(config, (configPath: string) =>
+    runSst(['secret', 'load', configPath, '--stage', stage], {
+      timeout: 120_000,
+      label: 'load the stage configuration into the SST secret store',
+    }),
+  )
+
+  console.log(`[${SCRIPT_NAME}] stage config ... ${storedKeys.length} keys in the SST secret store`)
+  if (excluded.length > 0) {
+    console.log(`[${SCRIPT_NAME}] stage config ... kept out of the store (local-only): ${excluded.join(', ')}`)
+  }
 }
 
 /*
@@ -623,7 +760,27 @@ function deployGithubDeployRoleStack({ awsCliPath, region, stage, repo }: any) {
   return roleArn
 }
 
-function ghVariableSet({ repo, stage, name, value }: any) {
+/*
+ * The two variables GitHub still has to hold, and why neither can live in the store.
+ *
+ * (The stage's Environment also carries the two Cloudflare secrets — storeCloudflareCredential — for
+ * a different reason: reading the store initializes that provider.)
+ *
+ * `aws-actions/configure-aws-credentials` needs the role ARN to obtain credentials, so it is read
+ * before any AWS access exists — which rules out a store that AWS credentials decrypt. Only the
+ * account id is genuinely unknown, though: the role name is githubDeployRoleName(stage), so the
+ * workflows compose the ARN from AWS_ACCOUNT_ID rather than storing the whole ARN.
+ * Same shape e2e-local.yml:89 already uses. The region is written alongside it: the workflows carry
+ * DEFAULT_AWS_REGION as a literal default, which is only right for a stage in that region, so a stage
+ * bootstrapped elsewhere needs the variable to say so.
+ *
+ * Per-stage, not repository-wide. Two stages may live in two AWS accounts — the deploy role is
+ * created by whichever account bootstrap is pointed at — so one shared value would let bootstrapping
+ * prod silently repoint dev's deploys at prod's account. The region goes the same way and for the
+ * same reason as before: it is read before any AWS access exists, so it cannot come from the store,
+ * and a stage outside the default region has nowhere else to say so.
+ */
+function ghEnvironmentVariableSet({ repo, stage, name, value }: any) {
   execFileSync('gh', ['variable', 'set', name, '--repo', repo, '--env', stage, '--body', value], {
     stdio: ['ignore', 'inherit', 'inherit'],
     timeout: 30_000,
@@ -631,29 +788,10 @@ function ghVariableSet({ repo, stage, name, value }: any) {
   })
 }
 
-/*
- * The gh installed here (2.92.0) has no --body-file, and passing it makes gh
- * print usage and exit non-zero. It takes --body, or reads the value from
- * stdin when --body is omitted; --env-file is a different feature entirely
- * (many secrets named by a dotenv file, not one secret whose value is that
- * file). Passing the whole file on stdin is what stores DEPLOY_ENV as a single
- * secret, and keeps the contents out of argv where other processes could read
- * them.
- */
-function ghSecretSetFromFile({ repo, stage, name, filePath }: any) {
-  execFileSync('gh', ['secret', 'set', name, '--repo', repo, '--env', stage], {
-    input: readFileSync(filePath),
-    stdio: ['pipe', 'inherit', 'inherit'],
-    timeout: 30_000,
-    killSignal: 'SIGTERM',
-  })
-}
-
-function wireGithubEnvironment({ repo, stage, region, roleArn }: any) {
-  ghVariableSet({ repo, stage, name: 'AWS_DEPLOY_ROLE_ARN', value: roleArn })
-  ghVariableSet({ repo, stage, name: 'AWS_REGION', value: region })
-  ghSecretSetFromFile({ repo, stage, name: 'DEPLOY_ENV', filePath: requireStageEnvFile() })
-  console.log(`[${SCRIPT_NAME}] GitHub ${stage} environment ... AWS_DEPLOY_ROLE_ARN, AWS_REGION, DEPLOY_ENV set`)
+function wireGithubEnvironment({ repo, stage, accountId, region }: any) {
+  ghEnvironmentVariableSet({ repo, stage, name: 'AWS_ACCOUNT_ID', value: accountId })
+  ghEnvironmentVariableSet({ repo, stage, name: 'AWS_REGION', value: region })
+  console.log(`[${SCRIPT_NAME}] GitHub ${stage} environment ... AWS_ACCOUNT_ID, AWS_REGION set`)
 }
 
 async function main() {
@@ -668,7 +806,23 @@ async function main() {
   const awsCliPath = resolveAwsCliPath()
   const reviewerIds = parseReviewerIds(parseFlag(args, 'reviewers'))
 
-  requireStageEnvFile()
+  // Before any external mutation. Every step below creates or changes something outside this process
+  // — an OIDC provider, a GitHub Environment, optionally a non-idempotent Auth0 app — so a .env this
+  // step could not store must stop the run here rather than after half of them have happened. All
+  // three checks for that reason, not just the syntax: prepareStageConfigLoad rejects a file with
+  // nothing storable in it, and serializeStageConfig a value the store cannot carry.
+  //
+  // The result is kept and handed to ensureStageConfig later, so what gets stored is exactly what was
+  // checked here — the file is read once, not again after those external changes have happened.
+  const stageConfigSource = readFileSync(requireStageEnvFile(), 'utf8')
+  validateDotenvSyntax(stageConfigSource, ENV_PATH)
+  let stageConfigLoad
+  try {
+    stageConfigLoad = prepareStageConfigLoad(stageConfigSource)
+    serializeStageConfig(stageConfigLoad.payload)
+  } catch (cause: any) {
+    throw new Error(`${ENV_PATH} ${cause.message}`, { cause })
+  }
   requireGhAuthenticated()
   const repo = resolveRepo(args)
   requireAwsCliWithLoginSupport(awsCliPath)
@@ -688,15 +842,27 @@ async function main() {
     if (!stackDomain) throw new Error('STACK_DOMAIN must be set in .env before --provision-auth0 can build callback URLs')
     provisionAuth0({ stackDomain })
   }
-  await ensureCloudflareCredentials({ awsCliPath, region, stage, force })
-  // Before the first timed sst call, not inside it — see ensureSstPlatform.
+  await ensureCloudflareCredentials({ awsCliPath, region, stage, repo, force })
+  // Before the first timed sst call, not inside it — see ensureSstPlatform. Both steps below are
+  // `sst secret` calls, so neither can run until the platform sst needs is installed.
   ensureSstPlatform(stage)
   await ensureOidcClientId(stage)
-  const roleArn = deployGithubDeployRoleStack({ awsCliPath, region, stage, repo })
-  wireGithubEnvironment({ repo, stage, region, roleArn })
+  ensureStageConfig(stage, stageConfigLoad)
+  // The role is deployed after the store is seeded so a failure here leaves a stage that is
+  // configured but not yet deployable, rather than one the workflow can reach with no configuration.
+  deployGithubDeployRoleStack({ awsCliPath, region, stage, repo })
+  wireGithubEnvironment({ repo, stage, accountId: identity.Account, region })
 
   console.log(
     `[${SCRIPT_NAME}] done. Preview next: gh workflow run deploy-infra.yml --repo ${repo} --ref main -f stage=${stage} -f apply=false`,
+  )
+  // Not deleted here on purpose. Until this branch is merged, the deploy workflow on main still reads
+  // DEPLOY_ENV, so removing it would break deploys of every commit that predates the store. Printed
+  // rather than silently left behind, because a stale DEPLOY_ENV is invisible once it stops being read.
+  console.log(
+    `[${SCRIPT_NAME}] after the first green apply, retire the superseded GitHub entries:\n` +
+      `  gh secret delete DEPLOY_ENV --repo ${repo} --env ${stage}\n` +
+      `  gh variable delete AWS_DEPLOY_ROLE_ARN --repo ${repo} --env ${stage}`,
   )
 }
 

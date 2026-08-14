@@ -183,7 +183,7 @@ jobs:
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage || 'dev' }}-github-deploy
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: build-apps-api-image-${{ github.run_id }}
 
