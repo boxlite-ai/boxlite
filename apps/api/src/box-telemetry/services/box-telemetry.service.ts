@@ -79,7 +79,20 @@ export class BoxTelemetryService {
     severities?: string[],
     search?: string,
   ): Promise<PaginatedLogsDto> {
-    const serviceName = this.getServiceName(boxId)
+    return this.getLogsForService(this.getServiceName(boxId), from, to, page, limit, severities, search)
+  }
+
+  async getLogsForService(
+    serviceName: string,
+    from: string,
+    to: string,
+    page: number,
+    limit: number,
+    severities?: string[],
+    search?: string,
+    traceId?: string,
+    maxExecutionTimeSeconds?: number,
+  ): Promise<PaginatedLogsDto> {
     const offset = (page - 1) * limit
 
     // Build WHERE clause for optional filters
@@ -93,6 +106,10 @@ export class BoxTelemetryService {
 
     if (search) {
       whereClause += ` AND positionCaseInsensitiveUTF8(Body, {search:String}) > 0`
+    }
+
+    if (traceId) {
+      whereClause += ` AND TraceId = {traceId:String}`
     }
 
     const params: Record<string, unknown> = {
@@ -111,13 +128,19 @@ export class BoxTelemetryService {
       params.search = search
     }
 
+    if (traceId) {
+      params.traceId = traceId
+    }
+
     // Get total count
     const countQuery = `
       SELECT count() as count
       FROM otel_logs
       WHERE ${whereClause}
     `
-    const countResult = await this.clickhouseService.query<ClickHouseCountRow>(countQuery, params)
+    const countResult = await this.clickhouseService.query<ClickHouseCountRow>(countQuery, params, {
+      maxExecutionTimeSeconds,
+    })
     const total = countResult[0]?.count || 0
 
     // Get paginated logs
@@ -129,7 +152,7 @@ export class BoxTelemetryService {
       ORDER BY Timestamp DESC
       LIMIT {limit:UInt32} OFFSET {offset:UInt32}
     `
-    const rows = await this.clickhouseService.query<ClickHouseLogRow>(logsQuery, params)
+    const rows = await this.clickhouseService.query<ClickHouseLogRow>(logsQuery, params, { maxExecutionTimeSeconds })
 
     const items: LogEntryDto[] = rows.map((row) => ({
       timestamp: row.Timestamp,

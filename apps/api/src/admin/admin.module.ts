@@ -12,10 +12,12 @@ import { RegionModule } from '../region/region.module'
 import { OrganizationModule } from '../organization/organization.module'
 import { InfrastructureLogsController } from './controllers/infrastructure-logs.controller'
 import { InfrastructureLogsService } from './services/infrastructure-logs.service'
+import { PlatformLogsService } from './services/platform-logs.service'
+import { BoxTelemetryModule } from '../box-telemetry/box-telemetry.module'
 
 @Module({
-  imports: [BoxModule, RegionModule, OrganizationModule],
+  imports: [BoxModule, RegionModule, OrganizationModule, BoxTelemetryModule],
   controllers: [AdminRunnerController, AdminBoxController, InfrastructureLogsController],
-  providers: [InfrastructureLogsService],
+  providers: [InfrastructureLogsService, PlatformLogsService],
 })
 export class AdminModule {}

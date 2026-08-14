@@ -18,6 +18,9 @@ import { AuthContext as IAuthContext } from '../../common/interfaces/auth-contex
 import { SystemRole } from '../../user/enums/system-role.enum'
 import { InfrastructureLogsDto, InfrastructureLogsQueryDto } from '../dto/infrastructure-logs.dto'
 import { InfrastructureLogsService } from '../services/infrastructure-logs.service'
+import { PaginatedLogsDto } from '../../box-telemetry/dto/paginated-logs.dto'
+import { PlatformLogsQueryDto } from '../dto/platform-logs.dto'
+import { PlatformLogsService } from '../services/platform-logs.service'
 
 @ApiTags('admin')
 @ApiExcludeController()
@@ -26,7 +29,10 @@ import { InfrastructureLogsService } from '../services/infrastructure-logs.servi
 @ApiOAuth2(['openid', 'profile', 'email'])
 @ApiBearerAuth()
 export class InfrastructureLogsController {
-  constructor(private readonly infrastructureLogs: InfrastructureLogsService) {}
+  constructor(
+    private readonly infrastructureLogs: InfrastructureLogsService,
+    private readonly platformLogs: PlatformLogsService,
+  ) {}
 
   @Get('access')
   access(@AuthContext() authContext: IAuthContext): { canRead: boolean } {
@@ -52,5 +58,28 @@ export class InfrastructureLogsController {
   })
   query(@Query() query: InfrastructureLogsQueryDto): Promise<InfrastructureLogsDto> {
     return this.infrastructureLogs.query(query)
+  }
+
+  @Get('platform')
+  @RequiredApiRole([SystemRole.ADMIN])
+  @ApiOperation({ summary: 'Search allowlisted platform OTLP logs', operationId: 'adminSearchPlatformLogs' })
+  @ApiResponse({ status: 200, type: PaginatedLogsDto })
+  @Audit({
+    action: AuditAction.READ,
+    targetType: AuditTarget.INFRASTRUCTURE_LOGS,
+    requestMetadata: {
+      query: (req) => ({
+        source: req.query.source,
+        from: req.query.from,
+        to: req.query.to,
+        hasSearch: typeof req.query.search === 'string' && req.query.search.length > 0,
+        hasTraceId: typeof req.query.traceId === 'string' && req.query.traceId.length > 0,
+        page: req.query.page,
+        limit: req.query.limit,
+      }),
+    },
+  })
+  queryPlatform(@Query() query: PlatformLogsQueryDto): Promise<PaginatedLogsDto> {
+    return this.platformLogs.query(query)
   }
 }

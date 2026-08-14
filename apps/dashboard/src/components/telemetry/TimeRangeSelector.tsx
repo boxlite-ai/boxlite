@@ -12,10 +12,12 @@ interface TimeRangeSelectorProps {
   onChange: (from: Date, to: Date) => void
   defaultRange?: { from: Date; to: Date }
   defaultSelectedQuickRange?: string
+  quickRanges?: QuickRangesConfig
+  maxRangeMs?: number
   className?: string
 }
 
-const quickRanges: QuickRangesConfig = {
+const defaultQuickRanges: QuickRangesConfig = {
   minutes: [15, 30],
   hours: [1, 3, 6, 12, 24],
   days: [3, 7],
@@ -25,6 +27,8 @@ export const TimeRangeSelector: React.FC<TimeRangeSelectorProps> = ({
   onChange,
   defaultRange,
   defaultSelectedQuickRange = 'Last 1 hour',
+  quickRanges = defaultQuickRanges,
+  maxRangeMs,
   className,
 }) => {
   const pickerRef = React.useRef<DateRangePickerRef>(null)
@@ -36,6 +40,7 @@ export const TimeRangeSelector: React.FC<TimeRangeSelectorProps> = ({
     const now = new Date()
     return { from: subHours(now, 1), to: now }
   })
+  const [rangeError, setRangeError] = useState<string>()
 
   useEffect(() => {
     if (dateRange.from && dateRange.to) {
@@ -44,19 +49,28 @@ export const TimeRangeSelector: React.FC<TimeRangeSelectorProps> = ({
   }, [dateRange, onChange])
 
   const handleChange = (range: DateRange) => {
+    if (range.from && range.to && maxRangeMs && range.to.getTime() - range.from.getTime() > maxRangeMs) {
+      setRangeError(`Select a range of ${Math.floor(maxRangeMs / 3_600_000)} hours or less.`)
+      return
+    }
+    setRangeError(undefined)
     setDateRange(range)
   }
 
   return (
-    <DateRangePicker
-      ref={pickerRef}
-      value={dateRange}
-      onChange={handleChange}
-      quickRangesEnabled
-      quickRanges={quickRanges}
-      timeSelection
-      className={className}
-      defaultSelectedQuickRange={defaultSelectedQuickRange}
-    />
+    <div>
+      <DateRangePicker
+        ref={pickerRef}
+        value={dateRange}
+        onChange={handleChange}
+        quickRangesEnabled
+        quickRanges={quickRanges}
+        allTimeEnabled={!maxRangeMs}
+        timeSelection
+        className={className}
+        defaultSelectedQuickRange={defaultSelectedQuickRange}
+      />
+      {rangeError && <p className="mt-1 text-xs text-destructive">{rangeError}</p>}
+    </div>
   )
 }

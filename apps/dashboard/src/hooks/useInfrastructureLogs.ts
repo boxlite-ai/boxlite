@@ -8,6 +8,7 @@ import { LogEntry } from '@boxlite-ai/api-client'
 import { useQuery } from '@tanstack/react-query'
 
 export type InfrastructureLogSource = 'runner' | 'collector'
+export type PlatformLogSource = 'api' | 'worker' | 'runner' | 'box'
 
 export interface InfrastructureLogsQuery {
   source: InfrastructureLogSource
@@ -21,6 +22,25 @@ export interface InfrastructureLogsQuery {
 export interface InfrastructureLogsPage {
   items: LogEntry[]
   nextToken?: string
+}
+
+export interface PlatformLogsQuery {
+  source: PlatformLogSource
+  from: Date
+  to: Date
+  page: number
+  limit: number
+  boxId?: string
+  severities?: string[]
+  search?: string
+  traceId?: string
+}
+
+export interface PlatformLogsPage {
+  items: LogEntry[]
+  total: number
+  page: number
+  totalPages: number
 }
 
 export function useInfrastructureLogsAccess() {
@@ -53,6 +73,26 @@ export function useInfrastructureLogs(query: InfrastructureLogsQuery) {
       })
       return response.data
     },
+    staleTime: 10_000,
+  })
+}
+
+export function usePlatformLogs(query: PlatformLogsQuery, enabled = true) {
+  const api = useApi()
+  return useQuery({
+    queryKey: ['platform-logs', query],
+    queryFn: async () => {
+      const response = await api.axiosInstance.get<PlatformLogsPage>('/admin/infrastructure-logs/platform', {
+        params: {
+          ...query,
+          from: query.from.toISOString(),
+          to: query.to.toISOString(),
+        },
+        timeout: 10_000,
+      })
+      return response.data
+    },
+    enabled,
     staleTime: 10_000,
   })
 }

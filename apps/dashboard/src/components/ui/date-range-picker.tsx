@@ -68,6 +68,7 @@ export interface DateRangePickerProps {
   timeSelection?: boolean
   disabled?: boolean
   defaultSelectedQuickRange?: string
+  allTimeEnabled?: boolean
   contentAlign?: 'start' | 'end'
 }
 
@@ -86,6 +87,7 @@ export const DateRangePicker = forwardRef<DateRangePickerRef, DateRangePickerPro
       timeSelection = true,
       disabled = false,
       defaultSelectedQuickRange,
+      allTimeEnabled = true,
       contentAlign = 'start',
     },
     ref,
@@ -205,15 +207,17 @@ export const DateRangePicker = forwardRef<DateRangePickerRef, DateRangePickerPro
               <div className="w-64 p-4 border-r">
                 <div className="text-sm font-medium mb-3 text-center">Quick ranges</div>
                 <div className="space-y-1 max-h-[400px] overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-muted-foreground/20 [&::-webkit-scrollbar-thumb]:rounded-full">
-                  <button
-                    className={cn(
-                      'w-full text-left px-3 py-2 text-sm rounded-md transition-colors',
-                      selectedQuickRange === 'All time' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted',
-                    )}
-                    onClick={() => handleQuickRangeSelect({ from: undefined, to: undefined }, 'All time')}
-                  >
-                    All time
-                  </button>
+                  {allTimeEnabled && (
+                    <button
+                      className={cn(
+                        'w-full text-left px-3 py-2 text-sm rounded-md transition-colors',
+                        selectedQuickRange === 'All time' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted',
+                      )}
+                      onClick={() => handleQuickRangeSelect({ from: undefined, to: undefined }, 'All time')}
+                    >
+                      All time
+                    </button>
+                  )}
                   {createTimeRangesFromConfig(quickRanges || {}).map((timeRange) => (
                     <button
                       key={timeRange.label}

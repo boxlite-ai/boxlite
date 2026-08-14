@@ -11,18 +11,29 @@ import InfrastructureLogs from './InfrastructureLogs'
 
 const mocks = vi.hoisted(() => ({
   query: vi.fn(),
+  platformQuery: vi.fn(),
   refetch: vi.fn(),
   result: {
     data: { items: [], nextToken: 'cursor-2' },
     isLoading: false,
     isError: false,
   },
+  platformResult: {
+    data: { items: [], total: 0, page: 1, totalPages: 0 },
+    isLoading: false,
+    isError: false,
+  },
+  timeRangeProps: [] as Array<Record<string, unknown>>,
 }))
 
 vi.mock('@/hooks/useInfrastructureLogs', () => ({
   useInfrastructureLogs: (query: unknown) => {
     mocks.query(query)
     return { ...mocks.result, refetch: mocks.refetch }
+  },
+  usePlatformLogs: (query: unknown) => {
+    mocks.platformQuery(query)
+    return { ...mocks.platformResult, refetch: mocks.refetch }
   },
 }))
 
@@ -49,7 +60,10 @@ vi.mock('@/components/ui/select', () => ({
 }))
 
 vi.mock('@/components/telemetry/TimeRangeSelector', () => ({
-  TimeRangeSelector: () => null,
+  TimeRangeSelector: (props: Record<string, unknown>) => {
+    mocks.timeRangeProps.push(props)
+    return null
+  },
 }))
 
 vi.mock('@/components/telemetry/LogTable', () => ({
@@ -69,7 +83,9 @@ describe('InfrastructureLogs', () => {
     root = null
     document.body.innerHTML = ''
     mocks.query.mockClear()
+    mocks.platformQuery.mockClear()
     mocks.refetch.mockClear()
+    mocks.timeRangeProps = []
     mocks.result = {
       data: { items: [], nextToken: 'cursor-2' },
       isLoading: false,
@@ -112,5 +128,29 @@ describe('InfrastructureLogs', () => {
     act(() => retryButton?.click())
 
     expect(mocks.refetch).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the CloudWatch selector within the API 24-hour contract', () => {
+    renderPage()
+
+    expect(mocks.timeRangeProps[0]).toMatchObject({
+      maxRangeMs: 24 * 60 * 60 * 1000,
+      quickRanges: { minutes: [15, 30], hours: [1, 3, 6, 12, 24] },
+    })
+  })
+
+  it('queries ClickHouse independently when the platform tab is selected', () => {
+    renderPage()
+
+    const platformTab = [...document.querySelectorAll('button')].find((button) =>
+      button.textContent?.includes('Platform OTLP'),
+    )
+    expect(platformTab).toBeDefined()
+    act(() =>
+      platformTab?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: false })),
+    )
+
+    expect(mocks.platformQuery.mock.lastCall?.[0]).toMatchObject({ source: 'api', page: 1, limit: 50 })
+    expect(mocks.timeRangeProps.at(-1)).toMatchObject({ maxRangeMs: 72 * 60 * 60 * 1000 })
   })
 })
