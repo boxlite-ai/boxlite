@@ -15,6 +15,7 @@ import {
   BoxDesiredState,
   BoxState,
   type BoxliteConfiguration,
+  type LogEntry,
   type Organization,
   type OrganizationUser,
   OrganizationUserRoleEnum,
@@ -145,4 +146,63 @@ export const MOCK_PAGINATED_BOXES: PaginatedBoxes = {
   total: MOCK_BOXES.length,
   page: 1,
   totalPages: 1,
+}
+
+function minutesAgo(minutes: number): string {
+  return new Date(Date.now() - minutes * 60_000).toISOString()
+}
+
+export const MOCK_INFRASTRUCTURE_LOGS: Record<'runner' | 'collector', LogEntry[]> = {
+  runner: [
+    {
+      timestamp: minutesAgo(4),
+      severityText: 'INFO',
+      body: 'amazon-cloudwatch-agent started with configuration version 1.300071.0',
+      serviceName: 'runner-infrastructure',
+      resourceAttributes: { 'host.id': 'i-0c8i-runner-01', 'service.name': 'runner-infrastructure' },
+      logAttributes: { source: 'amazon-cloudwatch-agent.log' },
+    },
+    {
+      timestamp: minutesAgo(11),
+      severityText: 'WARN',
+      body: 'root filesystem usage reached 78%',
+      serviceName: 'runner-infrastructure',
+      resourceAttributes: { 'host.id': 'i-0c8i-runner-02', 'service.name': 'runner-infrastructure' },
+      logAttributes: { source: 'cloud-init.log' },
+    },
+    {
+      timestamp: minutesAgo(23),
+      severityText: 'ERROR',
+      body: 'runner-setup.service exited with status=1; retrying',
+      serviceName: 'runner-infrastructure',
+      resourceAttributes: { 'host.id': 'i-0c8i-runner-03', 'service.name': 'runner-infrastructure' },
+      logAttributes: { source: 'runner-setup.log' },
+    },
+  ],
+  collector: [
+    {
+      timestamp: minutesAgo(6),
+      severityText: 'INFO',
+      body: 'OTLP receiver is ready on 0.0.0.0:4318',
+      serviceName: 'otel-collector',
+      resourceAttributes: { 'service.name': 'otel-collector', 'aws.ecs.cluster': 'boxlite-local' },
+      logAttributes: { component: 'receiver/otlp' },
+    },
+    {
+      timestamp: minutesAgo(14),
+      severityText: 'WARN',
+      body: 'ClickHouse exporter queue is 73% full',
+      serviceName: 'otel-collector',
+      resourceAttributes: { 'service.name': 'otel-collector', 'aws.ecs.cluster': 'boxlite-local' },
+      logAttributes: { component: 'exporter/clickhouse' },
+    },
+    {
+      timestamp: minutesAgo(28),
+      severityText: 'ERROR',
+      body: 'Jaeger trace export retry scheduled after timeout',
+      serviceName: 'otel-collector',
+      resourceAttributes: { 'service.name': 'otel-collector', 'aws.ecs.cluster': 'boxlite-local' },
+      logAttributes: { component: 'exporter/otlp' },
+    },
+  ],
 }

@@ -10,6 +10,7 @@ import { Tier } from '@/billing-api/types/tier'
 import { http, HttpResponse } from 'msw'
 import {
   MOCK_BOXES,
+  MOCK_INFRASTRUCTURE_LOGS,
   MOCK_ORGANIZATION,
   MOCK_ORGANIZATION_MEMBER,
   MOCK_PAGINATED_BOXES,
@@ -40,6 +41,17 @@ export const handlers = [
   http.get(`${API_URL}/shared-regions`, () => HttpResponse.json([])),
   http.get(`${API_URL}/regions`, () => HttpResponse.json([])),
   http.get(`${API_URL}/api-keys`, () => HttpResponse.json([])),
+  http.get(`${API_URL}/admin/infrastructure-logs/access`, () => HttpResponse.json({ canRead: true })),
+  http.get(`${API_URL}/admin/infrastructure-logs`, ({ request }) => {
+    const params = new URL(request.url).searchParams
+    const source = params.get('source') === 'collector' ? 'collector' : 'runner'
+    const search = params.get('search')
+    const items = search
+      ? MOCK_INFRASTRUCTURE_LOGS[source].filter((entry) => entry.body.includes(search))
+      : MOCK_INFRASTRUCTURE_LOGS[source]
+
+    return HttpResponse.json({ items })
+  }),
   http.post(`${API_URL}/api-keys`, async ({ request }) => {
     const body = (await request.json().catch(() => ({}))) as { name?: string }
     return HttpResponse.json({
