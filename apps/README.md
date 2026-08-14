@@ -97,8 +97,11 @@ The deployment runbook and operational constraints live in
 
 ## API catalog
 
-See [`API.md`](./API.md) for the categorized inventory of every registered
-application API, including its method, path, owning service, and purpose.
+See [`API.md`](./API.md) for the categorized inventory of every application
+interface, including its method, path, owning service, and purpose. Alongside
+the registered routes it covers outbound events, static asset trees, the local
+development stack, and the APIs whose clients live here but whose routes are
+served elsewhere.
 
 ## Data model
 
