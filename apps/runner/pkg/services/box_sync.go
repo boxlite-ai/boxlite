@@ -36,13 +36,13 @@ type BoxSyncService struct {
 	client   *apiclient.APIClient
 }
 
-// localContainerState pairs a box's local runtime state with its durable
-// Container.Start timestamp from the same BoxInfo snapshot.
+// localContainerState pairs a box's local runtime state with its durable boot
+// marker from the same BoxInfo snapshot.
 type localContainerState struct {
 	state enums.BoxState
-	// startedAt is non-nil when BoxLite recorded a successful Container.Start
-	// for the current or most recently ended lifecycle. Callers combine it with
-	// state before treating it as evidence that the box is running now.
+	// startedAt is non-nil when BoxLite recorded PID/Running publication for
+	// the current or most recently ended lifecycle. It does not prove that the
+	// asynchronous Container.Start RPC finished.
 	startedAt *time.Time
 }
 
@@ -76,14 +76,12 @@ func (s *BoxSyncService) GetLocalContainerStates(ctx context.Context) (map[strin
 	return boxStates, nil
 }
 
-// boxStartedAt reports when BoxLite confirmed a successful Container.Start for
-// the current or most recently ended lifecycle, or nil when no lifecycle has
-// such confirmation.
+// boxStartedAt returns BoxLite's PID/Running publication marker for the current
+// or most recently ended lifecycle, or nil when no boot was recorded.
 //
-// BoxLite publishes the timestamp beside the PID it belongs to and voids it in
-// the same write that publishes a new lifecycle's PID. That only buys the
-// reader anything while state and timestamp come from one snapshot, which is
-// why both are read off the same `BoxInfo`.
+// BoxLite publishes the timestamp beside its PID in the same state write. That
+// only buys the reader anything while state and timestamp come from one
+// snapshot, which is why both are read off the same `BoxInfo`.
 func boxStartedAt(box sdkboxlite.BoxInfo) *time.Time {
 	if box.StartedAt.IsZero() {
 		return nil
@@ -214,12 +212,10 @@ func (s *BoxSyncService) PerformSync(ctx context.Context) error {
 // control plane for a given remote state.
 //
 // A box the control plane still shows as coming up is the one case where the
-// local view is not self-evidently authoritative: BoxLite publishes Running
-// once the VM is up, which happens before the guest's separate Container.Start
-// runs. Reporting STARTED off that alone would call a box ready whose init was
-// never launched — so a transitional box additionally needs BoxLite's durable
-// record that Container.Start did succeed for the shim now running it. Both
-// facts come from one `BoxInfo`, so they cannot describe two lifecycles.
+// local view needs durable lifecycle evidence. A transitional box therefore
+// requires both local Running and BoxLite's boot marker from the same BoxInfo
+// snapshot. The marker confirms PID/Running publication for that lifecycle; it
+// intentionally does not confirm the asynchronous Container.Start RPC.
 //
 // Every other remote state keeps the long-standing behaviour: the local view
 // wins unconditionally.

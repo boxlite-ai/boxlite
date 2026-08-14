@@ -15,9 +15,10 @@ import (
 // TestCreateHasNoFallibleStepAfterStart guards the coupling documented at the
 // bx.Start call in Create.
 //
-// A successful bx.Start makes BoxLite publish the box's StartedAt, which
-// BoxSync reads as evidence that this whole job body succeeded. That only holds
-// while Start is the last step of Create that can fail. Nothing about the
+// A successful bx.Start means BoxLite published its PID/Running boot marker
+// and accepted the background Container.Start handoff. BoxSync treats that as
+// evidence that this job body reached its last fallible operation. That only
+// holds while Start is the last step of Create that can fail. Nothing about the
 // current code enforces it — replacing the hardcoded daemon version with a real
 // probe, for instance, would silently break it — so this asserts the shape of
 // the source directly.
@@ -40,8 +41,8 @@ func TestCreateHasNoFallibleStepAfterStart(t *testing.T) {
 	for _, violation := range violations {
 		t.Errorf(
 			"Client.Create returns a non-nil error at %s, after bx.Start already "+
-				"published StartedAt. Move the fallible step above bx.Start, or "+
-				"revisit what that timestamp means.",
+				"published the boot marker and accepted Container.Start. Move the "+
+				"fallible step above bx.Start, or revisit that completion contract.",
 			violation,
 		)
 	}

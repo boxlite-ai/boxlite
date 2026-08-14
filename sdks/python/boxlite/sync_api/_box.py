@@ -77,13 +77,12 @@ class SyncBox:
 
     def start(self) -> None:
         """
-        Start the box (initialize VM).
+        Boot the box and spawn its container-init start.
 
-        For Configured boxes: initializes VM for the first time.
-        For Stopped boxes: restarts the VM.
-
-        This is idempotent - calling start() on a Running box is a no-op.
-        Also called implicitly by exec() if the box is not running.
+        For Configured boxes this initializes the VM; for Stopped boxes it
+        restarts it. The method returns after background Container.Start is
+        spawned, without waiting for that RPC. Implicit operations such as
+        exec() still wait for the real container start.
         """
         self._sync(self._box.start())
 

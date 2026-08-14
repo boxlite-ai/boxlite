@@ -124,7 +124,7 @@ permissive (accepts any/no bearer) — the zero-config local-dev default.
 | GET    | `/v1/boxes/{box_id}`          | `boxes::get_box`     | Get box info                  |
 | HEAD   | `/v1/boxes/{box_id}`          | `boxes::head_box`    | Check box exists (204 / 404)  |
 | DELETE | `/v1/boxes/{box_id}`          | `boxes::remove_box`  | Remove box (`?force=true`)    |
-| POST   | `/v1/boxes/{box_id}/start`    | `boxes::start_box`   | Start a stopped box           |
+| POST   | `/v1/boxes/{box_id}/start`    | `boxes::start_box`   | Boot box; enqueue container start |
 | POST   | `/v1/boxes/{box_id}/stop`     | `boxes::stop_box`    | Stop a running box            |
 
 ### Command Execution

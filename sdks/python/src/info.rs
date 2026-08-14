@@ -284,6 +284,8 @@ pub(crate) struct PyBoxInfo {
     pub(crate) state: PyBoxStateInfo,
     #[pyo3(get)]
     pub(crate) created_at: String,
+    /// Most recent PID/Running boot-publication timestamp (RFC 3339).
+    /// This does not prove that asynchronous Container.Start finished.
     #[pyo3(get)]
     pub(crate) started_at: Option<String>,
     #[pyo3(get)]

@@ -38,7 +38,8 @@ pub trait EventListener: Send + Sync {
     /// Called after a box is created.
     fn on_box_created(&self, _box_id: &BoxID) {}
 
-    /// Called after a box VM starts successfully.
+    /// Called when an explicit `start()` owns and successfully completes the
+    /// guest `Container.Start`.
     fn on_box_started(&self, _box_id: &BoxID) {}
 
     /// Called after a box VM stops.

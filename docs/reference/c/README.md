@@ -608,7 +608,9 @@ boxlite_options_free(opts);
 
 #### boxlite_start_box
 
-Start or restart a stopped box.
+Boot or restart a box, enqueue its `Container.Start` RPC, and report success
+through the callback as soon as that background action is spawned. The callback
+does not wait for the guest RPC to finish.
 
 ```c
 BoxliteErrorCode boxlite_start_box(
@@ -1207,7 +1209,7 @@ if (code != Ok) {
 | `boxlite_runtime_free()` | Free runtime |
 | `boxlite_runtime_metrics()` | Get runtime metrics |
 | `boxlite_create_box()` | Create box |
-| `boxlite_start_box()` | Start/restart box |
+| `boxlite_start_box()` | Boot/restart box and spawn asynchronous `Container.Start` |
 | `boxlite_stop_box()` | Stop box |
 | `boxlite_remove()` | Remove box |
 | `boxlite_get()` | Reattach to box |

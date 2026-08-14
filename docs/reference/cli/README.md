@@ -392,7 +392,10 @@ boxlite rm --all --force
 
 **Synopsis:** `boxlite start BOX [BOX...]`
 
-Start one or more stopped boxes. No options. Prints each started box's name/ID to stdout; aggregates errors and exits non-zero if any failed.
+Boot one or more boxes and enqueue each container's init start. The command returns
+after the background `Container.Start` action is spawned; it does not wait for
+that RPC to finish. No options. Prints each accepted box name/ID to stdout and
+aggregates synchronous boot or dispatch errors.
 
 ---
 
@@ -463,9 +466,10 @@ Show detailed information for one or more boxes.
 | `--format FMT` | `-f` | `json` | `json`, `yaml`, or a Go template (e.g. `'{{.State.Status}}'`) |
 
 The Go-template engine exposes a `json` function for serializing nested values.
-`State.StartedAt` is the most recent successful container start timestamp in
-RFC 3339 format, or `null` if it has not been recorded or is unavailable over
-REST.
+`State.StartedAt` is when the most recent lifecycle published its PID and
+`Running` state, in RFC 3339 format, or `null` if no boot was recorded or the
+field is unavailable over REST. It does not prove that asynchronous
+`Container.Start` finished.
 
 **Examples:**
 

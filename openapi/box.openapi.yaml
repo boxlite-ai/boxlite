@@ -386,16 +386,18 @@ paths:
       - $ref: "#/components/parameters/boxId"
     post:
       operationId: startBox
-      summary: Start a box (initialize VM)
+      summary: Boot a box and enqueue its container start
       description: |
-        Initializes the VM for a box. Idempotent: if already running, returns
-        current state. Transitions: configured → running, stopped → running.
+        Initializes the VM for a box, spawns its `Container.Start` RPC in the
+        background, and returns without waiting for that RPC to finish.
+        Idempotent: if already running or starting, returns current state.
+        Transitions: configured → running, stopped → running.
       tags: [Boxes]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
       responses:
         "200":
-          description: Box started (or already running)
+          description: Box booted and container start enqueued (or already running)
           content:
             application/json:
               schema:

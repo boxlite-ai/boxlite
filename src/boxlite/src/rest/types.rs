@@ -352,7 +352,7 @@ impl BoxResponse {
             exit_code: self.exit_code,
             // Like `network`, this is local-lifecycle detail the remote REST
             // surface does not publish; `None` says "not known here" rather
-            // than "init was never launched".
+            // than "no boot marker was recorded".
             started_at: None,
         })
     }

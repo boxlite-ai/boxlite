@@ -124,7 +124,7 @@ impl PyBox {
         })
     }
 
-    /// Start the box (initialize VM).
+    /// Boot the box, spawn `Container.Start`, and return before that RPC finishes.
     fn start<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
 

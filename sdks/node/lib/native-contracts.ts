@@ -405,6 +405,7 @@ export interface JsBox {
     name?: string | null,
   ): Promise<JsBox>;
   export(dest: string, options?: JsExportOptions | null): Promise<string>;
+  /** Boots the box and returns once background Container.Start is spawned. */
   start(): Promise<void>;
   stop(): Promise<void>;
   metrics(): Promise<JsBoxMetrics>;

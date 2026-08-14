@@ -232,20 +232,19 @@ pub struct BoxState {
     /// keeps existing DB rows readable without migration.
     #[serde(default)]
     pub exit_code: Option<i32>,
-    /// When the guest's `Container.Start` returned success for the lifecycle
-    /// that published [`Self::pid`] (docker's `State.StartedAt`).
+    /// When a fresh lifecycle published its PID and `Running` state.
     ///
-    /// Deliberately not derivable from [`Self::status`]: booting only *creates*
-    /// the container, and `attach()` leaves a box `Running` with its init not
-    /// yet launched, so `Running` alone cannot answer "did this box's init
-    /// ever start". Survives a stop the way docker keeps `StartedAt` on an
-    /// exited container.
+    /// This is boot-publication evidence, not proof that the asynchronous
+    /// `Container.Start` RPC finished or that the container's init ran.
+    /// `attach(None)` therefore publishes this timestamp while deliberately
+    /// leaving init unstarted. The value survives stop as lifecycle history.
     ///
     /// **Invariant — a live PID in this row is always the one this timestamp
-    /// describes.** Exactly two writes can put a different shim's PID here, and
-    /// both void the timestamp: the one that publishes a new lifecycle's PID
-    /// (`BoxImpl::init_live_state`) and the one recovery branch that can adopt
-    /// a PID this row never published ([`Self::adopt_recovered_shim`]). The
+    /// describes.** Exactly two writes can put a different shim's PID here. A
+    /// fresh boot publishes that PID with a replacement timestamp in
+    /// `BoxImpl::init_live_state`; the recovery branch that adopts a PID this
+    /// row never published clears a timestamp that belonged to the old PID
+    /// ([`Self::adopt_recovered_shim`]). The
     /// lifecycle-ending writes ([`Self::mark_stop`], [`Self::mark_failed`],
     /// [`Self::reset_for_reboot`]) instead clear only the PID and preserve
     /// `Some(t)` — read that as "the run that just ended began at t", never as
@@ -358,7 +357,7 @@ impl BoxState {
         }
     }
 
-    /// Record that this lifecycle's `Container.Start` returned success.
+    /// Record that this lifecycle published its PID and `Running` state.
     pub fn mark_started(&mut self) {
         let now = Utc::now();
         self.started_at = Some(now);
@@ -1062,12 +1061,12 @@ mod tests {
         assert!(state.health_status.last_check.is_none());
         assert!(
             state.started_at.is_none(),
-            "a row written before this field existed cannot claim a launched init"
+            "a row written before this field existed cannot claim a published boot"
         );
     }
 
     #[test]
-    fn adopting_the_recorded_shim_keeps_its_container_start() {
+    fn adopting_the_recorded_shim_keeps_its_boot_marker() {
         let mut state = BoxState::new();
         state.set_pid(Some(4242));
         state.mark_started();
@@ -1077,13 +1076,13 @@ mod tests {
 
         assert_eq!(
             state.started_at, recorded,
-            "recovery re-attaching the same shim must not void the start it recorded"
+            "recovery re-attaching the same shim must not void its boot marker"
         );
         assert_eq!(state.status, BoxStatus::Running);
     }
 
     #[test]
-    fn adopting_a_different_shim_voids_the_container_start() {
+    fn adopting_a_different_shim_voids_the_boot_marker() {
         // A crash between the shim writing its PID file and this row being
         // saved leaves recovery adopting a PID the row never published. The
         // timestamp describes the PID it was written with, so it cannot
@@ -1097,16 +1096,15 @@ mod tests {
         assert_eq!(state.pid, Some(4243));
         assert!(
             state.started_at.is_none(),
-            "a start recorded for pid 4242 must not be read as evidence about pid 4243"
+            "a boot recorded for pid 4242 must not be read as evidence about pid 4243"
         );
     }
 
-    /// The three ways a lifecycle ends all keep the timestamp — docker's
-    /// `StartedAt` on an exited container. What makes that safe is that each
+    /// The three ways a lifecycle ends all keep its boot timestamp. Each
     /// one drops the PID: `Some(started_at)` beside `pid: None` describes the
-    /// run that ended, and cannot be read as a live box.
+    /// lifecycle that ended, and cannot be read as a live box.
     #[test]
-    fn ending_a_lifecycle_keeps_the_start_and_drops_the_pid() {
+    fn ending_a_lifecycle_keeps_the_boot_marker_and_drops_the_pid() {
         let ended = |end: fn(&mut BoxState)| {
             let mut state = BoxState::new();
             state.set_pid(Some(4242));
@@ -1123,11 +1121,11 @@ mod tests {
         ] {
             assert!(
                 state.started_at.is_some(),
-                "{name} must keep the start of the run that just ended"
+                "{name} must keep the boot marker of the lifecycle that just ended"
             );
             assert_eq!(
                 state.pid, None,
-                "{name} must drop the PID, or the kept start would read as a live box"
+                "{name} must drop the PID, or the kept boot would read as a live box"
             );
             assert!(
                 !state.status.is_active(),

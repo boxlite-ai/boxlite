@@ -147,7 +147,8 @@ impl JsBox {
         Ok(archive.path().to_string_lossy().to_string())
     }
 
-    /// Start or restart a stopped box.
+    /// Boot or restart the box, spawn `Container.Start`, and return before
+    /// that guest RPC finishes.
     #[napi]
     pub async fn start(&self) -> Result<()> {
         self.handle.start().await.map_err(map_err)

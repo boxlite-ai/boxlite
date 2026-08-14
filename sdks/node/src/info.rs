@@ -184,7 +184,8 @@ pub struct JsBoxInfo {
     /// Creation timestamp (ISO 8601 format)
     pub created_at: String,
 
-    /// Most recent successful container start timestamp (RFC 3339), when recorded
+    /// Most recent PID/Running boot-publication timestamp (RFC 3339).
+    /// This does not prove that asynchronous Container.Start finished.
     pub started_at: Option<String>,
 
     /// Image reference or rootfs path

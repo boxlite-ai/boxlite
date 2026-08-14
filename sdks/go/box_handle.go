@@ -39,7 +39,8 @@ func (b *Box) ID() string { return b.id }
 // Name returns the user-defined name of the box, if set.
 func (b *Box) Name() string { return b.name }
 
-// Start starts (or restarts) the box.
+// Start boots (or restarts) the box and returns once Container.Start has been
+// spawned in the background; it does not wait for that guest RPC to finish.
 func (b *Box) Start(ctx context.Context) error {
 	b.runtime.ensureDrainRunning()
 

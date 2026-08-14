@@ -300,11 +300,10 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 
 	// bx.Start must stay the last step of Create that can fail.
 	//
-	// A successful Start makes BoxLite publish the box's StartedAt,
-	// and BoxSync reads it as evidence this job body succeeded — it is what
-	// lets a lost job-completion callback be repaired later. A fallible step
-	// added below would publish that evidence for a Create that then returns
-	// an error, and the two would disagree with no way to tell which is right.
+	// A successful Start means BoxLite published the PID/Running boot marker and
+	// accepted the background Container.Start handoff. BoxSync uses that marker
+	// to repair a lost job-completion callback. A fallible step below would let
+	// Create return an error after publishing its completion evidence.
 	// TestCreateHasNoFallibleStepAfterStart enforces this.
 	skipStart := boxDto.SkipStart != nil && *boxDto.SkipStart
 	if !skipStart {
@@ -316,7 +315,8 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	return bx.ID(), "boxlite", nil
 }
 
-// Start starts a stopped box and returns the runtime version.
+// Start boots a box, spawns its Container.Start in the background, and returns
+// the runtime version without waiting for that guest RPC.
 func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
 		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
@@ -374,8 +374,8 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 //
 // Exported apart from GetBoxState because a caller that already holds a
 // BoxInfo must not fetch a second one: BoxSync pairs the state with the box's
-// StartedAt, and reading the two at different moments is what lets a stale
-// timestamp meet a fresh state.
+// boot marker, and reading the two at different moments is what lets a stale
+// marker meet a fresh state.
 func ToBoxState(state boxlite.State) enums.BoxState {
 	switch state {
 	case boxlite.StateRunning:

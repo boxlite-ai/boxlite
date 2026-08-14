@@ -401,17 +401,15 @@ pub struct BoxInfo {
     /// because its main command exited (docker semantics).
     pub exit_code: Option<i32>,
 
-    /// When the guest's `Container.Start` most recently returned success
-    /// (docker's `State.StartedAt`); `None` when no successful start has been
-    /// recorded. The value survives stop and reboot as lifecycle history. When
-    /// [`Self::pid`] is present, the timestamp describes that live PID.
+    /// When the most recent lifecycle published its PID and `Running` state;
+    /// `None` when no boot publication was recorded. The value survives stop
+    /// as lifecycle history. When [`Self::pid`] is present, the timestamp
+    /// describes that live PID.
     ///
-    /// Answers what [`Self::status`] cannot: `Running` is published once the
-    /// VM is up, which is before the separate `Container.Start` runs — and
-    /// `attach()` leaves a box `Running` with its init deliberately unstarted.
-    /// The cloud runner reads this to confirm a startup whose job-completion
-    /// callback was lost. Serde default keeps metadata from an older producer
-    /// readable.
+    /// This is intentionally boot evidence, not Docker `State.StartedAt`:
+    /// the separate asynchronous `Container.Start` may still be in flight or
+    /// may fail. `attach(None)` publishes this timestamp without starting init.
+    /// Serde default keeps metadata from an older producer readable.
     #[serde(default)]
     pub started_at: Option<DateTime<Utc>>,
 }

@@ -36,7 +36,8 @@ pub enum AuditEventKind {
     /// Box created.
     BoxCreated,
 
-    /// Box VM started successfully.
+    /// An explicit `start()` owned and successfully completed guest
+    /// `Container.Start`.
     BoxStarted,
 
     /// Box VM stopped.

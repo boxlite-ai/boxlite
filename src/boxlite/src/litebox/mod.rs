@@ -91,13 +91,13 @@ impl LiteBox {
         self.box_backend.info().await
     }
 
-    /// Start the box (initialize VM).
+    /// Boot the box and spawn its container-init start.
     ///
-    /// For Configured boxes: initializes VM for the first time.
-    /// For Stopped boxes: restarts the VM.
-    ///
-    /// This is idempotent - calling start() on a Running box is a no-op.
-    /// Also called implicitly by exec() if the box is not running.
+    /// For Configured boxes this initializes the VM; for Stopped boxes it
+    /// restarts it. Once booted, `Container.Start` runs in the background and
+    /// this method returns without waiting for the guest RPC. Concurrent starts
+    /// are single-flighted; implicit operations such as `exec()` still wait for
+    /// the real container start.
     pub async fn start(&self) -> BoxliteResult<()> {
         self.box_backend.start().await
     }

@@ -194,15 +194,17 @@ pub struct LiteBox {
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
-| `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
+| `start` | `async fn start(&self) -> BoxliteResult<()>` | Boot the box, spawn `Container.Start`, and return without waiting for that RPC |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
 | `stop` | `async fn stop(&self) -> BoxliteResult<()>` | Stop the box |
 
 #### Lifecycle
 
-- `start()` initializes VM for `Configured` or `Stopped` boxes
-- Idempotent: calling on `Running` box is a no-op
+- `start()` synchronously boots `Configured` or `Stopped` boxes, then spawns
+  `Container.Start` and returns before the guest RPC finishes
+- Concurrent and repeated container starts are single-flighted; after a
+  background failure, a later explicit or implicit operation may retry
 - `run()` implicitly calls `start()` if needed
 - `stop()` terminates VM; box can be restarted
 
