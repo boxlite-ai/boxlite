@@ -99,3 +99,10 @@ The deployment runbook and operational constraints live in
 
 See [`API.md`](./API.md) for the categorized inventory of every registered
 application API, including its method, path, owning service, and purpose.
+
+## Data model
+
+See [`SCHEMA.md`](./SCHEMA.md) for the control-plane Postgres schema: every
+table with its columns, keys, and indexes, how the tables relate and which of
+those relationships the database enforces, and the satellite stores that sit
+beside it.
