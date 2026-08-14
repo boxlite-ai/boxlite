@@ -20,11 +20,23 @@ Three things in that store are shared by construction, and none of them is a sta
 - `/sst/bootstrap` names the buckets every stage shares and is read before SST knows which stage it
   is running, so it is read-only for the same reason.
 
-One shared write remains: deployment assets are content-addressed in a single `sst-asset-*` bucket
-with no stage in the key, so every stage writes there. A write is idempotent — the key *is* the
-content hash — but a delete is not, so a stage can remove an object another stage's next update
-expects. It stays because `sst remove` needs it, and the blast radius is a redeploy: assets are
-rebuilt from the checkout, not recovered from the bucket.
+Three shared writes remain, and none is narrowed by this change:
+
+- Deployment assets are content-addressed in a single `sst-asset-*` bucket with no stage in the key,
+  so every stage writes there. A write is idempotent — the key *is* the content hash — but a delete
+  is not, so a stage can remove an object another stage's next update expects. It stays because
+  `sst remove` needs it, and the blast radius is a redeploy: assets are rebuilt from the checkout.
+- `boxlite-volume-*` buckets carry no stage in their names, so `s3:*` over that prefix reaches every
+  stage's volumes. Scoping it means renaming the buckets to carry the stage, across the runtime
+  boundary, the stack, and buckets that already exist.
+- `ssm:SendCommand` on `instance/*` is the widest grant the deploy role holds: an instance ARN
+  carries no stage, so a job bound to one stage can run a shell command on any instance in the
+  account. Narrowing it needs a Condition on an instance tag the Runner launch template sets, which
+  can only be verified against real instances.
+
+The first two predate this change and the third is how Runner upgrades have always been delivered;
+they are listed because the paragraph above would otherwise read as a stronger guarantee than the
+policy gives.
 
 That policy has not run a real deploy yet. Four of its grant groups were derived from live listings,
 and two — Pulumi's provider describe/list calls and the `ssm:SendCommand` document targets — are

@@ -418,6 +418,86 @@ test('what bootstrap stores is the .env it validated, read once', () => {
   )
 })
 
+test('the grants that are NOT stage-scoped are the documented ones, and only those', () => {
+  /*
+   * The isolation test above says what the deploy role cannot reach. This says what it still can, so
+   * the two together are the whole picture: a grant that is account-wide because its resource has no
+   * stage to scope to is a documented limit, and a new one appearing silently is not.
+   *
+   * Pinned against docs/security.md, because a limit nobody wrote down is indistinguishable from one
+   * nobody noticed.
+   */
+  const template = readDeployTemplate()
+  const statements = template.Resources.GitHubDeployRole.Properties.Policies.flatMap(
+    (policy: any) => policy.PolicyDocument.Statement,
+  )
+  const asArray = (value: any) => (Array.isArray(value) ? value : [value])
+  const stageScoped = (resource: any) => String(resource).includes('${GitHubEnvironment}')
+
+  // Every resource that names no stage, excluding the SST backing store the other test covers.
+  const unscoped = statements.flatMap((statement: any) =>
+    asArray(statement.Resource)
+      .filter((resource: any) => typeof resource === 'string' && !stageScoped(resource))
+      .filter((resource: string) => !resource.includes('sst-state-') && !resource.includes('/sst/'))
+      .map((resource: string) => ({ sid: statement.Sid, resource })),
+  )
+
+  /*
+   * Every resource this role can reach across stages, and why each one cannot be scoped. The list is
+   * the point: adding a grant whose resource carries no stage should require adding a line here and
+   * saying why, rather than passing unnoticed.
+   */
+  // The three whose reach across stages is a property of this change's story, so security.md has to
+  // keep saying so — a limit recorded only in a test is a limit the next reader will not find.
+  const DOCUMENTED_IN_SECURITY_MD: Array<[string, string]> = [
+    ['sst-asset-', 'deployment assets are content-addressed; the key is the content hash'],
+    ['boxlite-volume-', 'the bucket name carries no stage — scoping it is a rename'],
+    [':instance/*', 'an EC2 instance ARN carries no stage; narrowing needs a tag Condition'],
+  ]
+  // The rest predate this change and are accounted for here rather than in the prose.
+  const ACCOUNTED_HERE: Array<[string, string]> = [
+    ['document/AWS-RunShellScript', 'an AWS-owned SSM document, not a stage resource'],
+    [':role/boxlite-*', 'SST names the roles it creates per stack, and the stage is not a prefix'],
+    [':instance-profile/boxlite-*', 'same naming as the roles they wrap'],
+    [':policy/boxlite-*', 'same naming as the roles they attach to'],
+    ['role/aws-service-role/', 'service-linked roles are account-global by AWS design'],
+  ]
+  /*
+   * `*` carries no resource name to match on, so it is allowed per statement rather than per pattern.
+   * Excluding it wholesale — which this did at first — would have let the single widest grant there is
+   * appear without failing anything.
+   */
+  const WILDCARD_RESOURCE_STATEMENTS: Array<[string, string]> = [
+    ['BoxLiteAwsControlPlane', 'the control-plane calls SST makes have no resource-level ARNs'],
+    ['RunnerCommandStatus', 'SSM command-history APIs are list-shaped and take no resource'],
+    ['ReadIamAndAccountMetadata', 'account and IAM reads SST performs before it knows any resource'],
+  ]
+
+  const known = [...DOCUMENTED_IN_SECURITY_MD, ...ACCOUNTED_HERE]
+  const undocumented = unscoped.filter(({ sid, resource }: any) =>
+    resource === '*'
+      ? !WILDCARD_RESOURCE_STATEMENTS.some(([allowedSid]) => allowedSid === sid)
+      : !known.some(([pattern]) => resource.includes(pattern)),
+  )
+  assert.deepEqual(undocumented, [], 'an account-wide resource grant appeared that nothing accounts for')
+
+  /*
+   * Both directions. "Every unscoped grant is documented" alone lets the documentation rot the other
+   * way: narrow or delete boxlite-volume-* later and security.md would still describe it as shared,
+   * with nothing failing. So each documented pattern must also still match a real unscoped resource.
+   */
+  const security = readFileSync(join(REPO_ROOT, 'apps/infra/docs/security.md'), 'utf8')
+  for (const [pattern] of DOCUMENTED_IN_SECURITY_MD) {
+    const claim = pattern.replace(/^:/, '').replace(/-$/, '-*')
+    assert.ok(security.includes(claim), `docs/security.md must still name ${claim} as a shared grant`)
+    assert.ok(
+      unscoped.some(({ resource }: any) => resource.includes(pattern)),
+      `docs/security.md still describes ${claim} as reaching every stage, but no grant matches it — ` +
+        'either the policy was narrowed and the note is now wrong, or the pattern here is stale',
+    )
+  }
+})
+
 test('every unusable stage configuration store stops the deploy rather than warning', () => {
   // Over live source, for the reason the API-image test gives: nothing executes this path in a test,
   // so a branch downgraded to a warning would leave every unit test passing. The store is now the only
