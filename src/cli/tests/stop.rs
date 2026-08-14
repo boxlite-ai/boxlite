@@ -107,14 +107,27 @@ fn stop_reaps_whole_box_tree_not_just_launcher() {
 }
 
 /// The single 12-char box id directory under `<home>/boxes`.
+///
+/// Asserts uniqueness rather than taking the first match: `read_dir` has no
+/// defined order, so picking arbitrarily among several would make the test
+/// target a different box than the one it started — and `KillFloor` would then
+/// re-check identity against the wrong box id.
 #[cfg(target_os = "linux")]
 fn single_box_id(home: &Path) -> String {
-    std::fs::read_dir(home.join("boxes"))
+    let boxes = home.join("boxes");
+    let mut ids: Vec<String> = std::fs::read_dir(&boxes)
         .expect("boxes dir")
         .flatten()
         .filter_map(|e| e.file_name().into_string().ok())
-        .find(|n| n.len() == 12 && n.chars().all(|c| c.is_ascii_alphanumeric()))
-        .expect("exactly one box id dir")
+        .filter(|n| n.len() == 12 && n.chars().all(|c| c.is_ascii_alphanumeric()))
+        .collect();
+    assert_eq!(
+        ids.len(),
+        1,
+        "expected exactly one box id dir under {}, got {ids:?}",
+        boxes.display()
+    );
+    ids.pop().expect("length checked above")
 }
 
 /// Pids whose `/proc/<pid>/cmdline` mentions this box id — the bwrap launcher,
