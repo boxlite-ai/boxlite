@@ -285,7 +285,7 @@ jobs:
           capability=apps/infra/deployment/capabilities.json
           legacy_module=apps/infra/scripts/deployment-scope.mjs
           if [ -f "$capability" ]; then
-            if ! status=$(node -e "const fs=require('node:fs'); const c=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); console.log(c.version === 1 && c.componentSelection === true ? 'supported' : 'unsupported')" "$capability"); then
+            if ! status=$(node -e "const fs=require('node:fs'); const c=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); console.log([1,2].includes(c.version) && c.componentSelection === true ? 'supported' : 'unsupported')" "$capability"); then
               status=unreadable
             fi
             source_path=$capability

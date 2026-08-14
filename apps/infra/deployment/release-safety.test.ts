@@ -2,7 +2,9 @@
 // Copyright (c) 2026 BoxLite AI
 
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
@@ -193,6 +195,43 @@ test('SST deploy does not depend on a laptop-managed remote builder', () => {
     'apps/infra/buildkit/buildkitd.toml',
   ]) {
     assert.equal(existsSync(join(REPO_ROOT, legacyPath)), false, `${legacyPath} must be removed`)
+  }
+})
+
+test('component-selection bridge accepts capability v2 for existing single exclusions', () => {
+  const workflow = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
+  const scopeSupportStep = workflow.jobs.deploy.steps.find(
+    (step: any) => step.name === 'Require component selection support in the selected commit',
+  )
+  assert.ok(scopeSupportStep, 'the component-selection capability check is missing')
+
+  const checkout = mkdtempSync(join(tmpdir(), 'boxlite-capability-bridge-'))
+  const capability = join(checkout, 'apps/infra/deployment/capabilities.json')
+  mkdirSync(dirname(capability), { recursive: true })
+
+  const runGuard = (version: number, componentSelection: boolean, exclude: 'Api' | 'Runner') => {
+    writeFileSync(capability, `${JSON.stringify({ version, componentSelection })}\n`)
+    return spawnSync('/usr/bin/env', ['bash', '-c', scopeSupportStep.run], {
+      cwd: checkout,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        BOXLITE_ARTIFACT_REF: 'fixture-commit',
+        DEPLOY_EXCLUDE: exclude,
+      },
+    })
+  }
+
+  try {
+    for (const exclude of ['Api', 'Runner'] as const) {
+      assert.equal(runGuard(1, true, exclude).status, 0, `capability v1 must keep supporting --exclude ${exclude}`)
+      const v2 = runGuard(2, true, exclude)
+      assert.equal(v2.status, 0, `capability v2 must support --exclude ${exclude}: ${v2.stderr}`)
+    }
+    assert.notEqual(runGuard(3, true, 'Runner').status, 0, 'an unknown capability version must fail closed')
+    assert.notEqual(runGuard(2, false, 'Runner').status, 0, 'v2 without component selection must fail closed')
+  } finally {
+    rmSync(checkout, { recursive: true, force: true })
   }
 })
 
@@ -389,7 +428,7 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assertShellLine(scopeSupportStep.run, /if \[ -f "\$capability" \]; then/)
   assertShellLine(scopeSupportStep.run, /if ! status=\$\(node -e .* "\$capability"\); then/)
   assertShellLine(scopeSupportStep.run, /status=unreadable/)
-  assertShellLine(scopeSupportStep.run, /c\.version === 1 && c\.componentSelection === true/)
+  assertShellLine(scopeSupportStep.run, /\[1,2\]\.includes\(c\.version\) && c\.componentSelection === true/)
   assertShellLine(scopeSupportStep.run, /elif \[ -f "\$legacy_module" \]; then/)
   assertShellLine(scopeSupportStep.run, /typeof m\.resolveDeployScope === 'function'/)
   // Absence of both formats is its own decision, not an import failure.
