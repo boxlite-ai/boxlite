@@ -143,7 +143,12 @@ pub(crate) struct BoxImpl {
     /// client can attach first. This single-flights that step across every
     /// implicit-boot caller and an explicit `start()`, and is pre-set when we
     /// reattach to a box whose init is already running.
-    container_start: OnceCell<()>,
+    container_start: Arc<OnceCell<()>>,
+
+    #[cfg(test)]
+    background_starts_finished: Arc<std::sync::atomic::AtomicUsize>,
+    #[cfg(test)]
+    background_start_finished: Arc<tokio::sync::Notify>,
 }
 
 impl BoxImpl {
@@ -182,7 +187,11 @@ impl BoxImpl {
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
             watcher: std::sync::OnceLock::new(),
-            container_start: OnceCell::new(),
+            container_start: Arc::new(OnceCell::new()),
+            #[cfg(test)]
+            background_starts_finished: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            background_start_finished: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -293,26 +302,58 @@ impl BoxImpl {
         // makes `run` docker-shaped — create, attach, then start. `run` slips the
         // attach between these two calls; every other caller just wants both.
         let live = self.ensure_booted().await?;
-        let started_now = self.ensure_container_started(live).await?;
+        let guest_session = live.guest_session.clone();
+        let container_start = Arc::clone(&self.container_start);
+        let shutdown_token = self.shutdown_token.child_token();
+        let container_id = self.container_id().to_owned();
+        let box_id = self.config.id.clone();
+        let event_listeners = self.event_listeners.clone();
+        #[cfg(test)]
+        let background_starts_finished = Arc::clone(&self.background_starts_finished);
+        #[cfg(test)]
+        let background_start_finished = Arc::clone(&self.background_start_finished);
 
-        // Nothing below may fail. `ensure_container_started` has already
-        // published `started_at` (see [`Self::record_started`]), and readers of
-        // it — the cloud runner among them — take it as evidence that this
-        // whole call succeeded. A fallible step added here would publish that
-        // evidence for a start that then returned `Err`.
-        //
-        // Announce the start only when *this* call actually ran init — not on an
-        // idempotent re-`start()` or a reattach to an already-running box.
-        if started_now {
-            for listener in &self.event_listeners {
-                listener.on_box_started(&self.config.id);
+        tokio::spawn(async move {
+            match Self::ensure_container_started_owned(
+                container_start,
+                guest_session,
+                container_id,
+                shutdown_token,
+            )
+            .await
+            {
+                Ok(true) => {
+                    for listener in &event_listeners {
+                        listener.on_box_started(&box_id);
+                    }
+                    tracing::info!(
+                        box_id = %box_id,
+                        elapsed_ms = t0.elapsed().as_millis() as u64,
+                        "Box started"
+                    );
+                }
+                Ok(false) => {}
+                Err(BoxliteError::Stopped(_)) => {
+                    tracing::debug!(
+                        box_id = %box_id,
+                        "Container start cancelled because the box is stopping"
+                    );
+                }
+                Err(error) => {
+                    tracing::error!(
+                        box_id = %box_id,
+                        error = %error,
+                        "Container start failed in background"
+                    );
+                }
             }
-            tracing::info!(
-                box_id = %self.config.id,
-                elapsed_ms = t0.elapsed().as_millis() as u64,
-                "Box started"
-            );
-        }
+
+            #[cfg(test)]
+            {
+                background_starts_finished.fetch_add(1, Ordering::SeqCst);
+                background_start_finished.notify_waiters();
+            }
+        });
         Ok(())
     }
 
@@ -663,7 +704,7 @@ impl BoxImpl {
         // through the restart pipeline and spawn a new VM — exactly what
         // stop() must NOT do.
         let should_attach = self.state.read().status == BoxStatus::Running;
-        if should_attach && let Ok(live) = self.live_state().await {
+        if should_attach && let Ok(live) = self.ensure_booted().await {
             // Recovered boxes lazy-attach here via vmm_attach (now
             // ProcessIdentity-gated). Live boxes hit the cached LiveState.
             // Either way the teardown is identical:
@@ -977,66 +1018,57 @@ impl BoxImpl {
         self.live.get_or_try_init(|| self.init_live_state()).await
     }
 
-    /// Run the container's init exactly once, returning whether *this* call did
-    /// it (vs. finding it already running). Booting only creates the container;
-    /// this is the separate `Container.Start`. Single-flighted via `OnceCell`, so
-    /// the implicit-boot funnel and an explicit `start()` cannot double-run it,
+    /// Run the container's init exactly once. Booting only creates the container;
+    /// this is the separate `Container.Start`. Single-flighted via `OnceCell`,
+    /// so the implicit-boot funnel and an explicit `start()` cannot double-run it,
     /// and a box reattached with init already running pre-sets the cell.
-    async fn ensure_container_started(&self, live: &LiveState) -> BoxliteResult<bool> {
-        // `get_or_try_init` single-flights the closure but hands every concurrent
-        // caller the same `Ok`, so it cannot tell the winner from the waiters. A
-        // closure-local flag is set only inside the body that actually runs, so
-        // exactly one caller reports that it started the container (and a cell
-        // already set — e.g. a reattached, still-running box — leaves it false).
+    async fn ensure_container_started(&self, live: &LiveState) -> BoxliteResult<()> {
+        Self::ensure_container_started_owned(
+            Arc::clone(&self.container_start),
+            live.guest_session.clone(),
+            self.container_id().to_owned(),
+            self.shutdown_token.child_token(),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Owned form used by explicit `start()` so the RPC can outlive that call.
+    ///
+    /// Returns `true` only when this call actually executes and successfully
+    /// completes the `Container.Start` initializer.
+    async fn ensure_container_started_owned(
+        container_start: Arc<OnceCell<()>>,
+        guest_session: GuestSession,
+        container_id: String,
+        shutdown_token: CancellationToken,
+    ) -> BoxliteResult<bool> {
+        // Cancellation or an RPC error leaves the cell empty, allowing a later
+        // explicit or implicit operation to retry.
         let mut started_here = false;
-        self.container_start
-            .get_or_try_init(|| async {
-                live.guest_session
+        {
+            let start = container_start.get_or_try_init(|| async {
+                guest_session
                     .container()
                     .await?
-                    .start(self.container_id())
+                    .start(&container_id)
                     .await?;
                 started_here = true;
                 Ok::<(), BoxliteError>(())
-            })
-            .await?;
-        if started_here {
-            self.record_started();
+            });
+            tokio::select! {
+                biased;
+                _ = shutdown_token.cancelled() => {
+                    return Err(BoxliteError::Stopped(format!(
+                        "Container start cancelled for container {container_id}"
+                    )));
+                }
+                result = start => {
+                    result?;
+                }
+            }
         }
         Ok(started_here)
-    }
-
-    /// Publish `started_at` for this lifecycle.
-    ///
-    /// The counterpart of the shim's `exit` file: one names how the box died,
-    /// this names that its init was launched. It rides in `BoxState` beside the
-    /// PID it belongs to, so the pair is written and read as one row and no
-    /// consumer has to re-derive which shim the timestamp describes.
-    ///
-    /// A failed persist is logged, never propagated — the guest RPC already
-    /// succeeded and the box is running, so turning a bookkeeping failure into
-    /// a start failure would be a worse answer than the missing timestamp.
-    ///
-    /// **Consumers treat this as evidence that the whole start succeeded**, so
-    /// `start()` must not grow a fallible step after `ensure_container_started`.
-    /// See the note at the tail of [`Self::start`].
-    fn record_started(&self) {
-        let (persist_result, pid) = {
-            let mut state = self.state.write();
-            state.mark_started();
-            let pid = state.pid;
-            let result = self.runtime.box_manager.save_box(&self.config.id, &state);
-            (result, pid)
-        };
-
-        if let Err(error) = persist_result {
-            tracing::error!(
-                box_id = %self.config.id,
-                pid = ?pid,
-                error = %error,
-                "Container.Start succeeded but the start could not be recorded"
-            );
-        }
     }
 
     /// The box's network control backend (gvproxy ServicesMux client), owned in
@@ -1141,20 +1173,18 @@ impl BoxImpl {
             let mut state = self.state.write();
             state.set_pid(Some(pid));
             state.set_status(BoxStatus::Running);
+            // A box entering Running publishes its PID, status, and `started_at`
+            // timestamp atomically. An adopted Running box is the same lifecycle,
+            // so its existing Some/None value must be preserved.
+            if !adopting_running {
+                state.mark_started();
+            }
+
             // This is a fresh run of the box's main command, so the exit code
             // recorded for the previous one no longer describes it (docker
             // clears ExitCode on start too). The guest drops its matching
             // exit file in Container.Init.
             state.exit_code = None;
-            // Same reasoning for the start record, and this is the write that
-            // makes it safe: publishing the new PID and voiding the previous
-            // lifecycle's evidence happen in one `save_box`, so no reader can
-            // ever see this shim paired with the last one's start. Adopting a
-            // *running* box is not a new lifecycle — its record still names the
-            // live shim and must survive.
-            if !adopting_running {
-                state.started_at = None;
-            }
 
             // Initialize health status if health check is configured
             if self.config.options.advanced.health_check.is_some() {
@@ -1200,7 +1230,7 @@ impl BoxImpl {
 
         tracing::info!(
             box_id = %self.config.id,
-            "Box started successfully (first_start={})",
+            "Box booted successfully (first_start={})",
             is_first_start
         );
         // Lock is automatically released when _guard drops
@@ -1489,9 +1519,17 @@ mod tests {
     use crate::util::{PidFileWriter, PidRecord, ShimPidRecord, is_process_alive};
     use crate::vmm::VmmKind;
     use crate::vmm::controller::VmmMetrics;
-    use boxlite_shared::BoxTransport;
+    use boxlite_shared::{
+        BoxTransport, Container as ContainerService, ContainerInitRequest, ContainerInitResponse,
+        ContainerInitSuccess, ContainerServer, ContainerStartRequest, ContainerStartResponse,
+        ContainerStartSuccess, container_init_response, container_start_response,
+    };
     use chrono::Utc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
     use tempfile::TempDir;
+    use tokio::sync::{Notify, Semaphore};
+    use tonic::transport::{Endpoint, Server};
+    use tonic::{Request, Response, Status};
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
         info.network
@@ -1539,34 +1577,150 @@ mod tests {
         }
     }
 
-    struct RecordStartedSaveGate {
-        entered: std::sync::mpsc::Sender<()>,
-        release: std::sync::mpsc::Receiver<()>,
+    struct StartGate {
+        calls: AtomicUsize,
+        should_fail: AtomicBool,
+        entered: Semaphore,
+        release: Semaphore,
     }
 
-    static RECORD_STARTED_SAVE_GATE: std::sync::Mutex<Option<RecordStartedSaveGate>> =
-        std::sync::Mutex::new(None);
-
-    fn block_record_started_save(_: i32) -> bool {
-        let gate = RECORD_STARTED_SAVE_GATE
-            .lock()
-            .expect("record-started save gate lock poisoned")
-            .take();
-        let Some(gate) = gate else {
-            return false;
-        };
-
-        gate.entered.send(()).is_ok() && gate.release.recv().is_ok()
+    impl Default for StartGate {
+        fn default() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                should_fail: AtomicBool::new(false),
+                entered: Semaphore::new(0),
+                release: Semaphore::new(0),
+            }
+        }
     }
 
-    #[test]
-    fn record_started_holds_state_lock_until_persist_completes() {
+    #[derive(Clone)]
+    struct StartStubGuest {
+        gate: Arc<StartGate>,
+    }
+
+    #[tonic::async_trait]
+    impl ContainerService for StartStubGuest {
+        async fn init(
+            &self,
+            request: Request<ContainerInitRequest>,
+        ) -> Result<Response<ContainerInitResponse>, Status> {
+            let container_id = request.into_inner().container_id;
+            Ok(Response::new(ContainerInitResponse {
+                result: Some(container_init_response::Result::Success(
+                    ContainerInitSuccess { container_id },
+                )),
+            }))
+        }
+
+        async fn start(
+            &self,
+            request: Request<ContainerStartRequest>,
+        ) -> Result<Response<ContainerStartResponse>, Status> {
+            let container_id = request.into_inner().container_id;
+            self.gate.calls.fetch_add(1, Ordering::SeqCst);
+            self.gate.entered.add_permits(1);
+            self.gate
+                .release
+                .acquire()
+                .await
+                .expect("start release semaphore closed")
+                .forget();
+
+            if self.gate.should_fail.load(Ordering::SeqCst) {
+                return Err(Status::internal("injected Container.Start failure"));
+            }
+
+            Ok(Response::new(ContainerStartResponse {
+                result: Some(container_start_response::Result::Success(
+                    ContainerStartSuccess { container_id },
+                )),
+            }))
+        }
+    }
+
+    #[derive(Default)]
+    struct StartedCounter {
+        count: AtomicUsize,
+        changed: Notify,
+    }
+
+    impl StartedCounter {
+        async fn wait_for(&self, expected: usize) {
+            loop {
+                let notified = self.changed.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.count.load(Ordering::SeqCst) >= expected {
+                    return;
+                }
+                notified.await;
+            }
+        }
+    }
+
+    impl EventListener for StartedCounter {
+        fn on_box_started(&self, _: &BoxID) {
+            self.count.fetch_add(1, Ordering::SeqCst);
+            self.changed.notify_waiters();
+        }
+    }
+
+    async fn start_stub_guest(gate: Arc<StartGate>) -> (GuestSession, JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind stub guest");
+        let address = listener.local_addr().expect("read stub guest address");
+        let incoming = tonic::transport::server::TcpIncoming::from_listener(listener, true, None)
+            .expect("configure stub guest listener");
+
+        let server = tokio::spawn(async move {
+            Server::builder()
+                .add_service(ContainerServer::new(StartStubGuest { gate }))
+                .serve_with_incoming(incoming)
+                .await
+                .expect("serve stub guest");
+        });
+
+        let endpoint =
+            Endpoint::from_shared(format!("http://{address}")).expect("build stub guest endpoint");
+        let mut attempts = 0;
+        loop {
+            match endpoint.connect().await {
+                Ok(_) => break,
+                Err(error) => {
+                    attempts += 1;
+                    assert!(attempts < 100, "stub guest did not start: {error}");
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }
+        }
+
+        (GuestSession::new(BoxTransport::tcp(address.port())), server)
+    }
+
+    struct StartFixture {
+        box_impl: Arc<BoxImpl>,
+        listener: Arc<StartedCounter>,
+        _temp_dir: TempDir,
+        server: JoinHandle<()>,
+    }
+
+    impl Drop for StartFixture {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
+
+    async fn running_box_for_start_test(gate: Arc<StartGate>) -> StartFixture {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
         })
         .expect("create runtime");
+        let (guest_session, server) = start_stub_guest(gate).await;
 
         let id = BoxIDMint::mint();
         let config = BoxConfig {
@@ -1587,77 +1741,208 @@ mod tests {
         };
         let mut state = BoxState::new();
         state.status = BoxStatus::Running;
-        state.pid = Some(4242);
+        state.mark_started();
         state.set_lock_id(runtime.lock_manager.allocate().expect("allocate lock"));
         runtime
             .box_manager
             .add_box(&config, &state)
-            .expect("add box to manager");
+            .expect("persist test box");
 
-        let box_impl = Arc::new(BoxImpl::new(
+        let listener = Arc::new(StartedCounter::default());
+        let mut box_impl = BoxImpl::new(
             config,
             state,
             runtime.clone(),
             runtime.shutdown_token.child_token(),
-        ));
-        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        *RECORD_STARTED_SAVE_GATE
-            .lock()
-            .expect("record-started save gate lock poisoned") = Some(RecordStartedSaveGate {
-            entered: entered_tx,
-            release: release_rx,
-        });
-
-        // Hold SQLite's writer lock so its busy handler marks the exact point
-        // where record_started has entered the real persistence operation.
-        let database = runtime.box_manager.db();
-        let db_path = {
-            let conn = database.conn();
-            conn.busy_handler(Some(block_record_started_save))
-                .expect("install busy handler");
-            conn.path().expect("database has a path").to_owned()
-        };
-        let blocker = rusqlite::Connection::open(db_path).expect("open blocking connection");
-        blocker
-            .execute_batch("BEGIN IMMEDIATE")
-            .expect("acquire SQLite write lock");
-
-        let worker_box = Arc::clone(&box_impl);
-        let worker = std::thread::spawn(move || worker_box.record_started());
-        let reached_persist = entered_rx.recv_timeout(Duration::from_secs(5)).is_ok();
-        let state_lock_held = reached_persist && box_impl.state.try_write().is_none();
-
-        blocker
-            .execute_batch("ROLLBACK")
-            .expect("release SQLite write lock");
-        let _ = release_tx.send(());
-        worker.join().expect("record-started worker panicked");
-        database
-            .conn()
-            .busy_handler(None)
-            .expect("remove database busy handler");
-        *RECORD_STARTED_SAVE_GATE
-            .lock()
-            .expect("record-started save gate lock poisoned") = None;
-
-        assert!(
-            reached_persist,
-            "record_started did not reach the real SQLite update"
         );
-        assert!(
-            state_lock_held,
-            "record_started must hold the state write lock until persistence completes"
+        box_impl
+            .event_listeners
+            .push(listener.clone() as Arc<dyn EventListener>);
+
+        let live = LiveState::new(
+            Box::new(InfoTestHandler(0)),
+            guest_session,
+            None,
+            None,
+            BoxMetricsStorage::new(),
+            Disk::new(
+                temp_dir.path().join("container.qcow2"),
+                DiskFormat::Qcow2,
+                true,
+            ),
+            None,
+            #[cfg(target_os = "linux")]
+            None,
         );
-        assert!(
-            runtime
-                .box_manager
-                .update_box(&id)
-                .expect("load persisted state")
-                .started_at
-                .is_some(),
-            "record_started must persist the start timestamp"
+        assert!(box_impl.live.set(live).is_ok(), "install live state");
+
+        StartFixture {
+            box_impl: Arc::new(box_impl),
+            listener,
+            _temp_dir: temp_dir,
+            server,
+        }
+    }
+
+    async fn wait_for_background_starts(box_impl: &BoxImpl, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let notified = box_impl.background_start_finished.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if box_impl.background_starts_finished.load(Ordering::SeqCst) >= expected {
+                    return;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .expect("background Container.Start task did not finish");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn explicit_start_returns_before_container_start_rpc_finishes() {
+        let gate = Arc::new(StartGate::default());
+        let fixture = running_box_for_start_test(Arc::clone(&gate)).await;
+
+        tokio::time::timeout(Duration::from_millis(250), fixture.box_impl.start())
+            .await
+            .expect("start() waited for Container.Start")
+            .expect("start() failed before spawning Container.Start");
+        gate.entered
+            .acquire()
+            .await
+            .expect("entered semaphore closed")
+            .forget();
+        assert_eq!(fixture.listener.count.load(Ordering::SeqCst), 0);
+
+        let implicit_box = Arc::clone(&fixture.box_impl);
+        let implicit = tokio::spawn(async move { implicit_box.live_state().await.map(|_| ()) });
+        fixture
+            .box_impl
+            .start()
+            .await
+            .expect("concurrent explicit start failed");
+
+        gate.release.add_permits(1);
+        implicit
+            .await
+            .expect("implicit start task panicked")
+            .expect("implicit start failed");
+        tokio::time::timeout(Duration::from_secs(5), fixture.listener.wait_for(1))
+            .await
+            .expect("successful Container.Start did not emit started event");
+        wait_for_background_starts(&fixture.box_impl, 2).await;
+
+        fixture
+            .box_impl
+            .start()
+            .await
+            .expect("idempotent explicit start failed");
+        wait_for_background_starts(&fixture.box_impl, 3).await;
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.listener.count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn explicit_start_does_not_announce_when_implicit_start_wins_single_flight() {
+        let gate = Arc::new(StartGate::default());
+        let fixture = running_box_for_start_test(Arc::clone(&gate)).await;
+
+        let implicit_box = Arc::clone(&fixture.box_impl);
+        let implicit = tokio::spawn(async move { implicit_box.live_state().await.map(|_| ()) });
+        gate.entered
+            .acquire()
+            .await
+            .expect("entered semaphore closed")
+            .forget();
+
+        fixture
+            .box_impl
+            .start()
+            .await
+            .expect("concurrent explicit start failed");
+        gate.release.add_permits(1);
+
+        implicit
+            .await
+            .expect("implicit start task panicked")
+            .expect("implicit start failed");
+        wait_for_background_starts(&fixture.box_impl, 1).await;
+
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            fixture.listener.count.load(Ordering::SeqCst),
+            0,
+            "explicit waiter must not claim implicit start success"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn background_start_failure_preserves_state_and_can_retry() {
+        let gate = Arc::new(StartGate::default());
+        gate.should_fail.store(true, Ordering::SeqCst);
+        let fixture = running_box_for_start_test(Arc::clone(&gate)).await;
+        let started_at = fixture.box_impl.state.read().started_at;
+
+        fixture.box_impl.start().await.expect("spawn failed start");
+        gate.entered
+            .acquire()
+            .await
+            .expect("entered semaphore closed")
+            .forget();
+        gate.release.add_permits(1);
+        wait_for_background_starts(&fixture.box_impl, 1).await;
+
+        assert_eq!(fixture.box_impl.state.read().status, BoxStatus::Running);
+        assert_eq!(fixture.box_impl.state.read().started_at, started_at);
+        assert_eq!(fixture.listener.count.load(Ordering::SeqCst), 0);
+
+        gate.should_fail.store(false, Ordering::SeqCst);
+        fixture.box_impl.start().await.expect("spawn retry");
+        gate.entered
+            .acquire()
+            .await
+            .expect("retry entered semaphore closed")
+            .forget();
+        gate.release.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(5), fixture.listener.wait_for(1))
+            .await
+            .expect("successful retry did not emit started event");
+        wait_for_background_starts(&fixture.box_impl, 2).await;
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(fixture.listener.count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stop_cancels_in_flight_background_container_start() {
+        let gate = Arc::new(StartGate::default());
+        let fixture = running_box_for_start_test(Arc::clone(&gate)).await;
+
+        fixture.box_impl.start().await.expect("spawn start");
+        gate.entered
+            .acquire()
+            .await
+            .expect("entered semaphore closed")
+            .forget();
+        fixture.box_impl.stop().await.expect("stop booted box");
+        wait_for_background_starts(&fixture.box_impl, 1).await;
+        gate.release.add_permits(1);
+
+        assert_eq!(fixture.listener.count.load(Ordering::SeqCst), 0);
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.box_impl.state.read().status, BoxStatus::Stopped);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stopping_booted_box_does_not_start_container() {
+        let gate = Arc::new(StartGate::default());
+        let fixture = running_box_for_start_test(Arc::clone(&gate)).await;
+
+        fixture.box_impl.stop().await.expect("stop booted box");
+
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(fixture.listener.count.load(Ordering::SeqCst), 0);
     }
 
     // Regression test for the silent-orphan bug in stop().

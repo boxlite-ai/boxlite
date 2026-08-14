@@ -184,7 +184,7 @@ pub struct JsBoxInfo {
     /// Creation timestamp (ISO 8601 format)
     pub created_at: String,
 
-    /// Most recent successful container start timestamp (RFC 3339), when recorded
+    /// When the box most recently entered `Running` (RFC 3339), when recorded
     pub started_at: Option<String>,
 
     /// Image reference or rootfs path

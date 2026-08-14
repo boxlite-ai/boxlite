@@ -300,7 +300,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 
 	// bx.Start must stay the last step of Create that can fail.
 	//
-	// A successful Start makes BoxLite publish the box's StartedAt,
+	// A successful Start publishes StartedAt when BoxLite moves the box to Running,
 	// and BoxSync reads it as evidence this job body succeeded — it is what
 	// lets a lost job-completion callback be repaired later. A fallible step
 	// added below would publish that evidence for a Create that then returns

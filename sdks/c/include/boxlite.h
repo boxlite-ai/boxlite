@@ -318,11 +318,11 @@ typedef struct CBoxInfo {
   int64_t created_at;
   // Owned typed network metadata; null when network metadata is unavailable.
   struct CNetworkInfo *network;
-  // Unix milliseconds of the most recently recorded successful guest
-  // `Container.Start`; `0` when none was recorded. Preserved after stop or
-  // reboot; when [`Self::pid`] is nonzero, the timestamp describes that live
-  // PID. Milliseconds — not `created_at`'s seconds — preserve sub-second
-  // ordering against a job's timeline.
+  // Unix milliseconds when the box most recently entered `Running`; `0`
+  // when no start time was recorded. Preserved after stop or reboot; when
+  // [`Self::pid`] is nonzero, the timestamp describes that live PID.
+  // Milliseconds — not `created_at`'s seconds — preserve sub-second ordering
+  // against a job's timeline.
   int64_t started_at;
 } CBoxInfo;
 

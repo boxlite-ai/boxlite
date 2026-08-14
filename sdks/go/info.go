@@ -61,11 +61,11 @@ type BoxInfo struct {
 	AutoDelete uint32
 	AutoResume bool
 	CreatedAt  time.Time
-	// StartedAt is when the guest's Container.Start most recently returned
-	// success; the zero time means no successful start has been recorded. It is
-	// preserved after stop or reboot, and describes PID whenever PID is nonzero.
-	// State alone cannot answer whether the current init launched — a box reports
-	// Running from the moment its VM is up, before its init is started.
+	// StartedAt is when the box most recently entered Running; the zero time
+	// means no such start time has been recorded. It is preserved after stop or
+	// reboot and describes PID whenever PID is nonzero. It does not report when
+	// the configured user task becomes ready, exits, or completes; those are
+	// workload lifecycle outcomes.
 	StartedAt time.Time
 }
 

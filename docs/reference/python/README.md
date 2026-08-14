@@ -246,7 +246,7 @@ Metadata about a box.
 | `name` | `str \| None` | Optional user-assigned name |
 | `state` | `BoxStateInfo` | Runtime state with `status`, `running`, and nullable `pid` fields |
 | `created_at` | `str` | ISO 8601 creation timestamp |
-| `started_at` | `str \| None` | Most recent successful container start timestamp (RFC 3339); `None` if not recorded or unavailable over REST |
+| `started_at` | `str \| None` | Time when the box most recently entered `Running` (RFC 3339); `None` if not recorded or unavailable over REST |
 | `image` | `str` | OCI image used |
 | `cpus` | `int` | Allocated CPU cores |
 | `memory_mib` | `int` | Allocated memory in MiB |

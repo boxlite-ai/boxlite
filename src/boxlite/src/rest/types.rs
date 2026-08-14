@@ -350,9 +350,9 @@ impl BoxResponse {
             auto_resume: self.auto_resume,
             health_status: crate::litebox::HealthStatus::new(), // REST API doesn't provide health status
             exit_code: self.exit_code,
-            // Like `network`, this is local-lifecycle detail the remote REST
-            // surface does not publish; `None` says "not known here" rather
-            // than "init was never launched".
+            // Like `network`, the remote REST surface does not publish this
+            // local start timestamp; `None` means "not known here", not
+            // "the box never entered Running".
             started_at: None,
         })
     }

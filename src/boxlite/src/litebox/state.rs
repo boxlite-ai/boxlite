@@ -232,25 +232,24 @@ pub struct BoxState {
     /// keeps existing DB rows readable without migration.
     #[serde(default)]
     pub exit_code: Option<i32>,
-    /// When the guest's `Container.Start` returned success for the lifecycle
-    /// that published [`Self::pid`] (docker's `State.StartedAt`).
+    /// When the box most recently entered [`BoxStatus::Running`] (docker's
+    /// `State.StartedAt`).
     ///
-    /// Deliberately not derivable from [`Self::status`]: booting only *creates*
-    /// the container, and `attach()` leaves a box `Running` with its init not
-    /// yet launched, so `Running` alone cannot answer "did this box's init
-    /// ever start". Survives a stop the way docker keeps `StartedAt` on an
-    /// exited container.
+    /// This is BoxLite's service-level start timestamp. It does not describe
+    /// when the configured user task becomes ready, exits, or completes. The
+    /// value survives stop the way docker keeps `StartedAt` on an exited
+    /// container.
     ///
     /// **Invariant — a live PID in this row is always the one this timestamp
-    /// describes.** Exactly two writes can put a different shim's PID here, and
-    /// both void the timestamp: the one that publishes a new lifecycle's PID
-    /// (`BoxImpl::init_live_state`) and the one recovery branch that can adopt
-    /// a PID this row never published ([`Self::adopt_recovered_shim`]). The
+    /// describes.** A fresh lifecycle publishes its PID, `Running` state, and
+    /// new timestamp atomically in `BoxImpl::init_live_state`. Recovery may also
+    /// adopt a PID this row never published ([`Self::adopt_recovered_shim`]);
+    /// that path clears the timestamp because its start time is unknown. The
     /// lifecycle-ending writes ([`Self::mark_stop`], [`Self::mark_failed`],
     /// [`Self::reset_for_reboot`]) instead clear only the PID and preserve
-    /// `Some(t)` — read that as "the run that just ended began at t", never as
-    /// "something is running". Readers therefore interpret the timestamp
-    /// together with the lifecycle state from the same snapshot.
+    /// `Some(t)` — read that as "the run that just ended entered Running at t",
+    /// never as "something is running". Readers therefore interpret the
+    /// timestamp together with the lifecycle state from the same snapshot.
     ///
     /// Serde default keeps existing DB rows readable without migration.
     #[serde(default)]
@@ -358,7 +357,7 @@ impl BoxState {
         }
     }
 
-    /// Record that this lifecycle's `Container.Start` returned success.
+    /// Record when this box enters [`BoxStatus::Running`].
     pub fn mark_started(&mut self) {
         let now = Utc::now();
         self.started_at = Some(now);
@@ -367,12 +366,12 @@ impl BoxState {
 
     /// Adopt a live shim that recovery found on disk.
     ///
-    /// The one place a PID can enter this row without having been published by
-    /// the boot that owns it: a crash between the shim writing its PID file and
-    /// the row being saved leaves the two naming different lifecycles. A
-    /// `started_at` written for the PID we are replacing cannot describe the
-    /// one we are adopting, so it goes with it — that is what lets every reader
-    /// take the timestamp at face value.
+    /// Recovery can find a live PID that this row did not publish with its
+    /// matching Running transition—for example, when a crash occurs between the
+    /// shim writing its PID file and this row being saved. A `started_at` written
+    /// for the PID we are replacing cannot describe the adopted one, so recovery
+    /// clears it. This keeps the PID and timestamp safe to read together as one
+    /// snapshot.
     pub fn adopt_recovered_shim(&mut self, pid: u32) {
         if self.pid != Some(pid) {
             self.started_at = None;
@@ -1062,12 +1061,12 @@ mod tests {
         assert!(state.health_status.last_check.is_none());
         assert!(
             state.started_at.is_none(),
-            "a row written before this field existed cannot claim a launched init"
+            "a row written before this field existed cannot claim a Running transition"
         );
     }
 
     #[test]
-    fn adopting_the_recorded_shim_keeps_its_container_start() {
+    fn adopting_the_recorded_shim_keeps_started_at() {
         let mut state = BoxState::new();
         state.set_pid(Some(4242));
         state.mark_started();
@@ -1077,13 +1076,13 @@ mod tests {
 
         assert_eq!(
             state.started_at, recorded,
-            "recovery re-attaching the same shim must not void the start it recorded"
+            "recovery re-attaching the same shim must preserve its Running timestamp"
         );
         assert_eq!(state.status, BoxStatus::Running);
     }
 
     #[test]
-    fn adopting_a_different_shim_voids_the_container_start() {
+    fn adopting_a_different_shim_voids_started_at() {
         // A crash between the shim writing its PID file and this row being
         // saved leaves recovery adopting a PID the row never published. The
         // timestamp describes the PID it was written with, so it cannot
@@ -1097,16 +1096,16 @@ mod tests {
         assert_eq!(state.pid, Some(4243));
         assert!(
             state.started_at.is_none(),
-            "a start recorded for pid 4242 must not be read as evidence about pid 4243"
+            "started_at for pid 4242 must not be read as evidence about pid 4243"
         );
     }
 
-    /// The three ways a lifecycle ends all keep the timestamp — docker's
-    /// `StartedAt` on an exited container. What makes that safe is that each
-    /// one drops the PID: `Some(started_at)` beside `pid: None` describes the
-    /// run that ended, and cannot be read as a live box.
+    /// The three ways a lifecycle ends all keep the timestamp, like docker's
+    /// `StartedAt` on an exited container. With the PID cleared,
+    /// `Some(started_at)` describes when the run that ended entered `Running`;
+    /// it cannot be read as a live box.
     #[test]
-    fn ending_a_lifecycle_keeps_the_start_and_drops_the_pid() {
+    fn ending_a_lifecycle_keeps_started_at_and_drops_the_pid() {
         let ended = |end: fn(&mut BoxState)| {
             let mut state = BoxState::new();
             state.set_pid(Some(4242));
@@ -1123,11 +1122,11 @@ mod tests {
         ] {
             assert!(
                 state.started_at.is_some(),
-                "{name} must keep the start of the run that just ended"
+                "{name} must keep when the run that just ended entered Running"
             );
             assert_eq!(
                 state.pid, None,
-                "{name} must drop the PID, or the kept start would read as a live box"
+                "{name} must drop the PID, or kept started_at would read as a live box"
             );
             assert!(
                 !state.status.is_active(),
