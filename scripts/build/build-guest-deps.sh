@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build static e2fsprogs tools for a musl guest.
 # Usage:
-#   build-guest-deps.sh [--target TARGET] [--profile release|debug]
+#   build-guest-deps.sh --dest DIR [--target TARGET] [--profile release|debug]
 
 set -euo pipefail
 
@@ -46,10 +46,6 @@ cleanup() {
         chmod -R u+w "$work" 2>/dev/null || true
         rm -rf -- "$work"
     fi
-    if [ -n "${stage:-}" ]; then
-        chmod -R u+w "$stage" 2>/dev/null || true
-        rm -rf -- "$stage"
-    fi
     exit "$status"
 }
 
@@ -64,13 +60,18 @@ parse_args() {
                 target="$2"
                 shift 2
                 ;;
+            --dest)
+                [ "$#" -ge 2 ] || { die "--dest requires a value"; return 2; }
+                dest="$2"
+                shift 2
+                ;;
             --profile)
                 [ "$#" -ge 2 ] || { die "--profile requires a value"; return 2; }
                 profile="$2"
                 shift 2
                 ;;
             --help|-h)
-                echo "Usage: $0 [--target TARGET] [--profile release|debug]"
+                echo "Usage: $0 --dest DIR [--target TARGET] [--profile release|debug]"
                 exit 0
                 ;;
             *)
@@ -79,6 +80,18 @@ parse_args() {
                 ;;
         esac
     done
+
+    [ -n "$dest" ] || { die "--dest is required"; return 2; }
+    [ -d "$dest" ] || { die "destination must be an existing directory: $dest"; return 2; }
+    [ ! -L "$dest" ] || { die "destination must not be a symlink: $dest"; return 2; }
+    dest=$(cd "$dest" && pwd -P)
+    local destination_inventory
+    destination_inventory=$(find "$dest" ! -path "$dest" -prune -print) || {
+        die "failed to inspect destination: $dest"; return 2;
+    }
+    [ -z "$destination_inventory" ] || {
+        die "destination must be empty: $dest"; return 2;
+    }
 
     if [ -z "$target" ]; then
         target=$(bash "$root/scripts/util.sh" --target)
@@ -91,6 +104,7 @@ parse_args() {
 }
 
 build_tools() {
+    local destination_inventory
     local source="$root/src/deps/e2fsprogs-sys/vendor/e2fsprogs"
     local util="$root/scripts/util.sh"
     [ -x "$source/configure" ] || {
@@ -126,11 +140,9 @@ build_tools() {
     jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
     # e2fsprogs' generated configure and Makefiles do not preserve source,
     # compiler, or include paths containing shell-special characters. Build
-    # through controlled aliases while keeping the published output at root.
+    # through controlled aliases while writing only the two requested files into the caller's directory.
     # Preserve compiler basenames because some drivers dispatch on argv[0].
-    work=$(mktemp -d /tmp/boxlite-guest-tools-work.XXXXXX)
-    stage=$(mktemp -d "$output_parent/.guest-tools-stage.XXXXXX")
-    chmod 0755 "$stage"
+    work=$(mktemp -d /tmp/boxlite-e2fsprogs-work.XXXXXX)
     mkdir -p "$work/build" "$work/bin/target" "$work/bin/build"
     ln -s "$source" "$work/source"
     ln -s "$headers" "$work/headers"
@@ -161,15 +173,17 @@ build_tools() {
         make -C resize -j"$jobs" resize2fs.static
     )
 
-    install -m 0755 "$work/build/misc/mke2fs.static" "$stage/mke2fs"
-    install -m 0755 "$work/build/resize/resize2fs.static" "$stage/resize2fs"
-    bash "$util" --verify-guest-elf "$target" "$stage/mke2fs"
-    bash "$util" --verify-guest-elf "$target" "$stage/resize2fs"
-
-    rm -rf -- "$output"
-    mv "$stage" "$output"
-    stage=""
-    echo "✅ Guest e2fsprogs tools built: $output"
+    install -m 0755 "$work/build/misc/mke2fs.static" "$dest/mke2fs"
+    install -m 0755 "$work/build/resize/resize2fs.static" "$dest/resize2fs"
+    bash "$util" --verify-guest-elf "$target" "$dest/mke2fs"
+    bash "$util" --verify-guest-elf "$target" "$dest/resize2fs"
+    destination_inventory=$(find "$dest" ! -path "$dest" -prune -print | LC_ALL=C sort) || {
+        die "failed to inspect built destination: $dest"; return 1;
+    }
+    [ "$destination_inventory" = "$(printf '%s\n' "$dest/mke2fs" "$dest/resize2fs" | LC_ALL=C sort)" ] || {
+        die "destination inventory is not exactly mke2fs and resize2fs"; return 1;
+    }
+    echo "✅ Guest e2fsprogs tools built: $dest"
 }
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
@@ -178,12 +192,9 @@ target=""
 profile=""
 arch=""
 work=""
-stage=""
+dest=""
 
 parse_args "$@"
-output_parent="$root/target/$target/$profile"
-output="$output_parent/guest-tools"
-mkdir -p "$output_parent"
 
 trap cleanup EXIT
 trap 'exit 129' HUP

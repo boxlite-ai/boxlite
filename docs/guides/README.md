@@ -32,7 +32,7 @@ make dev:python
 | Target             | Description                              |
 |--------------------|------------------------------------------|
 | `make setup`       | Install platform-specific dependencies   |
-| `make guest`       | Cross-compile guest binary (musl static) |
+| `make guest`       | Build guest binary + minimal rootfs      |
 | `make shim`        | Build boxlite-shim binary                |
 | `make runtime`     | Build complete BoxLite runtime           |
 | `make dev:python`  | Local Python SDK development             |
@@ -59,8 +59,10 @@ scripts/
 │   ├── manylinux.sh
 │   └── musllinux.sh
 ├── build/              # Build scripts
-│   ├── build-guest.sh  # Guest binary (cross-compile)
-│   ├── build-shim.sh   # Shim binary
+│   ├── build-guest.sh         # Guest binary (cross-compile)
+│   ├── build-guest-rootfs.sh  # Minimal rootfs assembler
+│   ├── build-guest-deps.sh    # Private static e2fsprogs helper
+│   ├── build-shim.sh          # Shim binary
 │   └── build-runtime.sh
 ├── package/            # Packaging scripts
 └── common.sh           # Shared utilities

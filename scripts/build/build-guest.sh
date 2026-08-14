@@ -7,9 +7,10 @@
 #   - musllinux: scripts/setup/setup-musllinux.sh
 #
 # Usage:
-#   ./build-guest.sh [--profile PROFILE]
+#   ./build-guest.sh [--target TARGET] [--profile PROFILE]
 #
 # Options:
+#   --target TARGET     Guest musl target (default: native architecture)
 #   --profile PROFILE   Build profile: release or debug (default: release)
 
 set -e
@@ -23,21 +24,39 @@ source "$SCRIPT_DIR/setup/setup-common.sh"
 
 # Parse command-line arguments
 parse_args() {
+    GUEST_TARGET="${GUEST_TARGET:-}"
     PROFILE="release"
 
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --target)
+                [ "$#" -ge 2 ] || { echo "--target requires a value"; exit 1; }
+                GUEST_TARGET="$2"
+                shift 2
+                ;;
             --profile)
+                [ "$#" -ge 2 ] || { echo "--profile requires a value"; exit 1; }
                 PROFILE="$2"
                 shift 2
                 ;;
             *)
                 echo "Unknown option: $1"
-                echo "Usage: $0 [--profile PROFILE]"
+                echo "Usage: $0 [--target TARGET] [--profile PROFILE]"
                 exit 1
                 ;;
         esac
     done
+
+    if [ -z "$GUEST_TARGET" ]; then
+        GUEST_TARGET=$(bash "$SCRIPT_DIR/util.sh" --target)
+    fi
+    case "$GUEST_TARGET" in
+        x86_64-unknown-linux-musl|aarch64-unknown-linux-musl) ;;
+        *)
+            echo "Invalid guest target: $GUEST_TARGET"
+            exit 1
+            ;;
+    esac
 
     # Validate PROFILE value
     if [ "$PROFILE" != "release" ] && [ "$PROFILE" != "debug" ]; then
@@ -64,7 +83,6 @@ check_prerequisites() {
 
 # Ensure Rust target is added
 setup_rust_target() {
-    source "$SCRIPT_DIR/util.sh"
     print_step "Checking Rust target $GUEST_TARGET... "
     if rustup target list | grep -q "$GUEST_TARGET (installed)"; then
         print_success "Already installed"
