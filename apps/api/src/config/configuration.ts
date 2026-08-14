@@ -488,6 +488,13 @@ const configuration = {
   otelCollector: {
     apiKey: process.env.OTEL_COLLECTOR_API_KEY,
   },
+  infrastructureLogs: {
+    region: process.env.INFRASTRUCTURE_LOGS_REGION || process.env.AWS_REGION,
+    // logGroupName is retained as a compatibility alias for manually configured stages.
+    logGroupName: process.env.INFRASTRUCTURE_LOG_GROUP_NAME,
+    runnerLogGroupName: process.env.INFRASTRUCTURE_RUNNER_LOG_GROUP_NAME,
+    collectorLogGroupName: process.env.INFRASTRUCTURE_COLLECTOR_LOG_GROUP_NAME,
+  },
   clickhouse: {
     url: process.env.CLICKHOUSE_READER_URL || process.env.CLICKHOUSE_URL,
     host: process.env.CLICKHOUSE_HOST,

@@ -16,6 +16,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
@@ -48,6 +49,7 @@ import { useAuth } from 'react-oidc-context'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { BoxTerminalTab } from './BoxTerminalTab'
+import { BoxLogsTab } from './BoxLogsTab'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 const STATUS = { running: '#5ad67d', idle: '#e0b341', stopped: '#8C919C', error: '#e0564a', dim: '#5b616e' } as const
@@ -453,18 +455,18 @@ export default function BoxDetails() {
 
             {/* shell / terminal */}
             <div className="flex h-[60vh] flex-none flex-col border border-border bg-[hsl(var(--code-background))] lg:h-auto lg:min-h-0 lg:flex-1">
-              <div className="flex flex-none items-center justify-between border-b border-dashed border-border px-5 py-[15px]">
-                <span className="flex items-center gap-[9px] text-[11px] uppercase tracking-[2px]">
-                  <span className="size-[6px] flex-none bg-brand" />
-                  shell
-                  <span className="ml-0.5 tracking-[0.5px] text-muted-foreground normal-case">
-                    {getBoxPublicIdLabel(box)}
-                  </span>
-                </span>
-              </div>
-              <div className="flex min-h-0 flex-1 flex-col">
-                <BoxTerminalTab box={box} refreshSignal={terminalRefreshSignal} />
-              </div>
+              <Tabs defaultValue="shell" className="min-h-0 flex-1 gap-0">
+                <TabsList variant="underline">
+                  <TabsTrigger value="shell">Shell · {getBoxPublicIdLabel(box)}</TabsTrigger>
+                  <TabsTrigger value="logs">Logs</TabsTrigger>
+                </TabsList>
+                <TabsContent value="shell" className="min-h-0 flex flex-col">
+                  <BoxTerminalTab box={box} refreshSignal={terminalRefreshSignal} />
+                </TabsContent>
+                <TabsContent value="logs" className="min-h-0">
+                  <BoxLogsTab boxId={box.id} />
+                </TabsContent>
+              </Tabs>
             </div>
           </div>
         </>

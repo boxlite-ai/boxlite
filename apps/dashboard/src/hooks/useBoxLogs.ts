@@ -29,13 +29,27 @@ export function useBoxLogs(
   return useQuery<PaginatedLogs>({
     queryKey: queryKeys.telemetry.logs(boxId ?? '', params),
     queryFn: async () => {
-      if (!selectedOrganization || !boxId || !api.analyticsTelemetryApi) {
+      if (!selectedOrganization || !boxId) {
         throw new Error('Missing required parameters')
       }
       const limit = params.limit ?? 50
       const page = params.page ?? 1
       const offset = (page - 1) * limit
       const severity = params.severities?.length ? params.severities.join(',') : undefined
+
+      if (!api.analyticsTelemetryApi) {
+        const response = await api.boxApi.getBoxLogs(
+          boxId,
+          params.from,
+          params.to,
+          selectedOrganization.id,
+          page,
+          limit,
+          params.severities,
+          params.search,
+        )
+        return response.data
+      }
 
       const response = await api.analyticsTelemetryApi.organizationOrganizationIdBoxBoxIdTelemetryLogsGet(
         selectedOrganization.id,
@@ -67,7 +81,7 @@ export function useBoxLogs(
         totalPages: items.length < limit ? page : page + 1,
       }
     },
-    enabled: !!boxId && !!selectedOrganization && !!api.analyticsTelemetryApi && !!params.from && !!params.to,
+    enabled: !!boxId && !!selectedOrganization && !!params.from && !!params.to,
     staleTime: 10_000,
     ...options,
   })

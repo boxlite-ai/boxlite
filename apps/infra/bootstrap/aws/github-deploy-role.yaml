@@ -113,6 +113,13 @@ Resources:
               - ec2messages:GetMessages
               - ec2messages:SendReply
             Resource: '*'
+          - Sid: BoxLiteRunnerMetrics
+            Effect: Allow
+            Action: cloudwatch:PutMetricData
+            Resource: '*'
+            Condition:
+              StringEquals:
+                cloudwatch:namespace: BoxLite/Runner
           - Sid: BoxLiteStageSecrets
             Effect: Allow
             Action:

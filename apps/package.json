@@ -48,6 +48,7 @@
     "@astrojs/starlight": "0.30.0",
     "@astrojs/starlight-tailwind": "^2.0.1",
     "@astrojs/tailwind": "5.1.0",
+    "@aws-sdk/client-cloudwatch-logs": "3.1048.0",
     "@aws-sdk/client-s3": "^3.787.0",
     "@aws-sdk/client-sts": "^3.803.0",
     "@aws-sdk/credential-provider-node": "^3.901.0",

@@ -14,6 +14,7 @@ import { useAuth } from 'react-oidc-context'
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { BannerProvider } from './components/Banner'
 import { CommandPaletteProvider } from './components/CommandPalette'
+import { InfrastructureLogsAccessGate } from './components/InfrastructureLogsAccessGate'
 import LoadingFallback from './components/LoadingFallback'
 import { Button } from './components/ui/button'
 import {
@@ -42,6 +43,7 @@ const Keys = React.lazy(() => import('./pages/Keys'))
 const Billing = React.lazy(() => import('./pages/Billing'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
+const InfrastructureLogs = React.lazy(() => import('@/pages/InfrastructureLogs'))
 const BoxDetails = React.lazy(() => import('./components/boxes').then((m) => ({ default: m.BoxDetails })))
 const BoxTerminalFullscreen = React.lazy(() =>
   import('./components/boxes').then((m) => ({ default: m.BoxTerminalFullscreen })),
@@ -183,6 +185,17 @@ function App() {
         <Route index element={<Navigate to={boxesRedirect} replace />} />
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
         <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
+        <Route
+          path={getRouteSubPath(RoutePath.INFRASTRUCTURE_LOGS)}
+          element={
+            <InfrastructureLogsAccessGate
+              pending={<LoadingFallback />}
+              denied={<Navigate to={RoutePath.BOXES} replace />}
+            >
+              <InfrastructureLogs />
+            </InfrastructureLogsAccessGate>
+          }
+        />
         {/* Plan, wallet and usage are sections of the one Billing page. The old
             per-surface paths stay as redirects so existing links keep working.
             The route is open to any member: the wallet/tier data is owner-scoped by

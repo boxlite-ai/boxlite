@@ -45,6 +45,7 @@ import { useCallback, useMemo } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { CommandConfig, useCommandPaletteActions, useRegisterCommands } from './CommandPalette'
+import { InfrastructureLogsAccessGate } from './InfrastructureLogsAccessGate'
 
 interface SidebarProps {
   isBannerVisible: boolean
@@ -318,6 +319,14 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
               </Link>
             </DropdownMenuItem>
           )}
+          <InfrastructureLogsAccessGate>
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link to={RoutePath.INFRASTRUCTURE_LOGS}>
+                <Monitor className="size-4" />
+                Infrastructure logs
+              </Link>
+            </DropdownMenuItem>
+          </InfrastructureLogsAccessGate>
           <DropdownMenuItem asChild className="cursor-pointer">
             <a href={BOXLITE_DOCS_URL} target="_blank" rel="noopener noreferrer">
               <BookOpen className="size-4" />
@@ -363,6 +372,14 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
               API Keys
             </Link>
           </DropdownMenuItem>
+          <InfrastructureLogsAccessGate>
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link to={RoutePath.INFRASTRUCTURE_LOGS}>
+                <Monitor className="size-4" />
+                Infrastructure logs
+              </Link>
+            </DropdownMenuItem>
+          </InfrastructureLogsAccessGate>
           <DropdownMenuItem className="cursor-pointer" onClick={openOnboardingGuide}>
             <BookOpen className="size-4" />
             Quickstart

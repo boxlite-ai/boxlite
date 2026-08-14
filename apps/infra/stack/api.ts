@@ -37,6 +37,8 @@ export interface ApiInputs {
   otelCollectorOtlpHttpUrl: $util.Output<string>
   clickHouseReaderUrl: string | undefined
   clickHouseReaderHost: string | undefined
+  infrastructureRunnerLogGroup: aws.cloudwatch.LogGroup
+  infrastructureCollectorLogGroupName: string
 }
 
 export function buildApi(input: ApiInputs) {
@@ -69,6 +71,8 @@ export function buildApi(input: ApiInputs) {
     otelCollectorOtlpHttpUrl,
     clickHouseReaderUrl,
     clickHouseReaderHost,
+    infrastructureRunnerLogGroup,
+    infrastructureCollectorLogGroupName,
   } = input
 
 const apiArtifact = resolveArtifactSource('api')
@@ -112,6 +116,13 @@ const api = new sst.aws.Service('Api', {
   link: [db, redis],
   permissions: [
     {
+      actions: ['logs:FilterLogEvents'],
+      resources: [
+        infrastructureRunnerLogGroup.arn,
+        `arn:aws:logs:${REGION}:${accountId}:log-group:${infrastructureCollectorLogGroupName}`,
+      ],
+    },
+    {
       // VolumeManager boot probe is list-only on the storage bucket.
       actions: ['s3:ListBucket'],
       resources: [storage.arn],
@@ -145,6 +156,9 @@ const api = new sst.aws.Service('Api', {
     NODE_ENV: 'production',
     PORT: String(PORTS.API),
     ENVIRONMENT: 'production',
+    INFRASTRUCTURE_LOGS_REGION: REGION,
+    INFRASTRUCTURE_RUNNER_LOG_GROUP_NAME: infrastructureRunnerLogGroup.name,
+    INFRASTRUCTURE_COLLECTOR_LOG_GROUP_NAME: infrastructureCollectorLogGroupName,
     RUN_MIGRATIONS: 'true',
     VERSION: releaseVersion,
     DEFAULT_REGION_ENFORCE_QUOTAS: 'false',

@@ -92,7 +92,7 @@ export class BoxTelemetryService {
     }
 
     if (search) {
-      whereClause += ` AND Body ILIKE {search:String}`
+      whereClause += ` AND positionCaseInsensitiveUTF8(Body, {search:String}) > 0`
     }
 
     const params: Record<string, unknown> = {
@@ -108,7 +108,7 @@ export class BoxTelemetryService {
     }
 
     if (search) {
-      params.search = `%${search}%`
+      params.search = search
     }
 
     // Get total count

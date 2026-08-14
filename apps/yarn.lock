@@ -769,6 +769,24 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@aws-sdk/client-cloudwatch-logs@npm:3.1048.0":
+  version: 3.1048.0
+  resolution: "@aws-sdk/client-cloudwatch-logs@npm:3.1048.0"
+  dependencies:
+    "@aws-crypto/sha256-browser": "npm:5.2.0"
+    "@aws-crypto/sha256-js": "npm:5.2.0"
+    "@aws-sdk/core": "npm:^3.974.11"
+    "@aws-sdk/credential-provider-node": "npm:^3.972.42"
+    "@aws-sdk/types": "npm:^3.973.8"
+    "@smithy/core": "npm:^3.24.2"
+    "@smithy/fetch-http-handler": "npm:^5.4.2"
+    "@smithy/node-http-handler": "npm:^4.7.2"
+    "@smithy/types": "npm:^4.14.1"
+    tslib: "npm:^2.6.2"
+  checksum: 10c0/f5dae7448c336e7bac8ed2fb10c43fadd1da3831cf102d325441450bdc9da9779e9b31e2c9e711079fd1f44c5dabb2add7f1e57ea3450f510833aaf6f9849318
+  languageName: node
+  linkType: hard
+
 "@aws-sdk/client-cognito-identity@npm:3.1048.0":
   version: 3.1048.0
   resolution: "@aws-sdk/client-cognito-identity@npm:3.1048.0"
@@ -17028,6 +17046,7 @@ __metadata:
     "@astrojs/starlight": "npm:0.30.0"
     "@astrojs/starlight-tailwind": "npm:^2.0.1"
     "@astrojs/tailwind": "npm:5.1.0"
+    "@aws-sdk/client-cloudwatch-logs": "npm:3.1048.0"
     "@aws-sdk/client-s3": "npm:^3.787.0"
     "@aws-sdk/client-sts": "npm:^3.803.0"
     "@aws-sdk/credential-provider-node": "npm:^3.901.0"

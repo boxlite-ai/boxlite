@@ -15,4 +15,5 @@ export enum AuditTarget {
   USER = 'user',
   VOLUME = 'volume',
   REGION = 'region',
+  INFRASTRUCTURE_LOGS = 'infrastructure_logs',
 }

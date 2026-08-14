@@ -197,7 +197,11 @@ export async function deployStack() {
     // OTLP ingest is equally unauthenticated — reach the UI via VPN / bastion /
     // `aws ssm start-session`. JAEGER_PUBLIC is rejected (fail loud) like
     // MAILDEV_PUBLIC: no auth gate or TLS story makes public exposure safe.
-    const { otelCollectorOtlpHttpUrl } = buildObservability({
+    const infrastructureRunnerLogGroup = new aws.cloudwatch.LogGroup('RunnerInfrastructureLogs', {
+      name: `/boxlite/${$app.stage}/runner-infrastructure`,
+      retentionInDays: 14,
+    })
+    const { otelCollectorOtlpHttpUrl, collectorLogGroupName } = buildObservability({
       cluster,
       stackDomain,
       adminApiKey,
@@ -256,6 +260,8 @@ export async function deployStack() {
       otelCollectorOtlpHttpUrl,
       clickHouseReaderUrl,
       clickHouseReaderHost,
+      infrastructureRunnerLogGroup,
+      infrastructureCollectorLogGroupName: collectorLogGroupName,
     })
 
     // ─── 7. EDGE SERVICES ────────────────────────────────────────────────────
@@ -302,5 +308,6 @@ export async function deployStack() {
       defaultRunnerApiKey,
       adminApiKey,
       randomKey,
+      infrastructureLogGroup: infrastructureRunnerLogGroup,
     })
 }

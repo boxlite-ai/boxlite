@@ -158,7 +158,39 @@ test('keeps every Runner instance protected from replacement during full-stack d
   // First boot reads the staged artifact with the instance role, and those two options mean a
   // host that boots before the grant exists never retries. The SSM upgrade path pins the same
   // edge (see the rolling-upgrade test); without this one only half the rule is enforced.
-  assert.match(runnerFactory, /dependsOn: \[runnerArtifactPolicy\]/)
+  assert.match(runnerFactory, /dependsOn: \[runnerArtifactPolicy, runnerCloudWatchPolicy\]/)
+})
+
+test('ships only minimal Runner infrastructure telemetry to CloudWatch', () => {
+  const runnerSource = liveText('scriptEmittingShell', readFileSync(new URL('./runners.ts', import.meta.url), 'utf8'))
+  const apiSource = liveText('script', readFileSync(new URL('./api.ts', import.meta.url), 'utf8'))
+
+  const deploySource = liveText('scriptEmittingShell', readFileSync(new URL('./deploy.ts', import.meta.url), 'utf8'))
+  assert.match(deploySource, /new aws\.cloudwatch\.LogGroup\('RunnerInfrastructureLogs'/)
+  assert.match(deploySource, /retentionInDays: 14/)
+  assert.match(runnerSource, /cloudwatch:PutMetricData/)
+  assert.match(runnerSource, /logs:PutLogEvents/)
+  assert.match(runnerSource, /logs:CreateLogStream/)
+  assert.match(runnerSource, /Action: \['logs:DescribeLogStreams'\],[\s\S]*Resource: logGroupArn/)
+  assert.match(runnerSource, /Action: \['logs:CreateLogStream', 'logs:PutLogEvents'\],[\s\S]*Resource: `\$\{logGroupArn\}:\*`/)
+  assert.match(runnerSource, /"measurement": \["used_percent"\]/)
+  assert.match(runnerSource, /"measurement": \["used_percent", "inodes_free"\]/)
+  assert.match(runnerSource, /"resources": \["\/"\]/)
+  assert.match(runnerSource, /\/var\/log\/runner-setup\.log/)
+  assert.match(runnerSource, /\/var\/log\/cloud-init\.log/)
+  assert.match(runnerSource, /amazon-cloudwatch-agent\.log/)
+  assert.doesNotMatch(runnerSource, /journalctl|boxlite-runner\.service.*collect_list/)
+  assert.match(runnerSource, /new aws\.ssm\.Association\(\s*'RunnerCloudWatchAgentAssociation'/)
+  assert.match(apiSource, /actions: \['logs:FilterLogEvents'\],[\s\S]*infrastructureRunnerLogGroup\.arn/)
+  assert.doesNotMatch(apiSource, /infrastructureRunnerLogGroup\.arn\}:\*/)
+})
+
+test('gates every infrastructure log console entry on server-backed admin access', () => {
+  const appSource = readFileSync(new URL('../../dashboard/src/App.tsx', import.meta.url), 'utf8')
+  const sidebarSource = readFileSync(new URL('../../dashboard/src/components/Sidebar.tsx', import.meta.url), 'utf8')
+
+  assert.match(appSource, /InfrastructureLogsAccessGate[\s\S]*denied=\{<Navigate to=\{RoutePath\.BOXES\} replace \/>\}/)
+  assert.equal(sidebarSource.match(/<InfrastructureLogsAccessGate>/g)?.length, 2)
 })
 
 test('passes both the internal and public OIDC issuers to Proxy', () => {

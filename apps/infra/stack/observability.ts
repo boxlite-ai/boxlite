@@ -44,6 +44,7 @@ export function buildObservability(input: ObservabilityInputs) {
     .stripTrailingSlash(jaeger.url)
     .apply((url) => `${url}:${PORTS.OTLP_HTTP}`)
 
+  const collectorLogGroupName = `/boxlite/${$app.stage}/otel-collector`
   const otelCollector = new sst.aws.Service('OtelCollector', {
     cluster: input.cluster,
     image: { context: '../..', dockerfile: 'apps/otel-collector/Dockerfile', cache: false },
@@ -82,9 +83,15 @@ export function buildObservability(input: ObservabilityInputs) {
       ),
       JAEGER_OTLP_HTTP_ENDPOINT: jaegerOtlpHttpEndpoint,
     },
+    logging: { retention: '2 weeks' },
+    transform: {
+      logGroup: (args: any) => {
+        args.name = collectorLogGroupName
+      },
+    },
   })
   const otelCollectorOtlpHttpUrl = input
     .stripTrailingSlash(otelCollector.url)
     .apply((url) => `${url}:${PORTS.OTLP_HTTP}`)
-  return { otelCollector, otelCollectorOtlpHttpUrl }
+  return { otelCollector, otelCollectorOtlpHttpUrl, collectorLogGroupName }
 }

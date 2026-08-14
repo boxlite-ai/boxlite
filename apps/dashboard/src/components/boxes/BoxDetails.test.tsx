@@ -181,6 +181,7 @@ describe('BoxDetails refresh', () => {
 
     expect(mocks.boxRefetch).toHaveBeenCalledTimes(1)
     expect(mocks.terminalRefetch).toHaveBeenCalledTimes(1)
+    expect(document.body.textContent).toContain('Logs')
     expect(document.querySelector('[data-testid="terminal-frame"]')).toBe(frameBeforeRefresh)
   })
 })

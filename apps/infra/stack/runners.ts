@@ -26,6 +26,7 @@ export interface RunnerInputs {
   defaultRunnerApiKey: random.RandomPassword
   adminApiKey: random.RandomPassword
   randomKey: (name: string, length?: number) => random.RandomPassword
+  infrastructureLogGroup: aws.cloudwatch.LogGroup
 }
 
 export async function buildRunners(input: RunnerInputs): Promise<void> {
@@ -40,6 +41,7 @@ export async function buildRunners(input: RunnerInputs): Promise<void> {
     defaultRunnerApiKey,
     adminApiKey,
     randomKey,
+    infrastructureLogGroup,
   } = input
 
 const artifactsBucketName = runnerArtifactsBucketName({ app: $app.name, stage: $app.stage, accountId })
@@ -105,6 +107,32 @@ const runnerArtifactPolicy = new aws.iam.RolePolicy('RunnerArtifactS3Policy', {
       },
     ],
   }),
+})
+const runnerCloudWatchPolicy = new aws.iam.RolePolicy('RunnerCloudWatchPolicy', {
+  role: runnerRole.name,
+  policy: infrastructureLogGroup.arn.apply((logGroupArn) =>
+    JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Effect: 'Allow',
+          Action: ['cloudwatch:PutMetricData'],
+          Resource: '*',
+          Condition: { StringEquals: { 'cloudwatch:namespace': 'BoxLite/Runner' } },
+        },
+        {
+          Effect: 'Allow',
+          Action: ['logs:DescribeLogStreams'],
+          Resource: logGroupArn,
+        },
+        {
+          Effect: 'Allow',
+          Action: ['logs:CreateLogStream', 'logs:PutLogEvents'],
+          Resource: `${logGroupArn}:*`,
+        },
+      ],
+    }),
+  ),
 })
 const runnerInstanceProfile = new aws.iam.InstanceProfile('RunnerProfile', { role: runnerRole.name })
 
@@ -231,6 +259,7 @@ const makeRunner = (
       tags: {
         Name: nameTag,
         'boxlite:control-plane-runner-name': controlPlaneRunnerName,
+        'boxlite:observability': 'runner-infrastructure',
       },
     },
     {
@@ -241,7 +270,7 @@ const makeRunner = (
       // the host first and its user-data dies on AccessDenied — permanently, because
       // protect + ignoreChanges('userDataBase64') mean it never runs again. Same edge the
       // UpgradeRunnerBinary commands declare for the SSM path.
-      dependsOn: [runnerArtifactPolicy],
+      dependsOn: [runnerArtifactPolicy, runnerCloudWatchPolicy],
     },
   )
 
@@ -280,6 +309,63 @@ const extraRunners = runnerInventory.slice(1).map((runner) => {
   )
   return { name: runner.controlPlaneRunnerName, apiKey, instance }
 })
+
+const cloudWatchAgentVersion = '1.300071.0'
+const cloudWatchAgentDocument = new aws.ssm.Document('RunnerCloudWatchAgentDocument', {
+  documentType: 'Command',
+  documentFormat: 'YAML',
+  content: infrastructureLogGroup.name.apply(
+    (logGroupName) => `schemaVersion: '2.2'
+description: Configure minimal BoxLite Runner infrastructure telemetry
+mainSteps:
+  - action: aws:configurePackage
+    name: installCloudWatchAgent
+    inputs:
+      name: AmazonCloudWatchAgent
+      action: Install
+      version: '${cloudWatchAgentVersion}'
+  - action: aws:runShellScript
+    name: configureCloudWatchAgent
+    inputs:
+      runCommand:
+        - |-
+          set -euo pipefail
+          dpkg-query -W -f='\${Version}' amazon-cloudwatch-agent 2>/dev/null | grep -q '^${cloudWatchAgentVersion}'
+          install -d -m 0755 /opt/aws/amazon-cloudwatch-agent/etc
+          cat > /opt/aws/amazon-cloudwatch-agent/etc/boxlite.json <<'JSON'
+          {
+            "agent": {"metrics_collection_interval": 60, "run_as_user": "root"},
+            "metrics": {
+              "namespace": "BoxLite/Runner",
+              "append_dimensions": {"InstanceId": "\${aws:InstanceId}"},
+              "metrics_collected": {
+                "mem": {"measurement": ["used_percent"], "metrics_collection_interval": 60},
+                "disk": {"measurement": ["used_percent", "inodes_free"], "resources": ["/"], "metrics_collection_interval": 60}
+              }
+            },
+            "logs": {"logs_collected": {"files": {"collect_list": [
+              {"file_path": "/var/log/runner-setup.log", "log_group_name": "${logGroupName}", "log_stream_name": "{instance_id}/runner-setup"},
+              {"file_path": "/var/log/cloud-init.log", "log_group_name": "${logGroupName}", "log_stream_name": "{instance_id}/cloud-init"},
+              {"file_path": "/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log", "log_group_name": "${logGroupName}", "log_stream_name": "{instance_id}/agent"}
+            ]}}}
+          }
+          JSON
+          /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 \\
+            -c file:/opt/aws/amazon-cloudwatch-agent/etc/boxlite.json -s
+`,
+  ),
+})
+new aws.ssm.Association(
+  'RunnerCloudWatchAgentAssociation',
+  {
+    name: cloudWatchAgentDocument.name,
+    targets: [{ key: 'tag:boxlite:observability', values: ['runner-infrastructure'] }],
+    maxConcurrency: '1',
+    maxErrors: '0',
+    complianceSeverity: 'MEDIUM',
+  },
+  { dependsOn: [defaultRunner, ...extraRunners.map((runner) => runner.instance)] },
+)
 
 // Register the extra runners with the control plane once the API is healthy.
 // Idempotent (treats HTTP 409 as success), so redeploys are safe; only re-runs
