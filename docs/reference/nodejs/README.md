@@ -168,7 +168,7 @@ interface JsPortSpec {
 
 Port publication is available only with a local runtime. For code that should
 work with both local and remote runtimes, use `box.network.tunnel(port)`; each
-tunnel handle represents one connection.
+tunnel is one-shot; call `forward()` to consume it into a listener.
 OCI `EXPOSE` declarations do not publish host ports.
 
 #### `Secret`
@@ -261,14 +261,19 @@ live binding data yet, so box, get, or list info may report
 
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
-| Prepare | `await box.network.tunnel(port)` | Return a `JsBoxTunnel` or `BoxTunnel` for one TCP connection |
-| Inspect | `tunnel.uri(): string \| null` | Public URL of a remotely served tunnel; `null` for a local one |
-| Connect | `await tunnel.connect()` | Consume the tunnel and return its bidirectional connection |
+| Tunnel | `await box.network.tunnel(port)` | Prepare a one-shot `JsBoxTunnel` or `BoxTunnel` |
+| Forward | `await tunnel.forward(listen)` | Return a listener-backed `TunnelForwarder` |
+| Inspect | `tunnel.uri(): string \| null` | Read the prepared public URL; `null` for a local box |
+| Connect | `await tunnel.connect()` | Consume the prepared tunnel into its connection |
 | Read/write | `await connection.read(maxBytes)`, `await connection.write(data)` | Exchange bytes with the service |
 | Close | `await connection.close()` | Close the connection |
 
-Each tunnel handle carries exactly one connection. Call `tunnel()` again for
-each additional or concurrent connection. This differs from `ports`, which
+`listen` is `{ type: "tcp", host?: string, port: number }` or
+`{ type: "unix", path: string }`. The forwarder exposes `localAddr()`, `wait()`,
+and repeatable `close()`.
+
+Each tunnel is one-shot. Choose `connect()` or `forward()`; a forwarder opens
+fresh tunnels for additional clients. This differs from `ports`, which
 creates a persistent, local-only host listener that accepts repeated
 connections from ordinary host applications.
 

@@ -362,8 +362,17 @@ export interface JsSnapshotHandle {
 }
 
 export interface JsNetworkHandle {
-  /** Establish a tunnel to a service port inside the box. */
+  /** Prepare a one-shot tunnel to a service port inside the box. */
   tunnel(port: number): Promise<NativeBoxTunnel>;
+}
+
+export type SocketAddress =
+  { type: "tcp"; host?: string; port: number } | { type: "unix"; path: string };
+
+export interface NativeTunnelForwarder {
+  localAddr(): SocketAddress;
+  wait(): Promise<void>;
+  close(): Promise<void>;
 }
 
 /** Internal contract implemented by the native N-API tunnel binding. */
@@ -372,6 +381,7 @@ export interface NativeBoxTunnel {
   uri(): string | null;
   /** Consume the tunnel and return its bidirectional byte stream. */
   connect(): Promise<NativeBoxConnection>;
+  forward(listen: SocketAddress): Promise<NativeTunnelForwarder>;
 }
 
 export interface NativeBoxConnection {

@@ -1706,6 +1706,39 @@ mod tests {
         let NetworkCommand::Tunnel(args) = args.command;
         assert_eq!(args.target, "mybox");
         assert_eq!(args.port, 3000);
+        assert!(args.listen.is_none());
+    }
+
+    #[test]
+    fn network_tunnel_accepts_listener_forms() {
+        for listen in [
+            "8080",
+            "0",
+            "127.0.0.1:8080",
+            "[::1]:8080",
+            "unix:/tmp/app.sock",
+        ] {
+            Cli::try_parse_from([
+                "boxlite", "network", "tunnel", "mybox", "3000", "--listen", listen,
+            ])
+            .unwrap_or_else(|error| panic!("{listen} should parse: {error}"));
+        }
+    }
+
+    #[test]
+    fn network_tunnel_rejects_ambiguous_listener_forms() {
+        for listen in [
+            "localhost:8080",
+            "::1:8080",
+            ":8080",
+            "unix:relative.sock",
+            "127.0.0.1",
+        ] {
+            let result = Cli::try_parse_from([
+                "boxlite", "network", "tunnel", "mybox", "3000", "--listen", listen,
+            ]);
+            assert!(result.is_err(), "{listen} must be rejected");
+        }
     }
 
     #[test]

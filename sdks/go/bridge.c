@@ -41,6 +41,8 @@ extern void goBoxliteOnExecutionWait(int exit_code, CBoxliteError *err, void *ud
 extern void goBoxliteOnExecutionKill(CBoxliteError *err, void *ud);
 extern void goBoxliteOnExecutionSignal(CBoxliteError *err, void *ud);
 extern void goBoxliteOnExecutionResize(CBoxliteError *err, void *ud);
+extern void goBoxliteOnTunnelForwarderWait(CBoxliteError *err, void *ud);
+extern void goBoxliteOnTunnelForwarderClose(CBoxliteError *err, void *ud);
 
 CBoxStdoutCb cbStdout(void) { return (CBoxStdoutCb)goBoxliteOnStdout; }
 CBoxStderrCb cbStderr(void) { return (CBoxStderrCb)goBoxliteOnStderr; }
@@ -82,3 +84,5 @@ CExecutionWaitCb cbExecutionWait(void) { return (CExecutionWaitCb)goBoxliteOnExe
 CExecutionKillCb cbExecutionKill(void) { return (CExecutionKillCb)goBoxliteOnExecutionKill; }
 CExecutionSignalCb cbExecutionSignal(void) { return (CExecutionSignalCb)goBoxliteOnExecutionSignal; }
 CExecutionResizeCb cbExecutionResize(void) { return (CExecutionResizeCb)goBoxliteOnExecutionResize; }
+CTunnelForwarderWaitCb cbTunnelForwarderWait(void) { return (CTunnelForwarderWaitCb)goBoxliteOnTunnelForwarderWait; }
+CTunnelForwarderCloseCb cbTunnelForwarderClose(void) { return (CTunnelForwarderCloseCb)goBoxliteOnTunnelForwarderClose; }

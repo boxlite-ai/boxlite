@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Optional
 from .exec import ExecResult
 
 if TYPE_CHECKING:
-    from .boxlite import Boxlite
+    from .boxlite import Boxlite, TunnelForwarder
 
 logger = logging.getLogger("boxlite.simplebox")
 
@@ -27,7 +27,7 @@ class StreamType(IntEnum):
 
 
 class BoxTunnel:
-    """Prepared async tunnel handle for a box service port."""
+    """Prepared one-shot tunnel handle for a box service port."""
 
     def __init__(self, tunnel) -> None:
         self._tunnel = tunnel
@@ -40,6 +40,9 @@ class BoxTunnel:
         """Return the public URL of a remote tunnel, or ``None`` for a local one."""
         return self._tunnel.uri()
 
+    async def forward(self, listen) -> "TunnelForwarder":
+        return await self._tunnel.forward(listen)
+
 
 class NetworkHandle:
     """Network operations for a ``SimpleBox``."""
@@ -48,7 +51,7 @@ class NetworkHandle:
         self._owner = box
 
     async def tunnel(self, port: int) -> BoxTunnel:
-        """Establish and return a tunnel handle for a port inside the box."""
+        """Establish and return a one-shot tunnel for a port inside the box."""
         if not self._owner._started:
             raise RuntimeError(
                 "Box not started. Use 'async with SimpleBox(...) as box:' "
@@ -340,7 +343,7 @@ class SimpleBox:
         )
 
     async def tunnel(self, port: int) -> BoxTunnel:
-        """Establish and return a tunnel handle for a port inside this box."""
+        """Establish and return a one-shot tunnel for a port inside this box."""
         return await self.network.tunnel(port)
 
     async def metrics(self):

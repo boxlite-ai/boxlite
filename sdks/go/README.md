@@ -136,20 +136,24 @@ for _, image := range cached {
   ```
 
 Port publication is local-only. Remote runtimes reject it with guidance to use
-the existing network tunnel API. Each tunnel handle represents one connection.
+the existing network tunnel API. Each tunnel handle is one-shot.
 OCI `EXPOSE` metadata does not publish ports.
 
 ## Service Tunnels
 
-The same one-connection workflow works with local and remote runtimes:
+The same route workflow works with local and remote runtimes:
 
 - `box.Network() (*Network, error)` returns box-scoped network operations.
-- `network.Tunnel(ctx, port) (*BoxTunnel, error)` prepares one TCP connection.
+- `network.Tunnel(ctx, port) (*BoxTunnel, error)` prepares a one-shot tunnel.
+- `TCPListenAddress(host, port)` and `UnixListenAddress(path)` return validated
+  standard `net.Addr` values for `tunnel.Forward(ctx, addr)`. The returned
+  `TunnelForwarder` has `Addr() net.Addr`, `Wait(ctx) error`, and repeatable
+  `Close() error`; canceling a wait context does not close the listener.
 - `tunnel.URI() (string, error)` returns the public URL of a remotely served tunnel, or an empty string for a local one.
-- `tunnel.Connect(ctx) (net.Conn, error)` consumes the tunnel's single connection.
+- `tunnel.Connect(ctx) (net.Conn, error)` consumes the prepared connection.
 
-Call `Tunnel` again for each additional or concurrent connection, and close the
-returned `net.Conn`. This differs from `WithPort`, which creates a persistent,
+Choose `Connect` or `Forward`; a forwarder prepares fresh tunnels for later
+clients. This differs from `WithPort`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 
 ## Development

@@ -364,18 +364,23 @@ pub struct BoxState {
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
 | Get handle | `LiteBox::network(&self) -> NetworkHandle` | Get box-scoped network operations |
-| Prepare | `async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>` | Prepare one TCP connection |
-| Inspect | `BoxTunnel::uri(&self) -> Option<&str>` | Public URL of a remotely served tunnel; `None` for a local one |
+| Tunnel | `async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>` | Prepare a one-shot tunnel to one guest TCP service |
+| Forward | `async fn BoxTunnel::forward(self, listen: SocketAddress) -> BoxliteResult<TunnelForwarder>` | Consume the tunnel into a TCP or Unix listener |
+| Inspect | `BoxTunnel::uri(&self) -> Option<&str>` | Read the prepared public URL; `None` for a local box |
 | Descriptor | `BoxConnection::raw_fd(&self) -> Option<RawFd>` | Borrowed fd; `None` for a remotely served connection |
 | Take fd | `BoxConnection::into_fd(self) -> BoxliteResult<OwnedFd>` | Consume the connection and own its descriptor |
-| Connect | `BoxTunnel::connect(self) -> BoxliteResult<BoxConnection>` | Consume the tunnel into its bidirectional byte stream |
+| Connect | `BoxTunnel::connect(self) -> BoxliteResult<BoxConnection>` | Consume the prepared tunnel into its byte stream |
 | Split | `BoxConnection::into_split(self) -> (BoxReader, BoxWriter)` | Halves that read and write concurrently |
 | Half-close | `BoxWriter::shutdown(&mut self) -> BoxliteResult<()>` | Signal EOF; a peer that already hung up is success, not an error |
 
-`BoxTunnel` represents exactly one connection; its consuming `connect(self)`
-enforces that at the type boundary. Request another tunnel for each additional
-or concurrent connection. This differs from `BoxOptions.ports`, which creates a
-persistent, local-only host listener that accepts repeated connections.
+`BoxTunnel` remains one-shot: choose either `connect()` or `forward()`. A
+forwarder privately prepares a fresh tunnel for each later accepted client.
+This differs from `BoxOptions.ports`, which publishes a local port for
+the lifetime of the box.
+
+`TunnelForwarder::local_addr()` reports the canonical bound address, while
+repeatable `wait()` and `close()` share the listener's cached terminal result.
+Dropping the final handle requests cancellation.
 
 ---
 

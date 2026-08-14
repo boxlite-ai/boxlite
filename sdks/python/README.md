@@ -244,8 +244,8 @@ Configuration options for creating a box.
 - `network: NetworkSpec | None` - Structured network configuration
 - `ports: List[Tuple | Dict]` - Local TCP forwarding; omit `host_port` in a dict for automatic allocation
   - Protocol: `"tcp"`; UDP is rejected
-  - Portable local/remote code uses `box.network.tunnel(port)`; each tunnel
-    handle represents one connection
+  - Portable local/remote code uses `box.network.tunnel(port)`; each tunnel is
+    a prepared one-shot tunnel; call `forward()` for a listener
 - `secrets: List[Secret]` - Host-side HTTP(S) secret substitution rules
 - `advanced: AdvancedBoxOptions | None` - Expert-only container options
   - `capabilities.add: List[str]` - Capabilities added to BoxLite's baseline

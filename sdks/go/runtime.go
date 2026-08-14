@@ -28,6 +28,7 @@ const drainTimeoutMs = 100
 type Runtime struct {
 	handle *C.CBoxliteRuntime
 
+	drainMu   sync.Mutex
 	drainOnce sync.Once
 	drainStop chan struct{}
 	drainDone chan struct{}
@@ -333,6 +334,19 @@ func (r *Runtime) removeBox(ctx context.Context, idOrName string, force bool) er
 // M). Because the M is already a Go thread, callbacks like pipe writes or
 // channel sends do not need to hijack a new thread.
 func (r *Runtime) ensureDrainRunning() {
+	if r == nil {
+		return
+	}
+	r.drainMu.Lock()
+	defer r.drainMu.Unlock()
+	select {
+	case <-r.closing:
+		return
+	default:
+	}
+	if r.handle == nil {
+		return
+	}
 	r.drainOnce.Do(func() {
 		r.drainStop = make(chan struct{})
 		r.drainDone = make(chan struct{})
@@ -361,17 +375,22 @@ func (r *Runtime) drainLoop() {
 }
 
 func (r *Runtime) stopDrain() {
+	r.drainMu.Lock()
 	if r.drainStop == nil {
+		r.drainMu.Unlock()
 		return
 	}
 	select {
 	case <-r.drainStop:
+		r.drainMu.Unlock()
 		return
 	default:
 	}
 	close(r.drainStop)
-	if r.drainDone != nil {
-		<-r.drainDone
+	done := r.drainDone
+	r.drainMu.Unlock()
+	if done != nil {
+		<-done
 	}
 }
 

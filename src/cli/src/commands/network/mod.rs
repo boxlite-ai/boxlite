@@ -15,7 +15,7 @@ pub struct NetworkArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum NetworkCommand {
-    /// Print the public URL for a box service port.
+    /// Print a remote URL or forward a local listener to a box service.
     Tunnel(tunnel::TunnelArgs),
 }
 

@@ -675,6 +675,16 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::TunnelForwarderWait {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::TunnelForwarderClose {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
         }
     }
 }

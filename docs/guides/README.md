@@ -276,8 +276,8 @@ is appropriate for browsers, database clients, and other programs that expect a
 normal host address.
 
 For SDK code that must work with local and remote runtimes, use
-`box.network.tunnel(port)` and consume its byte stream with `connect()`. A tunnel
-handle represents one connection; request another handle for another connection.
+`box.network.tunnel(port)` and open byte streams with `connect()`. A tunnel
+can be consumed by `connect()` or by `forward()` to bind a local listener.
 Remote CLI users can run `boxlite network tunnel BOX PORT` to obtain the public
 service URL.
 

@@ -521,17 +521,12 @@ BoxliteErrorCode boxlite_tunnel_connect(
 void boxlite_tunnel_free(CBoxTunnelHandle* tunnel);
 ```
 
-Each `CBoxTunnelHandle` owns exactly one connection.
-`boxlite_tunnel_connect()` consumes it and returns an owned file descriptor that
-the caller must close; a second call returns `InvalidState`. Release the tunnel
-handle with `boxlite_tunnel_free()` after connecting or when discarding an
-unconsumed tunnel.
+Each `CBoxTunnelHandle` is one-shot. Choose `boxlite_tunnel_connect()` or
+`boxlite_tunnel_forward()`; either consumes the prepared tunnel.
 `boxlite_tunnel_uri()` reports where a remotely served tunnel can be reached, as
 an allocated string the caller frees with `boxlite_free_string()`. It writes NULL
-for a local tunnel, whose descriptor is already a live connection rather than an
-address — reach those with `boxlite_tunnel_connect()`.
+for a local tunnel.
 
-Create another tunnel handle for every additional or concurrent connection.
 This differs from `boxlite_options_add_port()`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 

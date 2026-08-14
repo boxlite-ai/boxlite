@@ -209,6 +209,14 @@ pub(crate) type CExecutionSignalFn = extern "C" fn(*mut crate::CBoxliteError, *m
 pub type CExecutionResizeCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CExecutionResizeFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
+/// Tunnel forwarder wait completion.
+pub type CTunnelForwarderWaitCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CTunnelForwarderWaitFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
+/// Tunnel forwarder close completion.
+pub type CTunnelForwarderCloseCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CTunnelForwarderCloseFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
 // ─── Owned FFI payload ─────────────────────────────────────────────────────
 //
 // Wraps a `Box::into_raw`'d FFI struct that will eventually be transferred
@@ -438,6 +446,16 @@ pub enum RuntimeEvent {
     },
     Resize {
         cb: CExecutionResizeFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    TunnelForwarderWait {
+        cb: CTunnelForwarderWaitFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    TunnelForwarderClose {
+        cb: CTunnelForwarderCloseFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
     },

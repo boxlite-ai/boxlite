@@ -31,6 +31,9 @@ class _FakeTunnel:
     async def connect(self) -> _FakeConnection:
         return self.connections.pop(0)
 
+    async def forward(self, listen):
+        return _FakeForwarder(listen)
+
 
 class _FakeNetwork:
     def __init__(self, tunnel: _FakeTunnel) -> None:
@@ -40,6 +43,22 @@ class _FakeNetwork:
     async def tunnel(self, port: int) -> _FakeTunnel:
         self.ports.append(port)
         return self.tunnel_value
+
+
+class _FakeForwarder:
+    def __init__(self, listen) -> None:
+        self.listen = listen
+        self.waited = False
+        self.closed = False
+
+    def local_addr(self):
+        return self.listen
+
+    async def wait(self) -> None:
+        self.waited = True
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class _FakeBox:
@@ -106,21 +125,21 @@ async def test_uri_is_none_for_a_local_tunnel():
 
 @pytest.mark.asyncio
 async def test_connect_consumes_tunnel_once():
-    connection = _FakeConnection()
+    first_connection = _FakeConnection()
     box = SimpleBox.__new__(SimpleBox)
     box._started = True
-    box._box = _FakeBox(_FakeTunnel([connection], "unused"))
+    box._box = _FakeBox(_FakeTunnel([first_connection], "unused"))
 
     tunnel = await box.network.tunnel(3000)
     first = await tunnel.connect()
     try:
         assert await first.write(b"one") == 3
-        assert connection.writes == [b"one"]
+        assert first_connection.writes == [b"one"]
         with pytest.raises(IndexError):
             await tunnel.connect()
     finally:
         await first.close()
-        assert connection.closed
+        assert first_connection.closed
 
 
 @pytest.mark.asyncio
@@ -130,6 +149,22 @@ async def test_tunnel_requires_a_started_box():
 
     with pytest.raises(RuntimeError, match="Box not started"):
         await box.network.tunnel(3000)
+
+
+@pytest.mark.asyncio
+async def test_forward_delegates_and_preserves_lifecycle_calls():
+    box = SimpleBox.__new__(SimpleBox)
+    box._started = True
+    box._box = _FakeBox(_FakeTunnel([], None))
+    listen = object()
+
+    tunnel = await box.network.tunnel(3000)
+    forwarder = await tunnel.forward(listen)
+    assert forwarder.local_addr() is listen
+    await forwarder.wait()
+    await forwarder.close()
+    assert forwarder.waited
+    assert forwarder.closed
 
 
 @pytest.mark.parametrize("port", [0, 65536, "3000", None])

@@ -380,9 +380,9 @@ QEMU's user-mode networking stack.
 ### Service Access Across Runtimes
 
 The box network tunnel API is portable across local and REST runtimes, but its
-transport is backend-specific. Local tunnels return a prepared gvproxy
-connection; REST tunnels connect through the remote service proxy and also
-carry its public URI. Each SDK tunnel handle represents one connection.
+transport is backend-specific. `tunnel()` eagerly prepares one local gvproxy or
+remote service-proxy connection. `uri()` inspects its public URI, while `connect()`
+or `forward()` consumes that prepared one-shot tunnel into a byte stream or listener.
 
 Explicit host port publication is a separate local-runtime feature that owns a
 TCP listener and accepts repeated connections.

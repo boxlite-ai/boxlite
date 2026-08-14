@@ -97,7 +97,7 @@ typedef struct BoxNetworkHandle BoxNetworkHandle;
 // Opaque handle for Runner API (auto-manages runtime)
 typedef struct BoxRunner BoxRunner;
 
-// Opaque handle for a one-shot box service tunnel.
+// Opaque handle for a one-shot prepared tunnel.
 typedef struct BoxTunnelHandle BoxTunnelHandle;
 
 // Opaque credential handle. Wraps a core `Arc<dyn Credential>` so the
@@ -121,6 +121,9 @@ typedef struct RestOptionsHandle RestOptionsHandle;
 // Opaque handle to a BoxliteRuntime instance with its Tokio runtime and the
 // per-runtime event queue used by the post-and-drain callback API.
 typedef struct RuntimeHandle RuntimeHandle;
+
+// Opaque long-lived listener handle.
+typedef struct TunnelForwarderHandle TunnelForwarderHandle;
 
 // Opaque handle to runtime named-volume operations.
 //
@@ -370,7 +373,25 @@ typedef void (*CRuntimeMetricsCb)(struct CRuntimeMetrics*, CBoxliteError*, void*
 
 typedef struct BoxNetworkHandle CBoxNetworkHandle;
 
+typedef struct TunnelForwarderHandle CTunnelForwarderHandle;
+
+// Tunnel forwarder wait completion.
+typedef void (*CTunnelForwarderWaitCb)(CBoxliteError*, void*);
+
+// Tunnel forwarder close completion.
+typedef void (*CTunnelForwarderCloseCb)(CBoxliteError*, void*);
+
 typedef struct BoxTunnelHandle CBoxTunnelHandle;
+
+typedef uint32_t BoxliteSocketAddressKind;
+
+// Listener address. Input strings are borrowed for the duration of a call.
+typedef struct BoxliteSocketAddress {
+  BoxliteSocketAddressKind kind;
+  const char *host;
+  uint16_t port;
+  const char *path;
+} BoxliteSocketAddress;
 
 typedef struct CredentialHandle CBoxliteCredential;
 
@@ -433,6 +454,10 @@ typedef void (*CBoxVolumeGetCb)(struct CVolumeInfo*, CBoxliteError*, void*);
 // Volume remove completion. The error pointer is borrowed for callback dispatch
 // only and no result allocation is produced.
 typedef void (*CBoxVolumeRemoveCb)(CBoxliteError*, void*);
+
+#define BoxliteSocketTcp 0
+
+#define BoxliteSocketUnix 1
 
 #ifdef __cplusplus
 extern "C" {
@@ -696,6 +721,24 @@ enum BoxliteErrorCode boxlite_box_network(CBoxHandle *handle,
                                           CBoxNetworkHandle **out_network,
                                           CBoxliteError *out_error);
 
+// Return a newly allocated canonical address string.
+enum BoxliteErrorCode boxlite_tunnel_forwarder_address(CTunnelForwarderHandle *forwarder,
+                                                       char **out_address,
+                                                       CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_tunnel_forwarder_wait(CTunnelForwarderHandle *forwarder,
+                                                    CTunnelForwarderWaitCb cb,
+                                                    void *user_data,
+                                                    CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_tunnel_forwarder_close(CTunnelForwarderHandle *forwarder,
+                                                     CTunnelForwarderCloseCb cb,
+                                                     void *user_data,
+                                                     CBoxliteError *out_error);
+
+// Initiate non-blocking cancellation and release the caller's handle.
+void boxlite_tunnel_forwarder_free(CTunnelForwarderHandle *forwarder);
+
 // Release a network handle. Accepts NULL and does not affect the box handle.
 void boxlite_network_free(CBoxNetworkHandle *network);
 
@@ -709,7 +752,7 @@ enum BoxliteErrorCode boxlite_network_tunnel(CBoxNetworkHandle *network,
                                              CBoxTunnelHandle **out_tunnel,
                                              CBoxliteError *out_error);
 
-// Release a tunnel handle and any unconsumed connection. Accepts NULL.
+// Release an unconsumed tunnel. Existing connections and forwarders remain alive.
 void boxlite_tunnel_free(CBoxTunnelHandle *tunnel);
 
 // Read the public URL of a remotely served tunnel, without consuming it.
@@ -723,13 +766,19 @@ enum BoxliteErrorCode boxlite_tunnel_uri(CBoxTunnelHandle *tunnel,
                                          char **out_uri,
                                          CBoxliteError *out_error);
 
-// Consume a tunnel's single connection and return its owned file descriptor.
+// Consume the tunnel and return its owned file descriptor.
 //
-// On success, the caller owns `*out_fd` and must close it. A second call
-// returns `InvalidState`. On failure `*out_fd` remains -1 and `out_error`
+// On success, the caller owns `*out_fd` and must close it.
+// On failure `*out_fd` remains -1 and `out_error`
 // receives details when provided.
 enum BoxliteErrorCode boxlite_tunnel_connect(CBoxTunnelHandle *tunnel,
                                              int32_t *out_fd,
+                                             CBoxliteError *out_error);
+
+// Bind a local listener synchronously and start forwarding accepted clients.
+enum BoxliteErrorCode boxlite_tunnel_forward(CBoxTunnelHandle *tunnel,
+                                             const struct BoxliteSocketAddress *listen,
+                                             CTunnelForwarderHandle **out_forwarder,
                                              CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_options_new(const char *image,

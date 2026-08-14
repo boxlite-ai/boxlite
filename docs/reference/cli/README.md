@@ -554,10 +554,23 @@ Display resource usage statistics for a box.
 
 ### `boxlite network tunnel`
 
-**Synopsis:** `boxlite network tunnel BOX PORT`
+**Synopsis:** `boxlite network tunnel BOX GUEST_PORT [--listen ADDRESS]`
 
 Print the public URL for a box service port. Requires a remote REST profile
-(`--url` or `--profile`); local boxes have no public ingress.
+(`--url` or `--profile`); local boxes have no public ingress. With `--listen`,
+bind a local listener and open one tunnel per accepted connection instead:
+
+```bash
+boxlite network tunnel mybox 3000 --listen 8080
+boxlite network tunnel mybox 3000 --listen 127.0.0.1:8080
+boxlite network tunnel mybox 3000 --listen '[::1]:8080'
+boxlite network tunnel mybox 3000 --listen unix:/tmp/app.sock
+```
+
+A bare port binds `127.0.0.1`; listener port `0` asks the OS to allocate a
+port. The canonical bound address is printed to stdout before clients are
+accepted. Ctrl-C closes the listener and active connections. TCP hosts must be
+numeric addresses, and Unix socket paths must be absolute.
 
 ---
 
@@ -718,7 +731,7 @@ Ports must be in `1..=65535`. TCP is the only supported protocol; UDP is rejecte
 `-p` is explicit local publication and is rejected for remote REST runtimes.
 For a remote box, use `boxlite network tunnel BOX PORT` to obtain its public
 service URL. For SDK code that must run with either runtime, use the box network
-tunnel API; each tunnel handle represents one connection.
+tunnel API; each returned tunnel is one-shot.
 Image `EXPOSE` declarations remain metadata and do not open host listeners.
 
 ---

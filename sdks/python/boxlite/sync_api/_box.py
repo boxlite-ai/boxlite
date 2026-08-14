@@ -137,7 +137,7 @@ class SyncBox:
         return self._network
 
     def tunnel(self, port: int):
-        """Establish and return a tunnel handle for a port inside this box."""
+        """Establish and return a one-shot tunnel for a port inside this box."""
         return self.network.tunnel(port)
 
     # Context manager support
