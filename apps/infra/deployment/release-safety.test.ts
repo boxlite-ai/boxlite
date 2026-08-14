@@ -57,6 +57,201 @@ const assertLiveLine = (text: string, pattern: RegExp, message?: string) =>
   assert.match(liveText('script', text), pattern, message ?? `missing live line: ${pattern}`)
 
 /*
+ * /sst/bootstrap names the state and asset buckets every stage shares, and SST reads it before it
+ * knows its stage, so it cannot be stage-scoped — which makes it the one parameter a stage must never
+ * be able to write. Rewriting it repoints every other stage's state; deleting it breaks them all.
+ *
+ * Deciding which statements reach it is the whole difficulty, so it is a function with its own tests
+ * rather than a condition inline in one assertion. Reading the template alone cannot prove the logic is
+ * right — the template passes, and a matcher that answered "nothing matches" would pass just as well.
+ */
+const SHARED_BOOTSTRAP_PARAMETER = '/sst/bootstrap'
+
+/*
+ * IAM matches resources by glob, so this must too: `parameter/sst/*`, `parameter/*`, `*`, and
+ * `parameter/sst/boot?trap` all reach the shared bootstrap while equalling no literal. Both wildcards
+ * IAM supports are translated and every other metacharacter escaped, so a `.` in an ARN cannot quietly
+ * stand in for an arbitrary character.
+ */
+function iamGlob(pattern: string) {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(
+    `^${escaped.replace(/\*/g, '.*').replace(/\?/g, '.').split(SUB_SENTINEL).join('.*')}$`,
+    'i',
+  )
+}
+
+/*
+ * Segment the ARN rather than looking for a `:parameter` substring. `arn:aws:ssm:*:*:*` covers the
+ * shared bootstrap and contains no such marker, so a substring search silently answers "no" to the
+ * broadest grant there is.
+ *
+ * The `${AWS::Region}`-style placeholders have to be neutralised first, because they contain colons
+ * themselves and would otherwise split into phantom segments. They stand for this deploy's own
+ * partition, region and account — the same ones the parameter lives in — so they count as matching.
+ */
+const SUB_SENTINEL = '\u0001'
+
+function coversSharedBootstrap(resource: unknown) {
+  if (typeof resource !== 'string') return false
+  if (resource === '*') return true
+
+  const segments = resource.replace(/\$\{[^}]*\}/g, SUB_SENTINEL).split(':')
+  // Anything that is not a well-formed 6-field ARN. Whether IAM rejects such a resource or reads the
+  // omitted fields as wildcards is not something this can settle, and it does not need to: either way
+  // "not an ARN I can read" must not come back as "does not reach the shared bootstrap".
+  if (segments.length < 6 || segments[0] !== 'arn') return true
+  const service = segments[2]
+  if (service !== 'ssm' && service !== '*' && service !== SUB_SENTINEL) return false
+  // Rejoined: an SSM parameter name may itself contain colons.
+  const resourceId = segments.slice(5).join(':')
+  return iamGlob(resourceId).test(`parameter${SHARED_BOOTSTRAP_PARAMETER}`)
+}
+
+/*
+ * Whether an action can write a parameter — case-insensitively, because IAM action names are:
+ * `SSM:PutParameter` and `ssm:putparameter` are the same grant, so a case-sensitive prefix test is an
+ * evasion rather than a style question. `*` and `ssm:*` grant every write without naming one.
+ */
+function mutatesParameters(action: unknown) {
+  if (typeof action !== 'string') return false
+  // A substitution can resolve to anything, so `${Service}:PutParameter` has to read as a possible
+  // write rather than as "not an ssm action". Same direction the resource side widens in: unknown
+  // means flagged, never waved through.
+  if (action.includes('${')) return true
+  const normalized = action.toLowerCase()
+  if (normalized === '*' || normalized === 'ssm:*') return true
+  return normalized.startsWith('ssm:') && !/^ssm:(get|list|describe)/.test(normalized)
+}
+
+/*
+ * An Allow with NotResource grants everything EXCEPT what it lists, so it reaches /sst/bootstrap unless
+ * that is one of the exclusions; NotAction is the same inversion for actions. Reasoning about either
+ * properly means evaluating a complement, which this does not do — so rather than inspect Action and
+ * Resource and quietly return "nothing matches", it reports the statement as unanalyzable and the
+ * assertion fails. The template uses neither today, and this is what keeps that true.
+ */
+function sharedBootstrapMutations(statement: any) {
+  const asList = (value: any) => (Array.isArray(value) ? value : [value])
+
+  /*
+   * Only a grant can be a violation. A Deny naming the shared bootstrap is the opposite — a protection
+   * — and flagging it would make the guard reject the very thing it wants. Anything that is neither is
+   * refused rather than assumed harmless, since IAM requires Effect and a statement without one is
+   * malformed.
+   */
+  const effect = statement?.Effect
+  if (effect === 'Deny') return []
+  if (effect !== 'Allow') return [`unanalyzable: Effect ${JSON.stringify(effect)}`]
+
+  const inverted = ['NotAction', 'NotResource'].filter((key) => statement?.[key] !== undefined)
+  if (inverted.length > 0) return [`unanalyzable: ${inverted.join(' + ')}`]
+
+  /*
+   * Anything that is not a plain string. `!Sub` with a variable map, or `Fn::Join`, parses to an array
+   * or object rather than to text, and the value it computes cannot be read here — so it is refused
+   * rather than skipped. Skipping is the failure mode that matters: a computed resource would return
+   * "does not cover the shared bootstrap" while possibly naming exactly that.
+   */
+  const resources = asList(statement?.Resource)
+  const actions = asList(statement?.Action)
+  const computed = [...resources, ...actions].filter((entry) => typeof entry !== 'string')
+  if (computed.length > 0) return [`unanalyzable: ${computed.length} computed Action/Resource entrie(s)`]
+
+  if (!resources.some(coversSharedBootstrap)) return []
+  return actions.filter(mutatesParameters)
+}
+
+test('the shared-bootstrap guard catches every way a grant can cover it', () => {
+  // Synthetic statements, not the template: this is what can make the guard above fail. Each entry
+  // reaches /sst/bootstrap without naming it exactly, or spells a write so a naive prefix test misses
+  // it.
+  const evasions = [
+    { Effect: 'Allow', Sid: 'ExactArn', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
+    { Effect: 'Allow', Sid: 'TrailingStar', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/*' },
+    { Effect: 'Allow', Sid: 'EmbeddedStar', Action: 'ssm:DeleteParameter', Resource: 'arn:aws:ssm:r:a:parameter/*/bootstrap' },
+    { Effect: 'Allow', Sid: 'SingleCharWildcard', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/boot?trap' },
+    { Effect: 'Allow', Sid: 'EverythingResource', Action: 'ssm:PutParameter', Resource: '*' },
+    // No `:parameter` anywhere in it, yet it covers every SSM resource in the account.
+    { Effect: 'Allow', Sid: 'WildcardArnSegments', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:*:*:*' },
+    { Effect: 'Allow', Sid: 'WildcardServiceSegment', Action: 'ssm:PutParameter', Resource: 'arn:aws:*:*:*:parameter/sst/bootstrap' },
+    { Effect: 'Allow', Sid: 'ServiceWildcardAction', Action: 'ssm:*', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
+    { Effect: 'Allow', Sid: 'EveryAction', Action: '*', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
+    { Effect: 'Allow', Sid: 'UppercaseService', Action: 'SSM:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
+    { Effect: 'Allow', Sid: 'MixedCaseAction', Action: 'SsM:putParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
+    {
+      Effect: 'Allow',
+      Sid: 'ListedAmongReads',
+      Action: ['ssm:GetParameter', 'ssm:PutParameter'],
+      Resource: ['arn:aws:ssm:r:a:parameter/sst/*'],
+    },
+    // Inverted forms: an Allow that lists what it does NOT cover grants the rest, including this.
+    { Effect: 'Allow', Sid: 'NotResourceAllow', Action: 'ssm:PutParameter', NotResource: 'arn:aws:ssm:r:a:parameter/other' },
+    { Effect: 'Allow', Sid: 'NotActionAllow', NotAction: 's3:*', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
+    // A computed identifier: nothing here can prove ${Whatever} is not the shared bootstrap.
+    { Effect: 'Allow', Sid: 'SubstitutedIdentifier', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/${Whatever}' },
+    // Not text at all. `!Sub` with a variable map and `Fn::Join` survive YAML parsing as structures,
+    // and their result is not knowable here, so neither may be waved through.
+    {
+      Effect: 'Allow',
+      Sid: 'FnJoinResource',
+      Action: 'ssm:PutParameter',
+      Resource: { 'Fn::Join': [':', ['arn', 'aws', 'ssm', 'r', 'a', 'parameter/sst/bootstrap']] },
+    },
+    {
+      Effect: 'Allow',
+      Sid: 'FnSubWithVariableMap',
+      Action: 'ssm:PutParameter',
+      Resource: ['arn:aws:ssm:r:a:parameter/${Name}', { Name: 'sst/bootstrap' }],
+    },
+    { Effect: 'Allow', Sid: 'ComputedAction', Action: { 'Fn::Join': [':', ['ssm', 'PutParameter']] }, Resource: '*' },
+    // Malformed rather than permissive, but still not something this can reason about.
+    { Sid: 'NoEffect', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
+    // Not a readable 6-field ARN, so it must never come back as "reaches nothing".
+    { Effect: 'Allow', Sid: 'TruncatedArn', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm' },
+    // A substituted action: the service is only known at deploy time, so it could be ssm.
+    {
+      Effect: 'Allow',
+      Sid: 'SubstitutedActionService',
+      Action: '${Service}:PutParameter',
+      Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap',
+    },
+    {
+      Effect: 'Allow',
+      Sid: 'SubstitutedActionVerb',
+      Action: 'ssm:${Verb}',
+      Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap',
+    },
+    { Effect: 'Allow', Sid: 'NotAnArn', Action: 'ssm:PutParameter', Resource: 'parameter/sst/bootstrap' },
+  ]
+  for (const statement of evasions) {
+    assert.notDeepEqual(sharedBootstrapMutations(statement), [], `${statement.Sid} must be caught`)
+  }
+
+  // And what must NOT trip it, or the guard would reject the policy the stack actually needs.
+  const allowed = [
+    {
+      Effect: 'Allow',
+      Sid: 'ReadOnlyShared',
+      Action: ['ssm:GetParameter', 'ssm:GetParameters'],
+      Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap',
+    },
+    { Effect: 'Allow', Sid: 'DescribeEverywhere', Action: 'ssm:DescribeParameters', Resource: '*' },
+    { Effect: 'Allow', Sid: 'ThisStagesParameters', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/boxlite/dev/*' },
+    { Effect: 'Allow', Sid: 'PassphraseOnly', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/passphrase/boxlite/dev' },
+    { Effect: 'Allow', Sid: 'DifferentService', Action: 's3:PutObject', Resource: '*' },
+    // A wildcard ARN for a different service reaches no parameter at all.
+    { Effect: 'Allow', Sid: 'WildcardArnOtherService', Action: 'ssm:PutParameter', Resource: 'arn:aws:s3:*:*:*' },
+    // A Deny naming the shared bootstrap protects it. Flagging that would reject the fix, not the bug.
+    { Effect: 'Deny', Sid: 'DenyProtectsIt', Action: 'ssm:PutParameter', Resource: 'arn:aws:ssm:r:a:parameter/sst/bootstrap' },
+    { Effect: 'Deny', Sid: 'DenyInverted', NotAction: 's3:*', Resource: '*' },
+  ]
+  for (const statement of allowed) {
+    assert.deepEqual(sharedBootstrapMutations(statement), [], `${statement.Sid} must be allowed`)
+  }
+})
+
+/*
  * The stage's configuration reaches a deploy through the SST secret store, which
  * deployment/sst.ts reads with the AWS credentials the job already holds. Nothing may reintroduce
  * the GitHub half of that: `DEPLOY_ENV` put stage config in a second control plane, and writing it
@@ -869,7 +1064,39 @@ test('the deploy role cannot reach another stage in the SST backing store', () =
   // the dev Environment could read prod's. This change makes the stage configuration authoritative in
   // that store, so it is the whole stack's config now, not just its app secrets.
   const template = readDeployTemplate()
-  const statements = template.Resources.GitHubDeployRole.Properties.Policies[0].PolicyDocument.Statement
+  /*
+   * Every inline policy, not just the first. A second `Policies` entry grants exactly as much as the
+   * first, so reading `Policies[0]` would let one be added that restores everything narrowed here.
+   * Managed policies are worse: their contents live outside this template entirely, so the role must
+   * not attach any — there is nothing here to check them against.
+   */
+  const role = template.Resources.GitHubDeployRole.Properties
+  assert.deepEqual(
+    role.ManagedPolicyArns ?? [],
+    [],
+    'a managed policy ARN points outside this template, so its grants cannot be checked here',
+  )
+
+  const statements = (role.Policies ?? []).flatMap((policy: any) => policy.PolicyDocument.Statement)
+
+  /*
+   * A policy does not have to be inline to reach this role. AWS::IAM::Policy and ::ManagedPolicy list
+   * their targets in `Roles`, ::RolePolicy in `RoleName`, and any of them can grant back everything the
+   * inline policy gives up — invisibly, if only Properties.Policies is read.
+   */
+  const ATTACHABLE_POLICY_TYPES = ['AWS::IAM::Policy', 'AWS::IAM::RolePolicy', 'AWS::IAM::ManagedPolicy']
+  const attachesToDeployRole = (properties: any) =>
+    [...(properties?.Roles ?? []), properties?.RoleName]
+      .filter(Boolean)
+      .some((target: any) => JSON.stringify(target).includes('GitHubDeployRole'))
+
+  for (const resource of Object.values(template.Resources) as any[]) {
+    if (!ATTACHABLE_POLICY_TYPES.includes(resource.Type)) continue
+    if (!attachesToDeployRole(resource.Properties)) continue
+    statements.push(...(resource.Properties?.PolicyDocument?.Statement ?? []))
+  }
+
+  assert.ok(statements.length > 0, 'the deploy role has no policy statements to check')
   const asArray = (value: any) => (Array.isArray(value) ? value : [value])
 
   // No statement may grant either service account-wide again.
@@ -911,19 +1138,9 @@ test('the deploy role cannot reach another stage in the SST backing store', () =
   const parameters = statements.find((statement: any) => statement.Sid === 'SstParametersForThisStage')
   assert.ok(parameters, 'the stage-scoped parameter grant is missing')
 
-  /*
-   * /sst/bootstrap names the state and asset buckets every stage shares, and it is read before SST
-   * knows its stage, so it cannot be stage-scoped — which makes it the one parameter a stage must not
-   * be able to write. Rewriting it repoints every other stage's state; deleting it breaks them all.
-   */
-  const sharedBootstrap = '/sst/bootstrap'
   for (const statement of statements) {
-    const touchesSharedBootstrap = asArray(statement.Resource).some(
-      (resource: any) => typeof resource === 'string' && resource.endsWith(`parameter${sharedBootstrap}`),
-    )
-    if (!touchesSharedBootstrap) continue
-    const mutating = asArray(statement.Action).filter((action: string) => !/^ssm:(Get|List|Describe)/.test(action))
-    assert.deepEqual(mutating, [], `${statement.Sid} may not mutate the shared ${sharedBootstrap}`)
+    const mutating = sharedBootstrapMutations(statement)
+    assert.deepEqual(mutating, [], `${statement.Sid} may not mutate the shared ${SHARED_BOOTSTRAP_PARAMETER}`)
   }
   const passphrase = asArray(parameters.Resource).find((resource: string) => resource.includes('/sst/passphrase/'))
   assert.ok(

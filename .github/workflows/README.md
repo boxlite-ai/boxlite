@@ -247,12 +247,15 @@ compiles neither component.
 
 Required GitHub configuration:
 
-- Environment variables `AWS_ACCOUNT_ID` and `AWS_REGION`, per stage. The first is what
-  the deploy workflows compose
-  `arn:aws:iam::<id>:role/boxlite-<stage>-github-deploy`. It cannot come from the
-  stage's secret store like everything else, because `configure-aws-credentials`
-  reads it before any AWS credentials exist. The region is a literal in the
-  workflows, pinned to `DEFAULT_AWS_REGION` by a test.
+- Environment variables `AWS_ACCOUNT_ID` and `AWS_REGION`, per stage. Neither can come
+  from the stage's secret store like everything else, because
+  `configure-aws-credentials` reads both before any AWS credentials exist.
+  - `AWS_ACCOUNT_ID` is **required**. The workflows compose
+    `arn:aws:iam::<id>:role/boxlite-<stage>-github-deploy` from it; only the account id
+    is unknown, since the role name follows from the stage.
+  - `AWS_REGION` is **optional**, and only for a stage outside the default. The
+    workflows fall back to `DEFAULT_AWS_REGION` as a literal, pinned to the code by a
+    test; set the variable when the stage lives elsewhere.
 
 - Environment secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_DEFAULT_ACCOUNT_ID`,
   per stage. These cannot come from the SST secret store: reading it initializes the
