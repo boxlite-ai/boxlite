@@ -761,7 +761,11 @@ function deployGithubDeployRoleStack({ awsCliPath, region, stage, repo }: any) {
 }
 
 /*
- * The two variables GitHub still has to hold, and why neither can live in the store.
+ * The two variables written on GitHub's side — AWS_ACCOUNT_ID, which a deploy cannot do without, and
+ * AWS_REGION, which only a stage outside the default region needs — and why neither can live in the
+ * store. Bootstrap writes both regardless: it knows the region it just deployed into, and stating it
+ * explicitly costs nothing, while leaving it to the workflows' literal default is silently wrong for
+ * exactly the stage that is hardest to debug.
  *
  * (The stage's Environment also carries the two Cloudflare secrets — storeCloudflareCredential — for
  * a different reason: reading the store initializes that provider.)
