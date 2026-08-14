@@ -2,7 +2,8 @@
 
 This catalog lists the interfaces registered by the applications in this
 directory. It covers HTTP, WebSocket, CONNECT, OTLP, and health interfaces;
-each entry names the owning service and what the interface does.
+each entry names the owning service and what the interface does. Route tables
+are collapsed by default — expand a summary line to see its routes.
 
 The inventory is implementation-grounded:
 
@@ -23,16 +24,37 @@ service does not currently register, including snapshots, clone, export,
 import, images, and runtime-wide metrics. They are intentionally absent below;
 `GET /api/v1/config` reports snapshots, clone, export, and import as disabled.
 
+## Services at a glance
+
+| API                                                                       | Service               | Base path or host                               | Deployed port            |
+| ------------------------------------------------------------------------- | --------------------- | ----------------------------------------------- | ------------------------ |
+| [Control-plane API](#control-plane-api)                                   | `apps/api`            | `/api`                                          | `3000`                   |
+| [Hosted BoxLite-compatible API](#hosted-boxlite-compatible-api)           | `apps/api`            | `/api/v1`                                       | `3000`                   |
+| [Runner API](#runner-api)                                                 | `apps/runner`         | `/`                                             | `3003`                   |
+| [Preview proxy API](#preview-proxy-api)                                   | `apps/proxy`          | `proxy.<domain>`, `<port>-<box>.proxy.<domain>` | `4000`                   |
+| [Telemetry collector API](#telemetry-collector-api)                       | `apps/otel-collector` | OTLP/HTTP and health listeners                  | `4318`, `13133`, `13132` |
+| [Services without a first-party API](#services-without-a-first-party-api) | remaining apps        | —                                               | —                        |
+
+Ports are the values used in deployments. Service ports and the collector's
+OTLP and HTTP health ports come from
+[`settings.ts`](./infra/stack/settings.ts); the collector's gRPC health port
+comes from its own [`config.yaml`](./otel-collector/config.yaml). Where an
+in-code default differs, the section notes it.
+
 ## Control-plane API
 
-**Service:** `apps/api` · **Base path:** `/api` · **Default port:** `3000`
+**Service:** `apps/api` · **Base path:** `/api` · **Port:** `3000` in
+deployments (`PORT` environment variable; no in-code default)
 
 This is the hosted product API used by the dashboard, SDKs, CLI, runners, and
 internal services. Authentication and authorization vary by route; the health
 and configuration discovery routes are public, while resource routes enforce
-user, organization, runner, or admin credentials.
+user, organization, runner, or admin credentials. Besides the routes below,
+the same process statically serves the dashboard single-page app at `/` and
+runner binaries under `/runner-amd64`; both exclude `/api` paths.
 
-### Discovery and API keys
+<details>
+<summary><b>Discovery and API keys</b> · 7 routes</summary>
 
 | Method   | Path                            | What it does                                                   |
 | -------- | ------------------------------- | -------------------------------------------------------------- |
@@ -44,7 +66,10 @@ user, organization, runner, or admin credentials.
 | `DELETE` | `/api/api-keys/{name}`          | Deletes the caller's API key by name.                          |
 | `DELETE` | `/api/api-keys/{userId}/{name}` | Deletes a named API key belonging to a specified user.         |
 
-### Users and authentication
+</details>
+
+<details>
+<summary><b>Users and authentication</b> · 10 routes</summary>
 
 | Method   | Path                                                     | What it does                                   |
 | -------- | -------------------------------------------------------- | ---------------------------------------------- |
@@ -59,7 +84,10 @@ user, organization, runner, or admin credentials.
 | `POST`   | `/api/users/mfa/sms/enroll`                              | Enrolls the user in SMS MFA.                   |
 | `GET`    | `/api/auth/end-session`                                  | Starts OIDC RP-initiated logout.               |
 
-### Organizations, membership, and invitations
+</details>
+
+<details>
+<summary><b>Organizations, membership, and invitations</b> · 23 routes</summary>
 
 | Method   | Path                                                                     | What it does                                             |
 | -------- | ------------------------------------------------------------------------ | -------------------------------------------------------- |
@@ -87,7 +115,10 @@ user, organization, runner, or admin credentials.
 | `PUT`    | `/api/organizations/{organizationId}/invitations/{invitationId}`         | Changes a pending invitation.                            |
 | `POST`   | `/api/organizations/{organizationId}/invitations/{invitationId}/cancel`  | Cancels a pending invitation.                            |
 
-### Roles and regions
+</details>
+
+<details>
+<summary><b>Roles and regions</b> · 11 routes</summary>
 
 | Method   | Path                                                 | What it does                                 |
 | -------- | ---------------------------------------------------- | -------------------------------------------- |
@@ -103,7 +134,10 @@ user, organization, runner, or admin credentials.
 | `POST`   | `/api/regions/{id}/regenerate-proxy-api-key`         | Regenerates the region proxy's API key.      |
 | `GET`    | `/api/shared-regions`                                | Lists shared regions.                        |
 
-### Boxes and preview access
+</details>
+
+<details>
+<summary><b>Boxes and preview access</b> · 19 routes</summary>
 
 | Method | Path                                                                    | What it does                                          |
 | ------ | ----------------------------------------------------------------------- | ----------------------------------------------------- |
@@ -127,7 +161,10 @@ user, organization, runner, or admin credentials.
 | `GET`  | `/api/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
 | `GET`  | `/api/preview/{signedPreviewToken}/{port}/box-id`                       | Resolves a signed preview token and port to a box ID. |
 
-### Volumes and object storage
+</details>
+
+<details>
+<summary><b>Volumes and object storage</b> · 6 routes</summary>
 
 | Method   | Path                              | What it does                                       |
 | -------- | --------------------------------- | -------------------------------------------------- |
@@ -138,7 +175,10 @@ user, organization, runner, or admin credentials.
 | `GET`    | `/api/volumes/by-name/{name}`     | Gets a volume by name.                             |
 | `GET`    | `/api/object-storage/push-access` | Returns temporary credentials for pushing objects. |
 
-### Runners and jobs
+</details>
+
+<details>
+<summary><b>Runners and jobs</b> · 14 routes</summary>
 
 | Method   | Path                           | What it does                                                   |
 | -------- | ------------------------------ | -------------------------------------------------------------- |
@@ -157,7 +197,10 @@ user, organization, runner, or admin credentials.
 | `GET`    | `/api/jobs/{jobId}`            | Gets a job by ID.                                              |
 | `POST`   | `/api/jobs/{jobId}/status`     | Reports job progress, success, or failure.                     |
 
-### Administration
+</details>
+
+<details>
+<summary><b>Administration</b> · 6 routes</summary>
 
 | Method   | Path                                 | What it does                                   |
 | -------- | ------------------------------------ | ---------------------------------------------- |
@@ -168,35 +211,52 @@ user, organization, runner, or admin credentials.
 | `PATCH`  | `/api/admin/runners/{id}/scheduling` | Changes runner scheduling as an administrator. |
 | `POST`   | `/api/admin/box/{boxId}/recover`     | Requests box recovery as an administrator.     |
 
-### Webhooks, audit, telemetry, and health
+</details>
 
-| Method | Path                                                                         | What it does                                                             |
-| ------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `POST` | `/api/webhooks/organizations/{organizationId}/app-portal-access`             | Creates access to the organization's Svix consumer portal.               |
-| `POST` | `/api/webhooks/organizations/{organizationId}/send`                          | Sends a webhook event to the organization.                               |
-| `GET`  | `/api/webhooks/organizations/{organizationId}/messages/{messageId}/attempts` | Lists delivery attempts for a webhook message.                           |
-| `GET`  | `/api/webhooks/status`                                                       | Reports webhook service status.                                          |
-| `GET`  | `/api/webhooks/organizations/{organizationId}/initialization-status`         | Reports whether organization webhooks are initialized.                   |
-| `POST` | `/api/webhooks/organizations/{organizationId}/initialize`                    | Initializes webhooks for an organization.                                |
-| `GET`  | `/api/audit`                                                                 | Lists audit records available to the caller.                             |
-| `GET`  | `/api/audit/organizations/{organizationId}`                                  | Lists one organization's audit records.                                  |
-| `GET`  | `/api/box/{boxId}/telemetry/logs`                                            | Queries logs for a box.                                                  |
-| `GET`  | `/api/box/{boxId}/telemetry/traces`                                          | Queries traces for a box.                                                |
-| `GET`  | `/api/box/{boxId}/telemetry/traces/{traceId}`                                | Gets spans for one trace.                                                |
-| `GET`  | `/api/box/{boxId}/telemetry/metrics`                                         | Queries metrics for a box.                                               |
-| `GET`  | `/api/organizations/otel-config/by-box-auth-token/{authToken}`               | Resolves a box token to its organization telemetry export configuration. |
-| `GET`  | `/api/health`                                                                | Reports process liveness.                                                |
-| `GET`  | `/api/health/ready`                                                          | Checks authenticated readiness, including Postgres and Redis.            |
+<details>
+<summary><b>Webhooks and audit</b> · 8 routes</summary>
 
-### API documentation
+| Method | Path                                                                         | What it does                                               |
+| ------ | ---------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `POST` | `/api/webhooks/organizations/{organizationId}/app-portal-access`             | Creates access to the organization's Svix consumer portal. |
+| `POST` | `/api/webhooks/organizations/{organizationId}/send`                          | Sends a webhook event to the organization.                 |
+| `GET`  | `/api/webhooks/organizations/{organizationId}/messages/{messageId}/attempts` | Lists delivery attempts for a webhook message.             |
+| `GET`  | `/api/webhooks/status`                                                       | Reports webhook service status.                            |
+| `GET`  | `/api/webhooks/organizations/{organizationId}/initialization-status`         | Reports whether organization webhooks are initialized.     |
+| `POST` | `/api/webhooks/organizations/{organizationId}/initialize`                    | Initializes webhooks for an organization.                  |
+| `GET`  | `/api/audit`                                                                 | Lists audit records available to the caller.               |
+| `GET`  | `/api/audit/organizations/{organizationId}`                                  | Lists one organization's audit records.                    |
 
-| Method | Path        | What it does                                            |
-| ------ | ----------- | ------------------------------------------------------- |
-| `GET`  | `/api`      | Serves the interactive Swagger UI.                      |
-| `GET`  | `/api-json` | Returns the generated product OpenAPI document as JSON. |
-| `GET`  | `/api-yaml` | Returns the generated product OpenAPI document as YAML. |
+</details>
 
-### Realtime and asynchronous interfaces
+<details>
+<summary><b>Box telemetry</b> · 5 routes</summary>
+
+| Method | Path                                                           | What it does                                                             |
+| ------ | -------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `GET`  | `/api/box/{boxId}/telemetry/logs`                              | Queries logs for a box.                                                  |
+| `GET`  | `/api/box/{boxId}/telemetry/traces`                            | Queries traces for a box.                                                |
+| `GET`  | `/api/box/{boxId}/telemetry/traces/{traceId}`                  | Gets spans for one trace.                                                |
+| `GET`  | `/api/box/{boxId}/telemetry/metrics`                           | Queries metrics for a box.                                               |
+| `GET`  | `/api/organizations/otel-config/by-box-auth-token/{authToken}` | Resolves a box token to its organization telemetry export configuration. |
+
+</details>
+
+<details>
+<summary><b>Health and API documentation</b> · 5 routes</summary>
+
+| Method | Path                | What it does                                                  |
+| ------ | ------------------- | ------------------------------------------------------------- |
+| `GET`  | `/api/health`       | Reports process liveness.                                     |
+| `GET`  | `/api/health/ready` | Checks authenticated readiness, including Postgres and Redis. |
+| `GET`  | `/api`              | Serves the interactive Swagger UI.                            |
+| `GET`  | `/api-json`         | Returns the generated product OpenAPI document as JSON.       |
+| `GET`  | `/api-yaml`         | Returns the generated product OpenAPI document as YAML.       |
+
+</details>
+
+<details>
+<summary><b>Realtime and asynchronous interfaces</b> · Socket.IO, 9 events, 1 Kafka topic</summary>
 
 | Protocol                 | Path, topic, or event          | What it does                                                                                                                           |
 | ------------------------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
@@ -212,9 +272,12 @@ user, organization, runner, or admin credentials.
 | Socket.IO event          | `runner.unschedulable.updated` | Notifies an organization that runner scheduling availability changed.                                                                  |
 | Kafka event              | `audit-logs` topic             | When the API worker and Kafka are enabled, consumes audit-log events and persists them, with bounded retries and dead-letter handling. |
 
+</details>
+
 ## Hosted BoxLite-compatible API
 
-**Service:** `apps/api` · **Base path:** `/api/v1` · **Default port:** `3000`
+**Service:** `apps/api` · **Base path:** `/api/v1` · **Port:** `3000` in
+deployments (shared with the control-plane API)
 
 Most resource paths accept both an unprefixed form and an organization-prefixed
 form. The tables write that as `[/{prefix}]`; clients can discover their prefix
@@ -223,14 +286,18 @@ combined bearer authentication. The box and volume resource routes also apply
 organization authorization; identity discovery at `GET /api/v1/me` can return
 `path_prefix: null` for an authenticated user with no organization membership.
 
-### Discovery
+<details>
+<summary><b>Discovery</b> · 2 routes</summary>
 
 | Method | Path             | What it does                                                               |
 | ------ | ---------------- | -------------------------------------------------------------------------- |
 | `GET`  | `/api/v1/config` | Reports which optional portable API capabilities are enabled.              |
 | `GET`  | `/api/v1/me`     | Returns the calling principal, path prefix, scopes, and credential expiry. |
 
-### Box lifecycle
+</details>
+
+<details>
+<summary><b>Box lifecycle</b> · 7 routes</summary>
 
 | Method   | Path                                     | What it does                                |
 | -------- | ---------------------------------------- | ------------------------------------------- |
@@ -242,7 +309,10 @@ organization authorization; identity discovery at `GET /api/v1/me` can return
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/start` | Starts a box and waits until it is running. |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/stop`  | Stops a box.                                |
 
-### Execution, files, metrics, and networking
+</details>
+
+<details>
+<summary><b>Execution, files, metrics, and networking</b> · 10 routes</summary>
 
 | Method   | Path                                                          | What it does                                            |
 | -------- | ------------------------------------------------------------- | ------------------------------------------------------- |
@@ -257,7 +327,14 @@ organization authorization; identity discovery at `GET /api/v1/me` can return
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/metrics`                    | Returns metrics for one box without marking it active.  |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Returns the runner tunnel URI for a guest TCP port.     |
 
-### Volumes
+The exec, signal, resize, files, and metrics handlers are registered as
+catch-all reverse proxies to the box's assigned runner; the methods shown are
+the portable contract, which the runner's own route registration enforces.
+
+</details>
+
+<details>
+<summary><b>Volumes</b> · 4 routes</summary>
 
 | Method   | Path                                                    | What it does                                  |
 | -------- | ------------------------------------------------------- | --------------------------------------------- |
@@ -266,39 +343,49 @@ organization authorization; identity discovery at `GET /api/v1/me` can return
 | `GET`    | `/api/v1[/{prefix}]/volumes/{volumeId}`                 | Gets a volume by ID.                          |
 | `DELETE` | `/api/v1[/{prefix}]/volumes/{volumeId}?force={boolean}` | Deletes a volume, optionally forcing removal. |
 
+</details>
+
 ## Runner API
 
-**Service:** `apps/runner` · **Base path:** `/` · **Default port:** `3003`
+**Service:** `apps/runner` · **Base path:** `/` · **Port:** `3003` in
+deployments (`API_PORT` environment variable; in-code default `8080`)
 
 There is one runner daemon per EC2 instance. `GET /` and the development-only
 Swagger UI are public; every other route requires the runner bearer token.
 BoxLite is embedded in the runner, so these calls operate on the local BoxLite
 runtime and its microVMs.
 
-### Health and introspection
+<details>
+<summary><b>Health and introspection</b> · 4 routes</summary>
 
-| Method | Path       | What it does                                        |
-| ------ | ---------- | --------------------------------------------------- |
-| `GET`  | `/`        | Reports runner process health.                      |
-| `GET`  | `/api/*`   | Serves the runner Swagger UI in development only.   |
-| `GET`  | `/metrics` | Exposes Prometheus runner metrics.                  |
-| `GET`  | `/info`    | Returns runner identity, version, and capabilities. |
+| Method | Path       | What it does                                          |
+| ------ | ---------- | ----------------------------------------------------- |
+| `GET`  | `/`        | Reports runner process health.                        |
+| `GET`  | `/api/*`   | Serves the runner Swagger UI in development only.     |
+| `GET`  | `/metrics` | Exposes Prometheus runner metrics.                    |
+| `GET`  | `/info`    | Reports runner health, resource metrics, and version. |
 
-### Box lifecycle and toolbox
+</details>
 
-| Method | Path                               | What it does                                                  |
-| ------ | ---------------------------------- | ------------------------------------------------------------- |
-| `POST` | `/boxes`                           | Creates a box in the embedded BoxLite runtime.                |
-| `GET`  | `/boxes/{boxId}`                   | Gets local box information.                                   |
-| `POST` | `/boxes/{boxId}/destroy`           | Destroys a local box.                                         |
-| `POST` | `/boxes/{boxId}/start`             | Starts a local box.                                           |
-| `POST` | `/boxes/{boxId}/stop`              | Stops a local box.                                            |
-| `POST` | `/boxes/{boxId}/recover`           | Recovers a local box.                                         |
-| `POST` | `/boxes/{boxId}/is-recoverable`    | Checks whether a local box can be recovered.                  |
-| `POST` | `/boxes/{boxId}/network-settings`  | Changes a local box's network settings.                       |
-| `ANY`  | `/boxes/{boxId}/toolbox/{path...}` | Reverse-proxies HTTP or WebSocket traffic to the box toolbox. |
+<details>
+<summary><b>Box lifecycle and toolbox</b> · 9 routes</summary>
 
-### Embedded BoxLite operations
+| Method | Path                               | What it does                                                                                    |
+| ------ | ---------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `POST` | `/boxes`                           | Creates a box in the embedded BoxLite runtime.                                                  |
+| `GET`  | `/boxes/{boxId}`                   | Gets local box information.                                                                     |
+| `POST` | `/boxes/{boxId}/destroy`           | Destroys a local box.                                                                           |
+| `POST` | `/boxes/{boxId}/start`             | Starts a local box.                                                                             |
+| `POST` | `/boxes/{boxId}/stop`              | Stops a local box.                                                                              |
+| `POST` | `/boxes/{boxId}/recover`           | Recovers a local box.                                                                           |
+| `POST` | `/boxes/{boxId}/is-recoverable`    | Checks whether a local box can be recovered.                                                    |
+| `POST` | `/boxes/{boxId}/network-settings`  | Changes a local box's network settings.                                                         |
+| `ANY`  | `/boxes/{boxId}/toolbox/{path...}` | Serves the box web terminal (xterm.js page and WebSocket shell); other paths return `410 Gone`. |
+
+</details>
+
+<details>
+<summary><b>Embedded BoxLite operations</b> · 10 routes</summary>
 
 | Method    | Path                                           | What it does                                          |
 | --------- | ---------------------------------------------- | ----------------------------------------------------- |
@@ -313,24 +400,34 @@ runtime and its microVMs.
 | `GET`     | `/v1/boxes/{boxId}/metrics`                    | Returns local box metrics.                            |
 | `CONNECT` | `/v1/boxes/{boxId}/network/tunnel?port={port}` | Opens a raw bidirectional TCP tunnel to a guest port. |
 
+</details>
+
 The runner Swagger files contain historical routes that are no longer
 registered by `server.go`; this catalog follows runtime registration.
 
 ## Preview proxy API
 
 **Service:** `apps/proxy` · **Base host:** `proxy.<domain>` and
-`<port>-<box>.proxy.<domain>` · **Default port:** `4000`
+`<port>-<box>.proxy.<domain>` · **Port:** `4000` in deployments (`PROXY_PORT`
+environment variable, required)
 
-The proxy is host-routed. Base-host utility routes are listed first; valid
-preview hosts route traffic to the matching box port on its runner.
+The proxy is host-routed: a host whose first label parses as `<port>-<box>`
+selects the preview forwarding paths, and any other host serves the base-host
+utility routes. The preview-warning acceptance route is handled before host
+routing, so it works on every host.
 
-| Method    | Host and path                                                  | What it does                                                                                     |
-| --------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `GET`     | `proxy.<domain>/health`                                        | Reports proxy health and version.                                                                |
-| `GET`     | `proxy.<domain>/callback`                                      | Completes the OIDC preview authentication flow.                                                  |
-| `POST`    | `proxy.<domain>/accept-boxlite-preview-warning?redirect={url}` | Records preview-warning acceptance and redirects the browser.                                    |
-| `ANY`     | `<port>-<box>.proxy.<domain>/{path...}`                        | Reverse-proxies HTTP and WebSocket traffic to the selected box port after preview access checks. |
-| `CONNECT` | `<port>-<box>.proxy.<domain>`                                  | Authorizes the preview and opens a bidirectional TCP tunnel through the runner.                  |
+<details>
+<summary><b>Proxy routes</b> · 5 routes</summary>
+
+| Method    | Host and path                                              | What it does                                                                                     |
+| --------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `GET`     | `proxy.<domain>/health`                                    | Reports proxy health and version.                                                                |
+| `GET`     | `proxy.<domain>/callback`                                  | Completes the OIDC preview authentication flow.                                                  |
+| `POST`    | `<any host>/accept-boxlite-preview-warning?redirect={url}` | Records preview-warning acceptance and redirects the browser.                                    |
+| `ANY`     | `<port>-<box>.proxy.<domain>/{path...}`                    | Reverse-proxies HTTP and WebSocket traffic to the selected box port after preview access checks. |
+| `CONNECT` | `<port>-<box>.proxy.<domain>`                              | Opens a bidirectional TCP tunnel through the runner; allowed for public boxes only.              |
+
+</details>
 
 ## Telemetry collector API
 
@@ -339,6 +436,10 @@ preview hosts route traffic to the matching box port on its runner.
 
 These VPC-internal interfaces receive box and host telemetry, resolve each box
 token to its organization export configuration, and expose collector health.
+Only the OTLP/HTTP receiver is enabled; OTLP gRPC is not configured.
+
+<details>
+<summary><b>Collector interfaces</b> · 6 interfaces</summary>
 
 | Protocol         | Path or service         | What it does                                                 |
 | ---------------- | ----------------------- | ------------------------------------------------------------ |
@@ -349,7 +450,12 @@ token to its organization export configuration, and expose collector health.
 | `GET` HTTP       | `:13133/health/config`  | Returns the health extension's component configuration view. |
 | gRPC             | `:13132` health service | Serves gRPC health checks.                                   |
 
+</details>
+
 ## Services without a first-party API
+
+<details>
+<summary><b>Non-API services and bundled tools</b> · 10 entries</summary>
 
 | Service                     | Role                                                                                                                                                                                                  |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -362,8 +468,11 @@ token to its organization export configuration, and expose collector health.
 | `apps/hack`, `apps/scripts` | Development and code-generation utilities; they do not run application APIs.                                                                                                                          |
 | Jaeger                      | Bundled third-party trace ingestion and UI, not a BoxLite-owned API.                                                                                                                                  |
 | PgAdmin                     | Bundled third-party database administration UI, internal only.                                                                                                                                        |
-| MailDev                     | Bundled third-party SMTP test service and UI, internal only.                                                                                                                                          |
+| MailDev                     | Bundled third-party SMTP test service and UI in deployed environments; not part of the local stack.                                                                                                   |
 
-Generated client libraries under `apps/libs` consume APIs; they are not
-services. A generated client specification alone is therefore not treated as a
-live endpoint unless a runtime application registers the route.
+Libraries under `apps/libs` — generated API clients and shared Go packages —
+are consumed by the services above; they are not services. A generated client
+specification alone is therefore not treated as a live endpoint unless a
+runtime application registers the route.
+
+</details>
