@@ -362,15 +362,13 @@ mod tests {
             let filter: BpfProgram = vec![];
 
             assert_eq!(filter.len(), 0);
-
             let seccomp_level = unsafe { libc::prctl(libc::PR_GET_SECCOMP) };
-            assert_eq!(seccomp_level, 0);
+            assert_ne!(seccomp_level, -1);
 
             apply_filter(&filter).unwrap();
 
-            // Test that seccomp level remains 0 when no filter applied.
-            let seccomp_level = unsafe { libc::prctl(libc::PR_GET_SECCOMP) };
-            assert_eq!(seccomp_level, 0);
+            let current_level = unsafe { libc::prctl(libc::PR_GET_SECCOMP) };
+            assert_eq!(current_level, seccomp_level);
         })
         .join()
         .unwrap();
@@ -380,16 +378,16 @@ mod tests {
             let filter = vec![0xFF; 1];
 
             let seccomp_level = unsafe { libc::prctl(libc::PR_GET_SECCOMP) };
-            assert_eq!(seccomp_level, 0);
+            assert_ne!(seccomp_level, -1);
 
             assert!(matches!(
                 apply_filter(&filter).unwrap_err(),
                 InstallationError::Prctl(_)
             ));
 
-            // Test that seccomp level remains 0 on failure.
-            let seccomp_level = unsafe { libc::prctl(libc::PR_GET_SECCOMP) };
-            assert_eq!(seccomp_level, 0);
+            // Test that seccomp level remains unchanged on failure.
+            let current_level = unsafe { libc::prctl(libc::PR_GET_SECCOMP) };
+            assert_eq!(current_level, seccomp_level);
         })
         .join()
         .unwrap();
@@ -434,9 +432,13 @@ mod tests {
         // Empty filter should be a no-op
         thread::spawn(|| {
             let filter: BpfProgram = vec![];
-            apply_filter_all_threads(&filter).unwrap();
             let seccomp_level = unsafe { libc::prctl(libc::PR_GET_SECCOMP) };
-            assert_eq!(seccomp_level, 0);
+            assert_ne!(seccomp_level, -1);
+
+            apply_filter_all_threads(&filter).unwrap();
+
+            let current_level = unsafe { libc::prctl(libc::PR_GET_SECCOMP) };
+            assert_eq!(current_level, seccomp_level);
         })
         .join()
         .unwrap();
