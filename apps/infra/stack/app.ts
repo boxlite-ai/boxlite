@@ -4,12 +4,14 @@
 import { PRODUCTION_STAGE } from './settings.js'
 
 export async function configureApp(input: { stage?: string } | undefined) {
-  const { loadDeploymentEnvironment, resolveAwsRegion } = await import('../deployment/environment.js')
-  loadDeploymentEnvironment()
+  // No dotenv load here: deployment/sst.ts is the single place that composes the deploy environment
+  // (local .env knobs, then the stage's SST secret store), and this process inherits the result.
+  // Loading .env again would reintroduce a second answer for keys the store now owns.
+  const { SST_APP_NAME, resolveAwsRegion } = await import('../deployment/environment.js')
   const REGION = resolveAwsRegion()
 
   return {
-    name: 'boxlite',
+    name: SST_APP_NAME,
     removal: input?.stage === PRODUCTION_STAGE ? ('retain' as const) : ('remove' as const),
     home: 'aws' as const,
     providers: {

@@ -99,9 +99,13 @@ gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=true   # deplo
 ```
 
 `npm run bootstrap` is safe to re-run. It prompts once per stage for the
-Cloudflare token and `OIDC_CLIENT_ID`, then stores them in SSM and the SST
-secret store; `--force` replaces already-seeded values. Its full flag list is in
-the script's header comment.
+Cloudflare token and `OIDC_CLIENT_ID`, and loads your `.env` into the stage's SST
+secret store alongside `OIDC_CLIENT_ID`. The Cloudflare pair goes to SSM and to
+the stage's GitHub Environment instead, because reading the store initializes the
+Cloudflare provider. On that Environment it also sets the `AWS_ACCOUNT_ID` and
+`AWS_REGION` variables, which the deploy workflow needs before it has any AWS
+credentials. `--force` re-prompts for an already-seeded Cloudflare credential. Its
+full flag list is in the script's header comment.
 
 A deploy takes 10–15 minutes and prints the service URLs. On a transient
 registry error, just rerun — SST resumes from the failed step.
@@ -213,8 +217,9 @@ runs before deployment.
 
 The workflows are manual/serialized, restricted to `main`, and bound to protected
 GitHub Environments. GitHub OIDC supplies short-lived AWS credentials; no AWS
-access keys are stored in GitHub. `DEPLOY_ENV` materializes the stage's gitignored
-`.env` only for the job and is deleted even if deployment fails.
+access keys are stored in GitHub, and no stage configuration either — a job reads
+that from the stage's SST secret store using the credentials it just assumed, so
+nothing is written to disk and there is no `.env` for a failed job to leave behind.
 
 `bootstrap/aws/github-deploy-role.yaml` bootstraps three things that must exist **before** an
 SST deploy: the OIDC role, the immutable Api ECR repository, and the private
@@ -232,24 +237,63 @@ they differ. Keep required reviewers enabled on each Environment.
 
 ## Secrets & credentials
 
-Nothing secret lives in git, but there are **two** control planes, and
-offboarding means revoking both. Most secrets live in AWS, where anyone who can
-deploy can read them. The rest are GitHub Environment secrets (see the table
-below), reachable by anyone who can administer the repository or run the
-workflow — revoking AWS access does not touch those. Secrets are per-stage; seed
+Nothing secret lives in git. A stage's configuration and its application secrets
+live in one place — its SST secret store, encrypted in the SST state bucket and
+readable by exactly the people who can already deploy that stage. The Cloudflare
+provider credentials are the one exception and are reachable two other ways, so
+offboarding still means revoking GitHub as well as AWS. Secrets are per-stage; seed
 each stage you run.
 
 | What | Stored in | Set by |
 | --- | --- | --- |
 | App secrets (`OIDC_CLIENT_ID`, Auth0 Management API, Svix, PostHog, `USAGE_EXPORT_TOKEN`) | SST secret store | `npm run bootstrap`; others via `npm run sst -- secret set <NAME> --stage <stage>` reading stdin |
-| Cloudflare creds (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`) | AWS SSM SecureString, or GitHub Environment secrets (which win) | `npm run bootstrap` |
-| Stage config (`STACK_DOMAIN`, `OIDC_*`, toggles) | GitHub Environment secret `DEPLOY_ENV` | `npm run bootstrap` |
+| Cloudflare creds (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`) | AWS SSM SecureString for local use; GitHub Environment secrets for CI (which win) | `npm run bootstrap` |
+| Stage config (`STACK_DOMAIN`, `OIDC_*`, toggles) | SST secret store | `npm run bootstrap`, from your local `.env` |
 
 Never pass secret values as command arguments or echo them. Rotate on any
 suspected disclosure. `npm run secrets -- --stage dev` lists what is set.
 
-Run SST through the npm scripts, never bare `npx sst` — the wrapper loads
-Cloudflare creds from SSM, enforces the Runner safety policy, and scrubs
+`.env` is bootstrap's input, not a deploy's. Bootstrap loads it into the store, and
+`deployment/sst.ts` reads it back into the environment before invoking sst, so a
+local `npm run deploy` and a CI deploy resolve the same values from the same place.
+Editing `.env` therefore changes nothing until you rerun bootstrap.
+
+Two rules narrow what the store may put into a deploy's environment, because
+`sst secret set` accepts any name from anyone who can deploy:
+
+- only keys named by the `BOXLITE_STAGE_CONFIG` manifest bootstrap writes. That is
+  also what makes a key you delete from `.env` stop applying: `sst secret load`
+  merges, so the old value stays in the store and simply goes unread. Tidy it up
+  with `npm run sst -- secret remove <NAME> --stage <stage>` when you care.
+- never local credential context (`AWS_PROFILE`, `AWS_CLI_PATH`) or the artifact
+  selectors CI owns — see `FORBIDDEN_DEPLOYMENT_KEYS` in
+  `deployment/validate-environment.ts`.
+
+A variable already set in the environment always wins over the store. That is how
+the deploy workflow keeps control of the selectors it sets, and how you override a
+stored value for a single command.
+
+The Cloudflare credentials cannot join the store, for two independent reasons.
+Reading the store initializes every provider `sst.config.ts` declares, Cloudflare
+included — `sst secret list` gets as far as the bootstrap state and then exits with
+`Cloudflare API not initialized` — so a token kept there would be needed in order to
+read itself. CI passes the two values as Environment secrets rather than reading the SSM copy.
+Whether the deploy role could read it is untested: it holds `ssm:GetParameter` and no
+identity-based `kms:Decrypt`, but `alias/aws/ssm` is an AWS-managed key whose key policy
+may admit the account via `kms:ViaService`, and the role trusts only the GitHub OIDC
+principal so it cannot be assumed locally to check. Measuring that from inside a job is
+what would let the Environment secrets go away.
+
+Otherwise two things are configured on the GitHub side, per stage:
+`AWS_ACCOUNT_ID` — from which the workflows compose
+`arn:aws:iam::<id>:role/boxlite-<stage>-github-deploy`. It cannot live in the store,
+because `configure-aws-credentials` reads it before any AWS credentials exist. Each
+stage's GitHub Environment must still exist under exactly the stage name — the trust
+policy pins `repo:<owner>/<repo>:environment:<stage>` — and that is where required
+reviewers are enforced.
+
+Run SST through the npm scripts, never bare `npx sst` — the wrapper loads the stage
+configuration from the secret store, enforces the Runner safety policy, and scrubs
 Pulumi event logs that can contain provider credentials. `sst dev` is disabled.
 
 ### Cloudflare API token

@@ -9,12 +9,11 @@
     "test": "tsx --test artifacts/*.test.ts bootstrap/*.test.ts deployment/*.test.ts policies/runner/*.test.ts runner/*.test.ts runner/model/*.test.ts shared/*.test.ts stack/*.test.ts",
     "typecheck": "tsc --noEmit",
     "sst": "tsx deployment/sst.ts",
-    "secrets": "tsx deployment/sst.ts secret list",
+    "secrets": "tsx deployment/secret-names.ts",
     "runner:update": "tsx runner/update.ts",
     "login": "tsx bootstrap/login.ts",
     "bootstrap": "tsx bootstrap/bootstrap.ts",
     "verify-deploy-role": "tsx deployment/verify-role.ts",
-    "validate-environment": "tsx deployment/validate-environment.ts",
     "validate-preview": "tsx deployment/preview.ts",
     "runner:build-artifact": "tsx artifacts/runner-build.ts"
   },
