@@ -148,7 +148,7 @@ fn current_start_time(pid: u32) -> Option<u64> {
     parse_stat(&stat).map(|(_, start_time)| start_time)
 }
 
-/// Collect every descendant of `root_pid` from `/proc` (breadth-first), each
+/// Collect every descendant of `root_pid` from `/proc` (depth-first), each
 /// with its start-time so later signals can verify identity.
 ///
 /// Captured at teardown *before* the launcher is signalled: a detached box's

@@ -58,9 +58,13 @@ fn stop_reaps_whole_box_tree_not_just_launcher() {
     // `rm --force`, which re-enters the same non-reaping stop path under test —
     // leaking the very libkrun VM the assert just caught. This floor SIGKILLs the
     // captured tree directly (never via boxlite) so the reproducer cleans up after
-    // itself. Fires only on panic: on the leak path the survivors are still alive
-    // so their pids are current, avoiding any SIGKILL of a recycled pid.
-    let _floor = KillFloor(tree.clone());
+    // itself. It carries the box id because part of the captured tree is already
+    // dead by then (`stop` does kill the launcher) and those pid numbers can be
+    // recycled during the survivor poll below — see `KillFloor`.
+    let _floor = KillFloor {
+        pids: tree.clone(),
+        box_id: box_id.clone(),
+    };
 
     // The leak is physically reproducible ONLY where `cgroup.kill` can't stand in
     // for the fallback — i.e. no cgroup delegation. On a delegated host the
@@ -130,13 +134,20 @@ fn box_processes(box_id: &str) -> Vec<u32> {
         else {
             continue;
         };
-        if let Ok(cmdline) = std::fs::read(entry.path().join("cmdline"))
-            && String::from_utf8_lossy(&cmdline).contains(box_id)
-        {
+        if cmdline_mentions(pid, box_id) {
             pids.push(pid);
         }
     }
     pids
+}
+
+/// Does `/proc/<pid>/cmdline` still name this box? The identity signal
+/// [`box_processes`] selects on, reused by [`KillFloor`] to re-verify a captured
+/// pid before signalling it.
+#[cfg(target_os = "linux")]
+fn cmdline_mentions(pid: u32, box_id: &str) -> bool {
+    std::fs::read(format!("/proc/{pid}/cmdline"))
+        .is_ok_and(|cmdline| String::from_utf8_lossy(&cmdline).contains(box_id))
 }
 
 /// Alive = `/proc/<pid>` exists and the process is not a zombie.
@@ -152,12 +163,30 @@ fn pid_alive(pid: u32) -> bool {
     }
 }
 
-/// SIGKILLs a captured pid set on drop — but only when the test is unwinding, so
-/// it runs exactly on the leak (assert-panicked) path where the box processes are
-/// still alive. Independent of `boxlite stop`/`rm`, so a pre-fix red run can't
-/// orphan the leaked VM through the same buggy path it's testing.
+/// SIGKILLs a captured pid set on drop, but only when the test is unwinding — so
+/// it runs exactly on the leak (assert-panicked) path. Independent of `boxlite
+/// stop`/`rm`, so a pre-fix red run can't orphan the leaked VM through the same
+/// buggy path it's testing.
+///
+/// The identity re-check is not optional. The set is the *whole* captured tree,
+/// and by the time this runs `stop` has already killed part of it — the launcher
+/// at least — after which the survivor poll waits up to 10s. The kernel can hand
+/// those freed pid numbers to unrelated processes in that window, so signalling
+/// them blind would kill a bystander. This mirrors the start-time guard the
+/// production reap uses (`jailer::signal_live`); here the box id in
+/// `/proc/<pid>/cmdline` is the identity, which needs no extra captured state.
+///
+/// Two limits, both deliberate. The check is a *class* identity — "belongs to
+/// this box" — not the instance identity the production guard gets from a
+/// start-time; that is the right granularity for a floor whose job is to kill
+/// anything of this box. And a window remains between the check and the kill,
+/// the same residual `signal_live` documents; it narrows the exposure from the
+/// multi-second poll to one syscall gap rather than closing it.
 #[cfg(target_os = "linux")]
-struct KillFloor(Vec<u32>);
+struct KillFloor {
+    pids: Vec<u32>,
+    box_id: String,
+}
 
 #[cfg(target_os = "linux")]
 impl Drop for KillFloor {
@@ -165,7 +194,10 @@ impl Drop for KillFloor {
         if !std::thread::panicking() {
             return;
         }
-        for &pid in &self.0 {
+        for &pid in &self.pids {
+            if !cmdline_mentions(pid, &self.box_id) {
+                continue; // exited, or the number was recycled to a stranger
+            }
             let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
         }
     }
