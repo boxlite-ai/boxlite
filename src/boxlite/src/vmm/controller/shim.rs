@@ -173,16 +173,33 @@ impl VmmHandlerTrait for ShimHandler {
     }
 
     fn stop(&mut self) -> BoxliteResult<()> {
-        // Graceful shutdown of the recorded pid first, then sweep the box's
-        // whole tree. `graceful_stop` only signals the recorded pid — the outer
-        // bwrap launcher — and a detached box's inner pid-ns tree (inner bwrap +
-        // shim + VM) outlives it, since #851 stopped applying `--die-with-parent`
-        // to detached boxes. The whole tree lives in the box's cgroup, so reap it
-        // by id — *after* graceful shutdown, so libkrun can flush its virtio-blk
-        // buffers first (a cgroup kill is a hard kill; reaping mid-flush risks
-        // qcow2 corruption). Best-effort and idempotent.
+        // `graceful_stop` only signals the recorded pid — the outer bwrap
+        // launcher — and a detached box's inner pid-ns tree (inner bwrap + shim +
+        // VM) outlives it, since #851 stopped applying `--die-with-parent` to
+        // detached boxes. Snapshot that tree *before* shutdown: once the launcher
+        // exits its children are reparented and can no longer be found from
+        // `self.pid`.
+        let box_tree = crate::jailer::collect_descendants(self.pid);
+
+        // Stop the recorded launcher (SIGTERM, wait, SIGKILL).
         let result = self.graceful_stop();
+
+        // Give the inner tree a graceful SIGTERM + bounded wait before any hard
+        // kill: for a detached box the shim is in its own session, so the
+        // launcher's shutdown above never reached it — this is the shim's only
+        // chance to flush libkrun's virtio-blk buffers. Reaping mid-flush risks
+        // qcow2 corruption. Runs before `reap_box` so the cgroup path flushes too.
+        const REAP_GRACE: std::time::Duration = std::time::Duration::from_millis(2000);
+        crate::jailer::terminate_and_wait(&box_tree, REAP_GRACE);
+
+        // Reap survivors. `reap_box` uses cgroup.kill (atomic, fork-safe) when the
+        // box owns a usable cgroup; rootless without cgroup delegation (WSL2 / CI
+        // / no-systemd, where the box cgroup can't be created or populated) it
+        // no-ops, so also SIGKILL the captured tree — killing the inner pid-ns
+        // init reaps the namespace. Both are idempotent, and `reap_pids` skips any
+        // pid already gone or recycled to an unrelated process.
         crate::jailer::reap_box(&self.box_id);
+        crate::jailer::reap_pids(&box_tree);
         result
     }
 
