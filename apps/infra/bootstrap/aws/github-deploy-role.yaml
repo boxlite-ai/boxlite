@@ -273,6 +273,14 @@ Resources:
                   - !Sub arn:${AWS::Partition}:s3:::sst-state-*/secret/boxlite/_fallback.json
               # The buckets this stack owns. Same prefixes the runtime boundary allows, so a rename has
               # to widen both together — see shared/resource-name.ts.
+              #
+              # Four of the six prefixes are stage-scoped and two are not: boxlite-volume-* carries no
+              # stage in its name, so this grants s3:* over every stage's volume buckets, not just this
+              # one. That is the naming, not an oversight here — the runtime boundary allows the same
+              # unscoped prefix — but it means "the buckets this stack owns" is true only of the
+              # boxlite-<stage>-* and boxlite-app-<stage>-* pairs. Scoping it needs the bucket name to
+              # carry the stage first, which is a rename across the boundary, the stack, and buckets
+              # that already exist.
               - Sid: BoxLiteStageBuckets
                 Effect: Allow
                 Action: s3:*
@@ -319,6 +327,14 @@ Resources:
               # Runner binary upgrades run as SSM commands against the stage's instances
               # (runner/update.ts). SendCommand takes instance and document ARNs; the describe and
               # invocation reads are list-shaped and have no resource of their own.
+              #
+              # instance/* is account-wide, and unscoped only because there is no way to scope it here:
+              # an instance ARN carries no stage, so narrowing this means a Condition on an instance tag
+              # the stack sets — a change to what the Runner launch template tags, verifiable only
+              # against real instances. Until then this is the widest grant the deploy role holds: a job
+              # bound to one stage can run a shell command on any instance in the account, which is more
+              # than reading another stage's configuration. Stated in docs/security.md rather than left
+              # to read as stage-scoped.
               - Sid: RunnerCommandChannel
                 Effect: Allow
                 Action:
