@@ -2,18 +2,23 @@
 // Copyright (c) 2026 BoxLite AI
 
 /*
- * Pure helpers for `bootstrap-environment.mjs` — the idempotent, human-run
- * environment preparation script. Kept side-effect-free (no AWS/GitHub CLI
- * calls) so the naming, ARN construction, and idempotency decisions are
- * covered by unit tests instead of only being exercised against live AWS.
+ * Helpers for bootstrap.ts — the idempotent, human-run environment preparation script.
+ *
+ * Nothing here calls AWS, GitHub or Auth0, so the naming, ARN construction, argv contract and
+ * idempotency decisions are covered by unit tests instead of only being exercised against live
+ * accounts. The one exception is withStageConfigFile, which writes the stage configuration to a
+ * short-lived 0600 file because `sst secret load` reads a path and has no stdin form; it is here
+ * rather than in bootstrap.ts so that file's three security properties stay testable.
  */
 
 // No underscore: the stage is interpolated into a CloudFormation stack name
 // (githubDeployRoleStackName), and CloudFormation accepts only alphanumerics
 // and hyphens. Allowing `dev_blue` here would pass validation and then fail at
 // `cloudformation deploy`, after bootstrap had already made external changes.
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { parseArgs } from 'node:util'
 
 import { parse } from 'dotenv'
 
@@ -42,6 +47,34 @@ function requireStageLike(name: any, value: any) {
     throw new Error(`${name} '${value}' must match ${STAGE_LIKE_PATTERN}`)
   }
   return value
+}
+
+/*
+ * bootstrap's own flags.
+ *
+ * Strict on purpose. Non-strict parsing accepts `--repo --force` as repo="--force" and silently
+ * drops the flag that followed, and it lets a boolean take an inline value — so `--provision-auth0=false`
+ * would read as truthy and run the one step in this script that is not idempotent. Strict refuses
+ * both, before anything external has been created.
+ *
+ * `--stage` is declared here only so strict parsing accepts it; its value is read by resolveSstStage,
+ * which owns the stage grammar and the "may be specified only once" rule.
+ */
+export function parseBootstrapOptions(args: readonly string[]) {
+  const { values } = parseArgs({
+    args: [...args],
+    strict: true,
+    options: {
+      force: { type: 'boolean' },
+      'provision-auth0': { type: 'boolean' },
+      repo: { type: 'string' },
+      reviewers: { type: 'string' },
+      stage: { type: 'string' },
+    },
+  })
+  // Spread off parseArgs' null-prototype object, so callers get something that behaves like every
+  // other options object in this package.
+  return { ...values }
 }
 
 export function validateGitHubRepo(repo: any) {
@@ -216,6 +249,30 @@ export function serializeStageConfig(config: any) {
       )
     })
   return lines.length > 0 ? `${lines.join('\n')}\n` : ''
+}
+
+/*
+ * The short-lived file `sst secret load` reads that serialized configuration from.
+ *
+ * `secret load` takes a path and has no stdin form, so the whole configuration — every domain, issuer
+ * and token in the operator's .env — has to exist on disk for the length of one command. That is the
+ * only reason this exists, and everything here is about keeping that window small and closed:
+ *
+ *   - a directory of its own, from mkdtemp, so the 0700 it creates keeps other users out even before
+ *     the file inside it exists;
+ *   - 0600 on the file as well, so a umask that would have widened it cannot;
+ *   - removal in `finally`, so a failed load leaves nothing behind — which is the case that matters,
+ *     since that is when someone is most likely to walk away from the terminal.
+ */
+export function withStageConfigFile<T>(config: any, use: (configPath: string) => T): T {
+  const directory = mkdtempSync(join(tmpdir(), 'boxlite-stage-config-'))
+  try {
+    const configPath = join(directory, 'stage-config.env')
+    writeFileSync(configPath, serializeStageConfig(config), { mode: 0o600 })
+    return use(configPath)
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 }
 
 /*

@@ -68,13 +68,13 @@ flowchart TB
 
 ## Prerequisites
 
-`npm run login` and `npm run bootstrap` set up everything except the accounts
-and the stack itself:
+Sign in to each provider's CLI, then `npm run bootstrap` sets up everything
+except the accounts and the stack itself:
 
 | You provide | Notes |
 | --- | --- |
-| An AWS account | `npm run login` runs `aws login` — no IAM user, no access keys |
-| A GitHub repo | `npm run login` runs `gh auth login` |
+| An AWS account | `aws login` — browser sign-in, no IAM user, no access keys |
+| A GitHub repo | `gh auth login` |
 | A Cloudflare domain + API token | One manual step — see [Cloudflare API token](#cloudflare-api-token) |
 | An OIDC tenant | Signup is always manual. `--provision-auth0` creates the app, API, and post-login Action **only on Auth0**; any other compliant IdP needs those created by hand |
 | An existing stack whose Runner count matches `RUNNERS` | First-Runner provisioning is not implemented here |
@@ -88,7 +88,7 @@ cd apps/infra
 npm install
 cp .env.example .env && $EDITOR .env   # STACK_DOMAIN, OIDC_ISSUER_BASE_URL, OIDC_AUDIENCE
 
-npm run login                          # browser sign-in: AWS, GitHub, Auth0
+aws login && gh auth login             # browser sign-in (auth0 login too, if using Auth0)
 npm run bootstrap -- --stage dev       # IAM role, GitHub Environment, secrets
 
 # Optional, and NOT idempotent — Auth0 has no upsert, so this duplicates apps:

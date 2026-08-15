@@ -11,7 +11,6 @@
     "sst": "tsx deployment/sst.ts",
     "secrets": "tsx deployment/secret-names.ts",
     "runner:update": "tsx runner/update.ts",
-    "login": "tsx bootstrap/login.ts",
     "bootstrap": "tsx bootstrap/bootstrap.ts",
     "verify-deploy-role": "tsx deployment/verify-role.ts",
     "validate-preview": "tsx deployment/preview.ts",

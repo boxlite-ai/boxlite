@@ -3,7 +3,7 @@
 Run commands from `apps/infra`:
 
 ```bash
-npm run login
+aws login && gh auth login
 npm run bootstrap -- --stage dev
 npm run sst -- diff --stage dev --policy policies/runner --json | npm run --silent validate-preview
 npm run deploy -- --stage dev --policy policies/runner

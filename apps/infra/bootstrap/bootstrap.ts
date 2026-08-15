@@ -47,13 +47,13 @@
  *                (decideCredentialRotation() in bootstrap/cloudflare-credentials.ts)
  *   --provision-auth0
  *                Create the Auth0 SPA app, custom API, and post-login Action
- *                (requires `npm run login` first). NOT idempotent — Auth0 has no
+ *                (requires `auth0 login` first). NOT idempotent — Auth0 has no
  *                upsert for apps or APIs, so rerunning creates duplicates.
  *
- * Sign-in: run `npm run login` first, which walks the browser sign-in for every
- * provider this needs (AWS via `aws login`, AWS CLI 2.32.0+ — no IAM user,
- * access keys, or IAM Identity Center setup required). An existing profile or
- * SSO session is used as-is if one is already active.
+ * Sign-in: `aws login` and `gh auth login` first, plus `auth0 login` for the
+ * option above. AWS needs CLI 2.32.0+ for `aws login` — no IAM user, access
+ * keys, or IAM Identity Center setup required. An existing profile or SSO
+ * session is used as-is if one is already active.
  *
  * Non-interactive use (e.g. wiring this into a more-privileged automation
  * later): set CLOUDFLARE_API_TOKEN, CLOUDFLARE_DEFAULT_ACCOUNT_ID, and
@@ -65,10 +65,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { hasFlag, parseFlag } from '../shared/cli-flags.js'
 import { decideCredentialRotation, writeCloudflareCredential } from './cloudflare-credentials.js'
-import { withStageConfigFile } from './stage-config-file.js'
-import { loadDeploymentEnvironment, resolveAwsRegion } from '../deployment/environment.js'
+import { loadDeploymentEnvironment, resolveAwsRegion, resolveSstStage } from '../deployment/environment.js'
 import {
   GITHUB_OIDC_PROVIDER_URL,
   MINIMUM_AWS_CLI_VERSION,
@@ -77,11 +75,13 @@ import {
   githubDeployRoleStackName,
   hasGitHubOidcProvider,
   isAwsCliVersionAtLeast,
+  parseBootstrapOptions,
   prepareStageConfigLoad,
   serializeStageConfig,
   ssmParameterName,
   sstPlatformState,
   validateGitHubRepo,
+  withStageConfigFile,
 } from './environment.js'
 import { validateDotenvSyntax } from '../deployment/key-policy.js'
 import {
@@ -99,7 +99,6 @@ import {
   parseReviewerIds,
 } from './github.js'
 import { resolveAwsCliPath } from '../shared/exec.js'
-import { resolveSstStage } from '../deployment/environment.js'
 
 const SCRIPT_NAME = 'bootstrap-environment'
 // The one stage that must never end up with an unreviewed deploy path. Matches
@@ -152,14 +151,13 @@ function requireGhAuthenticated() {
   } catch (cause: any) {
     const detail = cause.stderr?.trim()
     throw new Error(
-      `GitHub CLI is not authenticated; run \`npm run login\` first${detail ? ` (gh said: ${detail})` : ''}`,
+      `GitHub CLI is not authenticated; run \`gh auth login\` first${detail ? ` (gh said: ${detail})` : ''}`,
       { cause },
     )
   }
 }
 
-function resolveRepo(args: any) {
-  const override = parseFlag(args, 'repo')
+function resolveRepo(override: any) {
   if (override) return validateGitHubRepo(override)
 
   let nameWithOwner
@@ -213,7 +211,7 @@ function currentAwsIdentity(awsCliPath: any, region: any) {
     })
   } catch (cause) {
     throw new Error(
-      'no usable AWS credentials. Run `npm run login`, which opens the `aws login` browser sign-in ' +
+      'no usable AWS credentials. Run `aws login`, which opens the browser sign-in ' +
         '(no IAM user or access keys needed; signing in as the account root works), then rerun this command. ' +
         'An existing profile or SSO session works too — this step only needs `sts:GetCallerIdentity` to succeed.',
       { cause },
@@ -694,7 +692,7 @@ function provisionAuth0({ stackDomain }: any) {
   try {
     execFileSync('auth0', ['tenants', 'list'], { stdio: 'ignore', timeout: 30_000, killSignal: 'SIGTERM' })
   } catch (cause) {
-    throw new Error('the auth0 CLI is not authenticated; run `npm run login` and complete the browser consent', { cause })
+    throw new Error('the auth0 CLI is not authenticated; run `auth0 login` and complete the browser consent', { cause })
   }
 
   const app = auth0Json(spaApplicationArgs({ stackDomain }))
@@ -818,11 +816,12 @@ async function main() {
   // silently ignored and the stage lands in the default region.
   loadDeploymentEnvironment()
   const args = process.argv.slice(2)
+  const options = parseBootstrapOptions(args)
   const stage = resolveSstStage(args)
-  const force = hasFlag(args, 'force')
+  const force = Boolean(options.force)
   const region = resolveAwsRegion()
   const awsCliPath = resolveAwsCliPath()
-  const reviewerIds = parseReviewerIds(parseFlag(args, 'reviewers'))
+  const reviewerIds = parseReviewerIds(options.reviewers)
 
   // Before any external mutation. Every step below creates or changes something outside this process
   // — an OIDC provider, a GitHub Environment, optionally a non-idempotent Auth0 app — so a .env this
@@ -842,7 +841,7 @@ async function main() {
     throw new Error(`${ENV_PATH} ${cause.message}`, { cause })
   }
   requireGhAuthenticated()
-  const repo = resolveRepo(args)
+  const repo = resolveRepo(options.repo)
   requireAwsCliWithLoginSupport(awsCliPath)
   const identity = currentAwsIdentity(awsCliPath, region)
 
@@ -855,7 +854,7 @@ async function main() {
 
   ensureGitHubOidcProvider({ awsCliPath, region })
   ensureGithubEnvironment({ repo, stage, reviewerIds: effectiveReviewerIds })
-  if (hasFlag(args, 'provision-auth0')) {
+  if (options['provision-auth0']) {
     /*
      * From the snapshot that is about to be stored, not from process.env.
      *
@@ -898,7 +897,7 @@ try {
   await main()
 } catch (error: any) {
   // Print the cause chain. Several checks here wrap a tool failure in advice
-  // ("GitHub CLI is not authenticated; run `npm run login` first"), and the
+  // ("GitHub CLI is not authenticated; run `gh auth login` first"), and the
   // advice is only right for one of the ways that tool can fail — `gh auth
   // status` also exits non-zero when it cannot reach github.com. Without the
   // cause an operator whose session is fine is sent to re-authenticate.
