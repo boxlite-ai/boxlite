@@ -283,12 +283,50 @@ test('serializeStageConfig round-trips the values a stage config actually holds'
   assert.deepEqual(parseDotenv(serializeStageConfig(config)), config)
 })
 
+test('a value containing an apostrophe survives the round trip', () => {
+  // Generated passwords and tokens contain apostrophes routinely, and refusing them outright blocked
+  // bootstrap over a value that is perfectly valid. Asserted by parsing the output rather than by
+  // matching the quoting, since what matters is the value that comes back out.
+  const config = {
+    OIDC_AUDIENCE: "it's-a-token",
+    STACK_DOMAIN: "quote'and\"double",
+  }
+  assert.deepEqual(parseDotenv(serializeStageConfig({ OIDC_AUDIENCE: config.OIDC_AUDIENCE })), {
+    OIDC_AUDIENCE: "it's-a-token",
+  })
+  // A `#` is safe inside quotes — it would otherwise start a comment — so it round-trips.
+  assert.deepEqual(parseDotenv(serializeStageConfig({ OIDC_AUDIENCE: "it's a #hash" })), {
+    OIDC_AUDIENCE: "it's a #hash",
+  })
+  // Both quote kinds together cannot be expressed without escapes the parser would reinterpret, so
+  // that one is still refused — loudly, rather than stored as something else.
+  assert.throws(() => serializeStageConfig({ STACK_DOMAIN: config.STACK_DOMAIN }), /cannot be quoted/)
+})
+
 test('serializeStageConfig refuses a value it cannot represent, without echoing it', () => {
-  for (const value of ["it's quoted", 'first\nsecond', 'carriage\rreturn']) {
+  // A newline cannot go on one line at all; a value mixing both quote kinds cannot be quoted without
+  // escapes the parser would reinterpret. Either way the message must not repeat the value — this runs
+  // over credentials, and the error reaches a terminal and whatever collects it.
+  const unrepresentable: Array<[string, RegExp]> = [
+    ['first\nsecond', /GHCR_TOKEN contains a newline/],
+    ['carriage\rreturn', /GHCR_TOKEN contains a newline/],
+    /*
+     * Everything the double-quoted form cannot carry, which is the branch an apostrophe falls into.
+     * The backslash mangles `C:\new` through the unescape pass. The `$` and the backtick are refused
+     * for the store's actual reader: `sst secret load` is Go, and godotenv expands `$VAR` inside
+     * double quotes — JavaScript's dotenv does not, so testing only against that would bless a value
+     * sst stores differently.
+     */
+    [`it's "quoted"`, /GHCR_TOKEN mixes a single quote/],
+    ["it's C:\\new", /GHCR_TOKEN mixes a single quote/],
+    ["it's $HOME", /GHCR_TOKEN mixes a single quote/],
+    ["it's `whoami`", /GHCR_TOKEN mixes a single quote/],
+  ]
+  for (const [value, expected] of unrepresentable) {
     assert.throws(
       () => serializeStageConfig({ GHCR_TOKEN: value }),
       (error: any) => {
-        assert.match(error.message, /GHCR_TOKEN contains a single quote or newline/)
+        assert.match(error.message, expected)
         assert.equal(error.message.includes(value), false)
         return true
       },

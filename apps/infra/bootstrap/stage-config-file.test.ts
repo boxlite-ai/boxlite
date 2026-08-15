@@ -52,12 +52,13 @@ test('removes the file when the load fails', () => {
 })
 
 test('refuses a configuration it cannot represent before writing anything', () => {
-  // serializeStageConfig throws on a value the single-quoted form cannot carry. Nothing may reach
+  // serializeStageConfig throws on a value no quoting carries — here both quote kinds at once, since
+  // an apostrophe alone is ordinary in a token and is now written double-quoted. Nothing may reach
   // disk in that case, and the callback must never run.
   let ran = false
   assert.throws(
-    () => withStageConfigFile({ GHCR_TOKEN: "it's quoted" }, () => (ran = true)),
-    /GHCR_TOKEN contains a single quote or newline/,
+    () => withStageConfigFile({ GHCR_TOKEN: `it's "quoted"` }, () => (ran = true)),
+    /GHCR_TOKEN mixes a single quote/,
   )
   assert.equal(ran, false)
 })

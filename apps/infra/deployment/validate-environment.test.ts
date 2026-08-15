@@ -8,6 +8,10 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { parse as parseDotenv } from 'dotenv'
+
+import { deployableStageConfig, serializeStageConfig } from '../bootstrap/environment.js'
+
 import {
   APP_SECRET_NAMES,
   isForbiddenDeploymentKey,
@@ -139,35 +143,109 @@ BLANK=
   )
 })
 
+test('validateDotenvSyntax accepts every form the parser it guards accepts', () => {
+  /*
+   * This validator exists to reject what dotenv would silently drop, so rejecting something dotenv
+   * reads is the opposite failure: the operator is told a working .env is invalid and bootstrap
+   * refuses to run. `export KEY=value` comes from a file that doubles as a shell script; the spaces
+   * come from ordinary tidying.
+   *
+   * Each line is asserted against `parse` as well, so the two cannot drift apart on someone's word.
+   */
+  const accepted = [
+    'export STACK_DOMAIN=dev.boxlite.ai',
+    'STACK_DOMAIN = dev.boxlite.ai',
+    'export RUNNERS = 1',
+    // Surprising, and exactly why this is checked against the parser rather than a pattern: dotenv 17
+    // reads `KEY: value`, though not `KEY:value` or `KEY : value`. Rejecting it would refuse a file
+    // that loads.
+    'STACK_DOMAIN: dev.boxlite.ai',
+  ]
+  for (const line of accepted) {
+    assert.notDeepEqual(parseDotenv(line), {}, `${line} must actually parse, or the premise here is wrong`)
+    assert.doesNotThrow(() => validateDotenvSyntax(line), `${line} is valid dotenv`)
+  }
+
+  // And the near-misses dotenv really does drop, which are what this guard is for.
+  for (const line of ['STACK_DOMAIN:dev.boxlite.ai', 'STACK_DOMAIN : dev.boxlite.ai']) {
+    assert.deepEqual(parseDotenv(line), {}, `${line} must be dropped, or the premise here is wrong`)
+    assert.throws(() => validateDotenvSyntax(line), /is not an assignment dotenv can read/)
+  }
+
+  /*
+   * Accepting `KEY: value` does not loosen what may be stored. A credential written that way parses,
+   * and is then refused by the allowlist like any other — the syntax check has never been what keeps
+   * secrets out of the store, and reading it as though it were would misplace the guarantee.
+   */
+  const credentialLine = 'AWS_ACCESS_KEY_ID: synthetic-access-key'
+  assert.notDeepEqual(parseDotenv(credentialLine), {}, 'dotenv reads this form')
+  assert.doesNotThrow(() => validateDotenvSyntax(credentialLine))
+  assert.deepEqual(deployableStageConfig(credentialLine).config, {}, 'and it must still never be stored')
+})
+
 test('validateDotenvSyntax rejects a line dotenv would silently skip, without echoing it', () => {
   // dotenv drops a malformed line in silence, so the key is simply absent from the store and the
   // failure surfaces much later as a missing value. Reject at the boundary instead.
-  const invalid = [
-    'export AWS_SECRET_ACCESS_KEY:synthetic-secret-key',
-    'export AWS_SECRET_ACCESS_KEY = synthetic-secret-key',
-    'AWS_ACCESS_KEY_ID: synthetic-access-key',
-    'AWS_PROFILE : developer',
-    // A key that cannot start with a digit. The payload deliberately avoids the word "value", which
-    // the error message itself carries in `expected KEY=value`.
-    '1INVALID=synthetic-payload',
-  ]
+  // The payloads deliberately avoid the word "value", which the error message itself carries in
+  // `expected KEY=value`.
+  const invalid = ['export AWS_SECRET_ACCESS_KEY:synthetic-secret-key', 'AWS_PROFILE : developer']
   for (const assignment of invalid) {
     const value = assignment.split(/\s*(?:=|:)\s*/, 2)[1]
+    assert.deepEqual(parseDotenv(assignment), {}, `${assignment} must be dropped, or it is not this test's case`)
     assert.throws(
       () => validateDotenvSyntax(assignment),
       (error: any) => {
-        assert.match(error.message, /contains invalid assignment syntax on line 1/)
+        assert.match(error.message, /line 1 is not an assignment dotenv can read/)
         if (value) assert.equal(error.message.includes(value), false, 'the value must not be echoed')
         return true
       },
     )
   }
+
+  /*
+   * A key starting with a digit is not one this validator's business. dotenv's key pattern allows it,
+   * so the line is read rather than dropped and there is nothing here to warn about — and the
+   * allowlist refuses to store it anyway, which is where an unrecognised key is supposed to stop.
+   */
+  // A lone CR is a line break to the parser but not to `split(/\r?\n/)`, so the malformed half hid
+  // behind a line that parsed. The store would then simply lack that key.
+  const carriageReturnHidden = 'STACK_DOMAIN=dev.boxlite.ai\rBROKEN : synthetic'
+  assert.deepEqual(parseDotenv(carriageReturnHidden), { STACK_DOMAIN: 'dev.boxlite.ai' }, 'the second half is dropped')
+  assert.throws(() => validateDotenvSyntax(carriageReturnHidden), /line 2 is not an assignment/)
+
+  const digitLeading = '1INVALID=synthetic-payload'
+  assert.notDeepEqual(parseDotenv(digitLeading), {}, 'dotenv reads a digit-leading key')
+  assert.doesNotThrow(() => validateDotenvSyntax(digitLeading))
+  assert.deepEqual(deployableStageConfig(digitLeading).config, {}, 'and it is refused by the allowlist')
+})
+
+test('a value quoted across lines is refused, and the message says why it might be', () => {
+  /*
+   * dotenv reads it, so this is a deliberate refusal rather than a parse failure — and it costs
+   * nothing, because a stored value cannot contain a newline, so such a file could never be
+   * bootstrapped either way.
+   *
+   * It is refused here rather than recognised and skipped because recognising one is not possible
+   * without reimplementing the grammar: an unterminated quote parses to a key of its own, so a
+   * continuation line and a typo are indistinguishable to anything short of dotenv itself. The message
+   * therefore names both possibilities instead of asserting the wrong one.
+   */
+  const multiline = 'STACK_DOMAIN="first\nsecond"\nRUNNERS=1\n'
+  assert.deepEqual(parseDotenv(multiline), { STACK_DOMAIN: 'first\nsecond', RUNNERS: '1' }, 'dotenv does read it')
+  assert.notDeepEqual(parseDotenv('KEY="first'), {}, 'an unterminated quote yields a key, which is why')
+
+  assert.throws(() => validateDotenvSyntax(multiline), (error: any) => {
+    assert.match(error.message, /line 2 is not an assignment/)
+    assert.match(error.message, /cannot contain a newline/)
+    return true
+  })
+  assert.throws(() => serializeStageConfig({ STACK_DOMAIN: 'first\nsecond' }), /contains a newline/)
 })
 
 test('validateDotenvSyntax names the file it was given and the offending line', () => {
   assert.throws(
     () => validateDotenvSyntax('STACK_DOMAIN=dev.boxlite.ai\n\nOIDC_AUDIENCE', '/tmp/synthetic/.env'),
-    /\/tmp\/synthetic\/\.env contains invalid assignment syntax on line 3/,
+    /\/tmp\/synthetic\/\.env line 3 is not an assignment dotenv can read/,
   )
 })
 
