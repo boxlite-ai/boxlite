@@ -1425,13 +1425,38 @@ test('the stage configuration capability probe answers each selected-commit shap
   assert.ok(probe, 'the capability probe is not a node -e expression any more')
   const expression = probe.slice(probe.indexOf('"') + 1, probe.lastIndexOf('" "$capability"'))
 
+  /*
+   * The two gates read the same file, so they must accept the same versions. Left to drift, a bump one
+   * gate welcomes makes the other refuse the deploy — with a message about the store, for a commit
+   * whose store support never changed. This is not hypothetical: #1253 widened one of them.
+   */
+  const componentGate = workflow.jobs.deploy.steps.find(
+    (step: any) => step.name === 'Require component selection support in the selected commit',
+  )
+  assert.ok(componentGate, 'the component-selection gate is missing')
+  const acceptedVersions = (source: string) => source.match(/\[[\d,\s]+\]\.includes\(c\.version\)/)?.[0]
+  assert.equal(
+    acceptedVersions(expression),
+    acceptedVersions(liveShell(componentGate.run)),
+    'the two capability gates accept different versions of the same file',
+  )
+
   const fixture = mkdtempSync(join(tmpdir(), 'boxlite-capability-probe-'))
   const capability = join(fixture, 'capabilities.json')
   try {
     const cases: Array<[string, string]> = [
       ['supported', JSON.stringify({ version: 1, componentSelection: true, stageConfigStore: true })],
       ['unsupported', JSON.stringify({ version: 1, componentSelection: true })],
-      ['unsupported', JSON.stringify({ version: 2, stageConfigStore: true })],
+      /*
+       * v2 with the capability declared is SUPPORTED. There is one capabilities.json with one version,
+       * so a bump made for an unrelated capability must not read as "this commit cannot use the store"
+       * — which is why the component-selection gate stopped pinning a single version (#1253), and why
+       * this gate accepts the same set.
+       */
+      ['supported', JSON.stringify({ version: 2, componentSelection: true, stageConfigStore: true })],
+      ['unsupported', JSON.stringify({ version: 2, componentSelection: true })],
+      // Outside the set both gates accept: a future version this workflow has never been taught to read.
+      ['unsupported', JSON.stringify({ version: 3, stageConfigStore: true })],
     ]
     for (const [expected, contents] of cases) {
       writeFileSync(capability, contents)
