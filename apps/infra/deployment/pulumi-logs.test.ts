@@ -414,27 +414,127 @@ if (args[0] === 'state' && args[1] === 'export') {
   }
 })
 
-test('a manifested store with no digest stops the deploy instead of hydrating it', async () => {
-  // The shape a first `secret load` leaves if it tears between the values and the digest. Every
-  // manifest name is present, so nothing short of the digest can see it — and a wrapper that treated
-  // the absence as "cannot verify, carry on" would hydrate a configuration that never existed whole.
-  // Asserted end to end because the refusal lives in the wrapper: a unit test on hydrateStageConfig
-  // can only show the mismatch is detectable, not that anything acts on it.
-  const fixture = await fixtureRoot()
-  const fakeBin = join(fixture, 'bin')
-  const fakeSst = join(fakeBin, 'sst')
-  const capturedEnv = join(fixture, 'child-env.json')
+/*
+ * The store shapes the wrapper must refuse, each driven end to end.
+ *
+ * Six shapes across the wrapper's five refusals, not one apiece: an absent digest and a mismatched one
+ * meet the same comparison, covered as two shapes because they arise from different accidents and a
+ * reader would otherwise assume only one is handled. The other four — unreadable, no manifest, a
+ * manifested value the store lacks, and a manifest that applies nothing — get one shape each.
+ *
+ * They need the wrapper rather than a unit test: hydrateStageConfig can show a shape is detectable,
+ * never that anything acts on it. Counting `process.exit(1)` in the source proves refusals exist; it
+ * cannot prove which shape reaches which.
+ *
+ * Two things make each case prove its own branch rather than merely "something refused".
+ *
+ * The digest is stated explicitly: a placeholder makes every fixture trip the mismatch branch first,
+ * so the test passes while the branch it names is dead — which is what a first draft did, and what
+ * disabling a later refusal failed to reveal.
+ *
+ * And each case matches the wrapper's own message. Exit 1 is shared by all five, and the guards sit in
+ * a chain where removing one usually lets the next catch the same fixture — so the exit code cannot
+ * distinguish them, and a test that only checks it stays green through the regression it exists for.
+ */
+type RefusedStore = {
+  description: string
+  manifest?: string[]
+  values: Record<string, string>
+  digest: 'correct' | 'wrong' | 'omit'
+  // The store cannot be read at all — `sst secret list` itself fails.
+  listFails?: true
+  // A fragment of the refusal this shape must produce, distinct from every other guard's.
+  refusal: RegExp
+}
 
-  await mkdir(fakeBin, { recursive: true })
-  await writeFile(
-    fakeSst,
-    `#!/usr/bin/env node
+const REFUSED_STORES: RefusedStore[] = [
+  {
+    /*
+     * Not a store at all: `sst secret list` exits non-zero, as it does on a stage that was never
+     * bootstrapped or when AWS is unreachable. Its own guard, and the earliest one — everything below
+     * assumes a store that read cleanly.
+     */
+    description: 'a store that cannot be read',
+    values: {},
+    digest: 'omit',
+    listFails: true,
+    refusal: /could not read the ci stage configuration/,
+  },
+  {
+    // Torn between the values and the digest — every manifest name present, so only the digest sees it.
+    description: 'a manifested store with no digest',
+    manifest: ['STACK_DOMAIN'],
+    values: { STACK_DOMAIN: 'torn.example.test' },
+    digest: 'omit',
+    refusal: /carries no BOXLITE_STAGE_CONFIG_DIGEST/,
+  },
+  {
+    // A digest that describes a different generation: the interrupted read-modify-write.
+    description: 'a digest that does not match the values',
+    manifest: ['STACK_DOMAIN'],
+    values: { STACK_DOMAIN: 'mixed.example.test' },
+    digest: 'wrong',
+    refusal: /does not match its BOXLITE_STAGE_CONFIG_DIGEST/,
+  },
+  {
+    // Values but no manifest: never bootstrapped, or the manifest was removed. Hydration would be a
+    // no-op and the deploy would reconcile against whatever the defaults are.
+    description: 'a store with no manifest at all',
+    values: { STACK_DOMAIN: 'unmanifested.example.test' },
+    digest: 'omit',
+    refusal: /has no BOXLITE_STAGE_CONFIG manifest/,
+  },
+  {
+    // The manifest names a key the store does not hold — a half-written load. The digest is correct
+    // for what IS there, so this reaches the missing-value branch rather than the mismatch one.
+    description: 'a manifest naming a value the store lacks',
+    manifest: ['STACK_DOMAIN', 'APP_URL'],
+    values: { STACK_DOMAIN: 'partial.example.test' },
+    digest: 'correct',
+    refusal: /is incomplete/,
+  },
+  {
+    /*
+     * A manifest naming only keys that are refused: the store reads as populated and applies nothing.
+     * AWS_PROFILE rather than a process control — it is refused for the same reason and proves the same
+     * branch, but if a regression ever did hydrate it the worst case is a wrong AWS profile. A
+     * NODE_OPTIONS payload would instead name a file node executes at startup, making the fixture a
+     * preload primitive, and a child dying on the missing file would satisfy both assertions here
+     * without the refusal ever running.
+     */
+    description: 'a manifest that applies nothing',
+    manifest: ['AWS_PROFILE'],
+    values: { AWS_PROFILE: 'synthetic-refused-profile' },
+    digest: 'correct',
+    refusal: /applied nothing/,
+  },
+]
+
+function refusedStoreLines({ manifest, values, digest }: RefusedStore) {
+  const lines = ['# boxlite/ci']
+  if (manifest) lines.push(`BOXLITE_STAGE_CONFIG=${manifest.join(',')}`)
+  if (digest === 'correct') lines.push(`BOXLITE_STAGE_CONFIG_DIGEST=${stageConfigDigest(manifest ?? [], values)}`)
+  if (digest === 'wrong') lines.push(`BOXLITE_STAGE_CONFIG_DIGEST=${'0'.repeat(64)}`)
+  for (const [key, value] of Object.entries(values)) lines.push(`${key}=${value}`)
+  return lines
+}
+
+for (const refusedStore of REFUSED_STORES) {
+  const { description, refusal } = refusedStore
+  test(`${description} stops the deploy before sst runs`, async () => {
+    const fixture = await fixtureRoot()
+    const fakeBin = join(fixture, 'bin')
+    const fakeSst = join(fakeBin, 'sst')
+    const capturedEnv = join(fixture, 'child-env.json')
+
+    await mkdir(fakeBin, { recursive: true })
+    await writeFile(
+      fakeSst,
+      `#!/usr/bin/env node
 const { writeFileSync } = require('node:fs')
 const args = process.argv.slice(2)
 if (args[0] === 'secret' && args[1] === 'list') {
-  const NL = String.fromCharCode(10)
-  // Deliberately no BOXLITE_STAGE_CONFIG_DIGEST line.
-  process.stdout.write(['# boxlite/ci', 'BOXLITE_STAGE_CONFIG=STACK_DOMAIN', 'STACK_DOMAIN=torn.example.test'].join(NL) + NL)
+  ${refusedStore.listFails ? 'process.exit(7)' : `process.stdout.write(${JSON.stringify(refusedStoreLines(refusedStore))}.join(String.fromCharCode(10)) + String.fromCharCode(10))`}
   process.exit(0)
 }
 if (args[0] === 'state' && args[1] === 'export') {
@@ -443,34 +543,61 @@ if (args[0] === 'state' && args[1] === 'export') {
 }
 writeFileSync(process.env.SYNTHETIC_ENV_PATH, JSON.stringify(process.env))
 `,
-    'utf8',
-  )
-  await chmod(fakeSst, 0o755)
+      'utf8',
+    )
+    await chmod(fakeSst, 0o755)
 
-  const wrapper = spawnWrapper(['diff', '--stage', 'ci'], {
-    env: {
-      ...inheritedEnvironment(),
-      PATH: `${fakeBin}:${process.env.PATH}`,
-      SST_BIN_PATH: fakeSst,
-      CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
-      CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
-      RUNNERS: '1',
-      DEFAULT_RUNNER_NAME: 'default',
-      SYNTHETIC_ENV_PATH: capturedEnv,
-    },
-    stdio: ['ignore', 'inherit', 'inherit'],
+    const wrapper = spawnWrapper(['diff', '--stage', 'ci'], {
+      env: {
+        ...inheritedEnvironment(),
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        SST_BIN_PATH: fakeSst,
+        CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
+        CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
+        RUNNERS: '1',
+        DEFAULT_RUNNER_NAME: 'default',
+        SYNTHETIC_ENV_PATH: capturedEnv,
+      },
+      stdio: ['ignore', 'inherit', 'pipe'],
+    })
+
+    /*
+     * Drained to close, not just to exit. `exit` fires when the process ends, which can be before the
+     * pipe has delivered what it wrote — so asserting on the buffer at that moment reads however much
+     * happened to arrive, and the message checks below would fail intermittently on a machine under
+     * load. `close` is the event that means "and its stdio is finished".
+     */
+    let stderr = ''
+    wrapper.stderr.setEncoding('utf8')
+    wrapper.stderr.on('data', (chunk: string) => {
+      stderr += chunk
+    })
+    const stderrDrained = new Promise<void>((resolve) => wrapper.stderr.once('close', () => resolve()))
+
+    try {
+      const exit = await waitForExit(wrapper)
+      await stderrDrained
+      assert.deepEqual(exit, { code: 1, signal: null }, `${description} must be refused`)
+      assert.match(stderr, refusal, `${description} must be refused by its own guard, not a later one`)
+      /*
+       * And no OTHER guard spoke. Matching only the expected message proves this guard ran, not that it
+       * is what stopped the deploy: delete just its `process.exit(1)` and the message still prints
+       * while the next guard down the chain exits, satisfying both assertions above. Requiring silence
+       * from the others is what makes the exit attributable to this one.
+       */
+      for (const other of REFUSED_STORES) {
+        if (other.refusal.source === refusal.source) continue
+        assert.doesNotMatch(stderr, other.refusal, `${description} must not fall through to ${other.description}`)
+      }
+      // The fake sst writes that file only on its fall-through, so its absence is the proof no plan was
+      // ever started — the refusal has to land before sst is asked to build anything.
+      assert.equal(await fileExists(capturedEnv), false, `sst must not run with ${description}`)
+    } finally {
+      if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL')
+      await rm(fixture, { recursive: true, force: true })
+    }
   })
-
-  try {
-    assert.deepEqual(await waitForExit(wrapper), { code: 1, signal: null }, 'the wrapper must refuse')
-    // The refusal has to happen before sst is spawned to build anything — the env file is only written
-    // by the fake sst's fall-through, so its absence is the proof no plan was started.
-    assert.equal(await fileExists(capturedEnv), false, 'sst must not be invoked with a torn configuration')
-  } finally {
-    if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL')
-    await rm(fixture, { recursive: true, force: true })
-  }
-})
+}
 
 test('a stored stage configuration reaches the spawned SST process', async () => {
   // The end-to-end claim the unit tests cannot make: a value that exists only in the secret store is
