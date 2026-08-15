@@ -7,6 +7,16 @@ receivers:
         endpoint: 0.0.0.0:4318
         include_metadata: true
 
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: ${env:OTELCOL_MEMORY_LIMIT_MIB:-384}
+    spike_limit_mib: ${env:OTELCOL_MEMORY_SPIKE_LIMIT_MIB:-96}
+  batch:
+    timeout: 1s
+    send_batch_size: ${env:OTELCOL_BATCH_SIZE:-512}
+    send_batch_max_size: ${env:OTELCOL_BATCH_MAX_SIZE:-1024}
+
 exporters:
   boxlite_exporter:
     # Box authentication header name
@@ -86,10 +96,13 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
+      processors: [memory_limiter, batch]
       exporters: [boxlite_exporter]
     metrics:
       receivers: [otlp]
+      processors: [memory_limiter, batch]
       exporters: [boxlite_exporter]
     logs:
       receivers: [otlp]
+      processors: [memory_limiter, batch]
       exporters: [boxlite_exporter]

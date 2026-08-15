@@ -45,6 +45,7 @@ import { AdminModule } from './admin/admin.module'
 import { ClickHouseModule } from './clickhouse/clickhouse.module'
 import { BoxTelemetryModule } from './box-telemetry/box-telemetry.module'
 import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
+import { TenantObservabilityModule } from './tenant-observability/tenant-observability.module'
 
 @Module({
   imports: [
@@ -200,6 +201,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     HealthModule,
     ClickHouseModule,
     BoxTelemetryModule,
+    TenantObservabilityModule,
     BoxliteRestModule,
     OpenFeatureModule.forRoot({
       contextFactory: (request: ExecutionContext) => {

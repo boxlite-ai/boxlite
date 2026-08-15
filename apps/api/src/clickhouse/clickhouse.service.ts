@@ -44,7 +44,11 @@ export class ClickHouseService implements OnModuleDestroy {
     return this.configService.getClickHouseConfig() !== null
   }
 
-  async query<T>(query: string, params?: Record<string, unknown>): Promise<T[]> {
+  async query<T>(
+    query: string,
+    params?: Record<string, unknown>,
+    options?: { maxExecutionTimeSeconds?: number },
+  ): Promise<T[]> {
     const client = this.getClient()
     if (!client) {
       this.logger.warn('ClickHouse is not configured')
@@ -58,6 +62,7 @@ export class ClickHouseService implements OnModuleDestroy {
         format: 'JSONEachRow',
         clickhouse_settings: {
           date_time_input_format: 'best_effort',
+          ...(options?.maxExecutionTimeSeconds ? { max_execution_time: options.maxExecutionTimeSeconds } : {}),
         },
       })
 

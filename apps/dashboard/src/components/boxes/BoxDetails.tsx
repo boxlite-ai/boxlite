@@ -29,6 +29,7 @@ import { useConfig } from '@/hooks/useConfig'
 import { useRegions } from '@/hooks/useRegions'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { useTenantObservabilityEnabled } from '@/hooks/useTenantObservabilityEnabled'
 import { getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
 import { setLocalStorageItem } from '@/lib/local-storage'
@@ -48,7 +49,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useAuth } from 'react-oidc-context'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { BoxLogsTab } from './BoxLogsTab'
+import { BoxMetricsTab } from './BoxMetricsTab'
 import { BoxTerminalTab } from './BoxTerminalTab'
+import { BoxTracesTab } from './BoxTracesTab'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 const STATUS = { running: '#5ad67d', idle: '#e0b341', stopped: '#8C919C', error: '#e0564a', dim: '#5b616e' } as const
@@ -121,6 +125,18 @@ export default function BoxDetails() {
   const [copied, setCopied] = useState(false)
   const [terminalRefreshSignal, setTerminalRefreshSignal] = useState(0)
   const refreshRef = useRef<HTMLSpanElement>(null)
+  const tenantObservabilityEnabled = useTenantObservabilityEnabled()
+  const activePanel =
+    tenantObservabilityEnabled && ['logs', 'traces', 'metrics'].includes(searchParams.get('tab') ?? '')
+      ? (searchParams.get('tab') as 'logs' | 'traces' | 'metrics')
+      : 'shell'
+
+  const setActivePanel = (panel: 'shell' | 'logs' | 'traces' | 'metrics') => {
+    const nextParams = new URLSearchParams(searchParams)
+    if (panel === 'shell') nextParams.delete('tab')
+    else nextParams.set('tab', panel)
+    setSearchParams(nextParams, { replace: true })
+  }
 
   const updateOnboardingProgress = useCallback(
     (progress: OnboardingProgress) => {
@@ -483,23 +499,60 @@ export default function BoxDetails() {
                   <p className="text-[12px] leading-relaxed" style={{ color: STATUS.error }}>
                     {box.errorReason}
                   </p>
+                  {tenantObservabilityEnabled && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        navigate(
+                          `${RoutePath.OBSERVABILITY}?tab=logs&boxId=${encodeURIComponent(box.id)}&from=${encodeURIComponent(
+                            new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+                          )}&to=${encodeURIComponent(new Date().toISOString())}`,
+                        )
+                      }
+                      className="mt-3 border border-border px-3 py-2 text-[11px] uppercase tracking-[1px] transition-colors hover:bg-card"
+                    >
+                      View diagnostics
+                    </button>
+                  )}
                 </>
               )}
             </div>
 
-            {/* shell / terminal */}
+            {/* shell and tenant telemetry */}
             <div className="flex h-[60vh] flex-none flex-col border border-border bg-[hsl(var(--code-background))] lg:h-auto lg:min-h-0 lg:flex-1">
               <div className="flex flex-none items-center justify-between border-b border-dashed border-border px-5 py-[15px]">
                 <span className="flex items-center gap-[9px] text-[11px] uppercase tracking-[2px]">
                   <span className="size-[6px] flex-none bg-brand" />
-                  shell
+                  {activePanel}
                   <span className="ml-0.5 tracking-[0.5px] text-muted-foreground normal-case">
                     {getBoxPublicIdLabel(box)}
                   </span>
                 </span>
+                <div className="flex items-center gap-1">
+                  {(tenantObservabilityEnabled
+                    ? (['shell', 'logs', 'traces', 'metrics'] as const)
+                    : (['shell'] as const)
+                  ).map((panel) => (
+                    <button
+                      key={panel}
+                      type="button"
+                      onClick={() => setActivePanel(panel)}
+                      className={`px-2 py-1 text-[10px] uppercase tracking-[1px] transition-colors ${
+                        activePanel === panel
+                          ? 'bg-card text-foreground'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      {panel}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="flex min-h-0 flex-1 flex-col">
-                <BoxTerminalTab box={box} refreshSignal={terminalRefreshSignal} />
+                {activePanel === 'shell' && <BoxTerminalTab box={box} refreshSignal={terminalRefreshSignal} />}
+                {activePanel === 'logs' && <BoxLogsTab boxId={box.id} />}
+                {activePanel === 'traces' && <BoxTracesTab boxId={box.id} />}
+                {activePanel === 'metrics' && <BoxMetricsTab boxId={box.id} />}
               </div>
             </div>
           </div>

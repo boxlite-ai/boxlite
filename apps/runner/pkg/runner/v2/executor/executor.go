@@ -47,6 +47,11 @@ type Executor struct {
 	migrateWorkDir string
 }
 
+type jobTelemetryContext struct {
+	OrganizationID string `json:"organizationId"`
+	RunnerID       string `json:"runnerId"`
+}
+
 // NewExecutor creates a new job executor
 func NewExecutor(cfg *ExecutorConfig) (*Executor, error) {
 	apiClient, err := runnerapiclient.GetApiClient()
@@ -73,14 +78,26 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 	jobLog := e.log.With(
 		slog.String("job_id", job.GetId()),
 		slog.String("job_type", string(job.GetType())),
+		slog.String("boxlite.source", "runner"),
+		slog.String("boxlite.job.id", job.GetId()),
 	)
+	telemetry := e.getJobTelemetryContext(job)
+	if telemetry.OrganizationID != "" {
+		jobLog = jobLog.With(slog.String("boxlite.organization.id", telemetry.OrganizationID))
+	}
+	if telemetry.RunnerID != "" {
+		jobLog = jobLog.With(slog.String("boxlite.runner.id", telemetry.RunnerID))
+	}
 
 	// Add resource info if present
 	if resourceType := job.GetResourceType(); resourceType != "" {
 		jobLog = jobLog.With(slog.String("resource_type", resourceType))
 	}
 	if resourceId := job.GetResourceId(); resourceId != "" {
-		jobLog = jobLog.With(slog.String("resource_id", resourceId))
+		jobLog = jobLog.With(
+			slog.String("resource_id", resourceId),
+			slog.String("boxlite.box.id", resourceId),
+		)
 	}
 
 	// Add trace info to logs if available
@@ -123,16 +140,28 @@ func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, err
 			attribute.String("job.id", job.GetId()),
 			attribute.String("job.type", string(job.GetType())),
 			attribute.String("job.status", string(job.GetStatus())),
+			attribute.String("boxlite.source", "runner"),
+			attribute.String("boxlite.job.id", job.GetId()),
 		),
 	)
 	defer span.End()
+	telemetry := e.getJobTelemetryContext(job)
+	if telemetry.OrganizationID != "" {
+		span.SetAttributes(attribute.String("boxlite.organization.id", telemetry.OrganizationID))
+	}
+	if telemetry.RunnerID != "" {
+		span.SetAttributes(attribute.String("boxlite.runner.id", telemetry.RunnerID))
+	}
 
 	// Add resource attributes if present
 	if resourceType := job.GetResourceType(); resourceType != "" {
 		span.SetAttributes(attribute.String("resource.type", resourceType))
 	}
 	if resourceId := job.GetResourceId(); resourceId != "" {
-		span.SetAttributes(attribute.String("resource.id", resourceId))
+		span.SetAttributes(
+			attribute.String("resource.id", resourceId),
+			attribute.String("boxlite.box.id", resourceId),
+		)
 	}
 
 	// Dispatch to handler
@@ -169,6 +198,16 @@ func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, err
 	}
 
 	return resultMetadata, err
+}
+
+func (e *Executor) getJobTelemetryContext(job *apiclient.Job) jobTelemetryContext {
+	var telemetry jobTelemetryContext
+	if payload := job.GetPayload(); payload != "" {
+		if err := json.Unmarshal([]byte(payload), &telemetry); err != nil {
+			e.log.Debug("failed to read job telemetry context", "job_id", job.GetId(), "error", err)
+		}
+	}
+	return telemetry
 }
 
 // updateJobStatus reports job completion status to the API

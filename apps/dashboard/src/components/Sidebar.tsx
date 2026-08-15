@@ -19,6 +19,7 @@ import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
 import { Theme, useTheme } from '@/contexts/ThemeContext'
 import { RoutePath } from '@/enums/RoutePath'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { useTenantObservabilityEnabled } from '@/hooks/useTenantObservabilityEnabled'
 import { useCopyToClipboard } from 'usehooks-ts'
 import { toast } from 'sonner'
 import { markJustLoggedOut } from '@/lib/auth-session'
@@ -67,6 +68,7 @@ interface NavItem {
 const PRIMARY_NAV_ITEMS: NavItem[] = [
   { label: 'Boxes', path: RoutePath.BOXES },
   { label: 'Volumes', path: RoutePath.VOLUMES },
+  { label: 'Observability', path: RoutePath.OBSERVABILITY },
   { label: 'Billing', path: RoutePath.BILLING },
 ]
 
@@ -140,6 +142,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   const navigate = useNavigate()
   const { selectedOrganization } = useSelectedOrganization()
   const [, copyToClipboard] = useCopyToClipboard()
+  const tenantObservabilityEnabled = useTenantObservabilityEnabled()
 
   const copyOrgId = useCallback(() => {
     if (!selectedOrganization) return
@@ -163,7 +166,13 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   )
   useRegisterCommands(orgCommands, { groupId: 'organization', groupLabel: 'Organization', groupOrder: 5 })
 
-  const primaryItems: NavItem[] = PRIMARY_NAV_ITEMS
+  const primaryItems = useMemo(
+    () =>
+      tenantObservabilityEnabled
+        ? PRIMARY_NAV_ITEMS
+        : PRIMARY_NAV_ITEMS.filter((item) => item.path !== RoutePath.OBSERVABILITY),
+    [tenantObservabilityEnabled],
+  )
 
   const openOnboardingGuide = useCallback(() => {
     const event = new Event(ONBOARDING_OPEN_EVENT, { cancelable: true })

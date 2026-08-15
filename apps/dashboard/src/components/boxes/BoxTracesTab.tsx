@@ -180,7 +180,7 @@ function DetailRow({ label, children, mono = true }: { label: string; children: 
   )
 }
 
-function TraceExpandedRow({ boxId, trace }: { boxId: string; trace: TraceSummary }) {
+function TraceExpandedRow({ boxId, trace }: { boxId?: string; trace: TraceSummary }) {
   const { data: spans, isLoading, isError, refetch } = useBoxTraceSpans(boxId, trace.traceId)
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null)
 
@@ -379,7 +379,7 @@ function TraceExpandedRow({ boxId, trace }: { boxId: string; trace: TraceSummary
   )
 }
 
-export function BoxTracesTab({ boxId }: { boxId: string }) {
+export function BoxTracesTab({ boxId, sources }: { boxId?: string; sources?: string[] }) {
   const [params, setParams] = useQueryStates(tracesSearchParams)
   const [timeRange, setTimeRange] = useQueryStates(timeRangeSearchParams)
   const [expandedTraceId, setExpandedTraceId] = useState<string | null>(null)
@@ -394,8 +394,9 @@ export function BoxTracesTab({ boxId }: { boxId: string }) {
       to: resolvedTo,
       page: params.tracesPage,
       limit,
+      sources,
     }),
-    [resolvedFrom, resolvedTo, params.tracesPage],
+    [resolvedFrom, resolvedTo, params.tracesPage, sources],
   )
 
   const { data, isLoading, isError, refetch } = useBoxTraces(boxId, queryParams)

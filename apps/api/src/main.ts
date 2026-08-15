@@ -31,6 +31,7 @@ import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino'
 import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
+import { TenantTelemetryInterceptor } from './tenant-observability/interceptors/tenant-telemetry.interceptor'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -86,6 +87,7 @@ async function bootstrap() {
   app.useGlobalInterceptors(new LoggerErrorInterceptor())
   app.useGlobalInterceptors(new MetricsInterceptor(configService))
   app.useGlobalInterceptors(app.get(AuditInterceptor))
+  app.useGlobalInterceptors(app.get(TenantTelemetryInterceptor))
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,

@@ -10,4 +10,5 @@ export enum FeatureFlags {
   DASHBOARD_WEBHOOKS = 'dashboard_webhooks',
   BOX_SPENDING = 'box_spending',
   DASHBOARD_CREATE_BOX = 'dashboard_create-box',
+  TENANT_OBSERVABILITY = 'tenant_observability',
 }

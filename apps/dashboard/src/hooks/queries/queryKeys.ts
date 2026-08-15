@@ -84,10 +84,14 @@ export const queryKeys = {
   },
   telemetry: {
     all: ['telemetry'] as const,
-    logs: (boxId: string, params: object) => [...queryKeys.telemetry.all, boxId, 'logs', params] as const,
-    traces: (boxId: string, params: object) => [...queryKeys.telemetry.all, boxId, 'traces', params] as const,
-    metrics: (boxId: string, params: object) => [...queryKeys.telemetry.all, boxId, 'metrics', params] as const,
-    traceSpans: (boxId: string, traceId: string) => [...queryKeys.telemetry.all, boxId, 'traces', traceId] as const,
+    logs: (organizationId: string, boxId: string, params: object) =>
+      [...queryKeys.telemetry.all, organizationId, boxId, 'logs', params] as const,
+    traces: (organizationId: string, boxId: string, params: object) =>
+      [...queryKeys.telemetry.all, organizationId, boxId, 'traces', params] as const,
+    metrics: (organizationId: string, boxId: string, params: object) =>
+      [...queryKeys.telemetry.all, organizationId, boxId, 'metrics', params] as const,
+    traceSpans: (organizationId: string, boxId: string, traceId: string) =>
+      [...queryKeys.telemetry.all, organizationId, boxId, 'traces', traceId] as const,
   },
   analytics: {
     all: ['analytics'] as const,

@@ -18,30 +18,19 @@ export function useBoxTraceSpans(
   const { selectedOrganization } = useSelectedOrganization()
 
   return useQuery<TraceSpan[]>({
-    queryKey: queryKeys.telemetry.traceSpans(boxId ?? '', traceId ?? ''),
+    queryKey: queryKeys.telemetry.traceSpans(selectedOrganization?.id ?? '', boxId ?? '', traceId ?? ''),
     queryFn: async () => {
-      if (!selectedOrganization || !boxId || !traceId || !api.analyticsTelemetryApi) {
+      if (!selectedOrganization || !traceId) {
         throw new Error('Missing required parameters')
       }
-      const response = await api.analyticsTelemetryApi.organizationOrganizationIdBoxBoxIdTelemetryTracesTraceIdGet(
-        selectedOrganization.id,
-        boxId,
-        traceId,
-      )
-
-      return (response.data ?? []).map((span) => ({
-        traceId: span.traceId ?? '',
-        spanId: span.spanId ?? '',
-        parentSpanId: span.parentSpanId,
-        spanName: span.spanName ?? '',
-        timestamp: span.timestamp ?? '',
-        durationNs: (span.durationMs ?? 0) * 1_000_000,
-        spanAttributes: span.spanAttributes ?? {},
-        statusCode: span.statusCode,
-        statusMessage: span.statusMessage,
-      }))
+      const response = await api.axiosInstance.get<TraceSpan[]>(`/observability/traces/${traceId}`, {
+        headers: { 'X-BoxLite-Organization-ID': selectedOrganization.id },
+        params: { boxId },
+        timeout: 8_000,
+      })
+      return response.data
     },
-    enabled: !!boxId && !!traceId && !!selectedOrganization && !!api.analyticsTelemetryApi,
+    enabled: !!traceId && !!selectedOrganization,
     staleTime: 30_000,
     ...options,
   })

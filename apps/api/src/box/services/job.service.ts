@@ -15,7 +15,7 @@ import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { JobStateHandlerService } from './job-state-handler.service'
-import { propagation, context as otelContext } from '@opentelemetry/api'
+import { propagation, context as otelContext, trace } from '@opentelemetry/api'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 
 const REDIS_BLOCKING_COMMAND_TIMEOUT_BUFFER_MS = 3_000
@@ -70,8 +70,13 @@ export class JobService {
 
       // Log with context-specific info
       const contextInfo = resourceId ? `${resourceType} ${resourceId}` : 'N/A'
+      const telemetryFields = this.getTelemetryFields(payload, job.id, runnerId, resourceId)
+      trace.getActiveSpan()?.setAttributes(telemetryFields)
 
-      this.logger.debug(`Created job ${job.id} of type ${type} for ${contextInfo} on runner ${runnerId}`)
+      this.logger.debug({
+        msg: `Created job ${job.id} of type ${type} for ${contextInfo} on runner ${runnerId}`,
+        ...telemetryFields,
+      })
 
       // Notify runner via Redis - happens outside transaction
       // If transaction rolls back, notification is harmless (runner will poll and find nothing)
@@ -386,6 +391,23 @@ export class JobService {
 
   private getRunnerQueueKey(runnerId: string): string {
     return `${this.REDIS_JOB_QUEUE_PREFIX}${runnerId}`
+  }
+
+  private getTelemetryFields(
+    payload: string | Record<string, any> | undefined,
+    jobId: string,
+    runnerId: string,
+    resourceId: string,
+  ): Record<string, string> {
+    const fields: Record<string, string> = {
+      'boxlite.job.id': jobId,
+      'boxlite.runner.id': runnerId,
+      'boxlite.box.id': resourceId,
+    }
+    if (payload && typeof payload !== 'string' && typeof payload.organizationId === 'string') {
+      fields['boxlite.organization.id'] = payload.organizationId
+    }
+    return fields
   }
 
   /**

@@ -14,6 +14,9 @@ export interface TracesQueryParams {
   to: Date
   page?: number
   limit?: number
+  sources?: string[]
+  runnerId?: string
+  jobId?: string
 }
 
 export function useBoxTraces(
@@ -25,42 +28,28 @@ export function useBoxTraces(
   const { selectedOrganization } = useSelectedOrganization()
 
   return useQuery<PaginatedTraces>({
-    queryKey: queryKeys.telemetry.traces(boxId ?? '', params),
+    queryKey: queryKeys.telemetry.traces(selectedOrganization?.id ?? '', boxId ?? '', params),
     queryFn: async () => {
-      if (!selectedOrganization || !boxId || !api.analyticsTelemetryApi) {
+      if (!selectedOrganization) {
         throw new Error('Missing required parameters')
       }
-      const limit = params.limit ?? 50
-      const page = params.page ?? 1
-      const offset = (page - 1) * limit
-
-      const response = await api.analyticsTelemetryApi.organizationOrganizationIdBoxBoxIdTelemetryTracesGet(
-        selectedOrganization.id,
-        boxId,
-        params.from.toISOString(),
-        params.to.toISOString(),
-        limit,
-        offset,
-      )
-
-      const items = (response.data ?? []).map((trace) => ({
-        traceId: trace.traceId ?? '',
-        rootSpanName: trace.rootSpanName ?? '',
-        startTime: trace.startTime ?? '',
-        endTime: trace.endTime ?? '',
-        durationMs: trace.totalDurationMs ?? 0,
-        spanCount: trace.spanCount ?? 0,
-        statusCode: trace.statusCode,
-      }))
-
-      return {
-        items,
-        total: items.length < limit ? offset + items.length : offset + items.length + 1,
-        page,
-        totalPages: items.length < limit ? page : page + 1,
-      }
+      const response = await api.axiosInstance.get<PaginatedTraces>('/observability/traces', {
+        headers: { 'X-BoxLite-Organization-ID': selectedOrganization.id },
+        params: {
+          from: params.from.toISOString(),
+          to: params.to.toISOString(),
+          page: params.page ?? 1,
+          limit: params.limit ?? 50,
+          sources: params.sources?.join(','),
+          runnerId: params.runnerId,
+          boxId,
+          jobId: params.jobId,
+        },
+        timeout: 8_000,
+      })
+      return response.data
     },
-    enabled: !!boxId && !!selectedOrganization && !!api.analyticsTelemetryApi && !!params.from && !!params.to,
+    enabled: !!selectedOrganization && !!params.from && !!params.to,
     staleTime: 10_000,
     ...options,
   })

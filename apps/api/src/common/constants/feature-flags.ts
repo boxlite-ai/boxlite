@@ -6,4 +6,5 @@
 
 export const FeatureFlags = {
   ORGANIZATION_INFRASTRUCTURE: 'organization_infrastructure',
+  TENANT_OBSERVABILITY: 'tenant_observability',
 } as const

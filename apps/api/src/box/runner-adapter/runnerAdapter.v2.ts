@@ -137,6 +137,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       metadata,
       authToken: box.authToken,
       organizationId: box.organizationId,
+      runnerId: this.runner.id,
       regionId: box.region,
     }
 
@@ -153,9 +154,12 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     authToken: string,
     metadata?: { [key: string]: string },
   ): Promise<StartBoxResponse | undefined> {
+    const organizationId = await this.getBoxOrganizationId(boxId)
     await this.jobService.createJob(null, JobType.START_BOX, this.runner.id, ResourceType.BOX, boxId, {
       authToken,
       metadata,
+      organizationId,
+      runnerId: this.runner.id,
     })
 
     this.logger.debug(`Created START_BOX job for box ${boxId} on runner ${this.runner.id}`)
@@ -165,15 +169,22 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   }
 
   async stopBox(boxId: string, force?: boolean): Promise<void> {
+    const organizationId = await this.getBoxOrganizationId(boxId)
     await this.jobService.createJob(null, JobType.STOP_BOX, this.runner.id, ResourceType.BOX, boxId, {
       force,
+      organizationId,
+      runnerId: this.runner.id,
     })
 
     this.logger.debug(`Created STOP_BOX job for box ${boxId} on runner ${this.runner.id}`)
   }
 
   async destroyBox(boxId: string): Promise<void> {
-    await this.jobService.createJob(null, JobType.DESTROY_BOX, this.runner.id, ResourceType.BOX, boxId)
+    const organizationId = await this.getBoxOrganizationId(boxId)
+    await this.jobService.createJob(null, JobType.DESTROY_BOX, this.runner.id, ResourceType.BOX, boxId, {
+      organizationId,
+      runnerId: this.runner.id,
+    })
 
     this.logger.debug(`Created DESTROY_BOX job for box ${boxId} on runner ${this.runner.id}`)
   }
@@ -189,5 +200,17 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     _networkLimitEgress?: boolean,
   ): Promise<void> {
     throw new Error('Live network settings updates with runner API version 2 are not supported')
+  }
+
+  private async getBoxOrganizationId(boxId: string): Promise<string> {
+    const box = await this.boxRepository.findOne({
+      where: { id: boxId },
+      select: ['organizationId'],
+      loadEagerRelations: false,
+    })
+    if (!box) {
+      throw new Error(`Box ${boxId} not found`)
+    }
+    return box.organizationId
   }
 }

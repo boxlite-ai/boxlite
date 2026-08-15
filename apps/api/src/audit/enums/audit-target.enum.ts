@@ -5,6 +5,7 @@
  */
 
 export enum AuditTarget {
+  OBSERVABILITY = 'observability',
   API_KEY = 'api_key',
   ORGANIZATION = 'organization',
   ORGANIZATION_INVITATION = 'organization_invitation',

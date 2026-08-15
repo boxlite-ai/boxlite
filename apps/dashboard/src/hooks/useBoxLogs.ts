@@ -15,7 +15,11 @@ export interface LogsQueryParams {
   page?: number
   limit?: number
   severities?: string[]
+  sources?: string[]
   search?: string
+  runnerId?: string
+  jobId?: string
+  traceId?: string
 }
 
 export function useBoxLogs(
@@ -27,47 +31,31 @@ export function useBoxLogs(
   const { selectedOrganization } = useSelectedOrganization()
 
   return useQuery<PaginatedLogs>({
-    queryKey: queryKeys.telemetry.logs(boxId ?? '', params),
+    queryKey: queryKeys.telemetry.logs(selectedOrganization?.id ?? '', boxId ?? '', params),
     queryFn: async () => {
-      if (!selectedOrganization || !boxId || !api.analyticsTelemetryApi) {
+      if (!selectedOrganization) {
         throw new Error('Missing required parameters')
       }
-      const limit = params.limit ?? 50
-      const page = params.page ?? 1
-      const offset = (page - 1) * limit
-      const severity = params.severities?.length ? params.severities.join(',') : undefined
-
-      const response = await api.analyticsTelemetryApi.organizationOrganizationIdBoxBoxIdTelemetryLogsGet(
-        selectedOrganization.id,
-        boxId,
-        params.from.toISOString(),
-        params.to.toISOString(),
-        severity,
-        params.search,
-        limit,
-        offset,
-      )
-
-      const items = (response.data ?? []).map((entry) => ({
-        timestamp: entry.timestamp ?? '',
-        body: entry.body ?? '',
-        severityText: entry.severityText ?? '',
-        severityNumber: entry.severityNumber,
-        serviceName: entry.serviceName ?? '',
-        resourceAttributes: entry.resourceAttributes ?? {},
-        logAttributes: entry.logAttributes ?? {},
-        traceId: entry.traceId,
-        spanId: entry.spanId,
-      }))
-
-      return {
-        items,
-        total: items.length < limit ? offset + items.length : offset + items.length + 1,
-        page,
-        totalPages: items.length < limit ? page : page + 1,
-      }
+      const response = await api.axiosInstance.get<PaginatedLogs>('/observability/logs', {
+        headers: { 'X-BoxLite-Organization-ID': selectedOrganization.id },
+        params: {
+          from: params.from.toISOString(),
+          to: params.to.toISOString(),
+          page: params.page ?? 1,
+          limit: params.limit ?? 50,
+          severities: params.severities?.join(','),
+          sources: params.sources?.join(','),
+          search: params.search,
+          runnerId: params.runnerId,
+          boxId,
+          jobId: params.jobId,
+          traceId: params.traceId,
+        },
+        timeout: 8_000,
+      })
+      return response.data
     },
-    enabled: !!boxId && !!selectedOrganization && !!api.analyticsTelemetryApi && !!params.from && !!params.to,
+    enabled: !!selectedOrganization && !!params.from && !!params.to,
     staleTime: 10_000,
     ...options,
   })

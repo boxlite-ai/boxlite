@@ -101,7 +101,7 @@ function LogsEmptyState() {
   )
 }
 
-export function BoxLogsTab({ boxId }: { boxId: string }) {
+export function BoxLogsTab({ boxId, sources }: { boxId?: string; sources?: string[] }) {
   const [params, setParams] = useQueryStates(logsSearchParams)
   const [timeRange, setTimeRange] = useQueryStates(timeRangeSearchParams)
   const [searchInput, setSearchInput] = useState(params.search)
@@ -118,9 +118,10 @@ export function BoxLogsTab({ boxId }: { boxId: string }) {
       page: params.logsPage,
       limit,
       severities: params.severity.length > 0 ? [...params.severity] : undefined,
+      sources,
       search: params.search || undefined,
     }),
-    [resolvedFrom, resolvedTo, params.logsPage, params.severity, params.search],
+    [resolvedFrom, resolvedTo, params.logsPage, params.severity, params.search, sources],
   )
 
   const { data, isLoading, isError, refetch } = useBoxLogs(boxId, queryParams)
@@ -213,6 +214,7 @@ export function BoxLogsTab({ boxId }: { boxId: string }) {
                 <TableHead className="w-10" />
                 <TableHead className="w-48">Timestamp</TableHead>
                 <TableHead className="w-24">Severity</TableHead>
+                <TableHead className="w-40">Service</TableHead>
                 <TableHead>Message</TableHead>
               </TableRow>
             </TableHeader>
@@ -235,11 +237,12 @@ export function BoxLogsTab({ boxId }: { boxId: string }) {
                     <TableCell>
                       <SeverityBadge severity={log.severityText} />
                     </TableCell>
+                    <TableCell className="max-w-40 truncate font-mono text-xs">{log.serviceName}</TableCell>
                     <TableCell className="max-w-md truncate font-mono text-xs">{log.body}</TableCell>
                   </TableRow>
                   {expandedRow === index && (
                     <TableRow>
-                      <TableCell colSpan={4} className="bg-muted/30 p-4">
+                      <TableCell colSpan={5} className="bg-muted/30 p-4">
                         <div className="space-y-3">
                           <div>
                             <h4 className="text-sm font-medium mb-1">Full Message</h4>

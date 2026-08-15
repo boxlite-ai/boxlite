@@ -32,6 +32,7 @@ import LandingPage from './pages/LandingPage'
 import Logout from './pages/Logout'
 import NotFound from './pages/NotFound'
 import Boxes from './pages/Boxes'
+import { useTenantObservabilityEnabled } from './hooks/useTenantObservabilityEnabled'
 
 // Code-split the heavier, not-first-paint routes out of the main bundle. They
 // load on demand under the dashboard <Outlet> Suspense boundary, so the initial
@@ -41,12 +42,21 @@ const Keys = React.lazy(() => import('./pages/Keys'))
 // Billing pulls in the plan/wallet/usage sections (and recharts) behind this one chunk.
 const Billing = React.lazy(() => import('./pages/Billing'))
 const Volumes = React.lazy(() => import('./pages/Volumes'))
+const Observability = React.lazy(() => import('./pages/Observability'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
 const BoxDetails = React.lazy(() => import('./components/boxes').then((m) => ({ default: m.BoxDetails })))
 const BoxTerminalFullscreen = React.lazy(() =>
   import('./components/boxes').then((m) => ({ default: m.BoxTerminalFullscreen })),
 )
+
+const TenantObservabilityRoute = () => {
+  const isEnabled = useTenantObservabilityEnabled()
+  if (isEnabled === undefined) {
+    return <LoadingFallback />
+  }
+  return isEnabled ? <Observability /> : <Navigate to={RoutePath.BOXES} replace />
+}
 import { ApiProvider } from './providers/ApiProvider'
 import { RegionsProvider } from './providers/RegionsProvider'
 import { BoxSessionProvider } from './providers/BoxSessionProvider'
@@ -184,6 +194,7 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
         <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
         <Route path={getRouteSubPath(RoutePath.VOLUMES)} element={<Volumes />} />
+        <Route path={getRouteSubPath(RoutePath.OBSERVABILITY)} element={<TenantObservabilityRoute />} />
         {/* Plan, wallet and usage are sections of the one Billing page. The old
             per-surface paths stay as redirects so existing links keep working.
             The route is open to any member: the wallet/tier data is owner-scoped by
