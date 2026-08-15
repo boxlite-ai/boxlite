@@ -9,8 +9,10 @@ import { formatAmount } from '@/lib/utils'
 
 /**
  * Active-plan banner: a header strip naming the current tier, then the cycle
- * figures. The API has no subscription price or quota, so the three figures are
- * the ones it does expose — prepaid balance, spend so far, and tier expiry.
+ * figures — prepaid balance, wallet spend since the last top-up, and tier
+ * expiry. The subscription's own quota meter and billing cycle live on the
+ * Usage tab's This Cycle card (the `subscription` block on the tier read);
+ * this card keeps the tier-ladder view of the same wallet.
  */
 
 function daysUntil(date: Date): number {

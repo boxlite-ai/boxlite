@@ -5,8 +5,8 @@
  */
 
 export * from './OrganizationTier'
-export * from './OrganizationUsage'
 export * from './OrganizationWallet'
 export * from './tier'
 export * from './OrganizationEmail'
 export * from './Invoice'
+export * from './UsageFundingBucket'

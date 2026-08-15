@@ -10,11 +10,12 @@ import {
   AutomaticTopUp,
   OrganizationEmail,
   OrganizationTier,
-  OrganizationUsage,
   OrganizationWallet,
   PaginatedInvoices,
   PaymentUrl,
+  SeriesGranularity,
   Tier,
+  UsageFundingBucket,
   WalletTopUpRequest,
 } from './types'
 
@@ -39,16 +40,6 @@ export class BillingApiClient {
         throw BoxliteError.fromString(String(errorMessage))
       },
     )
-  }
-
-  public async getOrganizationUsage(organizationId: string): Promise<OrganizationUsage> {
-    const response = await this.axiosInstance.get(`/organization/${organizationId}/usage`)
-    return response.data
-  }
-
-  public async getPastOrganizationUsage(organizationId: string, periods?: number): Promise<OrganizationUsage[]> {
-    const response = await this.axiosInstance.get(`/organization/${organizationId}/usage/past?periods=${periods || 12}`)
-    return response.data
   }
 
   public async getOrganizationWallet(organizationId: string): Promise<OrganizationWallet> {
@@ -77,6 +68,7 @@ export class BillingApiClient {
 
   public async getOrganizationTier(organizationId: string): Promise<OrganizationTier> {
     const response = await this.axiosInstance.get(`/organization/${organizationId}/tier`)
+    const subscription = response.data.subscription
     const orgTier: OrganizationTier = {
       tier: response.data.tier,
       largestSuccessfulPaymentDate: response.data.largestSuccessfulPaymentDate
@@ -85,9 +77,29 @@ export class BillingApiClient {
       largestSuccessfulPaymentCents: response.data.largestSuccessfulPaymentCents,
       expiresAt: response.data.expiresAt ? new Date(response.data.expiresAt) : undefined,
       hasVerifiedBusinessEmail: response.data.hasVerifiedBusinessEmail,
+      ...(subscription && {
+        subscription: {
+          ...subscription,
+          cycleFrom: new Date(subscription.cycleFrom),
+          cycleTo: new Date(subscription.cycleTo),
+        },
+      }),
     }
 
     return orgTier
+  }
+
+  public async getUsageFundingSeries(
+    organizationId: string,
+    granularity: SeriesGranularity,
+    from: Date,
+    to: Date,
+  ): Promise<UsageFundingBucket[]> {
+    const params = new URLSearchParams({ granularity, from: from.toISOString(), to: to.toISOString() })
+    const response = await this.axiosInstance.get(`/organization/${organizationId}/usage/series?${params}`)
+    return (
+      response.data as Array<{ from: string; to: string; quotaCoveredCents: number; fromWalletCents: number }>
+    ).map((bucket) => ({ ...bucket, from: new Date(bucket.from), to: new Date(bucket.to) }))
   }
 
   public async upgradeTier(organizationId: string, tier: number): Promise<void> {
