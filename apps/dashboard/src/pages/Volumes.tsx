@@ -47,7 +47,7 @@ const ROW_GRID = 'grid grid-cols-[1.6fr_1.2fr_1fr_0.8fr_0.85fr_104px] items-cent
 // mount" rather than "last used" (a long-running writer disproves that) and
 // rather than "last mounted", whose past tense would suggest the mount has
 // since ended — something this page has no way to know.
-function timeAgo(value?: string): string {
+function timeAgo(value?: string | null): string {
   if (!value) return 'never'
   const minutes = Math.floor((Date.now() - new Date(value).getTime()) / 60_000)
   if (minutes < 1) return 'just now'
