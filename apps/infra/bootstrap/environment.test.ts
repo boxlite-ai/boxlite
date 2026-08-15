@@ -173,6 +173,32 @@ test('a value left behind by an interrupted load is caught', () => {
   assert.notEqual(recordedDigest, actualDigest)
 })
 
+test('an app-wide fallback cannot supply a stage its manifest or digest', () => {
+  /*
+   * `sst secret set --fallback` writes under the literal stage `_fallback`, which every stage reads.
+   * If the bookkeeping keys came from there, a stage nobody bootstrapped would inherit a manifest and
+   * a digest that agree with each other, sail through both fail-closed checks, and deploy another
+   * source's configuration — the exact case those checks exist to stop.
+   */
+  const printed = [
+    '# fallback',
+    `${STAGE_CONFIG_MANIFEST_KEY}=STACK_DOMAIN`,
+    `${STAGE_CONFIG_DIGEST_KEY}=${'a'.repeat(64)}`,
+    'STACK_DOMAIN=shared.example.test',
+    '# boxlite/dev',
+  ].join('\n')
+
+  const stored = parseSecretList(printed, { app: 'boxlite', stage: 'dev' })
+  assert.equal(stored[STAGE_CONFIG_MANIFEST_KEY], undefined, 'a fallback must not name a stage manifest')
+  assert.equal(stored[STAGE_CONFIG_DIGEST_KEY], undefined, 'nor supply the digest that would match it')
+  // An ordinary value still falls back, which is what the feature is for — it simply cannot be
+  // hydrated until the stage's own manifest names it.
+  assert.equal(stored.STACK_DOMAIN, 'shared.example.test')
+
+  const { apply } = hydrateStageConfig({ stored, environment: {} })
+  assert.deepEqual(apply, {}, 'with no stage manifest, nothing is hydrated')
+})
+
 test('a store with a manifest but no digest reads as torn, not as unverifiable', () => {
   // The first interrupted load is exactly this shape: the manifest landed, the digest did not. Treating
   // an absent digest as "cannot verify, carry on" would let that one case through unchecked — and it is

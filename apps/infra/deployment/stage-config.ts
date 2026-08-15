@@ -124,8 +124,19 @@ export function parseSecretList(stdout: any, { app, stage }: any) {
     const match = SECRET_ASSIGNMENT.exec(line)
     if (!match) continue
     const [, key, value] = match
+    /*
+     * The bookkeeping keys are never taken from the fallback section.
+     *
+     * A fallback belongs to the app, so `sst secret set --fallback BOXLITE_STAGE_CONFIG …` would give
+     * every stage a manifest — and with it a digest that matches, since both would come from the same
+     * place. A stage nobody has bootstrapped would then pass the manifest and digest checks and deploy
+     * another source's configuration, which is precisely the case those checks exist to stop.
+     *
+     * Ordinary values still fall back, which is what fallbacks are for: the value is shared on purpose
+     * and the stage's own manifest has to name it before anything is hydrated.
+     */
     if (section === stageSection) stageValues[key] = value
-    else if (section === FALLBACK_SECTION) fallback[key] = value
+    else if (section === FALLBACK_SECTION && !isStageConfigBookkeepingKey(key)) fallback[key] = value
   }
 
   return { ...fallback, ...stageValues }
