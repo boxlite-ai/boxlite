@@ -244,16 +244,16 @@ export function prepareStageConfigLoad(source: any) {
   }
 
   const manifest = serializeStageConfigManifest(storedKeys)
-  return {
-    excluded,
-    storedKeys,
-    payload: {
-      ...config,
-      [STAGE_CONFIG_MANIFEST_KEY]: manifest,
-      // Over the manifest's own keys rather than over `config`, so the two sides hash the same list:
-      // hydration has only the manifest to go by. A value that reaches the store without being named
-      // is then outside the digest, which is correct — an unnamed key is never hydrated either.
-      [STAGE_CONFIG_DIGEST_KEY]: stageConfigDigest(parseStageConfigManifest(manifest), config),
-    },
+  // Typed as a plain map: the literal below would otherwise infer down to just the two bookkeeping
+  // keys, and a caller reading a configuration value out of it would not typecheck.
+  const payload: Record<string, string> = {
+    ...config,
+    [STAGE_CONFIG_MANIFEST_KEY]: manifest,
+    // Over the manifest's own keys rather than over `config`, so the two sides hash the same list:
+    // hydration has only the manifest to go by. A value that reaches the store without being named
+    // is then outside the digest, which is correct — an unnamed key is never hydrated either.
+    [STAGE_CONFIG_DIGEST_KEY]: stageConfigDigest(parseStageConfigManifest(manifest), config),
   }
+
+  return { excluded, storedKeys, payload }
 }

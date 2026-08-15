@@ -842,8 +842,18 @@ async function main() {
   ensureGitHubOidcProvider({ awsCliPath, region })
   ensureGithubEnvironment({ repo, stage, reviewerIds: effectiveReviewerIds })
   if (hasFlag(args, 'provision-auth0')) {
-    const stackDomain = process.env.STACK_DOMAIN
-    if (!stackDomain) throw new Error('STACK_DOMAIN must be set in .env before --provision-auth0 can build callback URLs')
+    /*
+     * From the snapshot that is about to be stored, not from process.env.
+     *
+     * loadDeploymentEnvironment() leaves an exported STACK_DOMAIN in place — a shell override wins
+     * over the file — so reading it here would build Auth0 callback URLs for one domain while the
+     * store, and therefore every deploy, used another. The two would disagree with nothing to say so,
+     * and Auth0 provisioning is not idempotent, so the wrong URLs are not simply re-run away.
+     */
+    const stackDomain = stageConfigLoad.payload.STACK_DOMAIN
+    if (!stackDomain) {
+      throw new Error(`STACK_DOMAIN must be set in ${ENV_PATH} before --provision-auth0 can build callback URLs`)
+    }
     provisionAuth0({ stackDomain })
   }
   await ensureCloudflareCredentials({ awsCliPath, region, stage, repo, force })
