@@ -1,10 +1,20 @@
 # Infrastructure security
 
-Stage configuration and application secrets are loaded into the environment just before SST starts,
-from the stage's SST secret store; the Cloudflare provider credentials come from SSM or the job's
-Environment secrets, since reading that store initializes the Cloudflare provider. No workflow writes
-configuration to disk, and only keys named by the store's own `BOXLITE_STAGE_CONFIG` manifest are
-applied, so a secret written under any other name cannot reach a deploy's environment.
+A stage's configuration is loaded into the environment just before SST starts, from the stage's SST
+secret store; the Cloudflare provider credentials come from SSM or the job's Environment secrets,
+since reading that store initializes the Cloudflare provider. No workflow writes configuration to
+disk, and only keys named by the store's own `BOXLITE_STAGE_CONFIG` manifest are applied, so a secret
+written under any other name cannot reach a deploy's environment.
+
+The application secrets — `OIDC_CLIENT_ID` and the others declared as `sst.Secret` — live in that
+same store but are **not** part of that hydration. SST resolves them itself, so they never enter the
+deploy wrapper's own `process.env`; the stack still passes them to the services that need them, which
+is how they reach a deployed application's environment.
+
+Two separate things keep them intact. `sst secret load` merges rather than replacing, and bootstrap's
+payload excludes those names outright (`APP_SECRET_NAMES`), so a load cannot overwrite a value the
+operator was just prompted for. The manifest is not what protects them — it governs which stored keys
+may be hydrated, not what the load writes.
 
 A stage's deploy role reaches its own stage's **SST secret store**, and no other stage's. One bucket
 and one parameter tree hold every stage's, so the role's `s3:*`/`ssm:*` grant on `*` used to let a job

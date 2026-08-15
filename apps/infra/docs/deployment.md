@@ -284,13 +284,16 @@ may admit the account via `kms:ViaService`, and the role trusts only the GitHub 
 principal so it cannot be assumed locally to check. Measuring that from inside a job is
 what would let the Environment secrets go away.
 
-Otherwise two things are configured on the GitHub side, per stage:
-`AWS_ACCOUNT_ID` — from which the workflows compose
-`arn:aws:iam::<id>:role/boxlite-<stage>-github-deploy`. It cannot live in the store,
-because `configure-aws-credentials` reads it before any AWS credentials exist. Each
-stage's GitHub Environment must still exist under exactly the stage name — the trust
-policy pins `repo:<owner>/<repo>:environment:<stage>` — and that is where required
-reviewers are enforced.
+Otherwise two variables are configured on the GitHub side, per stage, and neither can live in the
+store because `configure-aws-credentials` reads both before any AWS credentials exist:
+
+- `AWS_ACCOUNT_ID`, from which the workflows compose
+  `arn:aws:iam::<id>:role/boxlite-<stage>-github-deploy`. Required.
+- `AWS_REGION`, needed only by a stage outside the workflows' default. Bootstrap writes it either
+  way, since it knows the region it just deployed into.
+
+Each stage's GitHub Environment must still exist under exactly the stage name — the trust policy pins
+`repo:<owner>/<repo>:environment:<stage>` — and that is where required reviewers are enforced.
 
 Run SST through the npm scripts, never bare `npx sst` — the wrapper loads the stage
 configuration from the secret store, enforces the Runner safety policy, and scrubs
