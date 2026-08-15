@@ -11,11 +11,17 @@
  * credentials. An enumeration of dangerous names cannot be finished, so this is the other shape:
  * nothing is hydrated unless the deploy demonstrably reads it.
  *
- * Derived from the source that reads them — every `envOr` / `requireEnv` / `process.env.X` under
- * stack/, deployment/, artifacts/, runner/ and shared/, minus the keys isLocalOnlyDeploymentKey
+ * Derived from the source that reads them — every *direct* `envOr` / `requireEnv` / `process.env.X`
+ * under stack/, deployment/, artifacts/, runner/ and shared/, minus the keys isLocalOnlyDeploymentKey
  * refuses. The test beside this file re-derives that set and fails when the two disagree, so adding a
  * config key to the stack fails until it is added here. That failure is the point: it makes widening
  * what a store can inject a decision someone makes, not something that happens.
+ *
+ * Direct is the operative word, and errs toward refusing. A name passed to a helper that reads it —
+ * `runnerEndpoint('DEFAULT_RUNNER_DOMAIN', …)` — is not derived, so it is not storable; the test says
+ * why that particular omission is deliberate rather than missed. The failure mode of that choice is a
+ * key an operator sets being ignored, which is visible, rather than a key reaching the sst child's
+ * environment because a helper obscured it.
  *
  * The denylist stays as a second check. It is not the boundary any more, but a key that is both read
  * by the stack and dangerous — AWS_PROFILE is one — must still be refused.
