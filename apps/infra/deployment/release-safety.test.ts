@@ -442,6 +442,17 @@ test('what bootstrap stores is the .env it validated, read once', () => {
 
   assert.doesNotMatch(body, /readFileSync|requireStageEnvFile/, 'the payload must be handed in, not re-read')
   assert.doesNotMatch(body, /prepareStageConfigLoad/, 'preparing it here would be the second read again')
+
+  /*
+   * The same value everywhere, not just read once. Auth0 provisioning builds callback URLs from
+   * STACK_DOMAIN and is not idempotent; taking it from process.env would let an exported override beat
+   * the file, so Auth0 would be configured for one domain and every deploy would use another.
+   */
+  assert.doesNotMatch(
+    source,
+    /process\.env\.STACK_DOMAIN/,
+    'STACK_DOMAIN must come from the validated snapshot, so Auth0 and the store cannot disagree',
+  )
   // Exactly one read in the whole script, and it is the one main() validates.
   assert.equal(
     source.match(/readFileSync\(requireStageEnvFile\(\)/g)?.length,
