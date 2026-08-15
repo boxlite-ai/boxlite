@@ -589,6 +589,12 @@ writeFileSync(process.env.SYNTHETIC_ENV_PATH, JSON.stringify(process.env))
         if (other.refusal.source === refusal.source) continue
         assert.doesNotMatch(stderr, other.refusal, `${description} must not fall through to ${other.description}`)
       }
+      /*
+       * And it exited deliberately rather than crashing. Node exits 1 on an unhandled throw too, so
+       * without this the unreadable-store case passes with its guard deleted: `stored` stays undefined,
+       * hydration throws a TypeError, and every assertion above is satisfied by a stack trace.
+       */
+      assert.doesNotMatch(stderr, /^\s+at |\b(TypeError|ReferenceError|SyntaxError)\b/m, `${description} must be refused, not crashed`)
       // The fake sst writes that file only on its fall-through, so its absence is the proof no plan was
       // ever started — the refusal has to land before sst is asked to build anything.
       assert.equal(await fileExists(capturedEnv), false, `sst must not run with ${description}`)
