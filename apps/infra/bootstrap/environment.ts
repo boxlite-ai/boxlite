@@ -191,8 +191,18 @@ export function deployableStageConfig(source: any) {
  * the quotes also protect a leading or trailing space from the trim and a `#` from being read as
  * the start of a comment.
  *
- * A value containing a single quote or a newline has no such representation. Refuse it here rather
- * than store a mangled token, which would surface much later as an opaque auth failure. The value
+ * So single quotes are the default. A value holding one of its own cannot use them, and an apostrophe
+ * is ordinary in a generated password — so that case takes the double-quoted form instead, but only
+ * when the value contains no `"`, `\`, `$` or backtick.
+ *
+ * The `$` matters and is easy to get wrong: `sst secret load` is Go, and godotenv expands `$VAR`
+ * inside double quotes. Checking this against JavaScript's dotenv says otherwise — that one does no
+ * expansion — so a password containing `$` would round-trip in a unit test here and be stored as
+ * something else by sst. The single-quoted form is exempt because neither parser expands inside it.
+ *
+ * What is left has no representation: a newline, which the one-assignment-per-line format cannot hold
+ * at all, and a value mixing a single quote with one of those four characters. Both are refused here
+ * rather than stored mangled, which would surface much later as an opaque auth failure. The value
  * itself stays out of the message — this runs over credentials.
  */
 export function serializeStageConfig(config: any) {
@@ -200,10 +210,24 @@ export function serializeStageConfig(config: any) {
     .sort()
     .map((key) => {
       const value = String(config[key])
-      if (/['\r\n]/.test(value)) {
-        throw new Error(`${key} contains a single quote or newline, which the stage configuration store cannot represent`)
+      // A newline cannot be represented at all: the format is one assignment per line.
+      if (/[\r\n]/.test(value)) {
+        throw new Error(`${key} contains a newline, which the stage configuration store cannot represent`)
       }
-      return `${key}='${value}'`
+      // Single quotes are the exact form — the parser strips them and does nothing else — so they are
+      // the default whenever the value has none of its own.
+      if (!value.includes("'")) return `${key}='${value}'`
+      /*
+       * An apostrophe is ordinary in a generated password or token, so refusing it outright would
+       * block bootstrap over a perfectly valid secret. Double quotes carry it, but they also make the
+       * parser process escapes — so this form is used only when there is nothing in the value for an
+       * escape to alter. Anything else is refused rather than silently mangled into a different value.
+       */
+      if (!/["\\$`]/.test(value)) return `${key}="${value}"`
+      throw new Error(
+        `${key} mixes a single quote with one of " \\ $ or a backtick, which cannot be quoted for the ` +
+          'stage configuration store without changing the value',
+      )
     })
   return lines.length > 0 ? `${lines.join('\n')}\n` : ''
 }

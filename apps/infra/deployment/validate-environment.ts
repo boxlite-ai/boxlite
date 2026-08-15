@@ -11,6 +11,8 @@
  * hydrated, and deployment/stage-config.ts drops one anyway if it somehow got written by hand.
  */
 
+import { parse } from 'dotenv'
+
 const FORBIDDEN_DEPLOYMENT_KEYS = new Set([
   'ALLOW_DOWNGRADE',
   'API_ARTIFACT_REF',
@@ -181,12 +183,36 @@ export function isLocalOnlyDeploymentKey(key: string) {
  * A malformed line is a different problem: the file does not say what its author thinks it says, and
  * dotenv would skip it in silence.
  */
+/*
+ * Reject the lines dotenv would drop in silence — a dropped key is simply absent from the store, and
+ * the failure surfaces much later as a missing value.
+ *
+ * The check asks the parser instead of describing it. A pattern here would be a second implementation
+ * of dotenv's grammar, and the two drift in both directions: too strict and an operator is told a
+ * working file is invalid (`export KEY=value` from a file that doubles as a shell script, `KEY = value`
+ * from ordinary tidying, and — genuinely surprising — `KEY: value`, which dotenv 17 reads while
+ * `KEY:value` and `KEY : value` it does not); too loose and the silent-drop this exists to catch gets
+ * through. `deployableStageConfig` hands the same text to the same parser, so agreement is the
+ * property that matters, not the shape of the rule.
+ *
+ * One case is line-oriented on purpose. A value quoted across lines parses for dotenv, but its
+ * continuations are not assignments and there is no way to recognise one without reimplementing the
+ * grammar — an unterminated quote yields a key of its own, so even "keep reading until it parses"
+ * cannot tell the two apart. Such a value could never be stored regardless, because a stored value
+ * cannot contain a newline, so it is refused here with a message that names both possibilities rather
+ * than guessing which one it is.
+ */
 export function validateDotenvSyntax(source: string, label = '.env') {
-  for (const [index, rawLine] of source.split(/\r?\n/).entries()) {
+  // A lone CR ends a line too — an old-Mac line ending, or a file mangled in transit. Splitting on
+  // \n alone folds `A=1\rBROKEN` into one line that parses as A=1, hiding the half the parser drops.
+  for (const [index, rawLine] of source.split(/\r\n|\r|\n/).entries()) {
     const line = rawLine.trim()
     if (line === '' || line.startsWith('#')) continue
-    if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(line)) {
-      throw new Error(`${label} contains invalid assignment syntax on line ${index + 1}; expected KEY=value`)
+    if (Object.keys(parse(line)).length === 0) {
+      throw new Error(
+        `${label} line ${index + 1} is not an assignment dotenv can read; expected KEY=value. If it ` +
+          'continues a value quoted across lines, note that a stored value cannot contain a newline.',
+      )
     }
   }
 }
