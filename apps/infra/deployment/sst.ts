@@ -363,8 +363,10 @@ try {
 }
 
 // Before the store is read, not after: reading it initializes the Cloudflare provider, which needs
-// these. A credential already in the environment is used as-is — that is what the deploy workflow
-// relies on, its role being unable to decrypt the parameter.
+// these. A credential already in the environment is used as-is, which is the path CI takes — every
+// step that reaches here is given the pair as Environment secrets, so the SSM lookup below never runs
+// there. That is deliberate rather than incidental: whether this role can decrypt the parameter is
+// untested (see the note at the top of this file), and nothing in CI should be the first to find out.
 for (const { env, param } of CLOUDFLARE_CREDS) {
   if (process.env[env]) continue // already provided — don't touch
   const name = `/boxlite/${stage}/${param}`

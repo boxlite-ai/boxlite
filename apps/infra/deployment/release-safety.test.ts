@@ -675,6 +675,27 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
   }
 })
 
+test('every step that runs the sst wrapper is given the Cloudflare credentials', () => {
+  /*
+   * The wrapper falls back to an SSM copy when the variables are unset, and whether this role can
+   * decrypt that parameter has never been verified — so a step without them either works by a path
+   * nobody has confirmed, or fails at provider initialization. Both are avoidable by passing the
+   * Environment secrets the stage already holds.
+   *
+   * `install` counts: it evaluates sst.config.ts, which initializes every provider declared there.
+   */
+  const workflow: any = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'), { schema: CLOUDFORMATION_SCHEMA })
+  const steps = values(workflow.jobs).flatMap((job: any) => job.steps ?? [])
+  const wrapperSteps = steps.filter((step: any) => typeof step.run === 'string' && /npm run .*\bsst\b/.test(step.run))
+  assert.ok(wrapperSteps.length > 0, 'no step runs the sst wrapper; this test is looking at the wrong thing')
+
+  for (const step of wrapperSteps) {
+    for (const secret of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_DEFAULT_ACCOUNT_ID']) {
+      assert.ok(step.env?.[secret], `step "${step.name}" runs sst without ${secret}`)
+    }
+  }
+})
+
 test('every unusable stage configuration store stops the deploy rather than warning', () => {
   // Over live source, for the reason the API-image test gives: nothing executes this path in a test,
   // so a branch downgraded to a warning would leave every unit test passing. The store is now the only
