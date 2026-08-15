@@ -463,7 +463,9 @@ test('the deploy role cannot rewrite its own permissions', () => {
   const template = readDeployTemplate()
   const statements = deployRolePolicyStatements(template)
   const asArray = (value: any) => (Array.isArray(value) ? value : [value])
-  const SELF_ARN_FRAGMENT = 'role/boxlite-${GitHubEnvironment}-github-deploy'
+  const SELF_ARN = 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-github-deploy'
+  const BOUNDARY_ARN =
+    'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boxlite-${GitHubEnvironment}-runtime-boundary'
   const SELF_MUTATING = /^iam:(Attach|Detach|Put|Delete|Update)/i
 
   const granted = new Set<string>()
@@ -492,8 +494,10 @@ test('the deploy role cannot rewrite its own permissions', () => {
      * the resource to end at the role's own name, and refuse to credit a conditional Deny at all.
      */
     if (statement.Condition !== undefined) continue
+    // Glob, not endsWith: the Deny names role/boxlite-*-github-deploy so it protects sibling stages
+    // as well, and a literal comparison against this stage's ARN would not see that it covers it.
     const coversSelf = asArray(statement.Resource).some(
-      (resource: any) => typeof resource === 'string' && resource.endsWith(SELF_ARN_FRAGMENT),
+      (resource: any) => typeof resource === 'string' && iamGlob(resource).test(SELF_ARN),
     )
     if (!coversSelf) continue
     for (const action of asArray(statement.Action)) denied.add(action)
@@ -514,18 +518,53 @@ test('the deploy role cannot rewrite its own permissions', () => {
    * Widen it, create a bounded role under the widened version, pass it to a service, and the boundary
    * has stopped bounding anything. Denying writes to that one policy is what breaks the chain.
    */
-  const BOUNDARY_ARN_FRAGMENT = 'policy/boxlite-${GitHubEnvironment}-runtime-boundary'
   const deniedOnBoundary = new Set<string>()
   for (const statement of statements) {
     if (statement.Effect !== 'Deny' || statement.Condition !== undefined) continue
     const coversBoundary = asArray(statement.Resource).some(
-      (resource: any) => typeof resource === 'string' && resource.endsWith(BOUNDARY_ARN_FRAGMENT),
+      (resource: any) => typeof resource === 'string' && iamGlob(resource).test(BOUNDARY_ARN),
     )
     if (!coversBoundary) continue
     for (const action of asArray(statement.Action)) deniedOnBoundary.add(action)
   }
   for (const action of ['iam:CreatePolicyVersion', 'iam:SetDefaultPolicyVersion', 'iam:DeletePolicy']) {
     assert.ok(deniedOnBoundary.has(action), `${action} on the runtime boundary must be denied`)
+  }
+
+  /*
+   * And a SIBLING stage's deploy role, which is the sharper version of the same hole: role/boxlite-*
+   * covers prod's deploy role as readily as this one's, so a Deny scoped to ${GitHubEnvironment} would
+   * still leave a dev-bound job able to rewrite prod's trust policy and assume it.
+   */
+  const siblingArn = SELF_ARN.replace('${GitHubEnvironment}', 'some-other-stage')
+  const deniedOnSibling = statements
+    .filter((statement: any) => statement.Effect === 'Deny' && statement.Condition === undefined)
+    .filter((statement: any) =>
+      asArray(statement.Resource).some(
+        (resource: any) => typeof resource === 'string' && iamGlob(resource).test(siblingArn),
+      ),
+    )
+    .flatMap((statement: any) => asArray(statement.Action))
+  for (const action of ['iam:PutRolePolicy', 'iam:UpdateAssumeRolePolicy']) {
+    assert.ok(deniedOnSibling.includes(action), `${action} on another stage's deploy role must be denied`)
+  }
+
+  // The boundary needs the same treatment for the same reason: widening prod's boundary from a dev job
+  // is the identical takeover one level down.
+  const siblingBoundaryArn = BOUNDARY_ARN.replace('${GitHubEnvironment}', 'some-other-stage')
+  const deniedOnSiblingBoundary = statements
+    .filter((statement: any) => statement.Effect === 'Deny' && statement.Condition === undefined)
+    .filter((statement: any) =>
+      asArray(statement.Resource).some(
+        (resource: any) => typeof resource === 'string' && iamGlob(resource).test(siblingBoundaryArn),
+      ),
+    )
+    .flatMap((statement: any) => asArray(statement.Action))
+  for (const action of ['iam:CreatePolicyVersion', 'iam:SetDefaultPolicyVersion']) {
+    assert.ok(
+      deniedOnSiblingBoundary.includes(action),
+      `${action} on another stage's runtime boundary must be denied`,
+    )
   }
 })
 
