@@ -18,13 +18,13 @@ afterEach(() => {
   axios.defaults.adapter = undefined as never
 })
 
-describe('getOrganizationTier subscription hydration', () => {
+describe('getOrganizationTier plan hydration', () => {
   it('turns the cycle bounds into Dates and passes the quota fields through', async () => {
     const api = serve({
       tier: 2,
       largestSuccessfulPaymentCents: 2500,
       hasVerifiedBusinessEmail: true,
-      subscription: {
+      plan: {
         planId: 'pro',
         planName: 'Pro',
         status: 'active',
@@ -36,9 +36,9 @@ describe('getOrganizationTier subscription hydration', () => {
       },
     })
     const tier = await api.getOrganizationTier('org-1')
-    expect(tier.subscription?.cycleFrom).toEqual(new Date('2026-08-05T00:00:00.000Z'))
-    expect(tier.subscription?.cycleTo).toEqual(new Date('2026-09-05T00:00:00.000Z'))
-    expect(tier.subscription).toMatchObject({
+    expect(tier.plan?.cycleFrom).toEqual(new Date('2026-08-05T00:00:00.000Z'))
+    expect(tier.plan?.cycleTo).toEqual(new Date('2026-09-05T00:00:00.000Z'))
+    expect(tier.plan).toMatchObject({
       planId: 'pro',
       includedQuotaCents: 25000,
       quotaConsumedCents: 6250,
@@ -49,8 +49,8 @@ describe('getOrganizationTier subscription hydration', () => {
   it('leaves the block absent for an unsubscribed organization', async () => {
     const api = serve({ tier: 1, largestSuccessfulPaymentCents: 0, hasVerifiedBusinessEmail: true })
     const tier = await api.getOrganizationTier('org-1')
-    expect(tier.subscription).toBeUndefined()
-    expect(tier).not.toHaveProperty('subscription')
+    expect(tier.plan).toBeUndefined()
+    expect(tier).not.toHaveProperty('plan')
   })
 })
 

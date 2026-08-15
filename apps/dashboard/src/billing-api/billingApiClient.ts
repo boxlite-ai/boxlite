@@ -68,7 +68,7 @@ export class BillingApiClient {
 
   public async getOrganizationTier(organizationId: string): Promise<OrganizationTier> {
     const response = await this.axiosInstance.get(`/organization/${organizationId}/tier`)
-    const subscription = response.data.subscription
+    const plan = response.data.plan
     const orgTier: OrganizationTier = {
       tier: response.data.tier,
       largestSuccessfulPaymentDate: response.data.largestSuccessfulPaymentDate
@@ -77,11 +77,11 @@ export class BillingApiClient {
       largestSuccessfulPaymentCents: response.data.largestSuccessfulPaymentCents,
       expiresAt: response.data.expiresAt ? new Date(response.data.expiresAt) : undefined,
       hasVerifiedBusinessEmail: response.data.hasVerifiedBusinessEmail,
-      ...(subscription && {
-        subscription: {
-          ...subscription,
-          cycleFrom: new Date(subscription.cycleFrom),
-          cycleTo: new Date(subscription.cycleTo),
+      ...(plan && {
+        plan: {
+          ...plan,
+          cycleFrom: new Date(plan.cycleFrom),
+          cycleTo: new Date(plan.cycleTo),
         },
       }),
     }

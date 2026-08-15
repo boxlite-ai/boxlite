@@ -160,7 +160,7 @@ export const handlers = [
       hasVerifiedBusinessEmail: true,
       // Mirrors the billing service's own mock seed: pro, a quarter used,
       // pinned mid-cycle so the meter renders deterministically.
-      subscription: {
+      plan: {
         planId: 'pro',
         planName: 'Pro',
         status: 'active',

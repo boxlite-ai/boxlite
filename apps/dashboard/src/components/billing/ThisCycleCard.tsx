@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { OrganizationSubscription } from '@/billing-api'
+import { OrganizationPlan } from '@/billing-api'
 import { Metric, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useOwnerTierQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
@@ -12,21 +12,21 @@ import { differenceInCalendarDays, format } from 'date-fns'
 
 /**
  * What the card states about a cycle, as plain values — pure in
- * (subscription, now) so the unlimited/canceled/downgrade branching is
+ * (plan, now) so the unlimited/canceled/downgrade branching is
  * testable without a DOM.
  */
-export function cycleFacts(subscription: OrganizationSubscription, now: Date) {
-  const daysLeft = Math.max(0, differenceInCalendarDays(subscription.cycleTo, now))
-  const rollDay = format(subscription.cycleTo, 'MMM d')
+export function cycleFacts(plan: OrganizationPlan, now: Date) {
+  const daysLeft = Math.max(0, differenceInCalendarDays(plan.cycleTo, now))
+  const rollDay = format(plan.cycleTo, 'MMM d')
   return {
-    unlimited: subscription.includedQuotaCents === null,
+    unlimited: plan.includedQuotaCents === null,
     daysLeft,
-    window: `${format(subscription.cycleFrom, 'MMM d')} – ${rollDay}`,
+    window: `${format(plan.cycleFrom, 'MMM d')} – ${rollDay}`,
     note:
-      subscription.status === 'canceled'
+      plan.status === 'canceled'
         ? `Canceled — quota stays usable until ${rollDay}, then pay-as-you-go from the wallet`
-        : subscription.pendingPlanId
-          ? `Downgrades to ${subscription.pendingPlanId} when the cycle rolls on ${rollDay}`
+        : plan.pendingPlanId
+          ? `Downgrades to ${plan.pendingPlanId} when the cycle rolls on ${rollDay}`
           : null,
   }
 }
@@ -34,15 +34,15 @@ export function cycleFacts(subscription: OrganizationSubscription, now: Date) {
 /**
  * The current billing cycle at a glance: quota consumed against the plan's
  * grant, the wallet that funds the overage, and when the cycle rolls. Every
- * number is the billing service's own — the subscription block on the tier
+ * number is the billing service's own — the plan block on the tier
  * read and the wallet — so the meter here is the meter settlement charges by.
- * Renders nothing when the organization has no live subscription: there is no
+ * Renders nothing when the organization has no live plan: there is no
  * cycle to show, and inventing one was the old demo's job.
  */
 export function ThisCycleCard() {
   const { data: tier, isLoading } = useOwnerTierQuery()
   const { data: wallet } = useOwnerWalletQuery()
-  const subscription = tier?.subscription
+  const plan = tier?.plan
 
   if (isLoading) {
     return (
@@ -54,19 +54,19 @@ export function ThisCycleCard() {
       </section>
     )
   }
-  if (!subscription) return null
+  if (!plan) return null
 
-  const { unlimited, daysLeft, window, note } = cycleFacts(subscription, new Date())
+  const { unlimited, daysLeft, window, note } = cycleFacts(plan, new Date())
 
   return (
     <section>
-      <SectionTitle title="This Cycle" count={`${subscription.planName} · ${window}`} />
+      <SectionTitle title="This Cycle" count={`${plan.planName} · ${window}`} />
       <Panel>
         <div className="flex flex-col gap-6 px-[22px] py-6 sm:flex-row sm:gap-14">
           <Metric
             label="Quota consumed"
-            value={formatAmount(subscription.quotaConsumedCents)}
-            sub={unlimited ? 'unlimited quota' : `of ${formatAmount(subscription.includedQuotaCents ?? 0)} included`}
+            value={formatAmount(plan.quotaConsumedCents)}
+            sub={unlimited ? 'unlimited quota' : `of ${formatAmount(plan.includedQuotaCents ?? 0)} included`}
           />
           {wallet && (
             <Metric label="Wallet balance" value={formatAmount(wallet.ongoingBalanceCents)} sub="drawn after quota" />
@@ -79,9 +79,9 @@ export function ThisCycleCard() {
             <div className="flex items-center gap-4 font-mono text-[12px]">
               <span className="w-[100px] shrink-0 uppercase tracking-[0.5px] text-muted-foreground">Quota used</span>
               <span className="w-[140px] shrink-0 tabular-nums text-foreground">
-                {formatAmount(subscription.quotaConsumedCents)} / {formatAmount(subscription.includedQuotaCents ?? 0)}
+                {formatAmount(plan.quotaConsumedCents)} / {formatAmount(plan.includedQuotaCents ?? 0)}
               </span>
-              <SegmentedBar used={subscription.quotaConsumedCents} limit={subscription.includedQuotaCents ?? 0} />
+              <SegmentedBar used={plan.quotaConsumedCents} limit={plan.includedQuotaCents ?? 0} />
             </div>
             <PanelNote>Included in plan · resets each cycle · unused quota does not carry over</PanelNote>
           </div>

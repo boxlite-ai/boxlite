@@ -10,8 +10,8 @@ import { formatAmount } from '@/lib/utils'
 /**
  * Active-plan banner: a header strip naming the current tier, then the cycle
  * figures — prepaid balance, wallet spend since the last top-up, and tier
- * expiry. The subscription's own quota meter and billing cycle live on the
- * Usage tab's This Cycle card (the `subscription` block on the tier read);
+ * expiry. The plan's own quota meter and billing cycle live on the
+ * Usage tab's This Cycle card (the `plan` block on the tier read);
  * this card keeps the tier-ladder view of the same wallet.
  */
 

@@ -5,7 +5,7 @@
 
 /**
  * One bucket of the funding-split series: settlement money grouped by when it
- * moved, split between the subscription quota and the wallet. Buckets are
+ * moved, split between the plan's quota and the wallet. Buckets are
  * dense — a quiet day arrives as an honest zero, not a gap.
  */
 export type UsageFundingBucket = {
