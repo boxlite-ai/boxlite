@@ -407,8 +407,12 @@ Resources:
                   - iam:DeletePolicyVersion
                   - iam:SetDefaultPolicyVersion
                 Resource:
-                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-github-deploy
-                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boxlite-${GitHubEnvironment}-runtime-boundary
+                  # Every stage's, not just this one's. role/boxlite-* covers a SIBLING stage's deploy
+                  # role too, so without the wildcard here a dev-bound job could rewrite prod's trust
+                  # policy and assume it. No deploy ever modifies one of these — they are CloudFormation
+                  # resources an operator creates — so denying all of them costs nothing.
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*-github-deploy
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boxlite-*-runtime-boundary
               - Sid: ManageBoxLiteRoles
                 Effect: Allow
                 Action:
