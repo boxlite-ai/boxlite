@@ -131,6 +131,38 @@ function mutatesParameters(action: unknown) {
  * Resource and quietly return "nothing matches", it reports the statement as unanalyzable and the
  * assertion fails. The template uses neither today, and this is what keeps that true.
  */
+/*
+ * Every statement that reaches the deploy role: its inline policies, plus any standalone policy
+ * resource that attaches to it. AWS::IAM::Policy and ::ManagedPolicy name their targets in `Roles`,
+ * ::RolePolicy in `RoleName`, and any of them can grant back whatever the inline policy gives up —
+ * invisibly, to anything that reads only Properties.Policies.
+ */
+const ATTACHABLE_POLICY_TYPES = ['AWS::IAM::Policy', 'AWS::IAM::RolePolicy', 'AWS::IAM::ManagedPolicy']
+
+function deployRolePolicyStatements(template: any) {
+  const role = template.Resources.GitHubDeployRole.Properties
+  const statements = (role.Policies ?? []).flatMap((policy: any) => policy.PolicyDocument.Statement)
+
+  /*
+   * By logical id (`!Ref GitHubDeployRole`) or by the physical name the role declares
+   * (`!Sub boxlite-${GitHubEnvironment}-github-deploy`) — both address the same role, and matching
+   * only the first would miss a policy attached the other way.
+   */
+  const physicalName = template.Resources.GitHubDeployRole.Properties.RoleName
+  const attachesToDeployRole = (properties: any) =>
+    [...(properties?.Roles ?? []), properties?.RoleName].filter(Boolean).some((target: any) => {
+      const text = JSON.stringify(target)
+      return text.includes('GitHubDeployRole') || (Boolean(physicalName) && text.includes(physicalName))
+    })
+
+  for (const resource of Object.values(template.Resources) as any[]) {
+    if (!ATTACHABLE_POLICY_TYPES.includes(resource.Type)) continue
+    if (!attachesToDeployRole(resource.Properties)) continue
+    statements.push(...(resource.Properties?.PolicyDocument?.Statement ?? []))
+  }
+  return statements
+}
+
 function sharedBootstrapMutations(statement: any) {
   const asList = (value: any) => (Array.isArray(value) ? value : [value])
 
@@ -418,6 +450,85 @@ test('what bootstrap stores is the .env it validated, read once', () => {
   )
 })
 
+test('the deploy role cannot rewrite its own permissions', () => {
+  /*
+   * The role is named boxlite-<stage>-github-deploy, so it matches the `role/boxlite-*` resource of
+   * its own IAM grants. iam:PutRolePolicy on itself is unbounded privilege escalation — the
+   * permissions boundary constrains the roles SST creates, not this role's own inline policy — and
+   * iam:PutRolePermissionsBoundary would let it lift that boundary for everything else.
+   *
+   * Derived from what is granted rather than listing actions here: adding a role-mutating action to
+   * the Allows must fail until the Deny covers it too, which a hand-written list would not do.
+   */
+  const template = readDeployTemplate()
+  const statements = deployRolePolicyStatements(template)
+  const asArray = (value: any) => (Array.isArray(value) ? value : [value])
+  const SELF_ARN_FRAGMENT = 'role/boxlite-${GitHubEnvironment}-github-deploy'
+  const SELF_MUTATING = /^iam:(Attach|Detach|Put|Delete|Update)/i
+
+  const granted = new Set<string>()
+  for (const statement of statements) {
+    if (statement.Effect !== 'Allow') continue
+    const reachesOwnName = asArray(statement.Resource).some(
+      (resource: any) => typeof resource === 'string' && resource.includes('role/boxlite-*'),
+    )
+    if (!reachesOwnName) continue
+    for (const action of asArray(statement.Action)) {
+      if (typeof action !== 'string' || !SELF_MUTATING.test(action)) continue
+      // An instance-profile action cannot be aimed at a role ARN, so denying it on this role's own
+      // ARN would be inert. The deploy role has no instance profile of its own to protect.
+      if (action.includes('InstanceProfile')) continue
+      granted.add(action)
+    }
+  }
+  assert.ok(granted.size > 0, 'expected the role to manage boxlite-* roles; the premise here has changed')
+
+  const denied = new Set<string>()
+  for (const statement of statements) {
+    if (statement.Effect !== 'Deny') continue
+    /*
+     * A Deny only counts if it actually lands. `…github-deploy-other` ends with a suffix and names a
+     * different role, and a Condition can make the Deny apply in cases that never occur — so require
+     * the resource to end at the role's own name, and refuse to credit a conditional Deny at all.
+     */
+    if (statement.Condition !== undefined) continue
+    const coversSelf = asArray(statement.Resource).some(
+      (resource: any) => typeof resource === 'string' && resource.endsWith(SELF_ARN_FRAGMENT),
+    )
+    if (!coversSelf) continue
+    for (const action of asArray(statement.Action)) denied.add(action)
+  }
+
+  const uncovered = [...granted].filter((action) => !denied.has(action))
+  assert.deepEqual(
+    uncovered,
+    [],
+    'these actions can be aimed at the deploy role itself with no Deny covering it: ' + uncovered.join(', '),
+  )
+  assert.ok(denied.has('iam:PutRolePermissionsBoundary'), 'the role must not be able to set its own boundary')
+  assert.ok(denied.has('iam:DeleteRolePermissionsBoundary'), 'the role must not be able to drop its own boundary')
+
+  /*
+   * The other half, and the one that reads as harmless: the runtime boundary is a managed policy named
+   * boxlite-<stage>-runtime-boundary, which matches ManageBoxLitePolicies' policy/boxlite-* resource.
+   * Widen it, create a bounded role under the widened version, pass it to a service, and the boundary
+   * has stopped bounding anything. Denying writes to that one policy is what breaks the chain.
+   */
+  const BOUNDARY_ARN_FRAGMENT = 'policy/boxlite-${GitHubEnvironment}-runtime-boundary'
+  const deniedOnBoundary = new Set<string>()
+  for (const statement of statements) {
+    if (statement.Effect !== 'Deny' || statement.Condition !== undefined) continue
+    const coversBoundary = asArray(statement.Resource).some(
+      (resource: any) => typeof resource === 'string' && resource.endsWith(BOUNDARY_ARN_FRAGMENT),
+    )
+    if (!coversBoundary) continue
+    for (const action of asArray(statement.Action)) deniedOnBoundary.add(action)
+  }
+  for (const action of ['iam:CreatePolicyVersion', 'iam:SetDefaultPolicyVersion', 'iam:DeletePolicy']) {
+    assert.ok(deniedOnBoundary.has(action), `${action} on the runtime boundary must be denied`)
+  }
+})
+
 test('the grants that are NOT stage-scoped are the documented ones, and only those', () => {
   /*
    * The isolation test above says what the deploy role cannot reach. This says what it still can, so
@@ -427,10 +538,10 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
    * Pinned against docs/security.md, because a limit nobody wrote down is indistinguishable from one
    * nobody noticed.
    */
+  // Every policy that reaches the role, inline or attached — the same collection the isolation test
+  // uses, because a grant added through an attached policy is exactly as account-wide as an inline one.
   const template = readDeployTemplate()
-  const statements = template.Resources.GitHubDeployRole.Properties.Policies.flatMap(
-    (policy: any) => policy.PolicyDocument.Statement,
-  )
+  const statements = deployRolePolicyStatements(template)
   const asArray = (value: any) => (Array.isArray(value) ? value : [value])
   const stageScoped = (resource: any) => String(resource).includes('${GitHubEnvironment}')
 
@@ -472,6 +583,22 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
     ['RunnerCommandStatus', 'SSM command-history APIs are list-shaped and take no resource'],
     ['ReadIamAndAccountMetadata', 'account and IAM reads SST performs before it knows any resource'],
   ]
+
+  /*
+   * A Sid is a label, so allowing one by name is not enough on its own: `ReadIamAndAccountMetadata`
+   * could keep its name and gain `iam:PutRolePolicy` on `*`, which no other check here would see.
+   * Nothing granted account-wide may write IAM or grant everything.
+   */
+  for (const [sid] of WILDCARD_RESOURCE_STATEMENTS) {
+    const statement = statements.find((candidate: any) => candidate.Sid === sid)
+    assert.ok(statement, `${sid} is allowed a wildcard resource but no longer exists`)
+    const dangerous = asArray(statement.Action).filter(
+      (action: any) =>
+        typeof action === 'string' &&
+        (action === '*' || /^iam:(?!Get|List|Simulate)/i.test(action) || /^sts:AssumeRole/i.test(action)),
+    )
+    assert.deepEqual(dangerous, [], `${sid} grants ${dangerous.join(', ')} on every resource`)
+  }
 
   const known = [...DOCUMENTED_IN_SECURITY_MD, ...ACCOUNTED_HERE]
   const undocumented = unscoped.filter(({ sid, resource }: any) =>
@@ -1145,37 +1272,17 @@ test('the deploy role cannot reach another stage in the SST backing store', () =
   // that store, so it is the whole stack's config now, not just its app secrets.
   const template = readDeployTemplate()
   /*
-   * Every inline policy, not just the first. A second `Policies` entry grants exactly as much as the
-   * first, so reading `Policies[0]` would let one be added that restores everything narrowed here.
-   * Managed policies are worse: their contents live outside this template entirely, so the role must
-   * not attach any — there is nothing here to check them against.
+   * Every policy that reaches the role — see deployRolePolicyStatements. A managed policy ARN is
+   * different: its contents live outside this template, so there is nothing here to check it against
+   * and the role must not attach one.
    */
-  const role = template.Resources.GitHubDeployRole.Properties
   assert.deepEqual(
-    role.ManagedPolicyArns ?? [],
+    template.Resources.GitHubDeployRole.Properties.ManagedPolicyArns ?? [],
     [],
     'a managed policy ARN points outside this template, so its grants cannot be checked here',
   )
 
-  const statements = (role.Policies ?? []).flatMap((policy: any) => policy.PolicyDocument.Statement)
-
-  /*
-   * A policy does not have to be inline to reach this role. AWS::IAM::Policy and ::ManagedPolicy list
-   * their targets in `Roles`, ::RolePolicy in `RoleName`, and any of them can grant back everything the
-   * inline policy gives up — invisibly, if only Properties.Policies is read.
-   */
-  const ATTACHABLE_POLICY_TYPES = ['AWS::IAM::Policy', 'AWS::IAM::RolePolicy', 'AWS::IAM::ManagedPolicy']
-  const attachesToDeployRole = (properties: any) =>
-    [...(properties?.Roles ?? []), properties?.RoleName]
-      .filter(Boolean)
-      .some((target: any) => JSON.stringify(target).includes('GitHubDeployRole'))
-
-  for (const resource of Object.values(template.Resources) as any[]) {
-    if (!ATTACHABLE_POLICY_TYPES.includes(resource.Type)) continue
-    if (!attachesToDeployRole(resource.Properties)) continue
-    statements.push(...(resource.Properties?.PolicyDocument?.Statement ?? []))
-  }
-
+  const statements = deployRolePolicyStatements(template)
   assert.ok(statements.length > 0, 'the deploy role has no policy statements to check')
   const asArray = (value: any) => (Array.isArray(value) ? value : [value])
 

@@ -22,10 +22,12 @@ Three things in that store are shared by construction, and none of them is a sta
 
 Three shared writes remain, and none is narrowed by this change:
 
-- Deployment assets are content-addressed in a single `sst-asset-*` bucket with no stage in the key,
-  so every stage writes there. A write is idempotent — the key *is* the content hash — but a delete
-  is not, so a stage can remove an object another stage's next update expects. It stays because
-  `sst remove` needs it, and the blast radius is a redeploy: assets are rebuilt from the checkout.
+- Deployment assets share a single `sst-asset-*` bucket with no stage in the key, so every stage has
+  `PutObject`, `DeleteObject` and `DeleteObjectVersion` over all of it. SST derives each key from the
+  content hash, which makes an ordinary deploy's writes idempotent — but that is SST's behaviour, not
+  a constraint the policy imposes: the grant permits writing arbitrary bytes to any key in the bucket,
+  or deleting one another stage's next update expects. It stays because `sst remove` needs the delete,
+  and the blast radius is bounded by assets being rebuilt from the checkout rather than recovered.
 - `boxlite-volume-*` buckets carry no stage in their names, so `s3:*` over that prefix reaches every
   stage's volumes. Scoping it means renaming the buckets to carry the stage, across the runtime
   boundary, the stack, and buckets that already exist.

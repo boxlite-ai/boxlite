@@ -373,6 +373,42 @@ Resources:
                 Condition:
                   StringEquals:
                     iam:PermissionsBoundary: !Ref BoxLiteRuntimePermissionsBoundary
+              # Two escalation paths, both closed the same way, because an IAM Allow cannot express
+              # "every boxlite-* resource except this one" — only a Deny can.
+              #
+              # First: this role is itself named boxlite-<stage>-github-deploy, so it matches the
+              # role/boxlite-* resource of the IAM grants below. iam:PutRolePolicy aimed at itself
+              # writes it any permission at all, with nothing to stop it — the runtime boundary
+              # constrains the roles SST creates, not this role's own inline policy.
+              #
+              # Second, and less obvious: the boundary IS a managed policy named
+              # boxlite-<stage>-runtime-boundary, which matches the policy/boxlite-* resource of
+              # ManageBoxLitePolicies. Widening it, then creating a bounded role under the widened
+              # version and passing it to a service, reaches anything the widened boundary allows. So
+              # the boundary policy is denied mutation too.
+              #
+              # Neither is something a deploy does: both this role and the boundary are created by
+              # `cloudformation deploy` under an operator's admin credentials, never by SST.
+              - Sid: DenySelfPrivilegeEscalation
+                Effect: Deny
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:DeleteRole
+                  - iam:DeleteRolePermissionsBoundary
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePermissionsBoundary
+                  - iam:PutRolePolicy
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:UpdateRole
+                  - iam:UpdateRoleDescription
+                  - iam:CreatePolicyVersion
+                  - iam:DeletePolicy
+                  - iam:DeletePolicyVersion
+                  - iam:SetDefaultPolicyVersion
+                Resource:
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-github-deploy
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boxlite-${GitHubEnvironment}-runtime-boundary
               - Sid: ManageBoxLiteRoles
                 Effect: Allow
                 Action:
