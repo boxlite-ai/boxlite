@@ -6,12 +6,16 @@ Environment secrets, since reading that store initializes the Cloudflare provide
 configuration to disk, and only keys named by the store's own `BOXLITE_STAGE_CONFIG` manifest are
 applied, so a secret written under any other name cannot reach a deploy's environment.
 
-A stage's deploy role reaches its own stage's state and secrets, and no other stage's. One bucket and
-one parameter tree hold every stage's, so the role's `s3:*`/`ssm:*` grant on `*` used to let a job
+A stage's deploy role reaches its own stage's **SST secret store**, and no other stage's. One bucket
+and one parameter tree hold every stage's, so the role's `s3:*`/`ssm:*` grant on `*` used to let a job
 bound to the dev Environment run `sst secret list --stage prod`. Those two are now scoped to this
 stage's state prefixes, its passphrase, and the buckets the stack owns.
 
-Three things in that store are shared by construction, and none of them is a stage's secrets:
+That is a claim about the SST store specifically, which is where a stage's configuration lives. It is
+*not* a claim about AWS Secrets Manager: `secretsmanager:*` is still granted account-wide, and is one
+of the two open items at the end of this section.
+
+Three things in the SST store are shared by construction, and none of them is a stage's configuration:
 
 - `ListBucket` stays at bucket scope, because SST enumerates before it reads. Other stages' key
   *names* remain visible; their contents do not.
