@@ -452,6 +452,13 @@ jobs:
 
       - name: Install SST providers
         working-directory: apps/infra
+        # The same credentials the deploy steps get. `install` evaluates sst.config.ts, which
+        # initializes every provider it declares — so without these the step falls back to the SSM copy
+        # whose readability from this role has never been verified. Supplying them costs nothing and
+        # removes the only place the workflow would have depended on that.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
         run: npm run --silent sst -- install --stage "$STAGE"
 
       # These stay hand-made scoped API tokens, and they stay GitHub Environment secrets rather than
