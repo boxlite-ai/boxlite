@@ -160,7 +160,7 @@ export function resolveArtifactSource(
   //
   // The ref stays optional here because a local `npm run deploy` has nothing published to address
   // and falls back to building the Api from the checkout. Each component requires it at its own
-  // boundary instead: resolveRunnerArtifact always, api-artifact only once a ref is present.
+  // boundary instead: resolveRunnerArtifact always, verifyApiImage only once a ref is present.
   const { key: refKey, ref } = artifactRefEntry(environment, component)
   return {
     kind,

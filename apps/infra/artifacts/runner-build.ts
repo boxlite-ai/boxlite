@@ -233,7 +233,7 @@ export class RunnerArtifactBuilder {
   }
 
   async execute({ stage }: any) {
-    // The printed deploy command runs through sst-with-cloudflare.mjs, which loads apps/infra/.env
+    // The printed deploy command runs through deployment/sst.ts, which loads apps/infra/.env
     // before resolving AWS. Staging without it would take AWS_PROFILE/AWS_REGION/AWS_CLI_PATH from
     // the bare shell and could upload into a different account than the deploy then reads.
     this.loadEnvironment({ environment: this.environment })

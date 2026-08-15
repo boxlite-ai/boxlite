@@ -4,7 +4,7 @@
 /*
  * CI preflight: confirm the assumed deploy role can actually attach the
  * runtime IAM permissions boundary before `sst diff`/`sst deploy` run.
- * apps/infra/sst.config.ts requires every role it manages to carry that
+ * apps/infra/stack/deploy.ts requires every role it manages to carry that
  * boundary (see the $transform there); if the bootstrap CloudFormation
  * stack (bootstrap/aws/github-deploy-role.yaml, provisioned by
  * bootstrap/bootstrap.ts) was never (re)deployed for this role,
@@ -17,7 +17,7 @@
  *
  * Usage: npm run verify-deploy-role
  * Reads the SST stage from IAM_PERMISSIONS_BOUNDARY_STAGE (already required
- * in the deploy workflow's job-level env, and by sst.config.ts itself).
+ * in the deploy workflow's job-level env, and by stack/deploy.ts itself).
  */
 
 import { parseAssumedRoleName, verifyDeployRoleGrantsBoundaryPermission } from './role-boundary.js'
@@ -93,7 +93,7 @@ function main() {
   if (!grants) {
     throw new Error(
       `deploy role '${roleName}' has no policy statement allowing iam:PutRolePermissionsBoundary for ` +
-        `${boundaryArn} on role/boxlite-*. apps/infra/sst.config.ts requires every SST-managed role to carry ` +
+        `${boundaryArn} on role/boxlite-*. apps/infra/stack/deploy.ts requires every SST-managed role to carry ` +
         `this boundary. Run \`npm run bootstrap -- --stage ${stage}\` with AWS admin ` +
         'credentials (it redeploys bootstrap/aws/github-deploy-role.yaml), then confirm the GitHub environment variable ' +
         `AWS_ACCOUNT_ID for '${stage}' still matches the account that stack was deployed into. ` +

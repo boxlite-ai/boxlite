@@ -102,7 +102,7 @@ import { resolveAwsCliPath } from '../shared/exec.js'
 
 const SCRIPT_NAME = 'bootstrap-environment'
 // The one stage that must never end up with an unreviewed deploy path. Matches
-// PRODUCTION_STAGE in sst.config.ts, which gates retain-on-removal.
+// PRODUCTION_STAGE in stack/settings.ts, which gates retain-on-removal.
 const PROTECTED_STAGE = 'prod'
 const INFRA_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const TEMPLATE_PATH = join(INFRA_ROOT, 'bootstrap', 'aws', 'github-deploy-role.yaml')
@@ -811,9 +811,10 @@ function wireGithubEnvironment({ repo, stage, accountId, region }: any) {
 }
 
 async function main() {
-  // Every other consumer (deployment/sst.ts, sst.config.ts) loads the
-  // stage dotenv first; without it AWS_REGION/STACK_DOMAIN from .env are
-  // silently ignored and the stage lands in the default region.
+  // deployment/sst.ts loads the stage dotenv before it does anything else, and this script has to
+  // match it: without it AWS_REGION/STACK_DOMAIN from .env are silently ignored and the stage
+  // lands in the default region. The stack itself deliberately does not (stack/app.ts) — the
+  // wrapper owns the environment sst sees.
   loadDeploymentEnvironment()
   const args = process.argv.slice(2)
   const options = parseBootstrapOptions(args)

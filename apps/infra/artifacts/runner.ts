@@ -4,7 +4,7 @@
 /*
  * The Runner's install artifact — from either source, in the one shape both install paths take.
  *
- * The EC2 user-data (sst.config.ts buildRunnerUserData) and the SSM upgrade payload
+ * The EC2 user-data (buildRunnerUserData in stack/runners.ts) and the SSM upgrade payload
  * (runner-update-binary.mjs) do the same three things: fetch a tarball, fetch its .sha256
  * sidecar, refuse to install unless the manifest names exactly that tarball. They differ only in
  * where the two URLs point — which is why a second source needs no new install logic on the
@@ -72,7 +72,7 @@ function requireBuildLocation(source: any, environment: any) {
   return { bucket, tarballName, key: `runner/${ref}/${tarballName}` }
 }
 
-// The `fetch` discriminant is annotated rather than inferred: sst.config.ts consumes this from
+// The `fetch` discriminant is annotated rather than inferred: stack/runners.ts consumes this from
 // TypeScript, where a bare 'https' in a returned object literal widens to `string` and no longer
 // satisfies the 'https' | 's3' the install helpers switch on.
 /**

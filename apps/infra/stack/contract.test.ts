@@ -252,7 +252,7 @@ test('every local Command pins dir, so it runs from the app root', () => {
   // resolves to .sst/platform/scripts and fails with "Cannot find module".
   // Only an apply runs these, so a preview cannot catch a missing dir.
   const commands = source.split(/new command\.local\.Command\(/).slice(1)
-  assert.ok(commands.length > 0, 'expected at least one command.local.Command in sst.config.ts')
+  assert.ok(commands.length > 0, 'expected at least one command.local.Command in the stack')
   for (const block of commands) {
     const properties = block.slice(0, block.indexOf('triggers:'))
     assert.match(
@@ -328,7 +328,7 @@ test('the Api deploys either a published image or a build of the deployed checko
   // The reference is built by the shared helper, which validates the repository name, rather
   // than re-derived here where a bad stage would only surface as an AWS error mid-deploy.
   assert.match(liveConfig, /import \{ apiImageReference \} from '\.\.\/artifacts\/api\.js'/)
-  // Pin each argument, not just the call: `[\s\S]*` swallowed them, and api-artifact.mjs does not
+  // Pin each argument, not just the call: `[\s\S]*` swallowed them, and artifacts/api.ts does not
   // validate region — a missing one yields `dkr.ecr.undefined.amazonaws.com` at deploy time.
   const imageReference = extractSection(liveConfig, 'apiImageReference({', '})')
   for (const argument of [
@@ -348,7 +348,7 @@ test('the Api deploys either a published image or a build of the deployed checko
   // The repository must predate the stack that consumes it; the stage bootstrap owns it.
   assert.doesNotMatch(apiService, /new aws\.ecr\.Repository/)
   // A cross-reference in a comment, deliberately read from the raw file: the point is that
-  // sst.config.ts tells a reader where the repository is created, not that anything executes.
+  // the stack tells a reader where the repository is created, not that anything executes.
   assert.match(source, /bootstrap\/aws\/github-deploy-role\.yaml/)
 })
 

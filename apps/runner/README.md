@@ -581,7 +581,7 @@ Optional features are toggled by env vars:
   `BOXLITE_SHUTDOWN_GRACE` — exec reaping timers.
 
 The runner is normally bootstrapped by the SST EC2 user-data script;
-see `apps/infra/sst.config.ts:buildRunnerUserData`. For local
+see `apps/infra/stack/runners.ts:buildRunnerUserData`. For local
 development against the Rust SDK directly, see `boxlite serve` at
 [`src/cli/src/commands/serve/`](../../src/cli/src/commands/serve/)
 (Rust REST server with parity coverage).

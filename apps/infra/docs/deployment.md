@@ -7,8 +7,8 @@ nested KVM, RDS Postgres, ElastiCache Redis, S3, and CloudFront.
 - **IaC** — SST v4 (Pulumi underneath)
 - **Cost** — ~$600/month always-on; see [Cost](#cost)
 
-**Where the "why" lives:** design rationale sits in `sst.config.ts` comments,
-next to the code it explains. This file is the runbook.
+**Where the "why" lives:** design rationale sits in comments next to the code it
+explains, mostly under `stack/` and `deployment/`. This file is the runbook.
 
 ## Architecture
 
@@ -340,10 +340,14 @@ npm run runner:update -- --stage dev # roll the Runner binary, one host at a tim
 Every deploy and removal requires an explicit `--stage` so the deployer, the
 verifier, and destructive operations cannot target different stages.
 
+`deploy`, `remove`, `sst`, and `secrets` all pass through the guarded deployment
+facade — do not call the SST binary directly. `runner:update` rolls one host at a
+time and stops on the first failure.
+
 ## Operating rules
 
 **The Runner holds state.** `/var/lib/boxlite` and the live microVMs are on its
-root disk, so `sst.config.ts` marks it `protect: true` with
+root disk, so `stack/runners.ts` marks it `protect: true` with
 `ignoreChanges: ['ami', 'userDataBase64']`. Routine deploys never replace it.
 The CI gate rejects any Runner create, delete, replace, or protected-property
 change — so scaling out, scaling down, and first-Runner provisioning are all
@@ -444,6 +448,7 @@ implemented here.
 ## Reference
 
 - `.env.example` — every configuration variable, with required/optional tiers
-- `sst.config.ts` — the stack itself; comments carry the design rationale
-- `scripts/*.mjs` — each script's header comment documents its flags
+- `stack/*.ts` — the resource graph, one file per domain; comments carry the design rationale
+- `deployment/*.ts` — the guarded wrapper, scope, stage config, and post-deploy verification
+- `scripts/*.mjs` — launchers whose paths are pinned in Pulumi state; see `scripts/README.md`
 - `.github/workflows/deploy-infra.yml` — the guarded CI deployment

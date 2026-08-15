@@ -46,7 +46,7 @@ export function apiImageRepository({ app, stage }: Pick<ApiImageIdentity, 'app' 
 
 // What a tag names. A release names a version, so the tag is that version. A build names one
 // commit, so it carries the ref as well — the same version+ref identity the Runner's tarball uses
-// (runner-artifact.mjs), which keeps the two components addressable by the same pair. Distinct
+// (artifacts/runner.ts), which keeps the two components addressable by the same pair. Distinct
 // shapes also mean a commit build can never land on the tag a release promotes, in a repository
 // where tags are immutable and a collision would be unrepairable.
 export function apiImageTag({ version, ref }: { version: string; ref?: string }) {

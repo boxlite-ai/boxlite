@@ -368,7 +368,7 @@ test('SST deploy verifies the selected Runner artifact before invoking SST', () 
   // wrong half.
   assertLiveLine(source, /deployScope = resolveDeployScope\(sstArgs\)/)
   // Exported before sst is spawned, so the resource graph is built for the same scope as the
-  // plan. Without it sst.config.ts declares UpgradeRunnerBinary-* on an Api-only deploy, and that
+  // plan. Without it stack/runners.ts declares UpgradeRunnerBinary-* on an Api-only deploy, and that
   // command — a sibling of the excluded instance, so `--exclude Runner` misses it — installs a
   // Runner binary from a commit whose build-runner job never ran.
   assertLiveLine(source, /exportDeployScope\(deployScope\)/)
