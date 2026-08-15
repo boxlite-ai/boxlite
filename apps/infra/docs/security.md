@@ -40,6 +40,21 @@ The first two predate this change and the third is how Runner upgrades have alwa
 they are listed because the paragraph above would otherwise read as a stronger guarantee than the
 policy gives.
 
+Two grants reach other stages and are **not** narrowed here, tracked in
+[#1255](https://github.com/boxlite-ai/boxlite/issues/1255):
+
+- `ManageBoxLiteRoles` covers `role/boxlite-*`, so a job bound to one stage can rewrite or delete
+  another stage's SST-created runtime roles. This stage's own deploy role, every other stage's, and
+  the runtime boundary policies are excluded by the `DenySelfPrivilegeEscalation` statement; the
+  remaining runtime roles are not.
+- `secretsmanager:*` is granted on `*`, so one stage can read and mutate another's secrets.
+
+Both would be scoped by `${GitHubEnvironment}` the way the runtime boundary already scopes
+`secretsmanager:GetSecretValue`, but only once a preview run confirms every resource SST creates
+carries the stage in its name — a wrong pattern fails a deploy with AccessDenied and needs the
+bootstrap stack redeployed to clear. So this section says what the policy grants today rather than
+what it should grant.
+
 That policy has not run a real deploy yet. Four of its grant groups were derived from live listings,
 and two — Pulumi's provider describe/list calls and the `ssm:SendCommand` document targets — are
 reasoned. A gap surfaces as AccessDenied on a preview, and clearing it means redeploying the bootstrap
