@@ -194,6 +194,21 @@ const CLOUDFLARE_CREDS = [
   { env: 'CLOUDFLARE_DEFAULT_ACCOUNT_ID', param: 'cloudflare-account-id' },
 ]
 
+/*
+ * The wrapper's own progress, on stderr.
+ *
+ * stdout belongs to the sst child, which this process spawns with `stdio: 'inherit'` — so anything
+ * written here goes into the same stream, ahead of sst's output. `sst diff --json` is piped straight
+ * into a JSON parser by the deploy workflow's preview step, and a progress line landing in that pipe
+ * fails the parse on its first character rather than on anything about the plan.
+ *
+ * Named rather than `console.error` at each site: these are not errors, and the reason they avoid
+ * stdout is not local to any one of them.
+ */
+function reportProgress(message: string) {
+  console.error(message)
+}
+
 function fetchFromSsm(name: any) {
   try {
     const awsCliPath = resolveAwsCliPath()
@@ -339,9 +354,9 @@ function loadStageConfig(stage: string) {
   Object.assign(process.env, apply)
 
   const applied = Object.keys(apply)
-  console.log(`sst-with-cloudflare: ${stage} stage configuration ... ${applied.length} keys loaded from the SST secret store`)
+  reportProgress(`sst-with-cloudflare: ${stage} stage configuration ... ${applied.length} keys loaded from the SST secret store`)
   if (alreadySet.length > 0) {
-    console.log(`sst-with-cloudflare: ${stage} stage configuration ... already in the environment, left alone: ${alreadySet.join(', ')}`)
+    reportProgress(`sst-with-cloudflare: ${stage} stage configuration ... already in the environment, left alone: ${alreadySet.join(', ')}`)
   }
   // Names only — a stored value is never printed. Worth surfacing rather than dropping silently: an
   // unlisted key is either a stale entry from a key since removed from .env, or one written by hand
@@ -453,7 +468,7 @@ if (sstArgs[0] === 'deploy') {
         },
         { awsCliPath: resolveAwsCliPath() },
       )
-      console.log(
+      reportProgress(
         `sst-with-cloudflare: Api ${apiSource.kind} image verified (${image.repository}:${image.tag}, ${image.digest})`,
       )
     }
@@ -473,12 +488,12 @@ if (sstArgs[0] === 'deploy') {
             }
           : process.env
       const runnerArtifact = await verifyRunnerArtifact(runnerSource, { environment: artifactEnvironment, signal })
-      console.log(
+      reportProgress(
         `sst-with-cloudflare: Runner ${runnerSource.kind} artifact verified (${runnerArtifact.tarballUrl}, linux-amd64)`,
       )
     }
     if (deployScope.excluded.length > 0) {
-      console.log(
+      reportProgress(
         `sst-with-cloudflare: ${deployScope.excluded.join(', ')} excluded from this deploy; artifact unverified`,
       )
     }
@@ -534,7 +549,7 @@ if (exitCode === 0 && !terminationSignal && sstArgs[0] === 'deploy') {
         },
       },
     )
-    console.log(
+    reportProgress(
       `sst-with-cloudflare: Proxy routing verified ` +
         `(${verification.healthyTargetCount}/${verification.desiredCount} healthy, ` +
         `listener → ${verification.targetGroupArn})`,
@@ -549,7 +564,7 @@ if (exitCode === 0 && !terminationSignal && sstArgs[0] === 'deploy') {
         )
       },
     })
-    console.log(
+    reportProgress(
       `sst-with-cloudflare: public deployment verified ` +
         `(Proxy ${publicVerification.proxyHealthUrl}, wildcard ${publicVerification.proxyWildcardHealthUrl}, ` +
         `API ${publicVerification.apiConfigUrl}, ` +

@@ -1098,3 +1098,102 @@ test('the infrastructure config check does not invoke SST outside the cleanup wr
   assert.doesNotMatch(makeTargets, /npm exec -- sst/)
   assert.match(makeTargets, /IAM_PERMISSIONS_BOUNDARY_STAGE=ci npm run sst -- install --stage ci/)
 })
+
+test('the wrapper keeps its own progress off the stream sst writes its plan to', async () => {
+  /*
+   * `sst diff --json` is piped straight into a JSON parser by the deploy workflow's preview step, and
+   * the wrapper spawns sst with `stdio: 'inherit'` — so stdout is one shared stream, and a progress
+   * line the wrapper prints lands in that pipe ahead of the plan. It fails the parse on its first
+   * character, reported as an invalid preview rather than as anything about the deploy: run
+   * 31880617031 died on `Unexpected token 's', "sst-with-c"...` with a plan that was fine.
+   *
+   * Driven through the wrapper because the coupling is between two processes: the messages are the
+   * wrapper's, the stream discipline is the child's, and nothing in either half alone shows that one
+   * corrupts the other.
+   */
+  const fixture = await fixtureRoot()
+  const fakeBin = join(fixture, 'bin')
+  const fakeSst = join(fakeBin, 'sst')
+  const plan = { steps: [], summary: { same: 3 } }
+
+  await mkdir(fakeBin, { recursive: true })
+  await writeFile(
+    fakeSst,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2)
+if (args[0] === 'secret' && args[1] === 'list') {
+  const NL = String.fromCharCode(10)
+  process.stdout.write(${JSON.stringify(
+    syntheticSecretList(['STACK_DOMAIN', 'APP_URL'], {
+      STACK_DOMAIN: 'stored.example.test',
+      APP_URL: 'https://stored.example.test',
+    }),
+  )}.join(NL) + NL)
+  process.exit(0)
+}
+if (args[0] === 'state' && args[1] === 'export') {
+  process.stdout.write(JSON.stringify({ stack: 'ci', latest: { resources: [] } }))
+  process.exit(0)
+}
+// The plan, on the stream the preview step parses.
+process.stdout.write(JSON.stringify(${JSON.stringify(plan)}))
+`,
+    'utf8',
+  )
+  await chmod(fakeSst, 0o755)
+
+  const wrapper = spawnWrapper(['diff', '--stage', 'ci', '--json'], {
+    env: {
+      ...inheritedEnvironment(),
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      SST_BIN_PATH: fakeSst,
+      CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
+      CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
+      RUNNERS: '1',
+      DEFAULT_RUNNER_NAME: 'default',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  /*
+   * Drained to close, not just to exit, for the reason spelled out at the refusal fixtures above —
+   * `exit` can fire before the pipe has delivered what was written. It matters more here than there:
+   * a short read makes `JSON.parse` throw the same SyntaxError a genuine stdout leak produces, so a
+   * flake on a loaded machine would be indistinguishable from the bug this test exists to catch.
+   */
+  let stdout = ''
+  let stderr = ''
+  wrapper.stdout.setEncoding('utf8')
+  wrapper.stderr.setEncoding('utf8')
+  wrapper.stdout.on('data', (chunk: string) => {
+    stdout += chunk
+  })
+  wrapper.stderr.on('data', (chunk: string) => {
+    stderr += chunk
+  })
+  const streamsDrained = Promise.all([
+    new Promise<void>((resolve) => wrapper.stdout.once('close', () => resolve())),
+    new Promise<void>((resolve) => wrapper.stderr.once('close', () => resolve())),
+  ])
+
+  try {
+    const exit = await waitForExit(wrapper)
+    await streamsDrained
+    assert.deepEqual(exit, { code: 0, signal: null })
+    // The whole stream, parsed the way the preview step parses it — not a substring search, which
+    // would pass with a progress line sitting in front of the plan.
+    assert.deepEqual(
+      JSON.parse(stdout),
+      plan,
+      `stdout must carry sst's plan and nothing else, but the preview step would parse: ${stdout.slice(0, 120)}`,
+    )
+    /*
+     * And the messages still exist. Without this the wrapper could pass by having gone silent, which
+     * is a different regression — the deploy log is where an operator sees which keys were loaded.
+     */
+    assert.match(stderr, /sst-with-cloudflare: ci stage configuration \.\.\. 2 keys loaded/)
+  } finally {
+    if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL')
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
