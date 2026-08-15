@@ -15,6 +15,18 @@ const INFRA_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // Where a deploy resolves configuration. Test files are excluded: they set synthetic values, they do
 // not define what a deploy reads.
 const SCANNED = ['stack', 'deployment', 'artifacts', 'runner', 'shared']
+/*
+ * Direct reads only. A name handed to a helper that reads it — `runnerEndpoint('DEFAULT_RUNNER_DOMAIN',
+ * …)`, which forwards to envOr — is deliberately not matched.
+ *
+ * Widening this to follow that indirection was tried and reverted. It surfaces DEFAULT_RUNNER_DOMAIN,
+ * _API_URL and _PROXY_URL, which the stack does pass to the API, but the API consumes them only on the
+ * v0 runner path: DEFAULT_RUNNER_API_VERSION defaults to '2', is not storable, and is not set by the
+ * stack, so no deployed stage can reach v0. Allowlisting them would widen what the shared store may
+ * carry while changing nothing a stage can observe.
+ *
+ * If a stage ever becomes able to select v0, this pattern and that list both need revisiting together.
+ */
 const ENV_READ =
   /envOr\(\s*'([A-Z][A-Z0-9_]*)'|requireEnv\(\s*'([A-Z][A-Z0-9_]*)'|process\.env\.([A-Z][A-Z0-9_]*)|process\.env\[\s*'([A-Z][A-Z0-9_]*)'\s*\]|environment\.([A-Z][A-Z0-9_]*)/g
 
