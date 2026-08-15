@@ -17,9 +17,8 @@
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-import { SST_APP_NAME as APP, loadDeploymentEnvironment } from './environment.js'
+import { SST_APP_NAME as APP, loadDeploymentEnvironment, resolveSstStage } from './environment.js'
 import { isStageConfigBookkeepingKey, parseSecretList } from './stage-config.js'
-import { resolveSstStage } from './stage.js'
 
 const SST_WRAPPER_PATH = fileURLToPath(new URL('./sst.ts', import.meta.url))
 

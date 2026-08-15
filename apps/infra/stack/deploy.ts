@@ -13,12 +13,16 @@ import { buildEdge } from './edge.js'
 import { buildRunners } from './runners.js'
 
 export async function deployStack() {
-    const { readWorkspaceVersion, resolveAwsRegion, resolvePublicDeploymentConfig } =
-      await import('../deployment/environment.js')
-    const { optionalPublicOidcIssuer, requireOidcIssuer } = await import('../deployment/oidc.js')
+    const {
+      optionalPublicOidcIssuer,
+      readWorkspaceVersion,
+      requireIamPermissionsBoundaryStage,
+      requireOidcIssuer,
+      resolveAwsRegion,
+      resolvePublicDeploymentConfig,
+    } = await import('../deployment/environment.js')
     // eslint-disable-next-line @nx/enforce-module-boundaries -- Stack synthesis shares the policy host's CommonJS Runner model.
     const { resolveRunnerInventory } = await import('../runner/model/inventory.js')
-    const { requireIamPermissionsBoundaryStage } = await import('../deployment/stage.js')
     const REGION = resolveAwsRegion()
     const { accountId } = await aws.getCallerIdentity()
     const workspaceVersion = readWorkspaceVersion()

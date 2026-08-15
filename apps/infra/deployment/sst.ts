@@ -62,6 +62,7 @@ import {
   readWorkspaceVersion,
   resolveAwsRegion,
   resolvePublicDeploymentConfig,
+  resolveSstStage,
 } from './environment.js'
 import {
   exportDeployScope,
@@ -69,8 +70,13 @@ import {
   requireSstSubcommandFirst,
   withRequiredRunnerPolicy,
 } from './scope.js'
-import { STAGE_CONFIG_DIGEST_KEY, STAGE_CONFIG_MANIFEST_KEY, StageConfigStore, hydrateStageConfig } from './stage-config.js'
-import { isLocalOnlyDeploymentKey } from './validate-environment.js'
+import {
+  STAGE_CONFIG_DIGEST_KEY,
+  STAGE_CONFIG_MANIFEST_KEY,
+  hydrateStageConfig,
+  readStoredStageConfig,
+} from './stage-config.js'
+import { isLocalOnlyDeploymentKey } from './key-policy.js'
 import {
   verifyProxyDeploymentWithRetry,
   verifyPublicDeploymentWithRetry,
@@ -81,7 +87,6 @@ import { resolveAwsAccountId, runnerArtifactsBucketName, verifyRunnerArtifact } 
 import { readRunnerStateBaseline } from '../runner/policy-baseline.js'
 import { resolveSstExecutable } from './sst-executable.js'
 import { SstProcessTerminator } from './sst-process.js'
-import { resolveSstStage } from './stage.js'
 import { removePulumiEventLogs, withPulumiEventLogCleanup } from './pulumi-logs.js'
 import { resolveAwsCliPath, runAwsText } from '../shared/exec.js'
 
@@ -248,7 +253,7 @@ function loadStageConfig(stage: string) {
 
   let stored
   try {
-    stored = new StageConfigStore({ app: APP, stage, runSst: readSstStdout }).read()
+    stored = readStoredStageConfig({ app: APP, stage, runSst: readSstStdout })
   } catch (error: any) {
     // Deliberately not `error.message`: execFileSync builds it from the failed command line and the
     // captured stdio, which for `secret list` is the store's contents. Only the exit status is safe to

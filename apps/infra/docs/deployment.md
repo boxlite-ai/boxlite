@@ -267,7 +267,7 @@ Two rules narrow what the store may put into a deploy's environment, because
   with `npm run sst -- secret remove <NAME> --stage <stage>` when you care.
 - never local credential context (`AWS_PROFILE`, `AWS_CLI_PATH`) or the artifact
   selectors CI owns — see `FORBIDDEN_DEPLOYMENT_KEYS` in
-  `deployment/validate-environment.ts`.
+  `deployment/key-policy.ts`.
 
 A variable already set in the environment always wins over the store. That is how
 the deploy workflow keeps control of the selectors it sets, and how you override a

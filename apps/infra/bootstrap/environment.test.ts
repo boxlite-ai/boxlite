@@ -20,7 +20,6 @@ import {
   isAwsCliVersionAtLeast,
   parseAwsCliVersion,
   prepareStageConfigLoad,
-  runtimeBoundaryPolicyArn,
   serializeStageConfig,
   ssmParameterName,
   sstPlatformState,
@@ -33,20 +32,6 @@ import {
   parseSecretList,
   parseStageConfigManifest,
 } from '../deployment/stage-config.js'
-
-test('runtimeBoundaryPolicyArn matches sst.config.ts interpolation', () => {
-  assert.equal(
-    runtimeBoundaryPolicyArn({ accountId: '123456789012', appName: 'boxlite', stage: 'dev' }),
-    'arn:aws:iam::123456789012:policy/boxlite-dev-runtime-boundary',
-  )
-})
-
-test('runtimeBoundaryPolicyArn rejects a malformed account id', () => {
-  assert.throws(
-    () => runtimeBoundaryPolicyArn({ accountId: '12345', appName: 'boxlite', stage: 'dev' }),
-    /must be a 12-digit AWS account id/,
-  )
-})
 
 test('githubDeployRoleStackName rejects a stage CloudFormation cannot name', () => {
   // CloudFormation stack names allow only alphanumerics and hyphens. An

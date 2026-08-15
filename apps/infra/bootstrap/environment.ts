@@ -24,12 +24,10 @@ import {
   serializeStageConfigManifest,
   stageConfigDigest,
 } from '../deployment/stage-config.js'
-import { isStorableStageConfigKey } from '../deployment/storable-keys.js'
-import { isLocalOnlyDeploymentKey } from '../deployment/validate-environment.js'
+import { isLocalOnlyDeploymentKey, isStorableStageConfigKey } from '../deployment/key-policy.js'
 
 const STAGE_LIKE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*$/
 const GITHUB_REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/
-const ACCOUNT_ID_PATTERN = /^\d{12}$/
 
 // `aws login` (browser-based AWS Management Console credentials) is what lets a
 // self-hoster bootstrap without minting long-lived access keys. It shipped in
@@ -51,18 +49,6 @@ export function validateGitHubRepo(repo: any) {
     throw new Error(`repo '${repo}' must look like 'owner/name'`)
   }
   return repo
-}
-
-// Mirrors sst.config.ts's own `${$app.name}-${$app.stage}-runtime-boundary`
-// interpolation (apps/infra/sst.config.ts:131) — this script and the SST run
-// must agree on the boundary policy name without either importing the other.
-export function runtimeBoundaryPolicyArn({ accountId, appName, stage }: any) {
-  if (!accountId || !ACCOUNT_ID_PATTERN.test(accountId)) {
-    throw new Error(`accountId '${accountId}' must be a 12-digit AWS account id`)
-  }
-  requireStageLike('appName', appName)
-  requireStageLike('stage', stage)
-  return `arn:aws:iam::${accountId}:policy/${appName}-${stage}-runtime-boundary`
 }
 
 // CloudFormation stack name for the GitHub deploy role. Stable per stage so

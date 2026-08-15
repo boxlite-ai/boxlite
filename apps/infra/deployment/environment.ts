@@ -6,8 +6,6 @@ import { readFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { optionalPublicOidcIssuer, requireOidcIssuer } from './oidc.js'
-
 // Exported because the deploy workflows carry it as a literal: `configure-aws-credentials` needs a
 // region before any AWS access exists, so it cannot come from the stage's secret store. A contract
 // test pins the YAML against this constant so the two cannot drift.
@@ -60,6 +58,126 @@ export function loadDeploymentEnvironment({ path, environment = process.env }: {
 
 export function resolveAwsRegion(environment = process.env) {
   return environment.AWS_REGION?.trim() || DEFAULT_AWS_REGION
+}
+
+// The fixed `boxlite-app-<stage>-artifacts-<account>` bucket is the strictest generated AWS name:
+// its 35 non-stage characters leave 28 of S3's 63.
+const SST_STAGE_PATTERN = /^[a-z0-9][a-z0-9-]{0,27}$/
+
+function validateSstStage(stage: unknown): string {
+  if (typeof stage !== 'string' || !SST_STAGE_PATTERN.test(stage)) {
+    throw new Error(`invalid SST stage '${String(stage)}' (expected 1-28 lowercase letters, numbers, or hyphens)`)
+  }
+  return stage
+}
+
+export function resolveSstStage(args: readonly string[], environment: NodeJS.ProcessEnv = process.env): string {
+  let configuredStage
+
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] === '--stage') {
+      const stage = args[index + 1]
+      if (!stage || stage.startsWith('-')) throw new Error('--stage requires a value')
+      if (configuredStage !== undefined) throw new Error('--stage may be specified only once')
+      configuredStage = stage
+      index += 1
+      continue
+    }
+
+    const inlineStage = args[index].match(/^--stage=(.*)$/)?.[1]
+    if (inlineStage !== undefined) {
+      if (!inlineStage) throw new Error('--stage requires a value')
+      if (configuredStage !== undefined) throw new Error('--stage may be specified only once')
+      configuredStage = inlineStage
+    }
+  }
+
+  if (configuredStage !== undefined) return validateSstStage(configuredStage)
+  if (environment.SST_STAGE !== undefined && environment.SST_STAGE !== '') {
+    return validateSstStage(environment.SST_STAGE)
+  }
+  // Never let a mutating command fall back to the personal default stage.
+  if (args[0] === 'deploy' || args[0] === 'remove') {
+    throw new Error(`${args[0]} requires an explicit --stage or SST_STAGE`)
+  }
+  return 'dev'
+}
+
+export function requireIamPermissionsBoundaryStage(
+  stage: unknown,
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  const selectedStage = validateSstStage(stage)
+  const configuredStage = environment.IAM_PERMISSIONS_BOUNDARY_STAGE
+  if (!configuredStage) {
+    throw new Error('IAM_PERMISSIONS_BOUNDARY_STAGE is required to identify the provisioned runtime boundary')
+  }
+
+  const boundaryStage = validateSstStage(configuredStage)
+  if (boundaryStage !== selectedStage) {
+    throw new Error(`IAM permissions boundary stage ${boundaryStage} does not match SST stage ${selectedStage}`)
+  }
+  return boundaryStage
+}
+
+const ACCOUNT_ID_PATTERN = /^\d{12}$/
+
+/*
+ * Mirrors the `${$app.name}-${$app.stage}-runtime-boundary` interpolation in stack/deploy.ts. The
+ * bootstrap that provisions the policy, the CI preflight that checks the deploy role may attach it,
+ * and the SST run that attaches it must agree on this name without importing each other's domain,
+ * which is why it is spelled here rather than in any one of them.
+ */
+export function runtimeBoundaryPolicyArn({ accountId, appName, stage }: any) {
+  if (!accountId || !ACCOUNT_ID_PATTERN.test(accountId)) {
+    throw new Error(`accountId '${accountId}' must be a 12-digit AWS account id`)
+  }
+  // Both take the stage grammar: each is a segment of a generated AWS name, so each is bound by the
+  // same character set and budget.
+  if (!appName || !SST_STAGE_PATTERN.test(appName)) {
+    throw new Error(`appName '${appName}' must match ${SST_STAGE_PATTERN}`)
+  }
+  validateSstStage(stage)
+  return `arn:aws:iam::${accountId}:policy/${appName}-${stage}-runtime-boundary`
+}
+
+function validateOidcIssuer(name: any, value: any) {
+  if (value !== value.trim()) {
+    throw new Error(`${name} must not contain leading or trailing whitespace`)
+  }
+
+  let issuer
+  try {
+    issuer = new URL(value)
+  } catch {
+    throw new Error(`${name} must be a valid absolute HTTPS URL`)
+  }
+
+  if (issuer.protocol !== 'https:') {
+    throw new Error(`${name} must use HTTPS`)
+  }
+  if (issuer.username || issuer.password) {
+    throw new Error(`${name} must not include credentials`)
+  }
+  if (issuer.search || issuer.hash) {
+    throw new Error(`${name} must not include a query string or fragment`)
+  }
+
+  return value
+}
+
+export function requireOidcIssuer(environment = process.env) {
+  const value = environment.OIDC_ISSUER_BASE_URL
+  if (!value) {
+    throw new Error('OIDC_ISSUER_BASE_URL is required (e.g. https://<tenant>.auth0.com/)')
+  }
+  return validateOidcIssuer('OIDC_ISSUER_BASE_URL', value)
+}
+
+export function optionalPublicOidcIssuer(environment = process.env) {
+  const value = environment.PUBLIC_OIDC_DOMAIN
+  if (value === undefined || value === '') return undefined
+  return validateOidcIssuer('PUBLIC_OIDC_DOMAIN', value)
 }
 
 export function resolveReleaseVersion(workspaceVersion: any, environment = process.env) {

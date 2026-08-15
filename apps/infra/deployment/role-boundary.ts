@@ -18,7 +18,7 @@
  * fails safely: the real deploy step re-checks it for real.
  */
 
-import { runtimeBoundaryPolicyArn } from '../bootstrap/environment.js'
+import { runtimeBoundaryPolicyArn } from './environment.js'
 
 const ASSUMED_ROLE_ARN_PATTERN = /^arn:aws:sts::\d{12}:assumed-role\/([^/]+)\/[^/]+$/
 

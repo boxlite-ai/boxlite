@@ -6,7 +6,7 @@ import test from 'node:test'
 
 import {
   STAGE_CONFIG_MANIFEST_KEY,
-  StageConfigStore,
+  readStoredStageConfig,
   hydrateStageConfig,
   parseSecretList,
   parseStageConfigManifest,
@@ -180,9 +180,9 @@ test('the manifest round-trips through serialize and parse', () => {
   assert.equal(serializeStageConfigManifest([]), '')
 })
 
-test('StageConfigStore reads the stage it was constructed for', () => {
+test('readStoredStageConfig reads the stage it was asked for', () => {
   const calls: any[] = []
-  const store = new StageConfigStore({
+  const stored = readStoredStageConfig({
     app: 'boxlite',
     stage: 'dev',
     runSst: (args: any) => {
@@ -191,13 +191,12 @@ test('StageConfigStore reads the stage it was constructed for', () => {
     },
   })
 
-  const stored = store.read()
   assert.deepEqual(calls, [['secret', 'list', '--stage', 'dev']])
   assert.equal(stored.STACK_DOMAIN, 'dev.boxlite.ai')
 })
 
-test('StageConfigStore refuses to be built without a runner, app, or stage', () => {
-  assert.throws(() => new StageConfigStore({ app: 'boxlite', stage: 'dev' }), /requires a runSst function/)
-  assert.throws(() => new StageConfigStore({ runSst: () => '', stage: 'dev' }), /requires an app and a stage/)
-  assert.throws(() => new StageConfigStore({ runSst: () => '', app: 'boxlite' }), /requires an app and a stage/)
+test('readStoredStageConfig refuses to run without a runner, app, or stage', () => {
+  assert.throws(() => readStoredStageConfig({ app: 'boxlite', stage: 'dev' }), /requires a runSst function/)
+  assert.throws(() => readStoredStageConfig({ runSst: () => '', stage: 'dev' }), /requires an app and a stage/)
+  assert.throws(() => readStoredStageConfig({ runSst: () => '', app: 'boxlite' }), /requires an app and a stage/)
 })

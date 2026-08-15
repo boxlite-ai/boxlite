@@ -83,7 +83,7 @@ import {
   sstPlatformState,
   validateGitHubRepo,
 } from './environment.js'
-import { validateDotenvSyntax } from '../deployment/validate-environment.js'
+import { validateDotenvSyntax } from '../deployment/key-policy.js'
 import {
   bindActionArgs,
   createActionArgs,
@@ -99,7 +99,7 @@ import {
   parseReviewerIds,
 } from './github.js'
 import { resolveAwsCliPath } from '../shared/exec.js'
-import { resolveSstStage } from '../deployment/stage.js'
+import { resolveSstStage } from '../deployment/environment.js'
 
 const SCRIPT_NAME = 'bootstrap-environment'
 // The one stage that must never end up with an unreviewed deploy path. Matches
