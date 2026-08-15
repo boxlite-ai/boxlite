@@ -11,6 +11,7 @@ import { buildObservability } from './observability.js'
 import { buildApi } from './api.js'
 import { buildEdge } from './edge.js'
 import { buildRunners } from './runners.js'
+import { buildClickHouseStorage, buildClickHouseWriterReady } from './clickhouse.js'
 
 export async function deployStack() {
     const { readWorkspaceVersion, resolveAwsRegion, resolvePublicDeploymentConfig } =
@@ -19,6 +20,7 @@ export async function deployStack() {
     // eslint-disable-next-line @nx/enforce-module-boundaries -- Stack synthesis shares the policy host's CommonJS Runner model.
     const { resolveRunnerInventory } = await import('../runner/model/inventory.js')
     const { requireIamPermissionsBoundaryStage } = await import('../deployment/stage.js')
+    const { resolveClickHouseConfig } = await import('../scripts/clickhouse-config.mjs')
     const REGION = resolveAwsRegion()
     const { accountId } = await aws.getCallerIdentity()
     const workspaceVersion = readWorkspaceVersion()
@@ -27,6 +29,7 @@ export async function deployStack() {
     const runnerInventory = resolveRunnerInventory(process.env)
     const oidcIssuer = requireOidcIssuer()
     const publicOidcIssuer = optionalPublicOidcIssuer()
+    const clickHouseConfig = resolveClickHouseConfig(process.env)
 
     // Every role created by this stack must stay inside the boundary provisioned
     // with the GitHub deployment role. The raw-resource transform also covers IAM
@@ -41,26 +44,10 @@ export async function deployStack() {
     // (api.url = "https://api.dev.boxlite.ai/" → apiBase = "https://api.dev.boxlite.ai").
     const stripTrailingSlash = (url: $util.Output<string>) => url.apply((u) => (u.endsWith('/') ? u.slice(0, -1) : u))
 
-    const clickHouseWriterEndpoint =
-      process.env.CLICKHOUSE_WRITER_ENDPOINT || process.env.CLICKHOUSE_ENDPOINT || process.env.CLICKHOUSE_OTEL_ENDPOINT
-    const clickHouseWriterPassword = process.env.CLICKHOUSE_WRITER_PASSWORD || process.env.CLICKHOUSE_PASSWORD
-    const clickHouseReaderUrl = process.env.CLICKHOUSE_READER_URL || process.env.CLICKHOUSE_URL
-    const clickHouseReaderHost = process.env.CLICKHOUSE_READER_HOST || process.env.CLICKHOUSE_HOST
-    const clickHouseExporterEnabled = process.env.CLICKHOUSE_EXPORTER_ENABLED === 'true'
-    if (clickHouseExporterEnabled && !clickHouseWriterEndpoint) {
-      throw new Error(
-        'CLICKHOUSE_WRITER_ENDPOINT or CLICKHOUSE_ENDPOINT is required when CLICKHOUSE_EXPORTER_ENABLED=true',
-      )
-    }
-    if (clickHouseExporterEnabled && !clickHouseWriterPassword) {
-      throw new Error(
-        'CLICKHOUSE_WRITER_PASSWORD or CLICKHOUSE_PASSWORD is required when CLICKHOUSE_EXPORTER_ENABLED=true',
-      )
-    }
-    const collectorExporters = clickHouseExporterEnabled ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
+    const collectorExporters = clickHouseConfig.active ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
     // Traces additionally fan out to Jaeger; metrics/logs stay off it (Jaeger
     // ingests traces only).
-    const collectorTraceExporters = clickHouseExporterEnabled
+    const collectorTraceExporters = clickHouseConfig.active
       ? '[boxlite_exporter,clickhouse,otlphttp/jaeger]'
       : '[boxlite_exporter,otlphttp/jaeger]'
 
@@ -87,6 +74,30 @@ export async function deployStack() {
     const defaultRunnerConfig = runnerInventory[0]
     const defaultRunnerName = defaultRunnerConfig.controlPlaneRunnerName
     const pgAdminPassword = randomKey('PgAdminPassword', 24)
+    const secret = (resourceName: string, name: string, value: $util.Input<string>) => {
+      const resource = new aws.secretsmanager.Secret(resourceName, {
+        namePrefix: `${$app.name}-${$app.stage}-${name}-`,
+        recoveryWindowInDays: 7,
+      })
+      const version = new aws.secretsmanager.SecretVersion(`${resourceName}Value`, {
+        secretId: resource.id,
+        secretString: $util.secret(value),
+      })
+      return { resource, version }
+    }
+
+    const clickHouseAdminSecret =
+      clickHouseConfig.mode === 'self-hosted'
+        ? secret('ClickHouseAdminSecret', 'clickhouse-admin', randomKey('ClickHouseAdminPassword').result)
+        : undefined
+    const clickHouseWriterSecret =
+      clickHouseConfig.mode === 'self-hosted'
+        ? secret('ClickHouseWriterSecret', 'clickhouse-writer', randomKey('ClickHouseWriterPassword').result)
+        : undefined
+    const clickHouseReaderSecret =
+      clickHouseConfig.mode === 'self-hosted'
+        ? secret('ClickHouseReaderSecret', 'clickhouse-reader', randomKey('ClickHouseReaderPassword').result)
+        : undefined
 
     // App secrets — set via `npm run sst -- secret set <NAME> --stage <stage>`
     // (or bulk `npm run sst -- secret load <dotenv>`); stored encrypted in SST
@@ -145,6 +156,16 @@ export async function deployStack() {
     // public IP, egress via the NAT above), loadBalancerSubnets = public (ALBs stay
     // internet-facing, fronted by Cloudflare).
     const { vpc, db, redis, storage, cluster } = createFoundation(REGION, isProd)
+    const foundation = { vpc, db, redis, storage, cluster }
+    const clickHouseResources = await buildClickHouseStorage({
+      foundation,
+      region: REGION,
+      accountId,
+      config: clickHouseConfig,
+      adminSecret: clickHouseAdminSecret,
+      writerSecret: clickHouseWriterSecret,
+      readerSecret: clickHouseReaderSecret,
+    })
 
     // ─── 3. IAM ──────────────────────────────────────────────────────────────
     // Box-storage credential vending. The Api's ECS task role assumes the
@@ -190,22 +211,29 @@ export async function deployStack() {
 
     // ─── 5. OBSERVABILITY INGEST ─────────────────────────────────────────────
     // Created before Api so API, runner, host, and box can all emit OTLP to the
-    // same Collector. ClickHouse is external/managed only; no in-cluster
-    // ClickHouseSpike fallback is part of the target architecture.
+    // same Collector. ClickHouse is either the private single-node backend or
+    // an existing managed service; ECS stdout/stderr remains in CloudWatch.
     // Jaeger is VPC-internal only: the trace UI exposes every span (URLs,
     // headers, IDs, SQL, error bodies) with no auth over plain HTTP, and its
     // OTLP ingest is equally unauthenticated — reach the UI via VPN / bastion /
     // `aws ssm start-session`. JAEGER_PUBLIC is rejected (fail loud) like
     // MAILDEV_PUBLIC: no auth gate or TLS story makes public exposure safe.
-    const { otelCollectorOtlpHttpUrl } = buildObservability({
+    const { otelCollector, otelCollectorOtlpHttpUrl } = buildObservability({
       cluster,
       stackDomain,
       adminApiKey,
-      clickHouseWriterEndpoint,
-      clickHouseWriterPassword,
+      clickHouseConfig,
+      clickHouseResources,
       collectorExporters,
       collectorTraceExporters,
       stripTrailingSlash,
+    })
+    const clickHouseWriterReadyDependency = buildClickHouseWriterReady({
+      region: REGION,
+      config: clickHouseConfig,
+      resources: clickHouseResources,
+      otelCollector,
+      otelCollectorOtlpHttpUrl,
     })
 
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────
@@ -228,7 +256,7 @@ export async function deployStack() {
     // an image has to be published before a fresh stack can consume one, so the consumer cannot
     // also be responsible for creating its input.
     const { api } = buildApi({
-      foundation: { vpc, db, redis, storage, cluster },
+      foundation,
       region: REGION,
       accountId,
       releaseVersion,
@@ -254,13 +282,14 @@ export async function deployStack() {
       oidcIssuer,
       publicOidcIssuer,
       otelCollectorOtlpHttpUrl,
-      clickHouseReaderUrl,
-      clickHouseReaderHost,
+      clickHouseConfig,
+      clickHouseResources,
+      clickHouseReadyDependency: clickHouseWriterReadyDependency,
     })
 
     // ─── 7. EDGE SERVICES ────────────────────────────────────────────────────
     buildEdge({
-      foundation: { vpc, db, redis, storage, cluster },
+      foundation,
       api,
       router,
       proxyDomain,
@@ -292,7 +321,7 @@ export async function deployStack() {
     // it owns the API repository: CI stages the object before this stack can consume it. The name
     // is derived in one helper shared with the preflight and the staging command.
     await buildRunners({
-      foundation: { vpc, db, redis, storage, cluster },
+      foundation,
       api,
       otelCollectorOtlpHttpUrl,
       region: REGION,

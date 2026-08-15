@@ -6,7 +6,7 @@
   "scripts": {
     "deploy": "tsx deployment/sst.ts deploy",
     "remove": "tsx deployment/sst.ts remove",
-    "test": "tsx --test artifacts/*.test.ts bootstrap/*.test.ts deployment/*.test.ts policies/runner/*.test.ts runner/*.test.ts runner/model/*.test.ts shared/*.test.ts stack/*.test.ts",
+    "test": "tsx --test artifacts/*.test.ts bootstrap/*.test.ts deployment/*.test.ts policies/runner/*.test.ts runner/*.test.ts runner/model/*.test.ts scripts/*.test.mjs shared/*.test.ts stack/*.test.ts",
     "typecheck": "tsc --noEmit",
     "sst": "tsx deployment/sst.ts",
     "secrets": "tsx deployment/secret-names.ts",

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
+import { CLICKHOUSE_STAGE_CONFIG_KEYS } from '../scripts/clickhouse-config.mjs'
+
 /*
  * The keys a stage's secret store may put into a deploy's environment.
  *
- * This started as a denylist of process controls, and seven review rounds each found a new way past
- * it: NODE_OPTIONS, then BASH_ENV and GIT_SSH_COMMAND, then DOCKER_HOST, DOCKER_CONTEXT, LD_AUDIT,
+ * A denylist of process controls was incomplete: NODE_OPTIONS, BASH_ENV, GIT_SSH_COMMAND,
+ * DOCKER_HOST, DOCKER_CONTEXT, LD_AUDIT,
  * SST_BUN_PATH, GH_TOKEN, RUSTC_WRAPPER, SSH_ASKPASS. Every one of them turns a stored string into
  * code or a moved trust boundary inside the sst child, which runs Pulumi with the deploy role's
  * credentials. An enumeration of dangerous names cannot be finished, so this is the other shape:
@@ -45,29 +47,7 @@ export const STORABLE_STAGE_CONFIG_KEYS: readonly string[] = [
   'BOXLITE_SYSTEM_SOURCE_REGISTRY_USERNAME',
   'BOX_MIGRATION_ARCHIVE_PREFIX',
   'BOX_OTEL_ENDPOINT_URL',
-  'CLICKHOUSE_COMPRESS',
-  'CLICKHOUSE_CREATE_SCHEMA',
-  'CLICKHOUSE_DATABASE',
-  'CLICKHOUSE_ENDPOINT',
-  'CLICKHOUSE_EXPORTER_ENABLED',
-  'CLICKHOUSE_HOST',
-  'CLICKHOUSE_OTEL_ENDPOINT',
-  'CLICKHOUSE_PASSWORD',
-  'CLICKHOUSE_PORT',
-  'CLICKHOUSE_PROTOCOL',
-  'CLICKHOUSE_READER_DATABASE',
-  'CLICKHOUSE_READER_HOST',
-  'CLICKHOUSE_READER_PASSWORD',
-  'CLICKHOUSE_READER_PORT',
-  'CLICKHOUSE_READER_PROTOCOL',
-  'CLICKHOUSE_READER_URL',
-  'CLICKHOUSE_READER_USERNAME',
-  'CLICKHOUSE_URL',
-  'CLICKHOUSE_USERNAME',
-  'CLICKHOUSE_WRITER_DATABASE',
-  'CLICKHOUSE_WRITER_ENDPOINT',
-  'CLICKHOUSE_WRITER_PASSWORD',
-  'CLICKHOUSE_WRITER_USERNAME',
+  ...CLICKHOUSE_STAGE_CONFIG_KEYS,
   'DASHBOARD_BASE_API_URL',
   'DASHBOARD_URL',
   'DEFAULT_REGION_ID',

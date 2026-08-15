@@ -5,13 +5,15 @@
 
 import { IMAGES, PORTS, envOr, httpHealth } from './settings.js'
 import type { FoundationResources } from './foundation.js'
+import type { ClickHouseResources } from './clickhouse.js'
+import type { ClickHouseConfig } from '../scripts/clickhouse-config.mjs'
 
 export interface ObservabilityInputs {
   cluster: FoundationResources['cluster']
   stackDomain: string
   adminApiKey: random.RandomPassword
-  clickHouseWriterEndpoint: string | undefined
-  clickHouseWriterPassword: string | undefined
+  clickHouseConfig: ClickHouseConfig
+  clickHouseResources: ClickHouseResources
   collectorExporters: string
   collectorTraceExporters: string
   stripTrailingSlash: (url: $util.Output<string>) => $util.Output<string>
@@ -39,6 +41,9 @@ export function buildObservability(input: ObservabilityInputs) {
       },
     },
     environment: { COLLECTOR_OTLP_ENABLED: 'true' },
+    transform: {
+      loadBalancer: (lbArgs: any) => { lbArgs.loadBalancerType = 'application' },
+    },
   })
   const jaegerOtlpHttpEndpoint = input
     .stripTrailingSlash(jaeger.url)
@@ -46,6 +51,7 @@ export function buildObservability(input: ObservabilityInputs) {
 
   const otelCollector = new sst.aws.Service('OtelCollector', {
     cluster: input.cluster,
+    wait: input.clickHouseConfig.active,
     image: { context: '../..', dockerfile: 'apps/otel-collector/Dockerfile', cache: false },
     command: [
       '--config',
@@ -68,13 +74,21 @@ export function buildObservability(input: ObservabilityInputs) {
         [`${PORTS.OTEL_HEALTH}/http`]: httpHealth('/health/status'),
       },
     },
+    ssm: {
+      ...(input.clickHouseConfig.active && input.clickHouseResources.writerSecretArn
+        ? { CLICKHOUSE_PASSWORD: input.clickHouseResources.writerSecretArn }
+        : {}),
+    },
     environment: {
-      CLICKHOUSE_ENDPOINT: input.clickHouseWriterEndpoint || 'https://clickhouse-disabled.invalid:443',
-      CLICKHOUSE_DATABASE: envOr('CLICKHOUSE_WRITER_DATABASE', envOr('CLICKHOUSE_DATABASE', 'otel')),
-      CLICKHOUSE_USERNAME: envOr('CLICKHOUSE_WRITER_USERNAME', envOr('CLICKHOUSE_USERNAME', 'default')),
-      CLICKHOUSE_PASSWORD: input.clickHouseWriterPassword || 'unused',
-      CLICKHOUSE_CREATE_SCHEMA: envOr('CLICKHOUSE_CREATE_SCHEMA', 'false'),
-      CLICKHOUSE_COMPRESS: envOr('CLICKHOUSE_COMPRESS', 'none'),
+      CLICKHOUSE_ENDPOINT:
+        input.clickHouseConfig.active && input.clickHouseResources.url
+          ? input.clickHouseResources.url
+          : 'https://clickhouse-disabled.invalid:443',
+      CLICKHOUSE_DATABASE: input.clickHouseConfig.database || 'otel',
+      CLICKHOUSE_USERNAME:
+        input.clickHouseConfig.writerUsername || 'otel_writer',
+      CLICKHOUSE_CREATE_SCHEMA: 'false',
+      CLICKHOUSE_COMPRESS: 'none',
       BOXLITE_API_URL: envOr('BOXLITE_API_URL', `https://api.${input.stackDomain}/api`),
       BOXLITE_API_KEY: envOr(
         'BOXLITE_API_KEY',
@@ -82,6 +96,13 @@ export function buildObservability(input: ObservabilityInputs) {
       ),
       JAEGER_OTLP_HTTP_ENDPOINT: jaegerOtlpHttpEndpoint,
     },
+    transform: {
+      loadBalancer: (lbArgs: any) => { lbArgs.loadBalancerType = 'application' },
+    },
+  }, {
+    dependsOn: [
+      ...(input.clickHouseResources.ready ? [input.clickHouseResources.ready] : []),
+    ],
   })
   const otelCollectorOtlpHttpUrl = input
     .stripTrailingSlash(otelCollector.url)

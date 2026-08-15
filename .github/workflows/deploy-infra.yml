@@ -13,7 +13,7 @@ run-name: Deploy ${{ inputs.components }} to ${{ inputs.stage }}
 #
 # `components` narrows both halves at once: an unselected leg is neither built nor deployed. It
 # drops the build jobs here and becomes `--exclude <Component>` on the SST commands below, which
-# apps/infra/scripts/deployment-scope.mjs accepts as one of exactly two reviewed partial shapes.
+# apps/infra/scripts/deployment-scope.mjs accepts as a reviewed partial shape.
 # Never `--target`: PR #1095 stalled this stack mid-provider-migration that way, because a targeted
 # update omits the shared resources it still depends on. `--exclude` keeps them in the plan.
 
@@ -36,6 +36,7 @@ on:
           - api+runner
           - api
           - runner
+          - infra
       apply:
         description: Preview again, then deploy the selected components
         required: true
@@ -174,8 +175,8 @@ jobs:
   build-api:
     name: Build commit Api image
     needs: resolve-ref
-    # `contains` rather than equality: the value is one of api+runner / api / runner, and no
-    # option's name contains the other's, so a substring test reads as the membership it is.
+    # `contains` rather than equality: the value is one of api+runner / api / runner / infra, and
+    # no leg's name contains the other, so a substring test reads as the membership it is.
     if: ${{ contains(inputs.components, 'api') }}
     # Nothing here depends on the C SDK, so this runs beside build-c rather than behind it.
     # The called workflow reaches ECR through OIDC, and a job-level block replaces the
@@ -247,7 +248,7 @@ jobs:
       # stay `build` above even when one leg is excluded: everything the plan declares still comes
       # from this one commit, and an exclusion that turned out to be narrower than the leg would
       # then fail loudly on the missing artifact rather than quietly reinstalling a release.
-      DEPLOY_EXCLUDE: ${{ inputs.components == 'api' && 'Runner' || inputs.components == 'runner' && 'Api' || '' }}
+      DEPLOY_EXCLUDE: ${{ inputs.components == 'api' && 'Runner' || inputs.components == 'runner' && 'Api' || inputs.components == 'infra' && 'Api,Runner' || '' }}
 
     steps:
       - name: Checkout selected commit
@@ -268,9 +269,8 @@ jobs:
       # deploys are disabled` from the older guard — true of that commit, but it reads as a
       # statement about this workflow and sends the operator to the wrong file.
       #
-      # It answers "can this tree scope at all", not "does it support THIS scope": the probe reads
-      # one export. A commit that knew `--exclude Runner` but not some later selector would pass
-      # here and be refused by resolveDeployScope's own allowlist instead.
+      # Legacy trees only support the original one-component exclusions. The infrastructure-only
+      # shape arrived with capability v2, so it must fail here rather than reach an older wrapper.
       #
       # Runs before the AWS credential step on purpose: an unsupported scope is knowable from the
       # checkout alone, so it should never reach the deploy role.
@@ -285,12 +285,16 @@ jobs:
           capability=apps/infra/deployment/capabilities.json
           legacy_module=apps/infra/scripts/deployment-scope.mjs
           if [ -f "$capability" ]; then
-            if ! status=$(node -e "const fs=require('node:fs'); const c=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); console.log([1,2].includes(c.version) && c.componentSelection === true ? 'supported' : 'unsupported')" "$capability"); then
+            if ! status=$(node -e "const fs=require('node:fs'); const c=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); const infra=process.env.DEPLOY_EXCLUDE === 'Api,Runner'; console.log([1,2].includes(c.version) && c.componentSelection === true && (!infra || c.version === 2 && c.infrastructureOnly === true) ? 'supported' : 'unsupported')" "$capability"); then
               status=unreadable
             fi
             source_path=$capability
           elif [ -f "$legacy_module" ]; then
-            status=$(node -e "import('./$legacy_module').then(m => console.log(typeof m.resolveDeployScope === 'function' ? 'supported' : 'unsupported')).catch(e => { console.log('unreadable'); console.error(e.message) })")
+            if [ "$DEPLOY_EXCLUDE" = 'Api,Runner' ]; then
+              status=unsupported
+            else
+              status=$(node -e "import('./$legacy_module').then(m => console.log(typeof m.resolveDeployScope === 'function' ? 'supported' : 'unsupported')).catch(e => { console.log('unreadable'); console.error(e.message) })")
+            fi
             source_path=$legacy_module
           else
             status=unsupported
@@ -538,7 +542,7 @@ jobs:
   e2e:
     name: E2E suite against ${{ inputs.stage }}
     needs: [resolve-ref, deploy]
-    if: ${{ inputs.apply }}
+    if: ${{ inputs.apply && inputs.components != 'infra' }}
     uses: ./.github/workflows/e2e-cloud.yml
     with:
       ref: ${{ needs.resolve-ref.outputs.sha }}

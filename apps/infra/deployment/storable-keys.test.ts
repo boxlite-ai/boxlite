@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { STORABLE_STAGE_CONFIG_KEYS, isStorableStageConfigKey } from './storable-keys.js'
 import { isLocalOnlyDeploymentKey } from './validate-environment.js'
 import { liveText } from '../shared/live-source.js'
+import { CLICKHOUSE_STAGE_CONFIG_KEYS } from '../scripts/clickhouse-config.mjs'
 
 const INFRA_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // Where a deploy resolves configuration. Test files are excluded: they set synthetic values, they do
@@ -57,6 +58,7 @@ function keysReadFromSource() {
       }
     }
   }
+  for (const key of CLICKHOUSE_STAGE_CONFIG_KEYS) keys.add(key)
   return keys
 }
 
@@ -69,7 +71,7 @@ test('the allowlist is exactly what the deploy reads, minus what must stay local
 })
 
 test('nothing the deploy never reads can be hydrated', () => {
-  // The seven vectors seven review rounds found in the denylist this replaces. None is read by the
+  // Known vectors in the denylist this replaces. None is read by the
   // stack, so none is storable — and, unlike the denylist, an eighth nobody has thought of is refused
   // by the same rule rather than needing to be named.
   const vectors = [

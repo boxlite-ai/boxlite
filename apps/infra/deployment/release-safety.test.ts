@@ -815,6 +815,42 @@ test('component-selection bridge accepts capability v2 for existing single exclu
   }
 })
 
+test('legacy component selection cannot claim infrastructure-only support', () => {
+  const workflow = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
+  const scopeSupportStep = workflow.jobs.deploy.steps.find(
+    (step: any) => step.name === 'Require component selection support in the selected commit',
+  )
+  assert.ok(scopeSupportStep, 'the component-selection capability check is missing')
+
+  const checkout = mkdtempSync(join(tmpdir(), 'boxlite-legacy-component-selection-'))
+  const legacyModule = join(checkout, 'apps/infra/scripts/deployment-scope.mjs')
+  mkdirSync(dirname(legacyModule), { recursive: true })
+  writeFileSync(legacyModule, 'export function resolveDeployScope() {}\n')
+
+  const runGuard = (exclude: 'Api' | 'Runner' | 'Api,Runner') =>
+    spawnSync('/usr/bin/env', ['bash', '-c', scopeSupportStep.run], {
+      cwd: checkout,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        BOXLITE_ARTIFACT_REF: 'legacy-fixture-commit',
+        DEPLOY_EXCLUDE: exclude,
+      },
+    })
+
+  try {
+    assert.equal(runGuard('Api').status, 0, 'legacy commits must keep their existing Api exclusion')
+    assert.equal(runGuard('Runner').status, 0, 'legacy commits must keep their existing Runner exclusion')
+    assert.notEqual(
+      runGuard('Api,Runner').status,
+      0,
+      'a legacy resolver predates the infrastructure-only scope and must fail before AWS credentials',
+    )
+  } finally {
+    rmSync(checkout, { recursive: true, force: true })
+  }
+})
+
 test('deployment previews and reconciles the full stack in guarded GitHub CI', () => {
   assert.ok(existsSync(DEPLOY_WORKFLOW), 'the stack deployment workflow is missing')
   const source = readFileSync(DEPLOY_WORKFLOW, 'utf8')
@@ -949,7 +985,7 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // capacity re-testing a stack the run only previewed.
   assert.equal(workflow.jobs.e2e.uses, './.github/workflows/e2e-cloud.yml')
   assert.equal(workflow.jobs.e2e.with.ref, '${{ needs.resolve-ref.outputs.sha }}')
-  assert.equal(workflow.jobs.e2e.if, '${{ inputs.apply }}')
+  assert.equal(workflow.jobs.e2e.if, "${{ inputs.apply && inputs.components != 'infra' }}")
   // Named, not `inherit` — which would hand the suite every secret this job can reach.
   assert.equal(workflow.jobs.e2e.secrets.BOXLITE_DEV_API_KEY, '${{ secrets.BOXLITE_DEV_API_KEY }}')
   // `needs` carries the ordering the `if` relies on: no status-check function appears in that
@@ -962,12 +998,12 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // build gating just burns the CI time the input exists to save.
   const components = workflow.on.workflow_dispatch.inputs.components
   assert.equal(components.type, 'choice', 'components must be an allowlist, not free text')
-  assert.deepEqual(components.options, ['api+runner', 'api', 'runner'])
+  assert.deepEqual(components.options, ['api+runner', 'api', 'runner', 'infra'])
   assert.equal(components.default, 'api+runner', 'an unqualified dispatch must still deploy everything')
   // `contains` reads as membership only while no single-leg option contains the other leg's name.
   // The combined option contains both by design; a leg that contained the other would make its
   // gate fire for a scope that excludes it — an `api`-only dispatch building the Runner anyway.
-  const legs = components.options.filter((option: any) => option !== 'api+runner')
+  const legs = ['api', 'runner']
   for (const leg of legs) {
     for (const other of legs.filter((candidate: any) => candidate !== leg)) {
       assert.ok(!leg.includes(other), `option '${leg}' contains '${other}', which breaks the contains() gates`)
@@ -988,7 +1024,7 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // before it ever gets there.
   assert.equal(
     workflow.jobs.deploy.env.DEPLOY_EXCLUDE,
-    "${{ inputs.components == 'api' && 'Runner' || inputs.components == 'runner' && 'Api' || '' }}",
+    "${{ inputs.components == 'api' && 'Runner' || inputs.components == 'runner' && 'Api' || inputs.components == 'infra' && 'Api,Runner' || '' }}",
   )
   assert.doesNotMatch(liveShell(source), /--target/)
   // The workflow definition comes from the dispatch ref while this job checks out the SELECTED
@@ -1008,6 +1044,7 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assertShellLine(scopeSupportStep.run, /if ! status=\$\(node -e .* "\$capability"\); then/)
   assertShellLine(scopeSupportStep.run, /status=unreadable/)
   assertShellLine(scopeSupportStep.run, /\[1,2\]\.includes\(c\.version\) && c\.componentSelection === true/)
+  assertShellLine(scopeSupportStep.run, /!infra \|\| c\.version === 2 && c\.infrastructureOnly === true/)
   assertShellLine(scopeSupportStep.run, /elif \[ -f "\$legacy_module" \]; then/)
   assertShellLine(scopeSupportStep.run, /typeof m\.resolveDeployScope === 'function'/)
   // Absence of both formats is its own decision, not an import failure.
