@@ -2,7 +2,7 @@
 // Copyright (c) 2026 BoxLite AI
 
 /*
- * Pure IAM-policy-document checks for `verify-deploy-role-boundary.mjs` — a
+ * Pure IAM-policy-document checks for deployment/verify-role.ts — a
  * CI preflight that catches "the bootstrap CloudFormation stack was never
  * (re)deployed" in seconds, using only the read-only IAM permissions already
  * granted to the deploy role (the ReadIamAndAccountMetadata statement in

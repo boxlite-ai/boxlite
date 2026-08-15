@@ -13,7 +13,6 @@
     "runner:update": "tsx runner/update.ts",
     "bootstrap": "tsx bootstrap/bootstrap.ts",
     "verify-deploy-role": "tsx deployment/verify-role.ts",
-    "validate-preview": "tsx deployment/preview.ts",
     "runner:build-artifact": "tsx artifacts/runner-build.ts"
   },
   "devDependencies": {

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 BoxLite AI
 
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -19,7 +19,6 @@ import { runnerArtifactsBucketName } from '../artifacts/runner.js'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SST_WRAPPER = join(REPO_ROOT, 'apps/infra/deployment/sst.ts')
-const RUNNER_POLICY_PROJECT = join(REPO_ROOT, 'apps/infra/PulumiPolicy.yaml')
 const RUNNER_POLICY_RUNTIME_PROJECT = join(REPO_ROOT, 'apps/infra/policies/runner/PulumiPolicy.yaml')
 const RUNNER_POLICY_ENTRY = join(REPO_ROOT, 'apps/infra/policies/runner/index.ts')
 const RUNNER_POLICY_DEFINITIONS = join(REPO_ROOT, 'apps/infra/policies/runner/definitions.ts')
@@ -294,7 +293,7 @@ test('the shared-bootstrap guard catches every way a grant can cover it', () => 
  */
 function assertNoMaterializedStageConfig(workflow: any, source: string) {
   assert.doesNotMatch(source, /secrets\.DEPLOY_ENV/, 'stage config must come from the SST secret store, not DEPLOY_ENV')
-  // The redirect specifically, not any mention of the path: the capability gate's own refusal message
+  // The redirect specifically, not any mention of the path: the comment above the capability gate
   // names apps/infra/.env to explain what an old commit expects, and a guard that cannot tell prose
   // from a write would forbid explaining the thing it protects.
   assert.doesNotMatch(source, />\s*apps\/infra\/\.env/, 'no workflow step may write apps/infra/.env')
@@ -380,14 +379,8 @@ test('SST deploy verifies the selected Runner artifact before invoking SST', () 
 })
 
 test('preview and deploy use the mandatory local Runner policy', () => {
-  assert.ok(existsSync(RUNNER_POLICY_PROJECT), 'PulumiPolicy.yaml is missing')
   assert.ok(existsSync(RUNNER_POLICY_ENTRY), 'the Runner policy entry point is missing')
   assert.ok(existsSync(RUNNER_POLICY_DEFINITIONS), 'the Runner policy definitions are missing')
-  assert.deepEqual(load(readFileSync(RUNNER_POLICY_PROJECT, 'utf8')), {
-    runtime: 'nodejs',
-    main: 'policies/runner/index.ts',
-    description: 'Mandatory BoxLite Runner lifecycle and identity policy',
-  })
 
   const policySource = readFileSync(RUNNER_POLICY_ENTRY, 'utf8')
   const policyDefinitions = readFileSync(RUNNER_POLICY_DEFINITIONS, 'utf8')
@@ -778,38 +771,75 @@ test('SST deploy does not depend on a laptop-managed remote builder', () => {
   }
 })
 
-test('component-selection bridge accepts capability v2 for existing single exclusions', () => {
+test('the capability gate answers every selected-commit shape', () => {
+  /*
+   * The gate is shell inside YAML, so a contract assertion could only prove it is present. This runs
+   * the step's own script against the trees a dispatch can select: one declaring the capabilities,
+   * one from before each existed, one whose file is corrupt, and one with no file at all. Every case
+   * but the first must refuse — a parse failure or a missing file falling through to the happy path
+   * would deploy exactly the commit the gate exists to catch.
+   *
+   * One version set covers both capabilities on purpose. capabilities.json is one document with one
+   * version, so a bump made for an unrelated capability must not read as "this commit cannot use the
+   * store" (#1253).
+   */
   const workflow = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
-  const scopeSupportStep = workflow.jobs.deploy.steps.find(
-    (step: any) => step.name === 'Require component selection support in the selected commit',
+  const gate = workflow.jobs.deploy.steps.find(
+    (step: any) => step.name === 'Require deployment capabilities in the selected commit',
   )
-  assert.ok(scopeSupportStep, 'the component-selection capability check is missing')
+  assert.ok(gate, 'the deployment capability gate is missing')
 
-  const checkout = mkdtempSync(join(tmpdir(), 'boxlite-capability-bridge-'))
+  const checkout = mkdtempSync(join(tmpdir(), 'boxlite-capability-gate-'))
   const capability = join(checkout, 'apps/infra/deployment/capabilities.json')
   mkdirSync(dirname(capability), { recursive: true })
 
-  const runGuard = (version: number, componentSelection: boolean, exclude: 'Api' | 'Runner') => {
-    writeFileSync(capability, `${JSON.stringify({ version, componentSelection })}\n`)
-    return spawnSync('/usr/bin/env', ['bash', '-c', scopeSupportStep.run], {
+  const runGate = (contents: string | null, exclude: string) => {
+    if (contents === null) rmSync(capability, { force: true })
+    else writeFileSync(capability, contents)
+    return spawnSync('/usr/bin/env', ['bash', '-c', gate.run], {
       cwd: checkout,
       encoding: 'utf8',
-      env: {
-        ...process.env,
-        BOXLITE_ARTIFACT_REF: 'fixture-commit',
-        DEPLOY_EXCLUDE: exclude,
-      },
+      env: { ...process.env, BOXLITE_ARTIFACT_REF: 'fixture-commit', DEPLOY_EXCLUDE: exclude },
     })
   }
+  const declared = (extra: object) => JSON.stringify({ stageConfigStore: true, componentSelection: true, ...extra })
 
   try {
-    for (const exclude of ['Api', 'Runner'] as const) {
-      assert.equal(runGuard(1, true, exclude).status, 0, `capability v1 must keep supporting --exclude ${exclude}`)
-      const v2 = runGuard(2, true, exclude)
-      assert.equal(v2.status, 0, `capability v2 must support --exclude ${exclude}: ${v2.stderr}`)
+    for (const version of [1, 2]) {
+      for (const exclude of ['', 'Api', 'Runner']) {
+        const accepted = runGate(declared({ version }), exclude)
+        assert.equal(accepted.status, 0, `capability v${version} must deploy with exclude='${exclude}': ${accepted.stderr}`)
+      }
     }
-    assert.notEqual(runGuard(3, true, 'Runner').status, 0, 'an unknown capability version must fail closed')
-    assert.notEqual(runGuard(2, false, 'Runner').status, 0, 'v2 without component selection must fail closed')
+
+    /*
+     * Each refusal is checked by the cause it reports, not only by its exit status. The three
+     * causes are answered by different arms of the gate and differ solely in what they tell the
+     * operator, so asserting the status alone would let the arms swap messages unnoticed — and
+     * "this commit is too old" sends someone to redispatch a newer ref when the real problem is a
+     * capability file they need to fix.
+     */
+    const refused = (contents: string | null, exclude: string) => {
+      const result = runGate(contents, exclude)
+      assert.notEqual(result.status, 0, `expected a refusal for ${contents}`)
+      return result.stderr
+    }
+
+    // A commit that cannot read the store would deploy against whatever defaults survived.
+    assert.match(refused(JSON.stringify({ version: 1, componentSelection: true }), ''), /does not declare the capabilities/)
+    // Component selection is only required when the dispatch actually narrows the scope.
+    assert.equal(runGate(JSON.stringify({ version: 1, stageConfigStore: true }), '').status, 0)
+    assert.match(refused(JSON.stringify({ version: 1, stageConfigStore: true }), 'Runner'), /--exclude Runner/)
+    // A version this workflow has never been taught to read.
+    assert.match(refused(declared({ version: 3 }), ''), /does not declare the capabilities/)
+    // Corrupt, then absent. Each has its own cause, and neither may borrow the other's: a parse
+    // failure is not an age problem, and a missing file is not a corrupt one.
+    const corrupt = refused('{ not json', '')
+    assert.match(corrupt, /failed to load/)
+    assert.doesNotMatch(corrupt, /does not declare the capabilities/)
+    const absent = refused(null, '')
+    assert.match(absent, /declares no/)
+    assert.doesNotMatch(absent, /failed to load/)
   } finally {
     rmSync(checkout, { recursive: true, force: true })
   }
@@ -984,7 +1014,7 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   }
   // The SST component each scope excludes. `--target` must never appear: it omits the shared and
   // provider resources a partial update still depends on, which is how PR #1095 stalled the stack
-  // mid-provider-migration. deployment-scope.mjs rejects it, and this keeps the workflow honest
+  // mid-provider-migration. deployment/scope.ts rejects it, and this keeps the workflow honest
   // before it ever gets there.
   assert.equal(
     workflow.jobs.deploy.env.DEPLOY_EXCLUDE,
@@ -996,52 +1026,22 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // couples them. Observed: run 31229121181 dispatched `components=api` at a PR head predating
   // component selection, and the old wrapper answered `partial SST deploys are disabled` — true
   // of that commit, but it reads as a statement about this workflow.
-  const scopeSupportStep = workflow.jobs.deploy.steps.find(
-    (step: any) => step.name === 'Require component selection support in the selected commit',
+  // What the gate decides, and which cause it reports for each refusal, is exercised for real by
+  // 'the capability gate answers every selected-commit shape', which runs this step's own script
+  // against each tree a dispatch can select and reads its stderr. Left here: that the step exists,
+  // that it reads the capability file rather than this workflow's assumptions, and where it sits.
+  const capabilityGate = workflow.jobs.deploy.steps.find(
+    (step: any) => step.name === 'Require deployment capabilities in the selected commit',
   )
-  assert.ok(scopeSupportStep, 'the component-selection capability check is missing')
-  assert.equal(scopeSupportStep.if, "${{ env.DEPLOY_EXCLUDE != '' }}", 'the check must run only for a narrowed scope')
-  // Current commits use versioned data; historical commits retain the executable capability
-  // probe. Both paths inspect behavior rather than grepping source comments.
-  assertShellLine(scopeSupportStep.run, /capability=apps\/infra\/deployment\/capabilities\.json/)
-  assertShellLine(scopeSupportStep.run, /if \[ -f "\$capability" \]; then/)
-  assertShellLine(scopeSupportStep.run, /if ! status=\$\(node -e .* "\$capability"\); then/)
-  assertShellLine(scopeSupportStep.run, /status=unreadable/)
-  assertShellLine(scopeSupportStep.run, /\[1,2\]\.includes\(c\.version\) && c\.componentSelection === true/)
-  assertShellLine(scopeSupportStep.run, /elif \[ -f "\$legacy_module" \]; then/)
-  assertShellLine(scopeSupportStep.run, /typeof m\.resolveDeployScope === 'function'/)
-  // Absence of both formats is its own decision, not an import failure.
-  assertShellLine(scopeSupportStep.run, /else\s+status=unsupported/)
-  assertShellLine(scopeSupportStep.run, /status=unsupported/)
-  // Each arm, and the claim that distinguishes it. Pinning only the `if` leaves an arm free to
-  // carry another arm's message, which a passing suite would not notice: the arms differ solely
-  // in what they tell the operator, so a wrong cause here is invisible to every other assertion.
-  const scopeSupportShell = liveShell(scopeSupportStep.run)
-  assert.match(scopeSupportShell, /supported\) ;;/, 'the supported arm must be a no-op')
-  const tooOld = scopeSupportShell.slice(scopeSupportShell.indexOf('unsupported)'))
-  assert.match(
-    tooOld.slice(0, tooOld.indexOf(';;')),
-    /predates component selection/,
-    'the too-old arm must name age as the cause',
-  )
-  const unreadable = scopeSupportShell.slice(scopeSupportShell.indexOf('*)'))
-  assert.match(
-    unreadable,
-    /failed to load/,
-    'the load-failure arm must not describe the commit as too old — that is the other arm',
-  )
-  assert.doesNotMatch(
-    unreadable,
-    /predates component selection/,
-    'the load-failure arm must not reuse the too-old cause',
-  )
-  // Before the deploy role is assumed. An unsupported scope is knowable from the checkout alone,
+  assert.ok(capabilityGate, 'the deployment capability gate is missing')
+  assertShellLine(capabilityGate.run, /capability=apps\/infra\/deployment\/capabilities\.json/)
+  // Before the deploy role is assumed. An unsupported commit is knowable from the checkout alone,
   // so it must never reach AWS credentials.
   const deployStepNames = workflow.jobs.deploy.steps.map((step: any) => step.name)
   assert.ok(
-    deployStepNames.indexOf('Require component selection support in the selected commit') <
+    deployStepNames.indexOf('Require deployment capabilities in the selected commit') <
       deployStepNames.indexOf('Configure AWS credentials through OIDC'),
-    'the capability check must run before AWS credentials are configured',
+    'the capability gate must run before AWS credentials are configured',
   )
   // A skipped build job would cascade a skip to the deploy under the implicit success(). Naming a
   // status-check function turns that off — without one, every narrowed dispatch silently deploys
@@ -1093,24 +1093,14 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.equal(workflow.jobs.deploy.env.IAM_PERMISSIONS_BOUNDARY_STAGE, '${{ inputs.stage }}')
   assertNoMaterializedStageConfig(workflow, source)
   // Any commit on main is deployable, and this job checks out THAT commit's apps/infra. One predating
-  // the store still expects apps/infra/.env, so it must be refused rather than deployed with whatever
-  // defaults survive — and refused before the deploy role is assumed.
-  const stageConfigGate = workflow.jobs.deploy.steps.find(
-    (step: any) => step.name === 'Require stage configuration store support in the selected commit',
-  )
-  assert.ok(stageConfigGate, 'the stage configuration capability gate is missing')
-  assert.equal(stageConfigGate.if, undefined, 'the gate must apply to every deploy, not just a narrowed scope')
-  assertShellLine(stageConfigGate.run, /c\.stageConfigStore === true/)
-  const credentialStep = workflow.jobs.deploy.steps.findIndex(
-    (step: any) => step.name === 'Configure AWS credentials through OIDC',
-  )
-  assert.ok(
-    workflow.jobs.deploy.steps.indexOf(stageConfigGate) < credentialStep,
-    'an unsupported commit must be refused before the deploy role is assumed',
-  )
-  // The capability this repo declares, so the gate cannot pass against a tree that lacks it.
+  // the store still expects apps/infra/.env, so the gate must apply to every deploy rather than only
+  // to a narrowed scope.
+  assert.equal(capabilityGate.if, undefined, 'the gate must apply to every deploy, not just a narrowed scope')
+  assertShellLine(capabilityGate.run, /c\.stageConfigStore === true/)
+  // The capabilities this repo declares, so the gate cannot pass against a tree that lacks them.
   const capabilities = JSON.parse(readFileSync(join(REPO_ROOT, 'apps/infra/deployment/capabilities.json'), 'utf8'))
   assert.equal(capabilities.stageConfigStore, true)
+  assert.equal(capabilities.componentSelection, true)
   assert.ok(safetyTestStep, 'the deployment safety test step is missing')
   assert.equal(safetyTestStep.run, 'npm test')
   assert.ok(installStep, 'the SST provider installation step is missing')
@@ -1119,50 +1109,37 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.equal(previewStep.if, undefined, 'Preview validation must not be conditional')
   assert.equal(previewStep['continue-on-error'], undefined, 'Preview failures must stop deployment')
   assert.equal(previewStep.shell, 'bash')
-  // Every executed line and its order, comments stripped: the scope must reach SST, and nothing
-  // may be appended alongside it. Compared as lines rather than one string so rewording a comment
-  // does not churn the pin, while adding or dropping a command still fails.
-  const liveCommands = (run: any) => liveShell(run).split('\n').filter(Boolean)
-  // Seeded with the fixed arguments, never `args=()`: expanding an empty array under `set -u` is
-  // an unbound-variable error before bash 4.4, so a full-scope deploy would die on the runner's
-  // bash rather than on anything about this stack. Verified against bash 3.2.
-  assert.deepEqual(liveCommands(previewStep.run), [
-    'set -euo pipefail',
-    'if node -e "const pkg = require(\'./package.json\'); process.exit(pkg.scripts?.[\'validate-preview\'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then',
-    '  policy=policies/runner',
-    '  validator=(npm run --silent validate-preview)',
-    'elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then',
-    '  policy=.',
-    '  validator=(node scripts/deployment-preview.mjs)',
-    'else',
-    "  echo 'selected commit has no supported deployment preview contract' >&2",
-    '  exit 1',
-    'fi',
-    'args=(diff --stage "$STAGE" --policy "$policy")',
-    '[ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")',
-    'args+=(--json)',
-    'npm run --silent sst -- "${args[@]}" |',
-    '  "${validator[@]}"',
-  ])
   assert.ok(deployStep, 'the deployment step is missing')
   assert.equal(deployStep.if, '${{ inputs.apply }}')
-  assert.deepEqual(liveCommands(deployStep.run), [
-    'set -euo pipefail',
-    'if node -e "const pkg = require(\'./package.json\'); process.exit(pkg.scripts?.[\'validate-preview\'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then',
-    '  policy=policies/runner',
-    'elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then',
-    '  policy=.',
-    'else',
-    "  echo 'selected commit has no supported deployment preview contract' >&2",
-    '  exit 1',
-    'fi',
-    'args=(--stage "$STAGE" --policy "$policy")',
-    '[ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")',
-    'npm run deploy -- "${args[@]}"',
-  ])
-  // The `"${args[@]}"` spelling in both invocations above is the whole guard: `--exclude
-  // "$DEPLOY_EXCLUDE"` inline would hand SST an empty component name on every full deploy, and
-  // unquoted it would word-split. The deepEqual pins those lines exactly, so no separate check.
+  /*
+   * Four properties per invocation, rather than the script line for line. Each is a way a deploy
+   * has actually gone wrong, and none of them cares how the surrounding bash is worded:
+   *
+   *   - the mandatory Runner policy is passed, so a plan that would replace a Runner is refused;
+   *   - the scope is appended conditionally, never inline — `--exclude "$DEPLOY_EXCLUDE"` inline
+   *     hands SST an empty component name on every full-scope deploy;
+   *   - it is expanded as "${args[@]}", so a scope with a space cannot word-split;
+   *   - the array is seeded with the fixed arguments, never `args=()` — expanding an EMPTY array
+   *     under `set -u` is an unbound-variable error before bash 4.4, which would kill a full-scope
+   *     deploy on the runner's own bash. Verified against bash 3.2.
+   */
+  for (const [label, step, invocation] of [
+    ['preview', previewStep, /npm run --silent sst -- "\$\{args\[@\]\}"/],
+    ['deploy', deployStep, /npm run deploy -- "\$\{args\[@\]\}"/],
+  ] as const) {
+    const shell = liveShell(step.run)
+    assert.match(shell, /--policy policies\/runner/, `the ${label} must pass the mandatory Runner policy`)
+    assert.match(shell, /^args=\(.+\)$/m, `the ${label} must seed its argument array`)
+    assert.match(
+      shell,
+      /\[ -z "\$DEPLOY_EXCLUDE" \] \|\| args\+=\(--exclude "\$DEPLOY_EXCLUDE"\)/,
+      `the ${label} must append the scope only when one was selected`,
+    )
+    assert.match(shell, invocation, `the ${label} must expand its arguments as a quoted array`)
+  }
+  // `sst diff` is what makes the preview a preview — the loop above proves it runs under the same
+  // policy pack as the apply, so a Runner the plan would replace is refused before approval.
+  assert.match(liveShell(previewStep.run), /args=\(diff /)
   assert.ok(
     workflow.jobs.deploy.steps.indexOf(previewStep) < workflow.jobs.deploy.steps.indexOf(deployStep),
     'Preview validation must complete before deployment',
@@ -1437,77 +1414,6 @@ test('the deploy role cannot reach another stage in the SST backing store', () =
   )
 })
 
-test('the stage configuration capability probe answers each selected-commit shape', () => {
-  // The gate is shell inside YAML, so the contract assertions above can only prove it is present.
-  // This runs the probe's own `node -e` expression against the three trees a dispatch can select: one
-  // that declares the capability, one from before it existed, and one whose file is corrupt. The last
-  // must not read as "supported" — a parse failure falling through to the happy path would deploy
-  // exactly the commit the gate exists to refuse.
-  const workflow = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
-  const gate = workflow.jobs.deploy.steps.find(
-    (step: any) => step.name === 'Require stage configuration store support in the selected commit',
-  )
-  assert.ok(gate, 'the capability gate is missing')
-  const probe = liveShell(gate.run)
-    .split('\n')
-    .map((line: string) => line.trim())
-    .find((line: string) => line.startsWith('if ! status=$(node -e'))
-  assert.ok(probe, 'the capability probe is not a node -e expression any more')
-  const expression = probe.slice(probe.indexOf('"') + 1, probe.lastIndexOf('" "$capability"'))
-
-  /*
-   * The two gates read the same file, so they must accept the same versions. Left to drift, a bump one
-   * gate welcomes makes the other refuse the deploy — with a message about the store, for a commit
-   * whose store support never changed. This is not hypothetical: #1253 widened one of them.
-   */
-  const componentGate = workflow.jobs.deploy.steps.find(
-    (step: any) => step.name === 'Require component selection support in the selected commit',
-  )
-  assert.ok(componentGate, 'the component-selection gate is missing')
-  const acceptedVersions = (source: string) => source.match(/\[[\d,\s]+\]\.includes\(c\.version\)/)?.[0]
-  assert.equal(
-    acceptedVersions(expression),
-    acceptedVersions(liveShell(componentGate.run)),
-    'the two capability gates accept different versions of the same file',
-  )
-
-  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-capability-probe-'))
-  const capability = join(fixture, 'capabilities.json')
-  try {
-    const cases: Array<[string, string]> = [
-      ['supported', JSON.stringify({ version: 1, componentSelection: true, stageConfigStore: true })],
-      ['unsupported', JSON.stringify({ version: 1, componentSelection: true })],
-      /*
-       * v2 with the capability declared is SUPPORTED. There is one capabilities.json with one version,
-       * so a bump made for an unrelated capability must not read as "this commit cannot use the store"
-       * — which is why the component-selection gate stopped pinning a single version (#1253), and why
-       * this gate accepts the same set.
-       */
-      ['supported', JSON.stringify({ version: 2, componentSelection: true, stageConfigStore: true })],
-      ['unsupported', JSON.stringify({ version: 2, componentSelection: true })],
-      // Outside the set both gates accept: a future version this workflow has never been taught to read.
-      ['unsupported', JSON.stringify({ version: 3, stageConfigStore: true })],
-    ]
-    for (const [expected, contents] of cases) {
-      writeFileSync(capability, contents)
-      const status = execFileSync(process.execPath, ['-e', expression, capability], { encoding: 'utf8' }).trim()
-      assert.equal(status, expected, `probe answered '${status}' for ${contents}`)
-    }
-
-    // Corrupt JSON must throw rather than print a status: that is what makes the workflow's
-    // `if ! status=$(...)` branch set `unreadable` and refuse instead of falling through.
-    writeFileSync(capability, '{ not json')
-    assert.throws(() =>
-      execFileSync(process.execPath, ['-e', expression, capability], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      }),
-    )
-  } finally {
-    rmSync(fixture, { recursive: true, force: true })
-  }
-})
-
 test('release deployment consumes one published version for both components', () => {
   const source = readFileSync(RELEASE_DEPLOY_WORKFLOW, 'utf8')
   const workflow = load(source)
@@ -1541,18 +1447,12 @@ test('release deployment consumes one published version for both components', ()
   // The same guarded wrapper and the same pre-deploy gates the build path uses: a release
   // deploy reconciles the identical stack, so it owes the identical safety checks.
   assert.equal(deployStep.shell, 'bash')
-  assert.deepEqual(liveShell(deployStep.run).split('\n').filter(Boolean), [
-    'set -euo pipefail',
-    'if node -e "const pkg = require(\'./package.json\'); process.exit(pkg.scripts?.[\'validate-preview\'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then',
-    '  policy=policies/runner',
-    'elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then',
-    '  policy=.',
-    'else',
-    "  echo 'selected commit has no supported deployment preview contract' >&2",
-    '  exit 1',
-    'fi',
-    'npm run deploy -- --stage "$STAGE" --policy "$policy"',
-  ])
+  // Through the guarded wrapper (`npm run deploy`, never the sst binary) and with the mandatory
+  // Runner policy — a release reconciles the identical stack, so it owes the identical guards. A
+  // release deploy takes no --exclude: it is always the whole stack at one published version.
+  const releaseDeployShell = liveShell(deployStep.run)
+  assert.match(releaseDeployShell, /npm run deploy -- --stage "\$STAGE" --policy policies\/runner/)
+  assert.doesNotMatch(releaseDeployShell, /--exclude/)
   assert.ok(workflow.jobs.deploy.steps.find((step: any) => step.name === 'Run deployment safety tests'))
   const boundaryStep = workflow.jobs.deploy.steps.find(
     (step: any) => step.name === 'Verify deploy role IAM boundary permissions',
@@ -1756,9 +1656,9 @@ test('API publishing builds once and promotes that exact image without rebuildin
   const resolveRun = workflow.jobs.publish.steps.find((step: any) => step.name === 'Resolve publish operation')?.run ?? ''
   assertShellLine(resolveRun, /tag v\$version declares Cargo\.toml version/)
   assertShellLine(resolveRun, /builds always land in dev/)
-  // The one string the deploy has to agree with. apiImageTag() in api-artifact.mjs derives the
+  // The one string the deploy has to agree with. apiImageTag() in artifacts/api.ts derives the
   // reference SST is handed; if these two drift the deploy resolves a tag nothing ever pushed and
-  // only finds out when the ECS task fails to pull. api-artifact.test.mjs pins the other half.
+  // only finds out when the ECS task fails to pull. artifacts/api.test.ts pins the other half.
   assertShellLine(resolveRun, /tag="v\$\{version\}-\$\{INPUT_REF\}"/)
   // A ref that is not a full lowercase sha would tag an image nobody can address again.
   assertShellLine(resolveRun, /\[\[ "\$INPUT_REF" =~ \^\[0-9a-f\]\{40\}\$ \]\]/)

@@ -161,12 +161,12 @@ credentials.
 
 Either path first runs deployment safety tests that require every Runner to
 retain `protect: true` and the AMI/user-data ignore rules. The build path then
-runs a full `sst diff --json` and passes the structured plan through
-`deployment/preview.ts`. The gate rejects creating, replacing, or
-deleting a Runner instance and any in-place Runner change other than provider
-association or tags. Workflow dispatch defaults to a preview-only run; set
-`apply=true` only after reviewing it. An apply run repeats the same guarded
-preview before the full-stack deploy:
+runs a full `sst diff` under the mandatory `policies/runner` policy pack, which
+rejects creating, replacing, or deleting a Runner instance and any in-place
+Runner change other than provider association or tags — the same pack the apply
+runs under, so a plan it refuses can never be applied. Workflow dispatch
+defaults to a preview-only run; set `apply=true` only after reviewing it. An
+apply run repeats the same guarded preview before the full-stack deploy:
 
 ```bash
 npm run deploy -- --stage dev
@@ -196,14 +196,15 @@ artifact is not required to exist. Any other selector is refused. `deploy-infra.
 exposes the same three scopes as its `components` input and skips the build jobs
 for a leg it excludes.
 
-A narrowed scope needs a *deployed commit* that understands it, which is not the
+A deploy needs a *deployed commit* whose tooling understands it, which is not the
 same commit as the workflow: `workflow_dispatch` reads the workflow definition
 from the dispatch ref while the deploy job checks out the selected one. So a
-`ref`/`pr` dispatch can pair a new workflow with a wrapper that predates
-`resolveDeployScope`. The job probes for it right after checkout and refuses
-before assuming the deploy role; redispatch such a commit with `api+runner`, or
-rebase it. Only a narrowed scope is affected — `api+runner` passes no selector
-and works against any commit.
+`ref`/`pr` dispatch can pair a new workflow with tooling that predates it. The
+job reads that commit's `deployment/capabilities.json` right after checkout and
+refuses before assuming the deploy role — every deploy needs `stageConfigStore`,
+and a narrowed one additionally needs `componentSelection`. A commit that
+declares neither cannot be deployed by this workflow at all; rebase it, or name a
+newer `ref`.
 
 A narrowed deploy leaves the excluded leg on whatever commit an earlier run put
 there, so the stack is then mixed-commit; the residual partial-update risk above

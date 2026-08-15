@@ -13,7 +13,7 @@ The intended declaration order is stable:
 
 Operational code is grouped separately:
 
-- `deployment/`: guarded SST execution, preview validation, scope, config, and verification
+- `deployment/`: guarded SST execution, scope, config, and post-deploy verification
 - `artifacts/`: API and Runner artifact identity, publication, and preflight
 - `runner/`: inventory, state baselines, registration, and rolling updates
 - `bootstrap/`: AWS/GitHub/Auth0 provisioning

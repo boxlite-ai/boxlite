@@ -233,7 +233,7 @@ test('the Runner binary upgrade is declared only when the Runner is in scope', (
   // `--exclude Runner` keeps the EC2 instance out of the plan, but UpgradeRunnerBinary-* is a
   // sibling of it, not a child, and SST is never passed --exclude-dependents. Its trigger carries
   // the deployed commit, so left declared on an Api-only deploy it fetches runner/<sha>/ for a
-  // commit whose build-runner job was skipped. deployment-preview.mjs cannot catch that:
+  // commit whose build-runner job was skipped. The Runner policy pack cannot catch that:
   // isRunnerLikeResource matches a name against /^Runner(?:-|$)/ OR an aws:ec2/instance:Instance
   // carrying Runner identity tags, and this command satisfies neither arm.
   const live = liveText('scriptEmittingShell', source)
