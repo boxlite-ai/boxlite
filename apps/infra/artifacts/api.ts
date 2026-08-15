@@ -19,12 +19,13 @@
  * The repository is named rather than looked up: the stage bootstrap
  * (bootstrap/aws/github-deploy-role.yaml) creates it because CI has to push into it before any deploy can
  * read it, so the consumer cannot be the thing that creates it. Both sides spell the name through
- * the same grammar — see resource-name.mjs.
+ * the same grammar — see awsResourceName in deployment/environment.ts.
  */
 
 import { execFileSync } from 'node:child_process'
 
-import { awsResourceName } from '../shared/resource-name.js'
+import { awsResourceName } from '../deployment/environment.js'
+import { resolveAwsCliPath } from '../shared/exec.js'
 
 // ECR's own rule, minus the uppercase it never allows: a stage that cannot name a repository
 // should fail here rather than as an opaque AWS validation error mid-deploy.
@@ -65,7 +66,7 @@ export function apiImageReference({ app, stage, accountId, region, version, ref 
 // caller can log which bytes it is about to deploy rather than only which tag.
 export function verifyApiImage(
   { app, stage, region, version, ref }: { app: string; stage: string; region: string; version: string; ref?: string },
-  { awsCliPath = 'aws', environment = process.env, timeoutMs = 15_000, run = execFileSync }: ApiImageExecution = {},
+  { awsCliPath = resolveAwsCliPath(), environment = process.env, timeoutMs = 15_000, run = execFileSync }: ApiImageExecution = {},
 ) {
   const repository = apiImageRepository({ app, stage })
   const tag = apiImageTag({ version, ref })

@@ -4,23 +4,13 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
+import { remainingTimeoutMs, signalProcessGroup } from '../shared/exec.js'
+
 const RELEASE_DOWNLOAD_ROOT = 'https://github.com/boxlite-ai/boxlite/releases/download'
 const RELEASE_REQUEST_KILL_GRACE_MS = 1_000
 const RELEASE_REQUEST_MAX_BUFFER = 1024 * 1024
 const STABLE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/
 const execFileAsync: any = promisify(execFile)
-
-function signalProcessGroup(child: any, signal: any) {
-  if (process.platform !== 'win32' && child.pid) {
-    try {
-      process.kill(-child.pid, signal)
-      return
-    } catch {
-      // The direct-child fallback below handles platforms without process groups.
-    }
-  }
-  if (child.exitCode === null && child.signalCode === null) child.kill(signal)
-}
 
 function releaseRequestTerminationError(reason: any, signal: any, executionError: any = undefined): any {
   const error: any =
@@ -133,12 +123,6 @@ async function curlReleaseAsset(curlPath: any, url: any, extraArguments: any, en
   }
 }
 
-function remainingTimeoutMs(deadline: any) {
-  const remaining = deadline - Date.now()
-  if (remaining <= 0) throw new Error('Runner release preflight exceeded its timeout')
-  return remaining
-}
-
 export async function verifyRunnerReleaseAssets(
   version: any,
   { curlPath = 'curl', environment = process.env, signal, timeoutMs = 15_000 }: any = {},
@@ -162,7 +146,7 @@ export async function verifyRunnerReleaseAssets(
       [],
       environment,
       signal,
-      remainingTimeoutMs(deadline),
+      remainingTimeoutMs(deadline, 'Runner release preflight'),
       'checksum',
     )
   ).trim()
@@ -187,7 +171,7 @@ export async function verifyRunnerReleaseAssets(
     ['--head', '--output', '/dev/null'],
     environment,
     signal,
-    remainingTimeoutMs(deadline),
+    remainingTimeoutMs(deadline, 'Runner release preflight'),
     'tarball',
   )
   return assets

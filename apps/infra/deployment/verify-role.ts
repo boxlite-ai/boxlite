@@ -20,11 +20,9 @@
  * in the deploy workflow's job-level env, and by sst.config.ts itself).
  */
 
-import { execFileSync } from 'node:child_process'
-
 import { parseAssumedRoleName, verifyDeployRoleGrantsBoundaryPermission } from './role-boundary.js'
 import { loadDeploymentEnvironment, resolveAwsRegion } from './environment.js'
-import { resolveAwsCliPath } from '../shared/aws-cli.js'
+import { resolveAwsCliPath, runAwsJson } from '../shared/exec.js'
 
 const SCRIPT_NAME = 'verify-deploy-role-boundary'
 
@@ -34,30 +32,19 @@ function requireStage(environment = process.env) {
   return stage
 }
 
-function awsJson(awsCliPath: any, region: any, args: any) {
-  const stdout = execFileSync(awsCliPath, [...args, '--region', region, '--output', 'json'], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 15_000,
-    killSignal: 'SIGTERM',
-  })
-  return JSON.parse(stdout)
-}
-
-function fetchInlinePolicyDocuments(awsCliPath: any, region: any, roleName: any) {
-  const { PolicyNames } = awsJson(awsCliPath, region, ['iam', 'list-role-policies', '--role-name', roleName])
+function fetchInlinePolicyDocuments(queryAws: any, roleName: any) {
+  const { PolicyNames } = queryAws(['iam', 'list-role-policies', '--role-name', roleName])
   return PolicyNames.map(
     (policyName: any) =>
-      awsJson(awsCliPath, region, ['iam', 'get-role-policy', '--role-name', roleName, '--policy-name', policyName])
-        .PolicyDocument,
+      queryAws(['iam', 'get-role-policy', '--role-name', roleName, '--policy-name', policyName]).PolicyDocument,
   )
 }
 
-function fetchAttachedManagedPolicyDocuments(awsCliPath: any, region: any, roleName: any) {
-  const { AttachedPolicies } = awsJson(awsCliPath, region, ['iam', 'list-attached-role-policies', '--role-name', roleName])
+function fetchAttachedManagedPolicyDocuments(queryAws: any, roleName: any) {
+  const { AttachedPolicies } = queryAws(['iam', 'list-attached-role-policies', '--role-name', roleName])
   return AttachedPolicies.map(({ PolicyArn }: any) => {
-    const { Policy } = awsJson(awsCliPath, region, ['iam', 'get-policy', '--policy-arn', PolicyArn])
-    const { PolicyVersion } = awsJson(awsCliPath, region, [
+    const { Policy } = queryAws(['iam', 'get-policy', '--policy-arn', PolicyArn])
+    const { PolicyVersion } = queryAws([
       'iam',
       'get-policy-version',
       '--policy-arn',
@@ -76,10 +63,11 @@ function main() {
   const region = resolveAwsRegion()
   const stage = requireStage()
   const awsCliPath = resolveAwsCliPath()
+  const queryAws = (args: any) => runAwsJson(args, { awsCliPath, region })
 
   let identity
   try {
-    identity = awsJson(awsCliPath, region, ['sts', 'get-caller-identity'])
+    identity = queryAws(['sts', 'get-caller-identity'])
   } catch (cause) {
     throw new Error('could not call `aws sts get-caller-identity`', { cause })
   }
@@ -88,8 +76,8 @@ function main() {
   try {
     const roleName = parseAssumedRoleName(identity.Arn)
     policyDocuments = [
-      ...fetchInlinePolicyDocuments(awsCliPath, region, roleName),
-      ...fetchAttachedManagedPolicyDocuments(awsCliPath, region, roleName),
+      ...fetchInlinePolicyDocuments(queryAws, roleName),
+      ...fetchAttachedManagedPolicyDocuments(queryAws, roleName),
     ]
   } catch (cause) {
     throw new Error(`could not read the deploy role's IAM policies for stage '${stage}'`, { cause })

@@ -98,7 +98,7 @@ import {
   isProtectionUnavailableError,
   parseReviewerIds,
 } from './github.js'
-import { resolveAwsCliPath } from '../shared/aws-cli.js'
+import { resolveAwsCliPath } from '../shared/exec.js'
 import { resolveSstStage } from '../deployment/stage.js'
 
 const SCRIPT_NAME = 'bootstrap-environment'

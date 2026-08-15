@@ -21,10 +21,9 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
-import { resolveAwsRegion } from '../deployment/environment.js'
-import { resolveAwsCliPath } from '../shared/aws-cli.js'
+import { awsResourceName, resolveAwsRegion } from '../deployment/environment.js'
+import { remainingTimeoutMs, resolveAwsCliPath } from '../shared/exec.js'
 import { resolveRunnerReleaseAssets, verifyRunnerReleaseAssets } from './runner-release.js'
-import { awsResourceName } from '../shared/resource-name.js'
 
 const BUILD_ARTIFACT_BUCKET_KEY = 'RUNNER_ARTIFACT_BUCKET'
 // The S3 naming rules that matter here: lowercase, no underscores, 3-63 characters. Anything
@@ -147,14 +146,6 @@ async function runAwsCli(awsCliPath: any, args: any, description: any, { environ
   }
 }
 
-// One budget for the whole preflight, as on the release path: two calls each granted the full
-// timeout would quietly double the worst case a caller thought it had asked for.
-function remainingTimeoutMs(deadline: any) {
-  const remaining = deadline - Date.now()
-  if (remaining <= 0) throw new Error('Runner artifact preflight exceeded its timeout')
-  return remaining
-}
-
 export async function resolveAwsAccountId({ awsCliPath, environment = process.env, timeoutMs = 15_000, signal }: any = {}) {
   const cli = awsCliPath ?? resolveAwsCliPath(environment)
   const accountId = (
@@ -179,7 +170,7 @@ async function verifyBuildArtifact(source: any, { awsCliPath, environment, timeo
   const manifest = (
     await runAwsCli(cli, ['s3', 'cp', '--region', region, `s3://${bucket}/${key}.sha256`, '-'], 'checksum', {
       environment,
-      timeoutMs: remainingTimeoutMs(deadline),
+      timeoutMs: remainingTimeoutMs(deadline, 'Runner artifact preflight'),
       signal,
     })
   ).trim()
@@ -199,7 +190,7 @@ async function verifyBuildArtifact(source: any, { awsCliPath, environment, timeo
 
   await runAwsCli(cli, ['s3api', 'head-object', '--region', region, '--bucket', bucket, '--key', key], 'tarball', {
     environment,
-    timeoutMs: remainingTimeoutMs(deadline),
+    timeoutMs: remainingTimeoutMs(deadline, 'Runner artifact preflight'),
     signal,
   })
   return resolveRunnerArtifact(source, environment)

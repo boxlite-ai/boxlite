@@ -83,7 +83,7 @@ import { resolveSstExecutable } from './sst-executable.js'
 import { SstProcessTerminator } from './sst-process.js'
 import { resolveSstStage } from './stage.js'
 import { removePulumiEventLogs, withPulumiEventLogCleanup } from './pulumi-logs.js'
-import { resolveAwsCliPath } from '../shared/aws-cli.js'
+import { resolveAwsCliPath, runAwsText } from '../shared/exec.js'
 
 const PULUMI_EVENT_LOG_ROOT = fileURLToPath(new URL('../.sst/pulumi', import.meta.url))
 const TERMINATION_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM']
@@ -196,24 +196,9 @@ const CLOUDFLARE_CREDS = [
 
 function fetchFromSsm(name: any) {
   try {
-    const awsCliPath = resolveAwsCliPath()
-    const out = execFileSync(
-      awsCliPath,
-      [
-        'ssm',
-        'get-parameter',
-        '--region',
-        REGION,
-        '--name',
-        name,
-        '--with-decryption',
-        '--query',
-        'Parameter.Value',
-        '--output',
-        'text',
-      ],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000, killSignal: 'SIGTERM' },
-    ).trim()
+    const out = runAwsText(['ssm', 'get-parameter', '--name', name, '--with-decryption', '--query', 'Parameter.Value'], {
+      region: REGION,
+    })
     return out && out !== 'None' ? out : null
   } catch (err: any) {
     if (err.code === 'ENOENT') console.warn('sst-with-cloudflare: `aws` CLI not found; skipping SSM lookup')

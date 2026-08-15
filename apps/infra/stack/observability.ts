@@ -86,5 +86,5 @@ export function buildObservability(input: ObservabilityInputs) {
   const otelCollectorOtlpHttpUrl = input
     .stripTrailingSlash(otelCollector.url)
     .apply((url) => `${url}:${PORTS.OTLP_HTTP}`)
-  return { otelCollector, otelCollectorOtlpHttpUrl }
+  return { otelCollectorOtlpHttpUrl }
 }

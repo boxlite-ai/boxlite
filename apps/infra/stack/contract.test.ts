@@ -50,7 +50,7 @@ test('loads local helpers dynamically inside SST config callbacks', () => {
   assert.doesNotMatch(liveEntrypoint, /^import\s/m)
   assert.match(liveEntrypoint, /async app\(input\)/)
   assert.match(liveEntrypoint, /await import\('\.\/stack\/app\.js'\)/)
-  assert.match(liveEntrypoint, /await import\('\.\/stack\/index\.js'\)/)
+  assert.match(liveEntrypoint, /await import\('\.\/stack\/deploy\.js'\)/)
   assert.match(liveEntrypoint, /async run\(\)/)
   assert.match(liveEntrypoint, /return deployStack\(\)/)
 })

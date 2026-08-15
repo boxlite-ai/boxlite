@@ -25,7 +25,7 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { loadDeploymentEnvironment, readWorkspaceVersion, resolveAwsRegion } from '../deployment/environment.js'
-import { resolveAwsCliPath } from '../shared/aws-cli.js'
+import { resolveAwsCliPath } from '../shared/exec.js'
 import { resolveAwsAccountId, runnerArtifactsBucketName } from './runner.js'
 
 const APP = 'boxlite'

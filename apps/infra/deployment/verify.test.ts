@@ -2,13 +2,9 @@
 // Copyright (c) 2026 BoxLite AI
 
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import test from 'node:test'
 
 import {
-  runAwsJson,
   verifyProxyDeployment,
   verifyProxyDeploymentWithRetry,
   verifyPublicDeployment,
@@ -20,30 +16,6 @@ const SERVICE_ARN = `${CLUSTER_ARN.replace(':cluster/', ':service/')}/Proxy`
 const TARGET_GROUP_ARN = 'arn:aws:elasticloadbalancing:ap-southeast-1:123456789012:targetgroup/proxy/primary'
 const LOAD_BALANCER_ARN = 'arn:aws:elasticloadbalancing:ap-southeast-1:123456789012:loadbalancer/net/proxy/lb'
 const LISTENER_ARN = 'arn:aws:elasticloadbalancing:ap-southeast-1:123456789012:listener/net/proxy/lb/listener'
-
-test('runs the configured AWS CLI when PATH does not contain aws', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'boxlite-infra-aws-cli-'))
-  const awsCliPath = join(directory, 'aws-cli')
-  const previousAwsCliPath = process.env.AWS_CLI_PATH
-  const previousPath = process.env.PATH
-
-  writeFileSync(awsCliPath, '#!/bin/sh\nprintf \'%s\\n\' \'{"Account":"123456789012"}\'\n')
-  chmodSync(awsCliPath, 0o755)
-  process.env.AWS_CLI_PATH = awsCliPath
-  process.env.PATH = directory
-
-  try {
-    assert.deepEqual(runAwsJson(['sts', 'get-caller-identity'], 'ap-southeast-1'), {
-      Account: '123456789012',
-    })
-  } finally {
-    if (previousAwsCliPath === undefined) delete process.env.AWS_CLI_PATH
-    else process.env.AWS_CLI_PATH = previousAwsCliPath
-    if (previousPath === undefined) delete process.env.PATH
-    else process.env.PATH = previousPath
-    rmSync(directory, { recursive: true, force: true })
-  }
-})
 
 function awsCallKey(args: any) {
   const operation = args.slice(0, 2).join(' ')

@@ -11,7 +11,7 @@ export default $config({
   },
 
   async run() {
-    const { deployStack } = await import('./stack/index.js')
+    const { deployStack } = await import('./stack/deploy.js')
     return deployStack()
   },
 })

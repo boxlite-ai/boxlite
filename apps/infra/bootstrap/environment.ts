@@ -103,9 +103,9 @@ export function ssmParameterName(stage: any, param: any) {
  * `RoleName` by a test, which turns a drift into a failure instead of a deploy that cannot assume its
  * role.
  *
- * It sits outside shared/resource-name.ts's grammar for now — see the note there. Moving it costs a
- * CloudFormation replacement and an edit to every workflow that composes the ARN, which is its own
- * change rather than a rider on this one.
+ * It sits outside the grammar awsResourceName composes (deployment/environment.ts) for now — see the
+ * note there. Moving it costs a CloudFormation replacement and an edit to every workflow that
+ * composes the ARN, which is its own change rather than a rider on this one.
  */
 export function githubDeployRoleName(stage: any) {
   requireStageLike('stage', stage)
