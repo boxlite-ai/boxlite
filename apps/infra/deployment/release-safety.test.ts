@@ -430,6 +430,36 @@ test('SST deploy verifies the selected API image before invoking SST', () => {
   assertLiveLine(source, /if \(apiSource && \(apiSource\.kind === 'release' \|\| apiSource\.ref\)\) \{/)
 })
 
+test('a failed sst call names its log rather than quoting it', () => {
+  /*
+   * sst writes provider diagnostics to .sst/log/sst.log, in most detail exactly when a call fails —
+   * request bodies included. bootstrap hands sst an app secret (`secret set`) and a stage's entire
+   * configuration (`secret load`), so quoting that file into an error message would put those values
+   * in the operator's terminal and whatever collects it.
+   *
+   * Asserted as "nothing reads the log" rather than "the calls that carry secrets do not": the log
+   * persists across calls, so a later install failure would quote what an earlier secret load wrote,
+   * and a per-call rule cannot see that. Removing the reader is what makes the property hold.
+   */
+  const source = liveText('script', readFileSync(join(REPO_ROOT, 'apps/infra/bootstrap/bootstrap.ts'), 'utf8'))
+
+  /*
+   * No read of any kind inside runSst, rather than "no read whose argument mentions sst.log" — a path
+   * held in a variable, or a helper called from the catch, would satisfy the narrower rule while
+   * quoting the same file. What has to hold is that the failure path reads nothing at all.
+   */
+  const start = source.indexOf('function runSst(')
+  assert.notEqual(start, -1, 'runSst is missing')
+  const body = source.slice(start, source.indexOf('\n}\n', start))
+  assert.doesNotMatch(body, /readFile|createReadStream|execFileSync\(\s*['"]cat/, 'the failure path must read nothing')
+
+  assert.doesNotMatch(source, /sstLogTail/, 'the log-quoting helper must stay gone')
+  // The log is named exactly once, as a path. A second mention is a second thing doing something
+  // with it, which is what this is here to notice.
+  assert.equal(source.match(/sst\.log/g)?.length, 1, 'the sst log may be named once, as a path')
+  assertLiveLine(source, /see \$\{join\(INFRA_ROOT, '\.sst', 'log', 'sst\.log'\)\}/)
+})
+
 test('what bootstrap stores is the .env it validated, read once', () => {
   // Over live source: nothing executes bootstrap in a test. main() validates a snapshot before any
   // external mutation, then ensureStageConfig runs after the OIDC provider, the GitHub Environment and

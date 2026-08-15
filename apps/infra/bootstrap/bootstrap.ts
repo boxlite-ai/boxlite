@@ -425,14 +425,20 @@ const SST_PLATFORM_DIR = join(INFRA_ROOT, '.sst', 'platform')
  */
 function ensureSstPlatform(stage: any) {
   if (sstPlatformState(SST_PLATFORM_DIR) === 'ready') {
-    runSst(['install', '--stage', stage], { timeout: SST_INSTALL_TIMEOUT_MS, label: 'install the SST platform' })
+    runSst(['install', '--stage', stage], {
+      timeout: SST_INSTALL_TIMEOUT_MS,
+      label: 'install the SST platform',
+    })
     console.log(`[${SCRIPT_NAME}] SST platform ... ready`)
     return
   }
 
   console.log(`[${SCRIPT_NAME}] SST platform ... installing (first run: pulumi + providers, a minute or two)`)
   try {
-    runSst(['install', '--stage', stage], { timeout: SST_COLD_INSTALL_TIMEOUT_MS, label: 'install the SST platform' })
+    runSst(['install', '--stage', stage], {
+      timeout: SST_COLD_INSTALL_TIMEOUT_MS,
+      label: 'install the SST platform',
+    })
   } catch (error) {
     if (sstPlatformState(SST_PLATFORM_DIR) !== 'deps-missing') throw error
     console.warn(
@@ -445,7 +451,10 @@ function ensureSstPlatform(stage: any) {
       timeout: SST_INSTALL_TIMEOUT_MS,
       killSignal: 'SIGTERM',
     })
-    runSst(['install', '--stage', stage], { timeout: SST_INSTALL_TIMEOUT_MS, label: 'install the SST platform' })
+    runSst(['install', '--stage', stage], {
+      timeout: SST_INSTALL_TIMEOUT_MS,
+      label: 'install the SST platform',
+    })
   }
   console.log(`[${SCRIPT_NAME}] SST platform ... ready`)
 }
@@ -457,7 +466,19 @@ function ensureSstPlatform(stage: any) {
  *
  * sst writes its own diagnosis to .sst/log/sst.log and prints only "Unexpected
  * error occurred" to the terminal, so a failure here is worthless without that
- * file's tail attached.
+ * file — which is why the error names its path.
+ */
+/*
+ * A failure names the sst log rather than quoting it.
+ *
+ * sst writes provider diagnostics to .sst/log/sst.log, in most detail exactly when a call fails —
+ * request bodies included. This script hands sst an app secret (`secret set`) and a stage's entire
+ * configuration (`secret load`), so quoting that file into an error message puts those values in the
+ * operator's terminal and whatever collects it.
+ *
+ * Gating it per call does not work, which is the version this replaced: the log persists across calls,
+ * so a later `install` failure would quote lines an earlier `secret load` had written. The file is
+ * one line away for anyone debugging, and printing the path costs them nothing.
  */
 function runSst(args: any, { input, timeout, label }: { input?: string; timeout: number; label: string }) {
   try {
@@ -471,18 +492,11 @@ function runSst(args: any, { input, timeout, label }: { input?: string; timeout:
     })
   } catch (cause: any) {
     const hint = cause.code === 'ETIMEDOUT' ? ` after ${Math.round(timeout / 1000)}s` : ''
-    throw new Error(`could not ${label}${hint}${sstLogTail()}`, { cause })
+    const detail = `\n  see ${join(INFRA_ROOT, '.sst', 'log', 'sst.log')}`
+    throw new Error(`could not ${label}${hint}${detail}`, { cause })
   }
 }
 
-function sstLogTail(lines = 5) {
-  try {
-    const tail = readFileSync(join(INFRA_ROOT, '.sst', 'log', 'sst.log'), 'utf8').trimEnd().split('\n').slice(-lines)
-    return tail.length ? `\n  last lines of .sst/log/sst.log:\n${tail.map((line) => `    ${line}`).join('\n')}` : ''
-  } catch {
-    return '' // no log yet — the wrapper's own stderr is all there is
-  }
-}
 
 async function ensureOidcClientId(stage: any) {
   // `?.trim() || undefined` rather than `??`: an env var set to the empty
