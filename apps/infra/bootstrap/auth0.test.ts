@@ -4,14 +4,30 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import {
   bindActionArgs,
+  brandingThemeArgs,
   createActionArgs,
   customApiArgs,
+  defaultThemeArgs,
   deployActionArgs,
   enableRpLogoutDiscoveryArgs,
+  pageTemplateArgs,
   spaApplicationArgs,
+  themeAssetUrls,
 } from './auth0.js'
+
+const AUTH0_ASSETS = join(import.meta.dirname, 'auth0')
+const CHECKED_IN_THEME = JSON.parse(readFileSync(join(AUTH0_ASSETS, 'branding-theme.json'), 'utf8'))
+const CHECKED_IN_TEMPLATE = readFileSync(join(AUTH0_ASSETS, 'page-template.liquid'), 'utf8')
+
+function theme(overrides = {}) {
+  return { colors: { page_background: '#13161B' }, fonts: { font_url: 'https://assets.example.com/f.woff2' },
+           widget: { logo_url: 'https://assets.example.com/logo.png' }, ...overrides }
+}
 
 function valueAfter(args: any, flag: any) {
   const index = args.indexOf(flag)
@@ -104,3 +120,70 @@ test('enableRpLogoutDiscoveryArgs flips the tenant logout-discovery setting', ()
   })
 })
 
+
+test('brandingThemeArgs updates an existing theme by id and creates one when the tenant has none', () => {
+  // A fresh tenant stores no theme at all, so the GET that precedes this 404s
+  // and there is no id to PATCH — provisioning has to fall back to a create.
+  assert.deepEqual(brandingThemeArgs({ themeId: 'thm_1', theme: theme() }).slice(0, 3), [
+    'api',
+    'patch',
+    'branding/themes/thm_1',
+  ])
+  assert.deepEqual(brandingThemeArgs({ theme: theme() }).slice(0, 3), ['api', 'post', 'branding/themes'])
+})
+
+test('brandingThemeArgs strips the _comment keys the checked-in payload carries', () => {
+  const args = brandingThemeArgs({
+    themeId: 'thm_1',
+    theme: { ...theme(), _comment: 'why these values', borders: { _comment_fine: 'why', buttons_style: 'sharp' } },
+  })
+  const sent = JSON.parse(valueAfter(args, '--data'))
+  // The Management API rejects unknown fields, so a comment left in the payload
+  // would fail the whole apply — and only against a real tenant, never here.
+  assert.equal('_comment' in sent, false)
+  assert.deepEqual(sent.borders, { buttons_style: 'sharp' })
+})
+
+test('brandingThemeArgs refuses a theme whose assets are not absolute https URLs', () => {
+  // Auth0 accepts an unreachable font without complaint and the widget silently
+  // keeps its default sans, so a bad URL has to fail here or not at all.
+  assert.throws(
+    () => brandingThemeArgs({ theme: theme({ fonts: { font_url: '/fonts/mono.woff2' } }) }),
+    /fonts.font_url must be an absolute https URL/,
+  )
+  assert.throws(() => brandingThemeArgs({ theme: { colors: {} } }), /needs at least colors and fonts/)
+})
+
+test('themeAssetUrls reports every remote asset bootstrap has to probe', () => {
+  assert.deepEqual(themeAssetUrls(theme()), [
+    'https://assets.example.com/f.woff2',
+    'https://assets.example.com/logo.png',
+  ])
+})
+
+test('defaultThemeArgs reads the tenant theme rather than assuming one exists', () => {
+  assert.deepEqual(defaultThemeArgs(), ['api', 'get', 'branding/themes/default'])
+})
+
+test('pageTemplateArgs refuses a template missing the markers Auth0 requires', () => {
+  // Auth0 rejects these with an opaque 400, so the message is worth producing here.
+  assert.throws(() => pageTemplateArgs('<html></html>'), /auth0:head.*auth0:widget|auth0:head/)
+  assert.throws(() => pageTemplateArgs('{%- auth0:head -%}'), /auth0:widget/)
+})
+
+test('pageTemplateArgs wraps the template in the payload the API expects', () => {
+  const template = '<html>{%- auth0:head -%}<body>{%- auth0:widget -%}</body></html>'
+  const args = pageTemplateArgs(template)
+  assert.deepEqual(args.slice(0, 3), ['api', 'put', 'branding/templates/universal-login'])
+  assert.deepEqual(JSON.parse(valueAfter(args, '--data')), { template })
+})
+
+test('the checked-in theme and template are the ones bootstrap will actually send', () => {
+  // Guards the assets, not the builders: these two files are edited by hand
+  // when the design changes, and a typo in either only surfaces against a real
+  // tenant otherwise.
+  assert.doesNotThrow(() => brandingThemeArgs({ themeId: 'thm_1', theme: CHECKED_IN_THEME }))
+  assert.doesNotThrow(() => pageTemplateArgs(CHECKED_IN_TEMPLATE))
+  assert.equal(CHECKED_IN_THEME.borders.widget_corner_radius, 0)
+  assert.equal(CHECKED_IN_THEME.fonts.reference_text_size, 13)
+})

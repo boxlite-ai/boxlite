@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    {%- auth0:head -%}
+    <style id="boxlite-console-template">
+    * {
+      --spacing: 0.5rem !important;
+      --base-form-element-height: 36px !important;
+      --prompt-width: 400px !important;
+      --outer-padding: 32px !important;
+      --prompt-min-height: auto !important;
+      --input-padding: 0 12px !important;
+      --base-line-height: 1.45 !important;
+      --default-font-size: 13px !important;
+      --title-font-size: 16px !important;
+      --small-font-size: 12px !important;
+      --link-color: var(--font-default-color) !important;
+    }
+    
+    /*
+     * Selector-level overrides for the ULP page template — the fixes with no
+     * custom property behind them. Everything expressible as a variable belongs in
+     * template-vars.json instead; this file is the smaller, more fragile half, so
+     * keep it that way.
+     *
+     * SELECTOR POLICY, most durable first. Nothing below reaches past tier 2.
+     *   1. element selectors (body, input, label, a) — cannot churn
+     *   2. ULP's own data-* attributes ([data-action-button-primary]) — semantic,
+     *      part of how ULP addresses its controls, stable across versions
+     *   x. hashed classes (.c177c0a11) — FORBIDDEN. They are build output and are
+     *      regenerated on every ULP release; a rule written against one breaks
+     *      silently on an Auth0 deploy nobody here controls.
+     *
+     * Colors resolve through ULP variables the theme API sets, so theme.json stays
+     * the single source of truth for the palette and this file never repeats a hex.
+     *
+     * WHY EVERY DECLARATION CARRIES !important: ULP styles these controls through
+     * hashed classes (specificity 0,1,0), which outrank any bare element selector
+     * (0,0,1) no matter how many are chained — a class always beats elements. The
+     * only ways to win are to name a hashed class, which the policy above forbids
+     * because it breaks on Auth0's release schedule, or to raise priority. Measured
+     * first: without it, `input`, `label` and `a` silently kept ULP's values while
+     * the sibling declarations in the same rule applied, which is the worst
+     * failure mode — a rule that looks live and is half dead.
+     */
+    
+    /*
+     * ULP leaves body at the 16px root, and reference_text_size only reaches the
+     * selectors that consume --default-font-size — which buttons, social buttons
+     * and labels do not. That left four type sizes on one screen (13/14/16/16.9).
+     * Set on `body`, never `html`: the rem-based geometry is measured off the root.
+     */
+    body {
+      font-size: var(--default-font-size) !important;
+      line-height: var(--base-line-height) !important;
+    }
+    
+    /* console: Button is text-sm / font-medium / tracking-tight */
+    button[data-action-button-primary],
+    button[data-action-button-secondary] {
+      font-size: 14px !important;
+      font-weight: 500 !important;
+      letter-spacing: -0.025em !important;
+    }
+    
+    /*
+     * console's outline Button sits on bg-background — one step DARKER than the
+     * card it sits in. ULP paints the social button in the widget color instead,
+     * flattening it into the card. --input-background-color is the same base
+     * surface, so this borrows it rather than restating the hex.
+     */
+    button[data-action-button-secondary] {
+      background-color: var(--input-background-color) !important;
+    }
+    
+    /* console: Input is text-sm / tracking-tight */
+    input {
+      font-size: 14px !important;
+      letter-spacing: -0.025em !important;
+    }
+    
+    label {
+      font-size: var(--default-font-size) !important;
+    }
+    
+    /*
+     * With --link-color moved off the blue (see template-vars.json), links need a
+     * non-color affordance. This is ApiKeyTable.tsx's pattern verbatim: foreground
+     * text, underline at offset 2, decoration in brand — which keeps #00B0F0 on
+     * screen as an accent instead of as the text color.
+     */
+    /*
+     * SIGNUP-ONLY CONTROLS. Neither of these renders on login, so a login-only
+     * audit reports all-clear while both sit at ULP's 14px white — the field error
+     * indistinguishable from body copy, and the password hint louder than the
+     * label it belongs to. Both hooks are stable: `ulp-` is ULP's own semantic
+     * prefix and `#password-security-popover` is a semantic id, not build output.
+     *
+     * The error stays hidden until validation fails, so it previews as `display:
+     * none` — verify it by unhiding the node, not by looking at the screen.
+     */
+    .ulp-error-info {
+      font-size: var(--default-font-size) !important;
+      color: var(--error-color) !important;
+    }
+    
+    /* console renders hint text as text-xs / text-muted-foreground */
+    #password-security-popover li {
+      font-size: var(--small-font-size) !important;
+      color: var(--font-light-color) !important;
+      line-height: var(--base-line-height) !important;
+    }
+    
+    /*
+     * `a[class]` rather than `a`, and this is the one place it is load-bearing.
+     * Auth0 server-renders a <style id="custom-styles-container"> into the page
+     * carrying `.cde2cc1cd, .cf1e61dce, [id^="ulp-container-"] a { font-weight:
+     * var(--font-bold-weight) !important }` — !important AND class specificity, so
+     * a bare `a` loses the tie no matter how important it declares itself. The
+     * attribute selector scores at class level (0,1,1) and takes it, without
+     * naming any hashed class. Setting --font-bold-weight instead would work but
+     * would unbold every other bold string on the page too.
+     */
+    a[class] {
+      font-weight: 400 !important;
+      text-decoration: underline !important;
+      text-underline-offset: 2px !important;
+      text-decoration-color: var(--base-focus-color) !important;
+    }
+    </style>
+  </head>
+  <body class="_widget-auto-layout">
+    {%- auth0:widget -%}
+  </body>
+</html>

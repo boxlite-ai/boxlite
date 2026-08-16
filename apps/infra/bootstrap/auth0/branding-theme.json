@@ -1,0 +1,87 @@
+{
+  "_comment": [
+    "Universal Login theme, mapped from the console's dark tokens in",
+    "apps/dashboard/src/index.css. Applied by:",
+    "  npm run bootstrap -- --provision-auth0-branding --stage <name>",
+    "",
+    "Keys beginning with _ are stripped before this is sent (see withoutComments",
+    "in ../auth0.ts) — the Management API rejects unknown fields.",
+    "",
+    "This file covers only what the theme API can express. Spacing, control",
+    "height, widget width, line-height and letter-spacing have no fields here",
+    "and live in page-template.liquid instead.",
+    "",
+    "UNPUBLISHED ASSET: fonts.font_url below currently 404s. Until the woff2 is",
+    "published, bootstrap refuses to apply this rather than let the widget",
+    "silently keep its default sans — which would leave the restyle looking",
+    "like it did nothing. widget.logo_url resolves but still points at the old",
+    "raster mark and wants replacing with a monochrome one."
+  ],
+
+  "displayName": "boxlite-console",
+
+  "colors": {
+    "page_background": "#13161B",
+    "widget_background": "#1A1D24",
+    "widget_border": "#2A2F3A",
+
+    "header": "#FFFFFF",
+    "body_text": "#FFFFFF",
+    "input_labels_placeholders": "#8C919C",
+    "icons": "#8C919C",
+
+    "input_background": "#13161B",
+    "input_border": "#2A2F3A",
+    "input_filled_text": "#FFFFFF",
+
+    "primary_button": "#FFFFFF",
+    "primary_button_label": "#13161B",
+    "secondary_button_border": "#2A2F3A",
+    "secondary_button_label": "#FFFFFF",
+
+    "links_focused_components": "#00B0F0",
+    "base_focus_color": "#00B0F0",
+    "base_hover_color": "#232833",
+
+    "error": "#E05548",
+    "success": "#5AD67D",
+    "captcha_widget_theme": "dark"
+  },
+
+  "borders": {
+    "buttons_style": "sharp",
+    "inputs_style": "sharp",
+    "button_border_radius": 0,
+    "input_border_radius": 0,
+    "widget_corner_radius": 0,
+    "button_border_weight": 1,
+    "input_border_weight": 1,
+    "widget_border_weight": 1,
+    "show_widget_shadow": false
+  },
+
+  "fonts": {
+    "font_url": "https://boxlite-auth-assets.pages.dev/ibm-plex-mono-latin-400-500.woff2",
+    "reference_text_size": 13,
+    "title": { "bold": false, "size": 123 },
+    "subtitle": { "bold": false, "size": 92 },
+    "body_text": { "bold": false, "size": 100 },
+    "buttons_text": { "bold": false, "size": 100 },
+    "input_labels": { "bold": false, "size": 100 },
+    "links": { "bold": false, "size": 100 },
+    "links_style": "normal"
+  },
+
+  "page_background": {
+    "background_color": "#13161B",
+    "page_layout": "center"
+  },
+
+  "widget": {
+    "header_text_alignment": "center",
+    "logo_position": "center",
+    "logo_height": 36,
+    "logo_url": "https://boxlite-auth-assets.pages.dev/boxlite-light.png",
+    "social_buttons_layout": "bottom"
+  }
+}

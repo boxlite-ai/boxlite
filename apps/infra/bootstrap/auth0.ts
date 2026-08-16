@@ -118,3 +118,97 @@ export function enableRpLogoutDiscoveryArgs() {
     JSON.stringify({ oidc_logout: { rp_logout_end_session_endpoint_discovery: true } }),
   ]
 }
+
+/*
+ * ---------------------------------------------------------------------------
+ * Universal Login branding
+ *
+ * Unlike everything above, these are idempotent: the theme is a PATCH and the
+ * page template a PUT, so re-running overwrites rather than duplicates. That
+ * is why bootstrap exposes them under their own flag instead of folding them
+ * into --provision-auth0 — the login page's appearance gets iterated on, and
+ * nobody should have to re-create an application to change a border radius.
+ *
+ * The split between the two payloads is not stylistic. The Branding Theme API
+ * has no field for spacing, control height, widget width, line-height or
+ * letter-spacing, and its reference_text_size only reaches the selectors that
+ * consume --default-font-size — which buttons, social buttons and labels do
+ * not. Those gaps can only be closed by CSS, and CSS can only reach the page
+ * through a page template, which in turn requires the custom domain the
+ * deployment already has. Hence: colors/radii/fonts in the theme, everything
+ * the theme cannot express in the template.
+ */
+
+/*
+ * The checked-in payloads carry `_comment` keys explaining non-obvious values
+ * to the next reader. The Management API rejects unknown fields, so they are
+ * stripped on the way out rather than being kept in a separate doc that would
+ * drift from the values it describes.
+ */
+function withoutComments(value: any): any {
+  if (Array.isArray(value)) return value.map(withoutComments)
+  if (value === null || typeof value !== 'object') return value
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !key.startsWith('_'))
+      .map(([key, nested]) => [key, withoutComments(nested)]),
+  )
+}
+
+/*
+ * Asset URLs are the one part of the theme this repo cannot vouch for: the
+ * font and logo live on a static host, and a typo or an unpublished file
+ * produces no error from Auth0 — the widget just falls back to its default
+ * sans, so the most visible half of the restyle silently does not happen and
+ * the run still reports success. Requiring an absolute https URL catches the
+ * shape here; bootstrap checks that the file actually resolves.
+ */
+function requireAssetUrl(name: any, value: any) {
+  if (typeof value !== 'string' || !value.startsWith('https://')) {
+    throw new Error(`${name} must be an absolute https URL, got '${value}'`)
+  }
+  return value
+}
+
+/** Every remote asset the theme depends on, for bootstrap to probe. */
+export function themeAssetUrls(theme: any) {
+  return [
+    requireAssetUrl('fonts.font_url', theme?.fonts?.font_url),
+    requireAssetUrl('widget.logo_url', theme?.widget?.logo_url),
+  ]
+}
+
+/**
+ * Read the tenant's current theme. Auth0 creates no theme until one is set, so
+ * this 404s on a fresh tenant — the caller decides between PATCH and POST on
+ * that basis, the same read-then-write shape the Action binding needs.
+ */
+export function defaultThemeArgs() {
+  return ['api', 'get', 'branding/themes/default']
+}
+
+export function brandingThemeArgs({ themeId, theme }: any) {
+  if (!theme?.colors || !theme?.fonts) {
+    throw new Error('the branding theme payload needs at least colors and fonts')
+  }
+  themeAssetUrls(theme)
+  const data = JSON.stringify(withoutComments(theme))
+  return themeId
+    ? ['api', 'patch', `branding/themes/${themeId}`, '--data', data]
+    : ['api', 'post', 'branding/themes', '--data', data]
+}
+
+/*
+ * Auth0 requires both markers and rejects the template without them. That
+ * rejection arrives as an opaque 400 from the API, so the check is worth
+ * having here where the message can name what is missing.
+ */
+const REQUIRED_TEMPLATE_MARKERS = ['{%- auth0:head -%}', '{%- auth0:widget -%}']
+
+export function pageTemplateArgs(template: any) {
+  const missing = REQUIRED_TEMPLATE_MARKERS.filter((marker) => !template?.includes(marker))
+  if (missing.length > 0) {
+    throw new Error(`the page template is missing required marker(s): ${missing.join(', ')}`)
+  }
+  return ['api', 'put', 'branding/templates/universal-login', '--data', JSON.stringify({ template })]
+}

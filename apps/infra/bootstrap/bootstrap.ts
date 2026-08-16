@@ -49,6 +49,13 @@
  *                Create the Auth0 SPA app, custom API, and post-login Action
  *                (requires `npm run login` first). NOT idempotent — Auth0 has no
  *                upsert for apps or APIs, so rerunning creates duplicates.
+ *   --provision-auth0-branding
+ *                Apply the Universal Login theme and page template so the hosted
+ *                login matches the console (requires `npm run login` first).
+ *                Idempotent — a PATCH and a PUT — so rerun it freely; that is why
+ *                it is a separate flag from --provision-auth0 rather than part of
+ *                it. Run it against every stage: branding is per-tenant, and dev
+ *                and prod are different tenants.
  *
  * Sign-in: run `npm run login` first, which walks the browser sign-in for every
  * provider this needs (AWS via `aws login`, AWS CLI 2.32.0+ — no IAM user,
@@ -86,11 +93,15 @@ import {
 import { validateDotenvSyntax } from '../deployment/key-policy.js'
 import {
   bindActionArgs,
+  brandingThemeArgs,
   createActionArgs,
   customApiArgs,
+  defaultThemeArgs,
   deployActionArgs,
   enableRpLogoutDiscoveryArgs,
+  pageTemplateArgs,
   spaApplicationArgs,
+  themeAssetUrls,
 } from './auth0.js'
 import {
   environmentApiPath,
@@ -116,6 +127,8 @@ const SST_INSTALL_TIMEOUT_MS = 240_000
 // progressing costs four minutes of silence.
 const SST_COLD_INSTALL_TIMEOUT_MS = 90_000
 const ACTION_SOURCE_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'set-custom-claims.js')
+const BRANDING_THEME_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'branding-theme.json')
+const PAGE_TEMPLATE_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'page-template.liquid')
 
 const CLOUDFLARE_CREDENTIALS = [
   {
@@ -679,6 +692,65 @@ function auth0Run(args: any) {
   execFileSync('auth0', args, { stdio: ['ignore', 'ignore', 'pipe'], timeout: 60_000, killSignal: 'SIGTERM' })
 }
 
+function requireAuth0Session() {
+  try {
+    execFileSync('auth0', ['tenants', 'list'], { stdio: 'ignore', timeout: 30_000, killSignal: 'SIGTERM' })
+  } catch (cause) {
+    throw new Error('the auth0 CLI is not authenticated; run `npm run login` and complete the browser consent', { cause })
+  }
+}
+
+/*
+ * A theme's font and logo are fetched by the browser, not by Auth0, so a URL
+ * that does not resolve produces no API error at all: the widget silently
+ * falls back to its default sans and the run still reports success. That is
+ * the worst failure this script can have — it looks like it worked — so the
+ * assets are probed before anything is written.
+ */
+async function requireAssetsPublished(urls: any) {
+  for (const url of urls) {
+    let status
+    try {
+      status = (await fetch(url, { method: 'HEAD', redirect: 'follow' })).status
+    } catch (cause) {
+      throw new Error(`could not reach the Universal Login asset ${url}`, { cause })
+    }
+    if (status >= 400) {
+      throw new Error(
+        `the Universal Login asset ${url} returned ${status}. ` +
+          'Publish it to the asset host (or correct the URL in bootstrap/auth0/branding-theme.json) before applying branding — ' +
+          'Auth0 accepts an unreachable asset without complaint and the login page just keeps its default appearance.',
+      )
+    }
+  }
+}
+
+/*
+ * Idempotent, unlike provisionAuth0: the theme is a PATCH and the template a
+ * PUT. Kept on its own flag so the login page's appearance can be iterated on
+ * without re-creating the application and API alongside it.
+ */
+async function provisionAuth0Branding() {
+  requireAuth0Session()
+
+  const theme = JSON.parse(readFileSync(BRANDING_THEME_PATH, 'utf8'))
+  await requireAssetsPublished(themeAssetUrls(theme))
+
+  // Auth0 stores no theme until one is set, so a fresh tenant 404s here and
+  // takes the create path instead of the update path.
+  let themeId
+  try {
+    themeId = auth0Json(defaultThemeArgs()).themeId
+  } catch {
+    themeId = undefined
+  }
+  auth0Run(brandingThemeArgs({ themeId, theme }))
+  console.log(`[${SCRIPT_NAME}] Auth0 Universal Login theme ... ${themeId ? 'updated' : 'created'}`)
+
+  auth0Run(pageTemplateArgs(readFileSync(PAGE_TEMPLATE_PATH, 'utf8')))
+  console.log(`[${SCRIPT_NAME}] Auth0 Universal Login page template ... applied`)
+}
+
 /*
  * Collapses the five manual Auth0 dashboard steps in README's "OIDC provider
  * setup" into API calls. The `auth0 login` device-code token already carries
@@ -689,11 +761,7 @@ function auth0Run(args: any) {
  * explicit flag for that reason.
  */
 function provisionAuth0({ stackDomain }: any) {
-  try {
-    execFileSync('auth0', ['tenants', 'list'], { stdio: 'ignore', timeout: 30_000, killSignal: 'SIGTERM' })
-  } catch (cause) {
-    throw new Error('the auth0 CLI is not authenticated; run `npm run login` and complete the browser consent', { cause })
-  }
+  requireAuth0Session()
 
   const app = auth0Json(spaApplicationArgs({ stackDomain }))
   const clientId = app.client_id ?? app.clientId
@@ -869,6 +937,13 @@ async function main() {
       throw new Error(`STACK_DOMAIN must be set in ${ENV_PATH} before --provision-auth0 can build callback URLs`)
     }
     provisionAuth0({ stackDomain })
+  }
+
+  // Independent of --provision-auth0 on purpose: branding is idempotent and
+  // gets re-applied whenever the design changes, long after the application
+  // and API exist.
+  if (options['provision-auth0-branding']) {
+    await provisionAuth0Branding()
   }
   await ensureCloudflareCredentials({ awsCliPath, region, stage, repo, force })
   // Before the first timed sst call, not inside it — see ensureSstPlatform. Both steps below are
