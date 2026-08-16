@@ -47,13 +47,13 @@
  *                (decideCredentialRotation() in bootstrap/cloudflare-credentials.ts)
  *   --provision-auth0
  *                Create the Auth0 SPA app, custom API, and post-login Action
- *                (requires `auth0 login` first). NOT idempotent — Auth0 has no
+ *                (requires `npm run login` first). NOT idempotent — Auth0 has no
  *                upsert for apps or APIs, so rerunning creates duplicates.
  *
- * Sign-in: `aws login` and `gh auth login` first, plus `auth0 login` for the
- * option above. AWS needs CLI 2.32.0+ for `aws login` — no IAM user, access
- * keys, or IAM Identity Center setup required. An existing profile or SSO
- * session is used as-is if one is already active.
+ * Sign-in: run `npm run login` first, which walks the browser sign-in for every
+ * provider this needs (AWS via `aws login`, AWS CLI 2.32.0+ — no IAM user,
+ * access keys, or IAM Identity Center setup required). An existing profile or
+ * SSO session is used as-is if one is already active.
  *
  * Non-interactive use (e.g. wiring this into a more-privileged automation
  * later): set CLOUDFLARE_API_TOKEN, CLOUDFLARE_DEFAULT_ACCOUNT_ID, and
@@ -151,7 +151,7 @@ function requireGhAuthenticated() {
   } catch (cause: any) {
     const detail = cause.stderr?.trim()
     throw new Error(
-      `GitHub CLI is not authenticated; run \`gh auth login\` first${detail ? ` (gh said: ${detail})` : ''}`,
+      `GitHub CLI is not authenticated; run \`npm run login\` first${detail ? ` (gh said: ${detail})` : ''}`,
       { cause },
     )
   }
@@ -211,7 +211,7 @@ function currentAwsIdentity(awsCliPath: any, region: any) {
     })
   } catch (cause) {
     throw new Error(
-      'no usable AWS credentials. Run `aws login`, which opens the browser sign-in ' +
+      'no usable AWS credentials. Run `npm run login`, which opens the `aws login` browser sign-in ' +
         '(no IAM user or access keys needed; signing in as the account root works), then rerun this command. ' +
         'An existing profile or SSO session works too — this step only needs `sts:GetCallerIdentity` to succeed.',
       { cause },
@@ -692,7 +692,7 @@ function provisionAuth0({ stackDomain }: any) {
   try {
     execFileSync('auth0', ['tenants', 'list'], { stdio: 'ignore', timeout: 30_000, killSignal: 'SIGTERM' })
   } catch (cause) {
-    throw new Error('the auth0 CLI is not authenticated; run `auth0 login` and complete the browser consent', { cause })
+    throw new Error('the auth0 CLI is not authenticated; run `npm run login` and complete the browser consent', { cause })
   }
 
   const app = auth0Json(spaApplicationArgs({ stackDomain }))
@@ -898,7 +898,7 @@ try {
   await main()
 } catch (error: any) {
   // Print the cause chain. Several checks here wrap a tool failure in advice
-  // ("GitHub CLI is not authenticated; run `gh auth login` first"), and the
+  // ("GitHub CLI is not authenticated; run `npm run login` first"), and the
   // advice is only right for one of the ways that tool can fail — `gh auth
   // status` also exits non-zero when it cannot reach github.com. Without the
   // cause an operator whose session is fine is sent to re-authenticate.

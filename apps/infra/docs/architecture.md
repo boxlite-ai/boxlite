@@ -16,7 +16,7 @@ Operational code is grouped separately:
 - `deployment/`: guarded SST execution, scope, config, and post-deploy verification
 - `artifacts/`: API and Runner artifact identity, publication, and preflight
 - `runner/`: inventory, state baselines, registration, and rolling updates
-- `bootstrap/`: AWS/GitHub/Auth0 provisioning
+- `bootstrap/`: AWS/GitHub/Auth0 provisioning and login
 - `shared/`: dependency-free utilities shared across domains
 - `policies/runner/`: mandatory Pulumi Runner safety policy
 
