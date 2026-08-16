@@ -10,9 +10,17 @@
     "key inside a prompt is the SCREEN, which is why 'login' and 'signup' appear",
     "twice: prompt 'login' owns screen 'login'.",
     "",
-    "Both prompts carry the same line on purpose. Auth0's defaults are 'Log in to",
-    "{companyName} to continue to {clientName}.' and its Sign Up counterpart, so",
-    "overriding only one leaves the two screens reading differently.",
+    "Both prompts carry the same description on purpose. Auth0's defaults are",
+    "'Log in to {companyName} to continue to {clientName}.' and its Sign Up",
+    "counterpart, so overriding only one leaves the two screens reading",
+    "differently.",
+    "",
+    "The titles deliberately do NOT match, which is the one thing Auth0's default",
+    "gets wrong by giving both screens the same 'Welcome'. Login sits behind a",
+    "'Don't have an account? Sign up' link, so it is the returning-user screen and",
+    "'Welcome back' is what it means. Naming the product belongs on signup, where",
+    "it is the visitor's first contact — on login it would be the second time",
+    "'BoxLite' appears in 50px, the first being the wordmark logo directly above.",
     "",
     "NOT LOCALLY VERIFIABLE: Auth0 renders this text server-side, so it is baked",
     "into the page before any CSS the preview harness can override. Like",
@@ -28,11 +36,13 @@
   "prompts": {
     "login": {
       "login": {
+        "title": "Welcome back",
         "description": "Agentic cloud platform for AI Agent builder"
       }
     },
     "signup": {
       "signup": {
+        "title": "Welcome to BoxLite",
         "description": "Agentic cloud platform for AI Agent builder"
       }
     }

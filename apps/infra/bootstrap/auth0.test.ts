@@ -234,13 +234,19 @@ test('customTextArgs refuses an override with nothing left to send', () => {
   assert.throws(() => customTextArgs({ prompt: 'login', text: { login: {} } }), /needs both a prompt and a language/)
 })
 
-test('the checked-in copy overrides login and signup together', () => {
+test('the checked-in copy shares a description but splits the titles', () => {
   // Auth0's two defaults differ ("Log in to …" / "Sign Up to …"), so overriding
   // one prompt and not the other leaves the screens reading differently.
   const requests = customTextRequests(CHECKED_IN_TEXT)
   assert.deepEqual(Object.keys(CHECKED_IN_TEXT.prompts), ['login', 'signup'])
-  assert.equal(
-    JSON.parse(valueAfter(requests[0], '--data')).login.description,
-    JSON.parse(valueAfter(requests[1], '--data')).signup.description,
-  )
+  const login = JSON.parse(valueAfter(requests[0], '--data')).login
+  const signup = JSON.parse(valueAfter(requests[1], '--data')).signup
+  assert.equal(login.description, signup.description)
+
+  // The titles diverging is the point, not an oversight: login is the
+  // returning-user screen, and the product name belongs on the one where it is
+  // the visitor's first contact rather than a repeat of the wordmark above it.
+  assert.notEqual(login.title, signup.title)
+  assert.doesNotMatch(login.title, /BoxLite/)
+  assert.match(signup.title, /BoxLite/)
 })
