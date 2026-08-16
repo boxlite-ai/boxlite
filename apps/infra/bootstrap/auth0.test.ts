@@ -17,6 +17,7 @@ import {
   enableRpLogoutDiscoveryArgs,
   pageTemplateArgs,
   spaApplicationArgs,
+  templateAssetUrls,
   themeAssetUrls,
 } from './auth0.js'
 
@@ -25,7 +26,7 @@ const CHECKED_IN_THEME = JSON.parse(readFileSync(join(AUTH0_ASSETS, 'branding-th
 const CHECKED_IN_TEMPLATE = readFileSync(join(AUTH0_ASSETS, 'page-template.liquid'), 'utf8')
 
 function theme(overrides = {}) {
-  return { colors: { page_background: '#13161B' }, fonts: { font_url: 'https://assets.example.com/f.woff2' },
+  return { colors: { page_background: '#13161B' }, fonts: { reference_text_size: 13 },
            widget: { logo_url: 'https://assets.example.com/logo.png' }, ...overrides }
 }
 
@@ -145,20 +146,42 @@ test('brandingThemeArgs strips the _comment keys the checked-in payload carries'
 })
 
 test('brandingThemeArgs refuses a theme whose assets are not absolute https URLs', () => {
-  // Auth0 accepts an unreachable font without complaint and the widget silently
-  // keeps its default sans, so a bad URL has to fail here or not at all.
+  // Auth0 accepts an unreachable logo without complaint, so a bad URL has to
+  // fail here or not at all.
   assert.throws(
-    () => brandingThemeArgs({ theme: theme({ fonts: { font_url: '/fonts/mono.woff2' } }) }),
-    /fonts.font_url must be an absolute https URL/,
+    () => brandingThemeArgs({ theme: theme({ widget: { logo_url: '/brand/logo.png' } }) }),
+    /widget.logo_url must be an absolute https URL/,
   )
   assert.throws(() => brandingThemeArgs({ theme: { colors: {} } }), /needs at least colors and fonts/)
 })
 
-test('themeAssetUrls reports every remote asset bootstrap has to probe', () => {
-  assert.deepEqual(themeAssetUrls(theme()), [
-    'https://assets.example.com/f.woff2',
-    'https://assets.example.com/logo.png',
-  ])
+test('themeAssetUrls reports the theme-side asset bootstrap has to probe', () => {
+  assert.deepEqual(themeAssetUrls(theme()), ['https://assets.example.com/logo.png'])
+})
+
+test('templateAssetUrls collects the fonts the template loads itself', () => {
+  // fonts.font_url takes one URL and IBM Plex Mono has no variable face, so the
+  // two weights are @font-face rules in the template — which means the probe
+  // has to read them back out of the CSS rather than out of the theme.
+  assert.deepEqual(
+    templateAssetUrls(`
+      @font-face { src: url('https://assets.example.com/mono-400.woff2') format('woff2'); }
+      @font-face { src: url("https://assets.example.com/mono-500.woff2") format('woff2'); }
+    `),
+    ['https://assets.example.com/mono-400.woff2', 'https://assets.example.com/mono-500.woff2'],
+  )
+  assert.deepEqual(templateAssetUrls('<html></html>'), [])
+})
+
+test('the checked-in template declares both weights behind a monospace fallback', () => {
+  // ULP's own stack ends in sans-serif, so a font that fails to load would take
+  // the typography back to where it started while the run reports success.
+  assert.equal(templateAssetUrls(CHECKED_IN_TEMPLATE).length, 2)
+  assert.match(CHECKED_IN_TEMPLATE, /font-weight: 400/)
+  assert.match(CHECKED_IN_TEMPLATE, /font-weight: 500/)
+  assert.match(CHECKED_IN_TEMPLATE, /'IBM Plex Mono', ui-monospace,[^;]*monospace !important/)
+  // The single-URL theme field must stay unused, or it would fight the above.
+  assert.equal('font_url' in CHECKED_IN_THEME.fonts, false)
 })
 
 test('defaultThemeArgs reads the tenant theme rather than assuming one exists', () => {

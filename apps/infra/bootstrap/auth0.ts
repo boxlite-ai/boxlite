@@ -156,12 +156,12 @@ function withoutComments(value: any): any {
 }
 
 /*
- * Asset URLs are the one part of the theme this repo cannot vouch for: the
- * font and logo live on a static host, and a typo or an unpublished file
- * produces no error from Auth0 — the widget just falls back to its default
- * sans, so the most visible half of the restyle silently does not happen and
- * the run still reports success. Requiring an absolute https URL catches the
- * shape here; bootstrap checks that the file actually resolves.
+ * Remote assets are the one part of this the repo cannot vouch for: the logo
+ * and the fonts live on a static host, and an unpublished file produces no
+ * error from Auth0 at all — the browser simply falls back, so the most visible
+ * half of the restyle does not happen and the run still reports success.
+ * Requiring an absolute https URL catches the shape here; bootstrap checks
+ * that the files actually resolve.
  */
 function requireAssetUrl(name: any, value: any) {
   if (typeof value !== 'string' || !value.startsWith('https://')) {
@@ -170,12 +170,22 @@ function requireAssetUrl(name: any, value: any) {
   return value
 }
 
-/** Every remote asset the theme depends on, for bootstrap to probe. */
+/** Remote assets the theme depends on, for bootstrap to probe. */
 export function themeAssetUrls(theme: any) {
-  return [
-    requireAssetUrl('fonts.font_url', theme?.fonts?.font_url),
-    requireAssetUrl('widget.logo_url', theme?.widget?.logo_url),
-  ]
+  return [requireAssetUrl('widget.logo_url', theme?.widget?.logo_url)]
+}
+
+/*
+ * The fonts are referenced from the template's @font-face rules rather than
+ * the theme's fonts.font_url, which accepts only one URL — IBM Plex Mono ships
+ * no variable face, so Regular and Medium are separate files and a single URL
+ * would leave the 500 weight synthesized. Reading them back out of the CSS
+ * keeps the template the only place a font URL is written down.
+ */
+const TEMPLATE_ASSET_PATTERN = /url\(['"]?(https:\/\/[^'")]+)['"]?\)/g
+
+export function templateAssetUrls(template: any) {
+  return [...String(template ?? '').matchAll(TEMPLATE_ASSET_PATTERN)].map((match) => match[1])
 }
 
 /**

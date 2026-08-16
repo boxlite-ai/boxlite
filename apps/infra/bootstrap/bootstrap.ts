@@ -101,6 +101,7 @@ import {
   enableRpLogoutDiscoveryArgs,
   pageTemplateArgs,
   spaApplicationArgs,
+  templateAssetUrls,
   themeAssetUrls,
 } from './auth0.js'
 import {
@@ -734,7 +735,10 @@ async function provisionAuth0Branding() {
   requireAuth0Session()
 
   const theme = JSON.parse(readFileSync(BRANDING_THEME_PATH, 'utf8'))
-  await requireAssetsPublished(themeAssetUrls(theme))
+  const template = readFileSync(PAGE_TEMPLATE_PATH, 'utf8')
+  // Both halves: the logo comes from the theme, the fonts from the template's
+  // @font-face rules (see templateAssetUrls for why they are not in the theme).
+  await requireAssetsPublished([...themeAssetUrls(theme), ...templateAssetUrls(template)])
 
   // Auth0 stores no theme until one is set, so a fresh tenant 404s here and
   // takes the create path instead of the update path.
@@ -747,7 +751,7 @@ async function provisionAuth0Branding() {
   auth0Run(brandingThemeArgs({ themeId, theme }))
   console.log(`[${SCRIPT_NAME}] Auth0 Universal Login theme ... ${themeId ? 'updated' : 'created'}`)
 
-  auth0Run(pageTemplateArgs(readFileSync(PAGE_TEMPLATE_PATH, 'utf8')))
+  auth0Run(pageTemplateArgs(template))
   console.log(`[${SCRIPT_NAME}] Auth0 Universal Login page template ... applied`)
 }
 

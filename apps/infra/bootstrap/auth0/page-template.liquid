@@ -45,6 +45,53 @@
      */
     
     /*
+     * The font is loaded here rather than through the theme's fonts.font_url for
+     * two reasons, both load-bearing.
+     *
+     * One: font_url takes a single URL, and IBM Plex Mono ships no variable face
+     * (IBM's own package has no Var-Roman file). Regular and Medium are separate
+     * woff2s, and the buttons below are 500 — through font_url the second weight
+     * would be synthesized into a faux bold that does not match the console.
+     *
+     * Two: ULP's own stack is `ulp-font, -apple-system, BlinkMacSystemFont, Roboto,
+     * Helvetica, sans-serif`, so a font that fails to load falls through to the
+     * system SANS, not to a monospace — leaving the typography identical to what
+     * it was before this change while everything reports success. Declaring the
+     * family here puts a real monospace fallback behind it: with no network at
+     * all the widget still lands on SF Mono / Consolas rather than Helvetica.
+     */
+    @font-face {
+      font-family: 'IBM Plex Mono';
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url('https://boxlite-auth-assets.pages.dev/ibm-plex-mono-400.woff2') format('woff2');
+    }
+    
+    @font-face {
+      font-family: 'IBM Plex Mono';
+      font-style: normal;
+      font-weight: 500;
+      font-display: swap;
+      src: url('https://boxlite-auth-assets.pages.dev/ibm-plex-mono-500.woff2') format('woff2');
+    }
+    
+    body,
+    input,
+    button,
+    select,
+    textarea,
+    a,
+    h1,
+    h2,
+    p,
+    span,
+    label,
+    div {
+      font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', 'SF Mono', monospace !important;
+    }
+    
+    /*
      * ULP leaves body at the 16px root, and reference_text_size only reaches the
      * selectors that consume --default-font-size — which buttons, social buttons
      * and labels do not. That left four type sizes on one screen (13/14/16/16.9).
@@ -84,12 +131,6 @@
     }
     
     /*
-     * With --link-color moved off the blue (see template-vars.json), links need a
-     * non-color affordance. This is ApiKeyTable.tsx's pattern verbatim: foreground
-     * text, underline at offset 2, decoration in brand — which keeps #00B0F0 on
-     * screen as an accent instead of as the text color.
-     */
-    /*
      * SIGNUP-ONLY CONTROLS. Neither of these renders on login, so a login-only
      * audit reports all-clear while both sit at ULP's 14px white — the field error
      * indistinguishable from body copy, and the password hint louder than the
@@ -111,6 +152,12 @@
       line-height: var(--base-line-height) !important;
     }
     
+    /*
+     * With --link-color moved off the blue (see template-vars.json), links need a
+     * non-color affordance. This is ApiKeyTable.tsx's pattern verbatim: foreground
+     * text, underline at offset 2, decoration in brand — which keeps #00B0F0 on
+     * screen as an accent instead of as the text color.
+     */
     /*
      * `a[class]` rather than `a`, and this is the one place it is load-bearing.
      * Auth0 server-renders a <style id="custom-styles-container"> into the page

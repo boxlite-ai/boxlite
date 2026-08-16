@@ -11,11 +11,17 @@
     "height, widget width, line-height and letter-spacing have no fields here",
     "and live in page-template.liquid instead.",
     "",
-    "UNPUBLISHED ASSET: fonts.font_url below currently 404s. Until the woff2 is",
-    "published, bootstrap refuses to apply this rather than let the widget",
-    "silently keep its default sans — which would leave the restyle looking",
-    "like it did nothing. widget.logo_url resolves but still points at the old",
-    "raster mark and wants replacing with a monochrome one."
+    "There is deliberately no fonts.font_url here. It takes a single URL, and",
+    "IBM Plex Mono ships no variable face, so Regular and Medium are separate",
+    "files and the 500-weight buttons would come out as synthesized faux bold.",
+    "Both @font-face rules live in page-template.liquid instead, behind a real",
+    "monospace fallback — ULP's own stack falls through to a system SANS, so a",
+    "font that fails to load would otherwise undo the restyle silently.",
+    "",
+    "UNPUBLISHED ASSETS: the two woff2 files the template references currently",
+    "404, and bootstrap refuses to apply until they resolve. widget.logo_url",
+    "below does resolve, but still points at the old raster mark and wants",
+    "replacing with a monochrome one."
   ],
 
   "displayName": "boxlite-console",
@@ -61,7 +67,6 @@
   },
 
   "fonts": {
-    "font_url": "https://boxlite-auth-assets.pages.dev/ibm-plex-mono-latin-400-500.woff2",
     "reference_text_size": 13,
     "title": { "bold": false, "size": 123 },
     "subtitle": { "bold": false, "size": 92 },
