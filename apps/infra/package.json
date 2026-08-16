@@ -8,6 +8,7 @@
     "remove": "tsx deployment/sst.ts remove",
     "test": "tsx --test artifacts/*.test.ts bootstrap/*.test.ts deployment/*.test.ts policies/runner/*.test.ts runner/*.test.ts runner/model/*.test.ts shared/*.test.ts stack/*.test.ts",
     "typecheck": "tsc --noEmit",
+    "typecheck:tooling": "tsc --noEmit -p tsconfig.tooling.json",
     "sst": "tsx deployment/sst.ts",
     "secrets": "tsx deployment/secret-names.ts",
     "runner:update": "tsx runner/update.ts",
