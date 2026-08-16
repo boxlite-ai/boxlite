@@ -61,8 +61,8 @@ function readSelectors(args: any) {
     let value = inline
     if (inline === undefined) {
       const next = args[index + 1]
-      // A following flag is a missing value, not the value itself — the same rule cli-flags.mjs
-      // applies, so `--exclude --stage` fails here instead of excluding a component named --stage.
+      // A following flag is a missing value, not the value itself, so `--exclude --stage` fails
+      // here instead of excluding a component named --stage.
       value = next && !next.startsWith('-') ? next : undefined
       if (value !== undefined) index += 1
     }

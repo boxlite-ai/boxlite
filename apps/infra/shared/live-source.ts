@@ -35,7 +35,7 @@ const STRIPPERS = {
   shell: stripShell,
   // A `.mjs` / `.ts` file read as source.
   script: stripScript,
-  // TypeScript whose template literals emit bash — sst.config.ts's user-data. Both syntaxes are
+  // TypeScript whose template literals emit bash — the stack's user-data. Both syntaxes are
   // live in the same text, and stripping only one leaves the other's comments matchable.
   scriptEmittingShell: (text: string) => stripShell(stripScript(text)),
 }

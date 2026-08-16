@@ -25,7 +25,7 @@
  *   - only keys the manifest names (STAGE_CONFIG_MANIFEST_KEY) are eligible, so a value written by
  *     hand — or left behind by a key since deleted from .env — is inert rather than live; and
  *   - the key must be one the deploy demonstrably reads (isStorableStageConfigKey, derived from source
- *     in deployment/storable-keys.ts) — so an unknown name is refused without anyone naming it; and
+ *     in deployment/key-policy.ts) — so an unknown name is refused without anyone naming it; and
  *   - isLocalOnlyDeploymentKey still drops the keys that ARE read but must stay on this machine,
  *     AWS_PROFILE among them.
  *
@@ -34,8 +34,7 @@
 
 import { createHash } from 'node:crypto'
 
-import { isStorableStageConfigKey } from './storable-keys.js'
-import { isLocalOnlyDeploymentKey } from './validate-environment.js'
+import { isLocalOnlyDeploymentKey, isStorableStageConfigKey } from './key-policy.js'
 
 /*
  * The one entry in the store that is not configuration: a comma-separated list of the key names
@@ -204,30 +203,15 @@ export function hydrateStageConfig({ stored, environment = process.env }: any) {
 }
 
 /*
- * The stage's store, behind one read.
+ * The stage's store, in one read.
  *
  * `runSst` is injected because the two callers must reach sst differently: the deploy wrapper owns
  * the resolved binary and has to call it directly (routing back through the wrapper would recurse),
  * while bootstrap goes through the wrapper like every other sst call it makes. Injecting it also
  * means the parsing and precedence rules above are testable without sst.
  */
-export class StageConfigStore {
-  #runSst
-  #app
-  #stage
-
-  constructor({ runSst, app, stage }: any) {
-    if (typeof runSst !== 'function') throw new Error('StageConfigStore requires a runSst function')
-    if (!app || !stage) throw new Error('StageConfigStore requires an app and a stage')
-    this.#runSst = runSst
-    this.#app = app
-    this.#stage = stage
-  }
-
-  read() {
-    return parseSecretList(this.#runSst(['secret', 'list', '--stage', this.#stage]), {
-      app: this.#app,
-      stage: this.#stage,
-    })
-  }
+export function readStoredStageConfig({ runSst, app, stage }: any) {
+  if (typeof runSst !== 'function') throw new Error('reading a stage config store requires a runSst function')
+  if (!app || !stage) throw new Error('reading a stage config store requires an app and a stage')
+  return parseSecretList(runSst(['secret', 'list', '--stage', stage]), { app, stage })
 }

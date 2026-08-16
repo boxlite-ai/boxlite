@@ -2,18 +2,23 @@
 // Copyright (c) 2026 BoxLite AI
 
 /*
- * Pure helpers for `bootstrap-environment.mjs` — the idempotent, human-run
- * environment preparation script. Kept side-effect-free (no AWS/GitHub CLI
- * calls) so the naming, ARN construction, and idempotency decisions are
- * covered by unit tests instead of only being exercised against live AWS.
+ * Helpers for bootstrap.ts — the idempotent, human-run environment preparation script.
+ *
+ * Nothing here calls AWS, GitHub or Auth0, so the naming, ARN construction, argv contract and
+ * idempotency decisions are covered by unit tests instead of only being exercised against live
+ * accounts. The one exception is withStageConfigFile, which writes the stage configuration to a
+ * short-lived 0600 file because `sst secret load` reads a path and has no stdin form; it is here
+ * rather than in bootstrap.ts so that file's three security properties stay testable.
  */
 
 // No underscore: the stage is interpolated into a CloudFormation stack name
 // (githubDeployRoleStackName), and CloudFormation accepts only alphanumerics
 // and hyphens. Allowing `dev_blue` here would pass validation and then fail at
 // `cloudformation deploy`, after bootstrap had already made external changes.
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { parseArgs } from 'node:util'
 
 import { parse } from 'dotenv'
 
@@ -24,12 +29,10 @@ import {
   serializeStageConfigManifest,
   stageConfigDigest,
 } from '../deployment/stage-config.js'
-import { isStorableStageConfigKey } from '../deployment/storable-keys.js'
-import { isLocalOnlyDeploymentKey } from '../deployment/validate-environment.js'
+import { isLocalOnlyDeploymentKey, isStorableStageConfigKey } from '../deployment/key-policy.js'
 
 const STAGE_LIKE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*$/
 const GITHUB_REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/
-const ACCOUNT_ID_PATTERN = /^\d{12}$/
 
 // `aws login` (browser-based AWS Management Console credentials) is what lets a
 // self-hoster bootstrap without minting long-lived access keys. It shipped in
@@ -46,23 +49,39 @@ function requireStageLike(name: any, value: any) {
   return value
 }
 
+/*
+ * bootstrap's own flags.
+ *
+ * Strict on purpose. Non-strict parsing accepts `--repo --force` as repo="--force" and silently
+ * drops the flag that followed, and it lets a boolean take an inline value — so `--provision-auth0=false`
+ * would read as truthy and run the one step in this script that is not idempotent. Strict refuses
+ * both, before anything external has been created.
+ *
+ * `--stage` is declared here only so strict parsing accepts it; its value is read by resolveSstStage,
+ * which owns the stage grammar and the "may be specified only once" rule.
+ */
+export function parseBootstrapOptions(args: readonly string[]) {
+  const { values } = parseArgs({
+    args: [...args],
+    strict: true,
+    options: {
+      force: { type: 'boolean' },
+      'provision-auth0': { type: 'boolean' },
+      repo: { type: 'string' },
+      reviewers: { type: 'string' },
+      stage: { type: 'string' },
+    },
+  })
+  // Spread off parseArgs' null-prototype object, so callers get something that behaves like every
+  // other options object in this package.
+  return { ...values }
+}
+
 export function validateGitHubRepo(repo: any) {
   if (!repo || !GITHUB_REPO_PATTERN.test(repo)) {
     throw new Error(`repo '${repo}' must look like 'owner/name'`)
   }
   return repo
-}
-
-// Mirrors sst.config.ts's own `${$app.name}-${$app.stage}-runtime-boundary`
-// interpolation (apps/infra/sst.config.ts:131) — this script and the SST run
-// must agree on the boundary policy name without either importing the other.
-export function runtimeBoundaryPolicyArn({ accountId, appName, stage }: any) {
-  if (!accountId || !ACCOUNT_ID_PATTERN.test(accountId)) {
-    throw new Error(`accountId '${accountId}' must be a 12-digit AWS account id`)
-  }
-  requireStageLike('appName', appName)
-  requireStageLike('stage', stage)
-  return `arn:aws:iam::${accountId}:policy/${appName}-${stage}-runtime-boundary`
 }
 
 // CloudFormation stack name for the GitHub deploy role. Stable per stage so
@@ -103,9 +122,9 @@ export function ssmParameterName(stage: any, param: any) {
  * `RoleName` by a test, which turns a drift into a failure instead of a deploy that cannot assume its
  * role.
  *
- * It sits outside shared/resource-name.ts's grammar for now — see the note there. Moving it costs a
- * CloudFormation replacement and an edit to every workflow that composes the ARN, which is its own
- * change rather than a rider on this one.
+ * It sits outside the grammar awsResourceName composes (deployment/environment.ts) for now — see the
+ * note there. Moving it costs a CloudFormation replacement and an edit to every workflow that
+ * composes the ARN, which is its own change rather than a rider on this one.
  */
 export function githubDeployRoleName(stage: any) {
   requireStageLike('stage', stage)
@@ -230,6 +249,30 @@ export function serializeStageConfig(config: any) {
       )
     })
   return lines.length > 0 ? `${lines.join('\n')}\n` : ''
+}
+
+/*
+ * The short-lived file `sst secret load` reads that serialized configuration from.
+ *
+ * `secret load` takes a path and has no stdin form, so the whole configuration — every domain, issuer
+ * and token in the operator's .env — has to exist on disk for the length of one command. That is the
+ * only reason this exists, and everything here is about keeping that window small and closed:
+ *
+ *   - a directory of its own, from mkdtemp, so the 0700 it creates keeps other users out even before
+ *     the file inside it exists;
+ *   - 0600 on the file as well, so a umask that would have widened it cannot;
+ *   - removal in `finally`, so a failed load leaves nothing behind — which is the case that matters,
+ *     since that is when someone is most likely to walk away from the terminal.
+ */
+export function withStageConfigFile<T>(config: any, use: (configPath: string) => T): T {
+  const directory = mkdtempSync(join(tmpdir(), 'boxlite-stage-config-'))
+  try {
+    const configPath = join(directory, 'stage-config.env')
+    writeFileSync(configPath, serializeStageConfig(config), { mode: 0o600 })
+    return use(configPath)
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 }
 
 /*

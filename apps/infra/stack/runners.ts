@@ -357,7 +357,7 @@ const runnerArtifactTrigger =
 // plan but not these — they are siblings of it, not children, and SST is never passed
 // --exclude-dependents. Their trigger carries the deployed commit, so on an Api-only deploy
 // they would still fire and fetch runner/<sha>/ from S3 for a commit whose build-runner job
-// was skipped, and deployment-preview.mjs would not catch it: isRunnerLikeResource matches a
+// was skipped, and the Runner policy pack would not catch it: isRunnerLikeResource matches a
 // name against /^Runner(?:-|$)/ OR an aws:ec2/instance:Instance carrying Runner identity
 // tags, and this command satisfies neither arm of that disjunction.
 //

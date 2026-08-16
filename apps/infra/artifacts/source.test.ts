@@ -221,7 +221,7 @@ test('a dirty checkout cannot satisfy the commit the Runner artifact was staged 
 
 test('an untracked file counts as dirty, as it does for the builder', () => {
   // The Docker build context is the working tree, so an untracked-but-not-ignored file ships in
-  // the Api image while HEAD still equals the ref. runner-artifact-build.mjs already refuses on
+  // the Api image while HEAD still equals the ref. artifacts/runner-build.ts already refuses on
   // --untracked-files=all; the two halves of one rule must ask git the same question.
   const flags: any[] = []
   const run = (args: any) => {

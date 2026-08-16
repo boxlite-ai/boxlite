@@ -7,8 +7,8 @@ nested KVM, RDS Postgres, ElastiCache Redis, S3, and CloudFront.
 - **IaC** — SST v4 (Pulumi underneath)
 - **Cost** — ~$600/month always-on; see [Cost](#cost)
 
-**Where the "why" lives:** design rationale sits in `sst.config.ts` comments,
-next to the code it explains. This file is the runbook.
+**Where the "why" lives:** design rationale sits in comments next to the code it
+explains, mostly under `stack/` and `deployment/`. This file is the runbook.
 
 ## Architecture
 
@@ -161,12 +161,12 @@ credentials.
 
 Either path first runs deployment safety tests that require every Runner to
 retain `protect: true` and the AMI/user-data ignore rules. The build path then
-runs a full `sst diff --json` and passes the structured plan through
-`deployment/preview.ts`. The gate rejects creating, replacing, or
-deleting a Runner instance and any in-place Runner change other than provider
-association or tags. Workflow dispatch defaults to a preview-only run; set
-`apply=true` only after reviewing it. An apply run repeats the same guarded
-preview before the full-stack deploy:
+runs a full `sst diff` under the mandatory `policies/runner` policy pack, which
+rejects creating, replacing, or deleting a Runner instance and any in-place
+Runner change other than provider association or tags — the same pack the apply
+runs under, so a plan it refuses can never be applied. Workflow dispatch
+defaults to a preview-only run; set `apply=true` only after reviewing it. An
+apply run repeats the same guarded preview before the full-stack deploy:
 
 ```bash
 npm run deploy -- --stage dev
@@ -196,14 +196,15 @@ artifact is not required to exist. Any other selector is refused. `deploy-infra.
 exposes the same three scopes as its `components` input and skips the build jobs
 for a leg it excludes.
 
-A narrowed scope needs a *deployed commit* that understands it, which is not the
+A deploy needs a *deployed commit* whose tooling understands it, which is not the
 same commit as the workflow: `workflow_dispatch` reads the workflow definition
 from the dispatch ref while the deploy job checks out the selected one. So a
-`ref`/`pr` dispatch can pair a new workflow with a wrapper that predates
-`resolveDeployScope`. The job probes for it right after checkout and refuses
-before assuming the deploy role; redispatch such a commit with `api+runner`, or
-rebase it. Only a narrowed scope is affected — `api+runner` passes no selector
-and works against any commit.
+`ref`/`pr` dispatch can pair a new workflow with tooling that predates it. The
+job reads that commit's `deployment/capabilities.json` right after checkout and
+refuses before assuming the deploy role — every deploy needs `stageConfigStore`,
+and a narrowed one additionally needs `componentSelection`. A commit that
+declares neither cannot be deployed by this workflow at all; rebase it, or name a
+newer `ref`.
 
 A narrowed deploy leaves the excluded leg on whatever commit an earlier run put
 there, so the stack is then mixed-commit; the residual partial-update risk above
@@ -267,7 +268,7 @@ Two rules narrow what the store may put into a deploy's environment, because
   with `npm run sst -- secret remove <NAME> --stage <stage>` when you care.
 - never local credential context (`AWS_PROFILE`, `AWS_CLI_PATH`) or the artifact
   selectors CI owns — see `FORBIDDEN_DEPLOYMENT_KEYS` in
-  `deployment/validate-environment.ts`.
+  `deployment/key-policy.ts`.
 
 A variable already set in the environment always wins over the store. That is how
 the deploy workflow keeps control of the selectors it sets, and how you override a
@@ -339,10 +340,14 @@ npm run runner:update -- --stage dev # roll the Runner binary, one host at a tim
 Every deploy and removal requires an explicit `--stage` so the deployer, the
 verifier, and destructive operations cannot target different stages.
 
+`deploy`, `remove`, `sst`, and `secrets` all pass through the guarded deployment
+facade — do not call the SST binary directly. `runner:update` rolls one host at a
+time and stops on the first failure.
+
 ## Operating rules
 
 **The Runner holds state.** `/var/lib/boxlite` and the live microVMs are on its
-root disk, so `sst.config.ts` marks it `protect: true` with
+root disk, so `stack/runners.ts` marks it `protect: true` with
 `ignoreChanges: ['ami', 'userDataBase64']`. Routine deploys never replace it.
 The CI gate rejects any Runner create, delete, replace, or protected-property
 change — so scaling out, scaling down, and first-Runner provisioning are all
@@ -443,6 +448,7 @@ implemented here.
 ## Reference
 
 - `.env.example` — every configuration variable, with required/optional tiers
-- `sst.config.ts` — the stack itself; comments carry the design rationale
-- `scripts/*.mjs` — each script's header comment documents its flags
+- `stack/*.ts` — the resource graph, one file per domain; comments carry the design rationale
+- `deployment/*.ts` — the guarded wrapper, scope, stage config, and post-deploy verification
+- `scripts/*.mjs` — launchers whose paths are pinned in Pulumi state; see `scripts/README.md`
 - `.github/workflows/deploy-infra.yml` — the guarded CI deployment

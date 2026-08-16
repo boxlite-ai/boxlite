@@ -186,9 +186,8 @@ the stage's private commit-keyed S3 path, while `build-api` calls
 `build-apps-api-image.yml` for the same commit and pushes
 `boxlite-app-<stage>-api:v<version>-<sha>`. The deploy itself compiles neither.
 Deployment safety tests first enforce the Runner lifecycle options. Dispatch defaults to
-preview-only; `apply=true` repeats the full structured preview and deploys only
-when the Runner safety gate accepts the
-plan. Routine control-plane deployment rejects every Runner create, delete,
+preview-only; `apply=true` repeats the guarded preview and deploys only when the
+mandatory Runner policy pack accepts the plan. Routine control-plane deployment rejects every Runner create, delete,
 replacement, or protected-property change; the routine workflow does not
 provision Runners. The job rejects `--target` deploys outright — a targeted
 update omits the shared and provider resources it still depends on, which is

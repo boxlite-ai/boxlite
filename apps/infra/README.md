@@ -12,9 +12,8 @@ npm command -> domain CLI -> deployment facade -> SST -> stack/deployStack()
 ## Start here
 
 - [Architecture](docs/architecture.md) — resource graph and source layout
-- [Deployment](docs/deployment.md) — prerequisites, bootstrap, preview, deploy, and artifact modes
+- [Deployment](docs/deployment.md) — prerequisites, bootstrap, preview, deploy, artifact modes, routine commands, and troubleshooting
 - [Security](docs/security.md) — credentials, policy enforcement, and protected resources
-- [Operations](docs/operations.md) — routine commands, Runner updates, and troubleshooting
 - [Networking](docs/networking.md) — VPC layout and traffic flows
 
 Use the repository make targets for validation:

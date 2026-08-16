@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-import { execFileSync } from 'node:child_process'
-
-import { resolveAwsCliPath } from '../shared/aws-cli.js'
+import { runAwsJson } from '../shared/exec.js'
 
 const PROXY_SERVICE_NAME = 'Proxy'
 const PROXY_CONTAINER_PORT = 4000
@@ -37,34 +35,12 @@ function activeListenerTargetGroups(listener: any) {
   return [...targetGroupArns]
 }
 
-export function runAwsJson(args: any, region: any) {
-  let output
-  try {
-    const awsCliPath = resolveAwsCliPath()
-    output = execFileSync(awsCliPath, [...args, '--region', region, '--output', 'json', '--no-cli-pager'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 15_000,
-      killSignal: 'SIGTERM',
-    })
-  } catch (error: any) {
-    const detail = error.stderr?.toString().trim() || error.message
-    throw new Error(`AWS ${args[0]} ${args[1]} failed: ${detail}`, { cause: error })
-  }
-
-  try {
-    return JSON.parse(output)
-  } catch (error) {
-    throw new Error(`AWS ${args[0]} ${args[1]} returned invalid JSON`, { cause: error })
-  }
-}
-
 export function verifyProxyDeployment({ app, stage, region, awsJson }: any) {
   if (!app?.trim()) throw new Error('Proxy verification requires an app name')
   if (!stage?.trim()) throw new Error('Proxy verification requires an SST stage')
   if (!region?.trim()) throw new Error('Proxy verification requires an AWS region')
 
-  const queryAws = awsJson ?? ((args: any) => runAwsJson(args, region))
+  const queryAws = awsJson ?? ((args: any) => runAwsJson(args, { region }))
   const taggedClusters = queryAws([
     'resourcegroupstaggingapi',
     'get-resources',

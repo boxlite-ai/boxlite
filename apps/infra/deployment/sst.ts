@@ -62,6 +62,7 @@ import {
   readWorkspaceVersion,
   resolveAwsRegion,
   resolvePublicDeploymentConfig,
+  resolveSstStage,
 } from './environment.js'
 import {
   exportDeployScope,
@@ -69,8 +70,13 @@ import {
   requireSstSubcommandFirst,
   withRequiredRunnerPolicy,
 } from './scope.js'
-import { STAGE_CONFIG_DIGEST_KEY, STAGE_CONFIG_MANIFEST_KEY, StageConfigStore, hydrateStageConfig } from './stage-config.js'
-import { isLocalOnlyDeploymentKey } from './validate-environment.js'
+import {
+  STAGE_CONFIG_DIGEST_KEY,
+  STAGE_CONFIG_MANIFEST_KEY,
+  hydrateStageConfig,
+  readStoredStageConfig,
+} from './stage-config.js'
+import { isLocalOnlyDeploymentKey } from './key-policy.js'
 import {
   verifyProxyDeploymentWithRetry,
   verifyPublicDeploymentWithRetry,
@@ -81,9 +87,8 @@ import { resolveAwsAccountId, runnerArtifactsBucketName, verifyRunnerArtifact } 
 import { readRunnerStateBaseline } from '../runner/policy-baseline.js'
 import { resolveSstExecutable } from './sst-executable.js'
 import { SstProcessTerminator } from './sst-process.js'
-import { resolveSstStage } from './stage.js'
 import { removePulumiEventLogs, withPulumiEventLogCleanup } from './pulumi-logs.js'
-import { resolveAwsCliPath } from '../shared/aws-cli.js'
+import { resolveAwsCliPath, runAwsText } from '../shared/exec.js'
 
 const PULUMI_EVENT_LOG_ROOT = fileURLToPath(new URL('../.sst/pulumi', import.meta.url))
 const TERMINATION_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM']
@@ -211,24 +216,9 @@ function reportProgress(message: string) {
 
 function fetchFromSsm(name: any) {
   try {
-    const awsCliPath = resolveAwsCliPath()
-    const out = execFileSync(
-      awsCliPath,
-      [
-        'ssm',
-        'get-parameter',
-        '--region',
-        REGION,
-        '--name',
-        name,
-        '--with-decryption',
-        '--query',
-        'Parameter.Value',
-        '--output',
-        'text',
-      ],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000, killSignal: 'SIGTERM' },
-    ).trim()
+    const out = runAwsText(['ssm', 'get-parameter', '--name', name, '--with-decryption', '--query', 'Parameter.Value'], {
+      region: REGION,
+    })
     return out && out !== 'None' ? out : null
   } catch (err: any) {
     if (err.code === 'ENOENT') console.warn('sst-with-cloudflare: `aws` CLI not found; skipping SSM lookup')
@@ -278,7 +268,7 @@ function loadStageConfig(stage: string) {
 
   let stored
   try {
-    stored = new StageConfigStore({ app: APP, stage, runSst: readSstStdout }).read()
+    stored = readStoredStageConfig({ app: APP, stage, runSst: readSstStdout })
   } catch (error: any) {
     // Deliberately not `error.message`: execFileSync builds it from the failed command line and the
     // captured stdio, which for `secret list` is the store's contents. Only the exit status is safe to

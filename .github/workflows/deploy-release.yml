@@ -10,7 +10,7 @@ name: Deploy release
 #   1. the GitHub release must contain the Runner tarball + checksum;
 #   2. Build apps/api image must have built (dev) or promoted (another stage) the same X.Y.Z.
 #
-# sst-with-cloudflare.mjs verifies both artifacts before invoking SST.
+# apps/infra/deployment/sst.ts verifies both artifacts before invoking SST.
 
 on:
   workflow_dispatch:
@@ -107,16 +107,7 @@ jobs:
       - name: Verify deploy role IAM boundary permissions
         working-directory: apps/infra
         shell: bash
-        run: |
-          set -euo pipefail
-          if node -e "const pkg = require('./package.json'); process.exit(pkg.scripts?.['verify-deploy-role'] ? 0 : 1)"; then
-            npm run --silent verify-deploy-role
-          elif [ -f scripts/verify-deploy-role-boundary.mjs ]; then
-            node scripts/verify-deploy-role-boundary.mjs
-          else
-            echo 'selected release has no supported deploy-role verifier' >&2
-            exit 1
-          fi
+        run: npm run --silent verify-deploy-role
 
       - name: Deploy published API and Runner artifacts
         working-directory: apps/infra
@@ -127,14 +118,4 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          if node -e "const pkg = require('./package.json'); process.exit(pkg.scripts?.['validate-preview'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then
-            policy=policies/runner
-          elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then
-            policy=.
-          else
-            echo 'selected commit has no supported deployment preview contract' >&2
-            exit 1
-          fi
-          npm run deploy -- --stage "$STAGE" --policy "$policy"
+        run: npm run deploy -- --stage "$STAGE" --policy policies/runner

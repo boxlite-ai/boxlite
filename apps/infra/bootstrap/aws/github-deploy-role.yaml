@@ -22,7 +22,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      # <namespace>-<workload>-<stage>-<name>, the grammar shared/resource-name.ts composes.
+      # <app>-<workload>-<stage>-<name>, the grammar awsResourceName composes.
       # This side declares the name; apiImageRepository resolves it. Both are pinned by tests.
       RepositoryName: !Sub boxlite-app-${GitHubEnvironment}-api
       ImageTagMutability: IMMUTABLE
@@ -137,7 +137,7 @@ Resources:
               - s3:PutBucketTagging
             Resource:
               # Both the legacy boxlite-<stage>-* shape and the boxlite-app-<stage>-* grammar
-              # shared/resource-name.ts composes. The boundary intersects with every identity
+              # awsResourceName composes. The boundary intersects with every identity
               # policy, so a bucket outside these prefixes is denied no matter what SST grants —
               # which is how a rename escapes the boundary silently.
               - !Sub arn:${AWS::Partition}:s3:::boxlite-${GitHubEnvironment}-*
@@ -290,7 +290,7 @@ Resources:
                 Resource:
                   - !Sub arn:${AWS::Partition}:s3:::sst-state-*/secret/boxlite/_fallback.json
               # The buckets this stack owns. Same prefixes the runtime boundary allows, so a rename has
-              # to widen both together — see shared/resource-name.ts.
+              # to widen both together — see awsResourceName in deployment/environment.ts.
               #
               # Four of the six prefixes are stage-scoped and two are not: boxlite-volume-* carries no
               # stage in its name, so this grants s3:* over every stage's volume buckets, not just this

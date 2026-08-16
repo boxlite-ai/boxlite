@@ -3,9 +3,9 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { parse as parseDotenv } from 'dotenv'
 
@@ -19,12 +19,13 @@ import {
   hasGitHubOidcProvider,
   isAwsCliVersionAtLeast,
   parseAwsCliVersion,
+  parseBootstrapOptions,
   prepareStageConfigLoad,
-  runtimeBoundaryPolicyArn,
   serializeStageConfig,
   ssmParameterName,
   sstPlatformState,
   validateGitHubRepo,
+  withStageConfigFile,
 } from './environment.js'
 import {
   STAGE_CONFIG_DIGEST_KEY,
@@ -33,20 +34,6 @@ import {
   parseSecretList,
   parseStageConfigManifest,
 } from '../deployment/stage-config.js'
-
-test('runtimeBoundaryPolicyArn matches sst.config.ts interpolation', () => {
-  assert.equal(
-    runtimeBoundaryPolicyArn({ accountId: '123456789012', appName: 'boxlite', stage: 'dev' }),
-    'arn:aws:iam::123456789012:policy/boxlite-dev-runtime-boundary',
-  )
-})
-
-test('runtimeBoundaryPolicyArn rejects a malformed account id', () => {
-  assert.throws(
-    () => runtimeBoundaryPolicyArn({ accountId: '12345', appName: 'boxlite', stage: 'dev' }),
-    /must be a 12-digit AWS account id/,
-  )
-})
 
 test('githubDeployRoleStackName rejects a stage CloudFormation cannot name', () => {
   // CloudFormation stack names allow only alphanumerics and hyphens. An
@@ -67,6 +54,33 @@ test('cloudFormationParameterOverrides validates repo shape and stage', () => {
     'GitHubEnvironment=dev',
   ])
   assert.throws(() => cloudFormationParameterOverrides({ repo: 'not-a-repo', stage: 'dev' }), /must look like/)
+})
+
+test('parseBootstrapOptions reads the flags bootstrap acts on', () => {
+  assert.deepEqual(
+    parseBootstrapOptions(['--stage', 'dev', '--repo', 'someone/boxlite', '--reviewers', '1,2', '--force']),
+    { stage: 'dev', repo: 'someone/boxlite', reviewers: '1,2', force: true },
+  )
+  assert.deepEqual(parseBootstrapOptions([]), {})
+})
+
+test('parseBootstrapOptions refuses an option whose value is the next flag', () => {
+  // Not pedantry: `--repo --force` parsed loosely yields repo='--force' AND drops --force, so the
+  // run continues against a repo nobody named with a flag nobody applied.
+  assert.throws(() => parseBootstrapOptions(['--repo', '--force']), /ambiguous|argument/i)
+  assert.throws(() => parseBootstrapOptions(['--reviewers']), /argument/i)
+  assert.throws(() => parseBootstrapOptions(['--repo']), /argument/i)
+})
+
+test('parseBootstrapOptions refuses an inline value on a boolean flag', () => {
+  // --provision-auth0 is the one step here that is not idempotent, so `--provision-auth0=false`
+  // reading as "on" would duplicate Auth0 apps for someone who wrote it to mean "off".
+  assert.throws(() => parseBootstrapOptions(['--provision-auth0=false']), /does not take an argument/i)
+  assert.throws(() => parseBootstrapOptions(['--force=0']), /does not take an argument/i)
+})
+
+test('parseBootstrapOptions refuses a flag this script does not define', () => {
+  assert.throws(() => parseBootstrapOptions(['--privision-auth0']), /Unknown option/i)
 })
 
 test('validateGitHubRepo accepts a community fork owner/name', () => {
@@ -437,4 +451,59 @@ test('sstPlatformState tells a finished install from an interrupted one', () => 
 
   mkdirSync(join(dir, 'node_modules', '@pulumi'))
   assert.equal(sstPlatformState(dir), 'ready')
+})
+
+const CONFIG = { STACK_DOMAIN: 'dev.boxlite.ai', OIDC_AUDIENCE: 'https://dev.boxlite.ai/api' }
+
+test('withStageConfigFile hands sst a file holding exactly the serialized configuration', () => {
+  // What `sst secret load` will parse. Read inside the callback because the file is gone after it.
+  const contents = withStageConfigFile(CONFIG, (path: string) => readFileSync(path, 'utf8'))
+  assert.equal(contents, "OIDC_AUDIENCE='https://dev.boxlite.ai/api'\nSTACK_DOMAIN='dev.boxlite.ai'\n")
+})
+
+test('withStageConfigFile keeps the configuration unreadable to other users while it exists', () => {
+  // The whole stage configuration sits on disk for the length of one command. Both the file and the
+  // directory holding it are checked: a permissive umask would widen the file, and a shared parent
+  // would expose it regardless of the file's own mode.
+  const modes = withStageConfigFile(CONFIG, (path: string) => ({
+    file: statSync(path).mode & 0o777,
+    directory: statSync(dirname(path)).mode & 0o777,
+  }))
+  assert.equal(modes.file, 0o600)
+  assert.equal(modes.directory, 0o700)
+})
+
+test('withStageConfigFile removes the file once the load has finished', () => {
+  const path = withStageConfigFile(CONFIG, (configPath: string) => configPath)
+  assert.equal(existsSync(path), false)
+  assert.equal(existsSync(dirname(path)), false, 'the directory goes too, not just the file')
+})
+
+test('withStageConfigFile removes the file when the load fails', () => {
+  // The case that matters: `secret load` throwing is exactly when someone walks away from the
+  // terminal, and a `finally` is the only thing that stops the configuration staying in /tmp.
+  let path = ''
+  assert.throws(
+    () =>
+      withStageConfigFile(CONFIG, (configPath: string) => {
+        path = configPath
+        throw new Error('synthetic secret load failure')
+      }),
+    /synthetic secret load failure/,
+  )
+  assert.notEqual(path, '')
+  assert.equal(existsSync(path), false)
+  assert.equal(existsSync(dirname(path)), false)
+})
+
+test('withStageConfigFile refuses a configuration it cannot represent before writing anything', () => {
+  // serializeStageConfig throws on a value no quoting carries — here both quote kinds at once, since
+  // an apostrophe alone is ordinary in a token and is now written double-quoted. Nothing may reach
+  // disk in that case, and the callback must never run.
+  let ran = false
+  assert.throws(
+    () => withStageConfigFile({ GHCR_TOKEN: `it's "quoted"` }, () => (ran = true)),
+    /GHCR_TOKEN mixes a single quote/,
+  )
+  assert.equal(ran, false)
 })
