@@ -89,8 +89,8 @@ export function verifyDeployRoleGrantsBoundaryPermission({ callerArn, accountId,
   const roleName = parseAssumedRoleName(callerArn)
   const boundaryArn = runtimeBoundaryPolicyArn({ accountId, appName, stage })
   // A synthetic-but-representative role ARN under the namespace SST creates
-  // roles in — not a real resource, just something the policy's `role/
-  // boxlite-*`-style Resource pattern should match.
+  // roles in — not a real resource, just something the policy's
+  // `role/boxlite-<stage>-*`-style Resource pattern should match.
   const probeResource = `arn:aws:iam::${accountId}:role/${appName}-${stage}-verify-probe`
 
   const grants = policyDocumentsAllow(policyDocuments, {

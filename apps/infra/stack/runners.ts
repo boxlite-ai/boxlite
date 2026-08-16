@@ -158,7 +158,17 @@ const ghcrSecret =
   ghcrUsername && ghcrToken
     ? // 7-day recovery window: an accidental delete during rotation is undoable
       // (vs 0 = immediate, irreversible — which would break all runner image pulls).
-      new aws.secretsmanager.Secret('GhcrPullToken', { recoveryWindowInDays: 7 })
+      //
+      // Named explicitly, following stack/deploy.ts:161's s3-access role. SST's `<app>-<stage>-`
+      // prefix comes from a transformation registered in the Component constructor, so it reaches a
+      // component's children — not a resource declared at stack root like this one, which would
+      // otherwise autoname to `GhcrPullToken-<suffix>`. The deploy role's secretsmanager grant is
+      // scoped to `secret:boxlite-<stage>-*`, and an autonamed secret falls outside it: the deploy
+      // would fail with AccessDenied the first time GHCR_TOKEN is set.
+      new aws.secretsmanager.Secret('GhcrPullToken', {
+        name: `${$app.name}-${$app.stage}-ghcr-pull-token`,
+        recoveryWindowInDays: 7,
+      })
     : undefined
 if (ghcrSecret) {
   new aws.secretsmanager.SecretVersion('GhcrPullTokenValue', {
