@@ -119,7 +119,7 @@ export async function deployStack() {
     // it refuses to place the task with "no permissions boundary allows the
     // secretsmanager:GetSecretValue action". (The deploy role is not the
     // constraint — its boxlite-sst-deploy policy grants secretsmanager on
-    // every resource, and it carries no boundary at all.)
+    // this stage's own secrets, and it carries no boundary at all.)
     //
     // Empty means the exporter stays off; see USAGE_EXPORT_ENABLED below.
     const usageExportToken = new sst.Secret('USAGE_EXPORT_TOKEN', '')

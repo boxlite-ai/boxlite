@@ -228,8 +228,8 @@ Runner artifact bucket. That bucket expires only superseded object versions —
 first boot re-fetches the commit-keyed tarball at every instance launch, so
 expiring the current object would make a later replacement fail to boot. The role
 grants only the AWS control-plane actions
-used by this SST stack. IAM mutation is limited to `boxlite-*` roles, policies, and
-instance profiles. Every role created by SST must carry the stage's runtime
+used by this SST stack. IAM mutation is limited to `boxlite-<stage>-*` roles, policies, and
+instance profiles, so one stage cannot rewrite another's. Every role created by SST must carry the stage's runtime
 permissions boundary, which excludes IAM mutation and limits workloads to the
 data-plane APIs they need. Redeploy that CloudFormation stack whenever its policy
 or resources change. `IAM_PERMISSIONS_BOUNDARY_STAGE` must match both the SST stage

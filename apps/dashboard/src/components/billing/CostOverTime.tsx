@@ -9,61 +9,76 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { AlertCircle, BarChart3, RefreshCw } from '@/components/ui/icon'
-import { AnalyticsUsageParams, useUsageChart } from '@/hooks/queries/useAnalyticsUsage'
+import { useOwnerUsageSeriesQuery } from '@/hooks/queries/billingQueries'
+import { UsageFundingBucket } from '@/billing-api'
 import { formatMoney } from '@/lib/utils'
-import { ModelsUsageChartPoint } from '@boxlite-ai/analytics-api-client'
+import { subDays, subHours } from 'date-fns'
 import { useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts'
 
 /**
- * Priced usage over time, split by resource.
- *
- * The design splits cost into quota-covered vs wallet-drawn; no quota concept
- * exists server-side, so the split here is CPU / RAM / disk — the dimensions
- * `/usage/chart` actually prices.
+ * Cost over time, split by who funded it: the plan's quota first, the wallet
+ * after — the billing service's own settlement record, so a bucket here is
+ * money that actually moved (or an honest zero), never an estimate. Chart is
+ * the last 30 days by day; list is the last 24 hours by hour, fetched only
+ * when opened.
  */
 
 const chartConfig = {
-  cpuPrice: { label: 'CPU', color: 'hsl(var(--chart-1))' },
-  ramPrice: { label: 'RAM', color: 'hsl(var(--chart-2))' },
-  diskPrice: { label: 'Disk', color: 'hsl(var(--chart-3))' },
+  quota: { label: 'Quota-covered', color: 'hsl(var(--brand))' },
+  wallet: { label: 'From wallet', color: 'hsl(var(--warning))' },
 } satisfies ChartConfig
 
-type Point = {
-  time: string
-  cpuPrice: number
-  ramPrice: number
-  diskPrice: number
-  total: number
-}
+type Point = { time: string; quota: number; wallet: number; total: number }
 
-function toPoints(raw: ModelsUsageChartPoint[] | undefined): Point[] {
-  return (raw ?? []).map((p) => {
-    const cpuPrice = p.cpuPrice ?? 0
-    const ramPrice = p.ramPrice ?? 0
-    const diskPrice = p.diskPrice ?? 0
-    return { time: p.time ?? '', cpuPrice, ramPrice, diskPrice, total: cpuPrice + ramPrice + diskPrice }
+function toPoints(buckets: UsageFundingBucket[] | undefined): Point[] {
+  return (buckets ?? []).map((bucket) => {
+    const quota = bucket.quotaCoveredCents / 100
+    const wallet = bucket.fromWalletCents / 100
+    return { time: bucket.from.toISOString(), quota, wallet, total: quota + wallet }
   })
 }
 
-const shortTime = (value: string) => {
+const shortDay = (value: string) => {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-const ROW = 'grid grid-cols-[1fr_90px_90px_90px_100px] items-center gap-x-4'
+const shortHour = (value: string) => {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
 
-export function CostOverTime({ params }: { params: AnalyticsUsageParams }) {
+const ROW = 'grid grid-cols-[1fr_110px_110px_110px] items-center gap-x-4'
+
+export function CostOverTime() {
   const [view, setView] = useState<'chart' | 'list'>('chart')
-  const { data, isLoading, isError, refetch } = useUsageChart(params)
-  const points = useMemo(() => toPoints(data), [data])
-  const total = useMemo(() => points.reduce((sum, p) => sum + p.total, 0), [points])
+  // Pinned once per mount: a window recomputed every render would churn the
+  // query key. The windows are the PRD's own — daily for the chart, the last
+  // 24 hours for the list.
+  const [windows] = useState(() => {
+    const now = new Date()
+    return { chartFrom: subDays(now, 30), listFrom: subHours(now, 24), to: now }
+  })
+
+  const daily = useOwnerUsageSeriesQuery('day', windows.chartFrom, windows.to)
+  const hourly = useOwnerUsageSeriesQuery('hour', windows.listFrom, windows.to, view === 'list')
+
+  const points = useMemo(() => toPoints(daily.data), [daily.data])
+  const hours = useMemo(() => toPoints(hourly.data), [hourly.data])
+  const active = view === 'chart' ? daily : hourly
+  // The header total describes what is on screen: 30 days in chart view, the
+  // last 24 hours in list view.
+  const activePoints = view === 'chart' ? points : hours
+  const total = useMemo(() => activePoints.reduce((sum, p) => sum + p.total, 0), [activePoints])
 
   return (
     <section>
       <SectionTitle
         title="Cost Over Time"
-        count={points.length ? formatMoney(total) : undefined}
+        count={total > 0 ? formatMoney(total) : undefined}
         right={
           <div className="flex items-center border border-border">
             {(['chart', 'list'] as const).map((mode) => (
@@ -81,34 +96,34 @@ export function CostOverTime({ params }: { params: AnalyticsUsageParams }) {
         }
       />
       <Panel>
-        {isError ? (
+        {active.isError ? (
           <Empty className="py-12">
             <EmptyHeader>
               <EmptyMedia variant="icon" className="bg-destructive-background text-destructive">
                 <AlertCircle />
               </EmptyMedia>
               <EmptyTitle className="text-destructive">Failed to load cost data</EmptyTitle>
-              <EmptyDescription>Something went wrong while fetching the usage series.</EmptyDescription>
+              <EmptyDescription>Something went wrong while fetching the funding series.</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
-              <Button variant="secondary" size="sm" onClick={() => refetch()}>
+              <Button variant="secondary" size="sm" onClick={() => active.refetch()}>
                 <RefreshCw />
                 Retry
               </Button>
             </EmptyContent>
           </Empty>
-        ) : isLoading ? (
+        ) : active.isLoading ? (
           <div className="flex h-[300px] items-center justify-center">
             <Spinner className="size-6" />
           </div>
-        ) : !points.length ? (
+        ) : view === 'chart' && total === 0 ? (
           <Empty className="py-12">
             <EmptyHeader>
               <EmptyMedia variant="icon">
                 <BarChart3 />
               </EmptyMedia>
-              <EmptyTitle>No cost data yet</EmptyTitle>
-              <EmptyDescription>Cost appears here once boxes run in the selected time range.</EmptyDescription>
+              <EmptyTitle>No cost yet</EmptyTitle>
+              <EmptyDescription>Settled cost appears here once boxes run — quota-covered first.</EmptyDescription>
             </EmptyHeader>
           </Empty>
         ) : view === 'chart' ? (
@@ -130,7 +145,7 @@ export function CostOverTime({ params }: { params: AnalyticsUsageParams }) {
                   axisLine={false}
                   tickMargin={8}
                   minTickGap={32}
-                  tickFormatter={shortTime}
+                  tickFormatter={shortDay}
                   tick={{ fontSize: 10 }}
                 />
                 <YAxis
@@ -148,7 +163,7 @@ export function CostOverTime({ params }: { params: AnalyticsUsageParams }) {
                     <ChartTooltipContent
                       indicator="dot"
                       labelFormatter={(label, payload) =>
-                        `${shortTime(String(label))}: ${formatMoney(
+                        `${shortDay(String(label))}: ${formatMoney(
                           payload.reduce((acc, curr) => acc + (curr.value as number), 0),
                         )}`
                       }
@@ -156,25 +171,18 @@ export function CostOverTime({ params }: { params: AnalyticsUsageParams }) {
                   }
                 />
                 <Area
-                  dataKey="cpuPrice"
+                  dataKey="quota"
                   type="monotoneX"
                   stackId="a"
-                  stroke="var(--color-cpuPrice)"
-                  fill="url(#cost-cpuPrice)"
+                  stroke="var(--color-quota)"
+                  fill="url(#cost-quota)"
                 />
                 <Area
-                  dataKey="ramPrice"
+                  dataKey="wallet"
                   type="monotoneX"
                   stackId="a"
-                  stroke="var(--color-ramPrice)"
-                  fill="url(#cost-ramPrice)"
-                />
-                <Area
-                  dataKey="diskPrice"
-                  type="monotoneX"
-                  stackId="a"
-                  stroke="var(--color-diskPrice)"
-                  fill="url(#cost-diskPrice)"
+                  stroke="var(--color-wallet)"
+                  fill="url(#cost-wallet)"
                 />
               </AreaChart>
             </ChartContainer>
@@ -186,31 +194,38 @@ export function CostOverTime({ params }: { params: AnalyticsUsageParams }) {
                 </span>
               ))}
             </div>
-            <PanelNote>Priced per resource, over the selected range</PanelNote>
+            <PanelNote>Settled cost by day, last 30 days — quota covers first, the wallet funds the rest</PanelNote>
           </div>
         ) : (
           <div className="px-[22px] py-4">
             <div
               className={`${ROW} border-b border-border pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
             >
-              <span>Time</span>
-              <span className="text-right">CPU</span>
-              <span className="text-right">RAM</span>
-              <span className="text-right">Disk</span>
+              <span>Hour</span>
+              <span className="text-right">Quota</span>
+              <span className="text-right">Wallet</span>
               <span className="text-right">Total</span>
             </div>
-            {points.map((p) => (
+            {hours.map((p) => (
               <div
                 key={p.time}
                 className={`${ROW} border-b border-border/40 py-[11px] font-mono text-[12px] transition-colors hover:bg-muted/30`}
               >
-                <span className="text-foreground">{shortTime(p.time)}</span>
-                <span className="text-right tabular-nums text-muted-foreground">{formatMoney(p.cpuPrice)}</span>
-                <span className="text-right tabular-nums text-muted-foreground">{formatMoney(p.ramPrice)}</span>
-                <span className="text-right tabular-nums text-muted-foreground">{formatMoney(p.diskPrice)}</span>
+                <span className="text-foreground">{shortHour(p.time)}</span>
+                <span
+                  className={`text-right tabular-nums ${p.quota > 0 ? 'text-foreground' : 'text-muted-foreground'}`}
+                >
+                  {p.quota > 0 ? formatMoney(p.quota) : '—'}
+                </span>
+                <span className={`text-right tabular-nums ${p.wallet > 0 ? 'text-warning' : 'text-muted-foreground'}`}>
+                  {p.wallet > 0 ? formatMoney(p.wallet) : '—'}
+                </span>
                 <span className="text-right tabular-nums text-foreground">{formatMoney(p.total)}</span>
               </div>
             ))}
+            <div className="pt-2">
+              <PanelNote>Last 24 hours · hourly granularity</PanelNote>
+            </div>
           </div>
         )}
       </Panel>

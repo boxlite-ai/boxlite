@@ -480,8 +480,14 @@ test('a billing URL is advertised only where a billing service answers', () => {
   const gate = billing.indexOf('if (!config.billingApiUrl)')
   assert.notEqual(gate, -1, 'Billing page must gate on config.billingApiUrl')
   assert.match(billing.slice(gate), /return <BillingComingSoon \/>/)
-  for (const section of ['<BillingAlerts />', '<PlanSection />', '<UsageSection />', '<WalletSection />']) {
-    assert.ok(billing.indexOf(section) > gate, `${section} must render only past the billing gate`)
+  // Opening tag, not the whole self-closing element: what has to hold is that the section renders
+  // past the gate, and that is just as true once a section takes a prop. Pinning `<X />` made this
+  // fail on #1256 giving UsageSection an onGoToWallet prop, which changed nothing about the gate.
+  for (const section of ['BillingAlerts', 'PlanSection', 'UsageSection', 'WalletSection']) {
+    // `<Name` followed by a delimiter, so the tag is matched whether or not it takes props but a
+    // different component sharing the prefix cannot stand in for it.
+    const rendered = billing.search(new RegExp(`<${section}[\\s/>]`))
+    assert.ok(rendered > gate, `<${section}> must render only past the billing gate`)
   }
 
   // The per-surface paths that used to be gated are now redirects into that page. A redirect

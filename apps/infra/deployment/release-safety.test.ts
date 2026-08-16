@@ -486,7 +486,7 @@ test('what bootstrap stores is the .env it validated, read once', () => {
 
 test('the deploy role cannot rewrite its own permissions', () => {
   /*
-   * The role is named boxlite-<stage>-github-deploy, so it matches the `role/boxlite-*` resource of
+   * The role is named boxlite-<stage>-github-deploy, so it matches the `role/boxlite-<stage>-*` resource of
    * its own IAM grants. iam:PutRolePolicy on itself is unbounded privilege escalation — the
    * permissions boundary constrains the roles SST creates, not this role's own inline policy — and
    * iam:PutRolePermissionsBoundary would let it lift that boundary for everything else.
@@ -505,8 +505,19 @@ test('the deploy role cannot rewrite its own permissions', () => {
   const granted = new Set<string>()
   for (const statement of statements) {
     if (statement.Effect !== 'Allow') continue
+    /*
+     * Glob against this role's own ARN, matching how the Deny side below is checked.
+     *
+     * This was a literal `role/boxlite-*` search, which stopped matching anything once #1255 scoped
+     * the Allows to `role/boxlite-${GitHubEnvironment}-*` — a pattern that still reaches this role.
+     * The premise assertion below catches that and fails, so the risk was never a silent pass; it was
+     * a loud failure whose obvious "fix" is to widen the grants back until the string matches again.
+     *
+     * The glob also credits statements whose resource is `*`, which the literal never did. Those
+     * reach this role as surely as a named pattern, so the Denies they require are now demanded too.
+     */
     const reachesOwnName = asArray(statement.Resource).some(
-      (resource: any) => typeof resource === 'string' && resource.includes('role/boxlite-*'),
+      (resource: any) => typeof resource === 'string' && iamGlob(resource).test(SELF_ARN),
     )
     if (!reachesOwnName) continue
     for (const action of asArray(statement.Action)) {
@@ -517,7 +528,10 @@ test('the deploy role cannot rewrite its own permissions', () => {
       granted.add(action)
     }
   }
-  assert.ok(granted.size > 0, 'expected the role to manage boxlite-* roles; the premise here has changed')
+  assert.ok(
+    granted.size > 0,
+    'expected the role to hold role-mutating actions reaching its own ARN; the premise here has changed',
+  )
 
   const denied = new Set<string>()
   for (const statement of statements) {
@@ -548,7 +562,8 @@ test('the deploy role cannot rewrite its own permissions', () => {
 
   /*
    * The other half, and the one that reads as harmless: the runtime boundary is a managed policy named
-   * boxlite-<stage>-runtime-boundary, which matches ManageBoxLitePolicies' policy/boxlite-* resource.
+   * boxlite-<stage>-runtime-boundary, which matches ManageBoxLitePolicies' policy/boxlite-<stage>-*
+   * resource.
    * Widen it, create a bounded role under the widened version, pass it to a service, and the boundary
    * has stopped bounding anything. Denying writes to that one policy is what breaks the chain.
    */
@@ -566,9 +581,10 @@ test('the deploy role cannot rewrite its own permissions', () => {
   }
 
   /*
-   * And a SIBLING stage's deploy role, which is the sharper version of the same hole: role/boxlite-*
-   * covers prod's deploy role as readily as this one's, so a Deny scoped to ${GitHubEnvironment} would
-   * still leave a dev-bound job able to rewrite prod's trust policy and assume it.
+   * And a SIBLING stage's deploy role. No Allow reaches one any more — #1255 scoped them all to
+   * ${GitHubEnvironment} — so this Deny is a backstop rather than a live patch, and it is asserted
+   * for the same reason the template keeps it cross-stage: the next grant that widens should hit a
+   * Deny already in place instead of needing one written under time pressure.
    */
   const siblingArn = SELF_ARN.replace('${GitHubEnvironment}', 'some-other-stage')
   const deniedOnSibling = statements
@@ -583,8 +599,8 @@ test('the deploy role cannot rewrite its own permissions', () => {
     assert.ok(deniedOnSibling.includes(action), `${action} on another stage's deploy role must be denied`)
   }
 
-  // The boundary needs the same treatment for the same reason: widening prod's boundary from a dev job
-  // is the identical takeover one level down.
+  // The boundary gets the same backstop for the same reason, one level down: nothing grants a dev job
+  // reach over prod's boundary today, and this is what keeps that true if something regains it.
   const siblingBoundaryArn = BOUNDARY_ARN.replace('${GitHubEnvironment}', 'some-other-stage')
   const deniedOnSiblingBoundary = statements
     .filter((statement: any) => statement.Effect === 'Deny' && statement.Condition === undefined)
@@ -618,8 +634,18 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
   const asArray = (value: any) => (Array.isArray(value) ? value : [value])
   const stageScoped = (resource: any) => String(resource).includes('${GitHubEnvironment}')
 
-  // Every resource that names no stage, excluding the SST backing store the other test covers.
-  const unscoped = statements.flatMap((statement: any) =>
+  /*
+   * Every resource that names no stage, excluding the SST backing store the other test covers.
+   *
+   * Allow only, because this test is about reach: a Deny naming a stage-less resource does not widen
+   * anything, it narrows. DenySelfPrivilegeEscalation deliberately spans every stage — that is the
+   * whole point of it — and counting it here would demand an excuse for the statement whose job is
+   * protecting sibling stages. Before #1255 that excuse existed by accident, because the entries
+   * covering the account-wide Allows matched the Deny's resources as substrings too.
+   */
+  const unscoped = statements
+    .filter((statement: any) => statement.Effect === 'Allow')
+    .flatMap((statement: any) =>
     asArray(statement.Resource)
       .filter((resource: any) => typeof resource === 'string' && !stageScoped(resource))
       .filter((resource: string) => !resource.includes('sst-state-') && !resource.includes('/sst/'))
@@ -638,12 +664,22 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
     ['boxlite-volume-', 'the bucket name carries no stage — scoping it is a rename'],
     [':instance/*', 'an EC2 instance ARN carries no stage; narrowing needs a tag Condition'],
   ]
-  // The rest predate this change and are accounted for here rather than in the prose.
+  /*
+   * The rest predate this change and are accounted for here rather than in the prose.
+   *
+   * The three IAM patterns that used to sit here — role/, instance-profile/ and policy/ on
+   * `boxlite-*` — are deliberately gone (#1255). Their excuse was "SST names the roles it creates per
+   * stack, and the stage is not a prefix", which was the wrong reason to keep an account-wide grant.
+   * What SST actually does (.sst/platform/src/components/component.ts): roles are in namingRules
+   * (:257) and get `<app>-<stage>-` when created as a component's child, so boxlite-dev-ApiExecutionRole-*
+   * is reachable by a stage pattern; a role at stack root autonames instead (`RunnerRole-1115ba6`);
+   * and instance profiles and managed policies are on the skip list at :142-143, so SST never
+   * prefixes those at all. None of the three was ever matched by `boxlite-*` either, so the broad
+   * pattern bought nothing over the narrow one. Leaving these entries would let a revert to the
+   * account-wide form pass in silence, which is how they lasted this long.
+   */
   const ACCOUNTED_HERE: Array<[string, string]> = [
     ['document/AWS-RunShellScript', 'an AWS-owned SSM document, not a stage resource'],
-    [':role/boxlite-*', 'SST names the roles it creates per stack, and the stage is not a prefix'],
-    [':instance-profile/boxlite-*', 'same naming as the roles they wrap'],
-    [':policy/boxlite-*', 'same naming as the roles they attach to'],
     ['role/aws-service-role/', 'service-linked roles are account-global by AWS design'],
   ]
   /*
@@ -662,13 +698,25 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
    * could keep its name and gain `iam:PutRolePolicy` on `*`, which no other check here would see.
    * Nothing granted account-wide may write IAM or grant everything.
    */
+  /*
+   * Secrets Manager belongs on this list for the same reason IAM does, and its absence is how
+   * `secretsmanager:*` on `*` sat here unremarked until #1255: every secret this stack creates carries
+   * the stage in its name, so anything beyond the calls that genuinely take no resource is reach into
+   * another stage. Named rather than pattern-matched, because "takes no resource" is a property of the
+   * specific API, not of its spelling — a new one has to be added here deliberately.
+   */
+  const RESOURCELESS_SECRETSMANAGER = ['secretsmanager:ListSecrets', 'secretsmanager:GetRandomPassword']
+
   for (const [sid] of WILDCARD_RESOURCE_STATEMENTS) {
     const statement = statements.find((candidate: any) => candidate.Sid === sid)
     assert.ok(statement, `${sid} is allowed a wildcard resource but no longer exists`)
     const dangerous = asArray(statement.Action).filter(
       (action: any) =>
         typeof action === 'string' &&
-        (action === '*' || /^iam:(?!Get|List|Simulate)/i.test(action) || /^sts:AssumeRole/i.test(action)),
+        (action === '*' ||
+          /^iam:(?!Get|List|Simulate)/i.test(action) ||
+          /^sts:AssumeRole/i.test(action) ||
+          (/^secretsmanager:/i.test(action) && !RESOURCELESS_SECRETSMANAGER.includes(action))),
     )
     assert.deepEqual(dangerous, [], `${sid} grants ${dangerous.join(', ')} on every resource`)
   }
@@ -680,6 +728,40 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
       : !known.some(([pattern]) => resource.includes(pattern)),
   )
   assert.deepEqual(undocumented, [], 'an account-wide resource grant appeared that nothing accounts for')
+
+  /*
+   * And the statement the account-wide secretsmanager grant was replaced by, pinned the way the
+   * boundary's four statements are. The check above catches re-widening — a `*` resource here would
+   * surface as undocumented — but not deletion, which would leave the deploy unable to read its own
+   * secrets and nothing failing until a deploy actually ran.
+   */
+  assert.deepEqual(findStatement(statements, 'SecretsForThisStage'), {
+    Sid: 'SecretsForThisStage',
+    Effect: 'Allow',
+    Action: 'secretsmanager:*',
+    Resource: [
+      'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:boxlite-${GitHubEnvironment}-*',
+    ],
+  })
+
+  /*
+   * And the secret the stack actually creates has to land inside that pattern, which is a contract
+   * between two files nothing else checks. It is not automatic: SST's `<app>-<stage>-` prefix comes
+   * from a transformation registered in its Component constructor, so a resource declared at stack
+   * root autonames instead — `RunnerRole-1115ba6` and `RunnerProfile-434704b` are live proof. An
+   * autonamed secret sits outside a stage-scoped grant, and the deploy fails with AccessDenied the
+   * first time GHCR_TOKEN is set. That is a runtime failure no unit test would otherwise reach.
+   */
+  const runnersSource = liveText('script', readFileSync(join(REPO_ROOT, 'apps/infra/stack/runners.ts'), 'utf8'))
+  const secretName = runnersSource.match(/new aws\.secretsmanager\.Secret\([^)]*?name: `([^`]+)`/s)?.[1]
+  assert.ok(secretName, 'the stack must name its Secrets Manager secret explicitly, not let it autoname')
+  const composedSecretName = secretName.replace('${$app.name}', 'boxlite').replace('${$app.stage}', 'dev')
+  assert.ok(
+    iamGlob(
+      'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:boxlite-dev-*',
+    ).test(`arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:${composedSecretName}`),
+    `the stack's secret '${composedSecretName}' falls outside the deploy role's secret:boxlite-<stage>-* grant`,
+  )
 
   /*
    * Both directions. "Every unscoped grant is documented" alone lets the documentation rot the other
@@ -1767,6 +1849,18 @@ test('dev deploy role trusts only the repository GitHub Environment identity', (
       'arn:${AWS::Partition}:s3:::boxlite-app-${GitHubEnvironment}-*/*',
       'arn:${AWS::Partition}:s3:::boxlite-volume-*/*',
     ],
+  })
+  /*
+   * The last sibling, and the one the unscoped-grant test cannot reach: it collects the deploy role's
+   * own policies, and this statement lives in the boundary ManagedPolicy, which names no role. So
+   * `boxlite-*` here — a task assuming another stage's runtime role — was revertible with every test
+   * still green, which is the failure shared/resource-name.ts:22-25 already records once.
+   */
+  assert.deepEqual(findStatement(statements, 'AssumeBoxLiteRuntimeRoles'), {
+    Sid: 'AssumeBoxLiteRuntimeRoles',
+    Effect: 'Allow',
+    Action: 'sts:AssumeRole',
+    Resource: 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-*',
   })
 })
 

@@ -127,7 +127,9 @@ jobs:
       # Before the download, not after: ./.github/actions/upload-to-release below is resolved from
       # the checked-out tree, and checkout cleans the workspace, which would take the wheels with
       # it if it ran second.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false # Only the action.yml is needed; nothing here runs git.
 
       - name: Download all wheels
         uses: actions/download-artifact@v5

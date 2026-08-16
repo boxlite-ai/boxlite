@@ -21,8 +21,11 @@ description: >-
 
   Only the finished 11MB binary is staged rather than the 2.3GB target directory,
   and the tree is removed afterwards to reclaim runner disk. Nothing needs the
-  intermediates: every caller's container script exports SKIP_GUEST_BUILD=1, so the
-  guest is never rebuilt there and no incremental compilation state has to survive.
+  intermediates: every caller restores .cache/<target> and sets SKIP_GUEST_BUILD=1
+  inside its container, so the guest is never rebuilt there and no incremental
+  compilation state has to survive. Four callers get that from
+  ./.github/actions/run-in-manylinux's prologue; build-wheels.yml gets it from
+  cibuildwheel instead (sdks/python/pyproject.toml, before-all and environment).
   sccache keeps its own compilation cache separately, so this costs nothing on the
   next run either.
 

@@ -195,6 +195,8 @@ jobs:
       # the checked-out tree, and checkout cleans the workspace, which would take the artifacts
       # with it if it ran second.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false # Only the action.yml is needed; nothing here runs git.
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4

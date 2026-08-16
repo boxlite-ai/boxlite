@@ -8,7 +8,7 @@ support subdirectories under `.github/workflows/`, so composite actions are wher
 
 ## How they fit together
 
-```
+```text
 PULL REQUEST / PUSH                     lint · test · codeql · api-client-drift
                                         e2e-stack · e2e-local · build-box-images
 
@@ -86,9 +86,10 @@ predating these directories fails with `Can't find 'action.yml'`; select a newer
 
 ## sccache
 
-All Rust compilation is cached with [sccache](https://github.com/mozilla-actions/sccache-action)
-over the GitHub Actions cache API. `./.github/actions/sccache` owns the whole configuration; a
-caller only invokes it.
+Rust compilation is cached with [sccache](https://github.com/mozilla-actions/sccache-action) over
+the GitHub Actions cache API **in the jobs that invoke `./.github/actions/sccache`** — not in every
+job that compiles Rust. `test.yml`'s `rust` and `guest-rootfs` jobs set up the toolchain without it,
+so they compile uncached. The action owns the whole configuration; a caller only invokes it.
 
 - Caches individual compilation units by content hash, so it works on the host and inside the
   Docker and cibuildwheel manylinux containers alike.
@@ -105,12 +106,23 @@ caller only invokes it.
   crate twice by absolute path.
 - The sccache version is pinned in the action rather than floating on `latest`, which is what an
   omitted `version` means.
-- Degrades rather than fails: if setup does not succeed, builds proceed uncached — `RUSTC_WRAPPER`
-  is set only when the binary is actually on `PATH`, since pointing it at a missing sccache would
-  turn a tolerated cache failure into a hard build failure. Diagnostics land in
-  `$RUNNER_TEMP/sccache-error.log`, and the action's post step prints hit/miss stats.
-  `warm-caches.yml` is the deliberate exception to tolerating failure, since populating the cache is
-  its entire purpose.
+- Degrades rather than fails, **on the host**: `RUSTC_WRAPPER` is set only once the server is
+  actually serving, so both a missing binary and a server that will not start leave it unset —
+  pointing cargo at an sccache that cannot answer would turn a tolerated cache failure into a hard
+  build failure. A tolerant job additionally gets `SCCACHE_IGNORE_SERVER_IO_ERROR`, which narrowly
+  turns a failure to read the compile response from the server into a local compile rather than a
+  failed build. Diagnostics land in `$RUNNER_TEMP/sccache-error.log`, and the action's post step
+  prints hit/miss stats.
+- **The containers decide separately, and depend on the host having sccache at all.**
+  `run-in-manylinux` builds its whole `-e` list — the bind-mount, `RUSTC_WRAPPER`,
+  `SCCACHE_GHA_ENABLED`, the basedir — inside `if command -v sccache` evaluated *on the host*, so a
+  host with no binary caches nowhere. Given a binary, the container runs its own server and its
+  prologue drops `RUSTC_WRAPPER` only if the mount did not arrive: it degrades on a missing binary,
+  not on a failed startup, and `SCCACHE_IGNORE_SERVER_IO_ERROR` is not forwarded. cibuildwheel's
+  container is the one that installs its own sccache (`sdks/python/pyproject.toml`), but it wraps
+  cargo through the `RUSTC_WRAPPER` its `environment-pass` inherits from the host.
+- `warm-caches.yml` passes `tolerate-failure: 'false'` and is the deliberate exception: populating
+  the cache is its entire purpose, so every one of those paths fails the job rather than warning.
 
 ## CodeQL
 

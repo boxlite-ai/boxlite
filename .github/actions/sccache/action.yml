@@ -40,6 +40,8 @@ runs:
 
     - name: Enable sccache for this job
       shell: bash
+      env:
+        TOLERATE_FAILURE: ${{ inputs.tolerate-failure }}
       run: |
         # Exported for this step (so the server restart below picks them up) and
         # appended to GITHUB_ENV (so every later step, and the docker invocation in
@@ -87,16 +89,38 @@ runs:
         # would otherwise say so.
         set_env SCCACHE_ERROR_LOG "$RUNNER_TEMP/sccache-error.log"
 
-        # Only when the binary really is on PATH. Pointing RUSTC_WRAPPER at a missing
-        # sccache turns every subsequent cargo invocation into a hard failure, which would
-        # convert the tolerated setup failure above into exactly the broken build it exists
-        # to prevent. Same guard run-in-manylinux applies inside the container.
-        if command -v sccache >/dev/null 2>&1; then
-          set_env RUSTC_WRAPPER sccache
-          # Restarted rather than left as sccache-action started it: the settings above
-          # are read at server startup, so a server already running would ignore them.
-          sccache --stop-server >/dev/null 2>&1 || true
-          sccache --start-server || echo "::warning::sccache server failed to start; this job compiles uncached"
-        else
-          echo "::warning::sccache is not on PATH; this job compiles uncached"
-        fi
+        # Every way the cache can fail to come up routes through here, so `tolerate-failure`
+        # means the same thing for all of them. A caller that passed 'false' — warm-caches.yml,
+        # whose entire purpose is to populate the cache — must not be told about it in a warning
+        # it then ignores.
+        unusable() {
+          if [ "$TOLERATE_FAILURE" = 'true' ]; then
+            echo "::warning::$1; this job compiles uncached"
+            exit 0
+          fi
+          # stdout, like every other workflow command in .github: the runner parses ::error::
+          # from stdout, so on stderr it would print but never become an annotation.
+          echo "::error::$1"
+          exit 1
+        }
+
+        command -v sccache >/dev/null 2>&1 || unusable 'sccache is not on PATH'
+
+        # Restarted rather than left as sccache-action started it: the settings above are read at
+        # server startup, so a server already running would ignore them.
+        sccache --stop-server >/dev/null 2>&1 || true
+        sccache --start-server || unusable 'sccache server failed to start'
+
+        # Only once the server is actually serving. RUSTC_WRAPPER pointing at an sccache that
+        # cannot answer turns every later cargo invocation into a hard failure — the exact
+        # outcome tolerating the failure exists to avoid.
+        #
+        # Host-side only; the containers decide separately, and .github/workflows/README.md's
+        # sccache section is where that split is written down.
+        #
+        # SCCACHE_IGNORE_SERVER_IO_ERROR covers the window after startup, narrowly: it turns a
+        # failure to read the compile response from the server into a local compile instead of a
+        # failed build. Undocumented, but real at the pinned version — sccache/src/commands.rs:544
+        # reads it as `== "1"`.
+        [ "$TOLERATE_FAILURE" != 'true' ] || set_env SCCACHE_IGNORE_SERVER_IO_ERROR 1
+        set_env RUSTC_WRAPPER sccache

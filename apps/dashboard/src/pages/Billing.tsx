@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RoutePath } from '@/enums/RoutePath'
 import { useConfig } from '@/hooks/useConfig'
 import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components/ui/icon'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 // Verbatim from the design: square segments, right-divided, accent fill when active.
@@ -86,13 +87,16 @@ function BillingComingSoon() {
  */
 function Billing() {
   const config = useConfig()
+  // Controlled, so a section can send the user to a sibling tab — the usage
+  // tab's low-balance banner tops up in the wallet tab.
+  const [tab, setTab] = useState('overview')
 
   if (!config.billingApiUrl) {
     return <BillingComingSoon />
   }
 
   return (
-    <Tabs defaultValue="overview" className="w-full gap-0">
+    <Tabs value={tab} onValueChange={setTab} className="w-full gap-0">
       <div className="px-[34px] pt-[26px] lg:px-[40px]">
         <h1 className="font-mono text-[22px] font-medium leading-none tracking-[-0.5px]">Billing</h1>
         <div className="mt-5 flex flex-col gap-4 empty:hidden">
@@ -117,7 +121,7 @@ function Billing() {
       </TabsContent>
       <TabsContent value="usage">
         <div className={TAB_PANE}>
-          <UsageSection />
+          <UsageSection onGoToWallet={() => setTab('wallet')} />
         </div>
       </TabsContent>
       <TabsContent value="wallet">

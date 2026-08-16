@@ -158,7 +158,44 @@ export const handlers = [
       largestSuccessfulPaymentCents: 1000,
       expiresAt: new Date(),
       hasVerifiedBusinessEmail: true,
+      // Mirrors the billing service's own mock seed: pro, a quarter used,
+      // pinned mid-cycle so the meter renders deterministically.
+      plan: {
+        planId: 'pro',
+        planName: 'Pro',
+        status: 'active',
+        cycleFrom: new Date(Date.UTC(2026, 7, 5)),
+        cycleTo: new Date(Date.UTC(2026, 8, 5)),
+        includedQuotaCents: 25000,
+        quotaConsumedCents: 6250,
+        quotaRemainingCents: 18750,
+      },
     })
+  }),
+  // Deterministic funding series: quota-first against the seeded remaining
+  // quota, wallet after — dense buckets so the chart shows honest zeros.
+  http.get(`${BILLING_API_URL}/organization/:organizationId/usage/series`, async ({ request }) => {
+    const url = new URL(request.url)
+    const granularity = url.searchParams.get('granularity') === 'hour' ? 'hour' : 'day'
+    const stepMs = granularity === 'hour' ? 3_600_000 : 86_400_000
+    const to = Date.parse(url.searchParams.get('to') ?? '') || Date.now()
+    const from = Date.parse(url.searchParams.get('from') ?? '') || to - 30 * 86_400_000
+
+    let quotaLeft = 18750
+    const buckets = []
+    for (let start = from; start + stepMs <= to; start += stepMs) {
+      const index = Math.floor(start / stepMs)
+      const totalCents = granularity === 'day' ? 420 + ((index * 37) % 350) : 30 + ((index * 13) % 40)
+      const quotaCoveredCents = Math.min(totalCents, Math.max(0, quotaLeft))
+      quotaLeft -= quotaCoveredCents
+      buckets.push({
+        from: new Date(start).toISOString(),
+        to: new Date(start + stepMs).toISOString(),
+        quotaCoveredCents,
+        fromWalletCents: totalCents - quotaCoveredCents,
+      })
+    }
+    return HttpResponse.json(buckets)
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/email`, async () => {
     return HttpResponse.json<OrganizationEmail[]>([

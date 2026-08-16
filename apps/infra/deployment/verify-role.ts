@@ -93,7 +93,7 @@ function main() {
   if (!grants) {
     throw new Error(
       `deploy role '${roleName}' has no policy statement allowing iam:PutRolePermissionsBoundary for ` +
-        `${boundaryArn} on role/boxlite-*. apps/infra/stack/deploy.ts requires every SST-managed role to carry ` +
+        `${boundaryArn} on role/boxlite-<stage>-*. apps/infra/stack/deploy.ts requires every SST-managed role to carry ` +
         `this boundary. Run \`npm run bootstrap -- --stage ${stage}\` with AWS admin ` +
         'credentials (it redeploys bootstrap/aws/github-deploy-role.yaml), then confirm the GitHub environment variable ' +
         `AWS_ACCOUNT_ID for '${stage}' still matches the account that stack was deployed into. ` +

@@ -21,9 +21,9 @@ and one parameter tree hold every stage's, so the role's `s3:*`/`ssm:*` grant on
 bound to the dev Environment run `sst secret list --stage prod`. Those two are now scoped to this
 stage's state prefixes, its passphrase, and the buckets the stack owns.
 
-That is a claim about the SST store specifically, which is where a stage's configuration lives. It is
-*not* a claim about AWS Secrets Manager: `secretsmanager:*` is still granted account-wide, and is one
-of the two open items at the end of this section.
+That is a claim about the SST store specifically, which is where a stage's configuration lives. AWS
+Secrets Manager is now scoped the same way: everything except the two calls that take no resource
+(`ListSecrets`, `GetRandomPassword`) is limited to `secret:boxlite-<stage>-*`.
 
 Three things in the SST store are shared by construction, and none of them is a stage's configuration:
 
@@ -54,20 +54,35 @@ The first two predate this change and the third is how Runner upgrades have alwa
 they are listed because the paragraph above would otherwise read as a stronger guarantee than the
 policy gives.
 
-Two grants reach other stages and are **not** narrowed here, tracked in
-[#1255](https://github.com/boxlite-ai/boxlite/issues/1255):
+The three grants that used to reach other stages are now scoped by `${GitHubEnvironment}` (#1255).
+`secretsmanager:ListSecrets` is the residue: it takes no resource, so a stage can still enumerate
+other stages' secret *names* and metadata — not their values.
 
-- `ManageBoxLiteRoles` covers `role/boxlite-*`, so a job bound to one stage can rewrite or delete
-  another stage's SST-created runtime roles. This stage's own deploy role, every other stage's, and
-  the runtime boundary policies are excluded by the `DenySelfPrivilegeEscalation` statement; the
-  remaining runtime roles are not.
-- `secretsmanager:*` is granted on `*`, so one stage can read and mutate another's secrets.
+- `ManageBoxLiteRoles` / `ManageBoxLitePolicies` and the instance-profile grants moved from
+  `boxlite-*` to `boxlite-<stage>-*`, so a job bound to one stage can no longer rewrite or delete
+  another stage's SST-created runtime roles.
+- `secretsmanager:*` moved from `*` to `secret:boxlite-<stage>-*`.
+- `AssumeBoxLiteRuntimeRoles`, in the runtime permissions boundary rather than the deploy role, moved
+  from `role/boxlite-*` to `role/boxlite-<stage>-*` — otherwise a task could assume another stage's
+  runtime role.
 
-Both would be scoped by `${GitHubEnvironment}` the way the runtime boundary already scopes
-`secretsmanager:GetSecretValue`, but only once a preview run confirms every resource SST creates
-carries the stage in its name — a wrong pattern fails a deploy with AccessDenied and needs the
-bootstrap stack redeployed to clear. So this section says what the policy grants today rather than
-what it should grant.
+A wrong pattern fails a deploy with AccessDenied and needs the bootstrap stack redeployed to clear,
+so what the patterns must cover was read out of SST rather than assumed
+(`.sst/platform/src/components/component.ts`). Two conditions gate the `<app>-<stage>-` prefix: the
+resource type must be in `namingRules`, and it must be created as a component's *child*, because the
+renaming transform is registered in the Component constructor. Roles (`:257`) and secrets (`:295`)
+qualify; instance profiles and managed policies are on the skip list (`:142-143`) and are never
+prefixed. So `boxlite-dev-ApiExecutionRole-*` is covered, while a role declared at stack root
+autonames (`RunnerRole-1115ba6`) — as it did under `boxlite-*` too, so narrowing costs it nothing.
+
+The stack's secrets divide the same way: `DatabaseProxySecret` and `CacheProxySecret` are component
+children and land inside the pattern; `GhcrPullToken` is declared at stack root and is named
+explicitly in `stack/runners.ts` so that it does. Without that name it would autoname and the
+narrowed grant would deny it — the deploy would fail the first time `GHCR_TOKEN` is set.
+
+`DenySelfPrivilegeEscalation` stays deliberately cross-stage (`boxlite-*-github-deploy`,
+`boxlite-*-runtime-boundary`). Narrowing the Allows makes it redundant on paper; it is kept as the
+backstop for the next grant that widens.
 
 That policy has not run a real deploy yet. Four of its grant groups were derived from live listings,
 and two — Pulumi's provider describe/list calls and the `ssm:SendCommand` document targets — are

@@ -211,19 +211,43 @@ test('a caller that supplies no script still gets the prologue and the epilogue'
 
 /* ------------------------------------------------------------------------- sccache */
 
-/** The action's env-export step, run with sccache present or absent from PATH. */
-const sccacheEnvironment = (sccacheOnPath: boolean) => {
+type SccacheRun = {
+  /** false takes the binary off PATH entirely. */
+  onPath?: boolean
+  /** true leaves the binary in place but makes `--start-server` exit non-zero. */
+  startFails?: boolean
+  tolerateFailure?: 'true' | 'false'
+  expectStatus?: number
+}
+
+/** The action's env-export step, run against a stub sccache in the requested state. */
+const sccacheEnvironment = ({
+  onPath = true,
+  startFails = false,
+  tolerateFailure = 'true',
+  expectStatus = 0,
+}: SccacheRun = {}) => {
   const action = readAction('sccache')
   const step = action.runs.steps.find((candidate: any) => typeof candidate.run === 'string')
   assert.ok(step, 'the sccache action no longer has a run step')
+  // The harness supplies TOLERATE_FAILURE below, so on its own it would keep passing if the action
+  // stopped mapping the input into the environment — at which point every tolerant caller would
+  // hard-fail on a cache problem. Pin the mapping itself.
+  assert.equal(
+    step.env?.TOLERATE_FAILURE,
+    '${{ inputs.tolerate-failure }}',
+    'the step must map tolerate-failure into the environment its script reads',
+  )
 
   const dir = mkdtempSync(join(tmpdir(), 'boxlite-sccache-'))
   try {
     const binDir = join(dir, 'bin')
     mkdirSync(binDir)
-    if (sccacheOnPath) {
+    if (onPath) {
       const stub = join(binDir, 'sccache')
-      writeFileSync(stub, '#!/bin/sh\nexit 0\n')
+      // A binary that is present but cannot serve is the case that separates "export the wrapper
+      // after startup" from "export it before": only here do the two orderings differ.
+      writeFileSync(stub, startFails ? '#!/bin/sh\n[ "$1" = --start-server ] && exit 1\nexit 0\n' : '#!/bin/sh\nexit 0\n')
       chmodSync(stub, 0o755)
     }
     const envFile = join(dir, 'github_env')
@@ -239,10 +263,11 @@ const sccacheEnvironment = (sccacheOnPath: boolean) => {
         ACTIONS_RESULTS_URL: 'https://results.example/',
         ACTIONS_RUNTIME_TOKEN: 'token-value',
         ACTIONS_CACHE_SERVICE_V2: 'on',
+        TOLERATE_FAILURE: tolerateFailure,
       },
       dir,
     )
-    assert.equal(result.status, 0, `the sccache step failed: ${result.stderr}`)
+    assert.equal(result.status, expectStatus, `unexpected exit: ${result.stdout}${result.stderr}`)
 
     // GITHUB_ENV's heredoc form: `NAME<<DELIM`, the value's lines, then DELIM alone.
     const exported = new Map<string, string>()
@@ -257,7 +282,7 @@ const sccacheEnvironment = (sccacheOnPath: boolean) => {
       }
       exported.set(name, value.join('\n'))
     }
-    return { exported, stdout: result.stdout, workspace: dir }
+    return { exported, stdout: result.stdout, stderr: result.stderr, workspace: dir }
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -267,7 +292,7 @@ test('sccache is switched on for the job, not merely installed', () => {
   // The upstream action installs the binary and exports the cache credentials but sets neither
   // RUSTC_WRAPPER nor SCCACHE_GHA_ENABLED, so a job that only installed it compiled uncached
   // while still looking healthy. These two are the difference.
-  const { exported, workspace } = sccacheEnvironment(true)
+  const { exported, workspace } = sccacheEnvironment()
   assert.equal(exported.get('RUSTC_WRAPPER'), 'sccache')
   assert.equal(exported.get('SCCACHE_GHA_ENABLED'), 'true')
   // sccache cannot cache incremental compilation, so the wrapper above is worth nothing without it.
@@ -284,12 +309,48 @@ test('a missing sccache degrades the build rather than breaking it', () => {
   // tolerate-failure lets a failed install continue uncached. Exporting RUSTC_WRAPPER anyway
   // would point cargo at a binary that is not there, turning every later compile into a hard
   // failure — the exact outcome tolerating the failure exists to avoid.
-  const { exported, stdout } = sccacheEnvironment(false)
+  const { exported, stdout } = sccacheEnvironment({ onPath: false })
   assert.equal(exported.get('RUSTC_WRAPPER'), undefined)
   assert.match(stdout, /::warning::/, 'a job compiling uncached says so')
-  // The cache configuration is still published: run-in-manylinux starts its own client inside
-  // the container and can succeed there even when the host binary is missing.
+  // The configuration published before the failure is left alone rather than retracted. That is
+  // all this pins: with no host binary nothing caches anywhere, because run-in-manylinux gates its
+  // entire -e list on host PATH too, and cibuildwheel's container — the only one that installs its
+  // own sccache — wraps cargo through the RUSTC_WRAPPER that is unset here.
   assert.equal(exported.get('SCCACHE_GHA_ENABLED'), 'true')
+})
+
+test('a caller that refuses to tolerate a cache failure gets one', () => {
+  // warm-caches.yml passes tolerate-failure: 'false' because populating the cache is the whole
+  // job. A warning it then ignores would let that workflow "succeed" having cached nothing —
+  // and every workflow reading the cache afterwards would silently miss.
+  const { exported, stdout } = sccacheEnvironment({ onPath: false, tolerateFailure: 'false', expectStatus: 1 })
+  assert.match(stdout, /::error::/, 'an intolerant caller is told with an error, not a warning')
+  assert.equal(exported.get('RUSTC_WRAPPER'), undefined)
+})
+
+test('a server that will not start is a cache failure like any other', () => {
+  // The case that separates this ordering from the obvious one. A present binary passes the PATH
+  // check, so exporting RUSTC_WRAPPER before startup would hand cargo a wrapper that cannot
+  // answer — every later compile dies, tolerant caller or not. Exporting after startup means a
+  // tolerant job compiles uncached and an intolerant one fails here, where the cause is legible.
+  const tolerant = sccacheEnvironment({ startFails: true })
+  assert.equal(tolerant.exported.get('RUSTC_WRAPPER'), undefined, 'a dead server must not be wrapped')
+  assert.match(tolerant.stdout, /::warning::/)
+
+  const strict = sccacheEnvironment({ startFails: true, tolerateFailure: 'false', expectStatus: 1 })
+  assert.equal(strict.exported.get('RUSTC_WRAPPER'), undefined)
+  assert.match(strict.stdout, /::error::/)
+})
+
+test('a tolerant job also survives a cache failure after startup', () => {
+  // Startup succeeding is not the end of the risk: a read or write can fail mid-build. Without
+  // this the job would die at that point, which is the same failure tolerate-failure exists to
+  // absorb, just later. sccache reads it as `== "1"` (src/commands.rs).
+  assert.equal(sccacheEnvironment().exported.get('SCCACHE_IGNORE_SERVER_IO_ERROR'), '1')
+  assert.equal(
+    sccacheEnvironment({ tolerateFailure: 'false' }).exported.get('SCCACHE_IGNORE_SERVER_IO_ERROR'),
+    undefined,
+  )
 })
 
 test('a change under .github reaches this suite locally, not only in CI', () => {
