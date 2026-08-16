@@ -100,98 +100,37 @@ jobs:
         include: ${{ fromJson(inputs.linux_x64_only && '[{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"}]' || needs.config.outputs.platforms) }}
 
     steps:
+      # This job builds a caller-selected commit, and a `uses: ./...` action is resolved from the
+      # checked-out tree rather than from this workflow's own ref. So the steps below need
+      # .github/actions/ to exist in the SELECTED commit, not just in the one defining this file.
+      # A commit predating those directories fails with "Can't find 'action.yml'" — the fix is to
+      # select a newer commit, the same versioning split deploy-infra.yml describes at its
+      # "Require deployment capabilities in the selected commit" step.
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.resolve-ref.outputs.sha }}
           submodules: recursive
 
-      - name: Set up Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
 
-      # sccache caches individual compilation units via GHA cache API.
-      # Works on host and inside Docker containers.
-      # Cache is pre-warmed by the Warm Caches workflow on push to main.
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-        continue-on-error: true
+      - uses: ./.github/actions/sccache
 
-      - name: Export GHA cache env vars
-        uses: actions/github-script@v7
-        with:
-          script: |
-            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', process.env.ACTIONS_CACHE_SERVICE_V2 || '');
-
-      # Build guest on host BEFORE manylinux container because:
-      # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
-      # - Building musl-cross-make from source takes ~15 minutes
-      # - Ubuntu host has musl-tools via apt (~30 seconds)
-      # - Guest is static musl binary, doesn't need manylinux glibc compatibility
-      # - Shim/libkrun must be built IN container (needs glibc 2.28 for manylinux)
-      - name: Build guest binary (Linux only)
+      - uses: ./.github/actions/build-guest
         if: runner.os == 'Linux'
-        run: |
-          make setup:build guest
-
-          # Cache only the final binary (11MB), not entire target dir (2.3GB)
-          GUEST_TARGET=$(scripts/util.sh --target)
-          mkdir -p ".cache/$GUEST_TARGET/release"
-          cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
-
-          # Clean up to save disk space (sccache stores compilation cache separately)
-          rm -rf target ~/.rustup ~/.cargo
-          mkdir -p target
 
       - name: Build C SDK (Linux)
         if: runner.os == 'Linux'
-        run: |
-          cat > "$RUNNER_TEMP/build.sh" << 'CONTAINER_SCRIPT'
-          set -ex
-          git config --global --add safe.directory /work
+        uses: ./.github/actions/run-in-manylinux
+        with:
+          target: ${{ matrix.target }}
+          script: |
+            # Build the C FFI library (static + shared)
+            cargo build --release -p boxlite-c
 
-          # sccache fallback: if not available, disable wrapper for normal compilation
-          if [ -n "${RUSTC_WRAPPER:-}" ] && ! command -v "$RUSTC_WRAPPER" &>/dev/null; then
-            echo "::warning::sccache not available in container, falling back to normal compilation"
-            unset RUSTC_WRAPPER
-          fi
-
-          GUEST_TARGET=$(scripts/util.sh --target)
-          if [ -d ".cache/$GUEST_TARGET" ]; then
-            echo "Restoring guest from .cache/$GUEST_TARGET"
-            mkdir -p target
-            cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
-          fi
-
-          export SKIP_GUEST_BUILD=1
-          export PATH="/usr/local/go/bin:$CARGO_HOME/bin:$PATH"
-          make setup:build runtime
-
-          # Build the C FFI library (static + shared)
-          cargo build --release -p boxlite-c
-
-          # Fix Go runtime symbol conflicts in the static library
-          bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
-
-          command -v sccache &>/dev/null && sccache --show-stats || true
-          CONTAINER_SCRIPT
-
-          # Conditionally mount sccache binary and pass env vars into Docker.
-          SCCACHE_DOCKER_ARGS=""
-          if command -v sccache &>/dev/null; then
-            SCCACHE_DOCKER_ARGS="-v $(which sccache):/usr/local/bin/sccache:ro -e SCCACHE_GHA_ENABLED=true -e RUSTC_WRAPPER=sccache -e ACTIONS_CACHE_SERVICE_V2 -e ACTIONS_RESULTS_URL -e ACTIONS_RUNTIME_TOKEN"
-          fi
-
-          docker run --rm \
-            -v "${{ github.workspace }}":/work \
-            -v "$RUNNER_TEMP/build.sh:/tmp/build.sh:ro" \
-            $SCCACHE_DOCKER_ARGS \
-            -w /work \
-            -e CARGO_HOME=/work/.cargo-manylinux \
-            quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }} \
-            bash /tmp/build.sh
+            # Fix Go runtime symbol conflicts in the static library
+            bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
 
       - name: Build C SDK (macOS)
         if: runner.os == 'macOS'
@@ -259,8 +198,6 @@ jobs:
           pattern: c-sdk-*
           merge-multiple: true
 
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
+      - uses: ./.github/actions/upload-to-release
         with:
           files: dist/boxlite-c-v*.tar.gz
-          fail_on_unmatched_files: true

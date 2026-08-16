@@ -38,8 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: ./.github/actions/setup-go
         with:
           go-version: ${{ needs.config.outputs.go-version }}
 

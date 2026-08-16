@@ -64,92 +64,23 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
 
-      # sccache caches individual compilation units via GHA cache API.
-      # Works on host and inside Docker containers.
-      # Cache is pre-warmed by the Warm Caches workflow on push to main.
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-        continue-on-error: true
+      - uses: ./.github/actions/sccache
 
-      - name: Export GHA cache env vars
-        uses: actions/github-script@v7
-        with:
-          script: |
-            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', process.env.ACTIONS_CACHE_SERVICE_V2 || '');
-
-      # Build guest on host BEFORE manylinux container because:
-      # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
-      # - Building musl-cross-make from source takes ~15 minutes
-      # - Ubuntu host has musl-tools via apt (~30 seconds)
-      # - Guest is static musl binary, doesn't need manylinux glibc compatibility
-      # - Shim/libkrun must be built IN container (needs glibc 2.28 for manylinux)
-      - name: Build guest binary (Linux only)
+      - uses: ./.github/actions/build-guest
         if: runner.os == 'Linux'
-        run: |
-          make setup:build guest
-
-          # Cache only the final binary (11MB), not entire target dir (2.3GB)
-          # Guest is not rebuilt in container (SKIP_GUEST_BUILD=1), so no incremental compilation needed
-          GUEST_TARGET=$(scripts/util.sh --target)
-          mkdir -p ".cache/$GUEST_TARGET/release"
-          cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
-
-          # Clean up to save disk space (sccache stores compilation cache separately)
-          rm -rf target ~/.rustup ~/.cargo
-          mkdir -p target
 
       - name: Build runtime (Linux)
         if: runner.os == 'Linux'
-        run: |
-          cat > "$RUNNER_TEMP/build.sh" << 'CONTAINER_SCRIPT'
-          set -ex
-          git config --global --add safe.directory /work
-
-          # sccache fallback: if not available, disable wrapper for normal compilation
-          if [ -n "${RUSTC_WRAPPER:-}" ] && ! command -v "$RUSTC_WRAPPER" &>/dev/null; then
-            echo "::warning::sccache not available in container, falling back to normal compilation"
-            unset RUSTC_WRAPPER
-          fi
-
-          GUEST_TARGET=$(scripts/util.sh --target)
-          if [ -d ".cache/$GUEST_TARGET" ]; then
-            echo "Restoring guest from .cache/$GUEST_TARGET"
-            mkdir -p target
-            cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
-          fi
-
-          export SKIP_GUEST_BUILD=1
-          export PATH="/usr/local/go/bin:$CARGO_HOME/bin:$PATH"
-          make setup:build runtime
-
-          # Build CLI binary (reuses compiled boxlite crate artifacts)
-          cargo build -p boxlite-cli --release
-
-          command -v sccache &>/dev/null && sccache --show-stats || true
-          CONTAINER_SCRIPT
-
-          # Conditionally mount sccache binary and pass env vars into Docker.
-          # If sccache-action failed or binary is missing, build proceeds without caching.
-          SCCACHE_DOCKER_ARGS=""
-          if command -v sccache &>/dev/null; then
-            SCCACHE_DOCKER_ARGS="-v $(which sccache):/usr/local/bin/sccache:ro -e SCCACHE_GHA_ENABLED=true -e RUSTC_WRAPPER=sccache -e ACTIONS_CACHE_SERVICE_V2 -e ACTIONS_RESULTS_URL -e ACTIONS_RUNTIME_TOKEN"
-          fi
-
-          docker run --rm \
-            -v ${{ github.workspace }}:/work \
-            -v "$RUNNER_TEMP/build.sh:/tmp/build.sh:ro" \
-            $SCCACHE_DOCKER_ARGS \
-            -w /work \
-            -e CARGO_HOME=/work/.cargo-manylinux \
-            quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }} \
-            bash /tmp/build.sh
+        uses: ./.github/actions/run-in-manylinux
+        with:
+          target: ${{ matrix.target }}
+          script: |
+            # Build CLI binary (reuses compiled boxlite crate artifacts)
+            cargo build -p boxlite-cli --release
 
       - name: Build runtime (macOS)
         if: runner.os == 'macOS'
@@ -289,8 +220,10 @@ jobs:
             dist/boxlite-cli-*.tar.gz
             dist/install.sh
 
+      # Step name retained: scripts/release/test_install.sh locates this block by
+      # `- name: Upload to release` to assert dist/install.sh.sha256 ships with the release.
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: ./.github/actions/upload-to-release
         with:
           files: |
             dist/boxlite-runtime-*.tar.gz
@@ -299,7 +232,6 @@ jobs:
             dist/SHA256SUMS
             dist/install.sh
             dist/install.sh.sha256
-          fail_on_unmatched_files: true
 
   # Publish Rust crates to crates.io after runtime tarballs are on GitHub Release.
   # Runtime tarballs must exist first because crates.io consumers download them
@@ -318,10 +250,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
+      - uses: ./.github/actions/setup-rust
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler

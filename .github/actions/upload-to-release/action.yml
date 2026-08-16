@@ -1,0 +1,29 @@
+name: Upload to release
+description: >-
+  Attaches built artifacts to the GitHub Release.
+
+  Thin on purpose. It exists so the release-upload action is pinned in one place
+  rather than five, and so fail_on_unmatched_files stays on: without it a glob
+  that stops matching — after a rename, or a build that quietly produced nothing —
+  publishes an empty release instead of failing.
+
+inputs:
+  files:
+    description: Newline-separated globs of artifacts to attach.
+    required: true
+  tag-name:
+    description: >-
+      Release tag to attach to. Empty lets the upstream action infer it from the
+      triggering ref, which is what every release-event caller wants. Only the
+      workflow that resolves a version itself needs to name one.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ inputs.tag-name }}
+        files: ${{ inputs.files }}
+        fail_on_unmatched_files: true
