@@ -1112,10 +1112,14 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.ok(deployStep, 'the deployment step is missing')
   assert.equal(deployStep.if, '${{ inputs.apply }}')
   /*
-   * Four properties per invocation, rather than the script line for line. Each is a way a deploy
+   * Five properties per invocation, rather than the script line for line. Each is a way a deploy
    * has actually gone wrong, and none of them cares how the surrounding bash is worded:
    *
    *   - the mandatory Runner policy is passed, so a plan that would replace a Runner is refused;
+   *   - the dispatched stage is passed, in the seed. The two legs fail differently without it and
+   *     the preview's way is the dangerous one: resolveSstStage returns 'dev' for a non-mutating
+   *     verb, so the diff previews a stage the apply never reconciles, while `deploy` refuses
+   *     outright (deployment/environment.ts). Pinning the seed keeps both honest;
    *   - the scope is appended conditionally, never inline — `--exclude "$DEPLOY_EXCLUDE"` inline
    *     hands SST an empty component name on every full-scope deploy;
    *   - it is expanded as "${args[@]}", so a scope with a space cannot word-split;
@@ -1129,7 +1133,9 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   ] as const) {
     const shell = liveShell(step.run)
     assert.match(shell, /--policy policies\/runner/, `the ${label} must pass the mandatory Runner policy`)
-    assert.match(shell, /^args=\(.+\)$/m, `the ${label} must seed its argument array`)
+    const seededArgs = shell.match(/^args=\((.+)\)$/m)
+    assert.ok(seededArgs, `the ${label} must seed its argument array`)
+    assert.match(seededArgs[1], /--stage "\$STAGE"/, `the ${label} must act on the dispatched stage`)
     assert.match(
       shell,
       /\[ -z "\$DEPLOY_EXCLUDE" \] \|\| args\+=\(--exclude "\$DEPLOY_EXCLUDE"\)/,
