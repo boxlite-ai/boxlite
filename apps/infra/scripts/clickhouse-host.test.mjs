@@ -9,14 +9,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
-import { gunzipSync } from 'node:zlib'
 
 import {
   buildClickHouseUserData,
   CLICKHOUSE_IMAGE,
   EC2_USER_DATA_MAX_BYTES,
   encodeClickHouseUserData,
-} from './clickhouse-bootstrap.mjs'
+  renderClickHouseSchema,
+} from './clickhouse-host.ts'
 
 const input = {
   region: 'ap-southeast-1',
@@ -24,12 +24,6 @@ const input = {
   adminSecretArn: 'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:admin',
   writerSecretArn: 'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:writer',
   readerSecretArn: 'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:reader',
-  retentionHours: 72,
-}
-
-function embeddedSchema(script) {
-  const encoded = script.match(/printf '%s' '([^']+)' \| base64/)[1]
-  return Buffer.from(encoded, 'base64').toString()
 }
 
 test('builds syntactically valid, secret-free, idempotent bootstrap shell', () => {
@@ -43,11 +37,8 @@ test('builds syntactically valid, secret-free, idempotent bootstrap shell', () =
   assert.match(script, /mountpoint -q/)
   assert.match(script, /aws secretsmanager get-secret-value/)
   assert.match(script, /CLICKHOUSE_IMAGE=.*sha256:/)
-  assert.match(embeddedSchema(script), /INTERVAL 72 HOUR/)
-  assert.match(script, /GRANT SELECT, INSERT, SHOW COLUMNS ON otel\.\* TO otel_writer/)
   assert.match(script, /RequiresMountsFor=\/var\/lib\/boxlite-clickhouse/)
   assert.doesNotMatch(script, /defaults,nofail/)
-  assert.match(script, /GRANT SELECT, SHOW COLUMNS ON otel\.\* TO otel_reader/)
   assert.match(script, /CREATE USER IF NOT EXISTS otel_writer IDENTIFIED WITH sha256_hash/)
   assert.match(script, /ALTER USER otel_reader IDENTIFIED WITH sha256_hash/)
   assert.doesNotMatch(script, /<otel_writer>/)
@@ -56,6 +47,7 @@ test('builds syntactically valid, secret-free, idempotent bootstrap shell', () =
   assert.match(script, /chown 101:101 \/run\/boxlite-clickhouse-users\.xml/)
   assert.match(script, /chmod 0400 \/run\/boxlite-clickhouse-users\.xml/)
   assert.doesNotMatch(script, /clickhouse-client[^\n]*--password(?:\s|$)/)
+  assert.doesNotMatch(script, /docker exec[^\n]*-e CLICKHOUSE_PASSWORD=/)
   assert.doesNotMatch(script, /CLICKHOUSE_PASSWORD=['"](?!\$)/)
   assert.doesNotMatch(script, /password_sha256_hex>[0-9a-f]{64}/)
   assert.equal(CLICKHOUSE_IMAGE.includes('@sha256:'), true)
@@ -86,21 +78,18 @@ test('does not write an unused runtime environment file', () => {
   )
 })
 
-test('grants each principal once after the schema exists', () => {
+test('leaves schema reconciliation to the post-boot readiness barrier', () => {
   const script = buildClickHouseUserData(input)
-  const schemaLoad = script.indexOf('clickhouse-client --user boxlite_admin --multiquery < /opt/boxlite-clickhouse/schema.sql')
-  const writerGrants = [...script.matchAll(/GRANT SELECT, INSERT, SHOW COLUMNS ON otel\.\* TO otel_writer/g)]
-  const readerGrants = [...script.matchAll(/GRANT SELECT, SHOW COLUMNS ON otel\.\* TO otel_reader/g)]
 
-  assert.notEqual(schemaLoad, -1, 'the schema load is missing')
-  assert.equal(writerGrants.length, 1, 'writer privileges should be declared once')
-  assert.equal(readerGrants.length, 1, 'reader privileges should be declared once')
-  assert.ok(writerGrants[0].index > schemaLoad, 'writer privileges must follow schema creation')
-  assert.ok(readerGrants[0].index > schemaLoad, 'reader privileges must follow schema creation')
+  assert.doesNotMatch(script, /\/opt\/boxlite-clickhouse\/schema\.sql/)
+  assert.doesNotMatch(script, /^\/usr\/local\/bin\/boxlite-clickhouse-sql-users$/m)
+  assert.doesNotMatch(script, /^GRANT /m)
+  assert.ok(Buffer.byteLength(script) <= EC2_USER_DATA_MAX_BYTES)
 })
 
 test('vendors every v0.144 telemetry table', () => {
-  const schema = embeddedSchema(buildClickHouseUserData(input))
+  const schema = renderClickHouseSchema()
+  assert.match(schema, /INTERVAL 72 HOUR/)
   for (const table of [
     'otel_logs',
     'otel_traces',
@@ -114,39 +103,35 @@ test('vendors every v0.144 telemetry table', () => {
   }
 })
 
-test('encodes deterministic gzip user data within the EC2 limit', () => {
+test('encodes deterministic user data within the EC2 limit', () => {
   const script = buildClickHouseUserData(input)
   const encoded = encodeClickHouseUserData(input)
-  const compressed = Buffer.from(encoded, 'base64')
+  const decoded = Buffer.from(encoded, 'base64')
 
-  assert.ok(Buffer.byteLength(script) > EC2_USER_DATA_MAX_BYTES)
-  assert.ok(compressed.byteLength <= EC2_USER_DATA_MAX_BYTES)
-  assert.deepEqual([...compressed.subarray(0, 2)], [0x1f, 0x8b])
-  assert.equal(compressed[9], 0xff, 'gzip header must not vary with the deployment host OS')
-  assert.equal(gunzipSync(compressed).toString(), script)
+  assert.ok(decoded.byteLength <= EC2_USER_DATA_MAX_BYTES)
+  assert.equal(decoded.toString(), script)
   assert.equal(encodeClickHouseUserData(input), encoded)
 })
 
-test('rejects compressed user data over the EC2 decoded-byte limit', () => {
-  const incompressibleVolumeId = Array.from({ length: 2_048 }, (_, index) =>
+test('rejects user data over the EC2 decoded-byte limit', () => {
+  const oversizedVolumeId = Array.from({ length: 2_048 }, (_, index) =>
     createHash('sha256').update(String(index)).digest('hex')
   ).join('')
 
   assert.throws(
-    () => encodeClickHouseUserData({ ...input, volumeId: incompressibleVolumeId }),
-    /compressed ClickHouse user data is \d+ bytes; EC2 allows 16384/,
+    () => encodeClickHouseUserData({ ...input, volumeId: oversizedVolumeId }),
+    /ClickHouse user data is \d+ bytes; EC2 allows 16384/,
   )
 })
 
 test('loads the schema after SST relocates the module under .sst/platform', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'boxlite-clickhouse-sst-bundle-'))
   const platformDirectory = join(directory, '.sst', 'platform')
-  const bundledModule = join(platformDirectory, 'clickhouse-bootstrap.mjs')
+  const bundledModule = join(platformDirectory, 'clickhouse-host.ts')
   mkdirSync(platformDirectory, { recursive: true })
-  copyFileSync(new URL('./clickhouse-bootstrap.mjs', import.meta.url), bundledModule)
-  copyFileSync(new URL('./clickhouse-schema.mjs', import.meta.url), join(platformDirectory, 'clickhouse-schema.mjs'))
+  copyFileSync(new URL('./clickhouse-host.ts', import.meta.url), bundledModule)
 
   const relocated = await import(pathToFileURL(bundledModule).href)
 
-  assert.match(relocated.renderClickHouseSchema(72), /INTERVAL 72 HOUR/)
+  assert.match(relocated.renderClickHouseSchema(), /INTERVAL 72 HOUR/)
 })

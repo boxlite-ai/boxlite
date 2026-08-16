@@ -4,18 +4,24 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import * as clickHouseConfig from './clickhouse-config.mjs'
+import * as clickHouseConfig from './clickhouse.js'
 
-const { resolveClickHouseConfig } = clickHouseConfig
+const { CLICKHOUSE_STAGE_CONFIG_KEYS, resolveClickHouseConfig } = clickHouseConfig
 
 test('defaults to one active self-hosted backend', () => {
   assert.deepEqual(resolveClickHouseConfig({}), {
     mode: 'self-hosted',
     active: true,
-    instanceType: 'm6a.large',
-    dataGiB: 50,
-    retentionHours: 72,
   })
+})
+
+test('exposes only the backend selector and managed connection', () => {
+  assert.deepEqual(CLICKHOUSE_STAGE_CONFIG_KEYS, [
+    'CLICKHOUSE_MODE',
+    'CLICKHOUSE_URL',
+    'CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN',
+    'CLICKHOUSE_READER_PASSWORD_SECRET_ARN',
+  ])
 })
 
 test('disables ClickHouse without provisioning a backend', () => {
@@ -39,9 +45,6 @@ test('connects one managed endpoint with separate writer and reader principals',
       url: 'https://example.clickhouse.cloud:8443',
       writerSecretArn: 'arn:aws:secretsmanager:region:account:secret:writer',
       readerSecretArn: 'arn:aws:secretsmanager:region:account:secret:reader',
-      writerUsername: 'otel_writer',
-      readerUsername: 'otel_reader',
-      database: 'otel',
     },
   )
 })
@@ -73,6 +76,53 @@ test('requires one HTTP endpoint shared by the collector and API', () => {
     () => resolveClickHouseConfig({ ...managed, CLICKHOUSE_URL: 'https://reader:plaintext@example.clickhouse.cloud:8443' }),
     /CLICKHOUSE_URL cannot contain credentials/,
   )
+  for (const query of [
+    'access_token=plaintext',
+    'password=plaintext',
+    'user=otel_writer',
+    'username=otel_writer',
+  ]) {
+    assert.throws(
+      () => resolveClickHouseConfig({ ...managed, CLICKHOUSE_URL: `https://example.clickhouse.cloud:8443?${query}` }),
+      /CLICKHOUSE_URL cannot contain credentials/,
+      query,
+    )
+  }
+  for (const url of [
+    'https://example.clickhouse.cloud:8443/otel',
+    'https://example.clickhouse.cloud:8443/.',
+    'https://example.clickhouse.cloud:8443/foo/..',
+    'https://example.clickhouse.cloud:8443/%2e%2e',
+    'https://example.clickhouse.cloud:8443?compress=false',
+    'https://example.clickhouse.cloud:8443#otel',
+  ]) {
+    assert.throws(
+      () => resolveClickHouseConfig({ ...managed, CLICKHOUSE_URL: url }),
+      /CLICKHOUSE_URL must be an origin URL without a path, query, or fragment/,
+      url,
+    )
+  }
+  const normalized = resolveClickHouseConfig({
+    ...managed,
+    CLICKHOUSE_URL: 'https://example.clickhouse.cloud:8443/',
+  })
+  assert.equal(normalized.mode, 'managed')
+  if (normalized.mode !== 'managed') assert.fail('managed configuration was not resolved')
+  assert.equal(normalized.url, 'https://example.clickhouse.cloud:8443')
+})
+
+test('requires distinct managed writer and reader secrets', () => {
+  const sharedSecretArn = 'arn:aws:secretsmanager:region:account:secret:shared'
+  assert.throws(
+    () =>
+      resolveClickHouseConfig({
+        CLICKHOUSE_MODE: 'managed',
+        CLICKHOUSE_URL: 'https://example.clickhouse.cloud:8443',
+        CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN: sharedSecretArn,
+        CLICKHOUSE_READER_PASSWORD_SECRET_ARN: sharedSecretArn,
+      }),
+    /managed ClickHouse writer and reader secrets must be different/,
+  )
 })
 
 test('requires managed passwords to use Secrets Manager ARNs readable by this stage', () => {
@@ -95,6 +145,8 @@ test('requires managed passwords to use Secrets Manager ARNs readable by this st
     'arn:aws:secretsmanager:us-east-1:123456789012:secret:boxlite-dev-clickhouse-writer-AbCdEf',
     'arn:aws:secretsmanager:ap-southeast-1:999999999999:secret:boxlite-dev-clickhouse-writer-AbCdEf',
     'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:other-dev-clickhouse-writer-AbCdEf',
+    `${valid}:password::`,
+    `${valid}::AWSCURRENT:`,
     'arn:aws:ssm:ap-southeast-1:123456789012:parameter/boxlite-dev-clickhouse-writer',
   ]) {
     assert.throws(
@@ -105,17 +157,14 @@ test('requires managed passwords to use Secrets Manager ARNs readable by this st
   }
 })
 
-test('rejects numeric settings that cannot remain exact JavaScript integers', () => {
-  for (const key of ['CLICKHOUSE_SELF_HOSTED_DATA_GB', 'CLICKHOUSE_RETENTION_HOURS']) {
-    assert.throws(
-      () => resolveClickHouseConfig({ [key]: '999999999999999999999999999999999999' }),
-      new RegExp(`${key} must be a positive safe integer`),
-    )
-  }
-})
-
-test('rejects removed multi-phase and plaintext-secret inputs', () => {
+test('rejects removed tuning, multi-phase, and plaintext-secret inputs', () => {
   for (const key of [
+    'CLICKHOUSE_SELF_HOSTED_INSTANCE_TYPE',
+    'CLICKHOUSE_SELF_HOSTED_DATA_GB',
+    'CLICKHOUSE_RETENTION_HOURS',
+    'CLICKHOUSE_WRITER_USERNAME',
+    'CLICKHOUSE_READER_USERNAME',
+    'CLICKHOUSE_DATABASE',
     'CLICKHOUSE_WRITER_ACTIVATION',
     'CLICKHOUSE_READER_ACTIVATION',
     'CLICKHOUSE_ACTIVATION',
@@ -144,6 +193,6 @@ test('rejects backend-specific inputs in the wrong mode', () => {
         CLICKHOUSE_MODE: 'managed',
         CLICKHOUSE_SELF_HOSTED_DATA_GB: '50',
       }),
-    /CLICKHOUSE_SELF_HOSTED_DATA_GB cannot be set when CLICKHOUSE_MODE=managed/,
+    /CLICKHOUSE_SELF_HOSTED_DATA_GB is not supported/,
   )
 })

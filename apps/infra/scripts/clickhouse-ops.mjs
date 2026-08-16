@@ -2,6 +2,7 @@
 // Copyright (c) 2026 BoxLite AI
 
 import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 
 const TABLES = [
@@ -18,11 +19,11 @@ export function buildSelfHostedReadinessCommand({ region, adminSecretArn, writer
   if (!region || !adminSecretArn || !writerSecretArn || !readerSecretArn || !expectedImage || !schemaBase64) throw new Error('all readiness inputs are required')
   const describeTables = TABLES.map(
     (table) =>
-      `docker exec -e CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" boxlite-clickhouse clickhouse-client --user boxlite_admin --query "DESCRIBE TABLE otel.${table}" >/dev/null`,
+      `CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user boxlite_admin --query "DESCRIBE TABLE otel.${table}" >/dev/null`,
   ).join('\n')
   const inserts = TABLES.map((table) => {
     const timestamp = table === 'otel_logs' || table === 'otel_traces' ? 'Timestamp' : 'TimeUnix'
-    return `docker exec -e CLICKHOUSE_PASSWORD="$WRITER_PASSWORD" boxlite-clickhouse clickhouse-client --user otel_writer --query "INSERT INTO otel.${table} (${timestamp}) VALUES (now64(9))"`
+    return `CLICKHOUSE_PASSWORD="$WRITER_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user otel_writer --query "INSERT INTO otel.${table} (${timestamp}) VALUES (now64(9))"`
   }).join('\n')
   const ttlColumns = { otel_logs: 'TimestampTime', otel_traces: 'Timestamp' }
   const reconcileTtl = TABLES.map((table) => {
@@ -43,19 +44,18 @@ test "$(docker inspect --format '{{.Config.Image}}' boxlite-clickhouse)" = '${ex
 ADMIN_PASSWORD=$(aws secretsmanager get-secret-value --region '${region}' --secret-id '${adminSecretArn}' --query SecretString --output text)
 WRITER_PASSWORD=$(aws secretsmanager get-secret-value --region '${region}' --secret-id '${writerSecretArn}' --query SecretString --output text)
 READER_PASSWORD=$(aws secretsmanager get-secret-value --region '${region}' --secret-id '${readerSecretArn}' --query SecretString --output text)
-docker exec -i -e CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" boxlite-clickhouse clickhouse-client --user boxlite_admin --multiquery < /opt/boxlite-clickhouse/schema.sql
-docker exec -i -e CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" boxlite-clickhouse clickhouse-client --user boxlite_admin --multiquery <<'SQL'
+CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -i -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user boxlite_admin --multiquery < /opt/boxlite-clickhouse/schema.sql
+CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -i -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user boxlite_admin --multiquery <<'SQL'
 GRANT SELECT, INSERT, SHOW COLUMNS ON otel.* TO otel_writer;
 GRANT SELECT, SHOW COLUMNS ON otel.* TO otel_reader;
 ${reconcileTtl}
 SQL
 ${describeTables}
-test "$(docker exec -e CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" boxlite-clickhouse clickhouse-client --user boxlite_admin --query "SELECT count() FROM system.tables WHERE database='otel' AND position(create_table_query, 'toIntervalHour(${retentionHours})') > 0")" = "7"
-docker exec -e CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" boxlite-clickhouse clickhouse-client --user boxlite_admin --query "SHOW GRANTS FOR otel_writer" | grep -q 'SHOW COLUMNS'
-docker exec -e CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" boxlite-clickhouse clickhouse-client --user boxlite_admin --query "SHOW GRANTS FOR otel_reader" | grep -q 'SELECT'
+test "$(CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user boxlite_admin --query "SELECT count() FROM system.tables WHERE database='otel' AND position(create_table_query, 'toIntervalHour(${retentionHours})') > 0")" = "7"
+CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user boxlite_admin --query "SHOW GRANTS FOR otel_writer" | grep -q 'SHOW COLUMNS'
+CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user boxlite_admin --query "SHOW GRANTS FOR otel_reader" | grep -q 'SELECT'
 ${inserts}
-docker exec -e CLICKHOUSE_PASSWORD="$READER_PASSWORD" boxlite-clickhouse clickhouse-client --user otel_reader --query "SELECT count() FROM otel.otel_logs" >/dev/null
-curl --silent --fail --user "boxlite_admin:$ADMIN_PASSWORD" http://127.0.0.1:8123/ping >/dev/null
+CLICKHOUSE_PASSWORD="$READER_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user otel_reader --query "SELECT count() FROM otel.otel_logs" >/dev/null
 unset ADMIN_PASSWORD WRITER_PASSWORD READER_PASSWORD`
 }
 
@@ -158,7 +158,43 @@ export function runSsmCommand({ region, instanceId, command, comment }) {
   throw new Error(`${comment}: SSM command ${commandId} did not finish within 15 minutes`)
 }
 
-function run() {
+export function buildWriterSmokeCommand({ region, collectorEndpoint, readerSecretArn }) {
+  if (!region || !collectorEndpoint || !readerSecretArn) {
+    throw new Error('region, collectorEndpoint, and readerSecretArn are required')
+  }
+  const marker = `boxlite-clickhouse-smoke-${randomUUID()}`
+  const payload = JSON.stringify({
+    resourceLogs: [{
+      resource: {
+        attributes: [{ key: 'service.name', value: { stringValue: 'boxlite-clickhouse-readiness' } }],
+      },
+      scopeLogs: [{
+        scope: { name: 'boxlite-infra' },
+        logRecords: [{
+          timeUnixNano: '__NOW_UNIX_NANO__',
+          severityText: 'INFO',
+          body: { stringValue: marker },
+        }],
+      }],
+    }],
+  })
+  const escapedMarker = marker.replaceAll("'", "''")
+  return `set -euo pipefail
+NOW_UNIX_NANO=$(date +%s%N)
+PAYLOAD=${shellLiteral(payload)}
+PAYLOAD="\${PAYLOAD/__NOW_UNIX_NANO__/\${NOW_UNIX_NANO}}"
+curl --silent --show-error --fail --header 'content-type: application/json' --data "$PAYLOAD" ${shellLiteral(`${collectorEndpoint.replace(/\/+$/, '')}/v1/logs`)} >/dev/null
+READER_PASSWORD=$(aws secretsmanager get-secret-value --region ${shellLiteral(region)} --secret-id ${shellLiteral(readerSecretArn)} --query SecretString --output text)
+for attempt in $(seq 1 60); do
+  COUNT=$(CLICKHOUSE_PASSWORD="$READER_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user otel_reader --query ${shellLiteral(`SELECT count() FROM otel.otel_logs WHERE Body = '${escapedMarker}'`)})
+  [ "$COUNT" -ge 1 ] && break
+  sleep 2
+done
+unset READER_PASSWORD
+[ "$COUNT" -ge 1 ] || { echo 'FATAL: synthetic OTLP log did not reach ClickHouse' >&2; exit 1; }`
+}
+
+function reconcile() {
   const { AWS_REGION, CLICKHOUSE_INSTANCE_ID, CLICKHOUSE_ADMIN_SECRET_ARN, CLICKHOUSE_WRITER_SECRET_ARN, CLICKHOUSE_READER_SECRET_ARN, CLICKHOUSE_EXPECTED_IMAGE, CLICKHOUSE_SCHEMA_BASE64, CLICKHOUSE_RETENTION_HOURS } = process.env
   if (!AWS_REGION || !CLICKHOUSE_INSTANCE_ID || !CLICKHOUSE_ADMIN_SECRET_ARN || !CLICKHOUSE_WRITER_SECRET_ARN || !CLICKHOUSE_READER_SECRET_ARN || !CLICKHOUSE_EXPECTED_IMAGE || !CLICKHOUSE_SCHEMA_BASE64 || !CLICKHOUSE_RETENTION_HOURS) {
     throw new Error(
@@ -180,7 +216,29 @@ function run() {
     command,
     comment: 'BoxLite ClickHouse readiness',
   })
-  console.log(`clickhouse-readiness: ${CLICKHOUSE_INSTANCE_ID} is ready`)
+  console.log(`clickhouse-ops: ${CLICKHOUSE_INSTANCE_ID} is reconciled`)
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) run()
+function smoke() {
+  const { AWS_REGION, CLICKHOUSE_INSTANCE_ID, CLICKHOUSE_READER_SECRET_ARN, OTEL_COLLECTOR_ENDPOINT } =
+    process.env
+  const command = buildWriterSmokeCommand({
+    region: AWS_REGION,
+    collectorEndpoint: OTEL_COLLECTOR_ENDPOINT,
+    readerSecretArn: CLICKHOUSE_READER_SECRET_ARN,
+  })
+  runSsmCommand({
+    region: AWS_REGION,
+    instanceId: CLICKHOUSE_INSTANCE_ID,
+    command,
+    comment: 'BoxLite ClickHouse writer readiness',
+  })
+  console.log('clickhouse-ops: synthetic OTLP log arrived')
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const operation = process.argv[2]
+  if (operation === 'reconcile') reconcile()
+  else if (operation === 'smoke') smoke()
+  else throw new Error('clickhouse-ops requires reconcile or smoke')
+}

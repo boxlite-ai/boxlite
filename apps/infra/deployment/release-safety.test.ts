@@ -738,10 +738,11 @@ test('every unusable stage configuration store stops the deploy rather than warn
   // boundary guessed at the next function would silently count another one's branches.
   const body = source.slice(start, source.indexOf('\n}\n', start))
 
-  // Unreadable, unbootstrapped, torn, half-written, and applying-nothing. Five refusals, each an error
+  // Unreadable, unbootstrapped, torn, half-written, applying-nothing, and removed configuration.
+  // Six refusals, each an error
   // paired with an exit: downgrading any one to a warning drops both counts and fails here.
-  assert.equal(body.match(/process\.exit\(1\)/g)?.length, 5, 'a store the wrapper cannot use must exit')
-  assert.equal(body.match(/console\.error\(/g)?.length, 5, 'every refusal must say which one it is')
+  assert.equal(body.match(/process\.exit\(1\)/g)?.length, 6, 'a store the wrapper cannot use must exit')
+  assert.equal(body.match(/console\.error\(/g)?.length, 6, 'every refusal must say which one it is')
   // Exactly one, and it is not a refusal: an unlisted key is a stale or hand-written entry that will
   // never take effect, worth surfacing but not worth failing a deploy over.
   assert.equal(body.match(/console\.warn\(/g)?.length, 1, 'only the unlisted-keys notice may warn')

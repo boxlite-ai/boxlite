@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { STORABLE_STAGE_CONFIG_KEYS, isStorableStageConfigKey } from './storable-keys.js'
 import { isLocalOnlyDeploymentKey } from './validate-environment.js'
 import { liveText } from '../shared/live-source.js'
-import { CLICKHOUSE_STAGE_CONFIG_KEYS } from '../scripts/clickhouse-config.mjs'
+import { CLICKHOUSE_STAGE_CONFIG_KEYS } from './clickhouse.js'
 
 const INFRA_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // Where a deploy resolves configuration. Test files are excluded: they set synthetic values, they do

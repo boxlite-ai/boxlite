@@ -1,48 +1,56 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-import { gzipSync } from 'node:zlib'
-
-import { readClickHouseSchema } from './clickhouse-schema.mjs'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 export const CLICKHOUSE_IMAGE =
   'clickhouse/clickhouse-server@sha256:c67cd26ea87301f3115e5fa7822905bcbb89cbd81e52bdd1ab7a938d1d5b77d8'
 export const EC2_USER_DATA_MAX_BYTES = 16 * 1024
+export const CLICKHOUSE_RETENTION_HOURS = 72
 
-const schemaTemplate = readClickHouseSchema()
-
-export function renderClickHouseSchema(retentionHours) {
-  if (!Number.isSafeInteger(retentionHours) || retentionHours < 1) {
-    throw new Error('retentionHours must be a positive whole number')
-  }
-  return schemaTemplate.replaceAll('__RETENTION_HOURS__', String(retentionHours))
+export interface ClickHouseUserDataInput {
+  region: string
+  volumeId: string
+  adminSecretArn: string
+  writerSecretArn: string
+  readerSecretArn: string
+  image?: string
 }
 
-function shellLiteral(value) {
+const schemaSource = [
+  new URL('../clickhouse/otel-schema-v0.144.0.sql', import.meta.url),
+  resolve(process.cwd(), 'clickhouse/otel-schema-v0.144.0.sql'),
+  resolve(process.cwd(), 'apps/infra/clickhouse/otel-schema-v0.144.0.sql'),
+].find((candidate) => existsSync(candidate))
+if (!schemaSource) throw new Error('clickhouse/otel-schema-v0.144.0.sql was not found')
+const schemaTemplate = readFileSync(schemaSource, 'utf8')
+
+export function renderClickHouseSchema() {
+  return schemaTemplate.replaceAll('__RETENTION_HOURS__', String(CLICKHOUSE_RETENTION_HOURS))
+}
+
+function shellLiteral(value: string) {
   return `'${String(value).replaceAll("'", `'"'"'`)}'`
 }
 
-function requireBootstrapInput(input, name) {
+function requireBootstrapInput(
+  input: ClickHouseUserDataInput,
+  name: 'region' | 'volumeId' | 'adminSecretArn' | 'writerSecretArn' | 'readerSecretArn',
+) {
   const value = input[name]
   if (typeof value !== 'string' || value === '') throw new Error(`${name} is required for ClickHouse bootstrap`)
   return value
 }
 
 /** Build secret-free EC2 user data. Secret values are fetched by the instance role at runtime. */
-export function buildClickHouseUserData(input) {
+export function buildClickHouseUserData(input: ClickHouseUserDataInput) {
   const region = requireBootstrapInput(input, 'region')
   const volumeId = requireBootstrapInput(input, 'volumeId')
   const adminSecretArn = requireBootstrapInput(input, 'adminSecretArn')
   const writerSecretArn = requireBootstrapInput(input, 'writerSecretArn')
   const readerSecretArn = requireBootstrapInput(input, 'readerSecretArn')
   const image = input.image || CLICKHOUSE_IMAGE
-  const retentionHours = Number(input.retentionHours)
-  if (!Number.isSafeInteger(retentionHours) || retentionHours < 1) {
-    throw new Error('retentionHours must be a positive whole number')
-  }
-
-  const schema = renderClickHouseSchema(retentionHours)
-  const schemaBase64 = Buffer.from(schema).toString('base64')
   const nvmeVolumeId = volumeId.replaceAll('-', '')
 
   return `#!/bin/bash
@@ -90,8 +98,6 @@ fi
 mountpoint -q /var/lib/boxlite-clickhouse || mount /var/lib/boxlite-clickhouse
 install -d -m 0750 /var/lib/boxlite-clickhouse/data /opt/boxlite-clickhouse
 
-printf '%s' ${shellLiteral(schemaBase64)} | base64 -d > /opt/boxlite-clickhouse/schema.sql
-
 cat > /usr/local/bin/boxlite-clickhouse-credentials <<'SCRIPT'
 #!/bin/bash
 set -euo pipefail
@@ -119,11 +125,13 @@ ADMIN_PASSWORD=$(secret "$ADMIN_SECRET_ARN")
 WRITER_HASH=$(printf %s "$(secret "$WRITER_SECRET_ARN")" | sha256sum | awk '{print $1}')
 READER_HASH=$(printf %s "$(secret "$READER_SECRET_ARN")" | sha256sum | awk '{print $1}')
 for attempt in $(seq 1 120); do
-  curl --silent --fail --user "boxlite_admin:$ADMIN_PASSWORD" http://127.0.0.1:8123/ping >/dev/null && break
+  CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD boxlite-clickhouse \
+    clickhouse-client --user boxlite_admin --query 'SELECT 1' >/dev/null 2>&1 && break
   sleep 5
 done
-curl --silent --fail --user "boxlite_admin:$ADMIN_PASSWORD" http://127.0.0.1:8123/ping >/dev/null
-docker exec -i -e CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" boxlite-clickhouse \
+CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD boxlite-clickhouse \
+  clickhouse-client --user boxlite_admin --query 'SELECT 1' >/dev/null
+CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -i -e CLICKHOUSE_PASSWORD boxlite-clickhouse \
   clickhouse-client --user boxlite_admin --multiquery <<SQL
 CREATE USER IF NOT EXISTS otel_writer IDENTIFIED WITH sha256_hash BY '$WRITER_HASH';
 ALTER USER otel_writer IDENTIFIED WITH sha256_hash BY '$WRITER_HASH';
@@ -168,31 +176,16 @@ ENV
 chmod 0600 /etc/boxlite-clickhouse.conf
 systemctl daemon-reload
 systemctl enable --now boxlite-clickhouse
-
-/usr/local/bin/boxlite-clickhouse-sql-users
-
-ADMIN_PASSWORD=$(aws secretsmanager get-secret-value --region "\${AWS_REGION}" --secret-id "\${ADMIN_SECRET_ARN}" --query SecretString --output text)
-docker exec -i -e CLICKHOUSE_PASSWORD="\${ADMIN_PASSWORD}" boxlite-clickhouse \
-  clickhouse-client --user boxlite_admin --multiquery < /opt/boxlite-clickhouse/schema.sql
-docker exec -i -e CLICKHOUSE_PASSWORD="\${ADMIN_PASSWORD}" boxlite-clickhouse \
-  clickhouse-client --user boxlite_admin --multiquery <<'SQL'
-GRANT SELECT, INSERT, SHOW COLUMNS ON otel.* TO otel_writer;
-GRANT SELECT, SHOW COLUMNS ON otel.* TO otel_reader;
-SQL
-unset ADMIN_PASSWORD
 `
 }
 
 /** Encode the bootstrap for EC2 while keeping the decoded payload inside AWS's user-data limit. */
-export function encodeClickHouseUserData(input) {
-  const compressed = gzipSync(buildClickHouseUserData(input), { level: 9 })
-  // RFC 1952 byte 9 is informational, but zlib writes the host OS there. Canonicalize it so
-  // macOS and Linux deployments produce the same Pulumi input and readiness trigger.
-  compressed[9] = 0xff
-  if (compressed.byteLength > EC2_USER_DATA_MAX_BYTES) {
+export function encodeClickHouseUserData(input: ClickHouseUserDataInput) {
+  const userData = Buffer.from(buildClickHouseUserData(input))
+  if (userData.byteLength > EC2_USER_DATA_MAX_BYTES) {
     throw new Error(
-      `compressed ClickHouse user data is ${compressed.byteLength} bytes; EC2 allows ${EC2_USER_DATA_MAX_BYTES}`,
+      `ClickHouse user data is ${userData.byteLength} bytes; EC2 allows ${EC2_USER_DATA_MAX_BYTES}`,
     )
   }
-  return compressed.toString('base64')
+  return userData.toString('base64')
 }

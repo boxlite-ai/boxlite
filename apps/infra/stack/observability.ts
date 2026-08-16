@@ -5,14 +5,16 @@
 
 import { IMAGES, PORTS, envOr, httpHealth } from './settings.js'
 import type { FoundationResources } from './foundation.js'
-import type { ClickHouseResources } from './clickhouse.js'
-import type { ClickHouseConfig } from '../scripts/clickhouse-config.mjs'
+import {
+  CLICKHOUSE_DATABASE,
+  CLICKHOUSE_WRITER_USERNAME,
+  type ClickHouseResources,
+} from './clickhouse.js'
 
 export interface ObservabilityInputs {
   cluster: FoundationResources['cluster']
   stackDomain: string
   adminApiKey: random.RandomPassword
-  clickHouseConfig: ClickHouseConfig
   clickHouseResources: ClickHouseResources
   collectorExporters: string
   collectorTraceExporters: string
@@ -51,7 +53,7 @@ export function buildObservability(input: ObservabilityInputs) {
 
   const otelCollector = new sst.aws.Service('OtelCollector', {
     cluster: input.cluster,
-    wait: input.clickHouseConfig.active,
+    wait: input.clickHouseResources.active,
     image: { context: '../..', dockerfile: 'apps/otel-collector/Dockerfile', cache: false },
     command: [
       '--config',
@@ -75,18 +77,20 @@ export function buildObservability(input: ObservabilityInputs) {
       },
     },
     ssm: {
-      ...(input.clickHouseConfig.active && input.clickHouseResources.writerSecretArn
+      ...(input.clickHouseResources.mode !== 'disabled'
         ? { CLICKHOUSE_PASSWORD: input.clickHouseResources.writerSecretArn }
         : {}),
     },
     environment: {
       CLICKHOUSE_ENDPOINT:
-        input.clickHouseConfig.active && input.clickHouseResources.url
+        input.clickHouseResources.mode !== 'disabled'
           ? input.clickHouseResources.url
           : 'https://clickhouse-disabled.invalid:443',
-      CLICKHOUSE_DATABASE: input.clickHouseConfig.database || 'otel',
-      CLICKHOUSE_USERNAME:
-        input.clickHouseConfig.writerUsername || 'otel_writer',
+      CLICKHOUSE_DATABASE,
+      CLICKHOUSE_USERNAME: CLICKHOUSE_WRITER_USERNAME,
+      ...(input.clickHouseResources.mode !== 'disabled'
+        ? { CLICKHOUSE_CREDENTIAL_VERSION: input.clickHouseResources.writerSecretVersionId }
+        : {}),
       CLICKHOUSE_CREATE_SCHEMA: 'false',
       CLICKHOUSE_COMPRESS: 'none',
       BOXLITE_API_URL: envOr('BOXLITE_API_URL', `https://api.${input.stackDomain}/api`),
@@ -101,7 +105,7 @@ export function buildObservability(input: ObservabilityInputs) {
     },
   }, {
     dependsOn: [
-      ...(input.clickHouseResources.ready ? [input.clickHouseResources.ready] : []),
+      ...(input.clickHouseResources.mode === 'self-hosted' ? [input.clickHouseResources.ready] : []),
     ],
   })
   const otelCollectorOtlpHttpUrl = input

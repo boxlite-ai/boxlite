@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-import { CLICKHOUSE_STAGE_CONFIG_KEYS } from '../scripts/clickhouse-config.mjs'
+import { CLICKHOUSE_STAGE_CONFIG_KEYS } from './clickhouse.js'
 
 /*
  * The keys a stage's secret store may put into a deploy's environment.

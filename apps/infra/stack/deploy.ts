@@ -20,7 +20,6 @@ export async function deployStack() {
     // eslint-disable-next-line @nx/enforce-module-boundaries -- Stack synthesis shares the policy host's CommonJS Runner model.
     const { resolveRunnerInventory } = await import('../runner/model/inventory.js')
     const { requireIamPermissionsBoundaryStage } = await import('../deployment/stage.js')
-    const { resolveClickHouseConfig } = await import('../scripts/clickhouse-config.mjs')
     const REGION = resolveAwsRegion()
     const { accountId } = await aws.getCallerIdentity()
     const workspaceVersion = readWorkspaceVersion()
@@ -29,7 +28,6 @@ export async function deployStack() {
     const runnerInventory = resolveRunnerInventory(process.env)
     const oidcIssuer = requireOidcIssuer()
     const publicOidcIssuer = optionalPublicOidcIssuer()
-    const clickHouseConfig = resolveClickHouseConfig(process.env)
 
     // Every role created by this stack must stay inside the boundary provisioned
     // with the GitHub deployment role. The raw-resource transform also covers IAM
@@ -43,13 +41,6 @@ export async function deployStack() {
     // Strip trailing slash from service.url so path concat produces clean URLs
     // (api.url = "https://api.dev.boxlite.ai/" → apiBase = "https://api.dev.boxlite.ai").
     const stripTrailingSlash = (url: $util.Output<string>) => url.apply((u) => (u.endsWith('/') ? u.slice(0, -1) : u))
-
-    const collectorExporters = clickHouseConfig.active ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
-    // Traces additionally fan out to Jaeger; metrics/logs stay off it (Jaeger
-    // ingests traces only).
-    const collectorTraceExporters = clickHouseConfig.active
-      ? '[boxlite_exporter,clickhouse,otlphttp/jaeger]'
-      : '[boxlite_exporter,otlphttp/jaeger]'
 
     // HTTPS everywhere: the Router CloudFront Function deletes customOriginConfig
     // for http origins and CF then falls back to match-viewer (→ tries HTTPS on a
@@ -74,31 +65,6 @@ export async function deployStack() {
     const defaultRunnerConfig = runnerInventory[0]
     const defaultRunnerName = defaultRunnerConfig.controlPlaneRunnerName
     const pgAdminPassword = randomKey('PgAdminPassword', 24)
-    const secret = (resourceName: string, name: string, value: $util.Input<string>) => {
-      const resource = new aws.secretsmanager.Secret(resourceName, {
-        namePrefix: `${$app.name}-${$app.stage}-${name}-`,
-        recoveryWindowInDays: 7,
-      })
-      const version = new aws.secretsmanager.SecretVersion(`${resourceName}Value`, {
-        secretId: resource.id,
-        secretString: $util.secret(value),
-      })
-      return { resource, version }
-    }
-
-    const clickHouseAdminSecret =
-      clickHouseConfig.mode === 'self-hosted'
-        ? secret('ClickHouseAdminSecret', 'clickhouse-admin', randomKey('ClickHouseAdminPassword').result)
-        : undefined
-    const clickHouseWriterSecret =
-      clickHouseConfig.mode === 'self-hosted'
-        ? secret('ClickHouseWriterSecret', 'clickhouse-writer', randomKey('ClickHouseWriterPassword').result)
-        : undefined
-    const clickHouseReaderSecret =
-      clickHouseConfig.mode === 'self-hosted'
-        ? secret('ClickHouseReaderSecret', 'clickhouse-reader', randomKey('ClickHouseReaderPassword').result)
-        : undefined
-
     // App secrets — set via `npm run sst -- secret set <NAME> --stage <stage>`
     // (or bulk `npm run sst -- secret load <dotenv>`); stored encrypted in SST
     // state and shared per-stage by anyone with deploy access. OIDC_CLIENT_ID is
@@ -161,11 +127,13 @@ export async function deployStack() {
       foundation,
       region: REGION,
       accountId,
-      config: clickHouseConfig,
-      adminSecret: clickHouseAdminSecret,
-      writerSecret: clickHouseWriterSecret,
-      readerSecret: clickHouseReaderSecret,
     })
+    const collectorExporters = clickHouseResources.active ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
+    // Traces additionally fan out to Jaeger; metrics/logs stay off it (Jaeger
+    // ingests traces only).
+    const collectorTraceExporters = clickHouseResources.active
+      ? '[boxlite_exporter,clickhouse,otlphttp/jaeger]'
+      : '[boxlite_exporter,otlphttp/jaeger]'
 
     // ─── 3. IAM ──────────────────────────────────────────────────────────────
     // Box-storage credential vending. The Api's ECS task role assumes the
@@ -222,7 +190,6 @@ export async function deployStack() {
       cluster,
       stackDomain,
       adminApiKey,
-      clickHouseConfig,
       clickHouseResources,
       collectorExporters,
       collectorTraceExporters,
@@ -230,7 +197,6 @@ export async function deployStack() {
     })
     const clickHouseWriterReadyDependency = buildClickHouseWriterReady({
       region: REGION,
-      config: clickHouseConfig,
       resources: clickHouseResources,
       otelCollector,
       otelCollectorOtlpHttpUrl,
@@ -282,7 +248,6 @@ export async function deployStack() {
       oidcIssuer,
       publicOidcIssuer,
       otelCollectorOtlpHttpUrl,
-      clickHouseConfig,
       clickHouseResources,
       clickHouseReadyDependency: clickHouseWriterReadyDependency,
     })

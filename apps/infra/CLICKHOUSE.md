@@ -9,6 +9,13 @@ ClickHouse stores direct OTLP logs, traces, and metrics from the existing collec
 - `managed`: an existing ClickHouse service and two Secrets Manager password secrets.
 - `disabled`: no ClickHouse resources or exporter.
 
+Self-hosted sizing and schema are deliberately fixed: `m6a.large`, 50 GiB gp3, 72-hour retention,
+database `otel`, and the `otel_writer` / `otel_reader` principals.
+
+When upgrading from an earlier configuration, remove the old instance, disk, retention, database,
+and username keys from `apps/infra/.env`, then rerun `npm run bootstrap -- --stage <stage>`. The
+deploy fails closed while the SST stage store still names one of those removed keys.
+
 The self-hosted rollout is automatic: database readiness, collector rollout, a real OTLP log smoke
 test, then the API rollout. Managed mode waits for the collector before the API but needs a manual
 synthetic-event check because the deployment runner may not be allowed to reach the managed endpoint.
@@ -22,12 +29,15 @@ CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN=arn:aws:secretsmanager:...
 CLICKHOUSE_READER_PASSWORD_SECRET_ARN=arn:aws:secretsmanager:...
 ```
 
-The URL must not contain credentials. Both secret ARNs must be in the deployment's AWS region and
-account, with names beginning `boxlite-<stage>-`, matching the runtime permissions boundary.
+The URL must be an origin only, with no path, query, fragment, or credentials; this prevents the
+collector and API clients from interpreting one connection string differently. Both secret ARNs
+must be distinct, in the deployment's AWS region and account, and have names beginning
+`boxlite-<stage>-`, matching the runtime permissions boundary.
 
 The managed database must already contain the schema in
-`clickhouse/otel-schema-v0.144.0.sql`. Managed mode relies on the collector and API service health;
-verify a synthetic OTLP event after switching.
+`clickhouse/otel-schema-v0.144.0.sql` with the same database and principals. Managed mode relies on
+the collector and API service health; after switching, verify both OTLP ingestion as `otel_writer`
+and a query as `otel_reader`.
 
 ## Private UI
 

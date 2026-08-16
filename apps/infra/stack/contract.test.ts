@@ -177,9 +177,11 @@ test('waits for the active ClickHouse collector rollout before probing the write
   const collector = configSection("const otelCollector = new sst.aws.Service('OtelCollector'", 'const otelCollectorOtlpHttpUrl')
   const writerReadiness = configSection('export function buildClickHouseWriterReady')
 
-  assert.match(collector, /wait: input\.clickHouseConfig\.active,/)
+  assert.match(collector, /wait: input\.clickHouseResources\.active,/)
   assert.match(writerReadiness, /triggers:\s*\[[\s\S]*otelCollector\.nodes\.taskDefinition\.arn/)
   assert.match(writerReadiness, /dependsOn:\s*\[otelCollector\]/)
+  assert.match(writerReadiness, /CLICKHOUSE_READER_SECRET_ARN: resources\.readerSecretArn/)
+  assert.doesNotMatch(writerReadiness, /return resources\.ready/)
 })
 
 test('injects only ClickHouse passwords through ECS secrets', () => {
@@ -190,6 +192,35 @@ test('injects only ClickHouse passwords through ECS secrets', () => {
   assert.match(api, /CLICKHOUSE_PASSWORD: clickHouseResources\.readerSecretArn/)
   assert.doesNotMatch(collector, /CLICKHOUSE_PASSWORD:\s*envOr/)
   assert.doesNotMatch(api, /CLICKHOUSE_PASSWORD:\s*envOr/)
+})
+
+test('rolls each ECS client when its ClickHouse password version changes', () => {
+  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
+  const collector = configSection("const otelCollector = new sst.aws.Service('OtelCollector'", 'const otelCollectorOtlpHttpUrl')
+  const api = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+  const writerReadiness = configSection('export function buildClickHouseWriterReady')
+
+  assert.match(liveConfig, /getSecretVersionsOutput\(\{ secretId, region \}\)/)
+  assert.match(liveConfig, /versionStages\.includes\('AWSCURRENT'\)/)
+  assert.match(clickHouse, /writerSecretVersionId:\s*currentSecretVersionId\(/)
+  assert.match(clickHouse, /readerSecretVersionId:\s*currentSecretVersionId\(/)
+  assert.match(clickHouse, /writerSecretVersionId:\s*writerSecret\.version\.versionId/)
+  assert.match(clickHouse, /readerSecretVersionId:\s*readerSecret\.version\.versionId/)
+  assert.match(collector, /CLICKHOUSE_CREDENTIAL_VERSION:\s*input\.clickHouseResources\.writerSecretVersionId/)
+  assert.match(api, /CLICKHOUSE_CREDENTIAL_VERSION:\s*clickHouseResources\.readerSecretVersionId/)
+  assert.match(writerReadiness, /triggers:\s*\[[^\]]*resources\.readerSecretVersionId/)
+})
+
+test('the ClickHouse facade owns its self-hosted secrets', () => {
+  const deploy = liveText('scriptEmittingShell', readFileSync(new URL('./deploy.ts', import.meta.url), 'utf8'))
+  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
+
+  assert.doesNotMatch(deploy, /ClickHouse(?:Admin|Writer|Reader)Secret/)
+  assert.doesNotMatch(deploy, /resolveClickHouseConfig/)
+  assert.match(clickHouse, /resolveClickHouseConfig\(process\.env\)/)
+  assert.match(clickHouse, /ClickHouseAdminSecret/)
+  assert.match(clickHouse, /ClickHouseWriterSecret/)
+  assert.match(clickHouse, /ClickHouseReaderSecret/)
 })
 
 test('validates managed secret ARNs against the runtime boundary before wiring ECS', () => {
@@ -204,13 +235,13 @@ test('orders the API after ClickHouse writer readiness', () => {
   const deploy = configSection('export async function deployStack()')
   const api = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
 
-  assert.match(deploy, /collectorExporters = clickHouseConfig\.active/)
-  assert.match(liveConfig, /if \(config\.mode !== 'self-hosted'\) return otelCollector/)
+  assert.match(deploy, /collectorExporters = clickHouseResources\.active/)
+  assert.match(liveConfig, /if \(resources\.mode === 'managed'\) return otelCollector/)
   assert.match(api, /dependsOn: clickHouseReadyDependency \? \[clickHouseReadyDependency\] : \[\]/)
   assert.doesNotMatch(liveConfig, /writerActivation|readerActivation|ClickHouseApiReaderReady/)
 })
 
-test('compresses ClickHouse user data before EC2 launch', () => {
+test('encodes ClickHouse user data before EC2 launch', () => {
   const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
   const instance = extractSection(clickHouse, 'const userData =', 'const instance =')
 

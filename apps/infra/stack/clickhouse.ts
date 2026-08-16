@@ -5,56 +5,118 @@
 
 import type { FoundationResources } from './foundation.js'
 import { RUNNER } from './settings.js'
-import { requireClickHouseSecretArn, type ClickHouseConfig } from '../scripts/clickhouse-config.mjs'
+import { requireClickHouseSecretArn, resolveClickHouseConfig } from '../deployment/clickhouse.js'
 
-export interface ManagedSecret {
+const CLICKHOUSE_INSTANCE_TYPE = 'm6a.large'
+const CLICKHOUSE_DATA_GIB = 50
+export const CLICKHOUSE_DATABASE = 'otel'
+export const CLICKHOUSE_WRITER_USERNAME = 'otel_writer'
+export const CLICKHOUSE_READER_USERNAME = 'otel_reader'
+
+interface ManagedSecret {
   resource: aws.secretsmanager.Secret
   version: aws.secretsmanager.SecretVersion
 }
 
-export interface ClickHouseResources {
-  url?: $util.Input<string>
-  writerSecretArn?: $util.Input<string>
-  readerSecretArn?: $util.Input<string>
-  instanceId?: $util.Input<string>
-  adminSecretArn?: $util.Input<string>
-  ready?: command.local.Command
+interface DisabledClickHouseResources {
+  mode: 'disabled'
+  active: false
+}
+
+interface ManagedClickHouseResources {
+  mode: 'managed'
+  active: true
+  url: $util.Input<string>
+  writerSecretArn: $util.Input<string>
+  writerSecretVersionId: $util.Input<string>
+  readerSecretArn: $util.Input<string>
+  readerSecretVersionId: $util.Input<string>
+}
+
+interface SelfHostedClickHouseResources {
+  mode: 'self-hosted'
+  active: true
+  url: $util.Input<string>
+  writerSecretArn: $util.Input<string>
+  writerSecretVersionId: $util.Input<string>
+  readerSecretArn: $util.Input<string>
+  readerSecretVersionId: $util.Input<string>
+  instanceId: $util.Input<string>
+  adminSecretArn: $util.Input<string>
+  ready: command.local.Command
+}
+
+export type ClickHouseResources =
+  | DisabledClickHouseResources
+  | ManagedClickHouseResources
+  | SelfHostedClickHouseResources
+
+function createClickHouseSecret(resourceName: string, name: string) {
+  const password = new random.RandomPassword(resourceName.replace(/Secret$/, 'Password'), { length: 32, special: false })
+  const resource = new aws.secretsmanager.Secret(resourceName, {
+    namePrefix: `${$app.name}-${$app.stage}-${name}-`,
+    recoveryWindowInDays: 7,
+  })
+  const version = new aws.secretsmanager.SecretVersion(`${resourceName}Value`, {
+    secretId: resource.id,
+    secretString: $util.secret(password.result),
+  })
+  return { resource, version }
+}
+
+function currentSecretVersionId(name: string, secretId: string, region: string) {
+  return aws.secretsmanager.getSecretVersionsOutput({ secretId, region }).versions.apply((versions) => {
+    const current = versions.filter((version) => version.versionStages.includes('AWSCURRENT'))
+    if (current.length !== 1) throw new Error(`${name} must have exactly one AWSCURRENT version`)
+    return current[0].versionId
+  })
 }
 
 export async function buildClickHouseStorage(input: {
   foundation: FoundationResources
   region: string
   accountId: string
-  config: ClickHouseConfig
-  adminSecret?: ManagedSecret
-  writerSecret?: ManagedSecret
-  readerSecret?: ManagedSecret
 }): Promise<ClickHouseResources> {
-  const { foundation: { vpc }, region, accountId, config, adminSecret, writerSecret, readerSecret } = input
+  const { foundation: { vpc }, region, accountId } = input
+  const config = resolveClickHouseConfig(process.env)
 
-  if (config.mode === 'disabled') return {}
+  if (config.mode === 'disabled') return { mode: config.mode, active: false }
   if (config.mode === 'managed') {
     const managedSecretScope = { region, accountId, appName: $app.name, stage: $app.stage }
+    const writerSecretArn = requireClickHouseSecretArn(
+      'CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN',
+      config.writerSecretArn,
+      managedSecretScope,
+    )
+    const readerSecretArn = requireClickHouseSecretArn(
+      'CLICKHOUSE_READER_PASSWORD_SECRET_ARN',
+      config.readerSecretArn,
+      managedSecretScope,
+    )
     return {
+      mode: config.mode,
+      active: true,
       url: config.url,
-      writerSecretArn: requireClickHouseSecretArn(
+      writerSecretArn,
+      writerSecretVersionId: currentSecretVersionId(
         'CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN',
-        config.writerSecretArn,
-        managedSecretScope,
+        writerSecretArn,
+        region,
       ),
-      readerSecretArn: requireClickHouseSecretArn(
+      readerSecretArn,
+      readerSecretVersionId: currentSecretVersionId(
         'CLICKHOUSE_READER_PASSWORD_SECRET_ARN',
-        config.readerSecretArn,
-        managedSecretScope,
+        readerSecretArn,
+        region,
       ),
     }
   }
 
-  if (!adminSecret || !writerSecret || !readerSecret) {
-    throw new Error('self-hosted ClickHouse secrets were not created')
-  }
-  const { encodeClickHouseUserData, CLICKHOUSE_IMAGE, renderClickHouseSchema } = await import(
-    '../scripts/clickhouse-bootstrap.mjs'
+  const adminSecret: ManagedSecret = createClickHouseSecret('ClickHouseAdminSecret', 'clickhouse-admin')
+  const writerSecret: ManagedSecret = createClickHouseSecret('ClickHouseWriterSecret', 'clickhouse-writer')
+  const readerSecret: ManagedSecret = createClickHouseSecret('ClickHouseReaderSecret', 'clickhouse-reader')
+  const { encodeClickHouseUserData, CLICKHOUSE_IMAGE, CLICKHOUSE_RETENTION_HOURS, renderClickHouseSchema } = await import(
+    '../scripts/clickhouse-host.js'
   )
 
   const role = new aws.iam.Role('ClickHouseRole', {
@@ -101,7 +163,7 @@ export async function buildClickHouseStorage(input: {
     'ClickHouseData',
     {
       availabilityZone: subnet.availabilityZone,
-      size: config.dataGiB,
+      size: CLICKHOUSE_DATA_GIB,
       type: 'gp3',
       encrypted: true,
       tags: {
@@ -130,12 +192,11 @@ export async function buildClickHouseStorage(input: {
       adminSecretArn,
       writerSecretArn,
       readerSecretArn,
-      retentionHours: config.retentionHours,
     }),
   )
   const instance = new aws.ec2.Instance('ClickHouse', {
     ami: ami.id,
-    instanceType: config.instanceType,
+    instanceType: CLICKHOUSE_INSTANCE_TYPE,
     subnetId: vpc.privateSubnets[0],
     associatePublicIpAddress: false,
     vpcSecurityGroupIds: [securityGroup.id],
@@ -158,8 +219,8 @@ export async function buildClickHouseStorage(input: {
   }, { deleteBeforeReplace: true })
   const ready = new command.local.Command('ClickHouseDatabaseReady', {
     dir: $cli.paths.root,
-    create: 'node scripts/clickhouse-readiness.mjs',
-    update: 'node scripts/clickhouse-readiness.mjs',
+    create: 'node scripts/clickhouse-ops.mjs reconcile',
+    update: 'node scripts/clickhouse-ops.mjs reconcile',
     environment: {
       AWS_REGION: region,
       CLICKHOUSE_INSTANCE_ID: instance.id,
@@ -167,15 +228,19 @@ export async function buildClickHouseStorage(input: {
       CLICKHOUSE_WRITER_SECRET_ARN: writerSecret.resource.arn,
       CLICKHOUSE_READER_SECRET_ARN: readerSecret.resource.arn,
       CLICKHOUSE_EXPECTED_IMAGE: CLICKHOUSE_IMAGE,
-      CLICKHOUSE_SCHEMA_BASE64: Buffer.from(renderClickHouseSchema(config.retentionHours)).toString('base64'),
-      CLICKHOUSE_RETENTION_HOURS: String(config.retentionHours),
+      CLICKHOUSE_SCHEMA_BASE64: Buffer.from(renderClickHouseSchema()).toString('base64'),
+      CLICKHOUSE_RETENTION_HOURS: String(CLICKHOUSE_RETENTION_HOURS),
     },
     triggers: [instance.id, volume.id, userData, adminSecret.version.id, writerSecret.version.id, readerSecret.version.id],
   }, { dependsOn: [attachment] })
   return {
+    mode: config.mode,
+    active: true,
     url: $interpolate`http://${instance.privateIp}:8123`,
     writerSecretArn: writerSecret.resource.arn,
+    writerSecretVersionId: writerSecret.version.versionId,
     readerSecretArn: readerSecret.resource.arn,
+    readerSecretVersionId: readerSecret.version.versionId,
     instanceId: instance.id,
     adminSecretArn: adminSecret.resource.arn,
     ready,
@@ -184,25 +249,28 @@ export async function buildClickHouseStorage(input: {
 
 export function buildClickHouseWriterReady(input: {
   region: string
-  config: ClickHouseConfig
   resources: ClickHouseResources
   otelCollector: any
   otelCollectorOtlpHttpUrl: $util.Output<string>
 }): any {
-  const { region, config, resources, otelCollector, otelCollectorOtlpHttpUrl } = input
-  if (!config.active) return undefined
-  if (config.mode !== 'self-hosted') return otelCollector
-  if (!resources.instanceId || !resources.adminSecretArn) return resources.ready
+  const { region, resources, otelCollector, otelCollectorOtlpHttpUrl } = input
+  if (resources.mode === 'disabled') return undefined
+  if (resources.mode === 'managed') return otelCollector
   return new command.local.Command('ClickHouseWriterReady', {
     dir: $cli.paths.root,
-    create: 'node scripts/clickhouse-writer-ready.mjs',
-    update: 'node scripts/clickhouse-writer-ready.mjs',
+    create: 'node scripts/clickhouse-ops.mjs smoke',
+    update: 'node scripts/clickhouse-ops.mjs smoke',
     environment: {
       AWS_REGION: region,
       CLICKHOUSE_INSTANCE_ID: resources.instanceId,
-      CLICKHOUSE_ADMIN_SECRET_ARN: resources.adminSecretArn,
+      CLICKHOUSE_READER_SECRET_ARN: resources.readerSecretArn,
       OTEL_COLLECTOR_ENDPOINT: otelCollectorOtlpHttpUrl,
     },
-    triggers: [resources.instanceId, otelCollectorOtlpHttpUrl, otelCollector.nodes.taskDefinition.arn],
+    triggers: [
+      resources.instanceId,
+      resources.readerSecretVersionId,
+      otelCollectorOtlpHttpUrl,
+      otelCollector.nodes.taskDefinition.arn,
+    ],
   }, { dependsOn: [otelCollector] })
 }

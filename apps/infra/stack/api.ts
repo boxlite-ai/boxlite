@@ -6,8 +6,11 @@
 import { apiImageReference } from '../artifacts/api.js'
 import { resolveArtifactSource } from '../artifacts/source.js'
 import type { FoundationResources } from './foundation.js'
-import type { ClickHouseResources } from './clickhouse.js'
-import type { ClickHouseConfig } from '../scripts/clickhouse-config.mjs'
+import {
+  CLICKHOUSE_DATABASE,
+  CLICKHOUSE_READER_USERNAME,
+  type ClickHouseResources,
+} from './clickhouse.js'
 import { PORTS, envOr, httpHealth, requireEnv, runnerEndpoint } from './settings.js'
 
 export interface ApiInputs {
@@ -37,7 +40,6 @@ export interface ApiInputs {
   oidcIssuer: string
   publicOidcIssuer: string | undefined
   otelCollectorOtlpHttpUrl: $util.Output<string>
-  clickHouseConfig: ClickHouseConfig
   clickHouseResources: ClickHouseResources
   clickHouseReadyDependency?: any
 }
@@ -70,7 +72,6 @@ export function buildApi(input: ApiInputs) {
     oidcIssuer,
     publicOidcIssuer,
     otelCollectorOtlpHttpUrl,
-    clickHouseConfig,
     clickHouseResources,
     clickHouseReadyDependency,
   } = input
@@ -146,7 +147,7 @@ const api = new sst.aws.Service('Api', {
   ],
   scaling: { min: 1, max: 4 },
   ssm: {
-    ...(clickHouseConfig.active && clickHouseResources.readerSecretArn
+    ...(clickHouseResources.mode !== 'disabled'
       ? { CLICKHOUSE_PASSWORD: clickHouseResources.readerSecretArn }
       : {}),
   },
@@ -280,11 +281,12 @@ const api = new sst.aws.Service('Api', {
     ...(process.env.OTEL_EXPORTER_OTLP_HEADERS && {
       OTEL_EXPORTER_OTLP_HEADERS: process.env.OTEL_EXPORTER_OTLP_HEADERS,
     }),
-    ...(clickHouseConfig.active && clickHouseResources.url
+    ...(clickHouseResources.mode !== 'disabled'
       ? {
           CLICKHOUSE_URL: clickHouseResources.url,
-          CLICKHOUSE_DATABASE: clickHouseConfig.database || 'otel',
-          CLICKHOUSE_USERNAME: clickHouseConfig.readerUsername || 'otel_reader',
+          CLICKHOUSE_DATABASE,
+          CLICKHOUSE_USERNAME: CLICKHOUSE_READER_USERNAME,
+          CLICKHOUSE_CREDENTIAL_VERSION: clickHouseResources.readerSecretVersionId,
         }
       : {}),
     BOX_OTEL_ENDPOINT_URL: envOr(
