@@ -130,6 +130,12 @@ test\:changed\:go:
 test\:changed\:apps:
 	@$(MAKE) test:apps
 
+# Workflow and composite-action changes. Runs the infra suite rather than the whole apps matrix:
+# that suite is what asserts across .github (caller/callee permissions, Environment allowlists,
+# the deploy step list, and the composite actions' own shell), and it finishes in seconds.
+test\:changed\:ci:
+	@$(MAKE) test:apps:infra
+
 # Integration-only for changed components (used by E2E CI on PRs).
 test\:integration\:changed:
 ifeq ($(CHANGED_COMPONENTS),)

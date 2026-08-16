@@ -261,6 +261,46 @@ test('a missing sccache degrades the build rather than breaking it', () => {
   assert.equal(exported.get('SCCACHE_GHA_ENABLED'), 'true')
 })
 
+test('a change under .github reaches this suite locally, not only in CI', () => {
+  // Without all three of these a workflow or action edit runs no local check at all: the
+  // pre-push hook declines the change, and even if it fired, no component tag would map to a
+  // test. CI catches it via lint.yml's paths filter, but only after a push.
+  // Compared as literal text: these files escape for shell and for make, so both carry
+  // backslashes that a regex written from the visible characters would silently miss.
+  const changes = readFileSync(join(REPO_ROOT, 'make/changes.mk'), 'utf8')
+  for (const prefix of ['workflows', 'actions']) {
+    assert.ok(
+      changes.includes(`grep -q '^\\.github/${prefix}/' && printf 'ci '`),
+      `make/changes.mk maps no component to .github/${prefix}/`,
+    )
+  }
+  // quality.mk expands fmt:<comp>/lint:<comp> per tag and there is no formatter for workflow
+  // YAML, so `ci` must not survive into FMT_COMPONENTS or `make lint:fix` breaks outright.
+  assert.ok(
+    changes.includes('FMT_COMPONENTS := $(sort $(filter-out ci,'),
+    'the ci tag is not filtered out of FMT_COMPONENTS',
+  )
+
+  assert.ok(
+    readFileSync(join(REPO_ROOT, 'make/test.mk'), 'utf8').includes(
+      'test\\:changed\\:ci:\n\t@$(MAKE) test:apps:infra',
+    ),
+    'the ci component tag dispatches to no test target',
+  )
+
+  const hooks: any = loadYaml(readFileSync(join(REPO_ROOT, '.pre-commit-config.yaml'), 'utf8'))
+  const prePush = hooks.repos
+    .flatMap((repo: any) => repo.hooks ?? [])
+    .find((hook: any) => (hook.stages ?? []).includes('pre-push'))
+  assert.ok(prePush, 'no pre-push hook to gate on')
+  // pre-commit compiles these with Python's `re`; `(?x)` (verbose) has no JS equivalent, and
+  // dropping it is exact here because stripping the whitespace it permits is the whole effect.
+  const pattern = new RegExp(String(prePush.files).replace(/\s+/g, '').replace(/^\(\?x\)/, ''))
+  for (const path of ['.github/workflows/lint.yml', '.github/actions/sccache/action.yml']) {
+    assert.match(path, pattern, `the pre-push hook skips ${path}`)
+  }
+})
+
 test('the host and the container strip the same prefix from cache keys', () => {
   // Absolute paths are part of an sccache key. The host workspace and the container's /work are
   // different prefixes for the same sources, so without both basedirs the two sides can never

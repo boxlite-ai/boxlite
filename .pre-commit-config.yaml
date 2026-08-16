@@ -47,6 +47,8 @@ repos:
             src/guest/|
             sdks/|
             apps/|
+            \.github/workflows/|
+            \.github/actions/|
             .*/Cargo\.toml$|
             Cargo\.lock$
           )
