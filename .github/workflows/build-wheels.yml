@@ -124,6 +124,11 @@ jobs:
       contents: write  # Required to upload to releases
 
     steps:
+      # Before the download, not after: ./.github/actions/upload-to-release below is resolved from
+      # the checked-out tree, and checkout cleans the workspace, which would take the wheels with
+      # it if it ran second.
+      - uses: actions/checkout@v4
+
       - name: Download all wheels
         uses: actions/download-artifact@v5
         with:

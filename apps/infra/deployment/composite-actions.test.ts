@@ -73,6 +73,37 @@ test('every workflow reference to a composite action resolves and passes declare
   assert.ok(checked >= 45, `expected every composite-action call site swept, saw ${checked}`)
 })
 
+test('every job using a composite action checks the repository out first', () => {
+  // A `uses: ./...` action is read from the workspace, so a job without a checkout cannot find it
+  // — and a job that checks out *after* downloading artifacts loses them, since checkout cleans
+  // the workspace. Swapping a remote action for a local one in a job that never needed a tree is
+  // the easy way to introduce this, and it surfaces only when that job runs: for the release
+  // upload jobs, that is at release time, with the assets silently missing.
+  for (const file of readdirSync(WORKFLOWS_DIR).filter((name) => /\.ya?ml$/.test(name))) {
+    const workflow: any = loadYaml(readFileSync(join(WORKFLOWS_DIR, file), 'utf8'))
+    for (const [jobName, job] of Object.entries<any>(workflow.jobs ?? {})) {
+      const steps: any[] = job.steps ?? []
+      const firstLocal = steps.findIndex((step) => String(step.uses ?? '').startsWith(LOCAL_ACTION))
+      if (firstLocal === -1) continue
+      const checkout = steps.findIndex((step) => String(step.uses ?? '').includes('actions/checkout'))
+      assert.notEqual(checkout, -1, `${file} job '${jobName}' uses a local action but never checks out`)
+      assert.ok(
+        checkout < firstLocal,
+        `${file} job '${jobName}' checks out at step ${checkout}, after its first local action at ${firstLocal}`,
+      )
+      // And before anything that populates the workspace: checkout cleans it, so a download
+      // placed first would be deleted by the very step that makes the local action resolvable.
+      const firstDownload = steps.findIndex((step) => String(step.uses ?? '').includes('actions/download-artifact'))
+      if (firstDownload !== -1) {
+        assert.ok(
+          checkout < firstDownload,
+          `${file} job '${jobName}' checks out at step ${checkout}, after downloading artifacts at ${firstDownload}; checkout would clean them away`,
+        )
+      }
+    }
+  }
+})
+
 test('every composite action declares a name and description and marks its shells', () => {
   const names = readdirSync(ACTIONS_DIR, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
