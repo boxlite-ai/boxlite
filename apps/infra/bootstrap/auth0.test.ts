@@ -16,6 +16,8 @@ import {
   deployActionArgs,
   enableRpLogoutDiscoveryArgs,
   pageTemplateArgs,
+  customTextArgs,
+  customTextRequests,
   spaApplicationArgs,
   templateAssetUrls,
   themeAssetUrls,
@@ -24,6 +26,7 @@ import {
 const AUTH0_ASSETS = join(import.meta.dirname, 'auth0')
 const CHECKED_IN_THEME = JSON.parse(readFileSync(join(AUTH0_ASSETS, 'branding-theme.json'), 'utf8'))
 const CHECKED_IN_TEMPLATE = readFileSync(join(AUTH0_ASSETS, 'page-template.liquid'), 'utf8')
+const CHECKED_IN_TEXT = JSON.parse(readFileSync(join(AUTH0_ASSETS, 'custom-text.json'), 'utf8'))
 
 function theme(overrides = {}) {
   return { colors: { page_background: '#13161B' }, fonts: { reference_text_size: 13 },
@@ -209,4 +212,35 @@ test('the checked-in theme and template are the ones bootstrap will actually sen
   assert.doesNotThrow(() => pageTemplateArgs(CHECKED_IN_TEMPLATE))
   assert.equal(CHECKED_IN_THEME.borders.widget_corner_radius, 0)
   assert.equal(CHECKED_IN_THEME.fonts.reference_text_size, 13)
+})
+
+test('customTextRequests emits one PUT per prompt, keyed by screen', () => {
+  const requests = customTextRequests({
+    language: 'en',
+    prompts: { login: { login: { description: 'x' } }, signup: { signup: { description: 'x' } } },
+  })
+  assert.deepEqual(
+    requests.map((args) => args[2]),
+    ['prompts/login/custom-text/en', 'prompts/signup/custom-text/en'],
+  )
+  assert.deepEqual(JSON.parse(valueAfter(requests[0], '--data')), { login: { description: 'x' } })
+})
+
+test('customTextArgs refuses an override with nothing left to send', () => {
+  // The endpoint REPLACES the prompt's document, so shipping an empty body
+  // would silently wipe the copy rather than leave it alone.
+  assert.throws(() => customTextArgs({ prompt: 'login', language: 'en', text: {} }), /is empty/)
+  assert.throws(() => customTextArgs({ prompt: 'login', language: 'en', text: { _comment: 'note' } }), /is empty/)
+  assert.throws(() => customTextArgs({ prompt: 'login', text: { login: {} } }), /needs both a prompt and a language/)
+})
+
+test('the checked-in copy overrides login and signup together', () => {
+  // Auth0's two defaults differ ("Log in to …" / "Sign Up to …"), so overriding
+  // one prompt and not the other leaves the screens reading differently.
+  const requests = customTextRequests(CHECKED_IN_TEXT)
+  assert.deepEqual(Object.keys(CHECKED_IN_TEXT.prompts), ['login', 'signup'])
+  assert.equal(
+    JSON.parse(valueAfter(requests[0], '--data')).login.description,
+    JSON.parse(valueAfter(requests[1], '--data')).signup.description,
+  )
 })

@@ -215,6 +215,28 @@ export function brandingThemeArgs({ themeId, theme }: any) {
  */
 const REQUIRED_TEMPLATE_MARKERS = ['{%- auth0:head -%}', '{%- auth0:widget -%}']
 
+/*
+ * One PUT per prompt. The endpoint replaces that prompt's whole custom-text
+ * document for the language, so a payload must carry every key it means to
+ * keep — the same replace-not-merge shape as the Action bindings above.
+ */
+export function customTextArgs({ prompt, language, text }: any) {
+  if (!prompt || !language) throw new Error('a custom-text override needs both a prompt and a language')
+  const body = withoutComments(text)
+  if (!body || Object.keys(body).length === 0) {
+    throw new Error(`the custom-text override for prompt '${prompt}' is empty`)
+  }
+  return ['api', 'put', `prompts/${prompt}/custom-text/${language}`, '--data', JSON.stringify(body)]
+}
+
+/** Flattens the checked-in document into one argv per prompt. */
+export function customTextRequests(document: any) {
+  const language = document?.language
+  return Object.entries(document?.prompts ?? {}).map(([prompt, text]) =>
+    customTextArgs({ prompt, language, text }),
+  )
+}
+
 export function pageTemplateArgs(template: any) {
   const missing = REQUIRED_TEMPLATE_MARKERS.filter((marker) => !template?.includes(marker))
   if (missing.length > 0) {

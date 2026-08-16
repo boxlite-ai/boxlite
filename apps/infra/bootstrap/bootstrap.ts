@@ -99,6 +99,7 @@ import {
   defaultThemeArgs,
   deployActionArgs,
   enableRpLogoutDiscoveryArgs,
+  customTextRequests,
   pageTemplateArgs,
   spaApplicationArgs,
   templateAssetUrls,
@@ -130,6 +131,7 @@ const SST_COLD_INSTALL_TIMEOUT_MS = 90_000
 const ACTION_SOURCE_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'set-custom-claims.js')
 const BRANDING_THEME_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'branding-theme.json')
 const PAGE_TEMPLATE_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'page-template.liquid')
+const CUSTOM_TEXT_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'custom-text.json')
 
 const CLOUDFLARE_CREDENTIALS = [
   {
@@ -753,6 +755,11 @@ async function provisionAuth0Branding() {
 
   auth0Run(pageTemplateArgs(template))
   console.log(`[${SCRIPT_NAME}] Auth0 Universal Login page template ... applied`)
+
+  const customText = JSON.parse(readFileSync(CUSTOM_TEXT_PATH, 'utf8'))
+  const requests = customTextRequests(customText)
+  for (const request of requests) auth0Run(request)
+  console.log(`[${SCRIPT_NAME}] Auth0 Universal Login copy ... applied to ${requests.length} prompt(s)`)
 }
 
 /*
