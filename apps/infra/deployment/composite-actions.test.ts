@@ -397,7 +397,7 @@ test('the host and the container strip the same prefix from cache keys', () => {
   // Absolute paths are part of an sccache key. The host workspace and the container's /work are
   // different prefixes for the same sources, so without both basedirs the two sides can never
   // share an entry.
-  const { exported, workspace } = sccacheEnvironment(true)
+  const { exported, workspace } = sccacheEnvironment()
   assert.equal(exported.get('SCCACHE_BASEDIRS'), workspace)
 
   const manylinux = readAction('run-in-manylinux')
