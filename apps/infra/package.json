@@ -18,9 +18,10 @@
     "runner:build-artifact": "tsx artifacts/runner-build.ts"
   },
   "devDependencies": {
-    "@types/node": "^22.13.4",
     "@pulumi/aws": "^7.24.0",
     "@pulumi/policy": "1.21.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.13.4",
     "js-yaml": "^4.1.0",
     "sst": "^4.6.11",
     "ts-node": "10.9.1",
