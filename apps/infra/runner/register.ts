@@ -7,7 +7,7 @@
  * The API only auto-seeds the single default runner (from DEFAULT_RUNNER_*), so
  * additional runners declared via RUNNERS must be registered through the admin
  * API. This script is invoked by the `RegisterExtraRunners` command in
- * sst.config.ts after the extra runner EC2s and the API service are up.
+ * stack/runners.ts after the extra runner EC2s and the API service are up.
  *
  * Pairing is token-based: the runner row's apiKey must equal the
  * BOXLITE_RUNNER_TOKEN baked into the matching EC2's user-data. SST mints one

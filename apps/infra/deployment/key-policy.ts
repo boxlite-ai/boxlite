@@ -1,18 +1,121 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-/*
- * Which keys must never leave the operator's machine.
- *
- * This was a CI step: the deploy workflow wrote the GitHub `DEPLOY_ENV` secret out as
- * apps/infra/.env and ran this over it. The store replaced that transport, so the same policy now
- * applies at three earlier points — bootstrap refuses to load one of these into the stage's secret
- * store (bootstrap/environment.ts's deployableStageConfig), the manifest scopes what may be
- * hydrated, and deployment/stage-config.ts drops one anyway if it somehow got written by hand.
- */
-
 import { parse } from 'dotenv'
 
+import { CLICKHOUSE_STAGE_CONFIG_KEYS } from './clickhouse.js'
+
+/*
+ * Which keys may cross the boundary between an operator's machine and a stage's shared secret store,
+ * in both directions. The allowlist below decides what a store may inject into a deploy; the
+ * denylists further down decide what may never be stored in the first place.
+ *
+ * The keys a stage's secret store may put into a deploy's environment:
+ *
+ * This started as a denylist of process controls, and seven review rounds each found a new way past
+ * it: NODE_OPTIONS, then BASH_ENV and GIT_SSH_COMMAND, then DOCKER_HOST, DOCKER_CONTEXT, LD_AUDIT,
+ * SST_BUN_PATH, GH_TOKEN, RUSTC_WRAPPER, SSH_ASKPASS. Every one of them turns a stored string into
+ * code or a moved trust boundary inside the sst child, which runs Pulumi with the deploy role's
+ * credentials. An enumeration of dangerous names cannot be finished, so this is the other shape:
+ * nothing is hydrated unless the deploy demonstrably reads it.
+ *
+ * Derived from the source that reads them — every *direct* `envOr` / `requireEnv` / `process.env.X`
+ * under stack/, deployment/, artifacts/, runner/ and shared/, minus the keys isLocalOnlyDeploymentKey
+ * refuses. The test beside this file re-derives that set and fails when the two disagree, so adding a
+ * config key to the stack fails until it is added here. That failure is the point: it makes widening
+ * what a store can inject a decision someone makes, not something that happens.
+ *
+ * Direct is the operative word, and errs toward refusing. A name passed to a helper that reads it —
+ * `runnerEndpoint('DEFAULT_RUNNER_DOMAIN', …)` — is not derived, so it is not storable; the test says
+ * why that particular omission is deliberate rather than missed. The failure mode of that choice is a
+ * key an operator sets being ignored, which is visible, rather than a key reaching the sst child's
+ * environment because a helper obscured it.
+ *
+ * The denylist stays as a second check. It is not the boundary any more, but a key that is both read
+ * by the stack and dangerous — AWS_PROFILE is one — must still be refused.
+ */
+export const STORABLE_STAGE_CONFIG_KEYS: readonly string[] = [
+  'ADMIN_API_KEY',
+  'APP_URL',
+  'BILLING_API_URL',
+  'BOXLITE_API_KEY',
+  'BOXLITE_API_URL',
+  'BOXLITE_RUNNER_STATE_BASELINE',
+  'BOXLITE_SYSTEM_BASE_IMAGE',
+  'BOXLITE_SYSTEM_IMAGES',
+  'BOXLITE_SYSTEM_IMAGE_TAG',
+  'BOXLITE_SYSTEM_NODE_IMAGE',
+  'BOXLITE_SYSTEM_PYTHON_IMAGE',
+  'BOXLITE_SYSTEM_SOURCE_REGISTRY_NAME',
+  'BOXLITE_SYSTEM_SOURCE_REGISTRY_PASSWORD',
+  'BOXLITE_SYSTEM_SOURCE_REGISTRY_PROJECT_ID',
+  'BOXLITE_SYSTEM_SOURCE_REGISTRY_URL',
+  'BOXLITE_SYSTEM_SOURCE_REGISTRY_USERNAME',
+  'BOX_MIGRATION_ARCHIVE_PREFIX',
+  'BOX_OTEL_ENDPOINT_URL',
+  ...CLICKHOUSE_STAGE_CONFIG_KEYS,
+  'DASHBOARD_BASE_API_URL',
+  'DASHBOARD_URL',
+  'DEFAULT_REGION_ID',
+  'DEFAULT_RUNNER_API_KEY',
+  'DEFAULT_RUNNER_NAME',
+  'DEFAULT_TEMPLATE',
+  'ENCRYPTION_KEY',
+  'ENCRYPTION_SALT',
+  'GHCR_TOKEN',
+  'GHCR_USERNAME',
+  'IAM_PERMISSIONS_BOUNDARY_STAGE',
+  'INSTANCE_IDS',
+  'JAEGER_PUBLIC',
+  'MAILDEV_PUBLIC',
+  'OIDC_AUDIENCE',
+  'OIDC_END_SESSION_ENDPOINT',
+  'OIDC_ISSUER_BASE_URL',
+  'OIDC_MANAGEMENT_API_AUDIENCE',
+  'OIDC_MANAGEMENT_API_BASE_URL',
+  'OIDC_MANAGEMENT_API_ENABLED',
+  'OIDC_MANAGEMENT_API_TOKEN_URL',
+  'OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST',
+  'OTEL_COLLECTOR_API_KEY',
+  'OTEL_ENABLED',
+  'OTEL_EXPORTER_OTLP_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_HEADERS',
+  'OTEL_TRACING_ENABLED',
+  'PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED',
+  'PGADMIN_CONFIG_SERVER_MODE',
+  'PGADMIN_DEFAULT_EMAIL',
+  'PGADMIN_DEFAULT_PASSWORD',
+  'PGADMIN_PUBLIC',
+  'POSTHOG_HOST',
+  'PROXY_API_KEY',
+  'PROXY_DOMAIN',
+  'PROXY_PROTOCOL',
+  'PROXY_TEMPLATE_URL',
+  'PUBLIC_OIDC_DOMAIN',
+  'RUNNERS',
+  'RUNNER_PORT',
+  'RUNNER_VERSION',
+  'STACK_DOMAIN',
+  'SVIX_SERVER_URL',
+  'USAGE_EXPORT_URL',
+]
+
+const STORABLE = new Set(STORABLE_STAGE_CONFIG_KEYS)
+
+export function isStorableStageConfigKey(key: string) {
+  return STORABLE.has(key)
+}
+
+/*
+ * The other side of the same question: which keys must never leave the operator's machine.
+ *
+ * This was once a CI step of its own — the deploy workflow wrote the GitHub DEPLOY_ENV secret out as
+ * apps/infra/.env and ran it over that file. The store replaced that transport, so the policy now
+ * applies at three earlier points: bootstrap refuses to load one of these into the stage's store
+ * (deployableStageConfig), the manifest scopes what may be hydrated, and stage-config.ts drops one
+ * anyway if it somehow got written by hand. Both halves live here because every one of those callers
+ * has to ask both, and a key classified by only one of two files is how they drift apart.
+ */
 const FORBIDDEN_DEPLOYMENT_KEYS = new Set([
   'ALLOW_DOWNGRADE',
   'API_ARTIFACT_REF',
@@ -176,16 +279,10 @@ export function isLocalOnlyDeploymentKey(key: string) {
 }
 
 /*
- * Reject a malformed dotenv source before anything is written from it.
- *
- * Only the syntax. *Which* keys may be stored is decided by isLocalOnlyDeploymentKey, which filters
- * rather than refuses, so an operator whose .env legitimately holds AWS_PROFILE can still bootstrap.
- * A malformed line is a different problem: the file does not say what its author thinks it says, and
- * dotenv would skip it in silence.
- */
-/*
  * Reject the lines dotenv would drop in silence — a dropped key is simply absent from the store, and
- * the failure surfaces much later as a missing value.
+ * the failure surfaces much later as a missing value. Only the syntax: *which* keys may be stored is
+ * decided by isLocalOnlyDeploymentKey, which filters rather than refuses, so an operator whose .env
+ * legitimately holds AWS_PROFILE can still bootstrap.
  *
  * The check asks the parser instead of describing it. A pattern here would be a second implementation
  * of dotenv's grammar, and the two drift in both directions: too strict and an operator is told a

@@ -51,7 +51,7 @@ test('loads local helpers dynamically inside SST config callbacks', () => {
   assert.doesNotMatch(liveEntrypoint, /^import\s/m)
   assert.match(liveEntrypoint, /async app\(input\)/)
   assert.match(liveEntrypoint, /await import\('\.\/stack\/app\.js'\)/)
-  assert.match(liveEntrypoint, /await import\('\.\/stack\/index\.js'\)/)
+  assert.match(liveEntrypoint, /await import\('\.\/stack\/deploy\.js'\)/)
   assert.match(liveEntrypoint, /async run\(\)/)
   assert.match(liveEntrypoint, /return deployStack\(\)/)
 })
@@ -394,7 +394,7 @@ test('the Runner binary upgrade is declared only when the Runner is in scope', (
   // `--exclude Runner` keeps the EC2 instance out of the plan, but UpgradeRunnerBinary-* is a
   // sibling of it, not a child, and SST is never passed --exclude-dependents. Its trigger carries
   // the deployed commit, so left declared on an Api-only deploy it fetches runner/<sha>/ for a
-  // commit whose build-runner job was skipped. deployment-preview.mjs cannot catch that:
+  // commit whose build-runner job was skipped. The Runner policy pack cannot catch that:
   // isRunnerLikeResource matches a name against /^Runner(?:-|$)/ OR an aws:ec2/instance:Instance
   // carrying Runner identity tags, and this command satisfies neither arm.
   const live = liveText('scriptEmittingShell', source)
@@ -413,7 +413,7 @@ test('every local Command pins dir, so it runs from the app root', () => {
   // resolves to .sst/platform/scripts and fails with "Cannot find module".
   // Only an apply runs these, so a preview cannot catch a missing dir.
   const commands = source.split(/new command\.local\.Command\(/).slice(1)
-  assert.ok(commands.length > 0, 'expected at least one command.local.Command in sst.config.ts')
+  assert.ok(commands.length > 0, 'expected at least one command.local.Command in the stack')
   for (const block of commands) {
     const properties = block.slice(0, block.indexOf('triggers:'))
     assert.match(
@@ -489,7 +489,7 @@ test('the Api deploys either a published image or a build of the deployed checko
   // The reference is built by the shared helper, which validates the repository name, rather
   // than re-derived here where a bad stage would only surface as an AWS error mid-deploy.
   assert.match(liveConfig, /import \{ apiImageReference \} from '\.\.\/artifacts\/api\.js'/)
-  // Pin each argument, not just the call: `[\s\S]*` swallowed them, and api-artifact.mjs does not
+  // Pin each argument, not just the call: `[\s\S]*` swallowed them, and artifacts/api.ts does not
   // validate region — a missing one yields `dkr.ecr.undefined.amazonaws.com` at deploy time.
   const imageReference = extractSection(liveConfig, 'apiImageReference({', '})')
   for (const argument of [
@@ -509,7 +509,7 @@ test('the Api deploys either a published image or a build of the deployed checko
   // The repository must predate the stack that consumes it; the stage bootstrap owns it.
   assert.doesNotMatch(apiService, /new aws\.ecr\.Repository/)
   // A cross-reference in a comment, deliberately read from the raw file: the point is that
-  // sst.config.ts tells a reader where the repository is created, not that anything executes.
+  // the stack tells a reader where the repository is created, not that anything executes.
   assert.match(source, /bootstrap\/aws\/github-deploy-role\.yaml/)
 })
 
@@ -641,8 +641,14 @@ test('a billing URL is advertised only where a billing service answers', () => {
   const gate = billing.indexOf('if (!config.billingApiUrl)')
   assert.notEqual(gate, -1, 'Billing page must gate on config.billingApiUrl')
   assert.match(billing.slice(gate), /return <BillingComingSoon \/>/)
-  for (const section of ['<BillingAlerts />', '<PlanSection />', '<UsageSection />', '<WalletSection />']) {
-    assert.ok(billing.indexOf(section) > gate, `${section} must render only past the billing gate`)
+  // Opening tag, not the whole self-closing element: what has to hold is that the section renders
+  // past the gate, and that is just as true once a section takes a prop. Pinning `<X />` made this
+  // fail on #1256 giving UsageSection an onGoToWallet prop, which changed nothing about the gate.
+  for (const section of ['BillingAlerts', 'PlanSection', 'UsageSection', 'WalletSection']) {
+    // `<Name` followed by a delimiter, so the tag is matched whether or not it takes props but a
+    // different component sharing the prefix cannot stand in for it.
+    const rendered = billing.search(new RegExp(`<${section}[\\s/>]`))
+    assert.ok(rendered > gate, `<${section}> must render only past the billing gate`)
   }
 
   // The per-surface paths that used to be gated are now redirects into that page. A redirect

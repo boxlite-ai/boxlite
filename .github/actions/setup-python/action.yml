@@ -1,0 +1,19 @@
+name: Set up Python
+description: >-
+  Installs the Python interpreter a job builds or tests against.
+
+inputs:
+  python-version:
+    description: >-
+      Python version to install. Matrix jobs pass their own; the default is the
+      single version the lint job pins, which is the only caller that does not
+      vary across the matrix.
+    required: false
+    default: '3.12'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}

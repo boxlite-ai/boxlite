@@ -1,21 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-const DEFAULT_TERMINATION_GRACE_MS = 10_000
+import { signalProcessGroup } from '../shared/exec.js'
 
-function signalProcessGroup(child: any, signal: any) {
-  if (process.platform !== 'win32' && child.pid) {
-    try {
-      process.kill(-child.pid, signal)
-      return
-    } catch {
-      // The direct-child fallback below handles platforms without process groups.
-    }
-  }
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill(signal)
-  }
-}
+const DEFAULT_TERMINATION_GRACE_MS = 10_000
 
 export class SstProcessTerminator {
   #activeChild: any

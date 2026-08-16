@@ -157,11 +157,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     await service.reconcileUsagePeriods()
   }
 
-  const serviceForBoxState = (
-    state: BoxState,
-    exportEnabled = false,
-    boxOverrides: Partial<typeof box> = {},
-  ) =>
+  const serviceForBoxState = (state: BoxState, exportEnabled = false, boxOverrides: Partial<typeof box> = {}) =>
     new UsageService(
       periods,
       new RedisLockProvider(redis),

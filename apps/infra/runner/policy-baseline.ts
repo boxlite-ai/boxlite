@@ -3,6 +3,7 @@
 
 import { spawn } from 'node:child_process'
 
+import { signalProcessGroup } from '../shared/exec.js'
 // eslint-disable-next-line @nx/enforce-module-boundaries -- Pulumi loads the shared Runner model through a CommonJS package boundary.
 import runnerStateBaseline from './model/state-baseline.js'
 
@@ -12,18 +13,6 @@ const STATE_EXPORT_TIMEOUT_MS = 5 * 60_000
 const STATE_EXPORT_KILL_GRACE_MS = 5_000
 const MAX_SERIALIZED_RUNNER_BASELINE_BYTES = 32 * 1024
 const STATE_NOT_FOUND_LOG = /\berr="state not found"(?:\s|$)/
-
-function signalProcessGroup(child: any, signal: any) {
-  if (process.platform !== 'win32' && child.pid) {
-    try {
-      process.kill(-child.pid, signal)
-      return
-    } catch {
-      // The direct-child fallback below handles platforms without process groups.
-    }
-  }
-  child.kill(signal)
-}
 
 function abortedExecutionError(signal: any, stdout: any, stderr: any): any {
   const error: any = new Error('The operation was aborted', { cause: signal.reason })

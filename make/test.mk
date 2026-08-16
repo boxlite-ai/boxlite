@@ -130,6 +130,12 @@ test\:changed\:go:
 test\:changed\:apps:
 	@$(MAKE) test:apps
 
+# Workflow and composite-action changes. Runs the infra suite rather than the whole apps matrix:
+# that suite is what asserts across .github (caller/callee permissions, Environment allowlists,
+# the deploy step list, and the composite actions' own shell), and it finishes in seconds.
+test\:changed\:ci:
+	@$(MAKE) test:apps:infra
+
 # Integration-only for changed components (used by E2E CI on PRs).
 test\:integration\:changed:
 ifeq ($(CHANGED_COMPONENTS),)
@@ -439,7 +445,12 @@ _ensure-infra-deps:
 		cd apps/infra && npm ci --no-audit --no-fund; \
 	fi
 
+# Type-check first: the suite runs under `tsx --test`, which strips types without checking them, so
+# a signature change that no longer compiles still leaves every test green. tsconfig.tooling.json
+# is the subset that checks without `sst install`; test:apps:infra-config below covers the rest.
 test\:apps\:infra: _ensure-infra-deps
+	@echo "🧪 Type-checking infrastructure scripts..."
+	@cd apps/infra && npm run --silent typecheck:tooling
 	@echo "🧪 Running infrastructure script tests..."
 	@cd apps/infra && npm test
 

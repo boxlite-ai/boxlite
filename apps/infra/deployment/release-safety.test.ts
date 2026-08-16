@@ -2,7 +2,7 @@
 // Copyright (c) 2026 BoxLite AI
 
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -19,7 +19,6 @@ import { runnerArtifactsBucketName } from '../artifacts/runner.js'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SST_WRAPPER = join(REPO_ROOT, 'apps/infra/deployment/sst.ts')
-const RUNNER_POLICY_PROJECT = join(REPO_ROOT, 'apps/infra/PulumiPolicy.yaml')
 const RUNNER_POLICY_RUNTIME_PROJECT = join(REPO_ROOT, 'apps/infra/policies/runner/PulumiPolicy.yaml')
 const RUNNER_POLICY_ENTRY = join(REPO_ROOT, 'apps/infra/policies/runner/index.ts')
 const RUNNER_POLICY_DEFINITIONS = join(REPO_ROOT, 'apps/infra/policies/runner/definitions.ts')
@@ -294,7 +293,7 @@ test('the shared-bootstrap guard catches every way a grant can cover it', () => 
  */
 function assertNoMaterializedStageConfig(workflow: any, source: string) {
   assert.doesNotMatch(source, /secrets\.DEPLOY_ENV/, 'stage config must come from the SST secret store, not DEPLOY_ENV')
-  // The redirect specifically, not any mention of the path: the capability gate's own refusal message
+  // The redirect specifically, not any mention of the path: the comment above the capability gate
   // names apps/infra/.env to explain what an old commit expects, and a guard that cannot tell prose
   // from a write would forbid explaining the thing it protects.
   assert.doesNotMatch(source, />\s*apps\/infra\/\.env/, 'no workflow step may write apps/infra/.env')
@@ -369,7 +368,7 @@ test('SST deploy verifies the selected Runner artifact before invoking SST', () 
   // wrong half.
   assertLiveLine(source, /deployScope = resolveDeployScope\(sstArgs\)/)
   // Exported before sst is spawned, so the resource graph is built for the same scope as the
-  // plan. Without it sst.config.ts declares UpgradeRunnerBinary-* on an Api-only deploy, and that
+  // plan. Without it stack/runners.ts declares UpgradeRunnerBinary-* on an Api-only deploy, and that
   // command — a sibling of the excluded instance, so `--exclude Runner` misses it — installs a
   // Runner binary from a commit whose build-runner job never ran.
   assertLiveLine(source, /exportDeployScope\(deployScope\)/)
@@ -380,14 +379,8 @@ test('SST deploy verifies the selected Runner artifact before invoking SST', () 
 })
 
 test('preview and deploy use the mandatory local Runner policy', () => {
-  assert.ok(existsSync(RUNNER_POLICY_PROJECT), 'PulumiPolicy.yaml is missing')
   assert.ok(existsSync(RUNNER_POLICY_ENTRY), 'the Runner policy entry point is missing')
   assert.ok(existsSync(RUNNER_POLICY_DEFINITIONS), 'the Runner policy definitions are missing')
-  assert.deepEqual(load(readFileSync(RUNNER_POLICY_PROJECT, 'utf8')), {
-    runtime: 'nodejs',
-    main: 'policies/runner/index.ts',
-    description: 'Mandatory BoxLite Runner lifecycle and identity policy',
-  })
 
   const policySource = readFileSync(RUNNER_POLICY_ENTRY, 'utf8')
   const policyDefinitions = readFileSync(RUNNER_POLICY_DEFINITIONS, 'utf8')
@@ -493,7 +486,7 @@ test('what bootstrap stores is the .env it validated, read once', () => {
 
 test('the deploy role cannot rewrite its own permissions', () => {
   /*
-   * The role is named boxlite-<stage>-github-deploy, so it matches the `role/boxlite-*` resource of
+   * The role is named boxlite-<stage>-github-deploy, so it matches the `role/boxlite-<stage>-*` resource of
    * its own IAM grants. iam:PutRolePolicy on itself is unbounded privilege escalation — the
    * permissions boundary constrains the roles SST creates, not this role's own inline policy — and
    * iam:PutRolePermissionsBoundary would let it lift that boundary for everything else.
@@ -512,8 +505,19 @@ test('the deploy role cannot rewrite its own permissions', () => {
   const granted = new Set<string>()
   for (const statement of statements) {
     if (statement.Effect !== 'Allow') continue
+    /*
+     * Glob against this role's own ARN, matching how the Deny side below is checked.
+     *
+     * This was a literal `role/boxlite-*` search, which stopped matching anything once #1255 scoped
+     * the Allows to `role/boxlite-${GitHubEnvironment}-*` — a pattern that still reaches this role.
+     * The premise assertion below catches that and fails, so the risk was never a silent pass; it was
+     * a loud failure whose obvious "fix" is to widen the grants back until the string matches again.
+     *
+     * The glob also credits statements whose resource is `*`, which the literal never did. Those
+     * reach this role as surely as a named pattern, so the Denies they require are now demanded too.
+     */
     const reachesOwnName = asArray(statement.Resource).some(
-      (resource: any) => typeof resource === 'string' && resource.includes('role/boxlite-*'),
+      (resource: any) => typeof resource === 'string' && iamGlob(resource).test(SELF_ARN),
     )
     if (!reachesOwnName) continue
     for (const action of asArray(statement.Action)) {
@@ -524,7 +528,10 @@ test('the deploy role cannot rewrite its own permissions', () => {
       granted.add(action)
     }
   }
-  assert.ok(granted.size > 0, 'expected the role to manage boxlite-* roles; the premise here has changed')
+  assert.ok(
+    granted.size > 0,
+    'expected the role to hold role-mutating actions reaching its own ARN; the premise here has changed',
+  )
 
   const denied = new Set<string>()
   for (const statement of statements) {
@@ -555,7 +562,8 @@ test('the deploy role cannot rewrite its own permissions', () => {
 
   /*
    * The other half, and the one that reads as harmless: the runtime boundary is a managed policy named
-   * boxlite-<stage>-runtime-boundary, which matches ManageBoxLitePolicies' policy/boxlite-* resource.
+   * boxlite-<stage>-runtime-boundary, which matches ManageBoxLitePolicies' policy/boxlite-<stage>-*
+   * resource.
    * Widen it, create a bounded role under the widened version, pass it to a service, and the boundary
    * has stopped bounding anything. Denying writes to that one policy is what breaks the chain.
    */
@@ -573,9 +581,10 @@ test('the deploy role cannot rewrite its own permissions', () => {
   }
 
   /*
-   * And a SIBLING stage's deploy role, which is the sharper version of the same hole: role/boxlite-*
-   * covers prod's deploy role as readily as this one's, so a Deny scoped to ${GitHubEnvironment} would
-   * still leave a dev-bound job able to rewrite prod's trust policy and assume it.
+   * And a SIBLING stage's deploy role. No Allow reaches one any more — #1255 scoped them all to
+   * ${GitHubEnvironment} — so this Deny is a backstop rather than a live patch, and it is asserted
+   * for the same reason the template keeps it cross-stage: the next grant that widens should hit a
+   * Deny already in place instead of needing one written under time pressure.
    */
   const siblingArn = SELF_ARN.replace('${GitHubEnvironment}', 'some-other-stage')
   const deniedOnSibling = statements
@@ -590,8 +599,8 @@ test('the deploy role cannot rewrite its own permissions', () => {
     assert.ok(deniedOnSibling.includes(action), `${action} on another stage's deploy role must be denied`)
   }
 
-  // The boundary needs the same treatment for the same reason: widening prod's boundary from a dev job
-  // is the identical takeover one level down.
+  // The boundary gets the same backstop for the same reason, one level down: nothing grants a dev job
+  // reach over prod's boundary today, and this is what keeps that true if something regains it.
   const siblingBoundaryArn = BOUNDARY_ARN.replace('${GitHubEnvironment}', 'some-other-stage')
   const deniedOnSiblingBoundary = statements
     .filter((statement: any) => statement.Effect === 'Deny' && statement.Condition === undefined)
@@ -625,8 +634,18 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
   const asArray = (value: any) => (Array.isArray(value) ? value : [value])
   const stageScoped = (resource: any) => String(resource).includes('${GitHubEnvironment}')
 
-  // Every resource that names no stage, excluding the SST backing store the other test covers.
-  const unscoped = statements.flatMap((statement: any) =>
+  /*
+   * Every resource that names no stage, excluding the SST backing store the other test covers.
+   *
+   * Allow only, because this test is about reach: a Deny naming a stage-less resource does not widen
+   * anything, it narrows. DenySelfPrivilegeEscalation deliberately spans every stage — that is the
+   * whole point of it — and counting it here would demand an excuse for the statement whose job is
+   * protecting sibling stages. Before #1255 that excuse existed by accident, because the entries
+   * covering the account-wide Allows matched the Deny's resources as substrings too.
+   */
+  const unscoped = statements
+    .filter((statement: any) => statement.Effect === 'Allow')
+    .flatMap((statement: any) =>
     asArray(statement.Resource)
       .filter((resource: any) => typeof resource === 'string' && !stageScoped(resource))
       .filter((resource: string) => !resource.includes('sst-state-') && !resource.includes('/sst/'))
@@ -645,12 +664,22 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
     ['boxlite-volume-', 'the bucket name carries no stage — scoping it is a rename'],
     [':instance/*', 'an EC2 instance ARN carries no stage; narrowing needs a tag Condition'],
   ]
-  // The rest predate this change and are accounted for here rather than in the prose.
+  /*
+   * The rest predate this change and are accounted for here rather than in the prose.
+   *
+   * The three IAM patterns that used to sit here — role/, instance-profile/ and policy/ on
+   * `boxlite-*` — are deliberately gone (#1255). Their excuse was "SST names the roles it creates per
+   * stack, and the stage is not a prefix", which was the wrong reason to keep an account-wide grant.
+   * What SST actually does (.sst/platform/src/components/component.ts): roles are in namingRules
+   * (:257) and get `<app>-<stage>-` when created as a component's child, so boxlite-dev-ApiExecutionRole-*
+   * is reachable by a stage pattern; a role at stack root autonames instead (`RunnerRole-1115ba6`);
+   * and instance profiles and managed policies are on the skip list at :142-143, so SST never
+   * prefixes those at all. None of the three was ever matched by `boxlite-*` either, so the broad
+   * pattern bought nothing over the narrow one. Leaving these entries would let a revert to the
+   * account-wide form pass in silence, which is how they lasted this long.
+   */
   const ACCOUNTED_HERE: Array<[string, string]> = [
     ['document/AWS-RunShellScript', 'an AWS-owned SSM document, not a stage resource'],
-    [':role/boxlite-*', 'SST names the roles it creates per stack, and the stage is not a prefix'],
-    [':instance-profile/boxlite-*', 'same naming as the roles they wrap'],
-    [':policy/boxlite-*', 'same naming as the roles they attach to'],
     ['role/aws-service-role/', 'service-linked roles are account-global by AWS design'],
   ]
   /*
@@ -669,13 +698,25 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
    * could keep its name and gain `iam:PutRolePolicy` on `*`, which no other check here would see.
    * Nothing granted account-wide may write IAM or grant everything.
    */
+  /*
+   * Secrets Manager belongs on this list for the same reason IAM does, and its absence is how
+   * `secretsmanager:*` on `*` sat here unremarked until #1255: every secret this stack creates carries
+   * the stage in its name, so anything beyond the calls that genuinely take no resource is reach into
+   * another stage. Named rather than pattern-matched, because "takes no resource" is a property of the
+   * specific API, not of its spelling — a new one has to be added here deliberately.
+   */
+  const RESOURCELESS_SECRETSMANAGER = ['secretsmanager:ListSecrets', 'secretsmanager:GetRandomPassword']
+
   for (const [sid] of WILDCARD_RESOURCE_STATEMENTS) {
     const statement = statements.find((candidate: any) => candidate.Sid === sid)
     assert.ok(statement, `${sid} is allowed a wildcard resource but no longer exists`)
     const dangerous = asArray(statement.Action).filter(
       (action: any) =>
         typeof action === 'string' &&
-        (action === '*' || /^iam:(?!Get|List|Simulate)/i.test(action) || /^sts:AssumeRole/i.test(action)),
+        (action === '*' ||
+          /^iam:(?!Get|List|Simulate)/i.test(action) ||
+          /^sts:AssumeRole/i.test(action) ||
+          (/^secretsmanager:/i.test(action) && !RESOURCELESS_SECRETSMANAGER.includes(action))),
     )
     assert.deepEqual(dangerous, [], `${sid} grants ${dangerous.join(', ')} on every resource`)
   }
@@ -687,6 +728,40 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
       : !known.some(([pattern]) => resource.includes(pattern)),
   )
   assert.deepEqual(undocumented, [], 'an account-wide resource grant appeared that nothing accounts for')
+
+  /*
+   * And the statement the account-wide secretsmanager grant was replaced by, pinned the way the
+   * boundary's four statements are. The check above catches re-widening — a `*` resource here would
+   * surface as undocumented — but not deletion, which would leave the deploy unable to read its own
+   * secrets and nothing failing until a deploy actually ran.
+   */
+  assert.deepEqual(findStatement(statements, 'SecretsForThisStage'), {
+    Sid: 'SecretsForThisStage',
+    Effect: 'Allow',
+    Action: 'secretsmanager:*',
+    Resource: [
+      'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:boxlite-${GitHubEnvironment}-*',
+    ],
+  })
+
+  /*
+   * And the secret the stack actually creates has to land inside that pattern, which is a contract
+   * between two files nothing else checks. It is not automatic: SST's `<app>-<stage>-` prefix comes
+   * from a transformation registered in its Component constructor, so a resource declared at stack
+   * root autonames instead — `RunnerRole-1115ba6` and `RunnerProfile-434704b` are live proof. An
+   * autonamed secret sits outside a stage-scoped grant, and the deploy fails with AccessDenied the
+   * first time GHCR_TOKEN is set. That is a runtime failure no unit test would otherwise reach.
+   */
+  const runnersSource = liveText('script', readFileSync(join(REPO_ROOT, 'apps/infra/stack/runners.ts'), 'utf8'))
+  const secretName = runnersSource.match(/new aws\.secretsmanager\.Secret\([^)]*?name: `([^`]+)`/s)?.[1]
+  assert.ok(secretName, 'the stack must name its Secrets Manager secret explicitly, not let it autoname')
+  const composedSecretName = secretName.replace('${$app.name}', 'boxlite').replace('${$app.stage}', 'dev')
+  assert.ok(
+    iamGlob(
+      'arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:boxlite-dev-*',
+    ).test(`arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:${composedSecretName}`),
+    `the stack's secret '${composedSecretName}' falls outside the deploy role's secret:boxlite-<stage>-* grant`,
+  )
 
   /*
    * Both directions. "Every unscoped grant is documented" alone lets the documentation rot the other
@@ -779,74 +854,79 @@ test('SST deploy does not depend on a laptop-managed remote builder', () => {
   }
 })
 
-test('component-selection bridge accepts capability v2 for existing single exclusions', () => {
+test('the capability gate answers every selected-commit shape', () => {
+  /*
+   * The gate is shell inside YAML, so a contract assertion could only prove it is present. This runs
+   * the step's own script against the trees a dispatch can select: one declaring the capabilities,
+   * one from before each existed, one whose file is corrupt, and one with no file at all. Every case
+   * but the first must refuse — a parse failure or a missing file falling through to the happy path
+   * would deploy exactly the commit the gate exists to catch.
+   *
+   * One version set covers both capabilities on purpose. capabilities.json is one document with one
+   * version, so a bump made for an unrelated capability must not read as "this commit cannot use the
+   * store" (#1253).
+   */
   const workflow = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
-  const scopeSupportStep = workflow.jobs.deploy.steps.find(
-    (step: any) => step.name === 'Require component selection support in the selected commit',
+  const gate = workflow.jobs.deploy.steps.find(
+    (step: any) => step.name === 'Require deployment capabilities in the selected commit',
   )
-  assert.ok(scopeSupportStep, 'the component-selection capability check is missing')
+  assert.ok(gate, 'the deployment capability gate is missing')
 
-  const checkout = mkdtempSync(join(tmpdir(), 'boxlite-capability-bridge-'))
+  const checkout = mkdtempSync(join(tmpdir(), 'boxlite-capability-gate-'))
   const capability = join(checkout, 'apps/infra/deployment/capabilities.json')
   mkdirSync(dirname(capability), { recursive: true })
 
-  const runGuard = (version: number, componentSelection: boolean, exclude: 'Api' | 'Runner') => {
-    writeFileSync(capability, `${JSON.stringify({ version, componentSelection })}\n`)
-    return spawnSync('/usr/bin/env', ['bash', '-c', scopeSupportStep.run], {
+  const runGate = (contents: string | null, exclude: string) => {
+    if (contents === null) rmSync(capability, { force: true })
+    else writeFileSync(capability, contents)
+    return spawnSync('/usr/bin/env', ['bash', '-c', gate.run], {
       cwd: checkout,
       encoding: 'utf8',
-      env: {
-        ...process.env,
-        BOXLITE_ARTIFACT_REF: 'fixture-commit',
-        DEPLOY_EXCLUDE: exclude,
-      },
+      env: { ...process.env, BOXLITE_ARTIFACT_REF: 'fixture-commit', DEPLOY_EXCLUDE: exclude },
     })
   }
+  const declared = (extra: object) => JSON.stringify({ stageConfigStore: true, componentSelection: true, ...extra })
 
   try {
-    for (const exclude of ['Api', 'Runner'] as const) {
-      assert.equal(runGuard(1, true, exclude).status, 0, `capability v1 must keep supporting --exclude ${exclude}`)
-      const v2 = runGuard(2, true, exclude)
-      assert.equal(v2.status, 0, `capability v2 must support --exclude ${exclude}: ${v2.stderr}`)
+    for (const version of [1, 2]) {
+      for (const exclude of ['', 'Api', 'Runner']) {
+        const accepted = runGate(declared({ version }), exclude)
+        assert.equal(accepted.status, 0, `capability v${version} must deploy with exclude='${exclude}': ${accepted.stderr}`)
+      }
     }
-    assert.notEqual(runGuard(3, true, 'Runner').status, 0, 'an unknown capability version must fail closed')
-    assert.notEqual(runGuard(2, false, 'Runner').status, 0, 'v2 without component selection must fail closed')
-  } finally {
-    rmSync(checkout, { recursive: true, force: true })
-  }
-})
 
-test('legacy component selection cannot claim infrastructure-only support', () => {
-  const workflow = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
-  const scopeSupportStep = workflow.jobs.deploy.steps.find(
-    (step: any) => step.name === 'Require component selection support in the selected commit',
-  )
-  assert.ok(scopeSupportStep, 'the component-selection capability check is missing')
+    /*
+     * Each refusal is checked by the cause it reports, not only by its exit status. The three
+     * causes are answered by different arms of the gate and differ solely in what they tell the
+     * operator, so asserting the status alone would let the arms swap messages unnoticed — and
+     * "this commit is too old" sends someone to redispatch a newer ref when the real problem is a
+     * capability file they need to fix.
+     */
+    const refused = (contents: string | null, exclude: string) => {
+      const result = runGate(contents, exclude)
+      assert.notEqual(result.status, 0, `expected a refusal for ${contents}`)
+      return result.stderr
+    }
 
-  const checkout = mkdtempSync(join(tmpdir(), 'boxlite-legacy-component-selection-'))
-  const legacyModule = join(checkout, 'apps/infra/scripts/deployment-scope.mjs')
-  mkdirSync(dirname(legacyModule), { recursive: true })
-  writeFileSync(legacyModule, 'export function resolveDeployScope() {}\n')
-
-  const runGuard = (exclude: 'Api' | 'Runner' | 'Api,Runner') =>
-    spawnSync('/usr/bin/env', ['bash', '-c', scopeSupportStep.run], {
-      cwd: checkout,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        BOXLITE_ARTIFACT_REF: 'legacy-fixture-commit',
-        DEPLOY_EXCLUDE: exclude,
-      },
-    })
-
-  try {
-    assert.equal(runGuard('Api').status, 0, 'legacy commits must keep their existing Api exclusion')
-    assert.equal(runGuard('Runner').status, 0, 'legacy commits must keep their existing Runner exclusion')
-    assert.notEqual(
-      runGuard('Api,Runner').status,
-      0,
-      'a legacy resolver predates the infrastructure-only scope and must fail before AWS credentials',
-    )
+    // A commit that cannot read the store would deploy against whatever defaults survived.
+    assert.match(refused(JSON.stringify({ version: 1, componentSelection: true }), ''), /does not declare the capabilities/)
+    // Component selection is only required when the dispatch actually narrows the scope.
+    assert.equal(runGate(JSON.stringify({ version: 1, stageConfigStore: true }), '').status, 0)
+    assert.match(refused(JSON.stringify({ version: 1, stageConfigStore: true }), 'Runner'), /--exclude Runner/)
+    // Infrastructure-only is a v2 capability, not merely two legacy exclusions combined.
+    assert.match(refused(declared({ version: 1 }), 'Api,Runner'), /--exclude Api,Runner/)
+    assert.match(refused(declared({ version: 2 }), 'Api,Runner'), /--exclude Api,Runner/)
+    assert.equal(runGate(declared({ version: 2, infrastructureOnly: true }), 'Api,Runner').status, 0)
+    // A version this workflow has never been taught to read.
+    assert.match(refused(declared({ version: 3 }), ''), /does not declare the capabilities/)
+    // Corrupt, then absent. Each has its own cause, and neither may borrow the other's: a parse
+    // failure is not an age problem, and a missing file is not a corrupt one.
+    const corrupt = refused('{ not json', '')
+    assert.match(corrupt, /failed to load/)
+    assert.doesNotMatch(corrupt, /does not declare the capabilities/)
+    const absent = refused(null, '')
+    assert.match(absent, /declares no/)
+    assert.doesNotMatch(absent, /failed to load/)
   } finally {
     rmSync(checkout, { recursive: true, force: true })
   }
@@ -1021,7 +1101,7 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   }
   // The SST component each scope excludes. `--target` must never appear: it omits the shared and
   // provider resources a partial update still depends on, which is how PR #1095 stalled the stack
-  // mid-provider-migration. deployment-scope.mjs rejects it, and this keeps the workflow honest
+  // mid-provider-migration. deployment/scope.ts rejects it, and this keeps the workflow honest
   // before it ever gets there.
   assert.equal(
     workflow.jobs.deploy.env.DEPLOY_EXCLUDE,
@@ -1033,53 +1113,23 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // couples them. Observed: run 31229121181 dispatched `components=api` at a PR head predating
   // component selection, and the old wrapper answered `partial SST deploys are disabled` — true
   // of that commit, but it reads as a statement about this workflow.
-  const scopeSupportStep = workflow.jobs.deploy.steps.find(
-    (step: any) => step.name === 'Require component selection support in the selected commit',
+  // What the gate decides, and which cause it reports for each refusal, is exercised for real by
+  // 'the capability gate answers every selected-commit shape', which runs this step's own script
+  // against each tree a dispatch can select and reads its stderr. Left here: that the step exists,
+  // that it reads the capability file rather than this workflow's assumptions, and where it sits.
+  const capabilityGate = workflow.jobs.deploy.steps.find(
+    (step: any) => step.name === 'Require deployment capabilities in the selected commit',
   )
-  assert.ok(scopeSupportStep, 'the component-selection capability check is missing')
-  assert.equal(scopeSupportStep.if, "${{ env.DEPLOY_EXCLUDE != '' }}", 'the check must run only for a narrowed scope')
-  // Current commits use versioned data; historical commits retain the executable capability
-  // probe. Both paths inspect behavior rather than grepping source comments.
-  assertShellLine(scopeSupportStep.run, /capability=apps\/infra\/deployment\/capabilities\.json/)
-  assertShellLine(scopeSupportStep.run, /if \[ -f "\$capability" \]; then/)
-  assertShellLine(scopeSupportStep.run, /if ! status=\$\(node -e .* "\$capability"\); then/)
-  assertShellLine(scopeSupportStep.run, /status=unreadable/)
-  assertShellLine(scopeSupportStep.run, /\[1,2\]\.includes\(c\.version\) && c\.componentSelection === true/)
-  assertShellLine(scopeSupportStep.run, /!infra \|\| c\.version === 2 && c\.infrastructureOnly === true/)
-  assertShellLine(scopeSupportStep.run, /elif \[ -f "\$legacy_module" \]; then/)
-  assertShellLine(scopeSupportStep.run, /typeof m\.resolveDeployScope === 'function'/)
-  // Absence of both formats is its own decision, not an import failure.
-  assertShellLine(scopeSupportStep.run, /else\s+status=unsupported/)
-  assertShellLine(scopeSupportStep.run, /status=unsupported/)
-  // Each arm, and the claim that distinguishes it. Pinning only the `if` leaves an arm free to
-  // carry another arm's message, which a passing suite would not notice: the arms differ solely
-  // in what they tell the operator, so a wrong cause here is invisible to every other assertion.
-  const scopeSupportShell = liveShell(scopeSupportStep.run)
-  assert.match(scopeSupportShell, /supported\) ;;/, 'the supported arm must be a no-op')
-  const tooOld = scopeSupportShell.slice(scopeSupportShell.indexOf('unsupported)'))
-  assert.match(
-    tooOld.slice(0, tooOld.indexOf(';;')),
-    /predates component selection/,
-    'the too-old arm must name age as the cause',
-  )
-  const unreadable = scopeSupportShell.slice(scopeSupportShell.indexOf('*)'))
-  assert.match(
-    unreadable,
-    /failed to load/,
-    'the load-failure arm must not describe the commit as too old — that is the other arm',
-  )
-  assert.doesNotMatch(
-    unreadable,
-    /predates component selection/,
-    'the load-failure arm must not reuse the too-old cause',
-  )
-  // Before the deploy role is assumed. An unsupported scope is knowable from the checkout alone,
+  assert.ok(capabilityGate, 'the deployment capability gate is missing')
+  assertShellLine(capabilityGate.run, /capability=apps\/infra\/deployment\/capabilities\.json/)
+  assertShellLine(capabilityGate.run, /c\.version === 2 && c\.infrastructureOnly === true/)
+  // Before the deploy role is assumed. An unsupported commit is knowable from the checkout alone,
   // so it must never reach AWS credentials.
   const deployStepNames = workflow.jobs.deploy.steps.map((step: any) => step.name)
   assert.ok(
-    deployStepNames.indexOf('Require component selection support in the selected commit') <
+    deployStepNames.indexOf('Require deployment capabilities in the selected commit') <
       deployStepNames.indexOf('Configure AWS credentials through OIDC'),
-    'the capability check must run before AWS credentials are configured',
+    'the capability gate must run before AWS credentials are configured',
   )
   // A skipped build job would cascade a skip to the deploy under the implicit success(). Naming a
   // status-check function turns that off — without one, every narrowed dispatch silently deploys
@@ -1131,24 +1181,14 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.equal(workflow.jobs.deploy.env.IAM_PERMISSIONS_BOUNDARY_STAGE, '${{ inputs.stage }}')
   assertNoMaterializedStageConfig(workflow, source)
   // Any commit on main is deployable, and this job checks out THAT commit's apps/infra. One predating
-  // the store still expects apps/infra/.env, so it must be refused rather than deployed with whatever
-  // defaults survive — and refused before the deploy role is assumed.
-  const stageConfigGate = workflow.jobs.deploy.steps.find(
-    (step: any) => step.name === 'Require stage configuration store support in the selected commit',
-  )
-  assert.ok(stageConfigGate, 'the stage configuration capability gate is missing')
-  assert.equal(stageConfigGate.if, undefined, 'the gate must apply to every deploy, not just a narrowed scope')
-  assertShellLine(stageConfigGate.run, /c\.stageConfigStore === true/)
-  const credentialStep = workflow.jobs.deploy.steps.findIndex(
-    (step: any) => step.name === 'Configure AWS credentials through OIDC',
-  )
-  assert.ok(
-    workflow.jobs.deploy.steps.indexOf(stageConfigGate) < credentialStep,
-    'an unsupported commit must be refused before the deploy role is assumed',
-  )
-  // The capability this repo declares, so the gate cannot pass against a tree that lacks it.
+  // the store still expects apps/infra/.env, so the gate must apply to every deploy rather than only
+  // to a narrowed scope.
+  assert.equal(capabilityGate.if, undefined, 'the gate must apply to every deploy, not just a narrowed scope')
+  assertShellLine(capabilityGate.run, /c\.stageConfigStore === true/)
+  // The capabilities this repo declares, so the gate cannot pass against a tree that lacks them.
   const capabilities = JSON.parse(readFileSync(join(REPO_ROOT, 'apps/infra/deployment/capabilities.json'), 'utf8'))
   assert.equal(capabilities.stageConfigStore, true)
+  assert.equal(capabilities.componentSelection, true)
   assert.ok(safetyTestStep, 'the deployment safety test step is missing')
   assert.equal(safetyTestStep.run, 'npm test')
   assert.ok(installStep, 'the SST provider installation step is missing')
@@ -1157,50 +1197,43 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.equal(previewStep.if, undefined, 'Preview validation must not be conditional')
   assert.equal(previewStep['continue-on-error'], undefined, 'Preview failures must stop deployment')
   assert.equal(previewStep.shell, 'bash')
-  // Every executed line and its order, comments stripped: the scope must reach SST, and nothing
-  // may be appended alongside it. Compared as lines rather than one string so rewording a comment
-  // does not churn the pin, while adding or dropping a command still fails.
-  const liveCommands = (run: any) => liveShell(run).split('\n').filter(Boolean)
-  // Seeded with the fixed arguments, never `args=()`: expanding an empty array under `set -u` is
-  // an unbound-variable error before bash 4.4, so a full-scope deploy would die on the runner's
-  // bash rather than on anything about this stack. Verified against bash 3.2.
-  assert.deepEqual(liveCommands(previewStep.run), [
-    'set -euo pipefail',
-    'if node -e "const pkg = require(\'./package.json\'); process.exit(pkg.scripts?.[\'validate-preview\'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then',
-    '  policy=policies/runner',
-    '  validator=(npm run --silent validate-preview)',
-    'elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then',
-    '  policy=.',
-    '  validator=(node scripts/deployment-preview.mjs)',
-    'else',
-    "  echo 'selected commit has no supported deployment preview contract' >&2",
-    '  exit 1',
-    'fi',
-    'args=(diff --stage "$STAGE" --policy "$policy")',
-    '[ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")',
-    'args+=(--json)',
-    'npm run --silent sst -- "${args[@]}" |',
-    '  "${validator[@]}"',
-  ])
   assert.ok(deployStep, 'the deployment step is missing')
   assert.equal(deployStep.if, '${{ inputs.apply }}')
-  assert.deepEqual(liveCommands(deployStep.run), [
-    'set -euo pipefail',
-    'if node -e "const pkg = require(\'./package.json\'); process.exit(pkg.scripts?.[\'validate-preview\'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then',
-    '  policy=policies/runner',
-    'elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then',
-    '  policy=.',
-    'else',
-    "  echo 'selected commit has no supported deployment preview contract' >&2",
-    '  exit 1',
-    'fi',
-    'args=(--stage "$STAGE" --policy "$policy")',
-    '[ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")',
-    'npm run deploy -- "${args[@]}"',
-  ])
-  // The `"${args[@]}"` spelling in both invocations above is the whole guard: `--exclude
-  // "$DEPLOY_EXCLUDE"` inline would hand SST an empty component name on every full deploy, and
-  // unquoted it would word-split. The deepEqual pins those lines exactly, so no separate check.
+  /*
+   * Five properties per invocation, rather than the script line for line. Each is a way a deploy
+   * has actually gone wrong, and none of them cares how the surrounding bash is worded:
+   *
+   *   - the mandatory Runner policy is passed, so a plan that would replace a Runner is refused;
+   *   - the dispatched stage is passed, in the seed. The two legs fail differently without it and
+   *     the preview's way is the dangerous one: resolveSstStage returns 'dev' for a non-mutating
+   *     verb, so the diff previews a stage the apply never reconciles, while `deploy` refuses
+   *     outright (deployment/environment.ts). Pinning the seed keeps both honest;
+   *   - the scope is appended conditionally, never inline — `--exclude "$DEPLOY_EXCLUDE"` inline
+   *     hands SST an empty component name on every full-scope deploy;
+   *   - it is expanded as "${args[@]}", so a scope with a space cannot word-split;
+   *   - the array is seeded with the fixed arguments, never `args=()` — expanding an EMPTY array
+   *     under `set -u` is an unbound-variable error before bash 4.4, which would kill a full-scope
+   *     deploy on the runner's own bash. Verified against bash 3.2.
+   */
+  for (const [label, step, invocation] of [
+    ['preview', previewStep, /npm run --silent sst -- "\$\{args\[@\]\}"/],
+    ['deploy', deployStep, /npm run deploy -- "\$\{args\[@\]\}"/],
+  ] as const) {
+    const shell = liveShell(step.run)
+    assert.match(shell, /--policy policies\/runner/, `the ${label} must pass the mandatory Runner policy`)
+    const seededArgs = shell.match(/^args=\((.+)\)$/m)
+    assert.ok(seededArgs, `the ${label} must seed its argument array`)
+    assert.match(seededArgs[1], /--stage "\$STAGE"/, `the ${label} must act on the dispatched stage`)
+    assert.match(
+      shell,
+      /\[ -z "\$DEPLOY_EXCLUDE" \] \|\| args\+=\(--exclude "\$DEPLOY_EXCLUDE"\)/,
+      `the ${label} must append the scope only when one was selected`,
+    )
+    assert.match(shell, invocation, `the ${label} must expand its arguments as a quoted array`)
+  }
+  // `sst diff` is what makes the preview a preview — the loop above proves it runs under the same
+  // policy pack as the apply, so a Runner the plan would replace is refused before approval.
+  assert.match(liveShell(previewStep.run), /args=\(diff /)
   assert.ok(
     workflow.jobs.deploy.steps.indexOf(previewStep) < workflow.jobs.deploy.steps.indexOf(deployStep),
     'Preview validation must complete before deployment',
@@ -1475,77 +1508,6 @@ test('the deploy role cannot reach another stage in the SST backing store', () =
   )
 })
 
-test('the stage configuration capability probe answers each selected-commit shape', () => {
-  // The gate is shell inside YAML, so the contract assertions above can only prove it is present.
-  // This runs the probe's own `node -e` expression against the three trees a dispatch can select: one
-  // that declares the capability, one from before it existed, and one whose file is corrupt. The last
-  // must not read as "supported" — a parse failure falling through to the happy path would deploy
-  // exactly the commit the gate exists to refuse.
-  const workflow = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
-  const gate = workflow.jobs.deploy.steps.find(
-    (step: any) => step.name === 'Require stage configuration store support in the selected commit',
-  )
-  assert.ok(gate, 'the capability gate is missing')
-  const probe = liveShell(gate.run)
-    .split('\n')
-    .map((line: string) => line.trim())
-    .find((line: string) => line.startsWith('if ! status=$(node -e'))
-  assert.ok(probe, 'the capability probe is not a node -e expression any more')
-  const expression = probe.slice(probe.indexOf('"') + 1, probe.lastIndexOf('" "$capability"'))
-
-  /*
-   * The two gates read the same file, so they must accept the same versions. Left to drift, a bump one
-   * gate welcomes makes the other refuse the deploy — with a message about the store, for a commit
-   * whose store support never changed. This is not hypothetical: #1253 widened one of them.
-   */
-  const componentGate = workflow.jobs.deploy.steps.find(
-    (step: any) => step.name === 'Require component selection support in the selected commit',
-  )
-  assert.ok(componentGate, 'the component-selection gate is missing')
-  const acceptedVersions = (source: string) => source.match(/\[[\d,\s]+\]\.includes\(c\.version\)/)?.[0]
-  assert.equal(
-    acceptedVersions(expression),
-    acceptedVersions(liveShell(componentGate.run)),
-    'the two capability gates accept different versions of the same file',
-  )
-
-  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-capability-probe-'))
-  const capability = join(fixture, 'capabilities.json')
-  try {
-    const cases: Array<[string, string]> = [
-      ['supported', JSON.stringify({ version: 1, componentSelection: true, stageConfigStore: true })],
-      ['unsupported', JSON.stringify({ version: 1, componentSelection: true })],
-      /*
-       * v2 with the capability declared is SUPPORTED. There is one capabilities.json with one version,
-       * so a bump made for an unrelated capability must not read as "this commit cannot use the store"
-       * — which is why the component-selection gate stopped pinning a single version (#1253), and why
-       * this gate accepts the same set.
-       */
-      ['supported', JSON.stringify({ version: 2, componentSelection: true, stageConfigStore: true })],
-      ['unsupported', JSON.stringify({ version: 2, componentSelection: true })],
-      // Outside the set both gates accept: a future version this workflow has never been taught to read.
-      ['unsupported', JSON.stringify({ version: 3, stageConfigStore: true })],
-    ]
-    for (const [expected, contents] of cases) {
-      writeFileSync(capability, contents)
-      const status = execFileSync(process.execPath, ['-e', expression, capability], { encoding: 'utf8' }).trim()
-      assert.equal(status, expected, `probe answered '${status}' for ${contents}`)
-    }
-
-    // Corrupt JSON must throw rather than print a status: that is what makes the workflow's
-    // `if ! status=$(...)` branch set `unreadable` and refuse instead of falling through.
-    writeFileSync(capability, '{ not json')
-    assert.throws(() =>
-      execFileSync(process.execPath, ['-e', expression, capability], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      }),
-    )
-  } finally {
-    rmSync(fixture, { recursive: true, force: true })
-  }
-})
-
 test('release deployment consumes one published version for both components', () => {
   const source = readFileSync(RELEASE_DEPLOY_WORKFLOW, 'utf8')
   const workflow = load(source)
@@ -1579,18 +1541,12 @@ test('release deployment consumes one published version for both components', ()
   // The same guarded wrapper and the same pre-deploy gates the build path uses: a release
   // deploy reconciles the identical stack, so it owes the identical safety checks.
   assert.equal(deployStep.shell, 'bash')
-  assert.deepEqual(liveShell(deployStep.run).split('\n').filter(Boolean), [
-    'set -euo pipefail',
-    'if node -e "const pkg = require(\'./package.json\'); process.exit(pkg.scripts?.[\'validate-preview\'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then',
-    '  policy=policies/runner',
-    'elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then',
-    '  policy=.',
-    'else',
-    "  echo 'selected commit has no supported deployment preview contract' >&2",
-    '  exit 1',
-    'fi',
-    'npm run deploy -- --stage "$STAGE" --policy "$policy"',
-  ])
+  // Through the guarded wrapper (`npm run deploy`, never the sst binary) and with the mandatory
+  // Runner policy — a release reconciles the identical stack, so it owes the identical guards. A
+  // release deploy takes no --exclude: it is always the whole stack at one published version.
+  const releaseDeployShell = liveShell(deployStep.run)
+  assert.match(releaseDeployShell, /npm run deploy -- --stage "\$STAGE" --policy policies\/runner/)
+  assert.doesNotMatch(releaseDeployShell, /--exclude/)
   assert.ok(workflow.jobs.deploy.steps.find((step: any) => step.name === 'Run deployment safety tests'))
   const boundaryStep = workflow.jobs.deploy.steps.find(
     (step: any) => step.name === 'Verify deploy role IAM boundary permissions',
@@ -1794,9 +1750,9 @@ test('API publishing builds once and promotes that exact image without rebuildin
   const resolveRun = workflow.jobs.publish.steps.find((step: any) => step.name === 'Resolve publish operation')?.run ?? ''
   assertShellLine(resolveRun, /tag v\$version declares Cargo\.toml version/)
   assertShellLine(resolveRun, /builds always land in dev/)
-  // The one string the deploy has to agree with. apiImageTag() in api-artifact.mjs derives the
+  // The one string the deploy has to agree with. apiImageTag() in artifacts/api.ts derives the
   // reference SST is handed; if these two drift the deploy resolves a tag nothing ever pushed and
-  // only finds out when the ECS task fails to pull. api-artifact.test.mjs pins the other half.
+  // only finds out when the ECS task fails to pull. artifacts/api.test.ts pins the other half.
   assertShellLine(resolveRun, /tag="v\$\{version\}-\$\{INPUT_REF\}"/)
   // A ref that is not a full lowercase sha would tag an image nobody can address again.
   assertShellLine(resolveRun, /\[\[ "\$INPUT_REF" =~ \^\[0-9a-f\]\{40\}\$ \]\]/)
@@ -1899,6 +1855,18 @@ test('dev deploy role trusts only the repository GitHub Environment identity', (
       'arn:${AWS::Partition}:s3:::boxlite-app-${GitHubEnvironment}-*/*',
       'arn:${AWS::Partition}:s3:::boxlite-volume-*/*',
     ],
+  })
+  /*
+   * The last sibling, and the one the unscoped-grant test cannot reach: it collects the deploy role's
+   * own policies, and this statement lives in the boundary ManagedPolicy, which names no role. So
+   * `boxlite-*` here — a task assuming another stage's runtime role — was revertible with every test
+   * still green, which is the failure shared/resource-name.ts:22-25 already records once.
+   */
+  assert.deepEqual(findStatement(statements, 'AssumeBoxLiteRuntimeRoles'), {
+    Sid: 'AssumeBoxLiteRuntimeRoles',
+    Effect: 'Allow',
+    Action: 'sts:AssumeRole',
+    Resource: 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-*',
   })
 })
 

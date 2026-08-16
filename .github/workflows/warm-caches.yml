@@ -34,8 +34,9 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'  # sccache and incremental compilation are incompatible
   SKIP_INSTALL_NODEJS: '1'
-  SCCACHE_GHA_ENABLED: 'true'
-  RUSTC_WRAPPER: 'sccache'
+  # SCCACHE_GHA_ENABLED and RUSTC_WRAPPER used to be declared here, and only here, which
+  # is why this was the one workflow whose host builds were actually cached.
+  # ./.github/actions/sccache now sets both for every caller.
 
 jobs:
   config:
@@ -54,77 +55,30 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Export GHA cache env vars
-        uses: actions/github-script@v7
+      # tolerate-failure: false — this workflow exists to populate the cache, so a
+      # failed setup is a failed run rather than an uncached one.
+      - uses: ./.github/actions/sccache
         with:
-          script: |
-            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', process.env.ACTIONS_CACHE_SERVICE_V2 || '');
+          tolerate-failure: 'false'
 
       # Guest build on host WITH sccache — warms cache for all workflows' guest builds
-      - name: Build guest binary
+      - uses: ./.github/actions/build-guest
         if: runner.os == 'Linux'
-        run: |
-          make setup:build guest
-          sccache --show-stats
-          GUEST_TARGET=$(scripts/util.sh --target)
-          mkdir -p ".cache/$GUEST_TARGET/release"
-          cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
-          rm -rf target ~/.rustup ~/.cargo
-          mkdir -p target
+        with:
+          show-sccache-stats: 'true'
 
-      # Docker build WITH sccache — warms cache for all workflows' manylinux builds
+      # Docker build WITH sccache — warms cache for all workflows' manylinux builds.
+      # No script: the shared prologue ends in `make setup:build runtime`, which under
+      # sccache is exactly the warming this job exists to do.
       - name: Build runtime in manylinux (warm sccache)
         if: runner.os == 'Linux'
-        run: |
-          cat > "$RUNNER_TEMP/build.sh" << 'CONTAINER_SCRIPT'
-          set -ex
-          git config --global --add safe.directory /work
-
-          # sccache fallback: if not available, disable wrapper for normal compilation
-          if [ -n "${RUSTC_WRAPPER:-}" ] && ! command -v "$RUSTC_WRAPPER" &>/dev/null; then
-            echo "::warning::sccache not available in container, falling back to normal compilation"
-            unset RUSTC_WRAPPER
-          fi
-
-          GUEST_TARGET=$(scripts/util.sh --target)
-          if [ -d ".cache/$GUEST_TARGET" ]; then
-            echo "Restoring guest from .cache/$GUEST_TARGET"
-            mkdir -p target
-            cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
-          fi
-
-          export SKIP_GUEST_BUILD=1
-          export PATH="/usr/local/go/bin:$CARGO_HOME/bin:$PATH"
-          make setup:build runtime
-
-          command -v sccache &>/dev/null && sccache --show-stats || true
-          CONTAINER_SCRIPT
-
-          # Conditionally mount sccache binary and pass env vars into Docker.
-          # If sccache-action failed or binary is missing, build proceeds without caching.
-          SCCACHE_DOCKER_ARGS=""
-          if command -v sccache &>/dev/null; then
-            SCCACHE_DOCKER_ARGS="-v $(which sccache):/usr/local/bin/sccache:ro -e SCCACHE_GHA_ENABLED=true -e RUSTC_WRAPPER=sccache -e ACTIONS_CACHE_SERVICE_V2 -e ACTIONS_RESULTS_URL -e ACTIONS_RUNTIME_TOKEN"
-          fi
-
-          docker run --rm \
-            -v ${{ github.workspace }}:/work \
-            -v "$RUNNER_TEMP/build.sh:/tmp/build.sh:ro" \
-            $SCCACHE_DOCKER_ARGS \
-            -w /work \
-            -e CARGO_HOME=/work/.cargo-manylinux \
-            quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }} \
-            bash /tmp/build.sh
+        uses: ./.github/actions/run-in-manylinux
+        with:
+          target: ${{ matrix.target }}
 
       # macOS build — warms cache for all workflows' darwin-arm64 builds
       - name: Build runtime (macOS)

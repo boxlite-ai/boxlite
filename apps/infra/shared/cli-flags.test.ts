@@ -24,7 +24,7 @@ test('parseFlag rejects a flag whose value is the next flag', () => {
 
 test('parseFlag treats an empty inline value as empty, not missing', () => {
   // Distinguishes "flag absent" (undefined) from "flag given empty" (''), so a
-  // caller can tell them apart. login.mjs treats both as "all providers".
+  // caller can tell them apart. login.ts treats both as "all providers".
   assert.equal(parseFlag(['--only='], 'only'), '')
 })
 

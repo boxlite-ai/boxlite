@@ -87,7 +87,7 @@ test('builds Linux AMD64 with the commit in both the version and archive identit
 })
 
 test('stages against the same AWS identity the printed deploy command will use', async () => {
-  // The deploy goes through sst-with-cloudflare.mjs, which loads apps/infra/.env. Resolving AWS
+  // The deploy goes through deployment/sst.ts, which loads apps/infra/.env. Resolving AWS
   // from the bare shell instead could upload into one account and then read from another.
   const { builder, calls } = fakeBuilder()
   await builder.execute({ stage: 'dev' })
@@ -161,7 +161,7 @@ test('a half-published commit is reported, not silently completed', async () => 
 })
 
 test('the repository root is resolved from this module, not the caller working directory', async () => {
-  // Same reason artifact-source.mjs anchors its lookup: from a nested repository or submodule a
+  // Same reason artifacts/source.ts anchors its lookup: from a nested repository or submodule a
   // bare rev-parse answers for that one, and this call decides the commit the artifact is keyed to.
   const { builder, calls } = fakeBuilder()
   await builder.execute({ stage: 'dev' })

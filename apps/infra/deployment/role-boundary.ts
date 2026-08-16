@@ -2,7 +2,7 @@
 // Copyright (c) 2026 BoxLite AI
 
 /*
- * Pure IAM-policy-document checks for `verify-deploy-role-boundary.mjs` — a
+ * Pure IAM-policy-document checks for deployment/verify-role.ts — a
  * CI preflight that catches "the bootstrap CloudFormation stack was never
  * (re)deployed" in seconds, using only the read-only IAM permissions already
  * granted to the deploy role (the ReadIamAndAccountMetadata statement in
@@ -18,7 +18,7 @@
  * fails safely: the real deploy step re-checks it for real.
  */
 
-import { runtimeBoundaryPolicyArn } from '../bootstrap/environment.js'
+import { runtimeBoundaryPolicyArn } from './environment.js'
 
 const ASSUMED_ROLE_ARN_PATTERN = /^arn:aws:sts::\d{12}:assumed-role\/([^/]+)\/[^/]+$/
 
@@ -89,8 +89,8 @@ export function verifyDeployRoleGrantsBoundaryPermission({ callerArn, accountId,
   const roleName = parseAssumedRoleName(callerArn)
   const boundaryArn = runtimeBoundaryPolicyArn({ accountId, appName, stage })
   // A synthetic-but-representative role ARN under the namespace SST creates
-  // roles in — not a real resource, just something the policy's `role/
-  // boxlite-*`-style Resource pattern should match.
+  // roles in — not a real resource, just something the policy's
+  // `role/boxlite-<stage>-*`-style Resource pattern should match.
   const probeResource = `arn:aws:iam::${accountId}:role/${appName}-${stage}-verify-probe`
 
   const grants = policyDocumentsAllow(policyDocuments, {

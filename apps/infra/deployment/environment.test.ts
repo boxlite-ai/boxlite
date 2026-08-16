@@ -9,10 +9,15 @@ import test from 'node:test'
 
 import {
   loadDeploymentEnvironment,
+  optionalPublicOidcIssuer,
   readWorkspaceVersion,
+  requireIamPermissionsBoundaryStage,
+  requireOidcIssuer,
   resolveAwsRegion,
   resolvePublicDeploymentConfig,
   resolveReleaseVersion,
+  resolveSstStage,
+  runtimeBoundaryPolicyArn,
 } from './environment.js'
 
 test('loads the deployment dotenv before resolving wrapper-side AWS settings', () => {
@@ -189,4 +194,106 @@ test('rejects Proxy settings that disagree with the provisioned TLS NLB', () => 
       ),
     /PROXY_TEMPLATE_URL host detached\.dev\.boxlite\.ai does not match PROXY_DOMAIN proxy\.dev\.boxlite\.ai/,
   )
+})
+
+test('resolves a stage from separate and inline CLI arguments', () => {
+  assert.equal(resolveSstStage(['deploy', '--stage', 'dev'], {}), 'dev')
+  assert.equal(resolveSstStage(['deploy', '--stage=production'], {}), 'production')
+})
+
+test('resolves an explicitly configured SST_STAGE', () => {
+  assert.equal(resolveSstStage(['deploy'], { SST_STAGE: 'staging' }), 'staging')
+})
+
+test('rejects duplicate stage options instead of guessing which one SST will use', () => {
+  assert.throws(
+    () => resolveSstStage(['deploy', '--stage', 'dev', '--stage=production'], {}),
+    /--stage may be specified only once/,
+  )
+})
+
+test('rejects unsafe CLI and environment stage values', () => {
+  for (const stage of ['dev/production', ' dev', 'dev ', '--production', 'Feature', 'feature_42-test', 'a'.repeat(29), '']) {
+    if (stage === '') {
+      assert.throws(() => resolveSstStage(['deploy', '--stage='], {}), /--stage requires a value/)
+      continue
+    }
+    assert.throws(() => resolveSstStage(['deploy', `--stage=${stage}`], {}), /invalid SST stage/)
+  }
+
+  assert.throws(() => resolveSstStage(['deploy'], { SST_STAGE: 'dev/production' }), /invalid SST stage/)
+  assert.equal(resolveSstStage(['deploy', '--stage', `feature-${'a'.repeat(20)}`], {}), `feature-${'a'.repeat(20)}`)
+})
+
+test('requires an explicit stage for state-changing stack commands', () => {
+  assert.throws(() => resolveSstStage(['deploy'], {}), /deploy requires an explicit --stage or SST_STAGE/)
+  assert.throws(() => resolveSstStage(['remove'], {}), /remove requires an explicit --stage or SST_STAGE/)
+})
+
+test('retains the dev credential lookup default for non-deploy commands', () => {
+  assert.equal(resolveSstStage(['diff'], {}), 'dev')
+})
+
+test('requires the provisioned IAM boundary stage to match the SST stage', () => {
+  assert.equal(requireIamPermissionsBoundaryStage('dev', { IAM_PERMISSIONS_BOUNDARY_STAGE: 'dev' }), 'dev')
+  assert.throws(
+    () => requireIamPermissionsBoundaryStage(0, { IAM_PERMISSIONS_BOUNDARY_STAGE: '0' }),
+    /invalid SST stage/,
+  )
+  assert.throws(
+    () => requireIamPermissionsBoundaryStage('production', { IAM_PERMISSIONS_BOUNDARY_STAGE: 'dev' }),
+    /IAM permissions boundary stage dev does not match SST stage production/,
+  )
+  assert.throws(() => requireIamPermissionsBoundaryStage('dev', {}), /IAM_PERMISSIONS_BOUNDARY_STAGE is required/)
+})
+
+test('runtimeBoundaryPolicyArn matches the stack transform interpolation', () => {
+  assert.equal(
+    runtimeBoundaryPolicyArn({ accountId: '123456789012', appName: 'boxlite', stage: 'dev' }),
+    'arn:aws:iam::123456789012:policy/boxlite-dev-runtime-boundary',
+  )
+})
+
+test('runtimeBoundaryPolicyArn rejects a malformed account id and an unsafe stage', () => {
+  assert.throws(
+    () => runtimeBoundaryPolicyArn({ accountId: '12345', appName: 'boxlite', stage: 'dev' }),
+    /must be a 12-digit AWS account id/,
+  )
+  // Tightened by the move: this name is interpolated into an ARN, so it now takes the same stage
+  // grammar every other generated name does rather than the looser bootstrap-side spelling. 'Dev'
+  // is the case that shows the change — the old grammar allowed uppercase and accepted it.
+  assert.throws(
+    () => runtimeBoundaryPolicyArn({ accountId: '123456789012', appName: 'boxlite', stage: 'Dev' }),
+    /invalid SST stage/,
+  )
+})
+
+test('preserves each provider-defined HTTPS issuer exactly', () => {
+  assert.equal(requireOidcIssuer({ OIDC_ISSUER_BASE_URL: 'https://tenant.auth0.com/' }), 'https://tenant.auth0.com/')
+  assert.equal(
+    requireOidcIssuer({ OIDC_ISSUER_BASE_URL: 'https://tenant.okta.com/oauth2/default' }),
+    'https://tenant.okta.com/oauth2/default',
+  )
+  assert.equal(
+    optionalPublicOidcIssuer({ PUBLIC_OIDC_DOMAIN: 'https://auth.dev.example.com/tenant' }),
+    'https://auth.dev.example.com/tenant',
+  )
+})
+
+test('requires the internal issuer and treats an empty public issuer as unset', () => {
+  assert.throws(() => requireOidcIssuer({}), /OIDC_ISSUER_BASE_URL is required/)
+  assert.equal(optionalPublicOidcIssuer({}), undefined)
+  assert.equal(optionalPublicOidcIssuer({ PUBLIC_OIDC_DOMAIN: '' }), undefined)
+})
+
+test('rejects malformed or unsafe issuer URLs', () => {
+  for (const value of [
+    'tenant.auth0.com/',
+    'http://tenant.auth0.com/',
+    'https://user:password@tenant.auth0.com/',
+    'https://tenant.auth0.com/?tenant=dev',
+    'https://tenant.auth0.com/#issuer',
+  ]) {
+    assert.throws(() => requireOidcIssuer({ OIDC_ISSUER_BASE_URL: value }), /OIDC_ISSUER_BASE_URL/)
+  }
 })

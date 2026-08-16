@@ -2,7 +2,8 @@
 
 Why the VPC is laid out the way it is: who can reach what, how things reach the
 internet, and the reasoning (with AWS docs) behind the two different egress
-patterns. Defined in [`sst.config.ts`](./sst.config.ts) §2 PLATFORM + §10 RUNNER.
+patterns. Defined in [`stack/foundation.ts`](../stack/foundation.ts) and
+[`stack/runners.ts`](../stack/runners.ts).
 
 ## Layout (ap-southeast-1, 2 AZs)
 
@@ -65,7 +66,7 @@ allowed). The difference is the failure mode.
 - **The runner uses B** by necessity (EC2, high-bandwidth image-pull egress).
   Because the SG is its *entire* inbound control surface, it is pinned to
   `:3003` from the VPC CIDR only → an **egress-only public IP**, nothing inbound
-  from the internet. See `RunnerSecurityGroup` in `sst.config.ts`.
+  from the internet. See `RunnerSecurityGroup` in `stack/runners.ts`.
 
 ## Why two NAT instances
 

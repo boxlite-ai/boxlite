@@ -1,5 +1,5 @@
 # Detect changed components by diffing against main (or HEAD~1 if on main).
-# Returns a space-separated list of component tags: rust cli ffi python node c go apps
+# Returns a space-separated list of component tags: rust cli ffi python node c go apps ci
 define detect_changes
 $(shell \
   BRANCH=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
@@ -22,6 +22,8 @@ $(shell \
   echo "$$CHANGED" | grep -q '^apps/' && printf 'apps '; \
   echo "$$CHANGED" | grep -q '^Cargo\.toml$$' && printf 'rust '; \
   echo "$$CHANGED" | grep -q '^Cargo\.lock$$' && printf 'rust '; \
+  echo "$$CHANGED" | grep -q '^\.github/workflows/' && printf 'ci '; \
+  echo "$$CHANGED" | grep -q '^\.github/actions/' && printf 'ci '; \
 )
 endef
 
@@ -29,4 +31,7 @@ CHANGED_COMPONENTS := $(sort $(detect_changes))
 
 # Map test components to format/lint surfaces.
 # cli doesn't need a separate formatter — cargo fmt --all and clippy --workspace cover it.
-FMT_COMPONENTS := $(sort $(subst cli,rust,$(CHANGED_COMPONENTS)))
+# ci is filtered out rather than mapped: quality.mk expands fmt:<comp> and lint:<comp> for every
+# tag here, and there is no formatter for workflow YAML. Leaving it in would make `make lint:fix`
+# — the pre-commit hook's own entry point — invoke a target that does not exist.
+FMT_COMPONENTS := $(sort $(filter-out ci,$(subst cli,rust,$(CHANGED_COMPONENTS))))

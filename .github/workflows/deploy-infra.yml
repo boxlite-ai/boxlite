@@ -13,7 +13,7 @@ run-name: Deploy ${{ inputs.components }} to ${{ inputs.stage }}
 #
 # `components` narrows both halves at once: an unselected leg is neither built nor deployed. It
 # drops the build jobs here and becomes `--exclude <Component>` on the SST commands below, which
-# apps/infra/scripts/deployment-scope.mjs accepts as a reviewed partial shape.
+# apps/infra/deployment/scope.ts accepts as one of the reviewed partial shapes.
 # Never `--target`: PR #1095 stalled this stack mid-provider-migration that way, because a targeted
 # update omits the shared resources it still depends on. `--exclude` keeps them in the plan.
 
@@ -194,7 +194,7 @@ jobs:
     needs: resolve-ref
     if: ${{ contains(inputs.components, 'runner') }}
     # The called workflow's release-upload job declares contents: write, and a callee cannot go
-    # past what its caller grants (see the caller-grant test in release-deployment-safety.test.mjs
+    # past what its caller grants (see the caller-grant test in apps/infra/deployment/release-safety.test.ts
     # for what is documented and what is inferred). Granted here rather than at workflow level so
     # the deploy job below keeps contents: read.
     permissions:
@@ -211,7 +211,7 @@ jobs:
     # input to this job rather than the reason it exists, so the scope is declared on both.
     if: ${{ contains(inputs.components, 'runner') }}
     # The called workflow's release-upload job declares contents: write, and a callee cannot go
-    # past what its caller grants (see the caller-grant test in release-deployment-safety.test.mjs
+    # past what its caller grants (see the caller-grant test in apps/infra/deployment/release-safety.test.ts
     # for what is documented and what is inferred). Granted here rather than at workflow level so
     # the deploy job below keeps contents: read.
     permissions:
@@ -258,99 +258,56 @@ jobs:
           persist-credentials: false
 
       # workflow_dispatch takes the workflow definition from the dispatch ref — main's tip — while
-      # this job checks out the SELECTED commit, so the two halves are versioned independently and
-      # a narrowed scope couples them: `--exclude` reaches a wrapper that may predate it.
+      # this job checks out the SELECTED commit. The two halves are versioned independently, so the
+      # tree being deployed, not this workflow, decides what the deploy can actually do. A commit
+      # predating the stage configuration store expects apps/infra/.env from a DEPLOY_ENV secret
+      # this workflow no longer writes, and would deploy with whatever defaults survived; one
+      # predating component selection would ignore --exclude and reconcile the full stack. Both are
+      # refused here rather than half-way through a reconcile.
       #
-      # A backstop, not the primary defence. resolve-ref answers `pr` with the merge commit, which
-      # carries main's tooling, so an ordinary branch being behind main no longer reaches here.
-      # Two things still can: `ref`, which names any commit on main including one older than
-      # component selection, and a pull request that itself removes or breaks the module. Detected
-      # on the deployed tree rather than assumed, because the alternative failure is `partial SST
-      # deploys are disabled` from the older guard — true of that commit, but it reads as a
-      # statement about this workflow and sends the operator to the wrong file.
+      # A backstop, not the primary defence: resolve-ref answers `pr` with the merge commit, which
+      # carries main's tooling, so only `ref` — which names any commit on main, including an old
+      # one — routinely reaches this. Asked of the deployed tree rather than assumed, because the
+      # alternative failure is `partial SST deploys are disabled` from that commit's own wrapper:
+      # true of it, but it reads as a statement about this workflow and sends the operator to the
+      # wrong file.
       #
       # Legacy trees only support the original one-component exclusions. The infrastructure-only
       # shape arrived with capability v2, so it must fail here rather than reach an older wrapper.
       #
-      # Runs before the AWS credential step on purpose: an unsupported scope is knowable from the
+      # Runs before the AWS credential step on purpose: an unsupported commit is knowable from the
       # checkout alone, so it should never reach the deploy role.
       #
-      # New trees declare capabilities as data. Historical trees fall back to the original pure
-      # module probe so supported commits remain deployable without teaching them the new layout.
-      - name: Require component selection support in the selected commit
-        if: ${{ env.DEPLOY_EXCLUDE != '' }}
+      # The version set is a range, not `=== 1`: a capability file is one document with one version,
+      # so pinning a single number rejects a commit that bumped it for an unrelated capability while
+      # still declaring this one (#1253).
+      - name: Require deployment capabilities in the selected commit
         shell: bash
         run: |
           set -euo pipefail
           capability=apps/infra/deployment/capabilities.json
-          legacy_module=apps/infra/scripts/deployment-scope.mjs
-          if [ -f "$capability" ]; then
-            if ! status=$(node -e "const fs=require('node:fs'); const c=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); const infra=process.env.DEPLOY_EXCLUDE === 'Api,Runner'; console.log([1,2].includes(c.version) && c.componentSelection === true && (!infra || c.version === 2 && c.infrastructureOnly === true) ? 'supported' : 'unsupported')" "$capability"); then
-              status=unreadable
-            fi
-            source_path=$capability
-          elif [ -f "$legacy_module" ]; then
-            if [ "$DEPLOY_EXCLUDE" = 'Api,Runner' ]; then
-              status=unsupported
-            else
-              status=$(node -e "import('./$legacy_module').then(m => console.log(typeof m.resolveDeployScope === 'function' ? 'supported' : 'unsupported')).catch(e => { console.log('unreadable'); console.error(e.message) })")
-            fi
-            source_path=$legacy_module
-          else
-            status=unsupported
-            source_path=$capability
+          if [ ! -f "$capability" ]; then
+            echo "commit $BOXLITE_ARTIFACT_REF declares no $capability, so this workflow cannot tell" >&2
+            echo "what its deploy supports. Redispatch naming a newer ref." >&2
+            exit 1
           fi
-          case "$status" in
-            supported) ;;
-            unsupported)
-              echo "commit $BOXLITE_ARTIFACT_REF predates component selection, so it cannot honour" >&2
-              echo "--exclude $DEPLOY_EXCLUDE and would deploy the full stack instead." >&2
-              echo "Redispatch with components=api+runner, or name a newer ref: this needs a commit" >&2
-              echo "whose $source_path declares component selection support." >&2
-              exit 1
-              ;;
-            *)
-              echo "$source_path exists at commit $BOXLITE_ARTIFACT_REF but failed to load (reason" >&2
-              echo "above). That is not an age problem, so fix the module rather than widening" >&2
-              echo "the scope to api+runner." >&2
-              exit 1
-              ;;
-          esac
-
-      # Unconditional, unlike the component-selection probe above: this job deploys any commit on
-      # main and checks out THAT commit's apps/infra, and a commit predating the stage configuration
-      # store has a wrapper that still expects apps/infra/.env from the DEPLOY_ENV secret this
-      # workflow no longer writes. It would deploy with whatever defaults survived, so refuse here,
-      # before the deploy role is assumed, rather than half-way through a reconcile.
-      - name: Require stage configuration store support in the selected commit
-        shell: bash
-        run: |
-          set -euo pipefail
-          capability=apps/infra/deployment/capabilities.json
-          status=unsupported
-          if [ -f "$capability" ]; then
-            # The same version set the component-selection gate above accepts. A capability file is one
-            # document with one version, so pinning `=== 1` here would reject a commit that bumped it
-            # to 2 for an unrelated capability while still supporting this one — which is the whole
-            # reason that gate stopped pinning a single version (#1253).
-            if ! status=$(node -e "const fs=require('node:fs'); const c=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); console.log([1,2].includes(c.version) && c.stageConfigStore === true ? 'supported' : 'unsupported')" "$capability"); then
-              status=unreadable
-            fi
+          if ! status=$(node -e "
+            const c = JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))
+            const selectable = process.argv[2] === '' || c.componentSelection === true
+            const infrastructureOnly = process.argv[2] !== 'Api,Runner' || c.version === 2 && c.infrastructureOnly === true
+            console.log([1, 2].includes(c.version) && c.stageConfigStore === true && selectable && infrastructureOnly ? 'supported' : 'unsupported')
+          " "$capability" "$DEPLOY_EXCLUDE"); then
+            echo "$capability exists at commit $BOXLITE_ARTIFACT_REF but failed to load (reason" >&2
+            echo "above); fix the file rather than deploying without its configuration." >&2
+            exit 1
           fi
-          case "$status" in
-            supported) ;;
-            unsupported)
-              echo "commit $BOXLITE_ARTIFACT_REF reads its stage configuration from apps/infra/.env," >&2
-              echo "which this workflow no longer materializes — it lives in the stage's SST secret" >&2
-              echo "store now. Deploy a commit whose $capability declares stageConfigStore." >&2
-              exit 1
-              ;;
-            *)
-              echo "$capability exists at commit $BOXLITE_ARTIFACT_REF but failed to load (reason" >&2
-              echo "above); fix the file rather than deploying without its configuration." >&2
-              exit 1
-              ;;
-          esac
+          if [ "$status" != supported ]; then
+            echo "commit $BOXLITE_ARTIFACT_REF does not declare the capabilities this deploy needs:" >&2
+            echo "reading stage configuration from the SST secret store, and — when components are" >&2
+            echo "narrowed — honouring --exclude $DEPLOY_EXCLUDE rather than deploying the full" >&2
+            echo "stack. Redispatch with components=api+runner, or name a newer ref." >&2
+            exit 1
+          fi
 
       - name: Verify native AMD64 Docker
         shell: bash
@@ -397,7 +354,7 @@ jobs:
           test -f "dist/runner/$archive"
           test -f "dist/runner/$archive.sha256"
           if ! aws s3api head-bucket --bucket "$bucket" >/dev/null 2>&1; then
-            echo "artifact bucket $bucket is missing; bootstrap $STAGE from apps/infra/ci/github-deploy-role.yaml first" >&2
+            echo "artifact bucket $bucket is missing; bootstrap $STAGE from apps/infra/bootstrap/aws/github-deploy-role.yaml first" >&2
             exit 1
           fi
           # Write-once: the Pulumi trigger and the host's health-route comparison treat
@@ -405,7 +362,7 @@ jobs:
           # already-installed hosts on the old build. S3 returns 412 rather than overwriting.
           #
           # Decided over the ref as a whole, never per key — the same rule
-          # apps/infra/scripts/runner-artifact-build.mjs applies locally. A fully published ref is
+          # apps/infra/artifacts/runner-build.ts applies locally. A fully published ref is
           # the desired end state. A half-published one is not completed here: the rebuild is not
           # byte-identical (tar czf alone stamps a gzip mtime), so writing the absent manifest
           # would describe bytes that are not the ones stored, and write-once then makes that
@@ -447,16 +404,7 @@ jobs:
       - name: Verify deploy role IAM boundary permissions
         working-directory: apps/infra
         shell: bash
-        run: |
-          set -euo pipefail
-          if node -e "const pkg = require('./package.json'); process.exit(pkg.scripts?.['verify-deploy-role'] ? 0 : 1)"; then
-            npm run --silent verify-deploy-role
-          elif [ -f scripts/verify-deploy-role-boundary.mjs ]; then
-            node scripts/verify-deploy-role-boundary.mjs
-          else
-            echo 'selected commit has no supported deploy-role verifier' >&2
-            exit 1
-          fi
+        run: npm run --silent verify-deploy-role
 
       - name: Install SST providers
         working-directory: apps/infra
@@ -486,21 +434,9 @@ jobs:
           # SST would read as a component name. The fixed arguments seed it because expanding an
           # EMPTY array under `set -u` is an unbound-variable error before bash 4.4 — seeded, it
           # is never empty, so the line does not depend on the runner image's bash version.
-          if node -e "const pkg = require('./package.json'); process.exit(pkg.scripts?.['validate-preview'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then
-            policy=policies/runner
-            validator=(npm run --silent validate-preview)
-          elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then
-            policy=.
-            validator=(node scripts/deployment-preview.mjs)
-          else
-            echo 'selected commit has no supported deployment preview contract' >&2
-            exit 1
-          fi
-          args=(diff --stage "$STAGE" --policy "$policy")
+          args=(diff --stage "$STAGE" --policy policies/runner)
           [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
-          args+=(--json)
-          npm run --silent sst -- "${args[@]}" |
-            "${validator[@]}"
+          npm run --silent sst -- "${args[@]}"
 
       - name: Deploy the selected components
         if: ${{ inputs.apply }}
@@ -512,15 +448,7 @@ jobs:
         run: |
           set -euo pipefail
           # Seeded for the same reason as the preview above: an empty array must never be expanded.
-          if node -e "const pkg = require('./package.json'); process.exit(pkg.scripts?.['validate-preview'] ? 0 : 1)" && [ -f policies/runner/PulumiPolicy.yaml ]; then
-            policy=policies/runner
-          elif [ -f scripts/deployment-preview.mjs ] && [ -f PulumiPolicy.yaml ]; then
-            policy=.
-          else
-            echo 'selected commit has no supported deployment preview contract' >&2
-            exit 1
-          fi
-          args=(--stage "$STAGE" --policy "$policy")
+          args=(--stage "$STAGE" --policy policies/runner)
           [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
           npm run deploy -- "${args[@]}"
 

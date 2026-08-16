@@ -7,6 +7,9 @@ import test from 'node:test'
 import { parseAssumedRoleName, policyDocumentsAllow, verifyDeployRoleGrantsBoundaryPermission } from './role-boundary.js'
 
 const ACCOUNT_ID = '123456789012'
+// The stage the fixtures below are scoped to, matching the verifyDeployRoleGrantsBoundaryPermission
+// calls at the bottom of this file. The real template writes ${GitHubEnvironment} here.
+const STAGE = 'dev'
 const CALLER_ARN = `arn:aws:sts::${ACCOUNT_ID}:assumed-role/boxlite-app-dev-deploy/deploy-dev-stack-30606029374`
 
 // Mirrors bootstrap/aws/github-deploy-role.yaml's GitHubDeployRole inline policy verbatim
@@ -25,13 +28,13 @@ function boundedRoleStatements(boundaryArn: any) {
       Sid: 'ManageBoxLiteRoles',
       Effect: 'Allow',
       Action: ['iam:AttachRolePolicy', 'iam:UpdateRole'],
-      Resource: [`arn:aws:iam::${ACCOUNT_ID}:role/boxlite-*`],
+      Resource: [`arn:aws:iam::${ACCOUNT_ID}:role/boxlite-${STAGE}-*`],
     },
     {
       Sid: 'SetBoxLiteRoleBoundary',
       Effect: 'Allow',
       Action: 'iam:PutRolePermissionsBoundary',
-      Resource: `arn:aws:iam::${ACCOUNT_ID}:role/boxlite-*`,
+      Resource: `arn:aws:iam::${ACCOUNT_ID}:role/boxlite-${STAGE}-*`,
       Condition: { StringEquals: { 'iam:PermissionsBoundary': boundaryArn } },
     },
   ]
@@ -64,7 +67,10 @@ test('policyDocumentsAllow rejects when the condition value is for a different s
   const productionBoundaryArn = `arn:aws:iam::${ACCOUNT_ID}:policy/boxlite-production-runtime-boundary`
   const allowed = policyDocumentsAllow([{ Statement: boundedRoleStatements(devBoundaryArn) }], {
     action: 'iam:PutRolePermissionsBoundary',
-    resource: `arn:aws:iam::${ACCOUNT_ID}:role/boxlite-production-verify-probe`,
+    // This stage's role, deliberately: policyDocumentsAllow returns on the first mismatch, so a
+    // production-named resource would be rejected by the Resource check and never reach the
+    // condition comparison this test is named for. That is what a stage-scoped fixture made it do.
+    resource: `arn:aws:iam::${ACCOUNT_ID}:role/boxlite-${STAGE}-verify-probe`,
     conditionKey: 'iam:PermissionsBoundary',
     conditionValue: productionBoundaryArn,
   })

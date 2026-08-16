@@ -22,7 +22,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      # <namespace>-<workload>-<stage>-<name>, the grammar shared/resource-name.ts composes.
+      # <app>-<workload>-<stage>-<name>, the grammar awsResourceName composes.
       # This side declares the name; apiImageRepository resolves it. Both are pinned by tests.
       RepositoryName: !Sub boxlite-app-${GitHubEnvironment}-api
       ImageTagMutability: IMMUTABLE
@@ -137,7 +137,7 @@ Resources:
               - s3:PutBucketTagging
             Resource:
               # Both the legacy boxlite-<stage>-* shape and the boxlite-app-<stage>-* grammar
-              # shared/resource-name.ts composes. The boundary intersects with every identity
+              # awsResourceName composes. The boundary intersects with every identity
               # policy, so a bucket outside these prefixes is denied no matter what SST grants —
               # which is how a rename escapes the boundary silently.
               - !Sub arn:${AWS::Partition}:s3:::boxlite-${GitHubEnvironment}-*
@@ -160,7 +160,7 @@ Resources:
           - Sid: AssumeBoxLiteRuntimeRoles
             Effect: Allow
             Action: sts:AssumeRole
-            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-*
 
   GitHubDeployRole:
     Type: AWS::IAM::Role
@@ -208,17 +208,35 @@ Resources:
                   - lambda:*
                   - logs:*
                   - rds:*
-                  - secretsmanager:*
+                  # The two secretsmanager calls that take no resource, so IAM cannot scope them.
+                  # Everything else this service offers is stage-scoped — see SecretsForThisStage.
+                  - secretsmanager:ListSecrets
+                  - secretsmanager:GetRandomPassword
                   - servicediscovery:*
-                  # s3 and ssm are deliberately absent. Both reach the SST backing store, which holds
-                  # every stage's state and secrets under one bucket and one parameter tree — the live
-                  # bucket carries secret/boxlite/dev.json beside secret/boxlite/prod.json. Granted
-                  # account-wide, a job bound to the dev Environment could read prod's configuration,
-                  # and this change makes that configuration authoritative. Scoped below instead.
+                  # s3, ssm and the rest of secretsmanager are deliberately absent. All three reach
+                  # another stage's data: s3 and ssm through the SST backing store, which holds every
+                  # stage's state and secrets under one bucket and one parameter tree — the live bucket
+                  # carries secret/boxlite/dev.json beside secret/boxlite/prod.json — and secretsmanager
+                  # through secrets whose names carry the stage. Granted account-wide, a job bound to
+                  # the dev Environment could read prod's. Scoped below instead.
                   - tag:GetResources
                   - tag:GetTagKeys
                   - tag:GetTagValues
                 Resource: '*'
+              # The stage's own secrets, and no other stage's — the same scope the runtime boundary
+              # already admits. Two things have to hold for that to cover what the stack creates, and
+              # both were checked rather than assumed (.sst/platform/src/components/component.ts):
+              # a secret is stage-prefixed only if it is in SST's namingRules (:295, it is) AND is a
+              # component's child, because the renaming transform is registered in the Component
+              # constructor. DatabaseProxySecret and CacheProxySecret qualify on both counts — they
+              # are children of sst.aws.Postgres/Redis, and live as boxlite-dev-DatabaseProxySecret-*.
+              # GhcrPullToken (stack/runners.ts) is declared at stack root, so it would autoname out
+              # of this pattern; it carries an explicit name for exactly that reason.
+              - Sid: SecretsForThisStage
+                Effect: Allow
+                Action: secretsmanager:*
+                Resource:
+                  - !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:boxlite-${GitHubEnvironment}-*
               # The SST backing store, scoped to this stage. Every prefix SST writes is
               # `<kind>/<app>/<stage>`; the five that exist in the live bucket were read from it, and
               # lock/ and summary/ came from sst v4.6.11 pkg/project/provider/provider.go because a
@@ -272,7 +290,7 @@ Resources:
                 Resource:
                   - !Sub arn:${AWS::Partition}:s3:::sst-state-*/secret/boxlite/_fallback.json
               # The buckets this stack owns. Same prefixes the runtime boundary allows, so a rename has
-              # to widen both together — see shared/resource-name.ts.
+              # to widen both together — see awsResourceName in deployment/environment.ts.
               #
               # Four of the six prefixes are stage-scoped and two are not: boxlite-volume-* carries no
               # stage in its name, so this grants s3:* over every stage's volume buckets, not just this
@@ -369,21 +387,22 @@ Resources:
               - Sid: CreateBoundedBoxLiteRoles
                 Effect: Allow
                 Action: iam:CreateRole
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-*
                 Condition:
                   StringEquals:
                     iam:PermissionsBoundary: !Ref BoxLiteRuntimePermissionsBoundary
               # Two escalation paths, both closed the same way, because an IAM Allow cannot express
-              # "every boxlite-* resource except this one" — only a Deny can.
+              # "every boxlite-<stage>-* resource except this one" — only a Deny can.
               #
               # First: this role is itself named boxlite-<stage>-github-deploy, so it matches the
-              # role/boxlite-* resource of the IAM grants below. iam:PutRolePolicy aimed at itself
+              # role/boxlite-${GitHubEnvironment}-* resource of the IAM grants below — narrowing those
+              # to this stage does not exclude this role, it is this stage's. iam:PutRolePolicy aimed at itself
               # writes it any permission at all, with nothing to stop it — the runtime boundary
               # constrains the roles SST creates, not this role's own inline policy.
               #
               # Second, and less obvious: the boundary IS a managed policy named
-              # boxlite-<stage>-runtime-boundary, which matches the policy/boxlite-* resource of
-              # ManageBoxLitePolicies. Widening it, then creating a bounded role under the widened
+              # boxlite-<stage>-runtime-boundary, which matches the policy/boxlite-${GitHubEnvironment}-*
+              # resource of ManageBoxLitePolicies. Widening it, then creating a bounded role under the widened
               # version and passing it to a service, reaches anything the widened boundary allows. So
               # the boundary policy is denied mutation too.
               #
@@ -407,10 +426,11 @@ Resources:
                   - iam:DeletePolicyVersion
                   - iam:SetDefaultPolicyVersion
                 Resource:
-                  # Every stage's, not just this one's. role/boxlite-* covers a SIBLING stage's deploy
-                  # role too, so without the wildcard here a dev-bound job could rewrite prod's trust
-                  # policy and assume it. No deploy ever modifies one of these — they are CloudFormation
-                  # resources an operator creates — so denying all of them costs nothing.
+                  # Every stage's, not just this one's. The Allows above are now scoped to this
+                  # stage, but this Deny deliberately is not: it is the backstop if one ever widens
+                  # again, and a dev-bound job must never rewrite prod's trust policy and assume it.
+                  # No deploy ever modifies one of these — they are CloudFormation resources an
+                  # operator creates — so denying all of them costs nothing.
                   - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*-github-deploy
                   - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boxlite-*-runtime-boundary
               - Sid: ManageBoxLiteRoles
@@ -434,12 +454,12 @@ Resources:
                   - iam:UpdateRole
                   - iam:UpdateRoleDescription
                 Resource:
-                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*
-                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/boxlite-*
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-*
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/boxlite-${GitHubEnvironment}-*
               - Sid: SetBoxLiteRoleBoundary
                 Effect: Allow
                 Action: iam:PutRolePermissionsBoundary
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-*
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/boxlite-${GitHubEnvironment}-*
                 Condition:
                   StringEquals:
                     iam:PermissionsBoundary: !Ref BoxLiteRuntimePermissionsBoundary
@@ -453,7 +473,7 @@ Resources:
                   - iam:SetDefaultPolicyVersion
                   - iam:TagPolicy
                   - iam:UntagPolicy
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boxlite-*
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boxlite-${GitHubEnvironment}-*
               - Sid: CreateRequiredServiceLinkedRoles
                 Effect: Allow
                 Action: iam:CreateServiceLinkedRole

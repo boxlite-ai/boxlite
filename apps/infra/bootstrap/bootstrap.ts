@@ -65,10 +65,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { hasFlag, parseFlag } from '../shared/cli-flags.js'
 import { decideCredentialRotation, writeCloudflareCredential } from './cloudflare-credentials.js'
-import { withStageConfigFile } from './stage-config-file.js'
-import { loadDeploymentEnvironment, resolveAwsRegion } from '../deployment/environment.js'
+import { loadDeploymentEnvironment, resolveAwsRegion, resolveSstStage } from '../deployment/environment.js'
 import {
   GITHUB_OIDC_PROVIDER_URL,
   MINIMUM_AWS_CLI_VERSION,
@@ -77,13 +75,15 @@ import {
   githubDeployRoleStackName,
   hasGitHubOidcProvider,
   isAwsCliVersionAtLeast,
+  parseBootstrapOptions,
   prepareStageConfigLoad,
   serializeStageConfig,
   ssmParameterName,
   sstPlatformState,
   validateGitHubRepo,
+  withStageConfigFile,
 } from './environment.js'
-import { validateDotenvSyntax } from '../deployment/validate-environment.js'
+import { validateDotenvSyntax } from '../deployment/key-policy.js'
 import {
   bindActionArgs,
   createActionArgs,
@@ -98,12 +98,11 @@ import {
   isProtectionUnavailableError,
   parseReviewerIds,
 } from './github.js'
-import { resolveAwsCliPath } from '../shared/aws-cli.js'
-import { resolveSstStage } from '../deployment/stage.js'
+import { resolveAwsCliPath } from '../shared/exec.js'
 
 const SCRIPT_NAME = 'bootstrap-environment'
 // The one stage that must never end up with an unreviewed deploy path. Matches
-// PRODUCTION_STAGE in sst.config.ts, which gates retain-on-removal.
+// PRODUCTION_STAGE in stack/settings.ts, which gates retain-on-removal.
 const PROTECTED_STAGE = 'prod'
 const INFRA_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const TEMPLATE_PATH = join(INFRA_ROOT, 'bootstrap', 'aws', 'github-deploy-role.yaml')
@@ -158,8 +157,7 @@ function requireGhAuthenticated() {
   }
 }
 
-function resolveRepo(args: any) {
-  const override = parseFlag(args, 'repo')
+function resolveRepo(override: any) {
   if (override) return validateGitHubRepo(override)
 
   let nameWithOwner
@@ -813,16 +811,18 @@ function wireGithubEnvironment({ repo, stage, accountId, region }: any) {
 }
 
 async function main() {
-  // Every other consumer (deployment/sst.ts, sst.config.ts) loads the
-  // stage dotenv first; without it AWS_REGION/STACK_DOMAIN from .env are
-  // silently ignored and the stage lands in the default region.
+  // deployment/sst.ts loads the stage dotenv before it does anything else, and this script has to
+  // match it: without it AWS_REGION/STACK_DOMAIN from .env are silently ignored and the stage
+  // lands in the default region. The stack itself deliberately does not (stack/app.ts) — the
+  // wrapper owns the environment sst sees.
   loadDeploymentEnvironment()
   const args = process.argv.slice(2)
+  const options = parseBootstrapOptions(args)
   const stage = resolveSstStage(args)
-  const force = hasFlag(args, 'force')
+  const force = Boolean(options.force)
   const region = resolveAwsRegion()
   const awsCliPath = resolveAwsCliPath()
-  const reviewerIds = parseReviewerIds(parseFlag(args, 'reviewers'))
+  const reviewerIds = parseReviewerIds(options.reviewers)
 
   // Before any external mutation. Every step below creates or changes something outside this process
   // — an OIDC provider, a GitHub Environment, optionally a non-idempotent Auth0 app — so a .env this
@@ -842,7 +842,7 @@ async function main() {
     throw new Error(`${ENV_PATH} ${cause.message}`, { cause })
   }
   requireGhAuthenticated()
-  const repo = resolveRepo(args)
+  const repo = resolveRepo(options.repo)
   requireAwsCliWithLoginSupport(awsCliPath)
   const identity = currentAwsIdentity(awsCliPath, region)
 
@@ -855,7 +855,7 @@ async function main() {
 
   ensureGitHubOidcProvider({ awsCliPath, region })
   ensureGithubEnvironment({ repo, stage, reviewerIds: effectiveReviewerIds })
-  if (hasFlag(args, 'provision-auth0')) {
+  if (options['provision-auth0']) {
     /*
      * From the snapshot that is about to be stored, not from process.env.
      *

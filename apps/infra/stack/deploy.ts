@@ -14,12 +14,16 @@ import { buildRunners } from './runners.js'
 import { buildClickHouseStorage, buildClickHouseWriterReady } from './clickhouse.js'
 
 export async function deployStack() {
-    const { readWorkspaceVersion, resolveAwsRegion, resolvePublicDeploymentConfig } =
-      await import('../deployment/environment.js')
-    const { optionalPublicOidcIssuer, requireOidcIssuer } = await import('../deployment/oidc.js')
+    const {
+      optionalPublicOidcIssuer,
+      readWorkspaceVersion,
+      requireIamPermissionsBoundaryStage,
+      requireOidcIssuer,
+      resolveAwsRegion,
+      resolvePublicDeploymentConfig,
+    } = await import('../deployment/environment.js')
     // eslint-disable-next-line @nx/enforce-module-boundaries -- Stack synthesis shares the policy host's CommonJS Runner model.
     const { resolveRunnerInventory } = await import('../runner/model/inventory.js')
-    const { requireIamPermissionsBoundaryStage } = await import('../deployment/stage.js')
     const REGION = resolveAwsRegion()
     const { accountId } = await aws.getCallerIdentity()
     const workspaceVersion = readWorkspaceVersion()
@@ -92,7 +96,7 @@ export async function deployStack() {
     // it refuses to place the task with "no permissions boundary allows the
     // secretsmanager:GetSecretValue action". (The deploy role is not the
     // constraint — its boxlite-sst-deploy policy grants secretsmanager on
-    // every resource, and it carries no boundary at all.)
+    // this stage's own secrets, and it carries no boundary at all.)
     //
     // Empty means the exporter stays off; see USAGE_EXPORT_ENABLED below.
     const usageExportToken = new sst.Secret('USAGE_EXPORT_TOKEN', '')

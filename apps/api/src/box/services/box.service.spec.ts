@@ -330,18 +330,18 @@ describe('BoxService public defaults', () => {
     [{ networkBlockAll: true }, { boxLimitedNetworkEgress: false }, { networkBlockAll: true }],
     [{ networkAllowList: '10.0.0.0/8' }, { boxLimitedNetworkEgress: false }, { networkAllowList: '10.0.0.0/8' }],
     [{}, { boxLimitedNetworkEgress: true }, { networkBlockAll: true }],
-  ])('creates a fresh box instead of claiming a warm box when network policy is required', async (request, org, expected) => {
-    const { service, boxRepository, warmPoolService } = makeCreateService()
-    ;(service as any).redis.exists.mockResolvedValue(0)
+  ])(
+    'creates a fresh box instead of claiming a warm box when network policy is required',
+    async (request, org, expected) => {
+      const { service, boxRepository, warmPoolService } = makeCreateService()
+      ;(service as any).redis.exists.mockResolvedValue(0)
 
-    await service.create(
-      { name: 'restricted-box', image: 'base', ...request } as any,
-      { id: 'org-1', ...org } as any,
-    )
+      await service.create({ name: 'restricted-box', image: 'base', ...request } as any, { id: 'org-1', ...org } as any)
 
-    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
-    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining(expected))
-  })
+      expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+      expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining(expected))
+    },
+  )
 
   it.each([
     [undefined, true],

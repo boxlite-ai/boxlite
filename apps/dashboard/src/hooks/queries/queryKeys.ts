@@ -30,8 +30,8 @@ export const queryKeys = {
     usage: {
       overview: (organizationId: string) =>
         [...queryKeys.organization.all, organizationId, 'usage', 'overview'] as const,
-      current: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'usage', 'current'] as const,
-      past: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'usage', 'past'] as const,
+      series: (organizationId: string, params: object) =>
+        [...queryKeys.organization.all, organizationId, 'usage', 'series', params] as const,
     },
 
     tier: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'tier'] as const,
@@ -97,7 +97,5 @@ export const queryKeys = {
       [...queryKeys.analytics.all, organizationId, 'boxes-usage', params] as const,
     boxUsagePeriods: (organizationId: string, boxId: string, params: object) =>
       [...queryKeys.analytics.all, organizationId, boxId, 'usage-periods', params] as const,
-    usageChart: (organizationId: string, params: object) =>
-      [...queryKeys.analytics.all, organizationId, 'usage-chart', params] as const,
   },
 } as const

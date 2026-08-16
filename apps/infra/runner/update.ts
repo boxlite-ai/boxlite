@@ -4,7 +4,7 @@
 /*
  * Rolling in-place upgrade of the boxlite-runner binary on live Runner EC2s.
  *
- * The Runner resources in sst.config.ts carry `ignoreChanges: ['ami','userDataBase64']`,
+ * The Runner resources in stack/runners.ts carry `ignoreChanges: ['ami','userDataBase64']`,
  * so a Cargo.toml version bump is detected but never acted on — `sst deploy` will not
  * replace a runner that holds box state (/var/lib/boxlite + in-memory libkrun VMs).
  * This is how the new version actually lands: /usr/local/bin/boxlite-runner is replaced
@@ -30,7 +30,7 @@
  *   INSTANCE_IDS=i-abc npm run runner:update
  *
  * Env:
- *   RUNNER_ARTIFACT_SOURCE  release|build (see artifact-source.mjs; default release)
+ *   RUNNER_ARTIFACT_SOURCE  release|build (see artifacts/source.ts; default release)
  *   BOXLITE_ARTIFACT_REF    commit a build-mode binary was produced from
  *   RUNNER_ARTIFACT_BUCKET  bucket a build-mode binary is staged in
  *   RUNNER_VERSION   target version (argv[2] wins; falls back to the workspace version)
@@ -135,7 +135,7 @@ export function resolveTargets(environment = process.env, { describe = aws } = {
 }
 
 // The workspace version is the release version for every published asset — the same
-// field sst.config.ts bakes into the runner user-data.
+// field stack/runners.ts bakes into the runner user-data.
 export function resolveVersion(argv = process.argv, environment = process.env) {
   const explicit = argv[2] || environment.RUNNER_VERSION
   return explicit ? explicit.trim().replace(/^v/, '') : readWorkspaceVersion()
