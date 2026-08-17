@@ -1,4 +1,4 @@
-PHONY_TARGETS += test test\:unit\:guest test\:guest-perms test\:guest-rootfs _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
+PHONY_TARGETS += test test\:unit\:guest test\:guest-perms test\:guest-rootfs test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -319,6 +319,14 @@ test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:ru
 		cargo test -p boxlite --features krun,gvproxy --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(CARGOTEST_FILTER); \
 	fi
+
+# Manual release-mode benchmark. Kept out of every aggregate and CI suite.
+test\:perf\:import-export: runtime
+	@echo "📊 Running manual 1 GiB import/export benchmark (release, serial)..."
+	@echo "   Commit: $$(git rev-parse --short HEAD)"
+	@echo "   Ensure at least 8 GiB of free disk space and no competing I/O workload."
+	@cargo test --release -p boxlite --features krun,gvproxy \
+		--test import_export_benchmark -- --ignored --test-threads=1 --nocapture
 
 # BoxLite C SDK unit tests.
 test\:unit\:ffi:
