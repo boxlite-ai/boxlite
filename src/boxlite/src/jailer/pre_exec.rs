@@ -67,7 +67,7 @@ pub fn add_pre_exec_hook(
     cmd: &mut Command,
     resource_limits: ResourceLimits,
     pid_writer: Option<PidFileWriter>,
-    preserved_fds: Vec<(RawFd, i32)>,
+    mut preserved_fds: Vec<(RawFd, i32)>,
     detach: bool,
 ) {
     use std::os::unix::process::CommandExt;
@@ -113,13 +113,43 @@ pub fn add_pre_exec_hook(
             // If preserved_fds is non-empty, dup2 each (source -> target),
             // then close everything above the highest target.
             // Otherwise, close all FDs >= 3 (default behavior).
+            //
+            // keep some fd work with the fix number in box process.
+            // fd: watchdog::PIPE_FD = 3: watchdog pipe
+            // next is: rootfs lease.
             if !preserved_fds.is_empty() {
-                for &(source, target) in &preserved_fds {
-                    if source != target {
-                        libc::dup2(source, target);
+                let first_close = preserved_fds.iter().map(|(_, t)| *t).max().unwrap() + 1;
+
+                // Stage every source away from every target before dup2. A source
+                // descriptor may numerically equal another entry's target; direct dup2
+                // in caller order would overwrite it before it was copied. Do not force
+                // staging above the largest target: a caller may legitimately preserve
+                // RLIMIT_NOFILE - 1, leaving no descriptor available above it.
+                for index in 0..preserved_fds.len() {
+                    let source = preserved_fds[index].0;
+                    let mut minimum = 3;
+                    loop {
+                        let staged = libc::fcntl(source, libc::F_DUPFD_CLOEXEC, minimum);
+                        if staged < 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        if preserved_fds.iter().any(|(_, target)| *target == staged) {
+                            libc::close(staged);
+                            minimum = staged + 1;
+                            continue;
+                        }
+                        preserved_fds[index].0 = staged;
+                        break;
                     }
                 }
-                let first_close = preserved_fds.iter().map(|(_, t)| *t).max().unwrap() + 1;
+                for &(source, target) in &preserved_fds {
+                    if libc::dup2(source, target) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                for &(source, _) in &preserved_fds {
+                    libc::close(source);
+                }
                 common::fd::close_fds_from(first_close)
                     .map_err(std::io::Error::from_raw_os_error)?;
             } else {
@@ -271,6 +301,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn preserved_fd_sources_are_staged_before_targets_are_overwritten() {
+        use std::os::fd::AsRawFd;
+
+        let dir = tempfile::tempdir().unwrap();
+        let first_path = dir.path().join("first");
+        let second_path = dir.path().join("second");
+        std::fs::write(&first_path, b"A").unwrap();
+        std::fs::write(&second_path, b"B").unwrap();
+        let first = std::fs::File::open(first_path).unwrap();
+        let second = std::fs::File::open(second_path).unwrap();
+
+        let crossing_source = 100;
+        assert_eq!(
+            unsafe { libc::dup2(second.as_raw_fd(), crossing_source) },
+            crossing_source
+        );
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "cat /proc/self/fd/100; cat /proc/self/fd/101"]);
+        add_pre_exec_hook(
+            &mut cmd,
+            ResourceLimits::default(),
+            None,
+            vec![(first.as_raw_fd(), 100), (crossing_source, 101)],
+            false,
+        );
+        let output = cmd.output().expect("spawn child with crossing fd map");
+        unsafe { libc::close(crossing_source) };
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"AB");
     }
 
     #[test]

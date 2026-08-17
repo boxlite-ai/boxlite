@@ -41,7 +41,7 @@ RUN test -f src/deps/libkrun-sys/vendor/libkrun/Cargo.toml \
   && git init -q
 
 RUN make setup:build guest
-RUN SKIP_GUEST_BUILD=1 make runtime \
+RUN SKIP_GUEST_ROOTFS_BUILD=1 make runtime \
   && cargo build --release -p boxlite-c \
   && bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a \
   && cp target/release/libboxlite.a sdks/go/libboxlite.a

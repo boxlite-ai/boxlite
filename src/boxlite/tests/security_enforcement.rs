@@ -100,8 +100,6 @@ async fn virtiofs_readonly_and_capabilities() {
     readonly_volume_blocks_write(&bx).await;
     readonly_volume_blocks_remount(&bx).await;
     rw_volume_allows_write(&bx).await;
-    guest_root_is_sealed_read_only(&bx).await;
-    sealed_root_leaves_container_rootfs_writable(&bx).await;
     capabilities_exclude_sys_admin(&bx).await;
     capabilities_match_docker_defaults(&bx).await;
 
@@ -148,49 +146,6 @@ async fn readonly_volume_blocks_remount(bx: &LiteBox) {
             || output.contains("Read-only"),
         "error should indicate permission/readonly denial, got: {output}"
     );
-}
-
-/// Run a shell script on the guest VM itself rather than inside the container.
-///
-/// `LiteBox::exec` only injects the container executor when the caller has not
-/// already chosen one, so setting it here reaches the guest's own mount
-/// namespace — the only vantage point from which the guest root is visible.
-fn guest_sh(script: &str) -> BoxCommand {
-    BoxCommand::new("sh")
-        .args(["-c", script])
-        .env("BOXLITE_EXECUTOR", "guest")
-}
-
-/// The guest agent remounts its own root read-only at boot
-/// (`mounts::seal_root_readonly`). That is what stops a container process from
-/// reopening the agent binary through the `/proc/<pid>/exe` a forked-not-exec'd
-/// SSH workload leaves behind, so the guest root must reject writes.
-async fn guest_root_is_sealed_read_only(bx: &LiteBox) {
-    // Positive control: /tmp is tmpfs, so a failure below is the seal and not a
-    // broken guest-executor path.
-    let writable = exec_exit_code(bx, guest_sh("echo probe > /tmp/boxlite-seal-probe")).await;
-    assert_eq!(writable, 0, "guest tmpfs should still accept writes");
-
-    // Assert on the file, not on the shell's exit code: a full guest rootfs
-    // fails the write with ENOSPC after `creat` has already made the entry, so
-    // a non-zero exit does not distinguish a sealed root from a full one.
-    let _ = exec_exit_code(bx, guest_sh("echo probe > /boxlite-seal-probe 2>&1")).await;
-    let exists = exec_exit_code(bx, guest_sh("test -e /boxlite-seal-probe")).await;
-    assert_ne!(exists, 0, "probe file should not exist on the sealed root");
-}
-
-/// The seal covers the guest's root superblock only. Container rootfs writes
-/// outside the tmpfs mounts must keep working.
-async fn sealed_root_leaves_container_rootfs_writable(bx: &LiteBox) {
-    let exit = exec_exit_code(
-        bx,
-        BoxCommand::new("sh").args(["-c", "echo ok > /usr/boxlite-seal-probe 2>&1"]),
-    )
-    .await;
-    assert_eq!(exit, 0, "container rootfs should stay writable");
-
-    let content = exec_stdout(bx, BoxCommand::new("cat").arg("/usr/boxlite-seal-probe")).await;
-    assert_eq!(content.trim(), "ok");
 }
 
 /// Sanity check: writable volume does accept writes.

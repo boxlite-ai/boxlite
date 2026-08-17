@@ -5,7 +5,6 @@ use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
 use crate::lock::{FileLockManager, LockManager};
 use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
-use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
 use crate::runtime::id::{BoxID, BoxIDMint};
 use crate::runtime::layout::{BoxFilesystemLayout, FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
@@ -18,7 +17,6 @@ use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, Weak};
-use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
 fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
@@ -141,10 +139,6 @@ pub struct RuntimeImpl {
     pub(crate) layout: FilesystemLayout,
     /// Pure image disk cache manager (image layers → ext4, no guest binary)
     pub(crate) image_disk_mgr: ImageDiskManager,
-    /// Versioned guest rootfs manager (image disk + guest binary → ext4)
-    pub(crate) guest_rootfs_mgr: GuestRootfsManager,
-    /// Guest rootfs lazy initialization (Arc<OnceCell>)
-    pub(crate) guest_rootfs: Arc<OnceCell<GuestRootfs>>,
     /// Runtime-wide metrics (AtomicU64 based, lock-free)
     pub(crate) runtime_metrics: RuntimeMetricsStorage,
 
@@ -193,26 +187,6 @@ pub struct SynchronizedState {
     /// Cache of active BoxImpl instances by name (only for named boxes).
     active_boxes_by_name: HashMap<String, Weak<crate::litebox::box_impl::BoxImpl>>,
 }
-
-/// Headroom `ImageDiskManager` reserves in every image disk it builds, for
-/// the `boxlite-guest` binary `GuestRootfsManager` injects into a copy of it
-/// afterward. `ImageDiskManager` folds this into its cache key
-/// (`disk_path`), so a disk cached under a different value is never reused.
-///
-/// Fixed, not derived from the real guest binary's current size: this
-/// manager has no GC (unlike `GuestRootfsManager`'s paired `version_key` +
-/// `gc()`), so a value that changed on every guest-binary rebuild would
-/// orphan a cache entry per digest on every rebuild — a routine, frequent
-/// event for developers. Because this is instead a source-level constant, it
-/// only changes on the rare, deliberate occasions *this number itself* gets
-/// edited (e.g. if a future guest binary outgrows it), each such change
-/// creating at most one new generation of cache entries, not a continuous
-/// leak. An unstripped debug build measures ~232 MB (see
-/// `guest_binary_fits_in_image_disk_headroom` below); 512 MiB covers that
-/// with margin to grow, in both debug and (far smaller) release builds, at
-/// the cost of some unused — but sparse, so cheap on disk — space in every
-/// cached image disk.
-const IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES: u64 = 512 * 1024 * 1024;
 
 impl RuntimeImpl {
     // ========================================================================
@@ -334,14 +308,8 @@ impl RuntimeImpl {
             "Initialized lock manager"
         );
 
-        // See IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES for why this is a fixed
-        // budget rather than derived from the guest binary actually on disk.
-        let image_disk_mgr = ImageDiskManager::new(
-            layout.image_layout().disk_images_dir(),
-            layout.temp_dir(),
-            IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES,
-        );
-        let guest_rootfs_mgr = GuestRootfsManager::new(base_disk_mgr.clone(), layout.temp_dir());
+        let image_disk_mgr =
+            ImageDiskManager::new(layout.image_layout().disk_images_dir(), layout.temp_dir());
 
         let inner = Arc::new(Self {
             sync_state: RwLock::new(SynchronizedState {
@@ -352,8 +320,6 @@ impl RuntimeImpl {
             image_manager,
             layout,
             image_disk_mgr,
-            guest_rootfs_mgr,
-            guest_rootfs: Arc::new(OnceCell::new()),
             runtime_metrics: RuntimeMetricsStorage::new(),
             experimental_features,
             base_disk_mgr,
@@ -1482,12 +1448,14 @@ impl RuntimeImpl {
             }
         }
 
-        // GC unreferenced guest rootfs entries
-        if let Err(e) = self.guest_rootfs_mgr.gc(&self.layout.boxes_dir()) {
-            tracing::warn!("Guest rootfs GC failed: {}", e);
+        if let Err(e) = self
+            .base_disk_mgr
+            .gc_legacy_rootfs(&self.layout.boxes_dir())
+        {
+            tracing::warn!("Legacy guest rootfs GC failed: {}", e);
         }
 
-        // Then reclaim base files no DB record and no overlay claims — the
+        // Then reclaim base files with no DB record and no overlay claims — the
         // per-kind collectors above work from records, so a file whose row is
         // gone is invisible to them.
         if let Err(e) = self.base_disk_mgr.gc_orphans(&self.layout.boxes_dir()) {
@@ -1877,32 +1845,7 @@ mod tests {
     use crate::runtime::backend::RuntimeBackend;
     use crate::runtime::images::ImageBackend;
     use crate::runtime::options::RootfsSpec;
-    use crate::vmm::guest_binary::GuestBinary;
     use tempfile::TempDir;
-
-    /// `IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES` must stay ahead of the real
-    /// embedded `boxlite-guest` binary — silently falling behind would
-    /// reintroduce the exact "Could not allocate block in ext2 filesystem"
-    /// failure this constant exists to prevent, undetected until a real box
-    /// tried to boot. Skipped when the guest binary isn't assembled (no
-    /// `make guest`/`make runtime:debug`).
-    #[test]
-    fn guest_binary_fits_in_image_disk_headroom() {
-        let Ok(guest) = GuestBinary::get() else {
-            eprintln!("skipping: boxlite-guest not found (run `make guest`)");
-            return;
-        };
-        let guest_len = std::fs::metadata(guest.path())
-            .expect("stat resolved guest binary")
-            .len();
-        assert!(
-            guest_len < IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES,
-            "guest binary is {} MiB, headroom budget is only {} MiB -- bump \
-             IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES",
-            guest_len / (1024 * 1024),
-            IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES / (1024 * 1024)
-        );
-    }
 
     #[test]
     fn local_runtime_rejects_explicit_lifecycle_policy() {

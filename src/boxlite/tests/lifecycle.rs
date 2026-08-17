@@ -2,10 +2,10 @@
 
 mod common;
 
-use boxlite::BoxliteRuntime;
 use boxlite::runtime::id::{BoxID, BoxIDMint};
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions};
 use boxlite::runtime::types::BoxStatus;
+use boxlite::{BoxCommand, BoxliteRuntime};
 
 // ============================================================================
 // RUNTIME INITIALIZATION TESTS
@@ -359,6 +359,52 @@ async fn remove_deletes_box_from_database() {
 
     // Box should no longer exist in database
     assert!(!runtime.exists(box_id.as_str()).await.unwrap());
+}
+
+#[tokio::test]
+async fn legacy_guest_rootfs_is_deleted_only_after_successful_restart() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
+    let box_id = handle.id().clone();
+
+    handle.start().await.unwrap();
+    handle.stop().await.unwrap();
+
+    let disks_dir = home.path.join("boxes").join(box_id.as_str()).join("disks");
+    let container_disk = disks_dir.join("disk.qcow2");
+    let legacy_guest_disk = disks_dir.join(common::LEGACY_GUEST_ROOTFS_DISK);
+    if reflink_copy::reflink(&container_disk, &legacy_guest_disk).is_err() {
+        std::fs::copy(&container_disk, &legacy_guest_disk).unwrap();
+    }
+
+    drop(handle);
+    let restarted = runtime
+        .get(box_id.as_str())
+        .await
+        .unwrap()
+        .expect("stopped box exists");
+    restarted.start().await.unwrap();
+
+    let execution = restarted
+        .exec(BoxCommand::new("echo").arg("bundled-rootfs"))
+        .await
+        .unwrap();
+    let result = execution.wait().await.unwrap();
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        !legacy_guest_disk.exists(),
+        "legacy guest disk must be removed only after the replacement guest starts"
+    );
+
+    restarted.stop().await.unwrap();
+    drop(restarted);
+    runtime.remove(box_id.as_str(), false).await.unwrap();
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 // ============================================================================

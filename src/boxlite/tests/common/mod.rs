@@ -16,6 +16,16 @@ pub use boxlite_test_utils::*;
 use boxlite::runtime::options::{BoxOptions, RootfsSpec};
 
 // ============================================================================
+// LEGACY ON-DISK CONTRACTS
+// ============================================================================
+
+/// Historical guest disk filename created by pre-bundled-rootfs releases.
+///
+/// Keep this independent from production constants so integration tests fail if
+/// compatibility with already-persisted legacy disks is accidentally removed.
+pub(crate) const LEGACY_GUEST_ROOTFS_DISK: &str = "guest-rootfs.qcow2";
+
+// ============================================================================
 // BOX OPTIONS HELPERS
 // ============================================================================
 

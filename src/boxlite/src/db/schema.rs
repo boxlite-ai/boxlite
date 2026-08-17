@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS box_snapshot (
 
 /// Base disk table (added in v7).
 ///
-/// Stores immutable COW fork points (clone bases, snapshots, rootfs cache).
+/// Stores immutable COW fork points (clone bases, snapshots, and legacy rootfs bases).
 /// Queryable columns for indexed lookups + JSON blob for full `BaseDisk` struct.
 /// `UNIQUE(source_box_id, name)` enforces one snapshot name per box;
 /// SQLite treats NULLs as distinct so clone bases (name=NULL) don't collide.

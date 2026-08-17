@@ -35,7 +35,7 @@ pytest -m "not integration"
 
 These tests require:
 - **boxlite-shim** binary (built during maturin develop)
-- **boxlite-guest** binary (built during maturin develop)
+- **guest-rootfs/** runtime tree (built during maturin develop)
 - **libkrun** and **libkrunfw** installed on the system
 
 ## Running Tests

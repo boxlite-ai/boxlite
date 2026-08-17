@@ -117,10 +117,12 @@ clean_runtime() {
     rm -rf target/release/boxlite-shim \
            target/debug/boxlite-shim
     if [ -z "${KEEP_GUEST_BIN:-}" ]; then
-        rm -rf target/$GUEST_TARGET/release/boxlite-guest \
-               target/$GUEST_TARGET/debug/boxlite-guest
+        rm -rf -- "target/$GUEST_TARGET/release/boxlite-guest" \
+               "target/$GUEST_TARGET/release/guest-rootfs" \
+               "target/$GUEST_TARGET/debug/boxlite-guest" \
+               "target/$GUEST_TARGET/debug/guest-rootfs"
     else
-        print_info "Keeping guest binary as requested"
+        print_info "Keeping guest build artifacts as requested"
     fi
 }
 

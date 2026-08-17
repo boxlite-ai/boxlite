@@ -46,6 +46,7 @@ pub struct ShimSpawner<'a> {
     box_id: &'a str,
     options: &'a BoxOptions,
     nested_virtualization: bool,
+    guest_rootfs: Option<&'a Path>,
 }
 
 impl<'a> ShimSpawner<'a> {
@@ -61,6 +62,7 @@ impl<'a> ShimSpawner<'a> {
             box_id,
             options,
             nested_virtualization: false,
+            guest_rootfs: None,
         }
     }
 
@@ -69,6 +71,11 @@ impl<'a> ShimSpawner<'a> {
     /// it is about to serialize, which is the authority on what the shim runs.
     pub fn with_nested_virtualization(mut self, enabled: bool) -> Self {
         self.nested_virtualization = enabled;
+        self
+    }
+
+    pub fn with_guest_rootfs(mut self, path: &'a Path) -> Self {
+        self.guest_rootfs = Some(path);
         self
     }
 
@@ -85,7 +92,8 @@ impl<'a> ShimSpawner<'a> {
     /// Filesystem grants beyond the jailer's standard set: read-only, and only
     /// the probes this host actually has — bwrap refuses to bind a missing one.
     fn additional_path_access(&self) -> Vec<PathAccess> {
-        self.required_probe_paths()
+        let mut paths: Vec<_> = self
+            .required_probe_paths()
             .iter()
             .map(PathBuf::from)
             .filter(|path| path.exists())
@@ -93,7 +101,14 @@ impl<'a> ShimSpawner<'a> {
                 path,
                 writable: false,
             })
-            .collect()
+            .collect();
+        if let Some(path) = self.guest_rootfs {
+            paths.push(PathAccess {
+                path: path.to_path_buf(),
+                writable: false,
+            });
+        }
+        paths
     }
 
     /// Spawn the shim subprocess with jailer isolation and optional watchdog.
@@ -125,6 +140,19 @@ impl<'a> ShimSpawner<'a> {
 
         if let Some(ref setup) = child_setup {
             builder = builder.with_preserved_fd(setup.raw_fd(), watchdog::PIPE_FD);
+        }
+
+        #[cfg(feature = "embedded-runtime")]
+        if let Some(lease_fd) = self
+            .guest_rootfs
+            .and_then(crate::runtime::embedded::EmbeddedRuntime::lease_fd_for)
+        {
+            let target_fd = if child_setup.is_some() {
+                watchdog::PIPE_FD + 1
+            } else {
+                watchdog::PIPE_FD
+            };
+            builder = builder.with_preserved_fd(lease_fd, target_fd);
         }
 
         let jail = builder.build()?;

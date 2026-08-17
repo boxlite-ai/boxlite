@@ -5,1020 +5,202 @@ use std::path::{Path, PathBuf};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use crate::disk::{
-    BaseDisk, BaseDiskKind, BaseDiskManager, Disk, DiskFormat, inject_file_into_ext4,
-};
-use crate::images::{ImageDiskManager, ImageObject};
-#[cfg(test)]
-use crate::runtime::id::BaseDiskID;
-use crate::runtime::id::BaseDiskIDMint;
-use crate::vmm::guest_binary::GuestBinary;
+use crate::runtime::constants::guest_paths;
 
-/// A fully resolved and ready-to-use guest rootfs.
-///
-/// This struct represents the box's guest rootfs that runs boxlite-guest:
-/// - Image pulled (if needed)
-/// - Layers extracted/overlayed
-/// - Guest binary injected and validated
+/// The immutable guest rootfs packaged with the BoxLite runtime.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct GuestRootfs {
     /// Path to the merged/final rootfs directory
     pub path: PathBuf,
-
-    /// How this rootfs was prepared
-    pub strategy: Strategy,
-
-    /// Kernel images path (for Firecracker/microVM)
-    pub kernel: Option<PathBuf>,
-
-    /// Initrd path (optional)
-    pub initrd: Option<PathBuf>,
 
     /// Environment variables from the init image config (e.g., PATH)
     #[serde(default)]
     pub env: Vec<(String, String)>,
 }
 
-/// Strategy used to prepare the rootfs.
-///
-/// This tracks how the rootfs was assembled, which is important for:
-/// - Cleanup logic (overlayfs mounts need unmounting)
-/// - Debugging (understand which strategy was used)
-/// - Performance metrics (compare overlay vs extraction)
-#[derive(Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
-pub enum Strategy {
-    /// Direct path provided by user (no processing needed)
-    #[default]
-    Direct,
-
-    /// Layers extracted into a single directory
-    ///
-    /// Used on macOS (no overlayfs) and as fallback on Linux
-    Extracted {
-        /// Number of layers extracted
-        layers: usize,
-    },
-
-    /// Linux overlayfs mount (requires cleanup on drop)
-    ///
-    /// This is the preferred strategy on Linux when CAP_SYS_ADMIN is available
-    OverlayMount {
-        /// Lower directories (read-only layers)
-        lower: Vec<PathBuf>,
-        /// Upper directory (writable layer)
-        upper: PathBuf,
-        /// Work directory (required by overlayfs)
-        work: PathBuf,
-    },
-
-    /// Disk-based rootfs (ext4 disk image)
-    ///
-    /// The guest rootfs is stored in an ext4 disk image that the box boots from.
-    /// This provides better performance than virtiofs for the guest rootfs.
-    Disk {
-        /// Path to the ext4 disk image
-        disk_path: PathBuf,
-        /// Device path in guest (e.g., "/dev/vdc").
-        /// Set by build_disk_attachments when disks are configured.
-        device_path: Option<String>,
-    },
-}
-
 impl GuestRootfs {
-    /// Create a new GuestRootfs, injecting the guest binary if needed.
-    pub fn new(
-        path: PathBuf,
-        strategy: Strategy,
-        kernel: Option<PathBuf>,
-        initrd: Option<PathBuf>,
-        env: Vec<(String, String)>,
-    ) -> BoxliteResult<Self> {
-        // Inject guest binary for directory-based strategies only.
-        // For disk-based strategies, the guest binary was already included
-        // during disk creation from the merged layers.
-        match &strategy {
-            Strategy::Disk { disk_path, .. } => {
-                tracing::debug!(
-                    "Skipping guest binary injection for disk-based rootfs: {}",
-                    disk_path.display()
-                );
-            }
-            _ => {
-                crate::util::inject_guest_binary(&path)?;
-            }
+    /// Resolve and validate the immutable rootfs packaged with the runtime.
+    pub fn from_bundled_rootfs(path: PathBuf) -> BoxliteResult<Self> {
+        let path = path.canonicalize().map_err(|error| {
+            BoxliteError::Storage(format!(
+                "Failed to resolve bundled guest rootfs {}: {error}",
+                path.display()
+            ))
+        })?;
+        if !path.is_dir() {
+            return Err(BoxliteError::Storage(format!(
+                "Bundled guest rootfs is not a directory: {}",
+                path.display()
+            )));
+        }
+
+        for relative in [
+            "dev",
+            "proc",
+            "run",
+            "sys",
+            "tmp",
+            "var",
+            "var/tmp",
+            "boxlite",
+            "boxlite/bin",
+        ] {
+            Self::validate_bundled_entry(&path, relative, true)?;
+        }
+        for relative in [
+            "boxlite/bin/boxlite-guest",
+            "boxlite/bin/mke2fs",
+            "boxlite/bin/resize2fs",
+        ] {
+            Self::validate_bundled_entry(&path, relative, false)?;
+            crate::vmm::guest_check::validate_guest_file(&path.join(relative))?;
         }
 
         Ok(Self {
             path,
-            strategy,
-            kernel,
-            initrd,
-            env,
+            env: vec![("PATH".to_string(), guest_paths::BIN_DIR.to_string())],
         })
     }
 
-    /// Clean up this rootfs.
-    ///
-    /// Behavior depends on strategy:
-    /// - `Direct`: No-op (user-provided path, don't delete)
-    /// - `Extracted`: Remove the directory
-    /// - `OverlayMount`: Unmount, then remove the directory
-    ///
-    /// Returns Ok(()) if cleanup succeeded or wasn't needed.
-    pub fn cleanup(&self) -> BoxliteResult<()> {
-        match &self.strategy {
-            Strategy::Direct => {
-                // User-provided path - don't clean up
-                tracing::debug!(
-                    "Skipping cleanup for direct rootfs: {}",
-                    self.path.display()
-                );
-                Ok(())
-            }
-            Strategy::Extracted { layers } => {
-                tracing::info!(
-                    "Cleaning up extracted rootfs ({} layers): {}",
-                    layers,
-                    self.path.display()
-                );
-                // Remove parent directory (contains merged/)
-                if let Some(parent) = self.path.parent() {
-                    Self::remove_directory(parent)
-                } else {
-                    Self::remove_directory(&self.path)
-                }
-            }
-            Strategy::OverlayMount { .. } => {
-                tracing::info!("Cleaning up overlay mount: {}", self.path.display());
-
-                #[cfg(target_os = "linux")]
-                {
-                    // Unmount overlay first
-                    Self::unmount_overlay(&self.path)?;
-                }
-
-                // Remove parent directory (contains merged/, upper/, work/, patch/)
-                if let Some(parent) = self.path.parent() {
-                    Self::remove_directory(parent)
-                } else {
-                    Ok(())
-                }
-            }
-            Strategy::Disk { disk_path, .. } => {
-                // Disk-based rootfs: disk is managed by the cache, don't clean up
-                tracing::debug!(
-                    "Skipping cleanup for disk-based rootfs: {} (managed by cache)",
-                    disk_path.display()
-                );
-                Ok(())
-            }
-        }
-    }
-
-    /// Unmount overlayfs (Linux only)
-    #[cfg(target_os = "linux")]
-    fn unmount_overlay(merged_dir: &Path) -> BoxliteResult<()> {
-        if !merged_dir.exists() {
-            return Ok(());
-        }
-
-        match std::process::Command::new("umount")
-            .arg(merged_dir)
-            .status()
+    fn validate_bundled_entry(
+        root: &Path,
+        relative: &str,
+        is_directory: bool,
+    ) -> BoxliteResult<()> {
+        let path = root.join(relative);
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            BoxliteError::Storage(format!(
+                "Invalid bundled guest rootfs entry {}: {error}",
+                path.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink()
+            || (is_directory && !metadata.is_dir())
+            || (!is_directory && !metadata.is_file())
         {
-            Ok(status) if status.success() => {
-                tracing::debug!("Unmounted overlay: {}", merged_dir.display());
-                Ok(())
-            }
-            Ok(status) => {
-                tracing::warn!(
-                    "Failed to unmount overlay {}: exit status {}",
-                    merged_dir.display(),
-                    status
-                );
-                Err(BoxliteError::Storage(format!(
-                    "umount failed with status {}",
-                    status
-                )))
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to execute umount for {}: {}",
-                    merged_dir.display(),
-                    e
-                );
-                Err(BoxliteError::Storage(format!(
-                    "umount execution failed: {}",
-                    e
-                )))
+            return Err(BoxliteError::Storage(format!(
+                "Invalid bundled guest rootfs entry: {}",
+                path.display()
+            )));
+        }
+        #[cfg(unix)]
+        if !is_directory {
+            use std::os::unix::fs::PermissionsExt;
+            if metadata.permissions().mode() & 0o111 == 0 {
+                return Err(BoxliteError::Storage(format!(
+                    "Bundled guest rootfs executable is not executable: {}",
+                    path.display()
+                )));
             }
         }
-    }
-
-    /// Remove directory recursively
-    fn remove_directory(path: &Path) -> BoxliteResult<()> {
-        if let Err(e) = std::fs::remove_dir_all(path) {
-            tracing::warn!(
-                "Failed to cleanup rootfs directory {}: {}",
-                path.display(),
-                e
-            );
-            Err(BoxliteError::Storage(format!("cleanup failed: {}", e)))
-        } else {
-            tracing::info!("Cleaned up rootfs directory: {}", path.display());
-            Ok(())
-        }
-    }
-}
-
-/// Manages versioned guest rootfs disks.
-///
-/// A guest rootfs = pure image disk + injected `boxlite-guest` binary.
-/// Version key = `{image_digest_short}-{guest_hash_short}`.
-///
-/// Old versions are kept alive as long as existing box qcow2 overlays
-/// reference them. GC removes unreferenced entries on startup.
-///
-/// Follows the staged install pattern: copy to temp → inject → atomic rename.
-///
-/// # Concurrency
-///
-/// Thread-safety is provided by the caller:
-/// - Multi-process: `RuntimeLock` ensures single-process access per BOXLITE_HOME
-/// - In-process: `OnceCell<GuestRootfs>` serializes all calls to `get_or_create()`
-/// - GC runs at startup (in `recover_boxes()`) before any box creation
-///
-/// No internal locking is needed.
-///
-/// Cache location: `~/.boxlite/bases/`
-///
-/// Rootfs entries use `BaseDiskID` filenames (e.g., `bases/a7Kx9mPq.ext4`) and are
-/// tracked in the `base_disk` table with `kind = 'rootfs'` and
-/// `source_box_id = "__global__"`. The `name` field stores the version key
-/// for content-addressable lookup.
-pub struct GuestRootfsManager {
-    base_disk_mgr: BaseDiskManager,
-    temp_dir: PathBuf,
-}
-
-/// Sentinel source_box_id for global rootfs cache entries.
-const GLOBAL_SOURCE: &str = "__global__";
-
-impl GuestRootfsManager {
-    pub fn new(base_disk_mgr: BaseDiskManager, temp_dir: PathBuf) -> Self {
-        Self {
-            base_disk_mgr,
-            temp_dir,
-        }
-    }
-
-    /// Get or create a versioned guest rootfs.
-    ///
-    /// Stage 1 (via `ImageDiskManager`): ensure pure image ext4 exists.
-    /// Stage 2: copy image disk → inject guest binary via debugfs → cache.
-    ///
-    /// Returns a `GuestRootfs` with `Strategy::Disk` pointing at the cached ext4.
-    pub async fn get_or_create(
-        &self,
-        image: &ImageObject,
-        image_disk_mgr: &ImageDiskManager,
-        env: Vec<(String, String)>,
-    ) -> BoxliteResult<GuestRootfs> {
-        let total_start = std::time::Instant::now();
-
-        // Stage 1: ensure pure image disk exists
-        let stage1_start = std::time::Instant::now();
-        let image_disk = image_disk_mgr.get_or_create(image).await?;
-        tracing::info!(
-            elapsed_ms = stage1_start.elapsed().as_millis() as u64,
-            "get_or_create: stage1 image_disk done"
-        );
-
-        // Stage 2: versioned guest rootfs
-        let digest = image.compute_image_digest();
-        let guest = GuestBinary::get()?;
-        let version_key = Self::version_key(&digest, guest.id());
-
-        if let Some(disk) = self.find(&version_key) {
-            tracing::info!(
-                version_key = %version_key,
-                commit = boxlite_shared::GIT_COMMIT.unwrap_or("unknown"),
-                total_ms = total_start.elapsed().as_millis() as u64,
-                "get_or_create: CACHE HIT"
-            );
-            return Self::disk_to_guest_rootfs(disk, env);
-        }
-
-        tracing::info!(
-            version_key = %version_key,
-            "get_or_create: CACHE MISS — building guest rootfs"
-        );
-        let disk = self.build_and_install(&image_disk, &version_key).await?;
-
-        tracing::info!(
-            total_ms = total_start.elapsed().as_millis() as u64,
-            cache_hit = false,
-            "get_or_create: completed"
-        );
-
-        Self::disk_to_guest_rootfs(disk, env)
-    }
-
-    /// Convert a persistent `Disk` into a `GuestRootfs` with `Strategy::Disk`.
-    ///
-    /// Leaks the disk (prevents drop cleanup) since ownership transfers to
-    /// the `OnceCell<GuestRootfs>` in the runtime.
-    fn disk_to_guest_rootfs(disk: Disk, env: Vec<(String, String)>) -> BoxliteResult<GuestRootfs> {
-        let disk_path = disk.path().to_path_buf();
-        let _ = disk.leak();
-        GuestRootfs::new(
-            disk_path.clone(),
-            Strategy::Disk {
-                disk_path,
-                device_path: None,
-            },
-            None,
-            None,
-            env,
-        )
-    }
-
-    /// Look up a cached guest rootfs by version key (DB-backed).
-    fn find(&self, version_key: &str) -> Option<Disk> {
-        let record = self
-            .base_disk_mgr
-            .store()
-            .find_by_name(GLOBAL_SOURCE, version_key)
-            .ok()
-            .flatten()?;
-        let path = PathBuf::from(record.base_path());
-        if path.exists() {
-            Some(Disk::new(path, DiskFormat::Ext4, true))
-        } else {
-            tracing::warn!(
-                version_key = %version_key,
-                base_path = %record.base_path(),
-                "DB record exists but file missing, removing stale record"
-            );
-            let _ = self.base_disk_mgr.store().delete(record.id());
-            None
-        }
-    }
-
-    /// Build guest rootfs from image disk and atomically install.
-    ///
-    /// Injects the same [`GuestBinary`] the caller keyed `version_key` on, so
-    /// what is cached always matches what the key names.
-    async fn build_and_install(&self, image_disk: &Disk, version_key: &str) -> BoxliteResult<Disk> {
-        let build_start = std::time::Instant::now();
-
-        // Stage: copy image disk to temp, inject guest binary there
-        let temp = tempfile::tempdir_in(&self.temp_dir).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to create temp directory in {}: {}",
-                self.temp_dir.display(),
-                e
-            ))
-        })?;
-        let staged_path = temp.path().join("guest-rootfs.ext4");
-
-        let copy_start = std::time::Instant::now();
-        let copy_bytes = fs::copy(image_disk.path(), &staged_path).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to copy image disk {} to staged path {}: {}",
-                image_disk.path().display(),
-                staged_path.display(),
-                e
-            ))
-        })?;
-        tracing::info!(
-            elapsed_ms = copy_start.elapsed().as_millis() as u64,
-            size_mb = copy_bytes / (1024 * 1024),
-            "build_and_install: copy image disk done"
-        );
-
-        // Inject the guest binary the version key was derived from. Resolution
-        // and validation already happened in `GuestBinary::get`, so there is no
-        // second lookup that could pick a different file.
-        let inject_start = std::time::Instant::now();
-        let guest = GuestBinary::get()?;
-
-        inject_file_into_ext4(&staged_path, guest.path(), "boxlite/bin/boxlite-guest")?;
-        tracing::info!(
-            elapsed_ms = inject_start.elapsed().as_millis() as u64,
-            "build_and_install: inject guest binary done"
-        );
-
-        let staged_disk = Disk::new(staged_path, DiskFormat::Ext4, false);
-        let result = self.install(version_key, staged_disk);
-
-        tracing::info!(
-            version_key = %version_key,
-            commit = boxlite_shared::GIT_COMMIT.unwrap_or("unknown"),
-            guest_id = %guest.id(),
-            total_ms = build_start.elapsed().as_millis() as u64,
-            "build_and_install: completed"
-        );
-
-        result
-    }
-
-    /// Atomically install a staged guest rootfs to the bases directory.
-    ///
-    /// Generates a `BaseDiskID` filename and inserts a DB record for tracking.
-    fn install(&self, version_key: &str, staged_disk: Disk) -> BoxliteResult<Disk> {
-        // Defensive: another process may have installed while we were building.
-        if let Some(disk) = self.find(version_key) {
-            tracing::debug!(version_key = %version_key, "Guest rootfs already installed (race)");
-            return Ok(disk);
-        }
-
-        let bases_dir = self.base_disk_mgr.bases_dir();
-        fs::create_dir_all(bases_dir).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to create bases directory {}: {}",
-                bases_dir.display(),
-                e
-            ))
-        })?;
-
-        let layer_id = BaseDiskIDMint::mint();
-        let target = bases_dir.join(format!("{}.ext4", layer_id));
-        let source = staged_disk.path().to_path_buf();
-
-        // Atomic rename (same filesystem guaranteed by startup validation)
-        fs::rename(&source, &target).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to install guest rootfs from {} to {}: {}",
-                source.display(),
-                target.display(),
-                e
-            ))
-        })?;
-
-        let _ = staged_disk.leak();
-
-        // File size for the record.
-        let size_bytes = fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
-
-        let disk = BaseDisk {
-            id: layer_id.clone(),
-            source_box_id: GLOBAL_SOURCE.to_string(),
-            name: Some(version_key.to_string()),
-            kind: BaseDiskKind::Rootfs,
-            disk_info: crate::disk::DiskInfo {
-                base_path: target.to_string_lossy().to_string(),
-                container_disk_bytes: 0,
-                size_bytes,
-            },
-            created_at: chrono::Utc::now().timestamp(),
-        };
-
-        if let Err(e) = self.base_disk_mgr.store().insert(&disk) {
-            // UNIQUE constraint violation means another process inserted first.
-            // Clean up our file and return the existing entry.
-            tracing::warn!(
-                version_key = %version_key,
-                error = %e,
-                "DB insert failed (possible race), checking for existing entry"
-            );
-            let _ = fs::remove_file(&target);
-            if let Some(disk) = self.find(version_key) {
-                return Ok(disk);
-            }
-            return Err(e);
-        }
-
-        tracing::info!(
-            layer_id = %layer_id,
-            version_key = %version_key,
-            path = %target.display(),
-            "Installed guest rootfs to cache"
-        );
-        Ok(Disk::new(target, DiskFormat::Ext4, true))
-    }
-
-    /// Garbage-collect stale guest rootfs entries.
-    ///
-    /// Uses DB records to identify rootfs entries. Preserves entries whose
-    /// version key contains the current guest binary hash (valid for future boxes).
-    /// Only deletes entries with outdated guest hashes that no existing box references.
-    ///
-    /// Returns the number of entries removed.
-    pub fn gc(&self, boxes_dir: &Path) -> BoxliteResult<usize> {
-        let gc_start = std::time::Instant::now();
-
-        // Version keys are "{image_12}-{guest_12}", so entries whose name ends
-        // with the current guest id are still valid for future boxes.
-        let current_guest_suffix = match GuestBinary::get() {
-            Ok(guest) => format!("-{}", guest.id()),
-            Err(e) => {
-                tracing::warn!("GC: cannot resolve the guest binary, skipping: {}", e);
-                return Ok(0);
-            }
-        };
-
-        let result = self.gc_inner(boxes_dir, &current_guest_suffix);
-
-        tracing::info!(
-            elapsed_ms = gc_start.elapsed().as_millis() as u64,
-            suffix = %current_guest_suffix,
-            "GC completed"
-        );
-
-        result
-    }
-
-    /// Inner GC logic, separated for testability.
-    ///
-    /// Queries the DB for all rootfs entries, then determines which to keep:
-    /// - Entries whose version key (name) ends with `current_guest_suffix`
-    /// - Entries whose base_path any box overlay backs onto (see
-    ///   [`BaseDiskManager::referenced_backing_paths`], which covers both
-    ///   `disk.qcow2` and `disks/guest-rootfs.qcow2`)
-    fn gc_inner(&self, boxes_dir: &Path, current_guest_suffix: &str) -> BoxliteResult<usize> {
-        let records = self
-            .base_disk_mgr
-            .store()
-            .list_by_box(GLOBAL_SOURCE, Some(BaseDiskKind::Rootfs))?;
-
-        if records.is_empty() {
-            return Ok(0);
-        }
-
-        // Collect all referenced backing file paths from box qcow2 overlays.
-        let referenced = self.base_disk_mgr.referenced_backing_paths(boxes_dir);
-
-        tracing::info!(
-            referenced_count = referenced.len(),
-            total_records = records.len(),
-            "gc_inner: scanned boxes for references"
-        );
-
-        let mut removed = 0;
-        let mut preserved_current = 0;
-        let mut preserved_referenced = 0;
-
-        for record in &records {
-            let base_path = PathBuf::from(record.base_path());
-            let version_key = record.name().unwrap_or("");
-
-            // Keep entries referenced by existing boxes
-            if referenced.contains(&base_path) {
-                preserved_referenced += 1;
-                continue;
-            }
-
-            // Keep entries matching current guest binary version
-            if version_key.ends_with(current_guest_suffix) {
-                preserved_current += 1;
-                tracing::debug!(
-                    version_key = %version_key,
-                    "GC: keeping current-version entry"
-                );
-                continue;
-            }
-
-            // Delete stale entries (old guest version, no box references)
-            tracing::info!(
-                id = %record.id(),
-                version_key = %version_key,
-                path = %record.base_path(),
-                "GC: removing stale guest rootfs"
-            );
-            if let Err(e) = fs::remove_file(&base_path)
-                && base_path.exists()
-            {
-                tracing::warn!("GC: failed to remove {}: {}", base_path.display(), e);
-            }
-            if let Err(e) = self.base_disk_mgr.store().delete(record.id()) {
-                tracing::warn!("GC: failed to delete DB record {}: {}", record.id(), e);
-            } else {
-                removed += 1;
-            }
-        }
-
-        tracing::info!(
-            total_entries = records.len(),
-            preserved_current,
-            preserved_referenced,
-            removed,
-            "gc_inner: summary"
-        );
-
-        Ok(removed)
-    }
-
-    /// Compute the version key from image digest and guest binary id.
-    fn version_key(digest: &str, guest_hash: &str) -> String {
-        let d = digest.strip_prefix("sha256:").unwrap_or(digest);
-        let d = &d[..12.min(d.len())];
-        let g = &guest_hash[..12.min(guest_hash.len())];
-        format!("{}-{}", d, g)
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
-    use crate::db::base_disk::BaseDiskStore;
+    use std::os::unix::fs::PermissionsExt;
 
-    fn id(s: &str) -> BaseDiskID {
-        BaseDiskID::parse(s).expect("test ID must be valid Base62 length-8")
-    }
-
-    fn test_store() -> BaseDiskStore {
-        let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.keep().join("test.db");
-        let db = Database::open(&db_path).unwrap();
-        BaseDiskStore::new(db)
-    }
-
-    fn make_mgr(bases_dir: PathBuf, temp_dir: PathBuf) -> GuestRootfsManager {
-        let base_disk_mgr = BaseDiskManager::new(bases_dir, test_store());
-        GuestRootfsManager::new(base_disk_mgr, temp_dir)
-    }
-
-    /// Insert a rootfs record directly for test setup.
-    fn insert_rootfs_record(store: &BaseDiskStore, rootfs_id: &str, version_key: &str, path: &str) {
-        store
-            .insert(&BaseDisk {
-                id: id(rootfs_id),
-                source_box_id: GLOBAL_SOURCE.to_string(),
-                name: Some(version_key.to_string()),
-                kind: BaseDiskKind::Rootfs,
-                disk_info: crate::disk::DiskInfo {
-                    base_path: path.to_string(),
-                    container_disk_bytes: 0,
-                    size_bytes: 100,
-                },
-                created_at: chrono::Utc::now().timestamp(),
-            })
-            .unwrap();
-    }
-
-    #[test]
-    fn test_version_key_strips_sha256_prefix() {
-        let key = GuestRootfsManager::version_key(
-            "sha256:abcdef123456789012345678",
-            "fedcba987654321012345678",
-        );
-        assert_eq!(key, "abcdef123456-fedcba987654");
-    }
-
-    #[test]
-    fn test_version_key_no_prefix() {
-        let key = GuestRootfsManager::version_key("abcdef123456789012", "111222333444555666");
-        assert_eq!(key, "abcdef123456-111222333444");
-    }
-
-    #[test]
-    fn test_version_key_short_inputs() {
-        let key = GuestRootfsManager::version_key("abc", "def");
-        assert_eq!(key, "abc-def");
-    }
-
-    /// Rebuilding the guest must move the cache key, so an existing entry is not
-    /// reused for a different binary.
-    ///
-    /// Same verification caveat as `guest_binary::id_tracks_the_bytes_on_disk`:
-    /// this composes `GuestBinary::resolve_at`, which the fix introduces, so a
-    /// full production revert stops it compiling instead of failing it. It was
-    /// checked by mutation (digest the path, not the bytes) and by a booted VM.
-    #[test]
-    fn version_key_follows_the_guest_binary_on_disk() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let digest = "sha256:18264223e3ecaaaabbbbccccdddd";
-
-        // One path, rewritten — what `make guest` does. Distinct paths would let
-        // an implementation that keyed on the path alone pass this test.
-        let write_guest = |filler: u8| {
-            let path = dir.path().join("boxlite-guest");
-            let mut elf = vec![0u8; 128];
-            elf[..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
-            elf[4] = 2;
-            let machine: u16 = if std::env::consts::ARCH == "x86_64" {
-                0x3E
-            } else {
-                0xB7
-            };
-            elf[18..20].copy_from_slice(&machine.to_le_bytes());
-            elf[64..].fill(filler);
-            std::fs::write(&path, elf).unwrap();
-            path
+    fn guest_elf() -> Vec<u8> {
+        let mut binary = vec![0_u8; 120];
+        binary[..4].copy_from_slice(b"\x7fELF");
+        binary[4] = 2;
+        binary[5] = 1;
+        binary[6] = 1;
+        let machine = match std::env::consts::ARCH {
+            "x86_64" => 0x3e_u16,
+            "aarch64" => 0xb7_u16,
+            other => panic!("unsupported test architecture: {other}"),
         };
+        binary[16..18].copy_from_slice(&2_u16.to_le_bytes());
+        binary[18..20].copy_from_slice(&machine.to_le_bytes());
+        binary[20..24].copy_from_slice(&1_u32.to_le_bytes());
+        binary[24..32].copy_from_slice(&0x400040_u64.to_le_bytes());
+        binary[32..40].copy_from_slice(&64_u64.to_le_bytes());
+        binary[52..54].copy_from_slice(&64_u16.to_le_bytes());
+        binary[54..56].copy_from_slice(&56_u16.to_le_bytes());
+        binary[56..58].copy_from_slice(&1_u16.to_le_bytes());
+        binary[64..68].copy_from_slice(&1_u32.to_le_bytes());
+        binary[68..72].copy_from_slice(&1_u32.to_le_bytes());
+        binary[80..88].copy_from_slice(&0x400000_u64.to_le_bytes());
+        let file_len = binary.len() as u64;
+        binary[96..104].copy_from_slice(&file_len.to_le_bytes());
+        binary[104..112].copy_from_slice(&file_len.to_le_bytes());
+        binary
+    }
 
-        let before = GuestBinary::resolve_at(write_guest(0xAA)).unwrap();
-        let after = GuestBinary::resolve_at(write_guest(0xBB)).unwrap();
+    fn bundled_rootfs() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        for relative in ["dev", "proc", "run", "sys", "tmp", "var/tmp", "boxlite/bin"] {
+            std::fs::create_dir_all(root.path().join(relative)).unwrap();
+        }
+        for binary in ["boxlite-guest", "mke2fs", "resize2fs"] {
+            let path = root.path().join("boxlite/bin").join(binary);
+            let contents = guest_elf();
+            std::fs::write(&path, contents).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        root
+    }
 
-        let key_before = GuestRootfsManager::version_key(digest, before.id());
-        let key_after = GuestRootfsManager::version_key(digest, after.id());
-
-        assert_ne!(
-            key_before, key_after,
-            "a rebuilt guest must not reuse the previous rootfs cache entry"
-        );
-        // Same image, so only the guest half may move — otherwise every image
-        // would rebuild whenever the guest changed.
+    #[test]
+    fn bundled_rootfs_requires_the_complete_minimal_inventory() {
+        let root = bundled_rootfs();
+        let resolved = GuestRootfs::from_bundled_rootfs(root.path().to_path_buf()).unwrap();
         assert_eq!(
-            key_before[..12],
-            key_after[..12],
-            "image half must be stable"
+            resolved.env,
+            vec![("PATH".into(), guest_paths::BIN_DIR.into())]
         );
-        assert!(key_after.ends_with(after.id()), "GC matches on this suffix");
     }
 
     #[test]
-    fn test_find_returns_none_for_missing() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let mgr = make_mgr(dir.path().to_path_buf(), dir.path().to_path_buf());
+    fn bundled_rootfs_rejects_invalid_mke2fs() {
+        let root = bundled_rootfs();
+        let mke2fs = root.path().join("boxlite/bin/mke2fs");
+        std::fs::write(&mke2fs, b"not an ELF").unwrap();
 
-        assert!(mgr.find("nonexistent-key").is_none());
+        let error = GuestRootfs::from_bundled_rootfs(root.path().to_path_buf()).unwrap_err();
+        assert!(error.to_string().contains("mke2fs"));
+        assert!(error.to_string().contains("ELF"));
     }
 
     #[test]
-    fn test_find_returns_disk_for_existing_db_record() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let bases_dir = dir.path().to_path_buf();
-        let store = test_store();
+    fn bundled_rootfs_rejects_dynamic_guest_binary() {
+        let root = bundled_rootfs();
+        let guest = root.path().join("boxlite/bin/boxlite-guest");
+        let mut binary = guest_elf();
+        binary[64..68].copy_from_slice(&3_u32.to_le_bytes());
+        std::fs::write(&guest, binary).unwrap();
 
-        // Create a fake cached file with BaseDiskID name
-        let cached = bases_dir.join("aB3xQ9mP.ext4");
-        std::fs::write(&cached, "fake disk").unwrap();
-
-        // Insert DB record mapping version_key → file path
-        insert_rootfs_record(&store, "aB3xQ9mP", "test-version", cached.to_str().unwrap());
-
-        let base_disk_mgr = BaseDiskManager::new(bases_dir, store);
-        let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
-
-        let disk = mgr.find("test-version");
-        assert!(disk.is_some());
-        let disk = disk.unwrap();
-        assert_eq!(disk.path(), cached);
-        assert_eq!(disk.format(), DiskFormat::Ext4);
-        let _ = disk.leak();
+        let error = GuestRootfs::from_bundled_rootfs(root.path().to_path_buf()).unwrap_err();
+        assert!(error.to_string().contains("dynamically linked"));
     }
 
     #[test]
-    fn test_find_returns_none_when_file_missing_despite_db_record() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = test_store();
+    fn bundled_rootfs_rejects_guest_without_loadable_segment() {
+        let root = bundled_rootfs();
+        let guest = root.path().join("boxlite/bin/boxlite-guest");
+        let mut binary = guest_elf();
+        binary[64..68].copy_from_slice(&0_u32.to_le_bytes());
+        std::fs::write(&guest, binary).unwrap();
 
-        // Insert DB record but DON'T create the file
-        insert_rootfs_record(
-            &store,
-            "aB3xQ9mP",
-            "ghost-key",
-            dir.path().join("ghost.ext4").to_str().unwrap(),
-        );
+        let error = GuestRootfs::from_bundled_rootfs(root.path().to_path_buf()).unwrap_err();
+        assert!(error.to_string().contains("no loadable ELF segment"));
+    }
 
-        let base_disk_mgr = BaseDiskManager::new(dir.path().to_path_buf(), store.clone());
-        let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
-        assert!(mgr.find("ghost-key").is_none());
+    #[test]
+    fn bundled_rootfs_rejects_symlinked_executables() {
+        let root = bundled_rootfs();
+        let guest = root.path().join("boxlite/bin/boxlite-guest");
+        std::fs::remove_file(&guest).unwrap();
+        std::os::unix::fs::symlink("mke2fs", &guest).unwrap();
 
-        // Stale DB record should have been deleted
+        let error = GuestRootfs::from_bundled_rootfs(root.path().to_path_buf()).unwrap_err();
         assert!(
-            store
-                .find_by_name(GLOBAL_SOURCE, "ghost-key")
-                .unwrap()
-                .is_none()
+            error
+                .to_string()
+                .contains("Invalid bundled guest rootfs entry")
         );
-    }
-
-    #[test]
-    fn test_install_creates_bases_dir_and_moves_file() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let bases_dir = dir.path().join("bases");
-        let store = test_store();
-        let base_disk_mgr = BaseDiskManager::new(bases_dir.clone(), store.clone());
-        let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
-
-        // Create staged file
-        let staged_path = dir.path().join("staged.ext4");
-        std::fs::write(&staged_path, "staged disk content").unwrap();
-        let staged_disk = Disk::new(staged_path, DiskFormat::Ext4, false);
-
-        let result = mgr.install("ver-key", staged_disk).unwrap();
-
-        // File should be in bases/ with .ext4 extension (BaseDiskID name)
-        assert!(result.path().starts_with(&bases_dir));
-        assert_eq!(result.path().extension().unwrap(), "ext4");
-        assert!(result.path().exists());
-        let stem = result.path().file_stem().unwrap().to_string_lossy();
-        assert!(
-            BaseDiskID::parse(&stem).is_some(),
-            "rootfs filename should be valid BaseDiskID"
-        );
-
-        // DB record should exist
-        let record = store.find_by_name(GLOBAL_SOURCE, "ver-key").unwrap();
-        assert!(record.is_some());
-        let record = record.unwrap();
-        assert_eq!(record.kind(), BaseDiskKind::Rootfs);
-        assert_eq!(record.base_path(), result.path().to_string_lossy());
-
-        let _ = result.leak();
-    }
-
-    #[test]
-    fn test_install_race_safe_returns_existing() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let bases_dir = dir.path().join("bases");
-        std::fs::create_dir_all(&bases_dir).unwrap();
-        let store = test_store();
-
-        // Pre-install via DB (simulating another process)
-        let existing = bases_dir.join("first123.ext4");
-        std::fs::write(&existing, "first install").unwrap();
-        insert_rootfs_record(&store, "first123", "raced-key", existing.to_str().unwrap());
-
-        let base_disk_mgr = BaseDiskManager::new(bases_dir, store);
-        let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
-
-        // Try to install again with same version_key
-        let staged_path = dir.path().join("staged.ext4");
-        std::fs::write(&staged_path, "second install").unwrap();
-        let staged_disk = Disk::new(staged_path, DiskFormat::Ext4, false);
-
-        let result = mgr.install("raced-key", staged_disk).unwrap();
-        assert_eq!(result.path(), existing);
-
-        // Original content preserved (first install wins)
-        assert_eq!(
-            std::fs::read_to_string(result.path()).unwrap(),
-            "first install"
-        );
-        let _ = result.leak();
-    }
-
-    #[test]
-    fn test_gc_removes_stale_entries() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let bases_dir = dir.path().join("bases");
-        let boxes_dir = dir.path().join("boxes");
-        std::fs::create_dir_all(&bases_dir).unwrap();
-        std::fs::create_dir_all(&boxes_dir).unwrap();
-
-        let store = test_store();
-
-        // Create entries with old guest hash via DB + filesystem
-        let file1 = bases_dir.join("aaa11111.ext4");
-        let file2 = bases_dir.join("bbb22222.ext4");
-        std::fs::write(&file1, "old1").unwrap();
-        std::fs::write(&file2, "old2").unwrap();
-        insert_rootfs_record(
-            &store,
-            "aaa11111",
-            "img123-oldguest1",
-            file1.to_str().unwrap(),
-        );
-        insert_rootfs_record(
-            &store,
-            "bbb22222",
-            "img456-oldguest2",
-            file2.to_str().unwrap(),
-        );
-
-        let base_disk_mgr = BaseDiskManager::new(bases_dir, store);
-        let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
-
-        // No boxes reference anything, old guest hash → both removed
-        let removed = mgr.gc_inner(&boxes_dir, "-currentguest").unwrap();
-        assert_eq!(removed, 2);
-        assert!(!file1.exists());
-        assert!(!file2.exists());
-    }
-
-    #[test]
-    fn test_gc_preserves_current_version_entries() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let bases_dir = dir.path().join("bases");
-        let boxes_dir = dir.path().join("boxes");
-        std::fs::create_dir_all(&bases_dir).unwrap();
-        std::fs::create_dir_all(&boxes_dir).unwrap();
-
-        let store = test_store();
-
-        // Current-version entry (version_key ends with current guest suffix)
-        let current_file = bases_dir.join("ccc33333.ext4");
-        std::fs::write(&current_file, "current version").unwrap();
-        insert_rootfs_record(
-            &store,
-            "ccc33333",
-            "img123-currentguest",
-            current_file.to_str().unwrap(),
-        );
-
-        // Stale entry (old guest hash)
-        let stale_file = bases_dir.join("ddd44444.ext4");
-        std::fs::write(&stale_file, "old version").unwrap();
-        insert_rootfs_record(
-            &store,
-            "ddd44444",
-            "img123-oldguest",
-            stale_file.to_str().unwrap(),
-        );
-
-        let base_disk_mgr = BaseDiskManager::new(bases_dir, store);
-        let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
-
-        let removed = mgr.gc_inner(&boxes_dir, "-currentguest").unwrap();
-        assert_eq!(removed, 1);
-        assert!(
-            current_file.exists(),
-            "Current-version entry should be kept"
-        );
-        assert!(!stale_file.exists(), "Stale entry should be removed");
-    }
-
-    #[test]
-    fn test_gc_preserves_referenced_entries() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let bases_dir = dir.path().join("bases");
-        let boxes_dir = dir.path().join("boxes");
-        std::fs::create_dir_all(&bases_dir).unwrap();
-
-        let store = test_store();
-
-        // Old-version entry referenced by a box (should survive)
-        let referenced_file = bases_dir.join("eee55555.ext4");
-        std::fs::write(&referenced_file, "keep me").unwrap();
-        insert_rootfs_record(
-            &store,
-            "eee55555",
-            "img123-oldguest",
-            referenced_file.to_str().unwrap(),
-        );
-
-        // Old-version entry not referenced (should be deleted)
-        let unreferenced_file = bases_dir.join("fff66666.ext4");
-        std::fs::write(&unreferenced_file, "delete me").unwrap();
-        insert_rootfs_record(
-            &store,
-            "fff66666",
-            "img456-oldguest",
-            unreferenced_file.to_str().unwrap(),
-        );
-
-        // Create a box with a qcow2 that references one of them.
-        // Note: correct path is boxes/{box_id}/disks/guest-rootfs.qcow2
-        let box_disks = boxes_dir.join("box-1").join("disks");
-        std::fs::create_dir_all(&box_disks).unwrap();
-        let qcow2_path = box_disks.join("guest-rootfs.qcow2");
-
-        // Write a minimal qcow2 header with backing file pointing to referenced_file
-        let backing_str = referenced_file.to_str().unwrap();
-        let backing_bytes = backing_str.as_bytes();
-        let mut buf = vec![0u8; 1024];
-        buf[0..4].copy_from_slice(&0x514649fbu32.to_be_bytes()); // Magic
-        buf[4..8].copy_from_slice(&3u32.to_be_bytes()); // Version
-        buf[8..16].copy_from_slice(&512u64.to_be_bytes()); // Backing offset
-        buf[16..20].copy_from_slice(&(backing_bytes.len() as u32).to_be_bytes());
-        buf[512..512 + backing_bytes.len()].copy_from_slice(backing_bytes);
-        std::fs::write(&qcow2_path, &buf).unwrap();
-
-        let base_disk_mgr = BaseDiskManager::new(bases_dir, store);
-        let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
-
-        let removed = mgr.gc_inner(&boxes_dir, "-currentguest").unwrap();
-        assert_eq!(removed, 1);
-        assert!(referenced_file.exists(), "Referenced entry should be kept");
-        assert!(
-            !unreferenced_file.exists(),
-            "Unreferenced stale entry should be removed"
-        );
-    }
-
-    #[test]
-    fn test_gc_no_records() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let mgr = make_mgr(dir.path().join("bases"), dir.path().to_path_buf());
-
-        let removed = mgr.gc_inner(dir.path(), "-anything").unwrap();
-        assert_eq!(removed, 0);
-    }
-
-    #[test]
-    fn test_gc_no_boxes_dir() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let bases_dir = dir.path().join("bases");
-        std::fs::create_dir_all(&bases_dir).unwrap();
-
-        let store = test_store();
-
-        // Stale entry (doesn't match current suffix)
-        let stale = bases_dir.join("ggg77777.ext4");
-        std::fs::write(&stale, "orphan").unwrap();
-        insert_rootfs_record(&store, "ggg77777", "img-oldguest", stale.to_str().unwrap());
-
-        let base_disk_mgr = BaseDiskManager::new(bases_dir, store);
-        let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
-
-        let removed = mgr
-            .gc_inner(&dir.path().join("nonexistent-boxes"), "-currentguest")
-            .unwrap();
-        assert_eq!(removed, 1);
     }
 }

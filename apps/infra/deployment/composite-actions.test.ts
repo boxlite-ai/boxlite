@@ -161,7 +161,7 @@ test('the manylinux prologue reaches the container unchanged whatever the caller
     'git config --global --add safe.directory /work',
     'unset RUSTC_WRAPPER',
     'GUEST_TARGET=$(scripts/util.sh --target)',
-    'export SKIP_GUEST_BUILD=1',
+    'export SKIP_GUEST_ROOTFS_BUILD=1',
     'export PATH="/usr/local/go/bin:$CARGO_HOME/bin:$PATH"',
     'make setup:build runtime',
   ]

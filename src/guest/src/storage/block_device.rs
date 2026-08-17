@@ -10,6 +10,10 @@ use boxlite_shared::Filesystem;
 use nix::libc;
 use nix::mount::{mount, MsFlags};
 
+/// Filesystem tools bundled in the immutable guest rootfs.
+const MKE2FS_PATH: &str = "/boxlite/bin/mke2fs";
+const RESIZE2FS_PATH: &str = "/boxlite/bin/resize2fs";
+
 /// Mounts and formats block devices.
 pub struct BlockDeviceMount;
 
@@ -200,9 +204,9 @@ impl BlockDeviceMount {
         // leaving us with ECHILD. See reaper::reap_fence.
         let output = {
             let _fence = crate::reaper::reap_fence();
-            Command::new("resize2fs").arg(device).output()
+            Command::new(RESIZE2FS_PATH).arg(device).output()
         }
-        .map_err(|e| BoxliteError::Storage(format!("Failed to execute resize2fs: {}", e)))?;
+        .map_err(|e| BoxliteError::Storage(format!("Failed to execute {RESIZE2FS_PATH}: {e}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -243,17 +247,16 @@ impl BlockDeviceMount {
             );
         }
 
-        let mkfs_cmd = format!("mkfs.{}", filesystem);
         // Fence the reaper across spawn-and-wait (see reap_fence): output()
         // self-waits and would otherwise race waitpid(-1) into ECHILD.
         let output = {
             let _fence = crate::reaper::reap_fence();
-            Command::new(&mkfs_cmd)
-                .arg("-F") // Force, don't prompt
+            Command::new(MKE2FS_PATH)
+                .args(["-t", filesystem, "-F"])
                 .arg(device)
                 .output()
         }
-        .map_err(|e| BoxliteError::Storage(format!("Failed to run {}: {}", mkfs_cmd, e)))?;
+        .map_err(|e| BoxliteError::Storage(format!("Failed to run {MKE2FS_PATH}: {e}")))?;
 
         if !output.status.success() {
             return Err(BoxliteError::Storage(format!(

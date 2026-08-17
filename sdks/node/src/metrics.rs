@@ -76,7 +76,7 @@ pub struct JsBoxMetrics {
     pub stage_filesystem_setup_ms: Option<f64>,
     /// Time to pull and prepare container image layers (milliseconds)
     pub stage_image_prepare_ms: Option<f64>,
-    /// Time to bootstrap guest rootfs (milliseconds)
+    /// Time to resolve and validate the packaged guest rootfs (milliseconds)
     pub stage_guest_rootfs_ms: Option<f64>,
     /// Time to build box configuration (milliseconds)
     pub stage_box_config_ms: Option<f64>,

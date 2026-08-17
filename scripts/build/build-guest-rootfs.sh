@@ -73,10 +73,27 @@ verify_guest_binary() {
 
 verify_inventory() {
     local rootfs="$1" actual expected path symlinks
-    expected=$(printf '%s\n' boxlite boxlite/bin boxlite/bin/boxlite-guest boxlite/bin/mke2fs boxlite/bin/resize2fs)
+    expected=$(printf '%s\n' \
+        boxlite \
+        boxlite/bin \
+        boxlite/bin/boxlite-guest \
+        boxlite/bin/mke2fs \
+        boxlite/bin/resize2fs \
+        dev proc run sys tmp var var/tmp)
     actual=$(cd "$rootfs" && find . ! -name . -print | sed 's#^./##' | LC_ALL=C sort)
     [ "$actual" = "$expected" ] || { printf 'ERROR: unexpected rootfs inventory\n%s\n' "$actual" >&2; return 1; }
-    for path in "$rootfs" "$rootfs/boxlite" "$rootfs/boxlite/bin"; do
+    for path in \
+        "$rootfs" \
+        "$rootfs/boxlite" \
+        "$rootfs/boxlite/bin" \
+        "$rootfs/dev" \
+        "$rootfs/proc" \
+        "$rootfs/run" \
+        "$rootfs/sys" \
+        "$rootfs/tmp" \
+        "$rootfs/var" \
+        "$rootfs/var/tmp"
+    do
         [ -d "$path" ] && [ ! -L "$path" ] && [ "$(portable_mode "$path")" = 755 ] || die "invalid 0755 rootfs directory: $path"
     done
     for path in "$rootfs/boxlite/bin/boxlite-guest" "$rootfs/boxlite/bin/mke2fs" "$rootfs/boxlite/bin/resize2fs"; do
@@ -99,8 +116,26 @@ main() {
 
     rm -rf -- "$output"
     output_created=1
-    mkdir -p "$output/rootfs/boxlite/bin"
-    chmod 0755 "$output" "$output/rootfs" "$output/rootfs/boxlite" "$output/rootfs/boxlite/bin"
+    mkdir -p \
+        "$output/rootfs/boxlite/bin" \
+        "$output/rootfs/dev" \
+        "$output/rootfs/proc" \
+        "$output/rootfs/run" \
+        "$output/rootfs/sys" \
+        "$output/rootfs/tmp" \
+        "$output/rootfs/var/tmp"
+    chmod 0755 \
+        "$output" \
+        "$output/rootfs" \
+        "$output/rootfs/boxlite" \
+        "$output/rootfs/boxlite/bin" \
+        "$output/rootfs/dev" \
+        "$output/rootfs/proc" \
+        "$output/rootfs/run" \
+        "$output/rootfs/sys" \
+        "$output/rootfs/tmp" \
+        "$output/rootfs/var" \
+        "$output/rootfs/var/tmp"
 
     bash "$script_dir/build-guest-deps.sh" \
         --target "$target" \

@@ -9,7 +9,7 @@
 //!   1. Filesystem           (create layout)
 //!   2. BootAssets       ─┬─  (stage custom kernel/initramfs)
 //!      ContainerRootfs  ├─  (pull image, create COW disk)
-//!      GuestRootfs      ─┘  (prepare guest, create COW disk)
+//!      GuestRootfs      ─┘  (resolve packaged read-only rootfs)
 //!   3. VmmSpawn             (build config + spawn VM)
 //!   4. GuestConnect         (wait for guest ready)
 //!   5. GuestInit       ─┬─   (initialize container)
@@ -19,7 +19,7 @@
 //!   1. Filesystem           (load existing layout)
 //!   2. BootAssets       ─┬─  (reuse box-scoped boot assets)
 //!      ContainerRootfs  ├─  (reuse existing COW disk - preserves user data)
-//!      GuestRootfs      ─┘  (reuse existing COW disk)
+//!      GuestRootfs      ─┘  (resolve packaged read-only rootfs)
 //!   3. VmmSpawn             (build config + spawn NEW VM)
 //!   4. GuestConnect         (wait for guest ready)
 //!   5. GuestInit       ─┬─   (re-initialize container in new VM)
@@ -88,7 +88,7 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
         // has its rootfs preserved (per BoxStatus::Failed doc) and is
         // retryable per BoxStatus::can_start.
         BoxStatus::Stopped | BoxStatus::Failed => vec![
-            // Restart: Same flow but rootfs tasks reuse existing COW disks
+            // Restart: same flow; only the container task reuses its COW disk
             // (preserves user modifications from previous run)
             Stage::sequential(vec![Box::new(FilesystemTask)]),
             Stage::parallel(vec![
@@ -218,7 +218,13 @@ impl BoxBuilder {
         } = self;
 
         let status = state.status;
-        let reuse_rootfs = status == BoxStatus::Stopped;
+        let container_disk_exists = config
+            .box_home
+            .join(crate::runtime::layout::dirs::DISKS_DIR)
+            .join(crate::disk::constants::filenames::CONTAINER_DISK)
+            .is_file();
+        let reuse_rootfs =
+            status == BoxStatus::Stopped || (status == BoxStatus::Failed && container_disk_exists);
         let skip_guest_wait = status == BoxStatus::Running;
 
         let ctx = InitPipelineContext::new(config, runtime.clone(), reuse_rootfs, skip_guest_wait);
@@ -255,24 +261,24 @@ impl BoxBuilder {
                 BoxliteError::Internal("guest_connect task must run first".into())
             })?;
 
-            // Get disks from context (for Running, create disk reference directly)
-            let (container_disk, guest_disk) = if status == BoxStatus::Running {
+            // Get the container disk (for Running, create a reference directly).
+            let container_disk = if status == BoxStatus::Running {
                 // Reattach: create disk reference to existing qcow2
                 use crate::disk::DiskFormat;
                 use crate::disk::constants::filenames;
-                let disk = crate::disk::Disk::new(
-                    ctx.config.box_home.join(filenames::CONTAINER_DISK),
+                crate::disk::Disk::new(
+                    ctx.config
+                        .box_home
+                        .join(crate::runtime::layout::dirs::DISKS_DIR)
+                        .join(filenames::CONTAINER_DISK),
                     DiskFormat::Qcow2,
                     true,
-                );
-                (disk, None)
+                )
             } else {
                 // Starting/Stopped: get disks from rootfs tasks
-                let container_disk = ctx
-                    .container_disk
+                ctx.container_disk
                     .take()
-                    .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?;
-                (container_disk, ctx.guest_disk.take())
+                    .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?
             };
 
             #[cfg(target_os = "linux")]
@@ -300,7 +306,6 @@ impl BoxBuilder {
                 published_ports,
                 metrics,
                 container_disk,
-                guest_disk,
                 #[cfg(target_os = "linux")]
                 bind_mount,
             );

@@ -1,9 +1,9 @@
-//! Base disk storage for clone bases and rootfs cache.
+//! Base disk storage for clone bases and legacy rootfs records.
 //!
 //! All entries are immutable COW fork points with different lifecycle rules:
 //! - `CloneBase`: unnamed, auto-deleted when no box references the base
 //!   (tracked via `base_disk_ref` table)
-//! - `Rootfs`: global guest rootfs cache (`source_box_id = "__global__"`)
+//! - `Rootfs`: legacy guest rootfs base records (`source_box_id = "__global__"`)
 //! - `Snapshot`: kept for backward compatibility in the DB CHECK constraint,
 //!   but new snapshots use the dedicated `snapshot` table (see `db/snapshot.rs`).
 //!
@@ -143,6 +143,7 @@ impl BaseDiskStore {
     }
 
     /// Find a base disk by box ID and name.
+    #[cfg(test)]
     pub(crate) fn find_by_name(
         &self,
         source_box_id: &str,
@@ -196,6 +197,22 @@ impl BaseDiskStore {
             params.iter().map(|p| p.as_ref()).collect();
         let rows = db_err!(stmt.query_map(params_refs.as_slice(), row_to_record))?;
 
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(db_err!(row)?);
+        }
+        Ok(records)
+    }
+
+    /// List every base disk of a kind, including legacy per-box rows.
+    pub(crate) fn list_by_kind(&self, kind: BaseDiskKind) -> BoxliteResult<Vec<BaseDiskInfo>> {
+        let conn = self.db.conn();
+        let mut stmt = db_err!(conn.prepare(
+            "SELECT id, source_box_id, name, kind, base_path, \
+             created_at, json FROM base_disk \
+             WHERE kind = ?1 ORDER BY created_at DESC",
+        ))?;
+        let rows = db_err!(stmt.query_map(rusqlite::params![kind.as_str()], row_to_record))?;
         let mut records = Vec::new();
         for row in rows {
             records.push(db_err!(row)?);

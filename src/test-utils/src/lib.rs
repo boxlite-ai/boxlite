@@ -4,7 +4,7 @@
 //!
 //! - [`assertions`] — Assertion macros (`assert_ok!`, `assert_err!`, etc.)
 //! - [`config_matrix`] — Multi-configuration test runner
-//! - [`cache`] — Shared image/rootfs cache (`SharedResources`)
+//! - [`cache`] — Shared image/backing-disk cache (`SharedResources`)
 //! - [`home`] — Per-test isolated home directory (`PerTestBoxHome`)
 //! - [`box_test`] — Per-test fixture with helpers (`BoxTestBase`)
 //! - [`sync_point`] — Async sync points for concurrency testing

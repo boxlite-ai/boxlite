@@ -25,7 +25,6 @@ use tokio_stream::StreamExt;
 
 /// Disk filenames matching `boxlite::disk::constants::filenames`.
 const CONTAINER_DISK: &str = "disk.qcow2";
-const GUEST_ROOTFS_DISK: &str = "guest-rootfs.qcow2";
 const SNAPSHOTS_DIR: &str = "snapshots";
 const DISKS_DIR: &str = "disks";
 
@@ -103,8 +102,8 @@ async fn test_cow_child_disks_exist_after_snapshot_create() {
         "container disk missing before snapshot"
     );
     assert!(
-        ddir.join(GUEST_ROOTFS_DISK).exists(),
-        "guest disk missing before snapshot"
+        !ddir.join(common::LEGACY_GUEST_ROOTFS_DISK).exists(),
+        "new boxes must use the bundled directory rootfs"
     );
 
     let info = litebox
@@ -115,8 +114,8 @@ async fn test_cow_child_disks_exist_after_snapshot_create() {
     assert_eq!(info.name, "ckpt1");
 
     // Snapshot copies must exist in the snapshot directory.
-    // Note: only the container disk is forked into the snapshot; guest rootfs is
-    // recreated from cache on start, so it is not part of the snapshot.
+    // Note: only the container disk is forked into the snapshot; the guest rootfs is
+    // immutable runtime content, so it is not part of the snapshot.
     let sdir = snapshot_dir(&home.path, &box_id, "ckpt1");
     assert!(
         sdir.join(CONTAINER_DISK).exists(),
@@ -194,6 +193,10 @@ async fn test_cow_child_disks_exist_after_snapshot_restore() {
         .await
         .expect("snapshot create failed");
 
+    let ddir = disks_dir(&home.path, &box_id);
+    let legacy_guest_disk = ddir.join(common::LEGACY_GUEST_ROOTFS_DISK);
+    std::fs::write(&legacy_guest_disk, b"legacy").expect("seed legacy guest disk");
+
     litebox
         .snapshots()
         .restore("v1")
@@ -201,15 +204,15 @@ async fn test_cow_child_disks_exist_after_snapshot_restore() {
         .expect("snapshot restore failed");
 
     // COW child container disk must exist after restore.
-    let ddir = disks_dir(&home.path, &box_id);
     assert!(
         ddir.join(CONTAINER_DISK).exists(),
         "COW child disk.qcow2 deleted by Disk::Drop after restore (missing .leak())"
     );
-    // Guest rootfs is intentionally deleted by restore so the next start recreates it fresh.
+    // Restore is not a successful boot boundary, so rollback material stays in
+    // place until the next Container.Start completes.
     assert!(
-        !ddir.join(GUEST_ROOTFS_DISK).exists(),
-        "guest-rootfs.qcow2 should be deleted after restore (recreated on next start)"
+        legacy_guest_disk.exists(),
+        "restore must not delete a legacy guest disk before a successful start"
     );
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;

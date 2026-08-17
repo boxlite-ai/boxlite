@@ -15,9 +15,8 @@
 ///
 /// It may still *appear* in a cache path, where it costs a split for
 /// byte-identical content and buys the ability to say which checkout produced
-/// an artifact. That trade is only worth taking where the split is bounded —
-/// see `EmbeddedRuntime::dir_name`, and note the guest rootfs key deliberately
-/// declines it.
+/// an artifact. That trade is only worth taking where the split is bounded;
+/// see `EmbeddedRuntime::dir_name`.
 pub const GIT_COMMIT: Option<&str> = option_env!("BOXLITE_GIT_COMMIT");
 
 pub mod constants;

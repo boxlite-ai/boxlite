@@ -31,7 +31,7 @@
 #      digest was supplied. A warning is emitted in this mode so the user
 #      knows they are in the weaker trust tier.
 #
-# The runtime (boxlite-shim, boxlite-guest, libkrunfw) is embedded in the
+# The runtime (boxlite-shim, minimal guest-rootfs, libkrunfw) is embedded in the
 # binary via include_bytes!; nothing else needs to be installed.
 
 set -eu

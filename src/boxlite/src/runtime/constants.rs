@@ -6,13 +6,15 @@
 // Re-export shared constants from boxlite-core
 pub use boxlite_shared::constants::{container, mount_tags, network};
 
-/// Guest mount points (paths inside the guest).
+/// Guest runtime paths known to the host.
 ///
-/// Note: Host only knows BIN_DIR (for guest entrypoint).
-/// All other guest paths are determined by the guest based on tags.
+/// Guest-only paths remain in the guest crate.
 pub mod guest_paths {
-    /// Guest binary directory (for guest entrypoint executable)
+    /// Directory containing executables bundled in the guest rootfs.
     pub const BIN_DIR: &str = "/boxlite/bin";
+
+    /// Guest agent executable bundled in the immutable guest rootfs.
+    pub const AGENT: &str = "/boxlite/bin/boxlite-guest";
 }
 
 pub mod envs {
@@ -42,9 +44,6 @@ pub mod envs {
 pub mod images {
     /// Default container image when none is specified
     pub const DEFAULT: &str = "alpine:latest";
-
-    /// Base image for VM init rootfs (must include mkfs.ext4 for disk formatting)
-    pub const INIT_ROOTFS: &str = "debian:bookworm-slim";
 }
 
 /// Filesystem and mount options

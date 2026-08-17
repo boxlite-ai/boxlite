@@ -71,8 +71,6 @@ pub(crate) struct LiveState {
 
     // Disk resources (kept for lifecycle management)
     _container_rootfs_disk: Disk,
-    #[allow(dead_code)]
-    guest_rootfs_disk: Option<Disk>,
 
     // Platform-specific
     #[cfg(target_os = "linux")]
@@ -89,7 +87,6 @@ impl LiveState {
         published_ports: Option<crate::litebox::ports::LivePublishedPorts>,
         metrics: BoxMetricsStorage,
         container_rootfs_disk: Disk,
-        guest_rootfs_disk: Option<Disk>,
         #[cfg(target_os = "linux")] bind_mount: Option<BindMountHandle>,
     ) -> Self {
         Self {
@@ -99,7 +96,6 @@ impl LiveState {
             published_ports,
             metrics,
             _container_rootfs_disk: container_rootfs_disk,
-            guest_rootfs_disk,
             #[cfg(target_os = "linux")]
             bind_mount,
         }
@@ -149,6 +145,61 @@ pub(crate) struct BoxImpl {
     background_starts_finished: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
     background_start_finished: Arc<tokio::sync::Notify>,
+}
+
+#[derive(Clone)]
+struct LegacyGuestRootfsCleanup {
+    box_id: BoxID,
+    layout: BoxFilesystemLayout,
+    runtime: SharedRuntimeImpl,
+}
+
+impl LegacyGuestRootfsCleanup {
+    fn new(box_impl: &BoxImpl) -> Self {
+        Self {
+            box_id: box_impl.config.id.clone(),
+            layout: box_impl.layout.clone(),
+            runtime: box_impl.runtime.clone(),
+        }
+    }
+
+    /// Remove the obsolete per-box guest overlay only after Container.Start.
+    ///
+    /// This is deliberately non-fallible: the container is already running. A
+    /// failed unlink is retried on the next cold start and must never turn a
+    /// successful start into an error.
+    fn run(&self) {
+        let path = self.layout.guest_rootfs_disk_path();
+        let migrated = match std::fs::remove_file(&path) {
+            Ok(()) => {
+                tracing::info!(
+                    box_id = %self.box_id,
+                    path = %path.display(),
+                    "Removed legacy guest rootfs disk after successful start"
+                );
+                true
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(error) => {
+                tracing::warn!(
+                    box_id = %self.box_id,
+                    path = %path.display(),
+                    %error,
+                    "Failed to remove legacy guest rootfs disk; will retry on next cold start"
+                );
+                false
+            }
+        };
+
+        if migrated
+            && let Err(error) = self
+                .runtime
+                .base_disk_mgr
+                .gc_legacy_rootfs(&self.runtime.layout.boxes_dir())
+        {
+            tracing::warn!(%error, "Legacy guest rootfs GC failed after box migration");
+        }
+    }
 }
 
 impl BoxImpl {
@@ -307,6 +358,7 @@ impl BoxImpl {
         let shutdown_token = self.shutdown_token.child_token();
         let container_id = self.container_id().to_owned();
         let box_id = self.config.id.clone();
+        let legacy_guest_rootfs_cleanup = LegacyGuestRootfsCleanup::new(self);
         let event_listeners = self.event_listeners.clone();
         #[cfg(test)]
         let background_starts_finished = Arc::clone(&self.background_starts_finished);
@@ -323,6 +375,7 @@ impl BoxImpl {
             .await
             {
                 Ok(true) => {
+                    legacy_guest_rootfs_cleanup.run();
                     for listener in &event_listeners {
                         listener.on_box_started(&box_id);
                     }
@@ -1023,13 +1076,16 @@ impl BoxImpl {
     /// so the implicit-boot funnel and an explicit `start()` cannot double-run it,
     /// and a box reattached with init already running pre-sets the cell.
     async fn ensure_container_started(&self, live: &LiveState) -> BoxliteResult<()> {
-        Self::ensure_container_started_owned(
+        let started_here = Self::ensure_container_started_owned(
             Arc::clone(&self.container_start),
             live.guest_session.clone(),
             self.container_id().to_owned(),
             self.shutdown_token.child_token(),
         )
         .await?;
+        if started_here {
+            LegacyGuestRootfsCleanup::new(self).run();
+        }
         Ok(())
     }
 
@@ -1770,7 +1826,6 @@ mod tests {
                 DiskFormat::Qcow2,
                 true,
             ),
-            None,
             #[cfg(target_os = "linux")]
             None,
         );
@@ -2226,7 +2281,6 @@ mod tests {
                 DiskFormat::Qcow2,
                 true,
             ),
-            None,
             #[cfg(target_os = "linux")]
             None,
         );

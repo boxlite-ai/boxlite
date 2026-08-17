@@ -1,4 +1,4 @@
-//! Shared test cache: images, rootfs, DB snapshot.
+//! Shared test cache: images, bases, and DB snapshot.
 //!
 //! Created once per process ([`OnceLock`]), cross-process safe ([`flock`]).
 //! Replaces the monolithic `warm_home()` function.
@@ -9,8 +9,7 @@
 //! target/boxlite-test/
 //! ├── .ready          ← cache version marker
 //! ├── images/         ← pulled OCI images (shared read-only)
-//! ├── rootfs/         ← built guest rootfs (shared read-only)
-//! ├── bases/          ← shared guest base disks (shared read-only)
+//! ├── bases/          ← shared container backing disks (read-only)
 //! ├── tmp/            ← transient files (per-test subdirs)
 //! └── db/boxlite.db   ← DB snapshot (copied per-test)
 //! ```
@@ -26,7 +25,7 @@ use tempfile::TempDir;
 use crate::{TEST_IMAGES, TEST_SHUTDOWN_TIMEOUT, test_registries};
 
 const READY_MARKER_FILE: &str = ".ready";
-const WARM_CACHE_VERSION: &str = "v3-python-alpine-bases";
+const WARM_CACHE_VERSION: &str = "v4-bundled-guest-rootfs";
 
 /// Cleanup handle for per-test resources linked into a home directory.
 ///
@@ -38,7 +37,7 @@ pub struct LinkedCache {
 
 static SHARED_RESOURCES: OnceLock<SharedResources> = OnceLock::new();
 
-/// Shared test cache containing pre-pulled images, built rootfs, and DB snapshot.
+/// Shared test cache containing pre-pulled images, backing disks, and a DB snapshot.
 ///
 /// Created once per process via [`SharedResources::global()`]. Cross-process safe
 /// via `flock` (nextest runs each test in a separate process).
@@ -51,7 +50,7 @@ impl SharedResources {
     /// Get or create the global shared cache.
     ///
     /// On first call: creates cache directories, pulls images (with cross-process lock),
-    /// warms rootfs, and snapshots the DB. Subsequent calls return the cached instance.
+    /// warms the VM/container disk pipeline, and snapshots the DB. Subsequent calls return the cached instance.
     pub fn global() -> &'static Self {
         SHARED_RESOURCES.get_or_init(Self::init)
     }
@@ -59,11 +58,6 @@ impl SharedResources {
     /// Path to the shared images directory.
     pub fn images_dir(&self) -> PathBuf {
         self.dir.join("images")
-    }
-
-    /// Path to the shared rootfs directory.
-    pub fn rootfs_dir(&self) -> PathBuf {
-        self.dir.join("rootfs")
     }
 
     /// Path to the shared tmp directory.
@@ -85,13 +79,12 @@ impl SharedResources {
     ///
     /// Creates:
     /// - `home/images → target/boxlite-test/images/` (symlink, read-only)
-    /// - `home/rootfs → target/boxlite-test/rootfs/` (symlink, read-only)
     /// - `home/bases → target/boxlite-test/bases/` (symlink, read-only)
     /// - `home/tmp → target/boxlite-test/tmp/<unique>/` (symlink, per-test)
     /// - `home/db/boxlite.db` (copy, per-test writable)
     pub fn link_into(&self, home_dir: &Path) -> LinkedCache {
-        // Symlink images, rootfs, bases → cache dir (shared, read-only)
-        for name in ["images", "rootfs", "bases"] {
+        // Symlink images and bases → cache dir (shared, read-only)
+        for name in ["images", "bases"] {
             let link = home_dir.join(name);
             if !link.exists() {
                 let target = self.dir.join(name);
@@ -101,7 +94,7 @@ impl SharedResources {
             }
         }
 
-        // Per-test tmp: unique subdir on same device as rootfs.
+        // Per-test tmp: unique subdir on same device as the shared cache.
         // Avoids cross-test cleanup race when BoxliteRuntime::new() wipes temp_dir.
         let cache_tmp = self.tmp_dir();
         std::fs::create_dir_all(&cache_tmp).unwrap_or_default();
@@ -131,7 +124,7 @@ impl SharedResources {
         let dir = cache_dir();
 
         // Create persistent cache directories
-        for subdir in ["images", "rootfs", "bases", "tmp"] {
+        for subdir in ["images", "bases", "tmp"] {
             std::fs::create_dir_all(dir.join(subdir))
                 .unwrap_or_else(|e| panic!("create cache/{subdir}: {e}"));
         }
@@ -156,13 +149,13 @@ impl SharedResources {
         resources.clear_ready_marker();
 
         // Ephemeral short-path home for warm-up runtime (macOS 104-char socket limit).
-        // Symlinks {images,rootfs,bases,tmp} → target/boxlite-test/ so data persists.
+        // Symlinks {images,bases,tmp} → target/boxlite-test/ so data persists.
         let warm_home = TempDir::new_in("/tmp").expect("create warm home");
-        for name in ["images", "rootfs", "bases", "tmp"] {
+        for name in ["images", "bases", "tmp"] {
             symlink_or_exists(&dir.join(name), &warm_home.path().join(name), name);
         }
 
-        // Pull images and warm rootfs on a dedicated thread.
+        // Pull images and warm the VM/container disk pipeline on a dedicated thread.
         // #[tokio::test] already has a Tokio runtime; creating another inside
         // the same thread panics ("Cannot start a runtime from within a runtime").
         resources.warm_on_thread(warm_home.path());
@@ -213,8 +206,8 @@ impl SharedResources {
                     }
                 }
 
-                // Warm rootfs by starting a box
-                eprintln!("[test] Warming guest rootfs pipeline...");
+                // Warm the VM and container disk pipeline by starting a box
+                eprintln!("[test] Warming VM pipeline...");
                 let handle = runtime
                     .create(
                         BoxOptions {
@@ -236,7 +229,7 @@ impl SharedResources {
                     let _ = runtime.remove(info.id.as_str(), true).await;
                 }
 
-                eprintln!("[test] Guest rootfs pipeline warm.");
+                eprintln!("[test] VM pipeline warm.");
                 let _ = runtime.shutdown(Some(TEST_SHUTDOWN_TIMEOUT)).await;
             });
         })
@@ -313,7 +306,6 @@ mod tests {
             dir: PathBuf::from("/test/cache"),
         };
         assert_eq!(resources.images_dir(), PathBuf::from("/test/cache/images"));
-        assert_eq!(resources.rootfs_dir(), PathBuf::from("/test/cache/rootfs"));
         assert_eq!(resources.tmp_dir(), PathBuf::from("/test/cache/tmp"));
         assert_eq!(
             resources.db_snapshot(),
@@ -325,7 +317,7 @@ mod tests {
     fn linked_cache_cleans_per_test_tmp_on_drop() {
         let base = tempfile::tempdir().expect("create base temp dir");
         let cache_dir = base.path().join("cache");
-        for sub in ["images", "rootfs", "bases", "tmp"] {
+        for sub in ["images", "bases", "tmp"] {
             std::fs::create_dir_all(cache_dir.join(sub)).unwrap();
         }
 
@@ -358,7 +350,7 @@ mod tests {
     fn link_into_creates_tmp_symlink() {
         let base = tempfile::tempdir().expect("create base temp dir");
         let cache_dir = base.path().join("cache");
-        for sub in ["images", "rootfs", "bases", "tmp"] {
+        for sub in ["images", "bases", "tmp"] {
             std::fs::create_dir_all(cache_dir.join(sub)).unwrap();
         }
 
@@ -386,7 +378,7 @@ mod tests {
     fn link_into_creates_bases_symlink() {
         let base = tempfile::tempdir().expect("create base temp dir");
         let cache_dir = base.path().join("cache");
-        for sub in ["images", "rootfs", "bases", "tmp"] {
+        for sub in ["images", "bases", "tmp"] {
             std::fs::create_dir_all(cache_dir.join(sub)).unwrap();
         }
 

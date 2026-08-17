@@ -1,4 +1,4 @@
-//! Runtime binary discovery for boxlite-shim, boxlite-guest, mke2fs, debugfs.
+//! Runtime artifact discovery for boxlite-shim, guest-rootfs, mke2fs, and debugfs.
 //!
 //! This module provides a flexible way to locate runtime binaries that are
 //! bundled with BoxLite. The search follows a priority order:
@@ -42,7 +42,7 @@ impl BinaryFinderBuilder {
     }
 }
 
-/// Finds runtime binaries (boxlite-shim, boxlite-guest, mke2fs, debugfs)
+/// Finds runtime files or directories (boxlite-shim, guest-rootfs, mke2fs, debugfs)
 /// by searching configured paths in priority order.
 ///
 /// # Example
@@ -51,7 +51,7 @@ impl BinaryFinderBuilder {
 /// // Using the default configuration
 /// let finder = RuntimeBinaryFinder::from_env();
 /// let shim_path = finder.find("boxlite-shim")?;
-/// let guest_path = finder.find("boxlite-guest")?;
+/// let guest_rootfs = finder.find("guest-rootfs/rootfs")?;
 ///
 /// // Or use the convenience function
 /// let path = find_binary("boxlite-shim")?;

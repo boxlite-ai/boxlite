@@ -7,7 +7,7 @@ pub mod filenames {
     /// Container rootfs COW disk: `~/.boxlite/boxes/{box_id}/disks/disk.qcow2`
     pub const CONTAINER_DISK: &str = "disk.qcow2";
 
-    /// Guest bootstrap COW disk: `~/.boxlite/boxes/{box_id}/disks/guest-rootfs.qcow2`
+    /// Legacy guest rootfs disk, ignored for boot and removed after a successful cold start.
     pub const GUEST_ROOTFS_DISK: &str = "guest-rootfs.qcow2";
 }
 

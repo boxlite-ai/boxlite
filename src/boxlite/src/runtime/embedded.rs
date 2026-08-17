@@ -1,6 +1,6 @@
 //! Embedded runtime: binaries compiled into the library, extracted on first use.
 //!
-//! The build.rs generates a manifest of (filename, mode, bytes) entries via `include_bytes!`.
+//! The build.rs generates a recursive manifest of (path, mode, optional bytes) entries via `include_bytes!`.
 //! On first access, [`EmbeddedRuntime`] extracts them to a version-stamped directory
 //! under the platform's local data dir, then serves that directory to
 //! [`RuntimeBinaryFinder`](crate::util::RuntimeBinaryFinder) for binary discovery.
@@ -11,13 +11,16 @@
 //! same-version builds with different assets from sharing a stale cache; the
 //! commit lets a cache directory say which checkout produced it.
 
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::fs::{File, OpenOptions};
+use std::os::fd::{AsRawFd, RawFd};
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-// Build.rs generates: pub const MANIFEST: &[(&str, u32, &[u8])] = &[...];
+// Build.rs generates file entries as Some(bytes) and directory entries as None.
 include!(concat!(env!("OUT_DIR"), "/embedded_manifest.rs"));
 
 /// Embedded runtime binary cache.
@@ -39,6 +42,7 @@ include!(concat!(env!("OUT_DIR"), "/embedded_manifest.rs"));
 /// ```
 pub struct EmbeddedRuntime {
     dir: PathBuf,
+    lease: File,
 }
 
 impl EmbeddedRuntime {
@@ -76,6 +80,12 @@ impl EmbeddedRuntime {
         &self.dir
     }
 
+    pub(crate) fn lease_fd_for(path: &Path) -> Option<RawFd> {
+        Self::get()
+            .filter(|runtime| path.starts_with(&runtime.dir))
+            .map(|runtime| runtime.lease.as_raw_fd())
+    }
+
     // ── Initialization ──────────────────────────────────────────────
 
     fn init() -> Option<Self> {
@@ -102,10 +112,7 @@ impl EmbeddedRuntime {
         // Fast path: already extracted by this or a previous process.
         let stamp = dir.join(".complete");
         if stamp.exists() {
-            // Refresh mtime so stale cleanup measures "last used", not "first extracted"
-            let now = filetime::FileTime::now();
-            let _ = filetime::set_file_mtime(&stamp, now);
-            return Ok(Self { dir });
+            return Self::open(dir);
         }
 
         // PID-scoped temp dir avoids collision between concurrent processes.
@@ -114,12 +121,43 @@ impl EmbeddedRuntime {
         std::fs::create_dir_all(&tmp)
             .map_err(|e| BoxliteError::Storage(format!("mkdir {}: {}", tmp.display(), e)))?;
 
+        let mut seen = HashSet::new();
+        let mut directories = Vec::new();
         for (name, mode, data) in MANIFEST {
-            let path = tmp.join(name);
-            std::fs::write(&path, data)
-                .map_err(|e| BoxliteError::Storage(format!("write {}: {}", path.display(), e)))?;
-            #[cfg(unix)]
-            Self::set_permissions(&path, *mode)?;
+            let relative = Self::validate_manifest_path(name)?;
+            if !seen.insert(relative.to_path_buf()) {
+                return Err(BoxliteError::Storage(format!(
+                    "duplicate embedded runtime entry: {name}"
+                )));
+            }
+
+            let path = tmp.join(relative);
+            match data {
+                Some(data) => {
+                    let parent = path.parent().ok_or_else(|| {
+                        BoxliteError::Storage(format!("runtime entry has no parent: {name}"))
+                    })?;
+                    std::fs::create_dir_all(parent).map_err(|error| {
+                        BoxliteError::Storage(format!("mkdir {}: {error}", parent.display()))
+                    })?;
+                    std::fs::write(&path, data).map_err(|error| {
+                        BoxliteError::Storage(format!("write {}: {error}", path.display()))
+                    })?;
+                    #[cfg(unix)]
+                    Self::set_permissions(&path, *mode)?;
+                }
+                None => {
+                    std::fs::create_dir_all(&path).map_err(|error| {
+                        BoxliteError::Storage(format!("mkdir {}: {error}", path.display()))
+                    })?;
+                    directories.push((path, *mode));
+                }
+            }
+        }
+
+        #[cfg(unix)]
+        for (path, mode) in directories.into_iter().rev() {
+            Self::set_permissions(&path, mode)?;
         }
 
         // Stamp marks extraction as complete — checked by the fast path above.
@@ -155,7 +193,39 @@ impl EmbeddedRuntime {
             }
         }
 
-        Ok(Self { dir })
+        Self::open(dir)
+    }
+
+    fn open(dir: PathBuf) -> BoxliteResult<Self> {
+        let dir = std::fs::canonicalize(&dir).map_err(|error| {
+            BoxliteError::Storage(format!(
+                "canonicalize runtime cache {}: {error}",
+                dir.display()
+            ))
+        })?;
+        let lease_path = dir.join(".lease");
+        let lease = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lease_path)
+            .map_err(|error| {
+                BoxliteError::Storage(format!("open lease {}: {error}", lease_path.display()))
+            })?;
+        Self::lock(&lease, libc::LOCK_SH).map_err(|error| {
+            BoxliteError::Storage(format!("lock lease {}: {error}", lease_path.display()))
+        })?;
+
+        let stamp = dir.join(".complete");
+        if !stamp.exists() {
+            return Err(BoxliteError::Storage(format!(
+                "runtime cache disappeared while leasing {}",
+                dir.display()
+            )));
+        }
+        let _ = filetime::set_file_mtime(&stamp, filetime::FileTime::now());
+        Ok(Self { dir, lease })
     }
 
     // ── Cache management ────────────────────────────────────────────
@@ -184,13 +254,38 @@ impl EmbeddedRuntime {
             let ttl = Self::ttl_for_stamp(&stamp);
             let is_stale = now.duration_since(mtime).is_ok_and(|age| age > ttl);
             if is_stale {
+                let lease_path = path.join(".lease");
+                let Ok(lease) = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(&lease_path)
+                else {
+                    continue;
+                };
+                if Self::lock(&lease, libc::LOCK_EX | libc::LOCK_NB).is_err() {
+                    tracing::debug!(dir = %path.display(), "Keeping leased embedded cache");
+                    continue;
+                }
                 tracing::info!(dir = %path.display(), "Removing stale embedded cache");
-                let _ = std::fs::remove_dir_all(&path);
+                if let Err(error) = std::fs::remove_dir_all(&path) {
+                    tracing::warn!(dir = %path.display(), %error, "Failed to remove stale embedded cache");
+                }
             }
         }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────
+
+    fn lock(file: &File, operation: libc::c_int) -> std::io::Result<()> {
+        let result = unsafe { libc::flock(file.as_raw_fd(), operation) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
 
     fn versioned_dir() -> BoxliteResult<PathBuf> {
         let data_dir = dirs::data_local_dir()
@@ -222,12 +317,9 @@ impl EmbeddedRuntime {
     /// which checkout produced it. A build with no commit to report keeps the
     /// two-segment name rather than carrying a placeholder.
     ///
-    /// Including it does split the cache for byte-identical assets, which is
-    /// the same cost the guest rootfs key refuses to pay. The trade differs
-    /// because the split is bounded here and unbounded there: [`cleanup_stale`]
-    /// reclaims these directories on a disuse TTL, whereas a rootfs base is
-    /// retained for as long as any box overlay backs onto it, so a per-commit
-    /// split would accumulate for the life of those boxes.
+    /// Including it does split the cache for byte-identical assets. That split is
+    /// bounded because [`cleanup_stale`] reclaims these directories after the
+    /// configured disuse TTL.
     ///
     /// [`cleanup_stale`]: Self::cleanup_stale
     fn dir_name(version: &str, commit: Option<&str>, manifest_hash: &str) -> String {
@@ -235,6 +327,21 @@ impl EmbeddedRuntime {
             Some(commit) => format!("v{}-{}-{}", version, commit, manifest_hash),
             None => format!("v{}-{}", version, manifest_hash),
         }
+    }
+
+    fn validate_manifest_path(name: &str) -> BoxliteResult<&Path> {
+        let path = Path::new(name);
+        if name.is_empty()
+            || path.is_absolute()
+            || path
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(BoxliteError::Storage(format!(
+                "invalid embedded runtime path: {name:?}"
+            )));
+        }
+        Ok(path)
     }
 
     #[cfg(unix)]
@@ -365,5 +472,72 @@ mod tests {
                 );
             }
         }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn lease_matches_canonical_rootfs_below_symlinked_data_dir() {
+        if MANIFEST.is_empty() {
+            return;
+        }
+
+        const CHILD_MARKER: &str = "BOXLITE_TEST_SYMLINKED_RUNTIME_LEASE_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            let runtime = EmbeddedRuntime::get().expect("embedded runtime must be available");
+            let rootfs = runtime
+                .dir()
+                .join("guest-rootfs/rootfs")
+                .canonicalize()
+                .expect("packaged rootfs must exist");
+            assert!(
+                EmbeddedRuntime::lease_fd_for(&rootfs).is_some(),
+                "canonical packaged rootfs must retain the runtime cache lease"
+            );
+            return;
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        let alias = tmp.path().join("alias");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(
+                "runtime::embedded::tests::lease_matches_canonical_rootfs_below_symlinked_data_dir",
+            )
+            .arg("--nocapture")
+            .env(CHILD_MARKER, "1")
+            .env("XDG_DATA_HOME", &alias)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn shared_cache_lease_blocks_exclusive_cleanup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lease_path = tmp.path().join(".lease");
+        let shared = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lease_path)
+            .unwrap();
+        EmbeddedRuntime::lock(&shared, libc::LOCK_SH).unwrap();
+        let contender = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lease_path)
+            .unwrap();
+        assert!(EmbeddedRuntime::lock(&contender, libc::LOCK_EX | libc::LOCK_NB).is_err());
+        drop(shared);
+        assert!(EmbeddedRuntime::lock(&contender, libc::LOCK_EX | libc::LOCK_NB).is_ok());
     }
 }

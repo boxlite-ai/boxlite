@@ -1119,6 +1119,53 @@ pub fn read_backing_chain(path: &Path) -> Vec<PathBuf> {
     chain
 }
 
+/// Strict backing-chain walk for destructive GC decisions.
+///
+/// Unlike [`read_backing_chain`], any I/O error, corrupt header, missing
+/// backing file, cycle, or excessive depth aborts the walk.
+pub(crate) fn read_backing_chain_checked(path: &Path) -> BoxliteResult<Vec<PathBuf>> {
+    let mut chain = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut current = path.to_path_buf();
+
+    for depth in 0..MAX_BACKING_CHAIN_DEPTH {
+        if !has_qcow2_magic(&current)? {
+            return Ok(chain);
+        }
+
+        let Some(backing) = read_backing_file_path(&current)? else {
+            return Ok(chain);
+        };
+        let backing = PathBuf::from(backing);
+        if !backing.exists() {
+            return Err(BoxliteError::Storage(format!(
+                "Backing file {} referenced by {} does not exist",
+                backing.display(),
+                current.display()
+            )));
+        }
+        let identity = backing.canonicalize().unwrap_or_else(|_| backing.clone());
+        if !visited.insert(identity) {
+            return Err(BoxliteError::Storage(format!(
+                "Circular QCOW2 backing chain at {}",
+                backing.display()
+            )));
+        }
+        chain.push(backing.clone());
+        current = backing;
+
+        if depth + 1 == MAX_BACKING_CHAIN_DEPTH {
+            return Err(BoxliteError::Storage(format!(
+                "QCOW2 backing chain exceeds {} entries from {}",
+                MAX_BACKING_CHAIN_DEPTH,
+                path.display()
+            )));
+        }
+    }
+
+    Ok(chain)
+}
+
 /// Return true when `path` starts with the QCOW2 magic (`QFI\xfb`).
 ///
 /// Raw backing files are valid terminal nodes in a qcow2 backing chain, so a

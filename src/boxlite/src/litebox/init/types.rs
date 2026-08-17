@@ -9,6 +9,7 @@ use crate::litebox::config::BoxConfig;
 use crate::litebox::ports::LivePublishedPorts;
 use crate::portal::GuestSession;
 use crate::portal::interfaces::ContainerRootfsInitConfig;
+use crate::rootfs::guest::GuestRootfs;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::VolumeSpec;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
@@ -302,7 +303,7 @@ pub struct InitPipelineContext {
     pub boot_assets: Option<PreparedBootAssets>,
     pub container_image_config: Option<ContainerImageConfig>,
     pub container_disk: Option<Disk>,
-    pub guest_disk: Option<Disk>,
+    pub guest_rootfs: Option<GuestRootfs>,
     pub volume_mgr: Option<GuestVolumeManager>,
     pub rootfs_init: Option<ContainerRootfsInitConfig>,
     pub container_mounts: Option<Vec<ContainerMount>>,
@@ -339,7 +340,7 @@ impl InitPipelineContext {
             boot_assets: None,
             container_image_config: None,
             container_disk: None,
-            guest_disk: None,
+            guest_rootfs: None,
             volume_mgr: None,
             rootfs_init: None,
             container_mounts: None,

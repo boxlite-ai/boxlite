@@ -10,7 +10,7 @@
 //! ~/.boxlite/boxes/{box_id}/
 //! ├── disks/
 //! │   ├── disk.qcow2              # Live container disk (COW child)
-//! │   └── guest-rootfs.qcow2
+//! │   └── guest-rootfs.qcow2       # Optional legacy migration artifact
 //! └── snapshots/
 //!     ├── snap-1/
 //!     │   └── disk.qcow2          # Snapshot container disk (immutable)
@@ -318,12 +318,6 @@ impl SnapshotManager {
             info.disk_info.container_disk_bytes,
         )?
         .leak();
-
-        // Delete guest-rootfs.qcow2 so next start recreates it fresh from cache.
-        let guest_disk = disks_dir.join(disk_filenames::GUEST_ROOTFS_DISK);
-        if guest_disk.exists() {
-            let _ = std::fs::remove_file(&guest_disk);
-        }
 
         Ok(())
     }

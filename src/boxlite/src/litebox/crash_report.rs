@@ -179,7 +179,7 @@ impl CrashReport {
                      Common causes:\n\
                      • Guest binary (boxlite-guest) crashed before producing output\n\
                      • Guest binary not found inside the rootfs\n\
-                     • Rootfs disk image corrupted or unmountable\n",
+                     • Packaged guest rootfs missing or unreadable\n",
                 );
             }
             Some(code) if code > 128 => {
@@ -233,8 +233,7 @@ impl CrashReport {
              • Stderr: {}\n\n\
              Diagnostic commands:\n\
              • RUST_LOG=debug boxlite run ...   (re-run with tracing)\n\
-             • dmesg | tail -50                 (kernel messages)\n\
-             • file $(which boxlite-guest)      (check binary arch)",
+             • dmesg | tail -50                 (kernel messages)",
             console_log.display(),
             stderr_file.display()
         ));

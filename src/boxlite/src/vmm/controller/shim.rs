@@ -374,7 +374,8 @@ impl VmmController for ShimController {
             self.box_id.as_str(),
             &self.options,
         )
-        .with_nested_virtualization(config.nested_virtualization);
+        .with_nested_virtualization(config.nested_virtualization)
+        .with_guest_rootfs(&config.guest_rootfs.path);
         let spawned = spawner.spawn(&config_json, config.detach)?;
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();

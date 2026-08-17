@@ -15,9 +15,8 @@ use libkrun_sys::{
     krun_add_vsock, krun_add_vsock_port2, krun_check_nested_virt, krun_create_ctx,
     krun_disable_implicit_vsock, krun_free_ctx, krun_init_log, krun_set_console_output,
     krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel, krun_set_nested_virt,
-    krun_set_port_map, krun_set_rlimits, krun_set_root, krun_set_root_disk_remount,
-    krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid, krun_split_irqchip,
-    krun_start_enter,
+    krun_set_port_map, krun_set_rlimits, krun_set_vm_config, krun_set_workdir, krun_setgid,
+    krun_setuid, krun_split_irqchip, krun_start_enter,
 };
 
 /// Thin wrapper that owns a libkrun context.
@@ -107,67 +106,6 @@ impl KrunContext {
         })
     }
 
-    pub unsafe fn set_rootfs(&self, rootfs: &str) -> BoxliteResult<()> {
-        tracing::trace!("Setting rootfs to: {}", rootfs);
-        tracing::trace!(
-            "Checking if rootfs exists: {}",
-            std::path::Path::new(rootfs).exists()
-        );
-        let rootfs_c = CString::new(rootfs)
-            .map_err(|e| BoxliteError::Engine(format!("invalid rootfs path: {e}")))?;
-        check_status("krun_set_root", unsafe {
-            krun_set_root(self.ctx_id, rootfs_c.as_ptr())
-        })
-    }
-
-    /// Configure root filesystem backed by a block device with automatic remount.
-    ///
-    /// This allows booting from a disk image. Libkrun creates a dummy virtiofs root,
-    /// executes init from it, and then automatically pivots to the disk-based root.
-    ///
-    /// # Arguments
-    /// * `device` - Block device path (e.g., "/dev/vda")
-    /// * `fstype` - Filesystem type (e.g., "ext4") or None for auto-detection
-    /// * `options` - Mount options or None for defaults
-    ///
-    /// # Note
-    /// The block device must be configured via `add_disk_with_format` before calling this.
-    pub unsafe fn set_root_disk_remount(
-        &self,
-        device: &str,
-        fstype: Option<&str>,
-        options: Option<&str>,
-    ) -> BoxliteResult<()> {
-        tracing::debug!(
-            "Setting root disk remount: device={}, fstype={:?}, options={:?}",
-            device,
-            fstype,
-            options
-        );
-
-        let device_c = CString::new(device)
-            .map_err(|e| BoxliteError::Engine(format!("invalid device path: {e}")))?;
-
-        let fstype_c = fstype
-            .map(CString::new)
-            .transpose()
-            .map_err(|e| BoxliteError::Engine(format!("invalid fstype: {e}")))?;
-
-        let options_c = options
-            .map(CString::new)
-            .transpose()
-            .map_err(|e| BoxliteError::Engine(format!("invalid options: {e}")))?;
-
-        check_status("krun_set_root_disk_remount", unsafe {
-            krun_set_root_disk_remount(
-                self.ctx_id,
-                device_c.as_ptr(),
-                fstype_c.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
-                options_c.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
-            )
-        })
-    }
-
     pub unsafe fn set_kernel(
         &self,
         kernel_path: &str,
@@ -205,19 +143,6 @@ impl KrunContext {
                 cmdline_c.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
             )
         })
-    }
-
-    pub unsafe fn set_overlayfs_rootfs(&self, layers: &[String]) -> BoxliteResult<()> {
-        tracing::trace!("Setting overlayfs with layers: {:?}", layers);
-        // Fallback: use the first layer as rootfs when overlayfs is not available
-        if let Some(first_layer) = layers.first() {
-            tracing::trace!("Using first layer as rootfs: {}", first_layer);
-            unsafe { self.set_rootfs(first_layer) }
-        } else {
-            Err(BoxliteError::Engine(
-                "No layers provided for overlayfs".into(),
-            ))
-        }
     }
 
     pub unsafe fn set_exec(

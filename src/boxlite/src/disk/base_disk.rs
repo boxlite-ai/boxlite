@@ -1,4 +1,4 @@
-//! Base disk management — fork-point tracking for clone bases and rootfs cache.
+//! Base disk management — fork-point tracking and legacy rootfs cleanup.
 //!
 //! `BaseDiskManager` creates, tracks, and cleans up immutable base disks
 //! (fork points) for clone operations. Snapshots have their own manager
@@ -39,7 +39,7 @@ pub enum BaseDiskKind {
     Snapshot,
     /// Clone base. Auto-deleted via index-find GC when no dependents exist.
     CloneBase,
-    /// Global guest rootfs cache (`source_box_id = "__global__"`).
+    /// Legacy guest rootfs base (`source_box_id = "__global__"`).
     Rootfs,
 }
 
@@ -285,6 +285,116 @@ impl BaseDiskManager {
                 "GC: reclaimed orphaned base disks"
             );
         }
+        Ok(removed)
+    }
+
+    /// Collect every backing file reachable from a legacy guest overlay.
+    ///
+    /// This scan is fail-closed because its result authorizes deletion.
+    fn referenced_legacy_rootfs_paths(&self, boxes_dir: &Path) -> BoxliteResult<HashSet<PathBuf>> {
+        let entries = match fs::read_dir(boxes_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(HashSet::new());
+            }
+            Err(error) => {
+                return Err(boxlite_shared::errors::BoxliteError::Storage(format!(
+                    "Failed to scan boxes directory {} for legacy rootfs references: {}",
+                    boxes_dir.display(),
+                    error
+                )));
+            }
+        };
+
+        let mut referenced = HashSet::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                boxlite_shared::errors::BoxliteError::Storage(format!(
+                    "Failed to read an entry in {}: {}",
+                    boxes_dir.display(),
+                    error
+                ))
+            })?;
+            let overlay = entry
+                .path()
+                .join("disks")
+                .join(disk_filenames::GUEST_ROOTFS_DISK);
+            match fs::symlink_metadata(&overlay) {
+                Ok(metadata) if metadata.is_file() => {}
+                Ok(_) => {
+                    return Err(boxlite_shared::errors::BoxliteError::Storage(format!(
+                        "Legacy guest rootfs path is not a regular file: {}",
+                        overlay.display()
+                    )));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(boxlite_shared::errors::BoxliteError::Storage(format!(
+                        "Failed to inspect legacy guest rootfs overlay {}: {}",
+                        overlay.display(),
+                        error
+                    )));
+                }
+            }
+
+            for backing in super::qcow2::read_backing_chain_checked(&overlay)? {
+                referenced.insert(backing.clone());
+                referenced.insert(backing.canonicalize().unwrap_or(backing));
+            }
+        }
+        Ok(referenced)
+    }
+
+    /// Remove obsolete guest-rootfs bases once no legacy overlay references them.
+    pub(crate) fn gc_legacy_rootfs(&self, boxes_dir: &Path) -> BoxliteResult<usize> {
+        let referenced = self.referenced_legacy_rootfs_paths(boxes_dir)?;
+        let records = self.store.list_by_kind(BaseDiskKind::Rootfs)?;
+        let canonical_bases = self
+            .bases_dir
+            .canonicalize()
+            .unwrap_or_else(|_| self.bases_dir.clone());
+        let mut removed = 0;
+
+        for record in records {
+            let path = record.disk_info().to_path_buf();
+            let comparable = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if referenced.contains(&path) || referenced.contains(&comparable) {
+                continue;
+            }
+
+            let parent = path.parent().and_then(|parent| parent.canonicalize().ok());
+            if parent.as_ref() != Some(&canonical_bases) {
+                tracing::warn!(
+                    base_disk_id = %record.id(),
+                    path = %path.display(),
+                    "GC: keeping legacy rootfs base outside the managed bases directory"
+                );
+                continue;
+            }
+
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    tracing::warn!(
+                        base_disk_id = %record.id(),
+                        path = %path.display(),
+                        %error,
+                        "GC: failed to remove legacy rootfs base"
+                    );
+                    continue;
+                }
+            }
+
+            self.store.delete(record.id())?;
+            removed += 1;
+            tracing::info!(
+                base_disk_id = %record.id(),
+                path = %path.display(),
+                "GC: removed unreferenced legacy rootfs base"
+            );
+        }
+
         Ok(removed)
     }
 
@@ -880,6 +990,68 @@ mod tests {
         assert!(
             clone_base.exists(),
             "container overlay still backs onto this"
+        );
+    }
+
+    #[test]
+    fn gc_legacy_rootfs_removes_unreferenced_rows_of_every_source() {
+        let (dir, mgr) = setup();
+        let boxes_dir = dir.path().join("boxes");
+
+        let global = mgr.bases_dir.join("rootglob.ext4");
+        std::fs::write(&global, b"global").unwrap();
+        insert_row(&mgr, "rootglob", BaseDiskKind::Rootfs, &global);
+
+        let per_box = mgr.bases_dir.join("rootbox1.ext4");
+        std::fs::write(&per_box, b"per-box").unwrap();
+        mgr.store()
+            .insert(&BaseDisk {
+                id: base_id("rootbox1"),
+                source_box_id: "legacy-box".to_string(),
+                name: None,
+                kind: BaseDiskKind::Rootfs,
+                disk_info: DiskInfo {
+                    base_path: per_box.to_string_lossy().to_string(),
+                    container_disk_bytes: 0,
+                    size_bytes: 0,
+                },
+                created_at: 0,
+            })
+            .unwrap();
+
+        assert_eq!(mgr.gc_legacy_rootfs(&boxes_dir).unwrap(), 2);
+        assert!(!global.exists());
+        assert!(!per_box.exists());
+        assert!(
+            mgr.store()
+                .list_by_kind(BaseDiskKind::Rootfs)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn gc_legacy_rootfs_keeps_a_live_guest_overlay_backing() {
+        let (dir, mgr) = setup();
+        let boxes_dir = dir.path().join("boxes");
+        let base = mgr.bases_dir.join("rootlive.ext4");
+        std::fs::write(&base, b"live").unwrap();
+        insert_row(&mgr, "rootlive", BaseDiskKind::Rootfs, &base);
+
+        let disks = boxes_dir.join("old-box").join("disks");
+        std::fs::create_dir_all(&disks).unwrap();
+        write_qcow2_with_backing(
+            &disks.join(disk_filenames::GUEST_ROOTFS_DISK),
+            Some(&base.to_string_lossy()),
+        );
+
+        assert_eq!(mgr.gc_legacy_rootfs(&boxes_dir).unwrap(), 0);
+        assert!(base.exists());
+        assert!(
+            mgr.store()
+                .find_by_id(&base_id("rootlive"))
+                .unwrap()
+                .is_some()
         );
     }
 

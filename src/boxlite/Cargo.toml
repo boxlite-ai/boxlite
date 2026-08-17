@@ -74,9 +74,6 @@ oci-client = { version = "0.15", default-features = false, features = ["rustls-t
 oci-spec = "0.8.3"
 tar = "0.4"
 flate2 = "1.0"
-# 0.11 picks the CPU's SHA extensions at runtime via cpufeatures; 0.10's portable
-# fallback costs ~36 ms release / ~690 ms debug on the 18 MB guest binary, which is
-# what forced the old compile-time BOXLITE_GUEST_HASH proxy.
 sha2 = "0.11"
 xattr = "1.0"
 walkdir = "2.5"

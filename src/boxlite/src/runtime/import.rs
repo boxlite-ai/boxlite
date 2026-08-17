@@ -215,13 +215,6 @@ fn install_disks(temp_dir: &Path, box_home: &Path) -> BoxliteResult<()> {
         &disks_dir.join(disk_filenames::CONTAINER_DISK),
     )?;
 
-    if extracted_guest.exists() {
-        move_file(
-            &extracted_guest,
-            &disks_dir.join(disk_filenames::GUEST_ROOTFS_DISK),
-        )?;
-    }
-
     Ok(())
 }
 

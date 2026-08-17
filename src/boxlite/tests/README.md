@@ -4,7 +4,7 @@ This directory contains integration tests for the BoxLite runtime. Tests run con
 
 ## Prerequisites
 
-1. **Build the runtime**: The tests require `boxlite-shim` and `boxlite-guest` binaries.
+1. **Build the runtime**: The tests require the assembled runtime (`boxlite-shim` and `guest-rootfs/`).
 
    ```bash
    make runtime:debug
@@ -71,7 +71,7 @@ All test files use shared infrastructure from `boxlite-test-utils` and `common/m
 
 ### `PerTestBoxHome::new()` — VM integration tests
 
-Per-test `TempDir` with symlinked image cache from `target/boxlite-test/`. On first use, a cross-process `flock` serializes the initial image pull and guest rootfs warmup. Subsequent tests reuse the cached artifacts.
+Per-test `TempDir` with symlinked image cache from `target/boxlite-test/`. On first use, a cross-process `flock` serializes the initial image pull and VM/container-disk warmup. Subsequent tests reuse the cached artifacts.
 
 ```rust
 use boxlite_test_utils::home::PerTestBoxHome;

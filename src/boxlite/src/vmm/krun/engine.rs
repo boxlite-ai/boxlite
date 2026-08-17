@@ -409,6 +409,11 @@ impl Vmm for Krun {
             // Add filesystem shares via virtiofs
             tracing::info!("Adding filesystem shares via virtiofs:");
             for share in config.fs_shares.shares() {
+                if share.tag == "/dev/root" {
+                    return Err(BoxliteError::Engine(
+                        "virtiofs tag /dev/root is reserved for the guest rootfs".into(),
+                    ));
+                }
                 let path_str = share.host_path.to_str().ok_or_else(|| {
                     BoxliteError::Engine(format!("Invalid path: {}", share.host_path.display()))
                 })?;
@@ -454,26 +459,14 @@ impl Vmm for Krun {
                 }
             }
 
-            // Configure root filesystem based on guest rootfs strategy
-            if let crate::rootfs::guest::Strategy::Disk {
-                device_path: Some(device_path),
-                ..
-            } = &config.guest_rootfs.strategy
-            {
-                // Disk-based boot: use set_root_disk_remount
-                tracing::info!("Configuring guest rootfs disk remount: {}", device_path);
-                ctx.set_root_disk_remount(device_path, Some("ext4"), None)?;
-            } else {
-                // Virtiofs-based boot: use set_rootfs
-                let rootfs_str = config.guest_rootfs.path.to_str().ok_or_else(|| {
-                    BoxliteError::Engine(format!(
-                        "Invalid rootfs path: {}",
-                        config.guest_rootfs.path.display()
-                    ))
-                })?;
-                tracing::debug!("Setting box root filesystem (virtiofs): {}", rootfs_str);
-                ctx.set_rootfs(rootfs_str)?;
-            }
+            let rootfs_str = config.guest_rootfs.path.to_str().ok_or_else(|| {
+                BoxliteError::Engine(format!(
+                    "Invalid rootfs path: {}",
+                    config.guest_rootfs.path.display()
+                ))
+            })?;
+            tracing::debug!("Setting read-only guest root filesystem: {}", rootfs_str);
+            ctx.add_virtiofs("/dev/root", rootfs_str, true)?;
 
             tracing::debug!("Setting working directory to /");
             // Set working directory (default to root if not specified)

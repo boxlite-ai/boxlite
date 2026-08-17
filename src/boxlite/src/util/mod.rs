@@ -9,7 +9,6 @@ pub(crate) use pid_file::{PidFileWriter, ShimPidRecord};
 use std::path::PathBuf;
 use std::process::Command;
 
-use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use tracing_appender::non_blocking::NonBlocking;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -156,130 +155,6 @@ pub fn register_to_tracing(non_blocking: NonBlocking, env_filter: EnvFilter) {
                 .with_ansi(false),
         )
         .try_init();
-}
-
-/// Inject guest binary into a rootfs directory.
-///
-/// Copies boxlite-guest into `/boxlite/bin/` so it can be executed
-/// directly without needing a virtiofs mount at boot time.
-///
-/// Uses fast mtime+size comparison to avoid unnecessary copies.
-/// The binary is only copied if:
-/// - It doesn't exist in the destination
-/// - The sizes differ
-/// - The source is newer than the destination
-pub fn inject_guest_binary(rootfs_path: &std::path::Path) -> BoxliteResult<()> {
-    let dest_dir = rootfs_path.join("boxlite/bin");
-    let dest_path = dest_dir.join("boxlite-guest");
-    // Same resolution the disk path uses, so the two can never inject different
-    // binaries. (mtime+size below answers a different question — whether this
-    // destination copy is current — not which binary is authoritative.)
-    let guest_bin = crate::vmm::guest_binary::GuestBinary::get()?.path();
-
-    // Check if binary needs update
-    if dest_path.exists() {
-        if is_binary_up_to_date(guest_bin, &dest_path)? {
-            return Ok(());
-        }
-        // Remove old binary before copying (it might be read-only 0o555)
-        std::fs::remove_file(&dest_path).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to remove old guest binary {}: {}",
-                dest_path.display(),
-                e
-            ))
-        })?;
-    }
-
-    std::fs::create_dir_all(&dest_dir).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to create guest bin directory {}: {}",
-            dest_dir.display(),
-            e
-        ))
-    })?;
-
-    std::fs::copy(guest_bin, &dest_path).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to copy guest binary to {}: {}",
-            dest_path.display(),
-            e
-        ))
-    })?;
-
-    // Ensure executable
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dest_path, std::fs::Permissions::from_mode(0o555)).map_err(
-            |e| {
-                BoxliteError::Storage(format!(
-                    "Failed to set permissions on {}: {}",
-                    dest_path.display(),
-                    e
-                ))
-            },
-        )?;
-    }
-
-    tracing::info!("Injected guest binary into {}", dest_path.display());
-    Ok(())
-}
-
-/// Check if destination binary is up-to-date compared to source.
-///
-/// Uses fast mtime+size comparison instead of content hashing.
-fn is_binary_up_to_date(source: &std::path::Path, dest: &std::path::Path) -> BoxliteResult<bool> {
-    let source_meta = std::fs::metadata(source).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to get metadata for {}: {}",
-            source.display(),
-            e
-        ))
-    })?;
-
-    let dest_meta = std::fs::metadata(dest).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to get metadata for {}: {}",
-            dest.display(),
-            e
-        ))
-    })?;
-
-    // Quick rejection: different sizes means definitely different content
-    if source_meta.len() != dest_meta.len() {
-        tracing::debug!(
-            "Guest binary size changed ({} -> {} bytes)",
-            dest_meta.len(),
-            source_meta.len()
-        );
-        return Ok(false);
-    }
-
-    // Compare modification times
-    let source_mtime = source_meta.modified().map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to get mtime for {}: {}",
-            source.display(),
-            e
-        ))
-    })?;
-
-    let dest_mtime = dest_meta.modified().map_err(|e| {
-        BoxliteError::Storage(format!("Failed to get mtime for {}: {}", dest.display(), e))
-    })?;
-
-    if dest_mtime >= source_mtime {
-        tracing::debug!(
-            "Guest binary at {} is up-to-date (size: {} bytes)",
-            dest.display(),
-            dest_meta.len()
-        );
-        return Ok(true);
-    }
-
-    tracing::debug!("Guest binary source is newer than destination");
-    Ok(false)
 }
 
 /// Auto-detect terminal size like Docker does

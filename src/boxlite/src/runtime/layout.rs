@@ -107,7 +107,7 @@ impl FsLayoutConfig {
 /// │   └── {box_id}/                            # See BoxFilesystemLayout
 /// ├── bases/                               # Flat backing files (nanoid-named)
 /// │   ├── {nanoid}.qcow2                       # Snapshot / clone base container disk
-/// │   └── {nanoid}.ext4                        # Guest rootfs cache
+/// │   └── {nanoid}.ext4                        # Legacy guest rootfs base (GC only)
 /// ├── locks/                               # Per-entity lock files
 /// ├── logs/                                # Home-level logs
 /// └── tmp/                                 # Transient temp files (same-fs for rename)
@@ -167,7 +167,7 @@ impl FilesystemLayout {
 
     /// Bases directory: ~/.boxlite/bases
     ///
-    /// Flat directory of immutable backing files (snapshots, clone bases, rootfs cache).
+    /// Flat directory of immutable backing files (snapshots, clone bases, and legacy rootfs bases awaiting GC).
     /// Each file is named with a nanoid(8) identifier and tracked in the `base_disk` table.
     pub fn bases_dir(&self) -> PathBuf {
         self.home_dir.join("bases")
@@ -343,7 +343,7 @@ impl FilesystemLayout {
 /// │   └── console.log       # Kernel/init output
 /// └── disks/              # Disk images
 ///     ├── disk.qcow2          # Data disk (container rootfs COW disk)
-///     └── guest-rootfs.qcow2  # Guest rootfs COW overlay
+///     └── guest-rootfs.qcow2  # Legacy migration artifact, deleted after a successful cold start
 /// ```
 #[derive(Clone, Debug)]
 pub struct BoxFilesystemLayout {
@@ -530,7 +530,7 @@ impl BoxFilesystemLayout {
             .join(crate::disk::constants::filenames::CONTAINER_DISK)
     }
 
-    /// Guest rootfs disk path: ~/.boxlite/boxes/{box_id}/disks/guest-rootfs.qcow2
+    /// Legacy guest rootfs disk path, retained only for migration cleanup.
     pub fn guest_rootfs_disk_path(&self) -> PathBuf {
         self.disks_dir()
             .join(crate::disk::constants::filenames::GUEST_ROOTFS_DISK)

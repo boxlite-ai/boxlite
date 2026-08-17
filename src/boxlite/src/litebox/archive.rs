@@ -66,7 +66,7 @@ pub struct ArchiveManifest {
     /// Full box configuration (v3+). `None` for v1/v2 archives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub box_options: Option<crate::runtime::options::BoxOptions>,
-    /// SHA-256 checksum of the guest rootfs disk.
+    /// Legacy guest-disk checksum. New archives write an empty string so old readers remain compatible.
     pub guest_disk_checksum: String,
     /// SHA-256 checksum of the container disk.
     pub container_disk_checksum: String,

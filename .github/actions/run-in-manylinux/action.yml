@@ -1,13 +1,13 @@
 # Requirement: ./.github/actions/sccache should be run before this, and
-# ./.github/actions/build-guest if the build needs the guest binary. This action mounts the sccache
-# binary the first produced and restores the guest the second staged; neither is created here.
+# ./.github/actions/build-guest if the build needs the guest rootfs. This action mounts the sccache
+# binary the first produced and restores the rootfs the second staged; neither is created here.
 
 #
 # The prologue is not boilerplate — every line is load-bearing:
 #   - /work is marked a safe git directory; the container runs as a different user than the checkout
 #   - RUSTC_WRAPPER is dropped when sccache did not reach the container, which is what turns a cold
 #     cache into a slow build rather than a failed one
-#   - the host-built guest is restored from .cache/<target> and SKIP_GUEST_BUILD stops a rebuild
+#   - the host-built rootfs is restored from .cache/<target> and SKIP_GUEST_ROOTFS_BUILD stops a rebuild
 #   - Go and cargo go on PATH before `make setup:build runtime`, which every caller needs first
 #
 # warm-caches.yml supplies no script at all: there the prologue *is* the payload, since running
@@ -57,12 +57,12 @@ runs:
 
         GUEST_TARGET=$(scripts/util.sh --target)
         if [ -d ".cache/$GUEST_TARGET" ]; then
-          echo "Restoring guest from .cache/$GUEST_TARGET"
+          echo "Restoring guest rootfs from .cache/$GUEST_TARGET"
           mkdir -p target
           cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
         fi
 
-        export SKIP_GUEST_BUILD=1
+        export SKIP_GUEST_ROOTFS_BUILD=1
         export PATH="/usr/local/go/bin:$CARGO_HOME/bin:$PATH"
         make setup:build runtime
         PROLOGUE

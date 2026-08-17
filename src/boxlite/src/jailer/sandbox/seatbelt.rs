@@ -159,10 +159,22 @@ fn build_sandbox_exec_args(
 ) -> (String, Vec<String>) {
     let mut args = Vec::new();
 
-    // Use custom profile if specified, otherwise build strict policy
+    // A caller-supplied profile still receives BoxLite's mandatory
+    // read-only path denials. Falling back to -f preserves the prior spawn
+    // failure when the profile cannot be read.
     if let Some(profile_path) = sandbox_profile {
-        args.push("-f".to_string());
-        args.push(profile_path.display().to_string());
+        match std::fs::read_to_string(profile_path) {
+            Ok(mut policy) => {
+                policy.push('\n');
+                policy.push_str(&build_readonly_write_denials(paths));
+                args.push("-p".to_string());
+                args.push(policy);
+            }
+            Err(_) => {
+                args.push("-f".to_string());
+                args.push(profile_path.display().to_string());
+            }
+        }
     } else {
         // Build strict modular policy: base + file permissions + optional network
         let policy = build_sandbox_policy(paths, binary_path, network_enabled);
@@ -238,6 +250,11 @@ fn build_sandbox_policy(paths: &[PathAccess], binary_path: &Path, network_enable
     } else {
         policy.push_str("; Network disabled\n");
     }
+
+    // Mandatory denials come last so broad static tmp allows cannot make a
+    // packaged rootfs writable when its cache happens to live below /tmp.
+    policy.push('\n');
+    policy.push_str(&build_readonly_write_denials(paths));
 
     policy
 }
@@ -317,6 +334,24 @@ fn build_dynamic_write_paths(paths: &[PathAccess]) -> String {
         }
     }
 
+    policy.push_str(")\n");
+    policy
+}
+
+fn build_readonly_write_denials(paths: &[PathAccess]) -> String {
+    let read_only: Vec<_> = paths.iter().filter(|path| !path.writable).collect();
+    if read_only.is_empty() {
+        return String::new();
+    }
+
+    let mut policy = String::from("; Mandatory read-only paths\n(deny file-write*\n");
+    for access in read_only {
+        let path = canonicalize_or_original(&access.path);
+        policy.push_str(&format!("    (literal \"{}\")\n", path.display()));
+        if access.path.is_dir() {
+            policy.push_str(&format!("    (subpath \"{}\")\n", path.display()));
+        }
+    }
     policy.push_str(")\n");
     policy
 }

@@ -197,14 +197,13 @@ use std::path::PathBuf;
 /// ├── exit                        [RW]  # crash_capture ExitInfo JSON
 /// ├── disks/                      [RW]  # disk images
 /// │   ├── disk.qcow2                      # VM/container root disk image
-/// │   └── guest-rootfs.qcow2              # guest rootfs COW overlay
 /// ├── mounts/                     [--]  # EXCLUDED: host writes, shim reads via shared/
 /// ├── shim.pid                    [--]  # EXCLUDED: written by pre_exec (before sandbox)
 /// └── shim.stderr                 [--]  # EXCLUDED: host creates before spawn
 ///
 /// External read-only paths:
-/// ~/.boxlite/rootfs/              [RO]  # shared guest rootfs backing directory
-/// ~/.boxlite/layers/              [RO]  # disk fork points (snapshot/clone bases)
+/// {runtime}/guest-rootfs/rootfs/ [RO]  # exact packaged guest rootfs
+/// ~/.boxlite/bases/               [RO]  # container snapshot/clone bases
 ///
 /// User volumes:
 /// {host_path}                     [per VolumeSpec.read_only]
@@ -236,11 +235,7 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
 
     // Writable files (pre-created before sandbox for bind-mounting)
     // Note: console_output_path() not listed — lives inside logs/ [RW subpath]
-    for file in [
-        layout.exit_file_path(),
-        layout.disk_path(),
-        layout.guest_rootfs_disk_path(),
-    ] {
+    for file in [layout.exit_file_path(), layout.disk_path()] {
         if file.exists() {
             paths.push(PathAccess {
                 path: file,
@@ -256,7 +251,7 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
     //
     // Cloned boxes have multi-level backing chains (clone → source → base image),
     // so we traverse the full chain to grant access to every backing file.
-    for qcow2 in [layout.disk_path(), layout.guest_rootfs_disk_path()] {
+    for qcow2 in [layout.disk_path()] {
         if !qcow2.exists() {
             continue;
         }
@@ -295,7 +290,7 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         });
     }
 
-    // Bases directory: shared backing files (snapshots, clone bases, rootfs cache).
+    // Bases directory: shared container backing files (snapshots and clone bases).
     // The qcow2 overlay references backing files in bases/ directly.
     // Disk images are data (read by the hypervisor, not executed on the host).
     if let Some(bases_dir) = layout

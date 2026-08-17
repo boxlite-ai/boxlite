@@ -50,12 +50,29 @@ reject() {
 top_expected=rootfs
 top_actual=$(cd "$artifact" && find . ! -name . -prune -print | sed 's#^./##' | LC_ALL=C sort)
 [ "$top_actual" = "$top_expected" ] || fail "guest-rootfs must contain only rootfs"
-inventory_expected=$(printf '%s\n' boxlite boxlite/bin boxlite/bin/boxlite-guest boxlite/bin/mke2fs boxlite/bin/resize2fs)
+inventory_expected=$(printf '%s\n' \
+    boxlite \
+    boxlite/bin \
+    boxlite/bin/boxlite-guest \
+    boxlite/bin/mke2fs \
+    boxlite/bin/resize2fs \
+    dev proc run sys tmp var var/tmp)
 inventory_actual=$(cd "$rootfs" && find . ! -name . -print | sed 's#^./##' | LC_ALL=C sort)
 [ "$inventory_actual" = "$inventory_expected" ] || fail "unexpected rootfs inventory"
 symlinks=$(find "$artifact" -type l -print) || fail "failed to inspect guest rootfs for symlinks"
 [ -z "$symlinks" ] || fail "guest rootfs contains a symlink"
-for path in "$rootfs" "$rootfs/boxlite" "$rootfs/boxlite/bin"; do
+for path in \
+    "$rootfs" \
+    "$rootfs/boxlite" \
+    "$rootfs/boxlite/bin" \
+    "$rootfs/dev" \
+    "$rootfs/proc" \
+    "$rootfs/run" \
+    "$rootfs/sys" \
+    "$rootfs/tmp" \
+    "$rootfs/var" \
+    "$rootfs/var/tmp"
+do
     [ -d "$path" ] && [ ! -L "$path" ] && [ "$(mode "$path")" = 755 ] || fail "invalid rootfs directory: $path"
 done
 for path in "$guest" "$mke2fs" "$resize2fs"; do

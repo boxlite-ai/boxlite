@@ -2,7 +2,7 @@
 # Populate cargo's OUT_DIR/runtime with all binaries and libraries
 #
 # This script completes the runtime directory that contains everything
-# needed to run BoxLite: shim binary, guest binary, and all FFI libraries.
+# needed to run BoxLite: shim binary, guest rootfs, and all FFI libraries.
 #
 # Usage:
 #   ./build-runtime.sh [--profile PROFILE]
@@ -12,7 +12,7 @@
 #
 # The runtime directory will contain:
 #   - boxlite-shim      VM subprocess runner (statically links libkrun + libgvproxy)
-#   - boxlite-guest     Guest agent (Linux binary)
+#   - guest-rootfs/     Minimal guest rootfs (Linux directory tree)
 #   - libkrunfw.*       libkrunfw library (dlopen'd at runtime)
 
 set -e
@@ -36,7 +36,7 @@ Options:
 
 The runtime directory will contain:
   - boxlite-shim      VM subprocess runner (statically links libkrun + libgvproxy)
-  - boxlite-guest     Guest agent (Linux binary)
+  - guest-rootfs/     Minimal guest rootfs (Linux directory tree)
   - libkrunfw.*       libkrunfw library (dlopen'd at runtime)
 
 Examples:
@@ -122,35 +122,34 @@ build_shim() {
     fi
 }
 
-# Build boxlite-guest binary
-build_guest() {
+# Build the complete minimal guest rootfs.
+build_guest_rootfs() {
     echo ""
-    print_section "Building boxlite-guest binary..."
+    print_section "Building minimal guest rootfs..."
 
     source "$SCRIPT_DIR/util.sh"
-    local guest_path="$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/boxlite-guest"
+    local guest_rootfs="$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/guest-rootfs"
 
-    # Skip build if SKIP_GUEST_BUILD=1 and binary exists
-    # Used in CI when guest is pre-built on Ubuntu host
-    if [ "${SKIP_GUEST_BUILD:-0}" = "1" ]; then
-        if [ -f "$guest_path" ] && [ -x "$guest_path" ]; then
-            GUEST_BINARY="$guest_path"
-            print_success "Using pre-built: $guest_path (SKIP_GUEST_BUILD=1)"
+    # Used in CI when the complete rootfs was built on an Ubuntu host.
+    if [ "${SKIP_GUEST_ROOTFS_BUILD:-0}" = "1" ]; then
+        if [ -d "$guest_rootfs/rootfs" ] && [ -x "$guest_rootfs/rootfs/boxlite/bin/boxlite-guest" ]; then
+            GUEST_ROOTFS_DIR="$guest_rootfs"
+            print_success "Using pre-built: $guest_rootfs (SKIP_GUEST_ROOTFS_BUILD=1)"
             return 0
         else
-            print_error "SKIP_GUEST_BUILD=1 but guest binary not found at $guest_path"
+            print_error "SKIP_GUEST_ROOTFS_BUILD=1 but guest rootfs not found at $guest_rootfs"
             exit 1
         fi
     fi
 
-    # Build guest binary
-    bash "$SCRIPT_BUILD_DIR/build-guest.sh" --profile "$PROFILE"
+    bash "$SCRIPT_BUILD_DIR/build-guest.sh" --target "$GUEST_TARGET" --profile "$PROFILE"
+    bash "$SCRIPT_BUILD_DIR/build-guest-rootfs.sh" --target "$GUEST_TARGET" --profile "$PROFILE"
 
-    if [ -f "$guest_path" ]; then
-        GUEST_BINARY="$guest_path"
-        print_success "Built: $guest_path"
+    if [ -d "$guest_rootfs/rootfs" ]; then
+        GUEST_ROOTFS_DIR="$guest_rootfs"
+        print_success "Built: $guest_rootfs"
     else
-        print_error "Failed to build boxlite-guest"
+        print_error "Failed to build guest rootfs"
         exit 1
     fi
 }
@@ -218,8 +217,10 @@ assemble_runtime() {
     cp "$SHIM_BINARY" "$RUNTIME_LIBS_DIR/"
     echo "✓"
 
-    print_step "Copying boxlite-guest... "
-    cp "$GUEST_BINARY" "$RUNTIME_LIBS_DIR/"
+    print_step "Copying guest-rootfs... "
+    rm -f -- "$RUNTIME_LIBS_DIR/boxlite-guest"
+    rm -rf -- "$RUNTIME_LIBS_DIR/guest-rootfs"
+    cp -R "$GUEST_ROOTFS_DIR" "$RUNTIME_LIBS_DIR/guest-rootfs"
     echo "✓"
 
     # Sign shim on macOS (always, to ensure proper entitlements)
@@ -268,7 +269,7 @@ main() {
 
     detect_platform
     build_shim
-    build_guest
+    build_guest_rootfs
     collect_libraries
     echo "Destination: $RUNTIME_LIBS_DIR"
 

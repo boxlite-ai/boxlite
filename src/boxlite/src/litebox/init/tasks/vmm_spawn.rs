@@ -10,7 +10,7 @@ use crate::images::ContainerImageConfig;
 use crate::litebox::init::types::{InitPipelineContext, resolve_user_volumes};
 use crate::net::{NetworkBackend, NetworkBackendConfig};
 use crate::pipeline::PipelineTask;
-use crate::rootfs::guest::{GuestRootfs, Strategy};
+use crate::rootfs::guest::GuestRootfs;
 use crate::runtime::constants::{guest_paths, mount_tags};
 use crate::runtime::id::BoxID;
 use crate::runtime::layout::BoxFilesystemLayout;
@@ -26,7 +26,7 @@ use crate::volumes::{
 use async_trait::async_trait;
 use boxlite_shared::BoxTransport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub struct VmmSpawnTask;
 
@@ -36,7 +36,7 @@ struct VmmSpawnInputs {
     container_image_config: ContainerImageConfig,
     prepared_kernel: Option<PreparedKernel>,
     container_disk_path: PathBuf,
-    guest_disk_path: Option<PathBuf>,
+    guest_rootfs: GuestRootfs,
     container_id: ContainerID,
     runtime: SharedRuntimeImpl,
     reuse_rootfs: bool,
@@ -71,10 +71,10 @@ impl VmmSpawnInputs {
             container_image_config,
             prepared_kernel,
             container_disk_path,
-            guest_disk_path: ctx
-                .guest_disk
-                .as_ref()
-                .map(|disk| disk.path().to_path_buf()),
+            guest_rootfs: ctx
+                .guest_rootfs
+                .clone()
+                .ok_or_else(|| BoxliteError::Internal("guest rootfs task must run first".into()))?,
             container_id: ctx.config.container.id.clone(),
             runtime: ctx.runtime.clone(),
             reuse_rootfs: ctx.reuse_rootfs,
@@ -142,7 +142,7 @@ async fn build_config(
         container_image_config,
         prepared_kernel,
         container_disk_path,
-        guest_disk_path,
+        guest_rootfs,
         container_id,
         runtime,
         reuse_rootfs,
@@ -217,15 +217,8 @@ async fn build_config(
     }
     let container_mounts = container_mgr.build_container_mounts();
 
-    // Get guest rootfs from runtime cache and configure with disk
-    let guest_rootfs = runtime
-        .guest_rootfs
-        .get()
-        .ok_or_else(|| BoxliteError::Internal("guest_rootfs not initialized".into()))?
-        .clone();
-
-    let guest_rootfs =
-        configure_guest_rootfs(guest_rootfs, guest_disk_path.as_deref(), &mut volume_mgr)?;
+    // The guest rootfs is a read-only directory bundled with this runtime.
+    let guest_rootfs = guest_rootfs.clone();
 
     // Build VMM config from volume manager
     let vmm_config = volume_mgr.build_vmm_config();
@@ -280,35 +273,6 @@ async fn build_config(
     ))
 }
 
-/// Configure guest rootfs with device path from volume manager.
-fn configure_guest_rootfs(
-    mut guest_rootfs: GuestRootfs,
-    guest_disk_path: Option<&Path>,
-    volume_mgr: &mut GuestVolumeManager,
-) -> BoxliteResult<GuestRootfs> {
-    if let Some(disk_path_input) = guest_disk_path
-        && let Strategy::Disk { ref disk_path, .. } = guest_rootfs.strategy
-    {
-        // Add disk to volume manager (guest rootfs - no format/resize needed)
-        let device_path = volume_mgr.add_block_device(
-            disk_path_input,
-            DiskFormat::Qcow2,
-            false,
-            None,
-            false, // need_format
-            false, // need_resize
-        );
-
-        // Update strategy with device path
-        guest_rootfs.strategy = Strategy::Disk {
-            disk_path: disk_path.clone(),
-            device_path: Some(device_path),
-        };
-    }
-
-    Ok(guest_rootfs)
-}
-
 fn build_guest_entrypoint(
     transport: &BoxTransport,
     ready_transport: &BoxTransport,
@@ -318,8 +282,7 @@ fn build_guest_entrypoint(
     let listen_uri = transport.to_uri();
     let ready_notify_uri = ready_transport.to_uri();
 
-    let executable = format!("{}/boxlite-guest", guest_paths::BIN_DIR);
-    let mut builder = GuestEntrypointBuilder::new(executable);
+    let mut builder = GuestEntrypointBuilder::new(guest_paths::AGENT.to_string());
     builder.with_arg("--listen");
     builder.with_arg(&listen_uri);
     builder.with_arg("--notify");

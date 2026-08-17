@@ -35,15 +35,11 @@ use tokio::sync::{oneshot, watch, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-/// Materialize the persistent SSH host key while the guest root is still
-/// writable.
+/// Materialize the persistent SSH host key during guest startup.
 ///
-/// A listener is configured later over RPC, long after
-/// [`crate::mounts::seal_root_readonly`] has run, and the key lives on the
-/// guest root rather than on one of the tmpfs mounts because clients pin it in
-/// `known_hosts` and it must survive a box restart. Creating it here keeps that
-/// storage unchanged: by the time a listener starts, `load_or_create` only ever
-/// reads.
+/// A listener is configured later over RPC, and clients pin this identity in
+/// `known_hosts`. Preparing it here preserves the stable key across listener
+/// reconfiguration; `load_or_create` remains the lazy fallback.
 pub(crate) fn provision_host_key() -> BoxliteResult<()> {
     host_key::load_or_create(&host_key::default_path())
         .map(|_| ())
