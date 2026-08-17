@@ -80,6 +80,7 @@ export class TenantObservabilityController {
   @Get('traces/:traceId')
   @ApiOperation({ operationId: 'getTenantTraceSpans', summary: 'Get every tenant-owned span in a trace' })
   @ApiResponse({ status: 200, type: [TraceSpanDto] })
+  @ApiResponse({ status: 413, description: 'Trace contains more than 1000 spans' })
   @RequireFlagsEnabled({ flags: [{ flagKey: FeatureFlags.TENANT_OBSERVABILITY, defaultValue: false }] })
   @Audit({ action: AuditAction.READ, targetType: AuditTarget.OBSERVABILITY, requestMetadata: queryAuditMetadata })
   getTraceSpans(
@@ -90,7 +91,7 @@ export class TenantObservabilityController {
     if (!/^[0-9a-fA-F]{32}$/.test(traceId)) {
       throw new NotFoundException('Trace not found')
     }
-    return this.observability.getTraceSpans(authContext.organizationId, traceId, query.boxId)
+    return this.observability.getTraceSpans(authContext.organizationId, traceId, query)
   }
 
   @Get('metrics')

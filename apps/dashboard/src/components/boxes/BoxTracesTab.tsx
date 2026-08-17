@@ -180,8 +180,8 @@ function DetailRow({ label, children, mono = true }: { label: string; children: 
   )
 }
 
-function TraceExpandedRow({ boxId, trace }: { boxId?: string; trace: TraceSummary }) {
-  const { data: spans, isLoading, isError, refetch } = useBoxTraceSpans(boxId, trace.traceId)
+function TraceExpandedRow({ boxId, trace, from, to }: { boxId?: string; trace: TraceSummary; from: Date; to: Date }) {
+  const { data: spans, isLoading, isError, refetch } = useBoxTraceSpans(boxId, trace.traceId, { from, to })
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null)
 
   const spanTree = useMemo(() => (spans ? buildSpanTree(spans) : []), [spans])
@@ -488,7 +488,7 @@ export function BoxTracesTab({ boxId, sources }: { boxId?: string; sources?: str
                     {isExpanded && (
                       <TableRow>
                         <TableCell colSpan={6} className="p-0">
-                          <TraceExpandedRow boxId={boxId} trace={trace} />
+                          <TraceExpandedRow boxId={boxId} trace={trace} from={resolvedFrom} to={resolvedTo} />
                         </TableCell>
                       </TableRow>
                     )}

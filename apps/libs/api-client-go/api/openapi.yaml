@@ -3924,6 +3924,377 @@ paths:
       summary: Get box metrics
       tags:
       - box
+  /observability/logs:
+    get:
+      operationId: getTenantLogs
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - explode: true
+        in: query
+        name: from
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: to
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          maximum: 100
+          minimum: 1
+          type: number
+        style: form
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 50
+          maximum: 100
+          minimum: 1
+          type: number
+        style: form
+      - explode: true
+        in: query
+        name: sources
+        required: false
+        schema:
+          items:
+            enum:
+            - api
+            - worker
+            - runner
+            - runtime-wrapper
+            - box
+            - collector-delivery
+            type: string
+          type: array
+        style: form
+      - description: Exact logical Runner ID
+        explode: true
+        in: query
+        name: runnerId
+        required: false
+        schema:
+          maxLength: 128
+          type: string
+        style: form
+      - description: Exact Box ID
+        explode: true
+        in: query
+        name: boxId
+        required: false
+        schema:
+          maxLength: 128
+          type: string
+        style: form
+      - description: Exact Job ID
+        explode: true
+        in: query
+        name: jobId
+        required: false
+        schema:
+          maxLength: 128
+          type: string
+        style: form
+      - description: Case-insensitive literal substring
+        explode: true
+        in: query
+        name: search
+        required: false
+        schema:
+          maxLength: 256
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: severities
+        required: false
+        schema:
+          items:
+            enum:
+            - DEBUG
+            - INFO
+            - WARN
+            - ERROR
+            - FATAL
+            type: string
+          type: array
+        style: form
+      - description: Exact OpenTelemetry trace ID
+        explode: true
+        in: query
+        name: traceId
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedLogs"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Search tenant-scoped platform and Box logs
+      tags:
+      - observability
+  /observability/traces:
+    get:
+      operationId: getTenantTraces
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - explode: true
+        in: query
+        name: from
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: to
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          maximum: 100
+          minimum: 1
+          type: number
+        style: form
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 50
+          maximum: 100
+          minimum: 1
+          type: number
+        style: form
+      - explode: true
+        in: query
+        name: sources
+        required: false
+        schema:
+          items:
+            enum:
+            - api
+            - worker
+            - runner
+            - runtime-wrapper
+            - box
+            - collector-delivery
+            type: string
+          type: array
+        style: form
+      - description: Exact logical Runner ID
+        explode: true
+        in: query
+        name: runnerId
+        required: false
+        schema:
+          maxLength: 128
+          type: string
+        style: form
+      - description: Exact Box ID
+        explode: true
+        in: query
+        name: boxId
+        required: false
+        schema:
+          maxLength: 128
+          type: string
+        style: form
+      - description: Exact Job ID
+        explode: true
+        in: query
+        name: jobId
+        required: false
+        schema:
+          maxLength: 128
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedTraces"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Search tenant-scoped distributed traces
+      tags:
+      - observability
+  /observability/traces/{traceId}:
+    get:
+      operationId: getTenantTraceSpans
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: traceId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: true
+        in: query
+        name: from
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: to
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Optional owned Box filter
+        explode: true
+        in: query
+        name: boxId
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/TraceSpan"
+                type: array
+          description: ""
+        "413":
+          description: Trace contains more than 1000 spans
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get every tenant-owned span in a trace
+      tags:
+      - observability
+  /observability/metrics:
+    get:
+      operationId: getTenantMetrics
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - explode: true
+        in: query
+        name: from
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: to
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Exact Box ID
+        explode: true
+        in: query
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: form
+      - description: Allowlisted metric names
+        explode: true
+        in: query
+        name: metricNames
+        required: false
+        schema:
+          items:
+            type: string
+          type: array
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsResponse"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get allowlisted metrics for an owned Box
+      tags:
+      - observability
 components:
   schemas:
     Announcement:

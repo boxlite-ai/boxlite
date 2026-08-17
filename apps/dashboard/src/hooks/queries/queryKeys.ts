@@ -90,8 +90,8 @@ export const queryKeys = {
       [...queryKeys.telemetry.all, organizationId, boxId, 'traces', params] as const,
     metrics: (organizationId: string, boxId: string, params: object) =>
       [...queryKeys.telemetry.all, organizationId, boxId, 'metrics', params] as const,
-    traceSpans: (organizationId: string, boxId: string, traceId: string) =>
-      [...queryKeys.telemetry.all, organizationId, boxId, 'traces', traceId] as const,
+    traceSpans: (organizationId: string, boxId: string, traceId: string, params: object) =>
+      [...queryKeys.telemetry.all, organizationId, boxId, 'traces', traceId, params] as const,
   },
   analytics: {
     all: ['analytics'] as const,

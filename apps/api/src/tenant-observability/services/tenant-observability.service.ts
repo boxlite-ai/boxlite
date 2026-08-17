@@ -3,7 +3,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BadRequestException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  PayloadTooLargeException,
+  ServiceUnavailableException,
+} from '@nestjs/common'
 import { BoxService } from '../../box/services/box.service'
 import { LogEntryDto } from '../../box-telemetry/dto/log-entry.dto'
 import { MetricDataPointDto, MetricsResponseDto, MetricSeriesDto } from '../../box-telemetry/dto/metrics-response.dto'
@@ -18,10 +24,12 @@ import {
   TenantMetricsQueryDto,
   TenantTelemetryRangeQueryDto,
   TenantTelemetrySource,
+  TenantTraceDetailQueryDto,
 } from '../dto/tenant-observability-query.dto'
 
 const MAX_QUERY_RANGE_MS = 24 * 60 * 60 * 1000
 const MAX_QUERY_EXECUTION_SECONDS = 4
+const MAX_TRACE_DETAIL_SPANS = 1000
 const ALL_SOURCES = Object.values(TenantTelemetrySource)
 
 interface ClickHouseCountRow {
@@ -174,19 +182,25 @@ export class TenantObservabilityService {
     return { items, total, page, totalPages: Math.ceil(total / limit) }
   }
 
-  async getTraceSpans(organizationId: string, traceId: string, boxId?: string): Promise<TraceSpanDto[]> {
+  async getTraceSpans(
+    organizationId: string,
+    traceId: string,
+    query: TenantTraceDetailQueryDto,
+  ): Promise<TraceSpanDto[]> {
     this.assertConfigured()
-    await this.assertBoxAccess(organizationId, boxId)
+    this.assertRange(query.from, query.to)
+    await this.assertBoxAccess(organizationId, query.boxId)
 
-    const query: TenantTelemetryRangeQueryDto = {
-      from: new Date(Date.now() - MAX_QUERY_RANGE_MS).toISOString(),
-      to: new Date().toISOString(),
+    const rangeQuery: TenantTelemetryRangeQueryDto = {
+      from: query.from,
+      to: query.to,
       page: 1,
       limit: 100,
-      boxId,
+      boxId: query.boxId,
     }
-    const { where: tenantWhere, params } = this.buildWhere('traces', organizationId, query, false)
+    const { where: tenantWhere, params } = this.buildWhere('traces', organizationId, rangeQuery)
     params.traceId = traceId.toLowerCase()
+    params.spanLimit = MAX_TRACE_DETAIL_SPANS + 1
 
     const rows = await this.clickhouse.query<ClickHouseSpanRow>(
       `SELECT TraceId, SpanId, ParentSpanId, SpanName, ServiceName, Timestamp, Duration,
@@ -194,13 +208,16 @@ export class TenantObservabilityService {
        FROM otel_traces
        WHERE TraceId = {traceId:String} AND ${tenantWhere}
        ORDER BY Timestamp ASC, SpanId ASC
-       LIMIT 1000`,
+       LIMIT {spanLimit:UInt32}`,
       params,
       { maxExecutionTimeSeconds: MAX_QUERY_EXECUTION_SECONDS },
     )
 
     if (rows.length === 0) {
       throw new NotFoundException('Trace not found')
+    }
+    if (rows.length > MAX_TRACE_DETAIL_SPANS) {
+      throw new PayloadTooLargeException(`Trace contains more than ${MAX_TRACE_DETAIL_SPANS} spans`)
     }
 
     return rows.map((row) => ({

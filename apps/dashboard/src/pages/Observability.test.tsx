@@ -6,7 +6,7 @@
 
 import { act } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useNavigate } from 'react-router-dom'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import Observability from './Observability'
 
@@ -21,6 +21,11 @@ vi.mock('@/components/boxes', () => ({
   BoxTracesTab: (props: unknown) => mocks.traces(props),
   BoxMetricsTab: (props: unknown) => mocks.metrics(props),
 }))
+
+function BackButton() {
+  const navigate = useNavigate()
+  return <button onClick={() => navigate(-1)}>Back</button>
+}
 
 describe('Observability page', () => {
   let root: Root | null = null
@@ -68,5 +73,32 @@ describe('Observability page', () => {
 
     expect(document.body.textContent).toContain('Select a Box')
     expect(mocks.metrics).not.toHaveBeenCalled()
+  })
+
+  it('updates the Box input when browser navigation changes the URL filter', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+
+    await act(async () => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter
+          initialEntries={['/dashboard/observability?boxId=box-a', '/dashboard/observability?boxId=box-b']}
+          initialIndex={1}
+        >
+          <BackButton />
+          <Observability />
+        </MemoryRouter>,
+      )
+    })
+
+    const boxInput = document.querySelector<HTMLInputElement>('input[aria-label="Box ID filter"]')
+    expect(boxInput?.value).toBe('box-b')
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button')?.click()
+    })
+
+    expect(boxInput?.value).toBe('box-a')
   })
 })

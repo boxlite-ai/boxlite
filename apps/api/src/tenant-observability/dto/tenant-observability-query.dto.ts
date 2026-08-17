@@ -69,7 +69,7 @@ export class TenantTelemetryRangeQueryDto {
   @IsDateString()
   to: string
 
-  @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 1 })
+  @ApiPropertyOptional({ type: Number, minimum: 1, maximum: 100, default: 1 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -77,7 +77,7 @@ export class TenantTelemetryRangeQueryDto {
   @Max(100)
   page = 1
 
-  @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 50 })
+  @ApiPropertyOptional({ type: Number, minimum: 1, maximum: 100, default: 50 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -136,6 +136,14 @@ export class TenantLogsQueryDto extends TenantTelemetryRangeQueryDto {
 }
 
 export class TenantTraceDetailQueryDto {
+  @ApiProperty({ type: String, format: 'date-time' })
+  @IsDateString()
+  from: string
+
+  @ApiProperty({ type: String, format: 'date-time' })
+  @IsDateString()
+  to: string
+
   @ApiPropertyOptional({ description: 'Optional owned Box filter' })
   @IsOptional()
   @IsString()

@@ -7,7 +7,7 @@ import { useQuery, UseQueryOptions } from '@tanstack/react-query'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { queryKeys } from '@/hooks/queries/queryKeys'
-import { PaginatedTraces } from '@boxlite-ai/api-client'
+import { GetTenantTracesSourcesEnum, PaginatedTraces } from '@boxlite-ai/api-client'
 
 export interface TracesQueryParams {
   from: Date
@@ -33,20 +33,18 @@ export function useBoxTraces(
       if (!selectedOrganization) {
         throw new Error('Missing required parameters')
       }
-      const response = await api.axiosInstance.get<PaginatedTraces>('/observability/traces', {
-        headers: { 'X-BoxLite-Organization-ID': selectedOrganization.id },
-        params: {
-          from: params.from.toISOString(),
-          to: params.to.toISOString(),
-          page: params.page ?? 1,
-          limit: params.limit ?? 50,
-          sources: params.sources?.join(','),
-          runnerId: params.runnerId,
-          boxId,
-          jobId: params.jobId,
-        },
-        timeout: 8_000,
-      })
+      const response = await api.observabilityApi.getTenantTraces(
+        params.from,
+        params.to,
+        selectedOrganization.id,
+        params.page ?? 1,
+        params.limit ?? 50,
+        params.sources as GetTenantTracesSourcesEnum[] | undefined,
+        params.runnerId,
+        boxId,
+        params.jobId,
+        { timeout: 8_000 },
+      )
       return response.data
     },
     enabled: !!selectedOrganization && !!params.from && !!params.to,

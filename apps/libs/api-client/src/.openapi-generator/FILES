@@ -11,6 +11,7 @@ api/config-api.ts
 api/health-api.ts
 api/jobs-api.ts
 api/object-storage-api.ts
+api/observability-api.ts
 api/organizations-api.ts
 api/preview-api.ts
 api/regions-api.ts
@@ -64,6 +65,7 @@ docs/MetricDataPoint.md
 docs/MetricSeries.md
 docs/MetricsResponse.md
 docs/ObjectStorageApi.md
+docs/ObservabilityApi.md
 docs/OidcConfig.md
 docs/Organization.md
 docs/OrganizationBoxDefaultLimitedNetworkEgress.md

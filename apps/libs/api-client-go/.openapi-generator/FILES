@@ -9,6 +9,7 @@ api_config.go
 api_health.go
 api_jobs.go
 api_object_storage.go
+api_observability.go
 api_organizations.go
 api_preview.go
 api_regions.go

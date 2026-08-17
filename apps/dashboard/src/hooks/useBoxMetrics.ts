@@ -29,16 +29,14 @@ export function useBoxMetrics(
       if (!selectedOrganization || !boxId) {
         throw new Error('Missing required parameters')
       }
-      const response = await api.axiosInstance.get<MetricsResponse>('/observability/metrics', {
-        headers: { 'X-BoxLite-Organization-ID': selectedOrganization.id },
-        params: {
-          from: params.from.toISOString(),
-          to: params.to.toISOString(),
-          boxId,
-          metricNames: params.metricNames?.join(','),
-        },
-        timeout: 8_000,
-      })
+      const response = await api.observabilityApi.getTenantMetrics(
+        params.from,
+        params.to,
+        boxId,
+        selectedOrganization.id,
+        params.metricNames,
+        { timeout: 8_000 },
+      )
       return response.data
     },
     enabled: !!boxId && !!selectedOrganization && !!params.from && !!params.to,

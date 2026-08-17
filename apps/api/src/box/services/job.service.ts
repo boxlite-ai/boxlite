@@ -70,7 +70,7 @@ export class JobService {
 
       // Log with context-specific info
       const contextInfo = resourceId ? `${resourceType} ${resourceId}` : 'N/A'
-      const telemetryFields = this.getTelemetryFields(payload, job.id, runnerId, resourceId)
+      const telemetryFields = this.getTelemetryFields(payload, job.id, runnerId, resourceType, resourceId)
       trace.getActiveSpan()?.setAttributes(telemetryFields)
 
       this.logger.debug({
@@ -397,12 +397,17 @@ export class JobService {
     payload: string | Record<string, any> | undefined,
     jobId: string,
     runnerId: string,
+    resourceType: ResourceType,
     resourceId: string,
   ): Record<string, string> {
     const fields: Record<string, string> = {
       'boxlite.job.id': jobId,
       'boxlite.runner.id': runnerId,
-      'boxlite.box.id': resourceId,
+      'resource.type': resourceType,
+      'resource.id': resourceId,
+    }
+    if (resourceType === ResourceType.BOX) {
+      fields['boxlite.box.id'] = resourceId
     }
     if (payload && typeof payload !== 'string' && typeof payload.organizationId === 'string') {
       fields['boxlite.organization.id'] = payload.organizationId

@@ -105,14 +105,39 @@ describe('TenantObservabilityService', () => {
       },
     ])
 
-    const spans = await service.getTraceSpans('org-a', 'a'.repeat(32))
+    const spans = await service.getTraceSpans('org-a', 'a'.repeat(32), range)
 
     const [sql, params] = clickhouse.query.mock.calls[0]
     expect(sql).toContain('TraceId = {traceId:String}')
     expect(sql).toContain('boxlite.organization.id')
     expect(sql).not.toContain('ServiceName = {serviceName:String}')
-    expect(params).toMatchObject({ organizationId: 'org-a', traceId: 'a'.repeat(32) })
+    expect(params).toMatchObject({
+      organizationId: 'org-a',
+      traceId: 'a'.repeat(32),
+      from: new Date(range.from),
+      to: new Date(range.to),
+    })
     expect(spans.map((span) => span.layer)).toEqual(['api', 'runtime-wrapper'])
+  })
+
+  it('rejects trace detail that exceeds the explicit span limit', async () => {
+    clickhouse.query.mockResolvedValue(
+      Array.from({ length: 1001 }, (_, index) => ({
+        TraceId: 'a'.repeat(32),
+        SpanId: index.toString(16).padStart(16, '0'),
+        ParentSpanId: '',
+        SpanName: 'oversized trace',
+        ServiceName: 'boxlite-api',
+        Timestamp: range.from,
+        Duration: 1,
+        SpanAttributes: {},
+        StatusCode: 'OK',
+        StatusMessage: '',
+        source: 'api',
+      })),
+    )
+
+    await expect(service.getTraceSpans('org-a', 'a'.repeat(32), range)).rejects.toMatchObject({ status: 413 })
   })
 
   it('only permits allowlisted Box metrics', async () => {

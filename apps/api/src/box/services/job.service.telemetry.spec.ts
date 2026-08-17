@@ -38,4 +38,29 @@ describe('JobService telemetry logging', () => {
     )
     expect(debug.mock.calls[0][0]).not.toHaveProperty('boxlite.source')
   })
+
+  it('does not label non-Box resources as Box telemetry', async () => {
+    const debug = jest.fn()
+    const adapter = new PinoNestLogger({ debug } as never, {} as never)
+    const previousLogger = (Logger as unknown as { staticInstanceRef: unknown }).staticInstanceRef
+    Logger.overrideLogger(adapter)
+
+    const service = new JobService({ insert: jest.fn() } as never, { lpush: jest.fn() } as never, {} as never)
+
+    try {
+      await service.createJob(null, JobType.EXPORT_BOX, 'runner-a', ResourceType.BACKUP, 'backup-a')
+    } finally {
+      Logger.overrideLogger(previousLogger as never)
+    }
+
+    expect(debug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        'boxlite.job.id': expect.any(String),
+        'boxlite.runner.id': 'runner-a',
+        'resource.type': ResourceType.BACKUP,
+        'resource.id': 'backup-a',
+      }),
+    )
+    expect(debug.mock.calls[0][0]).not.toHaveProperty('boxlite.box.id')
+  })
 })

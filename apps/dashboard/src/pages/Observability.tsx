@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { BarChart3 } from '@/components/ui/icon'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 const SOURCES = ['api', 'worker', 'runner', 'runtime-wrapper', 'box', 'collector-delivery'] as const
@@ -25,6 +25,10 @@ export default function Observability() {
   const selectedSource = searchParams.get('source') ?? 'all'
   const [boxInput, setBoxInput] = useState(selectedBoxId)
   const sources = useMemo(() => (selectedSource === 'all' ? undefined : [selectedSource]), [selectedSource])
+
+  useEffect(() => {
+    setBoxInput(selectedBoxId)
+  }, [selectedBoxId])
 
   const updateFilter = (name: string, value?: string) => {
     const next = new URLSearchParams(searchParams)

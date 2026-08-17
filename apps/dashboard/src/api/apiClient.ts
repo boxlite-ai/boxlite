@@ -16,6 +16,7 @@ import {
   AuditApi,
   Configuration,
   OrganizationsApi,
+  ObservabilityApi,
   RegionsApi,
   RunnersApi,
   BoxApi,
@@ -72,6 +73,7 @@ export class ApiClient {
   private _userApi: UsersApi
   private _apiKeyApi: ApiKeysApi
   private _organizationsApi: OrganizationsApi
+  private _observabilityApi: ObservabilityApi
   private _billingApi: BillingApiClient
   private _volumeApi: VolumesApi
   private _auditApi: AuditApi
@@ -131,6 +133,7 @@ export class ApiClient {
     this._userApi = new UsersApi(this.config, undefined, axiosInstance)
     this._apiKeyApi = new ApiKeysApi(this.config, undefined, axiosInstance)
     this._organizationsApi = new OrganizationsApi(this.config, undefined, axiosInstance)
+    this._observabilityApi = new ObservabilityApi(this.config, undefined, axiosInstance)
     this._billingApi = new BillingApiClient(config.billingApiUrl || window.location.origin, accessToken)
     this._volumeApi = new VolumesApi(this.config, undefined, axiosInstance)
     this._auditApi = new AuditApi(this.config, undefined, axiosInstance)
@@ -217,6 +220,10 @@ export class ApiClient {
 
   public get organizationsApi() {
     return this._organizationsApi
+  }
+
+  public get observabilityApi() {
+    return this._observabilityApi
   }
 
   public get billingApi() {
