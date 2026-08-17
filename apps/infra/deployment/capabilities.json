@@ -1,6 +1,5 @@
 {
-  "version": 2,
+  "version": 1,
   "componentSelection": true,
-  "infrastructureOnly": true,
   "stageConfigStore": true
 }

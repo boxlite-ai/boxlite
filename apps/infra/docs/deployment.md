@@ -178,9 +178,9 @@ a provider while those resources reference the old registration — deploying th
 stack with `--target Api` stopped SST on `StorageBucket` before any application
 resource reached AWS. Targeted `diff` remains available for read-only inspection.
 
-`--exclude` is accepted for exactly three scopes, which drop one or both
-artifact-backed legs — their service or instance, and the binary-upgrade commands
-that go with them — while keeping every shared and provider resource in the plan. The legs'
+`--exclude` is accepted for exactly two scopes, which drop the mutable half of one
+deployable leg — its service or instance, and the binary-upgrade commands that go
+with it — while keeping every shared and provider resource in the plan. The leg's
 ref-independent scaffolding (`RunnerRole`, `RunnerProfile`, `RunnerSecurityGroup`,
 `RunnerArtifactS3Policy`) still reconciles, as a no-op:
 
@@ -188,13 +188,12 @@ ref-independent scaffolding (`RunnerRole`, `RunnerProfile`, `RunnerSecurityGroup
 npm run deploy -- --stage dev                     # both legs
 npm run deploy -- --stage dev --exclude Runner    # Api leg only
 npm run deploy -- --stage dev --exclude Api       # Runner leg only
-npm run deploy -- --stage dev --exclude Api,Runner # infrastructure only
 ```
 
 `deployment/scope.ts` is the allowlist, and `deployment/capabilities.json` tells the
 preflight which artifacts to verify — an excluded leg is not deployed, so its
 artifact is not required to exist. Any other selector is refused. `deploy-infra.yml`
-exposes the same four scopes as its `components` input and skips the build jobs
+exposes the same three scopes as its `components` input and skips the build jobs
 for a leg it excludes.
 
 A deploy needs a *deployed commit* whose tooling understands it, which is not the
@@ -207,12 +206,12 @@ and a narrowed one additionally needs `componentSelection`. A commit that
 declares neither cannot be deployed by this workflow at all; rebase it, or name a
 newer `ref`.
 
-A narrowed deploy leaves each excluded leg on whatever commit an earlier run put
+A narrowed deploy leaves the excluded leg on whatever commit an earlier run put
 there, so the stack is then mixed-commit; the residual partial-update risk above
 is why `apply` defaults to false and the guarded preview runs first. Run the
-first new scope dispatch with `apply=false` and read the plan. An `infra` dispatch
-must show neither Api nor Runner operations and skips cloud E2E because no application
-artifact changed. The Runner
+first `--exclude Api` (`components=runner`) dispatch with `apply=false` and read
+the plan: only `--exclude Runner` has been exercised against this stack, and that
+scope is also the one that turns off the Api image preflight. The Runner
 EC2 identity and binary remain stable through the controls under
 [Operating rules](#operating-rules), and the matching artifact preflight always
 runs before deployment.

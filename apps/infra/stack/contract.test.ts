@@ -351,12 +351,12 @@ test('the runbook never hands an operator a deploy the wrapper rejects', () => {
   // runbook actually uses, so covering only `npm run deploy` would guard the rarer spelling.
   // Targeted `diff` stays legal and must not be flagged.
   //
-  // `--target` is still refused for deploys; `--exclude` is refused for anything but the three
+  // `--target` is still refused for deploys; `--exclude` is refused for anything but the two
   // reviewed component scopes, so the runbook may show those and nothing else.
   assert.doesNotMatch(readme, /npm run (?:deploy|sst -- deploy)[^\n]*--target\b/)
   for (const [, excluded] of readme.matchAll(/npm run (?:deploy|sst -- deploy)[^\n]*--exclude[=\s]+(\S+)/g)) {
     assert.ok(
-      ['Api', 'Runner', 'Api,Runner'].includes(excluded),
+      ['Api', 'Runner'].includes(excluded),
       `the runbook documents --exclude ${excluded}, which resolveDeployScope refuses`,
     )
   }

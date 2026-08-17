@@ -913,10 +913,6 @@ test('the capability gate answers every selected-commit shape', () => {
     // Component selection is only required when the dispatch actually narrows the scope.
     assert.equal(runGate(JSON.stringify({ version: 1, stageConfigStore: true }), '').status, 0)
     assert.match(refused(JSON.stringify({ version: 1, stageConfigStore: true }), 'Runner'), /--exclude Runner/)
-    // Infrastructure-only is a v2 capability, not merely two legacy exclusions combined.
-    assert.match(refused(declared({ version: 1 }), 'Api,Runner'), /--exclude Api,Runner/)
-    assert.match(refused(declared({ version: 2 }), 'Api,Runner'), /--exclude Api,Runner/)
-    assert.equal(runGate(declared({ version: 2, infrastructureOnly: true }), 'Api,Runner').status, 0)
     // A version this workflow has never been taught to read.
     assert.match(refused(declared({ version: 3 }), ''), /does not declare the capabilities/)
     // Corrupt, then absent. Each has its own cause, and neither may borrow the other's: a parse
@@ -1066,7 +1062,7 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // capacity re-testing a stack the run only previewed.
   assert.equal(workflow.jobs.e2e.uses, './.github/workflows/e2e-cloud.yml')
   assert.equal(workflow.jobs.e2e.with.ref, '${{ needs.resolve-ref.outputs.sha }}')
-  assert.equal(workflow.jobs.e2e.if, "${{ inputs.apply && inputs.components != 'infra' }}")
+  assert.equal(workflow.jobs.e2e.if, '${{ inputs.apply }}')
   // Named, not `inherit` — which would hand the suite every secret this job can reach.
   assert.equal(workflow.jobs.e2e.secrets.BOXLITE_DEV_API_KEY, '${{ secrets.BOXLITE_DEV_API_KEY }}')
   // `needs` carries the ordering the `if` relies on: no status-check function appears in that
@@ -1079,12 +1075,12 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // build gating just burns the CI time the input exists to save.
   const components = workflow.on.workflow_dispatch.inputs.components
   assert.equal(components.type, 'choice', 'components must be an allowlist, not free text')
-  assert.deepEqual(components.options, ['api+runner', 'api', 'runner', 'infra'])
+  assert.deepEqual(components.options, ['api+runner', 'api', 'runner'])
   assert.equal(components.default, 'api+runner', 'an unqualified dispatch must still deploy everything')
   // `contains` reads as membership only while no single-leg option contains the other leg's name.
   // The combined option contains both by design; a leg that contained the other would make its
   // gate fire for a scope that excludes it — an `api`-only dispatch building the Runner anyway.
-  const legs = ['api', 'runner']
+  const legs = components.options.filter((option: any) => option !== 'api+runner')
   for (const leg of legs) {
     for (const other of legs.filter((candidate: any) => candidate !== leg)) {
       assert.ok(!leg.includes(other), `option '${leg}' contains '${other}', which breaks the contains() gates`)
@@ -1105,7 +1101,7 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   // before it ever gets there.
   assert.equal(
     workflow.jobs.deploy.env.DEPLOY_EXCLUDE,
-    "${{ inputs.components == 'api' && 'Runner' || inputs.components == 'runner' && 'Api' || inputs.components == 'infra' && 'Api,Runner' || '' }}",
+    "${{ inputs.components == 'api' && 'Runner' || inputs.components == 'runner' && 'Api' || '' }}",
   )
   assert.doesNotMatch(liveShell(source), /--target/)
   // The workflow definition comes from the dispatch ref while this job checks out the SELECTED
@@ -1122,7 +1118,6 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   )
   assert.ok(capabilityGate, 'the deployment capability gate is missing')
   assertShellLine(capabilityGate.run, /capability=apps\/infra\/deployment\/capabilities\.json/)
-  assertShellLine(capabilityGate.run, /c\.version === 2 && c\.infrastructureOnly === true/)
   // Before the deploy role is assumed. An unsupported commit is knowable from the checkout alone,
   // so it must never reach AWS credentials.
   const deployStepNames = workflow.jobs.deploy.steps.map((step: any) => step.name)

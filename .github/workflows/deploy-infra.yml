@@ -13,7 +13,7 @@ run-name: Deploy ${{ inputs.components }} to ${{ inputs.stage }}
 #
 # `components` narrows both halves at once: an unselected leg is neither built nor deployed. It
 # drops the build jobs here and becomes `--exclude <Component>` on the SST commands below, which
-# apps/infra/deployment/scope.ts accepts as one of the reviewed partial shapes.
+# apps/infra/deployment/scope.ts accepts as one of exactly two reviewed partial shapes.
 # Never `--target`: PR #1095 stalled this stack mid-provider-migration that way, because a targeted
 # update omits the shared resources it still depends on. `--exclude` keeps them in the plan.
 
@@ -36,7 +36,6 @@ on:
           - api+runner
           - api
           - runner
-          - infra
       apply:
         description: Preview again, then deploy the selected components
         required: true
@@ -175,8 +174,8 @@ jobs:
   build-api:
     name: Build commit Api image
     needs: resolve-ref
-    # `contains` rather than equality: the value is one of api+runner / api / runner / infra, and
-    # no leg's name contains the other, so a substring test reads as the membership it is.
+    # `contains` rather than equality: the value is one of api+runner / api / runner, and no
+    # option's name contains the other's, so a substring test reads as the membership it is.
     if: ${{ contains(inputs.components, 'api') }}
     # Nothing here depends on the C SDK, so this runs beside build-c rather than behind it.
     # The called workflow reaches ECR through OIDC, and a job-level block replaces the
@@ -248,7 +247,7 @@ jobs:
       # stay `build` above even when one leg is excluded: everything the plan declares still comes
       # from this one commit, and an exclusion that turned out to be narrower than the leg would
       # then fail loudly on the missing artifact rather than quietly reinstalling a release.
-      DEPLOY_EXCLUDE: ${{ inputs.components == 'api' && 'Runner' || inputs.components == 'runner' && 'Api' || inputs.components == 'infra' && 'Api,Runner' || '' }}
+      DEPLOY_EXCLUDE: ${{ inputs.components == 'api' && 'Runner' || inputs.components == 'runner' && 'Api' || '' }}
 
     steps:
       - name: Checkout selected commit
@@ -272,8 +271,9 @@ jobs:
       # true of it, but it reads as a statement about this workflow and sends the operator to the
       # wrong file.
       #
-      # Legacy trees only support the original one-component exclusions. The infrastructure-only
-      # shape arrived with capability v2, so it must fail here rather than reach an older wrapper.
+      # It answers "can this tree scope at all", not "does it support THIS scope". A commit that
+      # knew `--exclude Runner` but not some later selector passes here and is refused by
+      # resolveDeployScope's own allowlist instead.
       #
       # Runs before the AWS credential step on purpose: an unsupported commit is knowable from the
       # checkout alone, so it should never reach the deploy role.
@@ -294,8 +294,7 @@ jobs:
           if ! status=$(node -e "
             const c = JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))
             const selectable = process.argv[2] === '' || c.componentSelection === true
-            const infrastructureOnly = process.argv[2] !== 'Api,Runner' || c.version === 2 && c.infrastructureOnly === true
-            console.log([1, 2].includes(c.version) && c.stageConfigStore === true && selectable && infrastructureOnly ? 'supported' : 'unsupported')
+            console.log([1, 2].includes(c.version) && c.stageConfigStore === true && selectable ? 'supported' : 'unsupported')
           " "$capability" "$DEPLOY_EXCLUDE"); then
             echo "$capability exists at commit $BOXLITE_ARTIFACT_REF but failed to load (reason" >&2
             echo "above); fix the file rather than deploying without its configuration." >&2
@@ -470,7 +469,7 @@ jobs:
   e2e:
     name: E2E suite against ${{ inputs.stage }}
     needs: [resolve-ref, deploy]
-    if: ${{ inputs.apply && inputs.components != 'infra' }}
+    if: ${{ inputs.apply }}
     uses: ./.github/workflows/e2e-cloud.yml
     with:
       ref: ${{ needs.resolve-ref.outputs.sha }}

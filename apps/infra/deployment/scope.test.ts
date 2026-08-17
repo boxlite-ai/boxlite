@@ -85,14 +85,6 @@ test('each reviewed exclusion drops exactly the leg it names', () => {
   }
 })
 
-test('the reviewed infrastructure-only scope excludes both artifact-backed legs', () => {
-  for (const subcommand of ['diff', 'deploy']) {
-    const scope = resolveDeployScope([subcommand, '--stage', 'dev', '--exclude', 'Api,Runner'])
-    assert.deepEqual(scope.components, [], `${subcommand} must not reconcile an artifact-backed component`)
-    assert.deepEqual(scope.excluded, ['api', 'runner'])
-  }
-})
-
 test('--target stays banned for deploys — it is what stalled the stack in #1095', () => {
   // Not interchangeable with --exclude. A targeted update omits the shared and provider resources
   // it still depends on, which is how SST stopped on StorageBucket mid-provider-migration.
@@ -120,21 +112,10 @@ test('rejects any scope that is not one of the reviewed shapes', () => {
   ]) {
     assert.throws(() => resolveDeployScope(args), /not a reviewed deploy scope/, args.join(' '))
   }
-  for (const args of [
-    ['deploy', '--exclude', 'Runner,Api'],
-    ['deploy', '--exclude', 'Api', '--exclude', 'Api'],
-    ['deploy', '--exclude', 'Runner', '--exclude', 'Runner'],
-    ['deploy', '--exclude', 'Api', '--exclude', 'Runner', '--exclude', 'Api'],
-  ]) {
-    assert.throws(() => resolveDeployScope(args), /not a reviewed deploy scope/, args.join(' '))
-  }
-  for (const args of [
-    ['diff', '--exclude', 'Runner,Api'],
-    ['diff', '--exclude', 'Api', '--exclude', 'Runner'],
-    ['diff', '--exclude', 'Proxy'],
-  ]) {
-    assert.throws(() => resolveDeployScope(args), /not a reviewed deploy scope/, args.join(' '))
-  }
+  assert.throws(
+    () => resolveDeployScope(['deploy', '--stage', 'dev', '--exclude', 'Api', '--exclude', 'Runner']),
+    /at most one scope selector/,
+  )
 })
 
 test('the resolved scope reaches sst.config.ts unchanged', () => {
@@ -145,7 +126,6 @@ test('the resolved scope reaches sst.config.ts unchanged', () => {
     ['deploy', '--stage', 'dev'],
     ['deploy', '--stage', 'dev', '--exclude', 'Runner'],
     ['deploy', '--stage', 'dev', '--exclude', 'Api'],
-    ['deploy', '--stage', 'dev', '--exclude', 'Api,Runner'],
   ]) {
     const environment = {}
     const scope = resolveDeployScope(args)
@@ -158,10 +138,10 @@ test('an absent scope is the full stack, but a present empty one stays empty', (
   // Absent is what a bare `sst` invocation and a local `npm run deploy` get.
   assert.deepEqual(readDeployScope({}), ['api', 'runner'])
   assert.deepEqual(readDeployScope({ [DEPLOY_SCOPE_KEY]: undefined }), ['api', 'runner'])
-  // Present-but-empty is a real scope, not a missing one. `diff --exclude Api,Runner`
+  // Present-but-empty is a real scope, not a missing one. `diff --exclude Api --exclude Runner`
   // produces it, and keying on truthiness round-tripped it back to the full stack — previewing
   // a graph the operator excluded both legs from.
-  const bothExcluded = resolveDeployScope(['diff', '--exclude', 'Api,Runner'])
+  const bothExcluded = resolveDeployScope(['diff', '--exclude', 'Api', '--exclude', 'Runner'])
   assert.deepEqual([...bothExcluded.components], [])
   const environment = {}
   exportDeployScope(bothExcluded, environment)

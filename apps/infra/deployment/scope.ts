@@ -4,16 +4,16 @@
 /*
  * Which components a deploy covers, and which partial shapes are allowed to say so.
  *
- * A full deploy is still the default and still what an unqualified `npm run deploy` gets. The
- * reviewed partial shapes below exist so a change can leave either or both artifact-backed legs
- * alone — a Runner build is the long pole, and infrastructure recovery should build neither leg.
+ * A full deploy is still the default and still what an unqualified `npm run deploy` gets. The two
+ * partial shapes below exist so a change to one leg does not have to rebuild and reconcile the
+ * other — a Runner build is the long pole, and an Api-only change should not pay for it.
  *
  * Only `--exclude` expresses that, never `--target`. PR #1095 took the dev stack down with
  * `--target Api`: Pulumi cannot migrate a provider while untargeted resources still reference the
  * old registration, and SST stopped on StorageBucket before any application resource deployed.
  * `--exclude` was the recovery, because it leaves shared and provider resources in the plan and
- * omits selected leaves. That distinction is the whole reason this module is an allowlist rather
- * than a parser: an operator may pick a reviewed shape, not compose a new one.
+ * omits one leaf. That distinction is the whole reason this module is an allowlist rather than a
+ * parser: an operator may pick a reviewed shape, not compose a new one.
  *
  * The residual risk from README.md ("Deploy an existing stack") is unchanged and conditional — an
  * omitted resource still referencing an old provider is a problem whenever the provider version
@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url'
 // the OtelCollector build from the checkout on every path and stay in every plan.
 const DEPLOY_COMPONENTS = ['api', 'runner']
 // The SST resource whose exclusion drops each component's leg.
-const COMPONENT_EXCLUSIONS = { Api: ['api'], Runner: ['runner'], 'Api,Runner': ['api', 'runner'] }
+const COMPONENT_EXCLUSIONS = { Api: 'api', Runner: 'runner' }
 type ComponentExclusion = keyof typeof COMPONENT_EXCLUSIONS
 const isComponentExclusion = (value: string | undefined): value is ComponentExclusion =>
   value !== undefined && Object.prototype.hasOwnProperty.call(COMPONENT_EXCLUSIONS, value)
@@ -83,36 +83,14 @@ const FULL_SCOPE = Object.freeze({ components: Object.freeze([...DEPLOY_COMPONEN
  */
 export function resolveDeployScope(args: any) {
   const selectors = readSelectors(args)
-  const exclusionSelectors = selectors.filter((selector) => selector.flag === 'exclude')
-
-  // Preview and apply must hand the same single scalar value to native SST. It owns one string
-  // flag and comma-splits it internally; accepting repeats or another comma order here would make
-  // BOXLITE_DEPLOY_SCOPE describe a different graph from the one SST previews or mutates.
-  if (RUNNER_POLICY_SUBCOMMANDS.has(args[0])) {
-    if (exclusionSelectors.length > 1) {
-      throw new Error(
-        `selectors ${exclusionSelectors.map((selector) => selector.raw).join(', ')} are not a reviewed deploy scope; ` +
-          'pass exactly one --exclude value',
-      )
-    }
-    for (const selector of exclusionSelectors) {
-      if (!isComponentExclusion(selector.value)) {
-        throw new Error(
-          `--exclude ${selector.value || '(no value)'} is not a reviewed deploy scope; ` +
-            `exclude exactly one of ${Object.keys(COMPONENT_EXCLUSIONS).join(', ')}`,
-        )
-      }
-    }
-  }
 
   // Only `deploy` mutates, so only `deploy` is held to the allowlist — a targeted `diff` stays
-  // legal for read-only inspection. SST owns one scalar --exclude flag and splits that value on
-  // commas, so the exact infrastructure shape is one Api,Runner selector, never repeated flags.
+  // legal for read-only inspection.
   if (args[0] === 'deploy') {
     if (selectors.length > 1) {
       throw new Error(
-        `selectors ${selectors.map((selector) => selector.raw).join(', ')} are not a reviewed deploy scope; ` +
-          'pass exactly one --exclude value',
+        `a deploy carries at most one scope selector (got ${selectors.map((s) => s.raw).join(', ')}); ` +
+          'a composed scope is not one of the reviewed shapes',
       )
     }
     for (const selector of selectors) {
@@ -121,6 +99,12 @@ export function resolveDeployScope(args: any) {
           `--target is disabled for deploys (${selector.raw}); it omits the shared and provider resources a ` +
             'targeted update still depends on, which is how PR #1095 stalled the stack mid-provider-migration. ' +
             `Use --exclude ${Object.keys(COMPONENT_EXCLUSIONS).join(' or --exclude ')} instead`,
+        )
+      }
+      if (!isComponentExclusion(selector.value)) {
+        throw new Error(
+          `--exclude ${selector.value || '(no value)'} is not a reviewed deploy scope; ` +
+            `exclude exactly one of ${Object.keys(COMPONENT_EXCLUSIONS).join(', ')}`,
         )
       }
     }
@@ -133,8 +117,10 @@ export function resolveDeployScope(args: any) {
   //
   // `--target` never narrows it. It filters which declared resources are acted on; it does not
   // remove declarations, and Pulumi reads a missing declaration as a delete.
-  const excluded = exclusionSelectors
-    .flatMap((selector) => (isComponentExclusion(selector.value) ? COMPONENT_EXCLUSIONS[selector.value] : []))
+  const excluded = selectors
+    .filter((selector) => selector.flag === 'exclude')
+    .map((selector) => (isComponentExclusion(selector.value) ? COMPONENT_EXCLUSIONS[selector.value] : undefined))
+    .filter(Boolean)
   if (excluded.length === 0) return FULL_SCOPE
 
   return Object.freeze({
@@ -156,8 +142,8 @@ export function exportDeployScope(scope: any, environment = process.env) {
  * The scope sst.config.ts must build for.
  *
  * An ABSENT key means the full stack — a bare `sst` invocation, or a local `npm run deploy`.
- * A key that is present but empty means the empty scope, which `diff --exclude Api,Runner`
- * legitimately produces; keyed on presence rather than truthiness so that case does not
+ * A key that is present but empty means the empty scope, which `diff --exclude Api --exclude
+ * Runner` legitimately produces; keyed on presence rather than truthiness so that case does not
  * round-trip back to the full stack and preview a graph the operator did not ask for.
  *
  * A value that is set but unreadable throws rather than defaulting: silently widening it would
