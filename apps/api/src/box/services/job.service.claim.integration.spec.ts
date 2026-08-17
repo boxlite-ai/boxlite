@@ -81,7 +81,9 @@ describeIfDatabase('JobService.claimPendingJobs (integration, real Postgres)', (
   })
 
   afterEach(async () => {
-    await dataSource.query(`ALTER TABLE "${schemaName}"."job" DROP CONSTRAINT IF EXISTS "${rejectConstraint}"`)
+    await dataSource.query(
+      `ALTER TABLE "${schemaName}"."job" DROP CONSTRAINT IF EXISTS "${rejectConstraint}"`,
+    )
   })
 
   it('claims a persisted job without reconstructing the returned database row', async () => {

@@ -77,34 +77,31 @@ export class RedisLockLease {
   }
 
   private scheduleRenewal(): void {
-    this.renewalTimer = setTimeout(
-      () => {
-        this.renewal = this.renewWithTimeout()
-          .catch((error) => {
-            if (error instanceof LockOwnershipLostError) {
-              throw error
-            }
-            if (this.isReleased) {
-              return
-            }
-            return new Promise<void>((resolve) => setTimeout(resolve, this.operationTimeoutMs)).then(() => {
-              if (!this.isReleased) {
-                return this.renewWithTimeout()
-              }
-            })
-          })
-          .catch((error) => {
-            this.renewalError = error
-            this.abortController.abort(error)
-          })
-          .then(() => {
-            if (!this.isReleased && !this.renewalError) {
-              this.scheduleRenewal()
+    this.renewalTimer = setTimeout(() => {
+      this.renewal = this.renewWithTimeout()
+        .catch((error) => {
+          if (error instanceof LockOwnershipLostError) {
+            throw error
+          }
+          if (this.isReleased) {
+            return
+          }
+          return new Promise<void>((resolve) => setTimeout(resolve, this.operationTimeoutMs)).then(() => {
+            if (!this.isReleased) {
+              return this.renewWithTimeout()
             }
           })
-      },
-      (this.ttl * 1000) / 2,
-    )
+        })
+        .catch((error) => {
+          this.renewalError = error
+          this.abortController.abort(error)
+        })
+        .then(() => {
+          if (!this.isReleased && !this.renewalError) {
+            this.scheduleRenewal()
+          }
+        })
+    }, (this.ttl * 1000) / 2)
   }
 
   private async renewWithTimeout(): Promise<void> {
