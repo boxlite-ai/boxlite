@@ -18,6 +18,8 @@ use boxlite::runtime::options::{BoxliteOptions, ExportOptions};
 use boxlite::runtime::types::BoxStatus;
 use boxlite::{BoxCommand, BoxliteRuntime, LiteBox};
 use tempfile::TempDir;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::writer::TestWriter;
 
 const BYTES_PER_MIB: f64 = 1024.0 * 1024.0;
 const GIB: u64 = 1024 * 1024 * 1024;
@@ -27,6 +29,8 @@ const DISK_SIZE_GB: u64 = 4;
 const WARMUP_RUNS: usize = 1;
 const SAMPLE_RUNS: usize = 3;
 const PAYLOAD_PATH: &str = "/root/boxlite-import-export-perf.bin";
+const DEFAULT_TRACING_FILTER: &str =
+    "boxlite::disk::qcow2=info,boxlite::litebox::clone_export=info";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CacheMode {
@@ -70,9 +74,21 @@ struct Statistics {
     mean: f64,
 }
 
+fn init_benchmark_tracing() {
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(DEFAULT_TRACING_FILTER));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_ansi(false)
+        .with_writer(TestWriter::with_stderr)
+        .try_init();
+}
+
 #[tokio::test]
 #[ignore = "manual 1 GiB performance benchmark; run make test:perf:import-export"]
 async fn test_import_export_1gib_benchmark() {
+    init_benchmark_tracing();
+
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -83,7 +99,7 @@ async fn test_import_export_1gib_benchmark() {
     let source = create_benchmark_source(&runtime).await;
     let source_disk_files = find_source_disk_files(&home.path, &source)
         .expect("locate source disk files for cache eviction");
-    let export_dir = TempDir::new_in("/tmp").expect("create benchmark export directory");
+    let export_dir = TempDir::new().expect("create benchmark export directory");
 
     eprintln!(
         "BENCHMARK_CONFIG payload_bytes={PAYLOAD_BYTES} disk_size_gb={DISK_SIZE_GB} \
@@ -158,11 +174,11 @@ async fn create_benchmark_source(runtime: &BoxliteRuntime) -> LiteBox {
     source.start().await.expect("start benchmark source box");
 
     let write_result = async {
-        let command = BoxCommand::new("sh").args([
-            "-c",
-            "dd if=/dev/urandom of=/root/boxlite-import-export-perf.bin \
-             bs=1048576 count=1024 2>/dev/null && sync",
-        ]);
+        let script = format!(
+            "dd if=/dev/urandom of={PAYLOAD_PATH} bs=1048576 count={} 2>/dev/null && sync",
+            PAYLOAD_BYTES / (1024 * 1024)
+        );
+        let command = BoxCommand::new("sh").args(["-c", &script]);
         let execution = source.exec(command).await?;
         execution.wait().await
     }
@@ -216,21 +232,31 @@ async fn run_mode(
             evict_file_caches(source_disk_files)?;
         }
 
+        let run_kind = if is_warmup { "warmup" } else { "sample" };
+        eprintln!(
+            "BENCHMARK_EXPORT_START mode={} kind={run_kind} iteration={iteration}",
+            mode.label()
+        );
         let export_started = Instant::now();
         let archive = source
             .export(ExportOptions::default(), &archive_path)
             .await
             .expect("export benchmark source");
         let export_elapsed = export_started.elapsed();
+        eprintln!(
+            "BENCHMARK_EXPORT_END mode={} kind={run_kind} iteration={iteration} export_ms={:.3}",
+            mode.label(),
+            export_elapsed.as_secs_f64() * 1000.0,
+        );
         let archive_bytes = fs::metadata(archive.path())
             .expect("read exported archive metadata")
             .len();
 
-        if mode.evicts_input_files() {
-            if let Err(error) = evict_file_cache(archive.path()) {
-                let _ = fs::remove_file(archive.path());
-                return Err(error);
-            }
+        if mode.evicts_input_files()
+            && let Err(error) = evict_file_cache(archive.path())
+        {
+            let _ = fs::remove_file(archive.path());
+            return Err(error);
         }
 
         let archive_path = archive.path().to_path_buf();
@@ -298,10 +324,8 @@ async fn validate_imported_payload(imported: &LiteBox) {
         .expect("start final imported benchmark box");
 
     let validation_result = async {
-        let command = BoxCommand::new("sh").args([
-            "-c",
-            "test \"$(wc -c < /root/boxlite-import-export-perf.bin)\" -eq 1073741824",
-        ]);
+        let script = format!("test \"$(wc -c < {PAYLOAD_PATH})\" -eq {PAYLOAD_BYTES}");
+        let command = BoxCommand::new("sh").args(["-c", &script]);
         let execution = imported.exec(command).await?;
         execution.wait().await
     }

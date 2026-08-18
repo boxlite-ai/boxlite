@@ -323,7 +323,7 @@ test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:ru
 # Manual release-mode benchmark. Kept out of every aggregate and CI suite.
 test\:perf\:import-export: runtime
 	@echo "📊 Running manual 1 GiB import/export benchmark (release, serial)..."
-	@echo "   Commit: $$(git rev-parse --short HEAD)"
+	@echo "   Commit: $$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 	@echo "   Ensure at least 8 GiB of free disk space and no competing I/O workload."
 	@cargo test --release -p boxlite --features krun,gvproxy \
 		--test import_export_benchmark -- --ignored --test-threads=1 --nocapture

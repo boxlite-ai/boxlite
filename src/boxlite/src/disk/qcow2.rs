@@ -462,9 +462,8 @@ impl Qcow2Helper {
             .write_all(&hdr)
             .map_err(|e| BoxliteError::Storage(format!("flatten: header write: {}", e)))?;
 
-        output
-            .sync_all()
-            .map_err(|e| BoxliteError::Storage(format!("flatten: sync: {}", e)))?;
+        // Export consumes this transient image immediately; syncing it here would
+        // only extend the VM quiesce window.
 
         tracing::info!(
             dst = %dst.display(),
