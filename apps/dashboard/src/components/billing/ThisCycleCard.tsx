@@ -7,6 +7,9 @@ import { OrganizationPlan } from '@/billing-api'
 import { Metric, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useOwnerTierQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
+import { useRunningBoxCountQuery } from '@/hooks/queries/useRunningBoxCountQuery'
+import { useTiersQuery } from '@/hooks/queries/useTiersQuery'
+import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { formatAmount } from '@/lib/utils'
 import { differenceInCalendarDays, format } from 'date-fns'
 
@@ -42,7 +45,19 @@ export function cycleFacts(plan: OrganizationPlan, now: Date) {
 export function ThisCycleCard() {
   const { data: tier, isLoading } = useOwnerTierQuery()
   const { data: wallet } = useOwnerWalletQuery()
+  const { data: tiers } = useTiersQuery()
+  const { selectedOrganization } = useSelectedOrganization()
   const plan = tier?.plan
+
+  // The ceiling is the catalog's, matched to the plan the organization is on
+  // rather than to its tier rung: the two ladders are independent axes, and a
+  // negotiated deal sits on no public rung at all. `null` on the rung means a
+  // deal with no stated ceiling, which is not a ceiling of zero.
+  const concurrencyLimit = tiers?.find((rung) => rung.planId === plan?.planId)?.concurrencyLimit ?? null
+  const { data: runningBoxes } = useRunningBoxCountQuery({
+    organizationId: selectedOrganization?.id,
+    enabled: Boolean(plan && concurrencyLimit != null),
+  })
 
   if (isLoading) {
     return (
@@ -84,6 +99,22 @@ export function ThisCycleCard() {
               <SegmentedBar used={plan.quotaConsumedCents} limit={plan.includedQuotaCents ?? 0} />
             </div>
             <PanelNote>Included in plan · resets each cycle · unused quota does not carry over</PanelNote>
+          </div>
+        )}
+
+        {concurrencyLimit != null && runningBoxes != null && (
+          <div className="border-t border-border px-[22px] py-4">
+            <div className="flex items-center gap-4 font-mono text-[12px]">
+              <span className="w-[100px] shrink-0 uppercase tracking-[0.5px] text-muted-foreground">Concurrent</span>
+              <span className="w-[140px] shrink-0 tabular-nums text-foreground">
+                {runningBoxes} / {concurrencyLimit}
+              </span>
+              <SegmentedBar used={runningBoxes} limit={concurrencyLimit} />
+            </div>
+            <PanelNote>
+              Boxes running now, against the plan&apos;s ceiling · not yet enforced, so this reports what is used rather
+              than what is refused
+            </PanelNote>
           </div>
         )}
 
