@@ -118,4 +118,16 @@ describe('ObjectStorageService', () => {
     await expect(service.getPushAccess('org-1')).rejects.toThrow(/S3_ACCESS_KEY and S3_SECRET_KEY/)
     expect(AssumeRoleCommand).not.toHaveBeenCalled()
   })
+
+  it('recognizes MinIO from its STS path when the data endpoint is loopback', async () => {
+    const service = buildService({
+      ...awsConfig,
+      's3.endpoint': 'http://127.0.0.1:9000',
+      's3.stsEndpoint': 'http://127.0.0.1:9000/minio/v1/assume-role',
+    })
+
+    await expect(service.getPushAccess('org-1')).rejects.toThrow(/S3_ACCESS_KEY and S3_SECRET_KEY/)
+    expect(STSClient).not.toHaveBeenCalled()
+    expect(AssumeRoleCommand).not.toHaveBeenCalled()
+  })
 })
