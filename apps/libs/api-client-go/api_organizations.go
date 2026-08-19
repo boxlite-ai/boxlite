@@ -188,6 +188,19 @@ type OrganizationsAPI interface {
 	GetOrganizationByBoxIdExecute(r OrganizationsAPIGetOrganizationByBoxIdRequest) (*Organization, *http.Response, error)
 
 	/*
+	GetOrganizationConcurrency Get current and historical organization concurrency
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param organizationId
+	@return OrganizationsAPIGetOrganizationConcurrencyRequest
+	*/
+	GetOrganizationConcurrency(ctx context.Context, organizationId string) OrganizationsAPIGetOrganizationConcurrencyRequest
+
+	// GetOrganizationConcurrencyExecute executes the request
+	//  @return OrganizationConcurrencyDto
+	GetOrganizationConcurrencyExecute(r OrganizationsAPIGetOrganizationConcurrencyRequest) (*OrganizationConcurrencyDto, *http.Response, error)
+
+	/*
 	GetOrganizationInvitationsCountForAuthenticatedUser Get count of organization invitations for authenticated user
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -324,6 +337,18 @@ type OrganizationsAPI interface {
 	// RegenerateProxyApiKeyExecute executes the request
 	//  @return RegenerateApiKeyResponse
 	RegenerateProxyApiKeyExecute(r OrganizationsAPIRegenerateProxyApiKeyRequest) (*RegenerateApiKeyResponse, *http.Response, error)
+
+	/*
+	SetOrganizationConcurrencyEntitlement Set the effective organization concurrency entitlement
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param organizationId
+	@return OrganizationsAPISetOrganizationConcurrencyEntitlementRequest
+	*/
+	SetOrganizationConcurrencyEntitlement(ctx context.Context, organizationId string) OrganizationsAPISetOrganizationConcurrencyEntitlementRequest
+
+	// SetOrganizationConcurrencyEntitlementExecute executes the request
+	SetOrganizationConcurrencyEntitlementExecute(r OrganizationsAPISetOrganizationConcurrencyEntitlementRequest) (*http.Response, error)
 
 	/*
 	SetOrganizationDefaultRegion Set default region for organization
@@ -1771,6 +1796,121 @@ func (a *OrganizationsAPIService) GetOrganizationByBoxIdExecute(r OrganizationsA
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
+type OrganizationsAPIGetOrganizationConcurrencyRequest struct {
+	ctx context.Context
+	ApiService OrganizationsAPI
+	organizationId string
+	hours *float32
+}
+
+// Rolling history window in hours
+func (r OrganizationsAPIGetOrganizationConcurrencyRequest) Hours(hours float32) OrganizationsAPIGetOrganizationConcurrencyRequest {
+	r.hours = &hours
+	return r
+}
+
+func (r OrganizationsAPIGetOrganizationConcurrencyRequest) Execute() (*OrganizationConcurrencyDto, *http.Response, error) {
+	return r.ApiService.GetOrganizationConcurrencyExecute(r)
+}
+
+/*
+GetOrganizationConcurrency Get current and historical organization concurrency
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param organizationId
+ @return OrganizationsAPIGetOrganizationConcurrencyRequest
+*/
+func (a *OrganizationsAPIService) GetOrganizationConcurrency(ctx context.Context, organizationId string) OrganizationsAPIGetOrganizationConcurrencyRequest {
+	return OrganizationsAPIGetOrganizationConcurrencyRequest{
+		ApiService: a,
+		ctx: ctx,
+		organizationId: organizationId,
+	}
+}
+
+// Execute executes the request
+//  @return OrganizationConcurrencyDto
+func (a *OrganizationsAPIService) GetOrganizationConcurrencyExecute(r OrganizationsAPIGetOrganizationConcurrencyRequest) (*OrganizationConcurrencyDto, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *OrganizationConcurrencyDto
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.GetOrganizationConcurrency")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/organizations/{organizationId}/concurrency"
+	localVarPath = strings.Replace(localVarPath, "{"+"organizationId"+"}", url.PathEscape(parameterValueToString(r.organizationId, "organizationId")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	if r.hours != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "hours", r.hours, "form", "")
+	} else {
+		var defaultValue float32 = 24
+		parameterAddToHeaderOrQuery(localVarQueryParams, "hours", defaultValue, "form", "")
+		r.hours = &defaultValue
+	}
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
 type OrganizationsAPIGetOrganizationInvitationsCountForAuthenticatedUserRequest struct {
 	ctx context.Context
 	ApiService OrganizationsAPI
@@ -2883,6 +3023,107 @@ func (a *OrganizationsAPIService) RegenerateProxyApiKeyExecute(r OrganizationsAP
 	}
 
 	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
+type OrganizationsAPISetOrganizationConcurrencyEntitlementRequest struct {
+	ctx context.Context
+	ApiService OrganizationsAPI
+	organizationId string
+	updateOrganizationConcurrencyEntitlementDto *UpdateOrganizationConcurrencyEntitlementDto
+}
+
+func (r OrganizationsAPISetOrganizationConcurrencyEntitlementRequest) UpdateOrganizationConcurrencyEntitlementDto(updateOrganizationConcurrencyEntitlementDto UpdateOrganizationConcurrencyEntitlementDto) OrganizationsAPISetOrganizationConcurrencyEntitlementRequest {
+	r.updateOrganizationConcurrencyEntitlementDto = &updateOrganizationConcurrencyEntitlementDto
+	return r
+}
+
+func (r OrganizationsAPISetOrganizationConcurrencyEntitlementRequest) Execute() (*http.Response, error) {
+	return r.ApiService.SetOrganizationConcurrencyEntitlementExecute(r)
+}
+
+/*
+SetOrganizationConcurrencyEntitlement Set the effective organization concurrency entitlement
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param organizationId
+ @return OrganizationsAPISetOrganizationConcurrencyEntitlementRequest
+*/
+func (a *OrganizationsAPIService) SetOrganizationConcurrencyEntitlement(ctx context.Context, organizationId string) OrganizationsAPISetOrganizationConcurrencyEntitlementRequest {
+	return OrganizationsAPISetOrganizationConcurrencyEntitlementRequest{
+		ApiService: a,
+		ctx: ctx,
+		organizationId: organizationId,
+	}
+}
+
+// Execute executes the request
+func (a *OrganizationsAPIService) SetOrganizationConcurrencyEntitlementExecute(r OrganizationsAPISetOrganizationConcurrencyEntitlementRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPut
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.SetOrganizationConcurrencyEntitlement")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/organizations/{organizationId}/concurrency-entitlement"
+	localVarPath = strings.Replace(localVarPath, "{"+"organizationId"+"}", url.PathEscape(parameterValueToString(r.organizationId, "organizationId")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.updateOrganizationConcurrencyEntitlementDto == nil {
+		return nil, reportError("updateOrganizationConcurrencyEntitlementDto is required and must be specified")
+	}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{"application/json"}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	// body params
+	localVarPostBody = r.updateOrganizationConcurrencyEntitlementDto
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
 }
 
 type OrganizationsAPISetOrganizationDefaultRegionRequest struct {
