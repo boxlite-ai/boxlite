@@ -503,6 +503,8 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             // client that attaches to the main command, which the SDKs cannot
             // do until they grow `attach()` (see sdk-run-semantics-api.md).
             tty: false,
+            // Capture stays off until the SDKs can also read the log back.
+            capture_logs: false,
             secrets,
         })
     }

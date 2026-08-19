@@ -35,6 +35,11 @@ const MIN_PRIVILEGED_CONTAINER_GUEST_VERSION: crate::portal::interfaces::guest::
 /// with no `/dev/kvm` while the caller believes nesting was granted.
 const MIN_DEVICE_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion = (0, 9, 8);
 
+/// Oldest guest release that honors `log_capture` on `Container.Init`. Same trap
+/// again, and the one the startup barrier cannot cover: an unaware guest never
+/// writes `begin`, so the caller would find no log and no failure either.
+const MIN_LOG_CAPTURE_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion = (0, 9, 8);
+
 pub struct GuestInitTask;
 
 struct GuestBootstrapConfig {
@@ -97,6 +102,11 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     } else {
                         Vec::new()
                     },
+                    log_capture: ctx
+                        .config
+                        .options
+                        .capture_logs
+                        .then(|| uuid::Uuid::new_v4().to_string()),
                     advanced: advanced.into(),
                 },
             };
@@ -155,6 +165,11 @@ async fn run_guest_init(
     if !bootstrap.container.devices.is_empty() {
         guest_interface
             .require_min_version(MIN_DEVICE_GUEST_VERSION)
+            .await?;
+    }
+    if bootstrap.container.log_capture.is_some() {
+        guest_interface
+            .require_min_version(MIN_LOG_CAPTURE_GUEST_VERSION)
             .await?;
     }
     guest_interface.init(bootstrap.guest).await?;
