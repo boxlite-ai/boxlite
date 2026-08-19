@@ -120,9 +120,7 @@ const Volumes: React.FC = () => {
   const rows = useMemo(() => {
     const needle = filter.trim().toLowerCase()
     if (!needle) return volumes
-    return volumes.filter(
-      (v) => v.name.toLowerCase().includes(needle) || v.id.toLowerCase().includes(needle),
-    )
+    return volumes.filter((v) => v.name.toLowerCase().includes(needle) || v.id.toLowerCase().includes(needle))
   }, [volumes, filter])
 
   const nameValid = !newName || NAME_REGEX.test(newName)

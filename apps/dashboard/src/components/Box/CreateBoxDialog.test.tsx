@@ -230,9 +230,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await rerenderOpen()
     const sizeGroup = document.querySelector('[aria-label="Size"]')
     if (!sizeGroup) throw new Error('expected the Size group to be rendered')
-    const medium = [...sizeGroup.querySelectorAll<HTMLButtonElement>('button')].find(
-      (b) => b.textContent === 'Medium',
-    )
+    const medium = [...sizeGroup.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Medium')
     expect(medium).toBeTruthy()
 
     await act(async () => medium?.dispatchEvent(new MouseEvent('click', { bubbles: true })))

@@ -286,6 +286,20 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
 
     let submitted = false
     try {
+      // Resolved BEFORE the transaction opens, never inside it. The import's
+      // resolver asks the scheduler for a target runner, which is a query: from
+      // inside the transaction it would need a *second* pool connection while
+      // this submission already holds the first, and the submit loop runs every
+      // pending migration concurrently — so at pool-size concurrency every
+      // connection ends up held by a transaction waiting for one only its peers
+      // could release. That deadlock starved the API's whole pool.
+      //
+      // `migration.box` is the row `findMigrations` already loaded, so this
+      // costs no extra query, and resolving from a copy that may have gone
+      // stale is safe: the locked re-read below runs ValidCheck against the
+      // same stamp and turns the migration around instead of submitting.
+      const target = await resolveTarget(migration.box, migration)
+
       submitted = await this.dataSource.transaction(async (entityManager) => {
         const box = await entityManager.findOne(Box, {
           where: { id: migration.boxId },
@@ -308,7 +322,6 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
           return false
         }
 
-        const target = await resolveTarget(box, current)
         await this.jobService.createJob(
           entityManager,
           jobType,

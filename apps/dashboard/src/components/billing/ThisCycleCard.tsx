@@ -6,7 +6,10 @@
 import { OrganizationPlan } from '@/billing-api'
 import { Metric, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useOwnerTierQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
+import { useOwnerPlanQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
+import { usePlansQuery } from '@/hooks/queries/usePlansQuery'
+import { useRunningBoxCountQuery } from '@/hooks/queries/useRunningBoxCountQuery'
+import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { formatAmount } from '@/lib/utils'
 import { differenceInCalendarDays, format } from 'date-fns'
 
@@ -34,15 +37,25 @@ export function cycleFacts(plan: OrganizationPlan, now: Date) {
 /**
  * The current billing cycle at a glance: quota consumed against the plan's
  * grant, the wallet that funds the overage, and when the cycle rolls. Every
- * number is the billing service's own — the plan block on the tier
- * read and the wallet — so the meter here is the meter settlement charges by.
- * Renders nothing when the organization has no live plan: there is no
- * cycle to show, and inventing one was the old demo's job.
+ * number is the billing service's own — the plan block and the wallet — so
+ * the meter here is the meter settlement charges by. Renders nothing when
+ * the organization has no live plan: there is no cycle to show, and
+ * inventing one was the old demo's job.
  */
 export function ThisCycleCard() {
-  const { data: tier, isLoading } = useOwnerTierQuery()
+  const { data: plan, isLoading } = useOwnerPlanQuery()
   const { data: wallet } = useOwnerWalletQuery()
-  const plan = tier?.plan
+  const { data: plans } = usePlansQuery()
+  const { selectedOrganization } = useSelectedOrganization()
+
+  // The ceiling is the catalog's, matched by plan id: a negotiated deal sits
+  // on no public catalog entry at all. `null` means a deal with no stated
+  // ceiling, which is not a ceiling of zero.
+  const concurrencyLimit = plans?.find((catalogPlan) => catalogPlan.id === plan?.planId)?.concurrencyLimit ?? null
+  const { data: runningBoxes } = useRunningBoxCountQuery({
+    organizationId: selectedOrganization?.id,
+    enabled: Boolean(plan && concurrencyLimit != null),
+  })
 
   if (isLoading) {
     return (
@@ -84,6 +97,22 @@ export function ThisCycleCard() {
               <SegmentedBar used={plan.quotaConsumedCents} limit={plan.includedQuotaCents ?? 0} />
             </div>
             <PanelNote>Included in plan · resets each cycle · unused quota does not carry over</PanelNote>
+          </div>
+        )}
+
+        {concurrencyLimit != null && runningBoxes != null && (
+          <div className="border-t border-border px-[22px] py-4">
+            <div className="flex items-center gap-4 font-mono text-[12px]">
+              <span className="w-[100px] shrink-0 uppercase tracking-[0.5px] text-muted-foreground">Concurrent</span>
+              <span className="w-[140px] shrink-0 tabular-nums text-foreground">
+                {runningBoxes} / {concurrencyLimit}
+              </span>
+              <SegmentedBar used={runningBoxes} limit={concurrencyLimit} />
+            </div>
+            <PanelNote>
+              Boxes running now, against the plan&apos;s ceiling · not yet enforced, so this reports what is used rather
+              than what is refused
+            </PanelNote>
           </div>
         )}
 

@@ -8,20 +8,21 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../queries/queryKeys'
 import { useApi } from '../useApi'
 
-interface DowngradeTierParams {
+interface UpgradePlanParams {
   organizationId: string
-  tier: number
+  planId: string
 }
 
-export const useDowngradeTierMutation = () => {
+/** Resolves to a Checkout URL for a first subscribe, or undefined when the change already applied. */
+export const useUpgradePlanMutation = () => {
   const { billingApi } = useApi()
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({ organizationId, tier }: DowngradeTierParams) => billingApi.downgradeTier(organizationId, tier),
+    mutationFn: ({ organizationId, planId }: UpgradePlanParams) => billingApi.upgradePlan(organizationId, planId),
     onSuccess: async (_data, { organizationId }) => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.organization.tier(organizationId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.organization.plan(organizationId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.organization.usage.overview(organizationId) }),
       ])
     },

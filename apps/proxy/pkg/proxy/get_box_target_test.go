@@ -5,19 +5,86 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
 	"github.com/gin-gonic/gin"
 )
+
+type failingSetCache[T any] struct{}
+
+func (failingSetCache[T]) Get(context.Context, string) (*T, error) {
+	return nil, errors.New("cache miss")
+}
+
+func (failingSetCache[T]) Set(context.Context, string, T, time.Duration) error {
+	return errors.New("cache unavailable")
+}
+
+func (failingSetCache[T]) Delete(context.Context, string) error {
+	return nil
+}
+
+func (failingSetCache[T]) Has(context.Context, string) (bool, error) {
+	return false, nil
+}
+
+func TestCacheErrorsDoNotLogPreviewCredentials(t *testing.T) {
+	previousLogger := slog.Default()
+	var output bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&output, nil)))
+	defer slog.SetDefault(previousLogger)
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte("true"))
+	}))
+	defer server.Close()
+
+	clientConfig := apiclient.NewConfiguration()
+	clientConfig.Servers[0].URL = server.URL
+	proxy := &Proxy{
+		apiclient:            apiclient.NewAPIClient(clientConfig),
+		boxPublicCache:       failingSetCache[bool]{},
+		boxAuthKeyValidCache: failingSetCache[bool]{},
+	}
+	signedToken := "signed-preview-token-secret"
+	authKey := "auth-key-secret"
+
+	if _, err := proxy.getBoxPublic(context.Background(), signedToken); err != nil {
+		t.Fatalf("getBoxPublic() error = %v", err)
+	}
+	if _, err := proxy.validateAndCache(context.Background(), signedToken, authKey, func() (bool, error) {
+		return true, nil
+	}); err != nil {
+		t.Fatalf("validateAndCache() error = %v", err)
+	}
+
+	logs := output.String()
+	for _, secret := range []string{signedToken, authKey} {
+		if strings.Contains(logs, secret) {
+			t.Errorf("cache error log contains preview credential %q", secret)
+		}
+	}
+	for _, message := range []string{"Failed to set box public in cache", "Failed to set box auth key valid in cache"} {
+		if !strings.Contains(logs, message) {
+			t.Errorf("cache error log does not contain %q", message)
+		}
+	}
+}
 
 func TestRequestEscapedPathPreservesEscapedSlash(t *testing.T) {
 	req := httptest.NewRequest("GET", "https://3999-token.proxy.dev.boxlite.ai/files/a%2Fb?download=1", nil)

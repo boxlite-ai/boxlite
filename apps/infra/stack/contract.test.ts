@@ -21,6 +21,7 @@ const stackSource = [
 ].join('\n')
 const source = `${entrypointSource}\n${stackSource}`
 const environmentExample = readFileSync(new URL('../.env.example', import.meta.url), 'utf8')
+const infraLocalNative = readFileSync(new URL('../../infra-local/compose/native.py', import.meta.url), 'utf8')
 const readme = [
   readFileSync(new URL('../README.md', import.meta.url), 'utf8'),
   readFileSync(new URL('../docs/deployment.md', import.meta.url), 'utf8'),
@@ -327,6 +328,17 @@ test('passes both the internal and public OIDC issuers to Proxy', () => {
 
   assert.match(proxyService, /OIDC_DOMAIN: oidcIssuer,/)
   assert.match(proxyService, /publicOidcIssuer[\s\S]*OIDC_PUBLIC_DOMAIN: publicOidcIssuer/)
+})
+
+test('enables Proxy OTLP logging in hosted and local deployments', () => {
+  const proxyService = configSection("new sst.aws.Service('Proxy'", '// ─── 8.')
+
+  assert.match(proxyService, /OTEL_LOGGING_ENABLED: envOr\('OTEL_LOGGING_ENABLED', 'true'\)/)
+  assert.match(proxyService, /OTEL_EXPORTER_OTLP_ENDPOINT: envOr\('OTEL_EXPORTER_OTLP_ENDPOINT'/)
+  assert.match(
+    infraLocalNative,
+    /"proxy": _Component\([\s\S]*"OTEL_LOGGING_ENABLED": "true"[\s\S]*"OTEL_EXPORTER_OTLP_ENDPOINT": _OTEL_OTLP_HTTP_URL/,
+  )
 })
 
 test('requires the OIDC client ID through the SST secret store', () => {

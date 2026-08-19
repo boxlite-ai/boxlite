@@ -12,12 +12,7 @@ import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
-import {
-  formatLifecycleSeconds,
-  validateLifecyclePolicy,
-  validateMounts,
-  type BoxVolumeMount,
-} from '@/lib/cloudBox'
+import { formatLifecycleSeconds, validateLifecyclePolicy, validateMounts, type BoxVolumeMount } from '@/lib/cloudBox'
 import { useVolumesQuery } from '@/hooks/queries/useVolumesQuery'
 import { VolumeState } from '@boxlite-ai/api-client'
 import { cn } from '@/lib/utils'
@@ -815,7 +810,9 @@ export const CreateBoxDialog = ({
 
             {/* Disk above is scratch space that dies with the box; a volume is
                 the opposite of that, which is the one fact worth stating here. */}
-            <PanelNote>A volume persists independently of this box and can be mounted into another box later.</PanelNote>
+            <PanelNote>
+              A volume persists independently of this box and can be mounted into another box later.
+            </PanelNote>
 
             {mounts.length > 0 && (
               <div className="flex flex-col gap-[9px]">
@@ -923,7 +920,9 @@ export const CreateBoxDialog = ({
           <button
             type="button"
             onClick={handleCreate}
-            disabled={submitting || !selectedOrganization?.id || !nameValid || Boolean(lifecycleError) || Boolean(mountError)}
+            disabled={
+              submitting || !selectedOrganization?.id || !nameValid || Boolean(lifecycleError) || Boolean(mountError)
+            }
             className="bg-primary px-5 py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-50 sm:py-[10px]"
           >
             {submitting ? 'Creating…' : 'Create Box'}

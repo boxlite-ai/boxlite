@@ -4,18 +4,15 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Invoice } from '@/billing-api/types/Invoice'
 import { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
 import { AsciiButton, AsciiChip, BRAND, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
 import { InvoicesTable } from '@/components/Invoices'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
-import { useCreateInvoicePaymentUrlMutation } from '@/hooks/mutations/useCreateInvoicePaymentUrlMutation'
 import { useRedeemCouponMutation } from '@/hooks/mutations/useRedeemCouponMutation'
 import { useSetAutomaticTopUpMutation } from '@/hooks/mutations/useSetAutomaticTopUpMutation'
 import { useTopUpWalletMutation } from '@/hooks/mutations/useTopUpWalletMutation'
-import { useVoidInvoiceMutation } from '@/hooks/mutations/useVoidInvoiceMutation'
 import {
   useFetchOwnerCheckoutUrlQuery,
   useIsOwnerCheckoutUrlFetching,
@@ -41,7 +38,7 @@ export function WalletSection() {
   const [redeemCouponError, setRedeemCouponError] = useState<string | null>(null)
   const [redeemCouponSuccess, setRedeemCouponSuccess] = useState<string | null>(null)
   const [oneTimeTopUpAmount, setOneTimeTopUpAmount] = useState<number | undefined>(undefined)
-  const [selectedPreset, setSelectedPreset] = useState<number | null>(null)
+  const [selectedPreset, setSelectedPreset] = useState<number | null>(100)
   const [invoicesPagination, setInvoicesPagination] = useState({
     pageIndex: 0,
     pageSize: DEFAULT_PAGE_SIZE,
@@ -57,8 +54,6 @@ export function WalletSection() {
   const setAutomaticTopUpMutation = useSetAutomaticTopUpMutation()
   const redeemCouponMutation = useRedeemCouponMutation()
   const topUpWalletMutation = useTopUpWalletMutation()
-  const createInvoicePaymentUrlMutation = useCreateInvoicePaymentUrlMutation()
-  const voidInvoiceMutation = useVoidInvoiceMutation()
 
   useEffect(() => {
     if (wallet?.automaticTopUp) {
@@ -177,68 +172,9 @@ export function WalletSection() {
     }
   }, [selectedOrganization, selectedPreset, oneTimeTopUpAmount, topUpWalletMutation])
 
-  const handlePayInvoice = useCallback(
-    async (invoice: Invoice) => {
-      if (!selectedOrganization) {
-        return
-      }
-
-      if (invoice.paymentStatus === 'pending' && invoice.totalDueAmountCents > 0) {
-        const newWindow = window.open('', '_blank')
-        try {
-          const result = await createInvoicePaymentUrlMutation.mutateAsync({
-            organizationId: selectedOrganization.id,
-            invoiceId: invoice.id,
-          })
-          if (newWindow) {
-            newWindow.location.href = result.url
-          }
-        } catch (error) {
-          newWindow?.close()
-          toast.error('Failed to open invoice', {
-            description: String(error),
-          })
-        }
-      }
-    },
-    [selectedOrganization, createInvoicePaymentUrlMutation],
-  )
-
-  const handleViewInvoice = useCallback(
-    async (invoice: Invoice) => {
-      if (!selectedOrganization) {
-        return
-      }
-
-      window.open(invoice.fileUrl, '_blank')
-    },
-    [selectedOrganization],
-  )
-
-  const handleVoidInvoice = useCallback(
-    async (invoice: Invoice) => {
-      if (!selectedOrganization) {
-        return
-      }
-      try {
-        await voidInvoiceMutation.mutateAsync({
-          organizationId: selectedOrganization.id,
-          invoiceId: invoice.id,
-        })
-        toast.success('Invoice voided successfully')
-      } catch (error) {
-        toast.error('Failed to void invoice', {
-          description: String(error),
-        })
-      }
-    },
-    [selectedOrganization, voidInvoiceMutation],
-  )
-
   const isBillingLoading = walletQuery.isLoading && billingPortalUrlQuery.isLoading
   const topUpEnabled =
     wallet?.creditCardConnected && !topUpWalletMutation.isPending && (selectedPreset || oneTimeTopUpAmount)
-  const spentCents = (wallet?.balanceCents ?? 0) - (wallet?.ongoingBalanceCents ?? 0)
   const autoReloadEnabled = (automaticTopUp?.thresholdAmount ?? 0) > 0 || (automaticTopUp?.targetAmount ?? 0) > 0
 
   return (
@@ -279,13 +215,17 @@ export function WalletSection() {
               </div>
 
               <div className="mt-4">
-                <div className="mb-1.5 flex items-center justify-between font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
-                  <span>Spent this month</span>
-                  <span className="tabular-nums">
-                    {formatAmount(spentCents)} / {formatAmount(wallet.balanceCents)}
-                  </span>
-                </div>
-                <SegmentedBar used={spentCents} limit={wallet.balanceCents} />
+                {wallet.creditGrantedCents !== undefined && wallet.creditRemainingCents !== undefined && (
+                  <>
+                    <div className="mb-1.5 flex items-center justify-between font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
+                      <span>Promotional credit remaining</span>
+                      <span className="tabular-nums">
+                        {formatAmount(wallet.creditRemainingCents)} / {formatAmount(wallet.creditGrantedCents)}
+                      </span>
+                    </div>
+                    <SegmentedBar used={wallet.creditRemainingCents} limit={wallet.creditGrantedCents} />
+                  </>
+                )}
                 {billingPortalUrlQuery.isLoading ? (
                   <Skeleton className="mt-2 h-4 w-[180px]" />
                 ) : billingPortalUrl ? (
@@ -307,7 +247,7 @@ export function WalletSection() {
               <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">Add funds</span>
               <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                 <div className="grid grid-cols-2 gap-2 sm:contents">
-                  {[25, 500, 1000, 2000].map((amount) => (
+                  {[25, 100, 500, 1000].map((amount) => (
                     <AsciiChip
                       key={amount}
                       selected={selectedPreset === amount}
@@ -505,7 +445,7 @@ export function WalletSection() {
 
           <section>
             <SectionTitle
-              title="Invoices"
+              title="Usage Settlements"
               count={invoicesQuery.data?.totalItems ? `${invoicesQuery.data.totalItems} records` : undefined}
             />
             <InvoicesTable
@@ -515,11 +455,8 @@ export function WalletSection() {
               totalItems={invoicesQuery.data?.totalItems ?? 0}
               onPaginationChange={setInvoicesPagination}
               loading={invoicesQuery.isLoading}
-              onViewInvoice={handleViewInvoice}
-              onVoidInvoice={handleVoidInvoice}
-              onPayInvoice={handlePayInvoice}
             />
-            <PanelNote>Invoices are generated automatically and sent to your billing emails.</PanelNote>
+            <PanelNote>Settled usage cost, split by the plan quota and wallet funds that paid it</PanelNote>
           </section>
         </div>
       )}

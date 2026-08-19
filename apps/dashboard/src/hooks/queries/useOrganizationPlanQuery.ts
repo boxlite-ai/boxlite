@@ -4,13 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import type { OrganizationTier } from '@/billing-api'
+import type { OrganizationPlan } from '@/billing-api'
 import { useQuery } from '@tanstack/react-query'
 import { useApi } from '../useApi'
 import { useConfig } from '../useConfig'
 import { queryKeys } from './queryKeys'
 
-export const useOrganizationTierQuery = ({
+export const useOrganizationPlanQuery = ({
   organizationId,
   enabled = true,
 }: {
@@ -20,9 +20,9 @@ export const useOrganizationTierQuery = ({
   const { billingApi } = useApi()
   const config = useConfig()
 
-  return useQuery<OrganizationTier | null>({
-    queryKey: queryKeys.organization.tier(organizationId),
-    queryFn: () => billingApi.getOrganizationTier(organizationId),
+  return useQuery<OrganizationPlan | null>({
+    queryKey: queryKeys.organization.plan(organizationId),
+    queryFn: () => billingApi.getOrganizationPlan(organizationId),
     enabled: Boolean(enabled && organizationId && config.billingApiUrl),
   })
 }

@@ -92,13 +92,29 @@ function makeHarness(
     createQueryBuilder,
   }
   const find = jest.fn().mockResolvedValue(migrations)
+  // Whether a transaction is open right now, and what each target resolution
+  // saw: a resolver that queries from inside the transaction needs a second
+  // pool connection while the first is still held, which deadlocks the pool
+  // under fan-out.
+  let inTransaction = false
+  const resolverSawTransaction: boolean[] = []
   const dataSource = {
     getRepository: jest.fn().mockReturnValue({ find }),
-    transaction: jest.fn().mockImplementation((run: any) => run(entityManager)),
+    transaction: jest.fn().mockImplementation(async (run: any) => {
+      inTransaction = true
+      try {
+        return await run(entityManager)
+      } finally {
+        inTransaction = false
+      }
+    }),
     manager: entityManager,
   } as any
   const runnerService = {
-    getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: TARGET_RUNNER }),
+    getRandomAvailableRunner: jest.fn().mockImplementation(async () => {
+      resolverSawTransaction.push(inTransaction)
+      return { id: TARGET_RUNNER }
+    }),
   } as any
   const jobService = {
     createJob: jest.fn().mockResolvedValue(undefined),
@@ -119,6 +135,7 @@ function makeHarness(
     jobService,
     redisLockProvider,
     writes,
+    resolverSawTransaction,
   }
 }
 
@@ -209,6 +226,40 @@ describe('BoxMigrationManager submitter loop', () => {
       boxClass: migration.box.class,
       excludedRunnerIds: [SOURCE_RUNNER],
     })
+    expect(h.jobService.createJob).toHaveBeenCalledWith(
+      h.entityManager,
+      JobType.IMPORT_BOX,
+      TARGET_RUNNER,
+      ResourceType.BACKUP,
+      BOX_ID,
+      { arcPath: 'box-migrations/box-1.boxlite' },
+    )
+  })
+
+  /**
+   * The import resolver asks the scheduler for a target runner, which is a
+   * query. Issued from inside `submitValidated`'s transaction it needs a
+   * *second* pool connection while the transaction still holds the first, and
+   * the submit loop fans out over every pending migration at once — so at
+   * pool-size concurrency (10 by default, `DB_POOL_MAX` unset) every connection
+   * ends up held by a transaction waiting for one only its peers could release.
+   *
+   * Observed on the local stack: 10 sessions `idle in transaction`, every
+   * IMPORT_BOX submission dying with `QueryRunnerAlreadyReleasedError` on the
+   * job insert, `GET /v1/{prefix}/boxes` timing out at 60s while
+   * `/api/health` answered in 1ms, and the drained runner never emptying.
+   */
+  it('resolves the import target before opening the transaction', async () => {
+    const migration = makeMigration(BoxMigrationState.PENDING_IMPORT, {
+      arcPath: 'box-migrations/box-1.boxlite',
+    })
+    const h = makeHarness([migration])
+
+    await h.manager.submitMigrationJobs()
+
+    expect(h.runnerService.getRandomAvailableRunner).toHaveBeenCalledTimes(1)
+    expect(h.resolverSawTransaction).toEqual([false])
+    // Still submitted, and still inside the transaction that holds the locks.
     expect(h.jobService.createJob).toHaveBeenCalledWith(
       h.entityManager,
       JobType.IMPORT_BOX,
