@@ -5,7 +5,8 @@
  */
 
 import { OrganizationEmail, OrganizationPlan, OrganizationWallet } from '@/billing-api'
-import { Invoice, PaginatedInvoices, PaymentUrl } from '@/billing-api/types/Invoice'
+import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
+import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
 import { Plan } from '@/billing-api/types/Plan'
 import { http, HttpResponse } from 'msw'
 import {
@@ -143,7 +144,8 @@ export const handlers = [
       name: 'Wallet',
       creditCardConnected: false,
       automaticTopUp: undefined,
-      hasFailedOrPendingInvoice: true,
+      creditGrantedCents: 10_000,
+      creditRemainingCents: 1_000,
     })
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
@@ -206,7 +208,7 @@ export const handlers = [
       },
     ])
   }),
-  http.get(`${BILLING_API_URL}/organization/:organizationId/invoices`, async ({ request, params }) => {
+  http.get(`${BILLING_API_URL}/organization/:organizationId/invoices`, async ({ request }) => {
     const url = new URL(request.url)
     const page = parseInt(url.searchParams.get('page') || '1', 10)
     const perPage = parseInt(url.searchParams.get('perPage') || '50', 10)
@@ -215,62 +217,38 @@ export const handlers = [
       {
         id: 'inv-001',
         number: 'INV-2026-001',
-        currency: 'USD',
-        issuingDate: new Date('2026-01-01').toISOString(),
-        paymentDueDate: new Date('2026-01-15').toISOString(),
-        paymentOverdue: false,
-        paymentStatus: 'succeeded',
         sequentialId: 1,
-        status: 'finalized',
+        chargedAt: new Date('2026-01-01').toISOString(),
         totalAmountCents: 9847,
-        totalDueAmountCents: 0,
-        type: 'subscription',
-        fileUrl: 'https://example.com/invoices/inv-001.pdf',
+        quotaCoveredCents: 8_000,
+        voided: false,
       },
       {
         id: 'inv-004',
         number: 'INV-2025-010',
-        currency: 'USD',
-        issuingDate: new Date('2025-10-01').toISOString(),
-        paymentDueDate: new Date('2025-10-15').toISOString(),
-        paymentOverdue: true,
-        paymentStatus: 'pending',
         sequentialId: 10,
-        status: 'finalized',
+        chargedAt: new Date('2025-10-01').toISOString(),
         totalAmountCents: 12150,
-        totalDueAmountCents: 12150,
-        type: 'subscription',
-        fileUrl: 'https://example.com/invoices/inv-004.pdf',
+        quotaCoveredCents: 12_150,
+        voided: false,
       },
       {
         id: 'inv-009',
         number: 'INV-2030-010',
-        currency: 'USD',
-        issuingDate: new Date('2025-10-01').toISOString(),
-        paymentDueDate: new Date('2030-10-15').toISOString(),
-        paymentOverdue: false,
-        paymentStatus: 'pending',
         sequentialId: 10,
-        status: 'pending',
+        chargedAt: new Date('2025-10-01').toISOString(),
         totalAmountCents: 12150,
-        totalDueAmountCents: 12150,
-        type: 'subscription',
-        fileUrl: 'https://example.com/invoices/inv-004.pdf',
+        quotaCoveredCents: 10_000,
+        voided: true,
       },
       {
         id: 'inv-005',
         number: 'INV-2025-009',
-        currency: 'USD',
-        issuingDate: new Date('2025-09-01').toISOString(),
-        paymentDueDate: new Date('2025-09-15').toISOString(),
-        paymentOverdue: false,
-        paymentStatus: 'failed',
         sequentialId: 9,
-        status: 'failed',
+        chargedAt: new Date('2025-09-01').toISOString(),
         totalAmountCents: 8900,
-        totalDueAmountCents: 0,
-        type: 'add_on',
-        fileUrl: 'https://example.com/invoices/inv-005.pdf',
+        quotaCoveredCents: 0,
+        voided: false,
       },
     ]
 
@@ -285,14 +263,6 @@ export const handlers = [
       totalItems,
       totalPages,
     })
-  }),
-  http.post(`${BILLING_API_URL}/organization/:organizationId/invoices/:invoiceId/payment-url`, async () => {
-    return HttpResponse.json<PaymentUrl>({
-      url: 'https://checkout.stripe.com/pay/cs_test_1234567890',
-    })
-  }),
-  http.post(`${BILLING_API_URL}/organization/:organizationId/invoices/:invoiceId/void`, async () => {
-    return HttpResponse.json({})
   }),
   http.post(`${BILLING_API_URL}/organization/:organizationId/wallet/top-up`, async () => {
     return HttpResponse.json<PaymentUrl>({

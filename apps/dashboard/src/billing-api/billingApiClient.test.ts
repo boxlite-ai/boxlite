@@ -111,3 +111,29 @@ describe('getUsageFundingSeries', () => {
     ])
   })
 })
+
+describe('PR 829 real-data parity: settlement invoices', () => {
+  it('keeps only the read surface that current Commerce supports', async () => {
+    const response = {
+      items: [
+        {
+          id: 'invoice-1',
+          number: 'INV-000001',
+          sequentialId: 1,
+          chargedAt: '2026-08-18T12:00:00.000Z',
+          totalAmountCents: 1_250,
+          quotaCoveredCents: 1_000,
+          voided: false,
+        },
+      ],
+      totalItems: 1,
+      totalPages: 1,
+    }
+    const api = serve(response)
+
+    await expect(api.listInvoices('org-1', 2, 25)).resolves.toEqual(response)
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/invoices?page=2&perPage=25')
+    expect(api).not.toHaveProperty('createInvoicePaymentUrl')
+    expect(api).not.toHaveProperty('voidInvoice')
+  })
+})

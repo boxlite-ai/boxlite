@@ -11,7 +11,8 @@ export interface OrganizationWallet {
   creditCardConnected: boolean
 
   automaticTopUp?: AutomaticTopUp
-  hasFailedOrPendingInvoice?: boolean
+  creditGrantedCents?: number
+  creditRemainingCents?: number
 }
 
 export type AutomaticTopUp = {
@@ -21,4 +22,8 @@ export type AutomaticTopUp = {
 
 export interface WalletTopUpRequest {
   amountCents: number
+}
+
+export interface PaymentUrl {
+  url: string
 }

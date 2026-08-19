@@ -41,6 +41,19 @@ function SpecRow({ label, value }: { label: string; value: string }) {
   )
 }
 
+/** PR 829's cosmetic tier label and quota leverage, derived from catalog order and money. */
+export function planCardDisplay(plan: Plan, catalogIndex: number): { tierLabel: string; leverage: string } {
+  const leverage =
+    plan.priceMonthlyCents && plan.includedQuotaCents
+      ? `${(Math.floor((plan.includedQuotaCents / plan.priceMonthlyCents) * 100) / 100)
+          .toFixed(2)
+          .replace(/0+$/, '')
+          .replace(/\.$/, '')}×`
+      : '—'
+
+  return { tierLabel: `T${catalogIndex + 1}`, leverage }
+}
+
 /** With no plan yet, $0/mo is the floor — every real plan is an upgrade. */
 function isUpgradeTo(plan: Plan, currentPriceCents: number | null): boolean {
   return (plan.priceMonthlyCents ?? 0) > (currentPriceCents ?? 0)
@@ -50,17 +63,20 @@ function PlanCard({
   plan,
   currentPlanId,
   currentPriceCents,
+  catalogIndex,
   onSwitch,
   pending,
 }: {
   plan: Plan
   currentPlanId?: string
   currentPriceCents: number | null
+  catalogIndex: number
   onSwitch: (plan: Plan) => void
   pending: boolean
 }) {
   const isActive = plan.id === currentPlanId
   const isUpgrade = isUpgradeTo(plan, currentPriceCents)
+  const display = planCardDisplay(plan, catalogIndex)
 
   return (
     <div
@@ -70,7 +86,7 @@ function PlanCard({
     >
       <div className="mb-4 flex items-center justify-between">
         <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
-          <span style={{ color: BRAND }}>▸</span> {plan.name}
+          <span style={{ color: BRAND }}>▸</span> {display.tierLabel} · {plan.name}
         </span>
         {isActive && (
           <span className="bg-foreground px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[1px] text-background">
@@ -87,12 +103,13 @@ function PlanCard({
 
       <div className="mb-5 flex-1 divide-y divide-border/40">
         <SpecRow
-          label="Included quota"
+          label="Quota"
           value={plan.includedQuotaCents != null ? formatWholeDollars(plan.includedQuotaCents) : 'Unlimited'}
         />
+        <SpecRow label="Leverage" value={display.leverage} />
         <SpecRow
-          label="Concurrency limit"
-          value={plan.concurrencyLimit != null ? `${plan.concurrencyLimit} boxes` : 'No limit'}
+          label="Concurrency"
+          value={plan.concurrencyLimit != null ? `${plan.concurrencyLimit} boxes` : 'Unlimited'}
         />
       </div>
 
@@ -117,12 +134,12 @@ function PlanCard({
  * The open-ended plan belongs beside the fixed catalogue, but its dashed
  * border makes clear that its limits and price are scoped rather than preset.
  */
-export function CustomPlanCard() {
+export function CustomPlanCard({ catalogIndex = 3 }: { catalogIndex?: number }) {
   return (
     <div className="flex flex-col border border-dashed border-brand/50 bg-card px-[22px] py-5 transition-colors hover:border-brand">
       <div className="mb-4 flex items-center justify-between gap-3">
         <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
-          <span style={{ color: BRAND }}>▸</span> Custom
+          <span style={{ color: BRAND }}>▸</span> T{catalogIndex + 1} · Custom
         </span>
         <span className="border border-brand/30 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[1px] text-brand">
           by request
@@ -132,13 +149,14 @@ export function CustomPlanCard() {
       <div className="mb-4">
         <span className="font-mono text-[26px] font-semibold leading-none tracking-tight text-foreground">Custom</span>
         <p className="mt-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
-          Tailored limits, compliance, and support.
+          Talk with sales about a plan for your workload.
         </p>
       </div>
 
       <div className="mb-5 flex-1 divide-y divide-border/40">
-        <SpecRow label="Included quota" value="Tailored" />
-        <SpecRow label="Concurrency limit" value="Tailored" />
+        <SpecRow label="Quota" value="—" />
+        <SpecRow label="Leverage" value="—" />
+        <SpecRow label="Concurrency" value="—" />
       </div>
 
       <a
@@ -216,17 +234,18 @@ export function PlanCards({
   return (
     <>
       <div className="grid grid-cols-1 gap-[14px] md:grid-cols-2 xl:grid-cols-4">
-        {plans.map((plan) => (
+        {plans.map((plan, catalogIndex) => (
           <PlanCard
             key={plan.id}
             plan={plan}
             currentPlanId={currentPlanId}
             currentPriceCents={currentPriceCents}
+            catalogIndex={catalogIndex}
             onSwitch={setConfirmPlan}
             pending={pending}
           />
         ))}
-        <CustomPlanCard />
+        <CustomPlanCard catalogIndex={plans.length} />
       </div>
 
       <AlertDialog open={!!confirmPlan} onOpenChange={(open) => !open && setConfirmPlan(null)}>

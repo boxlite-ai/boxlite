@@ -3,28 +3,29 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { OrganizationPlan, OrganizationWallet } from '@/billing-api'
+import { OrganizationPlan, OrganizationWallet, Plan } from '@/billing-api'
 import { BRAND, Metric, Panel } from '@/components/ascii'
-import { formatAmount } from '@/lib/utils'
-import { cycleFacts } from './ThisCycleCard'
+import { formatAmount, formatWholeDollars } from '@/lib/utils'
 
 /**
  * Active-plan banner: a header strip naming the current plan, then the cycle
- * figures — prepaid balance, wallet spend since the last top-up, and days
- * until the cycle rolls. The plan's own quota meter and concurrency reading
- * live on the Usage tab's This Cycle card; this card keeps the identity view
- * of the same wallet and plan.
+ * figures from the organization plan and wallet. Catalog data is joined by
+ * plan id for the self-serve price and cosmetic tier label; negotiated plans
+ * remain honest when they have no public catalog row.
  */
 
 export function CycleOverview({
   wallet,
   organizationPlan,
+  catalogPlan,
+  catalogIndex,
 }: {
   wallet: OrganizationWallet
   organizationPlan?: OrganizationPlan | null
+  catalogPlan?: Plan
+  catalogIndex?: number
 }) {
-  const spentCents = wallet.balanceCents - wallet.ongoingBalanceCents
-  const daysLeft = organizationPlan ? cycleFacts(organizationPlan, new Date()).daysLeft : null
+  const tierLabel = catalogIndex === undefined ? 'Plan' : `T${catalogIndex + 1}`
 
   return (
     <Panel>
@@ -33,7 +34,7 @@ export function CycleOverview({
         <div className="flex items-center gap-3">
           {organizationPlan && (
             <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
-              <span style={{ color: BRAND }}>▸</span> Plan
+              <span style={{ color: BRAND }}>▸</span> {tierLabel}
             </span>
           )}
           <span className="font-mono text-[18px] font-semibold tracking-tight text-foreground">
@@ -46,18 +47,35 @@ export function CycleOverview({
             </span>
           )}
         </div>
+        {catalogPlan?.priceMonthlyCents != null && (
+          <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+            {formatWholeDollars(catalogPlan.priceMonthlyCents)}/mo
+          </span>
+        )}
       </div>
 
       {/* Cycle figures */}
       <div className="grid grid-cols-2 gap-5 border-t border-border px-[22px] py-5 sm:flex sm:flex-row sm:gap-14">
-        <Metric label="Wallet balance" value={formatAmount(wallet.ongoingBalanceCents)} sub="prepaid balance" />
         <Metric
-          label="Spent this month"
-          value={formatAmount(spentCents)}
-          sub={`of ${formatAmount(wallet.balanceCents)} added`}
+          label="Subscription"
+          value={organizationPlan?.planName ?? 'No plan'}
+          sub={
+            catalogPlan?.priceMonthlyCents != null
+              ? `${formatWholeDollars(catalogPlan.priceMonthlyCents)}/mo`
+              : undefined
+          }
         />
-        {organizationPlan && daysLeft !== null && (
-          <Metric label="Renews in" value={`${daysLeft}`} sub={daysLeft === 1 ? 'day' : 'days'} />
+        <Metric label="Wallet balance" value={formatAmount(wallet.ongoingBalanceCents)} />
+        {organizationPlan && (
+          <Metric
+            label="Quota consumed"
+            value={formatAmount(organizationPlan.quotaConsumedCents)}
+            sub={
+              organizationPlan.includedQuotaCents == null
+                ? 'unlimited quota'
+                : `/ ${formatAmount(organizationPlan.includedQuotaCents)}`
+            }
+          />
         )}
       </div>
     </Panel>

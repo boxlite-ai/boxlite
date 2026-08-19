@@ -61,12 +61,8 @@ interface NavItem {
 // Billing is one entry either way: the page shows the real surfaces where a billing
 // service is deployed and the placeholder otherwise. Which of those surfaces a member
 // may see is decided in the page, not here.
-// Volumes sits here rather than under Boxes because its job is inventory: a
-// volume outlives every box that mounts it, and the reason the page exists at
-// all is that nobody can currently see which ones have been left behind.
 const PRIMARY_NAV_ITEMS: NavItem[] = [
   { label: 'Boxes', path: RoutePath.BOXES },
-  { label: 'Volumes', path: RoutePath.VOLUMES },
   { label: 'Billing', path: RoutePath.BILLING },
 ]
 

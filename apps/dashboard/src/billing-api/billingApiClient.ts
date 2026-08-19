@@ -12,8 +12,8 @@ import {
   OrganizationPlan,
   OrganizationWallet,
   PaginatedInvoices,
-  Plan,
   PaymentUrl,
+  Plan,
   SeriesGranularity,
   UsageFundingBucket,
   WalletTopUpRequest,
@@ -150,15 +150,6 @@ export class BillingApiClient {
     const url = `/organization/${organizationId}/invoices${queryString ? `?${queryString}` : ''}`
     const response = await this.axiosInstance.get(url)
     return response.data
-  }
-
-  public async createInvoicePaymentUrl(organizationId: string, invoiceId: string): Promise<PaymentUrl> {
-    const response = await this.axiosInstance.post(`/organization/${organizationId}/invoices/${invoiceId}/payment-url`)
-    return response.data
-  }
-
-  public async voidInvoice(organizationId: string, invoiceId: string): Promise<void> {
-    await this.axiosInstance.post(`/organization/${organizationId}/invoices/${invoiceId}/void`)
   }
 
   public async topUpWallet(organizationId: string, amountCents: number): Promise<PaymentUrl> {

@@ -113,7 +113,7 @@ export function CostOverTime() {
             </EmptyContent>
           </Empty>
         ) : active.isLoading ? (
-          <div className="flex h-[300px] items-center justify-center">
+          <div className="flex h-[180px] items-center justify-center">
             <Spinner className="size-6" />
           </div>
         ) : view === 'chart' && total === 0 ? (
@@ -128,7 +128,15 @@ export function CostOverTime() {
           </Empty>
         ) : view === 'chart' ? (
           <div className="px-[22px] py-5">
-            <ChartContainer config={chartConfig} className="aspect-auto h-[300px] w-full">
+            <div className="mb-3 flex flex-wrap items-center gap-4">
+              {Object.entries(chartConfig).map(([key, { label, color }]) => (
+                <span key={key} className="inline-flex items-center gap-1.5 font-mono text-[12px]">
+                  <span className="size-[9px] shrink-0" style={{ background: color }} />
+                  <span className="text-foreground">{label}</span>
+                </span>
+              ))}
+            </div>
+            <ChartContainer config={chartConfig} className="aspect-auto h-[180px] w-full">
               <AreaChart data={points}>
                 <defs>
                   {Object.keys(chartConfig).map((key) => (
@@ -186,18 +194,9 @@ export function CostOverTime() {
                 />
               </AreaChart>
             </ChartContainer>
-            <div className="mt-3 flex flex-wrap items-center gap-4">
-              {Object.entries(chartConfig).map(([key, { label, color }]) => (
-                <span key={key} className="inline-flex items-center gap-1.5 font-mono text-[12px]">
-                  <span className="size-[9px] shrink-0" style={{ background: color }} />
-                  <span className="text-foreground">{label}</span>
-                </span>
-              ))}
-            </div>
-            <PanelNote>Settled cost by day, last 30 days — quota covers first, the wallet funds the rest</PanelNote>
           </div>
         ) : (
-          <div className="px-[22px] py-4">
+          <div className="max-h-[240px] overflow-y-auto px-[22px] py-4">
             <div
               className={`${ROW} border-b border-border pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
             >
@@ -215,16 +214,18 @@ export function CostOverTime() {
                 <span
                   className={`text-right tabular-nums ${p.quota > 0 ? 'text-foreground' : 'text-muted-foreground'}`}
                 >
-                  {p.quota > 0 ? formatMoney(p.quota) : '—'}
+                  {p.quota > 0 ? formatMoney(p.quota, { minimumFractionDigits: 3, maximumFractionDigits: 3 }) : '—'}
                 </span>
                 <span className={`text-right tabular-nums ${p.wallet > 0 ? 'text-warning' : 'text-muted-foreground'}`}>
-                  {p.wallet > 0 ? formatMoney(p.wallet) : '—'}
+                  {p.wallet > 0 ? formatMoney(p.wallet, { minimumFractionDigits: 3, maximumFractionDigits: 3 }) : '—'}
                 </span>
-                <span className="text-right tabular-nums text-foreground">{formatMoney(p.total)}</span>
+                <span className="text-right tabular-nums text-foreground">
+                  {formatMoney(p.total, { minimumFractionDigits: 3, maximumFractionDigits: 3 })}
+                </span>
               </div>
             ))}
             <div className="pt-2">
-              <PanelNote>Last 24 hours · hourly granularity</PanelNote>
+              <PanelNote>Last 24 hours · per-hour granularity</PanelNote>
             </div>
           </div>
         )}
