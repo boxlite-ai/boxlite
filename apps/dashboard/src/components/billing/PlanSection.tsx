@@ -6,7 +6,7 @@
 
 import { Panel, PanelNote, SectionTitle } from '@/components/ascii'
 import { CycleOverview } from '@/components/billing/CycleOverview'
-import { EnterpriseRow, PlanCards, PlanCardsSkeleton } from '@/components/billing/PlanCards'
+import { CustomPlanCard, PlanCards, PlanCardsSkeleton } from '@/components/billing/PlanCards'
 import { Button } from '@/components/ui/button'
 import { useOwnerPlanQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
 import { usePlansQuery } from '@/hooks/queries/usePlansQuery'
@@ -27,8 +27,8 @@ export function PlanSection() {
   // Sort a copy: the array belongs to the query cache, so reordering it in place would leave a
   // second consumer reading a mutated array behind a reference that never changed. This is the
   // only consumer today, and the sort is idempotent, so nothing observes it yet. Non-self-serve
-  // entries (Enterprise) are filtered out here: they have no price to switch to and the static
-  // contact-sales row below is their only UI.
+  // entries are filtered out here: they have no price to switch to. The grid adds one static
+  // Custom card as the contact-sales path instead.
   const plans = plansQuery.data
     ?.filter((plan) => plan.selfServe)
     .slice()
@@ -70,9 +70,9 @@ export function PlanSection() {
 
           {config.billingApiUrl && isOwner && selectedOrganization && (
             <section>
-              <SectionTitle title="All Plans" count={plans?.length ? `${plans.length} plans` : undefined} />
+              <SectionTitle title="All Plans" count={plans ? `${plans.length + 1} plans` : undefined} />
               {isLoading ? (
-                <PlanCardsSkeleton count={3} />
+                <PlanCardsSkeleton count={4} />
               ) : (
                 <PlanCards
                   plans={plans || []}
@@ -83,12 +83,16 @@ export function PlanSection() {
             </section>
           )}
 
-          {/* Contact-sales stays outside the owner gate: any member could reach it
-              from the old /dashboard/limits page. */}
-          <section>
-            <SectionTitle title="Enterprise" />
-            <EnterpriseRow />
-          </section>
+          {/* The old contact-sales row was available to every member. Owners see
+              Custom in the plan grid; other members keep the same contact path. */}
+          {!isOwner && (
+            <section>
+              <SectionTitle title="Custom Plan" />
+              <div className="grid grid-cols-1 gap-[14px] md:grid-cols-2 xl:grid-cols-4">
+                <CustomPlanCard />
+              </div>
+            </section>
+          )}
 
           <section>
             <SectionTitle title="Resource Ceilings" count="per-organization" />

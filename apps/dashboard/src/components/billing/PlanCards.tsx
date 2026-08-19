@@ -23,6 +23,9 @@ import { formatWholeDollars } from '@/lib/utils'
 import { useState } from 'react'
 import { toast } from 'sonner'
 
+const CUSTOM_PLAN_CONTACT_URL =
+  'mailto:sales@boxlite.ai?subject=Custom%20Plan%20Inquiry&body=Hi%20BoxLite%20Team%2C%0A%0AI%27m%20interested%20in%20a%20custom%20plan%20and%20would%20like%20to%20learn%20more%20about%20your%20options.%0A%0AHere%27s%20some%20context%3A%0A%0A-%20Your%20use%20case%3A%20%0A-%20Current%20technology%3A%20%0A-%20Requirements%3A%20%0A-%20Typical%20box%20size%3A%20%0A-%20Peak%20concurrent%20boxes%3A%20%0A%0AThanks.'
+
 /**
  * Plan catalogue as a card grid. Every value comes from `Plan` — price,
  * included quota, and the concurrency ceiling — the catalog's own sellable
@@ -110,6 +113,44 @@ function PlanCard({
   )
 }
 
+/**
+ * The open-ended plan belongs beside the fixed catalogue, but its dashed
+ * border makes clear that its limits and price are scoped rather than preset.
+ */
+export function CustomPlanCard() {
+  return (
+    <div className="flex flex-col border border-dashed border-brand/50 bg-card px-[22px] py-5 transition-colors hover:border-brand">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+          <span style={{ color: BRAND }}>▸</span> Custom
+        </span>
+        <span className="border border-brand/30 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[1px] text-brand">
+          by request
+        </span>
+      </div>
+
+      <div className="mb-4">
+        <span className="font-mono text-[26px] font-semibold leading-none tracking-tight text-foreground">Custom</span>
+        <p className="mt-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+          Tailored limits, compliance, and support.
+        </p>
+      </div>
+
+      <div className="mb-5 flex-1 divide-y divide-border/40">
+        <SpecRow label="Included quota" value="Tailored" />
+        <SpecRow label="Concurrency limit" value="Tailored" />
+      </div>
+
+      <a
+        href={CUSTOM_PLAN_CONTACT_URL}
+        className="inline-flex w-full items-center justify-center border border-brand/40 px-4 py-2 font-mono text-[12px] text-foreground transition-colors hover:border-brand hover:bg-brand/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+      >
+        Contact sales →
+      </a>
+    </div>
+  )
+}
+
 /** Loading state shaped like the grid it replaces. */
 export function PlanCardsSkeleton({ count = 3 }: { count?: number }) {
   return (
@@ -122,33 +163,6 @@ export function PlanCardsSkeleton({ count = 3 }: { count?: number }) {
           <Skeleton className="h-9 w-full" />
         </div>
       ))}
-    </div>
-  )
-}
-
-/**
- * Enterprise sits below the grid rather than in it: the catalog's own
- * non-self-serve entry is filtered out of `plans` before it ever reaches
- * here, so this stays the fixed contact-sales row it always was.
- */
-export function EnterpriseRow() {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border border-border bg-card px-[22px] py-4">
-      <div className="flex flex-col gap-1">
-        <span className="font-mono text-[11px] text-muted-foreground">
-          Custom limits and compliance review. Contact sales at{' '}
-          <a href="mailto:sales@boxlite.ai" className="underline hover:text-foreground">
-            sales@boxlite.ai
-          </a>
-          .
-        </span>
-      </div>
-      <a
-        href="mailto:sales@boxlite.ai?subject=Custom%20Plan%20Inquiry&body=Hi%20BoxLite%20Team%2C%0A%0AI%27m%20interested%20in%20a%20custom%20plan%20and%20would%20like%20to%20learn%20more%20about%20your%20options.%0A%0AHere%27s%20some%20context%3A%0A%0A-%20Your%20use%20case%3A%20%0A-%20Current%20technology%3A%20%0A-%20Requirements%3A%20%0A-%20Typical%20box%20size%3A%20%0A-%20Peak%20concurrent%20boxes%3A%20%0A%0AThanks."
-        className="border border-border px-4 py-2 font-mono text-[12px] text-foreground transition-colors hover:border-brand"
-      >
-        Contact sales →
-      </a>
     </div>
   )
 }
@@ -212,6 +226,7 @@ export function PlanCards({
             pending={pending}
           />
         ))}
+        <CustomPlanCard />
       </div>
 
       <AlertDialog open={!!confirmPlan} onOpenChange={(open) => !open && setConfirmPlan(null)}>
