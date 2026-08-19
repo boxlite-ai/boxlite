@@ -65,6 +65,10 @@ export interface Organization {
      */
     'suspensionCleanupGracePeriodHours': number;
     /**
+     * Authoritative time when suspended boxes become eligible for cleanup
+     */
+    'suspensionCleanupAt'?: Date;
+    /**
      * Max CPU per box
      */
     'maxCpuPerBox': number;

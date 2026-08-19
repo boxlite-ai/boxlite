@@ -73,6 +73,7 @@ export const MOCK_ORGANIZATION: Organization = {
   updatedAt: nowDate,
   suspended: false,
   suspendedAt: epochDate,
+  suspensionCleanupAt: epochDate,
   suspensionReason: '',
   suspendedUntil: epochDate,
   suspensionCleanupGracePeriodHours: 0,

@@ -16,6 +16,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common'
 import { AuthGuard } from '@nestjs/passport'
@@ -51,6 +52,12 @@ import { RequireFlagsEnabled } from '@openfeature/nestjs-sdk'
 import { OrGuard } from '../../auth/or.guard'
 import { OtelCollectorGuard } from '../../auth/otel-collector.guard'
 import { OtelConfigDto } from '../dto/otel-config.dto'
+import {
+  OrganizationConcurrencyDto,
+  OrganizationConcurrencyQueryDto,
+  UpdateOrganizationConcurrencyEntitlementDto,
+} from '../dto/organization-concurrency.dto'
+import { OrganizationConcurrencyService } from '../services/organization-concurrency.service'
 
 @ApiTags('organizations')
 @Controller('organizations')
@@ -65,6 +72,7 @@ export class OrganizationController {
     private readonly organizationInvitationService: OrganizationInvitationService,
     private readonly userService: UserService,
     private readonly configService: TypedConfigService,
+    private readonly organizationConcurrencyService: OrganizationConcurrencyService,
   ) {}
 
   @Get('/invitations')
@@ -300,6 +308,55 @@ export class OrganizationController {
     return organizations.map(({ organization, isDefaultForAuthenticatedUser }) =>
       OrganizationDto.fromOrganization(organization, isDefaultForAuthenticatedUser),
     )
+  }
+
+  @Get('/:organizationId/concurrency')
+  @ApiOperation({
+    summary: 'Get current and historical organization concurrency',
+    operationId: 'getOrganizationConcurrency',
+  })
+  @ApiResponse({ status: 200, type: OrganizationConcurrencyDto })
+  @ApiParam({ name: 'organizationId', type: 'string' })
+  @UseGuards(AuthGuard('jwt'), AuthenticatedRateLimitGuard, OrganizationActionGuard)
+  async getConcurrency(
+    @Param('organizationId') organizationId: string,
+    @Query() query: OrganizationConcurrencyQueryDto,
+  ): Promise<OrganizationConcurrencyDto> {
+    const to = new Date()
+    const from = new Date(to.getTime() - query.hours * 60 * 60 * 1000)
+    return this.organizationConcurrencyService.getConcurrency(organizationId, from, to)
+  }
+
+  @Put('/:organizationId/concurrency-entitlement')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: 'Set the effective organization concurrency entitlement',
+    operationId: 'setOrganizationConcurrencyEntitlement',
+  })
+  @ApiResponse({ status: 204, description: 'Concurrency entitlement updated' })
+  @ApiParam({ name: 'organizationId', type: 'string' })
+  @ApiBody({ type: UpdateOrganizationConcurrencyEntitlementDto })
+  @RequiredApiRole([SystemRole.ADMIN, 'billing'])
+  @UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard, SystemActionGuard)
+  @Audit({
+    action: AuditAction.UPDATE,
+    targetType: AuditTarget.ORGANIZATION,
+    targetIdFromRequest: (req) => req.params.organizationId,
+    requestMetadata: {
+      body: (req: TypedRequest<UpdateOrganizationConcurrencyEntitlementDto>) => ({
+        maxConcurrentBoxes: req.body?.maxConcurrentBoxes,
+      }),
+    },
+  })
+  async setConcurrencyEntitlement(
+    @Param('organizationId') organizationId: string,
+    @Body() body: UpdateOrganizationConcurrencyEntitlementDto,
+  ): Promise<void> {
+    const organization = await this.organizationService.findOne(organizationId)
+    if (!organization) {
+      throw new NotFoundException(`Organization with ID ${organizationId} not found`)
+    }
+    await this.organizationConcurrencyService.setEntitlement(organizationId, body.maxConcurrentBoxes)
   }
 
   @Get('/:organizationId')

@@ -36,6 +36,8 @@ import type { Organization } from '../models';
 // @ts-ignore
 import type { OrganizationBoxDefaultLimitedNetworkEgress } from '../models';
 // @ts-ignore
+import type { OrganizationConcurrencyDto } from '../models';
+// @ts-ignore
 import type { OrganizationInvitation } from '../models';
 // @ts-ignore
 import type { OrganizationRole } from '../models';
@@ -51,6 +53,8 @@ import type { OtelConfig } from '../models';
 import type { RegenerateApiKeyResponse } from '../models';
 // @ts-ignore
 import type { Region } from '../models';
+// @ts-ignore
+import type { UpdateOrganizationConcurrencyEntitlementDto } from '../models';
 // @ts-ignore
 import type { UpdateOrganizationDefaultRegion } from '../models';
 // @ts-ignore
@@ -616,6 +620,51 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
         },
         /**
          * 
+         * @summary Get current and historical organization concurrency
+         * @param {string} organizationId 
+         * @param {number} [hours] Rolling history window in hours
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        getOrganizationConcurrency: async (organizationId: string, hours?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('getOrganizationConcurrency', 'organizationId', organizationId)
+            const localVarPath = `/organizations/{organizationId}/concurrency`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (hours !== undefined) {
+                localVarQueryParameter['hours'] = hours;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Get count of organization invitations for authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1043,6 +1092,50 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Set the effective organization concurrency entitlement
+         * @param {string} organizationId 
+         * @param {UpdateOrganizationConcurrencyEntitlementDto} updateOrganizationConcurrencyEntitlementDto 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        setOrganizationConcurrencyEntitlement: async (organizationId: string, updateOrganizationConcurrencyEntitlementDto: UpdateOrganizationConcurrencyEntitlementDto, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('setOrganizationConcurrencyEntitlement', 'organizationId', organizationId)
+            // verify required parameter 'updateOrganizationConcurrencyEntitlementDto' is not null or undefined
+            assertParamExists('setOrganizationConcurrencyEntitlement', 'updateOrganizationConcurrencyEntitlementDto', updateOrganizationConcurrencyEntitlementDto)
+            const localVarPath = `/organizations/{organizationId}/concurrency-entitlement`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'PUT', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(updateOrganizationConcurrencyEntitlementDto, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -1690,6 +1783,20 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Get current and historical organization concurrency
+         * @param {string} organizationId 
+         * @param {number} [hours] Rolling history window in hours
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async getOrganizationConcurrency(organizationId: string, hours?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<OrganizationConcurrencyDto>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getOrganizationConcurrency(organizationId, hours, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.getOrganizationConcurrency']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Get count of organization invitations for authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1828,6 +1935,20 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.regenerateProxyApiKey(id, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.regenerateProxyApiKey']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Set the effective organization concurrency entitlement
+         * @param {string} organizationId 
+         * @param {UpdateOrganizationConcurrencyEntitlementDto} updateOrganizationConcurrencyEntitlementDto 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async setOrganizationConcurrencyEntitlement(organizationId: string, updateOrganizationConcurrencyEntitlementDto: UpdateOrganizationConcurrencyEntitlementDto, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.setOrganizationConcurrencyEntitlement(organizationId, updateOrganizationConcurrencyEntitlementDto, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.setOrganizationConcurrencyEntitlement']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -2122,6 +2243,17 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
         },
         /**
          * 
+         * @summary Get current and historical organization concurrency
+         * @param {string} organizationId 
+         * @param {number} [hours] Rolling history window in hours
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        getOrganizationConcurrency(organizationId: string, hours?: number, options?: RawAxiosRequestConfig): AxiosPromise<OrganizationConcurrencyDto> {
+            return localVarFp.getOrganizationConcurrency(organizationId, hours, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Get count of organization invitations for authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2228,6 +2360,17 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
          */
         regenerateProxyApiKey(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<RegenerateApiKeyResponse> {
             return localVarFp.regenerateProxyApiKey(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Set the effective organization concurrency entitlement
+         * @param {string} organizationId 
+         * @param {UpdateOrganizationConcurrencyEntitlementDto} updateOrganizationConcurrencyEntitlementDto 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        setOrganizationConcurrencyEntitlement(organizationId: string, updateOrganizationConcurrencyEntitlementDto: UpdateOrganizationConcurrencyEntitlementDto, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.setOrganizationConcurrencyEntitlement(organizationId, updateOrganizationConcurrencyEntitlementDto, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -2502,6 +2645,18 @@ export class OrganizationsApi extends BaseAPI {
 
     /**
      * 
+     * @summary Get current and historical organization concurrency
+     * @param {string} organizationId 
+     * @param {number} [hours] Rolling history window in hours
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public getOrganizationConcurrency(organizationId: string, hours?: number, options?: RawAxiosRequestConfig) {
+        return OrganizationsApiFp(this.configuration).getOrganizationConcurrency(organizationId, hours, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Get count of organization invitations for authenticated user
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -2618,6 +2773,18 @@ export class OrganizationsApi extends BaseAPI {
      */
     public regenerateProxyApiKey(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return OrganizationsApiFp(this.configuration).regenerateProxyApiKey(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Set the effective organization concurrency entitlement
+     * @param {string} organizationId 
+     * @param {UpdateOrganizationConcurrencyEntitlementDto} updateOrganizationConcurrencyEntitlementDto 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public setOrganizationConcurrencyEntitlement(organizationId: string, updateOrganizationConcurrencyEntitlementDto: UpdateOrganizationConcurrencyEntitlementDto, options?: RawAxiosRequestConfig) {
+        return OrganizationsApiFp(this.configuration).setOrganizationConcurrencyEntitlement(organizationId, updateOrganizationConcurrencyEntitlementDto, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
