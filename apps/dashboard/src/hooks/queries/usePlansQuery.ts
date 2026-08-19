@@ -4,19 +4,19 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import type { Tier } from '@/billing-api'
+import type { Plan } from '@/billing-api'
 import { useQuery } from '@tanstack/react-query'
 import { useApi } from '../useApi'
 import { useConfig } from '../useConfig'
 import { queryKeys } from './queryKeys'
 
-export const useTiersQuery = ({ enabled = true }: { enabled?: boolean } = {}) => {
+export const usePlansQuery = ({ enabled = true }: { enabled?: boolean } = {}) => {
   const { billingApi } = useApi()
   const config = useConfig()
 
-  return useQuery<Tier[]>({
-    queryKey: queryKeys.billing.tiers(),
-    queryFn: () => billingApi.listTiers(),
+  return useQuery<Plan[]>({
+    queryKey: queryKeys.billing.plans(),
+    queryFn: () => billingApi.listPlans(),
     enabled: Boolean(enabled && config.billingApiUrl),
   })
 }

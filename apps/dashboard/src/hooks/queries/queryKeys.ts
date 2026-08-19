@@ -34,7 +34,7 @@ export const queryKeys = {
         [...queryKeys.organization.all, organizationId, 'usage', 'series', params] as const,
     },
 
-    tier: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'tier'] as const,
+    plan: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'plan'] as const,
     wallet: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'wallet'] as const,
   },
   user: {
@@ -43,7 +43,7 @@ export const queryKeys = {
   },
   billing: {
     all: ['billing'] as const,
-    tiers: () => [...queryKeys.billing.all, 'tiers'] as const,
+    plans: () => [...queryKeys.billing.all, 'plans'] as const,
     emails: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'emails'] as const,
     portalUrl: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'portal-url'] as const,
     checkoutUrl: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'checkout-url'] as const,

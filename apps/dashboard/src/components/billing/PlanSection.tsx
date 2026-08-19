@@ -8,40 +8,43 @@ import { Panel, PanelNote, SectionTitle } from '@/components/ascii'
 import { CycleOverview } from '@/components/billing/CycleOverview'
 import { EnterpriseRow, PlanCards, PlanCardsSkeleton } from '@/components/billing/PlanCards'
 import { Button } from '@/components/ui/button'
-import { useOwnerTierQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
-import { useTiersQuery } from '@/hooks/queries/useTiersQuery'
+import { useOwnerPlanQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
+import { usePlansQuery } from '@/hooks/queries/usePlansQuery'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { cn } from '@/lib/utils'
 import { RefreshCcw } from '@/components/ui/icon'
 import { ReactNode } from 'react'
-import { useAuth } from 'react-oidc-context'
 
 export function PlanSection() {
-  const { user } = useAuth()
   const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
-  const organizationTierQuery = useOwnerTierQuery()
+  const organizationPlanQuery = useOwnerPlanQuery()
   const walletQuery = useOwnerWalletQuery()
-  const tiersQuery = useTiersQuery()
+  const plansQuery = usePlansQuery()
 
-  const organizationTier = organizationTierQuery.data
+  const organizationPlan = organizationPlanQuery.data
   // Sort a copy: the array belongs to the query cache, so reordering it in place would leave a
   // second consumer reading a mutated array behind a reference that never changed. This is the
-  // only consumer today, and the sort is idempotent, so nothing observes it yet.
-  const tiers = tiersQuery.data?.slice().sort((a, b) => a.tier - b.tier)
+  // only consumer today, and the sort is idempotent, so nothing observes it yet. Non-self-serve
+  // entries (Enterprise) are filtered out here: they have no price to switch to and the static
+  // contact-sales row below is their only UI.
+  const plans = plansQuery.data
+    ?.filter((plan) => plan.selfServe)
+    .slice()
+    .sort((a, b) => (a.priceMonthlyCents ?? 0) - (b.priceMonthlyCents ?? 0))
   const wallet = walletQuery.data
 
   const config = useConfig()
-  // useTiersQuery is gated only on config.billingApiUrl, so plan switching is gated here.
+  // usePlansQuery is gated only on config.billingApiUrl, so plan switching is gated here.
   const isOwner = authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
 
-  const isLoading = organizationTierQuery.isLoading || tiersQuery.isLoading || walletQuery.isLoading
-  const isError = organizationTierQuery.isError || tiersQuery.isError || walletQuery.isError
+  const isLoading = organizationPlanQuery.isLoading || plansQuery.isLoading || walletQuery.isLoading
+  const isError = organizationPlanQuery.isError || plansQuery.isError || walletQuery.isError
 
   const handleRetry = () => {
-    organizationTierQuery.refetch()
-    tiersQuery.refetch()
+    organizationPlanQuery.refetch()
+    plansQuery.refetch()
     walletQuery.refetch()
   }
 
@@ -61,28 +64,20 @@ export function PlanSection() {
           {config.billingApiUrl && isOwner && wallet && (
             <section>
               <SectionTitle title="Active Plan" />
-              <CycleOverview
-                wallet={wallet}
-                organizationTier={organizationTier}
-                currentTier={tiers?.find((tier) => tier.tier === organizationTier?.tier)}
-              />
+              <CycleOverview wallet={wallet} organizationPlan={organizationPlan} />
             </section>
           )}
 
           {config.billingApiUrl && isOwner && selectedOrganization && (
             <section>
-              <SectionTitle title="All Plans" count={tiers?.length ? `${tiers.length} tiers` : undefined} />
+              <SectionTitle title="All Plans" count={plans?.length ? `${plans.length} plans` : undefined} />
               {isLoading ? (
-                <PlanCardsSkeleton count={4} />
+                <PlanCardsSkeleton count={3} />
               ) : (
                 <PlanCards
-                  tiers={tiers || []}
-                  organizationTier={organizationTier}
+                  plans={plans || []}
+                  organizationPlan={organizationPlan}
                   organizationId={selectedOrganization.id}
-                  requirementsState={{
-                    emailVerified: !!user?.profile?.email_verified,
-                    creditCardLinked: !!wallet?.creditCardConnected,
-                  }}
                 />
               )}
             </section>

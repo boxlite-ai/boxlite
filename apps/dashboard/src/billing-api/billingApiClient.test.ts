@@ -18,27 +18,22 @@ afterEach(() => {
   axios.defaults.adapter = undefined as never
 })
 
-describe('getOrganizationTier plan hydration', () => {
+describe('getOrganizationPlan', () => {
   it('turns the cycle bounds into Dates and passes the quota fields through', async () => {
     const api = serve({
-      tier: 2,
-      largestSuccessfulPaymentCents: 2500,
-      hasVerifiedBusinessEmail: true,
-      plan: {
-        planId: 'pro',
-        planName: 'Pro',
-        status: 'active',
-        cycleFrom: '2026-08-05T00:00:00.000Z',
-        cycleTo: '2026-09-05T00:00:00.000Z',
-        includedQuotaCents: 25000,
-        quotaConsumedCents: 6250,
-        quotaRemainingCents: 18750,
-      },
+      planId: 'pro',
+      planName: 'Pro',
+      status: 'active',
+      cycleFrom: '2026-08-05T00:00:00.000Z',
+      cycleTo: '2026-09-05T00:00:00.000Z',
+      includedQuotaCents: 25000,
+      quotaConsumedCents: 6250,
+      quotaRemainingCents: 18750,
     })
-    const tier = await api.getOrganizationTier('org-1')
-    expect(tier.plan?.cycleFrom).toEqual(new Date('2026-08-05T00:00:00.000Z'))
-    expect(tier.plan?.cycleTo).toEqual(new Date('2026-09-05T00:00:00.000Z'))
-    expect(tier.plan).toMatchObject({
+    const plan = await api.getOrganizationPlan('org-1')
+    expect(plan?.cycleFrom).toEqual(new Date('2026-08-05T00:00:00.000Z'))
+    expect(plan?.cycleTo).toEqual(new Date('2026-09-05T00:00:00.000Z'))
+    expect(plan).toMatchObject({
       planId: 'pro',
       includedQuotaCents: 25000,
       quotaConsumedCents: 6250,
@@ -46,11 +41,41 @@ describe('getOrganizationTier plan hydration', () => {
     })
   })
 
-  it('leaves the block absent for an unsubscribed organization', async () => {
-    const api = serve({ tier: 1, largestSuccessfulPaymentCents: 0, hasVerifiedBusinessEmail: true })
-    const tier = await api.getOrganizationTier('org-1')
-    expect(tier.plan).toBeUndefined()
-    expect(tier).not.toHaveProperty('plan')
+  it('hydrates dueAt when the plan is past due', async () => {
+    const api = serve({
+      planId: 'pro',
+      planName: 'Pro',
+      status: 'past_due',
+      cycleFrom: '2026-08-05T00:00:00.000Z',
+      cycleTo: '2026-09-05T00:00:00.000Z',
+      includedQuotaCents: 25000,
+      quotaConsumedCents: 6250,
+      quotaRemainingCents: 18750,
+      dueAt: '2026-08-20T00:00:00.000Z',
+      amountDueCents: 14900,
+    })
+    const plan = await api.getOrganizationPlan('org-1')
+    expect(plan?.dueAt).toEqual(new Date('2026-08-20T00:00:00.000Z'))
+  })
+
+  it('returns null for an organization with no live plan', async () => {
+    const api = serve(null)
+    const plan = await api.getOrganizationPlan('org-1')
+    expect(plan).toBeNull()
+  })
+})
+
+describe('upgradePlan', () => {
+  it('returns the checkout URL when a first subscribe needs one', async () => {
+    const api = serve({ url: 'https://checkout.stripe.com/pay/cs_test_123' })
+    const url = await api.upgradePlan('org-1', 'pro')
+    expect(url).toBe('https://checkout.stripe.com/pay/cs_test_123')
+  })
+
+  it('returns undefined when an in-place change applies with no redirect', async () => {
+    const api = serve(undefined)
+    const url = await api.upgradePlan('org-1', 'max')
+    expect(url).toBeUndefined()
   })
 })
 

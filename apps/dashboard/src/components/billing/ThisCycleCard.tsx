@@ -6,9 +6,9 @@
 import { OrganizationPlan } from '@/billing-api'
 import { Metric, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useOwnerTierQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
+import { useOwnerPlanQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
+import { usePlansQuery } from '@/hooks/queries/usePlansQuery'
 import { useRunningBoxCountQuery } from '@/hooks/queries/useRunningBoxCountQuery'
-import { useTiersQuery } from '@/hooks/queries/useTiersQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { formatAmount } from '@/lib/utils'
 import { differenceInCalendarDays, format } from 'date-fns'
@@ -37,23 +37,21 @@ export function cycleFacts(plan: OrganizationPlan, now: Date) {
 /**
  * The current billing cycle at a glance: quota consumed against the plan's
  * grant, the wallet that funds the overage, and when the cycle rolls. Every
- * number is the billing service's own — the plan block on the tier
- * read and the wallet — so the meter here is the meter settlement charges by.
- * Renders nothing when the organization has no live plan: there is no
- * cycle to show, and inventing one was the old demo's job.
+ * number is the billing service's own — the plan block and the wallet — so
+ * the meter here is the meter settlement charges by. Renders nothing when
+ * the organization has no live plan: there is no cycle to show, and
+ * inventing one was the old demo's job.
  */
 export function ThisCycleCard() {
-  const { data: tier, isLoading } = useOwnerTierQuery()
+  const { data: plan, isLoading } = useOwnerPlanQuery()
   const { data: wallet } = useOwnerWalletQuery()
-  const { data: tiers } = useTiersQuery()
+  const { data: plans } = usePlansQuery()
   const { selectedOrganization } = useSelectedOrganization()
-  const plan = tier?.plan
 
-  // The ceiling is the catalog's, matched to the plan the organization is on
-  // rather than to its tier rung: the two ladders are independent axes, and a
-  // negotiated deal sits on no public rung at all. `null` on the rung means a
-  // deal with no stated ceiling, which is not a ceiling of zero.
-  const concurrencyLimit = tiers?.find((rung) => rung.planId === plan?.planId)?.concurrencyLimit ?? null
+  // The ceiling is the catalog's, matched by plan id: a negotiated deal sits
+  // on no public catalog entry at all. `null` means a deal with no stated
+  // ceiling, which is not a ceiling of zero.
+  const concurrencyLimit = plans?.find((catalogPlan) => catalogPlan.id === plan?.planId)?.concurrencyLimit ?? null
   const { data: runningBoxes } = useRunningBoxCountQuery({
     organizationId: selectedOrganization?.id,
     enabled: Boolean(plan && concurrencyLimit != null),

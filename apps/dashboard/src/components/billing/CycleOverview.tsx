@@ -3,58 +3,49 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { OrganizationTier, OrganizationWallet, Tier } from '@/billing-api'
+import { OrganizationPlan, OrganizationWallet } from '@/billing-api'
 import { BRAND, Metric, Panel } from '@/components/ascii'
 import { formatAmount } from '@/lib/utils'
+import { cycleFacts } from './ThisCycleCard'
 
 /**
- * Active-plan banner: a header strip naming the current tier, then the cycle
- * figures — prepaid balance, wallet spend since the last top-up, and tier
- * expiry. The plan's own quota meter and billing cycle live on the
- * Usage tab's This Cycle card (the `plan` block on the tier read);
- * this card keeps the tier-ladder view of the same wallet.
+ * Active-plan banner: a header strip naming the current plan, then the cycle
+ * figures — prepaid balance, wallet spend since the last top-up, and days
+ * until the cycle rolls. The plan's own quota meter and concurrency reading
+ * live on the Usage tab's This Cycle card; this card keeps the identity view
+ * of the same wallet and plan.
  */
-
-function daysUntil(date: Date): number {
-  return Math.max(0, Math.ceil((date.getTime() - Date.now()) / 86_400_000))
-}
 
 export function CycleOverview({
   wallet,
-  organizationTier,
-  currentTier,
+  organizationPlan,
 }: {
   wallet: OrganizationWallet
-  organizationTier?: OrganizationTier | null
-  currentTier?: Tier
+  organizationPlan?: OrganizationPlan | null
 }) {
   const spentCents = wallet.balanceCents - wallet.ongoingBalanceCents
-  const expiresInDays = organizationTier?.expiresAt ? daysUntil(organizationTier.expiresAt) : null
-  const ceilings = currentTier
-    ? `${currentTier.tierLimit.concurrentCPU} vCPU · ${currentTier.tierLimit.concurrentRAMGiB} GiB RAM · ${currentTier.tierLimit.concurrentDiskGiB} GiB disk`
-    : null
+  const daysLeft = organizationPlan ? cycleFacts(organizationPlan, new Date()).daysLeft : null
 
   return (
     <Panel>
       {/* Header strip */}
       <div className="flex flex-wrap items-center gap-4 px-[22px] py-5">
         <div className="flex items-center gap-3">
-          {organizationTier && (
+          {organizationPlan && (
             <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
-              <span style={{ color: BRAND }}>▸</span> T{organizationTier.tier}
+              <span style={{ color: BRAND }}>▸</span> Plan
             </span>
           )}
           <span className="font-mono text-[18px] font-semibold tracking-tight text-foreground">
-            {organizationTier ? `Tier ${organizationTier.tier}` : 'No tier'}
+            {organizationPlan ? organizationPlan.planName : 'No plan'}
             <span className="ml-1 animate-pulse text-muted-foreground">▮</span>
           </span>
-          {organizationTier && (
+          {organizationPlan && (
             <span className="bg-foreground px-2 py-0.5 font-mono text-[10px] uppercase tracking-[1px] text-background">
-              active
+              {organizationPlan.status}
             </span>
           )}
         </div>
-        {ceilings && <span className="ml-auto font-mono text-[11px] text-muted-foreground">{ceilings}</span>}
       </div>
 
       {/* Cycle figures */}
@@ -65,12 +56,8 @@ export function CycleOverview({
           value={formatAmount(spentCents)}
           sub={`of ${formatAmount(wallet.balanceCents)} added`}
         />
-        {organizationTier && (
-          <Metric
-            label={expiresInDays === null ? 'Tier' : 'Tier expires in'}
-            value={expiresInDays === null ? `T${organizationTier.tier}` : `${expiresInDays}`}
-            sub={expiresInDays === null ? 'no expiry set' : 'days'}
-          />
+        {organizationPlan && daysLeft !== null && (
+          <Metric label="Renews in" value={`${daysLeft}`} sub={daysLeft === 1 ? 'day' : 'days'} />
         )}
       </div>
     </Panel>

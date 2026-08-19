@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { OrganizationEmail, OrganizationTier, OrganizationWallet } from '@/billing-api'
+import { OrganizationEmail, OrganizationPlan, OrganizationWallet } from '@/billing-api'
 import { Invoice, PaginatedInvoices, PaymentUrl } from '@/billing-api/types/Invoice'
-import { Tier } from '@/billing-api/types/tier'
+import { Plan } from '@/billing-api/types/Plan'
 import { http, HttpResponse } from 'msw'
 import {
   MOCK_BOXES,
@@ -97,47 +97,42 @@ export const handlers = [
   http.get(`${BILLING_API_URL}/organization/:organizationId/portal-url`, async () => {
     return HttpResponse.json<string>(`${BILLING_API_URL}/portal`)
   }),
-  http.get(`${BILLING_API_URL}/tier`, async () => {
-    return HttpResponse.json<Tier[]>([
+  http.get(`${BILLING_API_URL}/plan`, async () => {
+    // Mirrors the billing service's own standard-plan catalog (Subscription.md
+    // v2 §3). Enterprise carries nulls — the contact-sales card, not missing
+    // data — and is not self-serve.
+    return HttpResponse.json<Plan[]>([
       {
-        tier: 1,
-        tierLimit: {
-          concurrentCPU: 10,
-          concurrentRAMGiB: 20,
-          concurrentDiskGiB: 30,
-        },
-        minTopUpAmountCents: 0,
-        topUpIntervalDays: 0,
+        id: 'starter',
+        name: 'Starter',
+        priceMonthlyCents: 1_900,
+        includedQuotaCents: 3_000,
+        concurrencyLimit: 20,
+        selfServe: true,
       },
       {
-        tier: 2,
-        tierLimit: {
-          concurrentCPU: 100,
-          concurrentRAMGiB: 200,
-          concurrentDiskGiB: 300,
-        },
-        minTopUpAmountCents: 2500,
-        topUpIntervalDays: 0,
+        id: 'pro',
+        name: 'Pro',
+        priceMonthlyCents: 14_900,
+        includedQuotaCents: 25_000,
+        concurrencyLimit: 100,
+        selfServe: true,
       },
       {
-        tier: 3,
-        tierLimit: {
-          concurrentCPU: 250,
-          concurrentRAMGiB: 500,
-          concurrentDiskGiB: 2000,
-        },
-        minTopUpAmountCents: 50000,
-        topUpIntervalDays: 0,
+        id: 'max',
+        name: 'Max',
+        priceMonthlyCents: 49_900,
+        includedQuotaCents: 90_000,
+        concurrencyLimit: 1_000,
+        selfServe: true,
       },
       {
-        tier: 4,
-        tierLimit: {
-          concurrentCPU: 500,
-          concurrentRAMGiB: 1000,
-          concurrentDiskGiB: 5000,
-        },
-        minTopUpAmountCents: 200000,
-        topUpIntervalDays: 30,
+        id: 'enterprise',
+        name: 'Enterprise',
+        priceMonthlyCents: null,
+        includedQuotaCents: null,
+        concurrencyLimit: null,
+        selfServe: false,
       },
     ])
   }),
@@ -151,26 +146,25 @@ export const handlers = [
       hasFailedOrPendingInvoice: true,
     })
   }),
-  http.get(`${BILLING_API_URL}/organization/:organizationId/tier`, async () => {
-    return HttpResponse.json<OrganizationTier>({
-      tier: 2,
-      largestSuccessfulPaymentDate: new Date(),
-      largestSuccessfulPaymentCents: 1000,
-      expiresAt: new Date(),
-      hasVerifiedBusinessEmail: true,
-      // Mirrors the billing service's own mock seed: pro, a quarter used,
-      // pinned mid-cycle so the meter renders deterministically.
-      plan: {
-        planId: 'pro',
-        planName: 'Pro',
-        status: 'active',
-        cycleFrom: new Date(Date.UTC(2026, 7, 5)),
-        cycleTo: new Date(Date.UTC(2026, 8, 5)),
-        includedQuotaCents: 25000,
-        quotaConsumedCents: 6250,
-        quotaRemainingCents: 18750,
-      },
+  http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
+    // Mirrors the billing service's own mock seed: pro, a quarter used,
+    // pinned mid-cycle so the meter renders deterministically.
+    return HttpResponse.json<OrganizationPlan>({
+      planId: 'pro',
+      planName: 'Pro',
+      status: 'active',
+      cycleFrom: new Date(Date.UTC(2026, 7, 5)),
+      cycleTo: new Date(Date.UTC(2026, 8, 5)),
+      includedQuotaCents: 25000,
+      quotaConsumedCents: 6250,
+      quotaRemainingCents: 18750,
     })
+  }),
+  http.post(`${BILLING_API_URL}/organization/:organizationId/plan/upgrade`, async () => {
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.post(`${BILLING_API_URL}/organization/:organizationId/plan/downgrade`, async () => {
+    return new HttpResponse(null, { status: 204 })
   }),
   // Deterministic funding series: quota-first against the seeded remaining
   // quota, wallet after — dense buckets so the chart shows honest zeros.

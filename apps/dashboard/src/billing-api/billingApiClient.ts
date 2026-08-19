@@ -9,12 +9,12 @@ import axios, { AxiosInstance } from 'axios'
 import {
   AutomaticTopUp,
   OrganizationEmail,
-  OrganizationTier,
+  OrganizationPlan,
   OrganizationWallet,
   PaginatedInvoices,
+  Plan,
   PaymentUrl,
   SeriesGranularity,
-  Tier,
   UsageFundingBucket,
   WalletTopUpRequest,
 } from './types'
@@ -66,27 +66,17 @@ export class BillingApiClient {
     return response.data?.message || 'Coupon redeemed successfully'
   }
 
-  public async getOrganizationTier(organizationId: string): Promise<OrganizationTier> {
-    const response = await this.axiosInstance.get(`/organization/${organizationId}/tier`)
-    const plan = response.data.plan
-    const orgTier: OrganizationTier = {
-      tier: response.data.tier,
-      largestSuccessfulPaymentDate: response.data.largestSuccessfulPaymentDate
-        ? new Date(response.data.largestSuccessfulPaymentDate)
-        : undefined,
-      largestSuccessfulPaymentCents: response.data.largestSuccessfulPaymentCents,
-      expiresAt: response.data.expiresAt ? new Date(response.data.expiresAt) : undefined,
-      hasVerifiedBusinessEmail: response.data.hasVerifiedBusinessEmail,
-      ...(plan && {
-        plan: {
-          ...plan,
-          cycleFrom: new Date(plan.cycleFrom),
-          cycleTo: new Date(plan.cycleTo),
-        },
-      }),
+  public async getOrganizationPlan(organizationId: string): Promise<OrganizationPlan | null> {
+    const response = await this.axiosInstance.get(`/organization/${organizationId}/plan`)
+    if (!response.data) {
+      return null
     }
-
-    return orgTier
+    return {
+      ...response.data,
+      cycleFrom: new Date(response.data.cycleFrom),
+      cycleTo: new Date(response.data.cycleTo),
+      ...(response.data.dueAt && { dueAt: new Date(response.data.dueAt) }),
+    }
   }
 
   public async getUsageFundingSeries(
@@ -102,16 +92,23 @@ export class BillingApiClient {
     ).map((bucket) => ({ ...bucket, from: new Date(bucket.from), to: new Date(bucket.to) }))
   }
 
-  public async upgradeTier(organizationId: string, tier: number): Promise<void> {
-    await this.axiosInstance.post(`/organization/${organizationId}/tier/upgrade`, { tier })
+  /**
+   * A first subscribe has no Stripe Subscription to update in place, so the
+   * server sends back a Checkout URL to visit instead of applying the change
+   * here; an in-place change on an existing subscription applies immediately
+   * and returns nothing. Callers must check for a URL before assuming done.
+   */
+  public async upgradePlan(organizationId: string, planId: string): Promise<string | undefined> {
+    const response = await this.axiosInstance.post(`/organization/${organizationId}/plan/upgrade`, { planId })
+    return response.data?.url
   }
 
-  public async downgradeTier(organizationId: string, tier: number): Promise<void> {
-    await this.axiosInstance.post(`/organization/${organizationId}/tier/downgrade`, { tier })
+  public async downgradePlan(organizationId: string, planId: string | null): Promise<void> {
+    await this.axiosInstance.post(`/organization/${organizationId}/plan/downgrade`, { planId })
   }
 
-  public async listTiers(): Promise<Tier[]> {
-    const response = await this.axiosInstance.get('/tier')
+  public async listPlans(): Promise<Plan[]> {
+    const response = await this.axiosInstance.get('/plan')
     return response.data
   }
 

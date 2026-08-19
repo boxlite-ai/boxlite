@@ -11,7 +11,7 @@ import type { ComponentProps, ReactNode } from 'react'
  *
  * These are presentation only — they take plain display values, never domain
  * objects — so a screen can adopt the look without the primitive learning
- * anything about boxes, wallets or tiers.
+ * anything about boxes, wallets or plans.
  */
 
 export const BRAND = 'hsl(var(--brand))'
