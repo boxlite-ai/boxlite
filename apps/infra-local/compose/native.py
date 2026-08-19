@@ -262,6 +262,7 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "REDIS_HOST": "127.0.0.1",
                 "REDIS_PORT": "26379",
                 "SHUTDOWN_TIMEOUT_SEC": "10",
+                "OTEL_LOGGING_ENABLED": "true",
                 "OTEL_TRACING_ENABLED": "true",
                 "OTEL_EXPORTER_OTLP_ENDPOINT": _OTEL_OTLP_HTTP_URL,
             },

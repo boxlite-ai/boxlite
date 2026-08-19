@@ -71,6 +71,7 @@ new sst.aws.Service('Proxy', {
     ...(publicOidcIssuer && {
       OIDC_PUBLIC_DOMAIN: publicOidcIssuer,
     }),
+    OTEL_LOGGING_ENABLED: envOr('OTEL_LOGGING_ENABLED', 'true'),
     OTEL_TRACING_ENABLED: envOr('OTEL_TRACING_ENABLED', 'true'),
     OTEL_EXPORTER_OTLP_ENDPOINT: envOr('OTEL_EXPORTER_OTLP_ENDPOINT', otelCollectorOtlpHttpUrl),
   },

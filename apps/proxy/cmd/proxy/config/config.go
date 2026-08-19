@@ -33,6 +33,7 @@ type Config struct {
 	Redis                 *cache.RedisConfig `envconfig:"REDIS"`
 	PreviewWarningEnabled bool               `envconfig:"PREVIEW_WARNING_ENABLED"`
 	ShutdownTimeoutSec    int                `envconfig:"SHUTDOWN_TIMEOUT_SEC"`
+	OtelLoggingEnabled    bool               `envconfig:"OTEL_LOGGING_ENABLED"`
 	OtelTracingEnabled    bool               `envconfig:"OTEL_TRACING_ENABLED"`
 	OtelEndpoint          string             `envconfig:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 	OtelHeaders           string             `envconfig:"OTEL_EXPORTER_OTLP_HEADERS"`
