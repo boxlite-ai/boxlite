@@ -148,16 +148,20 @@ export const handlers = [
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
     // Mirrors the billing service's own mock seed: pro, a quarter used,
-    // pinned mid-cycle so the meter renders deterministically.
-    return HttpResponse.json<OrganizationPlan>({
-      planId: 'pro',
-      planName: 'Pro',
-      status: 'active',
-      cycleFrom: new Date(Date.UTC(2026, 7, 5)),
-      cycleTo: new Date(Date.UTC(2026, 8, 5)),
-      includedQuotaCents: 25000,
-      quotaConsumedCents: 6250,
-      quotaRemainingCents: 18750,
+    // pinned mid-cycle so the meter renders deterministically. The real
+    // route wraps this in a `plan` key ({} means no live plan), never a
+    // bare object or null.
+    return HttpResponse.json<{ plan?: OrganizationPlan }>({
+      plan: {
+        planId: 'pro',
+        planName: 'Pro',
+        status: 'active',
+        cycleFrom: new Date(Date.UTC(2026, 7, 5)),
+        cycleTo: new Date(Date.UTC(2026, 8, 5)),
+        includedQuotaCents: 25000,
+        quotaConsumedCents: 6250,
+        quotaRemainingCents: 18750,
+      },
     })
   }),
   http.post(`${BILLING_API_URL}/organization/:organizationId/plan/upgrade`, async () => {

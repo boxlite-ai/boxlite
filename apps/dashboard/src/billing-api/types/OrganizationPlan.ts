@@ -5,10 +5,14 @@
  */
 
 /**
- * The organization's plan and its cycle quota — the whole body of
- * `GET organization/:id/plan`. `includedQuotaCents`/`quotaRemainingCents` of
- * null mean unlimited (a negotiated deal), not zero. `null` overall means no
- * live plan: never subscribed, or canceled and past its cycle.
+ * The organization's plan and its cycle quota. The wire body of
+ * `GET organization/:id/plan` is `{ plan?: OrganizationPlan }` — an empty
+ * object when there is no live plan, never a bare null or this shape
+ * unwrapped (boxlite-commerce billing.controller.ts, getOrganizationPlan).
+ * `getOrganizationPlan()` in billingApiClient.ts does that unwrapping, so
+ * every other consumer sees this type directly, or `null` for "no plan".
+ * `includedQuotaCents`/`quotaRemainingCents` of null mean unlimited (a
+ * negotiated deal), not zero.
  */
 export type OrganizationPlan = {
   planId: string

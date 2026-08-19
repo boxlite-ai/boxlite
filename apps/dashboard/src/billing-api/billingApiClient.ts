@@ -68,14 +68,16 @@ export class BillingApiClient {
 
   public async getOrganizationPlan(organizationId: string): Promise<OrganizationPlan | null> {
     const response = await this.axiosInstance.get(`/organization/${organizationId}/plan`)
-    if (!response.data) {
+    // {} (no `plan` key) means no live plan — the server never sends a bare null.
+    const plan = response.data?.plan
+    if (!plan) {
       return null
     }
     return {
-      ...response.data,
-      cycleFrom: new Date(response.data.cycleFrom),
-      cycleTo: new Date(response.data.cycleTo),
-      ...(response.data.dueAt && { dueAt: new Date(response.data.dueAt) }),
+      ...plan,
+      cycleFrom: new Date(plan.cycleFrom),
+      cycleTo: new Date(plan.cycleTo),
+      ...(plan.dueAt && { dueAt: new Date(plan.dueAt) }),
     }
   }
 

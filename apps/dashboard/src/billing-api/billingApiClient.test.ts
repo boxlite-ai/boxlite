@@ -19,16 +19,18 @@ afterEach(() => {
 })
 
 describe('getOrganizationPlan', () => {
-  it('turns the cycle bounds into Dates and passes the quota fields through', async () => {
+  it('unwraps the plan envelope and turns the cycle bounds into Dates', async () => {
     const api = serve({
-      planId: 'pro',
-      planName: 'Pro',
-      status: 'active',
-      cycleFrom: '2026-08-05T00:00:00.000Z',
-      cycleTo: '2026-09-05T00:00:00.000Z',
-      includedQuotaCents: 25000,
-      quotaConsumedCents: 6250,
-      quotaRemainingCents: 18750,
+      plan: {
+        planId: 'pro',
+        planName: 'Pro',
+        status: 'active',
+        cycleFrom: '2026-08-05T00:00:00.000Z',
+        cycleTo: '2026-09-05T00:00:00.000Z',
+        includedQuotaCents: 25000,
+        quotaConsumedCents: 6250,
+        quotaRemainingCents: 18750,
+      },
     })
     const plan = await api.getOrganizationPlan('org-1')
     expect(plan?.cycleFrom).toEqual(new Date('2026-08-05T00:00:00.000Z'))
@@ -43,23 +45,25 @@ describe('getOrganizationPlan', () => {
 
   it('hydrates dueAt when the plan is past due', async () => {
     const api = serve({
-      planId: 'pro',
-      planName: 'Pro',
-      status: 'past_due',
-      cycleFrom: '2026-08-05T00:00:00.000Z',
-      cycleTo: '2026-09-05T00:00:00.000Z',
-      includedQuotaCents: 25000,
-      quotaConsumedCents: 6250,
-      quotaRemainingCents: 18750,
-      dueAt: '2026-08-20T00:00:00.000Z',
-      amountDueCents: 14900,
+      plan: {
+        planId: 'pro',
+        planName: 'Pro',
+        status: 'past_due',
+        cycleFrom: '2026-08-05T00:00:00.000Z',
+        cycleTo: '2026-09-05T00:00:00.000Z',
+        includedQuotaCents: 25000,
+        quotaConsumedCents: 6250,
+        quotaRemainingCents: 18750,
+        dueAt: '2026-08-20T00:00:00.000Z',
+        amountDueCents: 14900,
+      },
     })
     const plan = await api.getOrganizationPlan('org-1')
     expect(plan?.dueAt).toEqual(new Date('2026-08-20T00:00:00.000Z'))
   })
 
-  it('returns null for an organization with no live plan', async () => {
-    const api = serve(null)
+  it('returns null for an organization with no live plan (the {} envelope, not a bare null)', async () => {
+    const api = serve({})
     const plan = await api.getOrganizationPlan('org-1')
     expect(plan).toBeNull()
   })
