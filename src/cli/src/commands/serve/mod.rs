@@ -23,7 +23,7 @@ use tokio::sync::RwLock;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
-use boxlite::runtime::options::{NetworkConfig, NetworkMode};
+use boxlite::runtime::options::{NamedVolumeMount, NetworkConfig, NetworkMode};
 use boxlite::{
     BoxCommand, BoxInfo, BoxOptions, BoxliteRuntime, ExecStdin, Execution, LiteBox, NetworkSpec,
     RootfsSpec,
@@ -766,6 +766,15 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         cmd: req.cmd.clone(),
         user: req.user.clone(),
         tty: req.tty.unwrap_or(false),
+        volume_mounts: req
+            .volumes
+            .iter()
+            .map(|m| NamedVolumeMount {
+                volume_id: m.volume_id.clone(),
+                guest_path: m.guest_path.clone(),
+                read_only: m.read_only,
+            })
+            .collect(),
         advanced: boxlite::AdvancedBoxOptions {
             capabilities: boxlite::ContainerCapabilities {
                 add: req.advanced.capabilities.add.clone(),
@@ -1430,6 +1439,39 @@ mod tests {
             msg.contains("unknown field") && msg.contains("security_settings"),
             "expected deny-unknown-fields rejection mentioning `security_settings`; got {msg}"
         );
+    }
+
+    // ============================================================
+    // REST named-volume wire contract: `volume_id` only, never `host_path`.
+    //
+    // Mirrors the `security` boundary above: `CreateVolumeMount` carries
+    // `#[serde(deny_unknown_fields)]`, so a client cannot smuggle a
+    // `host_path` (arbitrary host directory) into a mount request. The
+    // server resolves the backing directory from the volume id itself.
+    // ============================================================
+
+    #[test]
+    fn create_volume_mount_rejects_client_supplied_host_path() {
+        let json = r#"{"volume_id":"v1","guest_path":"/data","host_path":"/etc"}"#;
+        let msg = match serde_json::from_str::<super::types::CreateVolumeMount>(json) {
+            Ok(_) => panic!("`host_path` must be rejected at deserialize"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("unknown field") && msg.contains("host_path"),
+            "expected deny-unknown-fields rejection mentioning `host_path`; got {msg}"
+        );
+    }
+
+    #[test]
+    fn create_box_request_accepts_volume_mounts() {
+        let json = r#"{"image":"alpine:latest","volumes":[{"volume_id":"v1","guest_path":"/data","read_only":false}]}"#;
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(json).expect("volume mounts must deserialize");
+        assert_eq!(req.volumes.len(), 1);
+        assert_eq!(req.volumes[0].volume_id, "v1");
+        assert_eq!(req.volumes[0].guest_path, "/data");
+        assert!(!req.volumes[0].read_only);
     }
 
     fn uploaded_v3_archive(box_options: serde_json::Value) -> Vec<u8> {

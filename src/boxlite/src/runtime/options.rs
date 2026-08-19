@@ -2,7 +2,7 @@
 
 use crate::runtime::constants::envs as const_envs;
 use crate::runtime::layout::dirs as const_dirs;
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -328,6 +328,8 @@ pub struct BoxOptions {
     pub env: Vec<(String, String)>,
     pub rootfs: RootfsSpec,
     pub volumes: Vec<VolumeSpec>,
+    #[serde(default)]
+    pub volume_mounts: Vec<NamedVolumeMount>,
     pub network: NetworkSpec,
     /// Explicit host publication for the local runtime.
     ///
@@ -524,6 +526,7 @@ impl Default for BoxOptions {
             env: Vec::new(),
             rootfs: RootfsSpec::default(),
             volumes: Vec::new(),
+            volume_mounts: Vec::new(),
             network: NetworkSpec::default(),
             ports: Vec::new(),
             auto_remove: default_auto_remove(),
@@ -636,6 +639,36 @@ pub struct VolumeSpec {
     pub guest_path: String,
     pub read_only: bool,
 }
+
+/// A named-volume mount request, unresolved.
+///
+/// `volume_id` names a server-assigned volume; the runtime resolves it to the
+/// volume's host directory at create time. Unlike [`VolumeSpec`], this never
+/// carries a concrete host path, so a caller cannot select an arbitrary host
+/// directory — the runtime is the only place id → path mapping happens.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct NamedVolumeMount {
+    pub volume_id: String,
+    pub guest_path: String,
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+/// A volume mount's `guest_path` must name an absolute path inside the guest.
+///
+/// Rejecting a non-absolute path here (rather than downstream) keeps a
+/// malformed mount from reaching the box build, and makes the rule unit-testable
+/// without constructing a runtime.
+pub(crate) fn validate_guest_path(guest_path: &str) -> BoxliteResult<()> {
+    if guest_path.trim().is_empty() || !guest_path.starts_with('/') {
+        return Err(BoxliteError::InvalidArgument(format!(
+            "volume guest_path must be an absolute path, got {:?}",
+            guest_path
+        )));
+    }
+    Ok(())
+}
+
 
 /// Network mode for public box configuration surfaces.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
