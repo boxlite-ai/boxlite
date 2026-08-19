@@ -62,11 +62,29 @@ impl Capture {
             .append(true)
             .custom_flags(nix::libc::O_NOFOLLOW)
             .open(&self.log_path)
-            .map_err(|error| self.io_error("open", error))?;
+            .map_err(|error| Self::io_error("open", &self.log_path, error))?;
         file.write_all(self.begin_record()?.as_bytes())
-            .map_err(|error| self.io_error("write", error))?;
+            .map_err(|error| Self::io_error("write", &self.log_path, error))?;
         file.sync_all()
-            .map_err(|error| self.io_error("fsync", error))
+            .map_err(|error| Self::io_error("fsync", &self.log_path, error))?;
+        self.sync_parent()
+    }
+
+    /// Syncing the file persists its contents, not the directory entry naming
+    /// it. On a first run `output.log` is newly created, so without this a host
+    /// crash can drop the whole file after `write_begin` returned success —
+    /// producing exactly the ambiguity the barrier exists to rule out, a log
+    /// with no `begin` that did have capture armed.
+    fn sync_parent(&self) -> BoxliteResult<()> {
+        let parent = self.log_path.parent().ok_or_else(|| {
+            BoxliteError::Internal(format!(
+                "capture log path has no parent directory: {}",
+                self.log_path.display()
+            ))
+        })?;
+        std::fs::File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|error| Self::io_error("fsync directory", parent, error))
     }
 
     fn begin_record(&self) -> BoxliteResult<String> {
@@ -80,10 +98,10 @@ impl Capture {
         ))
     }
 
-    fn io_error(&self, action: &str, error: std::io::Error) -> BoxliteError {
+    fn io_error(action: &str, path: &std::path::Path, error: std::io::Error) -> BoxliteError {
         BoxliteError::Internal(format!(
             "failed to {action} capture log {}: {error}",
-            self.log_path.display()
+            path.display()
         ))
     }
 }
@@ -168,6 +186,36 @@ mod tests {
         assert_eq!(written.lines().count(), 2);
         assert!(written.contains("b3f1c0a4-7d2e-4a91-8c55-0e6f2ab41d90"));
         assert!(written.contains("c4e2d1b5-8e3f-4b02-9d66-1f7a3bc52ea1"));
+    }
+
+    /// Whether the entry survives a crash needs fault injection to observe, so
+    /// this covers what is observable: both ways the directory sync can fail must
+    /// surface as errors rather than let the barrier report itself armed. Called
+    /// directly because reaching it through `write_begin` is impossible — a parent
+    /// that cannot be opened cannot be traversed either, so the log's own `open`
+    /// fails first and the sync never runs.
+    #[test]
+    fn a_failed_directory_sync_is_reported() {
+        for (log_path, why) in [
+            ("/", "root has no parent to sync"),
+            (
+                "/nonexistent-boxlite-capture-dir/output.log",
+                "an absent parent cannot be synced",
+            ),
+        ] {
+            let capture = Capture::from_request(
+                request("b3f1c0a4-7d2e-4a91-8c55-0e6f2ab41d90"),
+                PathBuf::from(log_path),
+            )
+            .unwrap()
+            .unwrap();
+
+            let error = capture.sync_parent().expect_err(why);
+            assert!(
+                matches!(error, BoxliteError::Internal(_)),
+                "{why}: {error:?}"
+            );
+        }
     }
 
     #[test]
