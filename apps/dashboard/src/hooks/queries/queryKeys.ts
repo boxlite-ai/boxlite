@@ -26,6 +26,8 @@ export const queryKeys = {
 
     list: () => [...queryKeys.organization.all, 'list'] as const,
     detail: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'detail'] as const,
+    concurrency: (organizationId: string, hours: number) =>
+      [...queryKeys.organization.all, organizationId, 'concurrency', { hours }] as const,
 
     usage: {
       overview: (organizationId: string) =>
@@ -80,7 +82,6 @@ export const queryKeys = {
     all: ['boxes'] as const,
     detail: (organizationId: string, boxId: string) =>
       [...queryKeys.boxes.all, organizationId, boxId, 'detail'] as const,
-    runningCount: (organizationId: string) => [...queryKeys.boxes.all, organizationId, 'running-count'] as const,
     terminalSession: (boxId: string) => [...queryKeys.boxes.all, boxId, 'terminal-session'] as const,
   },
   telemetry: {

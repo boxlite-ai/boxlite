@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BadRequestException } from '@nestjs/common'
+import { BadRequestException, HttpException, HttpStatus } from '@nestjs/common'
 
 /** The per-organization ceilings from the OrganizationQuota row. A ceiling of 0
  * denies all usage of that dimension (a 2-cpu box cannot fit in a 0 cpu quota) —
@@ -13,7 +13,7 @@ export interface OrgQuotaLimits {
   totalMemoryQuota: number
   totalDiskQuota: number
   totalGpuQuota: number
-  maxConcurrentBoxes: number
+  maxConcurrentBoxes: number | null
 }
 
 /** Applied when an organization has no OrganizationQuota row. Must stay in sync
@@ -64,11 +64,16 @@ export function assertWithinOrgQuota(limits: OrgQuotaLimits, usage: OrgResourceU
   if (usage.gpu > limits.totalGpuQuota) {
     violations.push(`GPU limit exceeded (max ${limits.totalGpuQuota})`)
   }
-  if (usage.count > limits.maxConcurrentBoxes) {
+  const concurrencyExceeded = limits.maxConcurrentBoxes !== null && usage.count > limits.maxConcurrentBoxes
+  if (concurrencyExceeded) {
     violations.push(`concurrent box limit exceeded (max ${limits.maxConcurrentBoxes})`)
   }
 
   if (violations.length > 0) {
-    throw new BadRequestException(`Organization quota exceeded: ${violations.join('; ')}`)
+    const message = `Organization quota exceeded: ${violations.join('; ')}`
+    if (concurrencyExceeded) {
+      throw new HttpException(message, HttpStatus.TOO_MANY_REQUESTS)
+    }
+    throw new BadRequestException(message)
   }
 }

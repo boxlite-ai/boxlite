@@ -29,8 +29,27 @@ function isCreditsDepletionSuspension(reason: string) {
 
 type Suspension = Pick<
   Organization,
-  'suspended' | 'suspensionReason' | 'suspendedAt' | 'suspensionCleanupGracePeriodHours'
+  'suspended' | 'suspensionReason' | 'suspendedAt' | 'suspensionCleanupAt' | 'suspensionCleanupGracePeriodHours'
 >
+
+function getCleanupDate(suspension: Suspension) {
+  if (suspension.suspensionCleanupAt) {
+    return new Date(suspension.suspensionCleanupAt)
+  }
+
+  return suspension.suspendedAt
+    ? addHours(new Date(suspension.suspendedAt), suspension.suspensionCleanupGracePeriodHours ?? 0)
+    : null
+}
+
+function getCleanupText(suspension: Suspension) {
+  const cleanupDate = getCleanupDate(suspension)
+  if (!cleanupDate) return 'Boxes will be stopped soon'
+
+  return cleanupDate <= new Date()
+    ? 'Boxes will be stopped'
+    : `Boxes will be stopped ${formatDistanceToNow(cleanupDate, { addSuffix: true })}`
+}
 
 export function useSuspensionBanner(suspension?: Suspension | null) {
   const { addBanner, removeBanner } = useBanner()
@@ -88,24 +107,11 @@ export function useSuspensionBanner(suspension?: Suspension | null) {
     }
 
     if (isCreditsDepletionSuspension(reason)) {
-      const suspendedAtDate = suspension.suspendedAt ? new Date(suspension.suspendedAt) : null
-      const cleanupDate = suspendedAtDate
-        ? addHours(suspendedAtDate, suspension.suspensionCleanupGracePeriodHours ?? 0)
-        : null
-
-      const cleanupDatePassed = cleanupDate !== null && cleanupDate <= new Date()
-
-      const cleanupText = cleanupDate
-        ? cleanupDatePassed
-          ? 'Boxes will be stopped'
-          : `Boxes will be stopped ${formatDistanceToNow(cleanupDate, { addSuffix: true })}`
-        : 'Boxes will be stopped soon'
-
       addBanner({
         id: SUSPENSION_BANNER_ID,
         variant: 'error',
         title: 'Credits depleted',
-        description: cleanupText,
+        description: getCleanupText(suspension),
         action:
           path !== RoutePath.BILLING
             ? {
@@ -118,23 +124,11 @@ export function useSuspensionBanner(suspension?: Suspension | null) {
       return
     }
 
-    const suspendedAtDate = suspension.suspendedAt ? new Date(suspension.suspendedAt) : null
-    const cleanupDate = suspendedAtDate
-      ? addHours(suspendedAtDate, suspension.suspensionCleanupGracePeriodHours ?? 0)
-      : null
-
-    const cleanupDatePassed = cleanupDate !== null && cleanupDate <= new Date()
-    const cleanupText = cleanupDate
-      ? cleanupDatePassed
-        ? 'Boxes will be stopped'
-        : `Boxes will be stopped ${formatDistanceToNow(cleanupDate, { addSuffix: true })}`
-      : 'Boxes will be stopped soon'
-
     addBanner({
       id: SUSPENSION_BANNER_ID,
       variant: 'error',
       title: 'Organization suspended',
-      description: reason ? `${reason}. ${cleanupText}` : cleanupText,
+      description: `${reason}. ${getCleanupText(suspension)}`,
       isDismissible: false,
     })
   }, [suspension, addBanner, removeBanner, navigate, path])

@@ -17,6 +17,7 @@ All URIs are relative to *http://localhost:3000*
 |[**deleteRegion**](#deleteregion) | **DELETE** /regions/{id} | Delete a region|
 |[**getOrganization**](#getorganization) | **GET** /organizations/{organizationId} | Get organization by ID|
 |[**getOrganizationByBoxId**](#getorganizationbyboxid) | **GET** /organizations/by-box-id/{boxId} | Get organization by box ID|
+|[**getOrganizationConcurrency**](#getorganizationconcurrency) | **GET** /organizations/{organizationId}/concurrency | Get current and historical organization concurrency|
 |[**getOrganizationInvitationsCountForAuthenticatedUser**](#getorganizationinvitationscountforauthenticateduser) | **GET** /organizations/invitations/count | Get count of organization invitations for authenticated user|
 |[**getOrganizationOtelConfigByBoxAuthToken**](#getorganizationotelconfigbyboxauthtoken) | **GET** /organizations/otel-config/by-box-auth-token/{authToken} | Get organization OTEL config by box auth token|
 |[**getRegionById**](#getregionbyid) | **GET** /regions/{id} | Get region by ID|
@@ -28,6 +29,7 @@ All URIs are relative to *http://localhost:3000*
 |[**listOrganizationRoles**](#listorganizationroles) | **GET** /organizations/{organizationId}/roles | List organization roles|
 |[**listOrganizations**](#listorganizations) | **GET** /organizations | List organizations|
 |[**regenerateProxyApiKey**](#regenerateproxyapikey) | **POST** /regions/{id}/regenerate-proxy-api-key | Regenerate proxy API key for a region|
+|[**setOrganizationConcurrencyEntitlement**](#setorganizationconcurrencyentitlement) | **PUT** /organizations/{organizationId}/concurrency-entitlement | Set the effective organization concurrency entitlement|
 |[**setOrganizationDefaultRegion**](#setorganizationdefaultregion) | **PATCH** /organizations/{organizationId}/default-region | Set default region for organization|
 |[**suspendOrganization**](#suspendorganization) | **POST** /organizations/{organizationId}/suspend | Suspend organization|
 |[**unsuspendOrganization**](#unsuspendorganization) | **POST** /organizations/{organizationId}/unsuspend | Unsuspend organization|
@@ -714,6 +716,59 @@ const { status, data } = await apiInstance.getOrganizationByBoxId(
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
+# **getOrganizationConcurrency**
+> OrganizationConcurrencyDto getOrganizationConcurrency()
+
+
+### Example
+
+```typescript
+import {
+    OrganizationsApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new OrganizationsApi(configuration);
+
+let organizationId: string; // (default to undefined)
+let hours: number; //Rolling history window in hours (optional) (default to 24)
+
+const { status, data } = await apiInstance.getOrganizationConcurrency(
+    organizationId,
+    hours
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **organizationId** | [**string**] |  | defaults to undefined|
+| **hours** | [**number**] | Rolling history window in hours | (optional) defaults to 24|
+
+
+### Return type
+
+**OrganizationConcurrencyDto**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
 # **getOrganizationInvitationsCountForAuthenticatedUser**
 > number getOrganizationInvitationsCountForAuthenticatedUser()
 
@@ -1246,6 +1301,60 @@ const { status, data } = await apiInstance.regenerateProxyApiKey(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | The proxy API key has been successfully regenerated. |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **setOrganizationConcurrencyEntitlement**
+> setOrganizationConcurrencyEntitlement(updateOrganizationConcurrencyEntitlementDto)
+
+
+### Example
+
+```typescript
+import {
+    OrganizationsApi,
+    Configuration,
+    UpdateOrganizationConcurrencyEntitlementDto
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new OrganizationsApi(configuration);
+
+let organizationId: string; // (default to undefined)
+let updateOrganizationConcurrencyEntitlementDto: UpdateOrganizationConcurrencyEntitlementDto; //
+
+const { status, data } = await apiInstance.setOrganizationConcurrencyEntitlement(
+    organizationId,
+    updateOrganizationConcurrencyEntitlementDto
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **updateOrganizationConcurrencyEntitlementDto** | **UpdateOrganizationConcurrencyEntitlementDto**|  | |
+| **organizationId** | [**string**] |  | defaults to undefined|
+
+
+### Return type
+
+void (empty response body)
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: Not defined
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**204** | Concurrency entitlement updated |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

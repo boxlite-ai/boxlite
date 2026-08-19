@@ -102,7 +102,7 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Organizations, membership, and invitations</b> · 23 routes</summary>
+<summary><b>Organizations, membership, and invitations</b> · 25 routes</summary>
 
 | Method   | Path                                                                     | What it does                                             |
 | -------- | ------------------------------------------------------------------------ | -------------------------------------------------------- |
@@ -118,6 +118,8 @@ serves and the events it emits are catalogued below alongside its routes.
 | `GET`    | `/api/organizations/by-box-id/{boxId}`                                   | Resolves the organization that owns a box.               |
 | `POST`   | `/api/organizations/{organizationId}/box-default-limited-network-egress` | Changes the default limited-egress policy for new boxes. |
 | `PUT`    | `/api/organizations/{organizationId}/experimental-config`                | Replaces the organization's experimental configuration.  |
+| `GET`    | `/api/organizations/{organizationId}/concurrency`                        | Gets current and historical concurrency usage.           |
+| `PUT`    | `/api/organizations/{organizationId}/concurrency-entitlement`            | Sets the effective concurrency entitlement.              |
 | `GET`    | `/api/organizations/{organizationId}/users`                              | Lists organization members.                              |
 | `POST`   | `/api/organizations/{organizationId}/users/{userId}/access`              | Changes a member's organization access.                  |
 | `DELETE` | `/api/organizations/{organizationId}/users/{userId}`                     | Removes a member from the organization.                  |

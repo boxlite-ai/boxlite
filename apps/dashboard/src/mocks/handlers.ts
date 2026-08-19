@@ -8,6 +8,7 @@ import { OrganizationEmail, OrganizationPlan, OrganizationWallet } from '@/billi
 import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
 import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
 import { Plan } from '@/billing-api/types/Plan'
+import type { OrganizationConcurrencyDto } from '@boxlite-ai/api-client'
 import { http, HttpResponse } from 'msw'
 import {
   MOCK_BOXES,
@@ -27,6 +28,16 @@ export const handlers = [
   // backend and no login (see MockAuthProvider for the fake session).
   http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),
   http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
+  http.get(`${API_URL}/organizations/:organizationId/concurrency`, () => {
+    const now = Date.now()
+    const runningBoxes = [0, 1, 3, 2, 1]
+    const points = runningBoxes.map((count, index) => ({
+      observedAt: new Date(now - (24 - index * 6) * 60 * 60 * 1000),
+      runningBoxes: count,
+    }))
+
+    return HttpResponse.json<OrganizationConcurrencyDto>({ current: 1, limit: 100, points })
+  }),
   http.get(`${API_URL}/organizations/:organizationId/users`, () => HttpResponse.json([MOCK_ORGANIZATION_MEMBER])),
   http.get(`${API_URL}/box/paginated`, ({ request }) => {
     // Respect the ?states=… filter so the fleet count cards (running / stopped)

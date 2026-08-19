@@ -7,6 +7,7 @@
 import { Panel, SectionTitle } from '@/components/ascii'
 import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
 import { CostOverTime } from '@/components/billing/CostOverTime'
+import { ConcurrencyTimeline } from '@/components/billing/ConcurrencyTimeline'
 import { ThisCycleCard } from '@/components/billing/ThisCycleCard'
 import { AggregatedUsageChart, ResourceUsageBreakdown, UsageSummary } from '@/components/spending/AggregatedUsageChart'
 import { BoxUsageTable } from '@/components/spending/BoxUsageTable'
@@ -82,6 +83,7 @@ export function UsageSection({ onGoToWallet }: { onGoToWallet: () => void }) {
       <BalanceLowBanner onGoToWallet={onGoToWallet} />
       <ThisCycleCard />
       <CostOverTime />
+      <ConcurrencyTimeline />
 
       {analyticsAvailable && (
         <>

@@ -17,6 +17,7 @@ Name | Type | Description | Notes
 **suspensionReason** | **string** | Suspended reason | [default to undefined]
 **suspendedUntil** | **Date** | Suspended until | [default to undefined]
 **suspensionCleanupGracePeriodHours** | **number** | Suspension cleanup grace period hours | [default to undefined]
+**suspensionCleanupAt** | **Date** | Authoritative time when suspended boxes become eligible for cleanup | [optional] [default to undefined]
 **maxCpuPerBox** | **number** | Max CPU per box | [default to undefined]
 **maxMemoryPerBox** | **number** | Max memory per box | [default to undefined]
 **maxDiskPerBox** | **number** | Max disk per box | [default to undefined]
@@ -49,6 +50,7 @@ const instance: Organization = {
     suspensionReason,
     suspendedUntil,
     suspensionCleanupGracePeriodHours,
+    suspensionCleanupAt,
     maxCpuPerBox,
     maxMemoryPerBox,
     maxDiskPerBox,

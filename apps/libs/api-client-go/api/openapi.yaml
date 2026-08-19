@@ -425,6 +425,73 @@ paths:
       summary: Set default region for organization
       tags:
       - organizations
+  /organizations/{organizationId}/concurrency:
+    get:
+      operationId: getOrganizationConcurrency
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Rolling history window in hours
+        explode: true
+        in: query
+        name: hours
+        required: false
+        schema:
+          default: 24
+          maximum: 168
+          minimum: 1
+          type: number
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationConcurrencyDto"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get current and historical organization concurrency
+      tags:
+      - organizations
+  /organizations/{organizationId}/concurrency-entitlement:
+    put:
+      operationId: setOrganizationConcurrencyEntitlement
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrganizationConcurrencyEntitlementDto"
+        required: true
+      responses:
+        "204":
+          description: Concurrency entitlement updated
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Set the effective organization concurrency entitlement
+      tags:
+      - organizations
   /organizations/{organizationId}:
     delete:
       operationId: deleteOrganization
@@ -4457,6 +4524,7 @@ components:
         suspensionReason: suspensionReason
         suspendedUntil: 2000-01-23T04:56:07.000+00:00
         suspensionCleanupGracePeriodHours: 0.8008281904610115
+        suspensionCleanupAt: 2000-01-23T04:56:07.000+00:00
         maxCpuPerBox: 6.027456183070403
         maxMemoryPerBox: 1.4658129805029452
         maxDiskPerBox: 5.962133916683182
@@ -4514,6 +4582,11 @@ components:
         suspensionCleanupGracePeriodHours:
           description: Suspension cleanup grace period hours
           type: number
+        suspensionCleanupAt:
+          description: Authoritative time when suspended boxes become eligible for
+            cleanup
+          format: date-time
+          type: string
         maxCpuPerBox:
           description: Max CPU per box
           type: number
@@ -4607,6 +4680,63 @@ components:
           type: string
       required:
       - defaultRegionId
+      type: object
+    OrganizationConcurrencyPointDto:
+      example:
+        observedAt: 2000-01-23T04:56:07.000+00:00
+        runningBoxes: 0.14658129805029452
+      properties:
+        observedAt:
+          description: When the concurrency count was observed
+          format: date-time
+          type: string
+        runningBoxes:
+          description: Boxes occupying a concurrency slot
+          minimum: 0
+          type: number
+      required:
+      - observedAt
+      - runningBoxes
+      type: object
+    OrganizationConcurrencyDto:
+      example:
+        current: 0.08008281904610115
+        limit: 6.027456183070403
+        points:
+        - observedAt: 2000-01-23T04:56:07.000+00:00
+          runningBoxes: 0.14658129805029452
+        - observedAt: 2000-01-23T04:56:07.000+00:00
+          runningBoxes: 0.14658129805029452
+      properties:
+        current:
+          description: Boxes occupying a concurrency slot now
+          minimum: 0
+          type: number
+        limit:
+          description: Effective concurrency entitlement. Null means unlimited.
+          nullable: true
+          type: number
+        points:
+          description: Concurrency changes during the requested rolling window
+          items:
+            $ref: "#/components/schemas/OrganizationConcurrencyPointDto"
+          type: array
+      required:
+      - current
+      - limit
+      - points
+      type: object
+    UpdateOrganizationConcurrencyEntitlementDto:
+      example:
+        maxConcurrentBoxes: 1.0800828190461012
+      properties:
+        maxConcurrentBoxes:
+          description: Maximum concurrent boxes. Null means unlimited.
+          minimum: 1
+          nullable: true
+          type: number
+      required:
+      - maxConcurrentBoxes
       type: object
     OrganizationSuspension:
       example:

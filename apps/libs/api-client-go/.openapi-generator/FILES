@@ -57,6 +57,8 @@ model_metrics_response.go
 model_oidc_config.go
 model_organization.go
 model_organization_box_default_limited_network_egress.go
+model_organization_concurrency_dto.go
+model_organization_concurrency_point_dto.go
 model_organization_invitation.go
 model_organization_role.go
 model_organization_suspension.go
@@ -90,6 +92,7 @@ model_trace_span.go
 model_trace_summary.go
 model_update_box_state_dto.go
 model_update_job_status.go
+model_update_organization_concurrency_entitlement_dto.go
 model_update_organization_default_region.go
 model_update_organization_invitation.go
 model_update_organization_member_access.go

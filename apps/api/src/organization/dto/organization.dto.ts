@@ -71,6 +71,11 @@ export class OrganizationDto {
   })
   suspensionCleanupGracePeriodHours?: number
 
+  @ApiPropertyOptional({
+    description: 'Authoritative time when suspended boxes become eligible for cleanup',
+  })
+  suspensionCleanupAt?: Date
+
   @ApiProperty({
     description: 'Max CPU per box',
   })
@@ -169,6 +174,12 @@ export class OrganizationDto {
       suspendedAt: organization.suspendedAt,
       suspendedUntil: organization.suspendedUntil,
       suspensionCleanupGracePeriodHours: organization.suspensionCleanupGracePeriodHours,
+      suspensionCleanupAt:
+        organization.suspendedAt && organization.suspensionCleanupGracePeriodHours != null
+          ? new Date(
+              organization.suspendedAt.getTime() + organization.suspensionCleanupGracePeriodHours * 60 * 60 * 1000,
+            )
+          : undefined,
       maxCpuPerBox: organization.maxCpuPerBox,
       maxMemoryPerBox: organization.maxMemoryPerBox,
       maxDiskPerBox: organization.maxDiskPerBox,

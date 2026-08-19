@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BadRequestException } from '@nestjs/common'
+import { BadRequestException, HttpException, HttpStatus } from '@nestjs/common'
 import { assertWithinOrgQuota, OrgQuotaLimits, OrgResourceUsage } from './org-quota'
 
 const limits: OrgQuotaLimits = {
@@ -42,7 +42,19 @@ describe('assertWithinOrgQuota', () => {
 
   it('rejects the 11th concurrent box when max is 10', () => {
     expect(() => assertWithinOrgQuota(limits, usage({ count: 10 }), 0)).not.toThrow()
-    expect(() => assertWithinOrgQuota(limits, usage({ count: 11 }), 0)).toThrow(/concurrent box limit/)
+    try {
+      assertWithinOrgQuota(limits, usage({ count: 11 }), 0)
+      throw new Error('expected concurrency admission to be rejected')
+    } catch (error) {
+      expect(error).toBeInstanceOf(HttpException)
+      expect((error as HttpException).getStatus()).toBe(HttpStatus.TOO_MANY_REQUESTS)
+    }
+  })
+
+  it('treats a null concurrent-box limit as unlimited', () => {
+    expect(() =>
+      assertWithinOrgQuota({ ...limits, maxConcurrentBoxes: null }, usage({ count: 10_000 }), 0),
+    ).not.toThrow()
   })
 
   it('fast-rejects a GPU request when the org has no GPU quota', () => {
@@ -70,8 +82,13 @@ describe('assertWithinOrgQuota', () => {
   })
 
   it('reports every violated dimension in one message', () => {
-    expect(() => assertWithinOrgQuota(limits, usage({ cpu: 99, memory: 99, disk: 99, count: 99 }), 0)).toThrow(
-      /CPU .*memory .*disk .*concurrent/s,
-    )
+    try {
+      assertWithinOrgQuota(limits, usage({ cpu: 99, memory: 99, disk: 99, count: 99 }), 0)
+      throw new Error('expected quota admission to be rejected')
+    } catch (error) {
+      expect(error).toBeInstanceOf(HttpException)
+      expect((error as HttpException).getStatus()).toBe(HttpStatus.TOO_MANY_REQUESTS)
+      expect((error as Error).message).toMatch(/CPU .*memory .*disk .*concurrent/s)
+    }
   })
 })

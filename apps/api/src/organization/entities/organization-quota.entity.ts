@@ -55,9 +55,10 @@ export class OrganizationQuota {
   @Column({
     type: 'int',
     default: 50,
+    nullable: true,
     name: 'max_concurrent_boxes',
   })
-  maxConcurrentBoxes: number
+  maxConcurrentBoxes: number | null
 
   @CreateDateColumn({
     type: 'timestamp with time zone',

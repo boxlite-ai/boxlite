@@ -47,6 +47,8 @@ type Organization struct {
 	SuspendedUntil time.Time `json:"suspendedUntil"`
 	// Suspension cleanup grace period hours
 	SuspensionCleanupGracePeriodHours float32 `json:"suspensionCleanupGracePeriodHours"`
+	// Authoritative time when suspended boxes become eligible for cleanup
+	SuspensionCleanupAt *time.Time `json:"suspensionCleanupAt,omitempty"`
 	// Max CPU per box
 	MaxCpuPerBox float32 `json:"maxCpuPerBox"`
 	// Max memory per box
@@ -412,6 +414,38 @@ func (o *Organization) SetSuspensionCleanupGracePeriodHours(v float32) {
 	o.SuspensionCleanupGracePeriodHours = v
 }
 
+// GetSuspensionCleanupAt returns the SuspensionCleanupAt field value if set, zero value otherwise.
+func (o *Organization) GetSuspensionCleanupAt() time.Time {
+	if o == nil || IsNil(o.SuspensionCleanupAt) {
+		var ret time.Time
+		return ret
+	}
+	return *o.SuspensionCleanupAt
+}
+
+// GetSuspensionCleanupAtOk returns a tuple with the SuspensionCleanupAt field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *Organization) GetSuspensionCleanupAtOk() (*time.Time, bool) {
+	if o == nil || IsNil(o.SuspensionCleanupAt) {
+		return nil, false
+	}
+	return o.SuspensionCleanupAt, true
+}
+
+// HasSuspensionCleanupAt returns a boolean if a field has been set.
+func (o *Organization) HasSuspensionCleanupAt() bool {
+	if o != nil && !IsNil(o.SuspensionCleanupAt) {
+		return true
+	}
+
+	return false
+}
+
+// SetSuspensionCleanupAt gets a reference to the given time.Time and assigns it to the SuspensionCleanupAt field.
+func (o *Organization) SetSuspensionCleanupAt(v time.Time) {
+	o.SuspensionCleanupAt = &v
+}
+
 // GetMaxCpuPerBox returns the MaxCpuPerBox field value
 func (o *Organization) GetMaxCpuPerBox() float32 {
 	if o == nil {
@@ -766,6 +800,9 @@ func (o Organization) ToMap() (map[string]interface{}, error) {
 	toSerialize["suspensionReason"] = o.SuspensionReason
 	toSerialize["suspendedUntil"] = o.SuspendedUntil
 	toSerialize["suspensionCleanupGracePeriodHours"] = o.SuspensionCleanupGracePeriodHours
+	if !IsNil(o.SuspensionCleanupAt) {
+		toSerialize["suspensionCleanupAt"] = o.SuspensionCleanupAt
+	}
 	toSerialize["maxCpuPerBox"] = o.MaxCpuPerBox
 	toSerialize["maxMemoryPerBox"] = o.MaxMemoryPerBox
 	toSerialize["maxDiskPerBox"] = o.MaxDiskPerBox
@@ -859,6 +896,7 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "suspensionReason")
 		delete(additionalProperties, "suspendedUntil")
 		delete(additionalProperties, "suspensionCleanupGracePeriodHours")
+		delete(additionalProperties, "suspensionCleanupAt")
 		delete(additionalProperties, "maxCpuPerBox")
 		delete(additionalProperties, "maxMemoryPerBox")
 		delete(additionalProperties, "maxDiskPerBox")

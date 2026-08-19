@@ -32,6 +32,17 @@ describe('OrganizationController suspend/unsuspend role metadata', () => {
   )
 })
 
+describe('OrganizationController concurrency entitlement role metadata', () => {
+  const reflector = new Reflector()
+
+  it('admits only Admin and billing service callers', () => {
+    const handler = OrganizationController.prototype.setConcurrencyEntitlement
+
+    expect(reflector.get(RequiredSystemRole, handler)).toBeUndefined()
+    expect(reflector.get(RequiredApiRole, handler)).toEqual([SystemRole.ADMIN, 'billing'])
+  })
+})
+
 describe('OrganizationController suspend/unsuspend, evaluated through the real guard', () => {
   function httpContext(request: Record<string, unknown>, method: 'suspend' | 'unsuspend'): ExecutionContext {
     return {
