@@ -84,12 +84,15 @@ endef
 test:
 	@$(MAKE) test:changed
 
-# Repo-local BoxLite diagram skill validator. This suite is deterministic: it
-# uses local stand-ins for gh and Mermaid CLI while exercising the real parser,
-# source, diff, and cross-view validation code.
+# Pinned BoxLite diagram skill validator. This suite is deterministic: it uses
+# local stand-ins for gh and Mermaid CLI while exercising the real parser,
+# source, diff, and cross-view validation code from agent-tooling.
 test\:skill\:boxlite-diagrams:
 	@echo "🧪 Running BoxLite diagrams skill validator tests..."
-	@python3 -m unittest discover -s .agents/skills/boxlite-diagrams/tests -v
+	@./.agent-tooling/install.sh >/dev/null
+	@hooks_path="$$(git config --get core.hooksPath)"; \
+	tooling_root="$$(cd "$$hooks_path/.." && pwd)"; \
+	python3 -m unittest discover -s "$$tooling_root/.agents/skills/boxlite-diagrams/tests" -v
 
 # Smart test: only test components with changes, fall back to full matrix.
 test\:changed:

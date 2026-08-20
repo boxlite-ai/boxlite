@@ -1,1 +1,0 @@
-../../.agents/hooks/preflight-commit-push.sh

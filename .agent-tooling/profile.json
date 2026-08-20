@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "profile": "boxlite",
+  "repository": "boxlite-ai/boxlite",
+  "tooling": {
+    "repository": "boxlite-ai/agent-tooling",
+    "sha": "f0bcf5be9b1ab2771ab3ddb176e89c0911e8dec3"
+  },
+  "checks": [
+    {
+      "name": "format",
+      "command": "make fmt:check"
+    },
+    {
+      "name": "lint",
+      "command": "make lint"
+    },
+    {
+      "name": "test",
+      "command": "make test"
+    }
+  ]
+}

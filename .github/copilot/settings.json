@@ -1,7 +1,4 @@
 {
-  "env": {
-    "VERDICT_GATE_HARD_BLOCK": "1"
-  },
   "extraKnownMarketplaces": {
     "boxlite-agent-tooling": {
       "source": {

@@ -1,0 +1,30 @@
+name: Agent tooling
+
+on:
+  pull_request:
+    paths:
+      - ".agent-tooling/**"
+      - ".agents/plugins/marketplace.json"
+      - ".claude/settings.json"
+      - ".github/copilot/settings.json"
+      - ".github/workflows/agent-tooling.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".agent-tooling/**"
+      - ".agents/plugins/marketplace.json"
+      - ".claude/settings.json"
+      - ".github/copilot/settings.json"
+      - ".github/workflows/agent-tooling.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve and validate the pinned tooling profile
+        run: ./.agent-tooling/install.sh

@@ -535,11 +535,12 @@ install_git_hooks_best_effort() {
         return 0
     fi
 
-    # prek first, gate second, and the redirect cleared in between — the order is
-    # load-bearing. prek writes .git/hooks/{pre-commit,pre-push} and refuses
+    # prek first, agent-tooling second, and the redirect cleared in between — the
+    # order is load-bearing. prek writes .git/hooks/{pre-commit,pre-push} and refuses
     # outright while core.hooksPath is set ("Cowardly refusing to install hooks
     # with core.hooksPath set"), while the gate CHAINS into the very files prek
-    # writes (.githooks/pre-commit -> --git-common-dir/hooks/pre-commit). Set the
+    # writes (agent-tooling/.githooks/pre-commit ->
+    # --git-common-dir/hooks/pre-commit). Set the
     # redirect first and prek installs nothing, so the gate chains into a file
     # that does not exist and lint-fix and the test matrix silently stop running.
     # Clearing up front also makes a re-run of `make setup` idempotent.
@@ -568,21 +569,18 @@ install_git_hooks_best_effort() {
         fi
     fi
 
-    # Point git at the tracked gate layer (.githooks/pre-commit, pre-push,
-    # commit-msg). This is what makes the agent audit gate fire for any process
-    # that runs git, not just for harnesses we have wired.
-    #
-    # Relative, not absolute: git resolves a relative core.hooksPath against each
-    # worktree's own root, so a linked worktree runs the hooks it contains rather
-    # than the main checkout's. Absolute would make one installed copy serve every
-    # worktree whatever commit it sits on.
-    #
-    # Reached whether or not prek ran: the branches above warn rather than return,
-    # because the gate does not depend on prek.
-    if (cd "$root_dir" && git config core.hooksPath .githooks); then
-        print_success "core.hooksPath -> .githooks (agent gate active)"
+    # Resolve the immutable agent-tooling pin and point git at its gate layer.
+    # The bootstrap validates the consumer profile and all native activation
+    # files before changing core.hooksPath. Reached whether or not prek ran: the
+    # branches above warn rather than return because the gate does not depend on
+    # prek.
+    local agent_tooling_installer="$root_dir/.agent-tooling/install.sh"
+    if [ ! -x "$agent_tooling_installer" ]; then
+        print_warning "Agent tooling installer not found at $agent_tooling_installer"
+    elif (cd "$root_dir" && "$agent_tooling_installer"); then
+        print_success "Pinned agent-tooling gate active"
     else
-        print_warning "Could not set core.hooksPath; the agent gate will not run"
+        print_warning "Agent tooling installation failed; the agent gate will not run"
     fi
 }
 

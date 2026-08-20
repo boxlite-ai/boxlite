@@ -178,7 +178,7 @@ Cargo.lock
 .claude/worktrees/
 .agents/state/
 # Legacy marker locations, kept ignored through the move to .agents/state/.
-# The first two are written by .agents/hooks/preflight-commit-push.sh so a
+# The first two are written by the shared preflight-commit-push hook so a
 # commit-msg from before the move still finds its audit; the rest are what a
 # checkout from before the move still writes. All must stay ignored: the verdict
 # gate keys its dossier to a tree hash that skips ignored paths, so an unignored
