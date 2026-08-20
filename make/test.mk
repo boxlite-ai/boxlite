@@ -20,6 +20,7 @@ export NEXTEST_FILTER_EXPR
 NEXTEST_FILTER   = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',))
 NEXTEST_CLI_FILTER = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',-E 'not binary(stress_disk)'))
 CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),)
+REST_CLIENT_CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),rest::client::tests::)
 PYTEST_FILTER    = $(if $(FILTER),-k '$(FILTER)',)
 VITEST_FILTER    = $(if $(FILTER),-t '$(FILTER)',)
 CTEST_FILTER     = $(if $(FILTER),-R '$(FILTER)',)
@@ -217,6 +218,7 @@ test\:unit\:rust:
 		cargo test -p boxlite --no-default-features --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 	fi; \
+	cargo test -p boxlite --no-default-features --features rest --lib -- --test-threads=1 $(REST_CLIENT_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and

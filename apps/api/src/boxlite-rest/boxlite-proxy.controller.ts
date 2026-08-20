@@ -176,6 +176,7 @@ export class BoxliteProxyController {
       res,
       next,
       USER_OPERATION,
+      { proxyTimeoutMs: 0 },
     )
   }
 
@@ -217,7 +218,7 @@ export class BoxliteProxyController {
     res: Response,
     next: NextFunction,
     policy: ProxyActivityPolicy,
-    opts?: { ws?: boolean },
+    opts?: { ws?: boolean; proxyTimeoutMs?: number },
   ) {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     if (!box) {
@@ -260,7 +261,7 @@ export class BoxliteProxyController {
           fixRequestBody(proxyReq, originalReq)
         },
       },
-      proxyTimeout: 5 * 60 * 1000,
+      proxyTimeout: opts?.proxyTimeoutMs ?? 5 * 60 * 1000,
     }
 
     return createProxyMiddleware(proxyOptions)(req, res, next)

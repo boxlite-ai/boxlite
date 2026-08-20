@@ -53,6 +53,19 @@ describe('BoxliteProxyController', () => {
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
   })
 
+  it('disables the runner timeout for files only', async () => {
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller } = makeHarness()
+
+    await controller.proxyFiles(activeAuth as never, 'public-box', { url: '/files' } as never, {} as never, jest.fn())
+    await controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn())
+
+    const fileOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
+    const execOptions = jest.mocked(createProxyMiddleware).mock.calls[1][0]
+    expect(fileOptions.proxyTimeout).toBe(0)
+    expect(execOptions.proxyTimeout).toBe(300000)
+  })
+
   it('returns the public endpoint for JSON tunnel requests', async () => {
     const { controller, boxService } = makeHarness()
 

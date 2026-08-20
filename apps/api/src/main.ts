@@ -186,6 +186,9 @@ async function bootstrap() {
     const httpServer = app.getHttpServer()
     httpServer.keepAliveTimeout = 65 * 60 * 1000
     httpServer.headersTimeout = 66 * 60 * 1000
+    // File uploads can legitimately exceed Node's default five-minute request
+    // body deadline. Node exposes this setting only at the server level.
+    httpServer.requestTimeout = 0
 
     // WebSocket upgrade routing for the BoxLite REST `/attach` endpoint.
     // NestJS controllers only fire on Express's `request` event; WS upgrades

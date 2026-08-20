@@ -128,3 +128,4 @@ boxlite-test-utils = { path = "../test-utils" }
 notify = "6.1"
 proptest = "1.4"
 toml = "0.8"
+tokio = { version = "1.37", features = ["test-util"] }
