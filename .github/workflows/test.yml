@@ -24,12 +24,12 @@ on:
       - '.gitmodules'
       - 'scripts/common.sh'
       - 'scripts/build/build-guest-deps.sh'
-      - 'scripts/build/build-guest-rootfs.sh'
       - 'scripts/build/build-guest.sh'
       - 'scripts/build/build-libseccomp.sh'
       - 'scripts/util.sh'
       - 'scripts/setup/**'
-      - 'scripts/test/test-guest-rootfs.sh'
+      - 'scripts/test/test-guest-artifacts.sh'
+      - 'scripts/test/test-guest-build-contracts.sh'
       - 'Makefile'
       - 'make/**'
       - 'rust-toolchain.toml'
@@ -71,7 +71,7 @@ jobs:
       node: ${{ steps.filter.outputs.node }}
       go: ${{ steps.filter.outputs.go }}
       api: ${{ steps.filter.outputs.api }}
-      guest_rootfs: ${{ steps.filter.outputs.guest_rootfs }}
+      guest_artifacts: ${{ steps.filter.outputs.guest_artifacts }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v4
@@ -102,20 +102,20 @@ jobs:
               - 'apps/package.json'
               - 'apps/yarn.lock'
               - 'apps/nx.json'
-            guest_rootfs:
+            guest_artifacts:
               - '.cargo/**'
               - '.gitmodules'
               - 'src/deps/e2fsprogs-sys/**'
               - 'src/guest/**'
               - 'src/shared/**'
               - 'scripts/build/build-guest-deps.sh'
-              - 'scripts/build/build-guest-rootfs.sh'
               - 'scripts/build/build-guest.sh'
               - 'scripts/build/build-libseccomp.sh'
               - 'scripts/common.sh'
               - 'scripts/util.sh'
               - 'scripts/setup/**'
-              - 'scripts/test/test-guest-rootfs.sh'
+              - 'scripts/test/test-guest-artifacts.sh'
+              - 'scripts/test/test-guest-build-contracts.sh'
               - 'Makefile'
               - 'make/**'
               - 'rust-toolchain.toml'
@@ -304,10 +304,10 @@ jobs:
       - name: Run Go unit tests
         run: make test:unit:go
 
-  guest-rootfs:
-    name: Guest Rootfs (${{ matrix.os }} / ${{ matrix.target }} / ${{ matrix.profile }})
+  guest_artifacts:
+    name: Guest Artifacts (${{ matrix.os }} / ${{ matrix.target }} / ${{ matrix.profile }})
     needs: [config, changes]
-    if: ${{ needs.changes.outputs.guest_rootfs == 'true' }}
+    if: ${{ needs.changes.outputs.guest_artifacts == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -344,8 +344,8 @@ jobs:
       - name: Set up build dependencies
         run: make setup:build
 
-      - name: Build and qualify guest rootfs
-        run: make test:guest-rootfs GUEST_TARGET=${{ matrix.target }} PROFILE=${{ matrix.profile }}
+      - name: Build and qualify guest artifacts
+        run: make test:guest-artifacts GUEST_TARGET=${{ matrix.target }} PROFILE=${{ matrix.profile }}
 
   # API tests need real Redis and Postgres services for integration coverage.
   api:
@@ -413,7 +413,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [config, changes, rust, cli, python, node, go, api, guest-rootfs]
+    needs: [config, changes, rust, cli, python, node, go, api, guest_artifacts]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

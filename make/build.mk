@@ -6,7 +6,7 @@ guest:
 	@target="$${_BOXLITE_GUEST_TARGET_ARG:-$$(bash "$$PWD/scripts/util.sh" --target)}"; \
 	profile="$${_BOXLITE_PROFILE_ARG:-release}"; \
 	bash "$$PWD/scripts/build/build-guest.sh" --target "$$target" --profile "$$profile" && \
-	bash "$$PWD/scripts/build/build-guest-rootfs.sh" --target "$$target" --profile "$$profile"
+	bash "$$PWD/scripts/build/build-guest-deps.sh" --target "$$target" --profile "$$profile"
 
 shim:
 	@bash $(SCRIPT_DIR)/build/build-shim.sh

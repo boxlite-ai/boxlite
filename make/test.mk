@@ -1,4 +1,4 @@
-PHONY_TARGETS += test test\:unit\:guest test\:guest-perms test\:guest-rootfs test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
+PHONY_TARGETS += test test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -286,14 +286,14 @@ test\:guest-perms:
 		exit 1; \
 	fi
 
-# Build and structurally qualify the minimal guest rootfs. Native x86_64 release
-# also exercises verifier rejection paths; no guest executable is run.
-test\:guest-rootfs: export _BOXLITE_GUEST_TARGET_ARG := $(value GUEST_TARGET)
-test\:guest-rootfs: export _BOXLITE_PROFILE_ARG := $(value PROFILE)
-test\:guest-rootfs: guest
+# Build and qualify the standalone guest artifacts. Native x86_64 release also
+# exercises verifier rejection paths; matching native Linux runs tool smoke tests.
+test\:guest-artifacts: export _BOXLITE_GUEST_TARGET_ARG := $(value GUEST_TARGET)
+test\:guest-artifacts: export _BOXLITE_PROFILE_ARG := $(value PROFILE)
+test\:guest-artifacts:
 	@target="$${_BOXLITE_GUEST_TARGET_ARG:-$$(bash "$$PWD/scripts/util.sh" --target)}"; \
 	profile="$${_BOXLITE_PROFILE_ARG:-release}"; \
-	bash "$$PWD/scripts/test/test-guest-rootfs.sh" --target "$$target" --profile "$$profile"
+	bash "$$PWD/scripts/test/test-guest-artifacts.sh" --target "$$target" --profile "$$profile"
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
 test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)

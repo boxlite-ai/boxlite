@@ -1,13 +1,21 @@
 #!/bin/bash
-# Build static e2fsprogs tools for a musl guest.
+# Build and publish static e2fsprogs tools alongside the musl guest binary.
 # Usage:
-#   build-guest-deps.sh --dest DIR [--target TARGET] [--profile release|debug]
+#   build-guest-deps.sh [--target TARGET] [--profile release|debug]
 
 set -euo pipefail
 
 die() {
     echo "ERROR: $*" >&2
     return 1
+}
+
+portable_mode() {
+    if stat -c '%a' "$1" >/dev/null 2>&1; then
+        stat -c '%a' "$1"
+    else
+        stat -f '%Lp' "$1"
+    fi
 }
 
 host_arch() {
@@ -39,12 +47,29 @@ musl_cc() {
     echo "$compiler"
 }
 
+artifact_exists() {
+    [ -e "$1" ] || [ -L "$1" ]
+}
+
+remove_tree() {
+    local path="$1" label="$2"
+    [ -n "$path" ] || return 0
+    [ -e "$path" ] || [ -L "$path" ] || return 0
+    chmod -R u+w "$path" 2>/dev/null || true
+    if ! rm -rf -- "$path"; then
+        die "failed to remove $label: $path"
+        return 1
+    fi
+}
+
 cleanup() {
-    local status=$?
+    local status=$? cleanup_failed=0
     trap - EXIT HUP INT TERM
-    if [ -n "${work:-}" ]; then
-        chmod -R u+w "$work" 2>/dev/null || true
-        rm -rf -- "$work"
+    set +e
+    remove_tree "$work" "temporary guest tools work directory" || cleanup_failed=1
+    remove_tree "$stage" "guest tools staging directory" || cleanup_failed=1
+    if [ "$status" -eq 0 ] && [ "$cleanup_failed" -ne 0 ]; then
+        status=1
     fi
     exit "$status"
 }
@@ -60,18 +85,13 @@ parse_args() {
                 target="$2"
                 shift 2
                 ;;
-            --dest)
-                [ "$#" -ge 2 ] || { die "--dest requires a value"; return 2; }
-                dest="$2"
-                shift 2
-                ;;
             --profile)
                 [ "$#" -ge 2 ] || { die "--profile requires a value"; return 2; }
                 profile="$2"
                 shift 2
                 ;;
             --help|-h)
-                echo "Usage: $0 --dest DIR [--target TARGET] [--profile release|debug]"
+                echo "Usage: $0 [--target TARGET] [--profile release|debug]"
                 exit 0
                 ;;
             *)
@@ -80,18 +100,6 @@ parse_args() {
                 ;;
         esac
     done
-
-    [ -n "$dest" ] || { die "--dest is required"; return 2; }
-    [ -d "$dest" ] || { die "destination must be an existing directory: $dest"; return 2; }
-    [ ! -L "$dest" ] || { die "destination must not be a symlink: $dest"; return 2; }
-    dest=$(cd "$dest" && pwd -P)
-    local destination_inventory
-    destination_inventory=$(find "$dest" ! -path "$dest" -prune -print) || {
-        die "failed to inspect destination: $dest"; return 2;
-    }
-    [ -z "$destination_inventory" ] || {
-        die "destination must be empty: $dest"; return 2;
-    }
 
     if [ -z "$target" ]; then
         target=$(bash "$root/scripts/util.sh" --target)
@@ -103,8 +111,56 @@ parse_args() {
     esac
 }
 
+verify_tool() {
+    local path="$1"
+    [ -f "$path" ] && [ ! -L "$path" ] && [ -s "$path" ] || {
+        die "invalid guest tool: $path"
+        return 1
+    }
+    [ "$(portable_mode "$path")" = 755 ] || {
+        die "guest tool must have mode 0755: $path"
+        return 1
+    }
+    bash "$root/scripts/util.sh" --verify-guest-elf "$target" "$path"
+}
+
+verify_stage() {
+    local actual expected
+    verify_tool "$stage/mke2fs"
+    verify_tool "$stage/resize2fs"
+    actual=$(find "$stage" ! -path "$stage" -prune -print | LC_ALL=C sort) || {
+        die "failed to inspect guest tool staging: $stage"
+        return 1
+    }
+    expected=$(printf '%s\n' "$stage/mke2fs" "$stage/resize2fs" | LC_ALL=C sort)
+    [ "$actual" = "$expected" ] || {
+        die "guest tool staging must contain exactly mke2fs and resize2fs"
+        return 1
+    }
+}
+
+preflight_final_paths() {
+    local name final
+    for name in mke2fs resize2fs; do
+        final="$output_parent/$name"
+        if artifact_exists "$final" && { [ ! -f "$final" ] || [ -L "$final" ]; }; then
+            die "refusing to replace non-regular guest tool: $final"
+            return 1
+        fi
+    done
+}
+
+publish_tools() {
+    local name final
+    preflight_final_paths
+    for name in mke2fs resize2fs; do
+        final="$output_parent/$name"
+        mv -- "$stage/$name" "$final"
+        verify_tool "$final"
+    done
+}
+
 build_tools() {
-    local destination_inventory
     local source="$root/src/deps/e2fsprogs-sys/vendor/e2fsprogs"
     local util="$root/scripts/util.sh"
     [ -x "$source/configure" ] || {
@@ -112,6 +168,13 @@ build_tools() {
         return 1
     }
     [ -f "$util" ] || { die "missing build utility: $util"; return 1; }
+
+    output_parent="$root/target/$target/$profile"
+    mkdir -p "$output_parent"
+    [ -d "$output_parent" ] && [ ! -L "$output_parent" ] || {
+        die "guest artifact directory must be a regular directory: $output_parent"
+        return 1
+    }
 
     local cc build_cc cc_name build_cc_name headers host jobs cflags ldflags
     cc=$(musl_cc "$arch")
@@ -140,9 +203,8 @@ build_tools() {
     jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
     # e2fsprogs' generated configure and Makefiles do not preserve source,
     # compiler, or include paths containing shell-special characters. Build
-    # through controlled aliases while writing only the two requested files into the caller's directory.
-    # Preserve compiler basenames because some drivers dispatch on argv[0].
-    work=$(mktemp -d /tmp/boxlite-e2fsprogs-work.XXXXXX)
+    # through controlled aliases, then stage only the two requested files.
+    work=$(mktemp -d "${TMPDIR:-/tmp}/boxlite-e2fsprogs-work.XXXXXX")
     mkdir -p "$work/build" "$work/bin/target" "$work/bin/build"
     ln -s "$source" "$work/source"
     ln -s "$headers" "$work/headers"
@@ -173,17 +235,12 @@ build_tools() {
         make -C resize -j"$jobs" resize2fs.static
     )
 
-    install -m 0755 "$work/build/misc/mke2fs.static" "$dest/mke2fs"
-    install -m 0755 "$work/build/resize/resize2fs.static" "$dest/resize2fs"
-    bash "$util" --verify-guest-elf "$target" "$dest/mke2fs"
-    bash "$util" --verify-guest-elf "$target" "$dest/resize2fs"
-    destination_inventory=$(find "$dest" ! -path "$dest" -prune -print | LC_ALL=C sort) || {
-        die "failed to inspect built destination: $dest"; return 1;
-    }
-    [ "$destination_inventory" = "$(printf '%s\n' "$dest/mke2fs" "$dest/resize2fs" | LC_ALL=C sort)" ] || {
-        die "destination inventory is not exactly mke2fs and resize2fs"; return 1;
-    }
-    echo "✅ Guest e2fsprogs tools built: $dest"
+    stage=$(mktemp -d "$output_parent/.guest-tools-stage.XXXXXX")
+    install -m 0755 "$work/build/misc/mke2fs.static" "$stage/mke2fs"
+    install -m 0755 "$work/build/resize/resize2fs.static" "$stage/resize2fs"
+    verify_stage
+    publish_tools
+    echo "✅ Guest e2fsprogs tools built: $output_parent/{mke2fs,resize2fs}"
 }
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
@@ -192,7 +249,8 @@ target=""
 profile=""
 arch=""
 work=""
-dest=""
+output_parent=""
+stage=""
 
 parse_args "$@"
 

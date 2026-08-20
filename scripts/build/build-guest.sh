@@ -58,7 +58,6 @@ parse_args() {
             ;;
     esac
 
-    # Validate PROFILE value
     if [ "$PROFILE" != "release" ] && [ "$PROFILE" != "debug" ]; then
         echo "Invalid profile: $PROFILE"
         echo "Run with --profile release or --profile debug"
@@ -93,6 +92,77 @@ setup_rust_target() {
     fi
 }
 
+find_readelf() {
+    local candidate
+    for candidate in "${READELF:-}" "${GUEST_TARGET%%-*}-linux-musl-readelf" llvm-readelf \
+        /opt/homebrew/opt/llvm/bin/llvm-readelf /usr/local/opt/llvm/bin/llvm-readelf readelf; do
+        [ -n "$candidate" ] || continue
+        command -v "$candidate" >/dev/null 2>&1 || continue
+        echo "$candidate"
+        return 0
+    done
+    print_error "readelf or llvm-readelf is required to verify boxlite-guest" >&2
+    return 1
+}
+
+verify_guest_binary() {
+    local path="$1" machine header programs dynamic readelf_tool
+    if [ ! -f "$path" ] || [ -L "$path" ] || [ ! -s "$path" ] || [ ! -x "$path" ]; then
+        print_error "invalid boxlite-guest output: $path"
+        return 1
+    fi
+
+    case "$GUEST_TARGET" in
+        x86_64-unknown-linux-musl) machine='Advanced Micro Devices X86-64|AMD x86-64|X86-64|x86-64' ;;
+        aarch64-unknown-linux-musl) machine='AArch64' ;;
+    esac
+
+    readelf_tool=$(find_readelf)
+    header=$(LC_ALL=C "$readelf_tool" -hW "$path") || {
+        print_error "failed to read ELF header: $path"; return 1;
+    }
+    programs=$(LC_ALL=C "$readelf_tool" -lW "$path") || {
+        print_error "failed to read program headers: $path"; return 1;
+    }
+    dynamic=$(LC_ALL=C "$readelf_tool" -dW "$path") || {
+        print_error "failed to read dynamic section: $path"; return 1;
+    }
+
+    printf '%s\n' "$header" | grep -Eq 'Class:[[:space:]]+ELF64([[:space:]]|$)' || {
+        print_error "boxlite-guest must be ELF64: $path"; return 1;
+    }
+    printf '%s\n' "$header" | grep -Eiq 'Data:[[:space:]]+2.s complement,[[:space:]]+little([ -])endian' || {
+        print_error "boxlite-guest must be little-endian: $path"; return 1;
+    }
+    printf '%s\n' "$header" | grep -Eq 'Type:[[:space:]]+(EXEC|DYN)([[:space:]]|$)' || {
+        print_error "boxlite-guest must be ET_EXEC or static PIE: $path"; return 1;
+    }
+    printf '%s\n' "$header" | grep -Eq "Machine:[[:space:]]+($machine)([[:space:]]|$)" || {
+        print_error "boxlite-guest architecture does not match $GUEST_TARGET: $path"; return 1;
+    }
+    printf '%s\n' "$programs" | grep -Eq '(^|[[:space:]])LOAD([[:space:]]|$)' || {
+        print_error "boxlite-guest has no loadable segment: $path"; return 1;
+    }
+    if printf '%s\n' "$programs" | grep -Eq '(^|[[:space:]])INTERP([[:space:]]|$)'; then
+        print_error "boxlite-guest has a PT_INTERP segment: $path"
+        return 1
+    fi
+    if printf '%s\n' "$dynamic" | grep -Eq '(\(NEEDED\)|(^|[[:space:]])NEEDED([[:space:]]|$))'; then
+        print_error "boxlite-guest has a DT_NEEDED entry: $path"
+        return 1
+    fi
+}
+
+normalize_guest_binary_mode() {
+    local path="$1"
+    if [ ! -f "$path" ] || [ -L "$path" ] || [ ! -s "$path" ]; then
+        print_error "invalid boxlite-guest output: $path"
+        return 1
+    fi
+
+    chmod 0755 "$path"
+}
+
 # Build the guest binary
 build_guest_binary() {
     cd "$PROJECT_ROOT"
@@ -125,29 +195,9 @@ build_guest_binary() {
 
     cargo build $build_flag --target "$GUEST_TARGET" -p boxlite-guest
 
-    # Verify guest binary is statically linked
     local guest_binary="$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/boxlite-guest"
-    local file_output
-    file_output=$(file "$guest_binary")
-    if echo "$file_output" | grep -q "dynamically linked"; then 
-        local musl_arch
-        musl_arch=$(echo "$GUEST_TARGET" | cut -d'-' -f1)
-        local musl_gcc="${musl_arch}-linux-musl-gcc"
-
-        print_error "boxlite-guest is dynamically linked, but must be statically linked"
-        echo ""
-        echo "❌ Error: The boxlite-guest binary must be statically linked."
-        echo ""
-        echo "The guest binary at $guest_binary is dynamically linked, which means"
-        echo "it depends on shared libraries that won't be available inside the VM."
-        echo ""
-        echo "🔧 To fix this issue:"
-        echo "  Check your $musl_gcc version:"
-        echo "  $ $musl_gcc --version"
-        echo "  Verify whether your C compiler is a gnu-gcc wrapper instead of true musl-gcc"
-        echo ""
-        exit 1
-    fi
+    normalize_guest_binary_mode "$guest_binary"
+    verify_guest_binary "$guest_binary"
 }
 
 # Main execution
@@ -160,7 +210,7 @@ main() {
     echo "Binary location: $PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/boxlite-guest"
 
     echo ""
-    print_success "Done! Guest binary is ready for packaging."
+    print_success "Done! Guest binary is ready."
 }
 
 main "$@"

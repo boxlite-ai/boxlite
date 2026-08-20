@@ -7,27 +7,27 @@
 # Callers keep `if: runner.os == 'Linux'` on the step — it is the caller's condition, not this
 # action's, and a reader of the job should see it without opening this file.
 
-name: Build guest binary
+name: Build guest artifacts
 description: >-
-  Builds boxlite-guest on the host and stages it under .cache/<target>/release/,
-  then reclaims the build tree.
+  Builds boxlite-guest, mke2fs and resize2fs on the host, stages the three
+  executables under .cache/<target>/release/, then reclaims the build tree.
 
   On the host and before the container, deliberately: manylinux (AlmaLinux/RHEL)
   has no musl packages in its repos and building musl-cross-make from source takes
   ~15 minutes, where the Ubuntu host has musl-tools via apt in ~30 seconds. The
-  guest is a static musl binary so it needs none of the container's glibc
+  guest artifacts are static musl binaries so they need none of the container's glibc
   compatibility, while the shim and libkrun do — they need glibc 2.28 — and must be
   built inside it.
 
-  Only the finished 11MB binary is staged rather than the 2.3GB target directory,
+  Only the three finished executables are staged rather than the complete target directory,
   and the tree is removed afterwards to reclaim runner disk. Nothing needs the
-  intermediates: every caller restores .cache/<target> and sets SKIP_GUEST_BUILD=1
-  inside its container, so the guest is never rebuilt there and no incremental
-  compilation state has to survive. Four callers get that from
+  intermediates: every caller restores .cache/<target>; SKIP_GUEST_BUILD=1 keeps
+  boxlite-guest from being rebuilt, while the two tools remain available as build
+  outputs without entering the current runtime package. Four callers get that from
   ./.github/actions/run-in-manylinux's prologue; build-wheels.yml gets it from
   cibuildwheel instead (sdks/python/pyproject.toml, before-all and environment).
-  sccache keeps its own compilation cache separately, so this costs nothing on the
-  next run either.
+  sccache keeps Rust compilation units separately, so those units remain reusable
+  on the next warm run.
 
 inputs:
   show-sccache-stats:
@@ -51,8 +51,13 @@ runs:
         fi
 
         GUEST_TARGET=$(scripts/util.sh --target)
+        rm -rf -- ".cache/$GUEST_TARGET/release"
         mkdir -p ".cache/$GUEST_TARGET/release"
-        cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
+        cp \
+          "target/$GUEST_TARGET/release/boxlite-guest" \
+          "target/$GUEST_TARGET/release/mke2fs" \
+          "target/$GUEST_TARGET/release/resize2fs" \
+          ".cache/$GUEST_TARGET/release/"
 
         rm -rf target ~/.rustup ~/.cargo
         mkdir -p target

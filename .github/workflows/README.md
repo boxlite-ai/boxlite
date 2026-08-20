@@ -88,7 +88,7 @@ predating these directories fails with `Can't find 'action.yml'`; select a newer
 
 Rust compilation is cached with [sccache](https://github.com/mozilla-actions/sccache-action) over
 the GitHub Actions cache API **in the jobs that invoke `./.github/actions/sccache`** — not in every
-job that compiles Rust. `test.yml`'s `rust` and `guest-rootfs` jobs set up the toolchain without it,
+job that compiles Rust. `test.yml`'s `rust` and `guest_artifacts` jobs set up the toolchain without it,
 so they compile uncached. The action owns the whole configuration; a caller only invokes it.
 
 - Caches individual compilation units by content hash, so it works on the host and inside the
