@@ -4,7 +4,6 @@
  */
 
 import { BoxState } from '../../box/enums/box-state.enum'
-import { BOX_STATES_CONSUMING_COMPUTE } from '../../organization/constants/box-consuming-states.constant'
 import { ExpectedOpenPeriod, expectedOpenPeriod, sameShape } from './expected-usage-period'
 
 const box = { cpu: 2, gpu: 1, mem: 4, disk: 10 }
@@ -54,14 +53,10 @@ describe('expectedOpenPeriod', () => {
     expect(stopped).toEqual({ cpu: 0, gpu: 0, mem: 0, disk: box.disk })
   })
 
-  it('does not bill the states quota counts before a box is usable', () => {
-    // quota counts CREATING/STARTING because the runner has already pinned the
-    // resources; billing deliberately does not charge for a box the tenant
-    // cannot use yet. Divergence here is a pricing decision, not a bug.
+  it('does not bill a box before it is usable', () => {
     const notYetBillable = [BoxState.CREATING, BoxState.STARTING, BoxState.RESTORING]
 
     for (const state of notYetBillable) {
-      expect(BOX_STATES_CONSUMING_COMPUTE).toContain(state)
       expect(expectedOpenPeriod({ ...box, state })).toBeNull()
     }
   })

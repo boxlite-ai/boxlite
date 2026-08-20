@@ -34,8 +34,10 @@ on:
       - 'make/**'
       - 'rust-toolchain.toml'
       - 'sdks/**'
-      - 'apps/**'
-      - '!apps/e2e/**' # Stack e2e runs in e2e-stack.yml / e2e-cloud.yml, not this unit matrix.
+      - 'apps/api/**'
+      - 'apps/package.json'
+      - 'apps/yarn.lock'
+      - 'apps/nx.json'
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/test.yml'
@@ -68,7 +70,7 @@ jobs:
       python: ${{ steps.filter.outputs.python }}
       node: ${{ steps.filter.outputs.node }}
       go: ${{ steps.filter.outputs.go }}
-      apps: ${{ steps.filter.outputs.apps }}
+      api: ${{ steps.filter.outputs.api }}
       guest_rootfs: ${{ steps.filter.outputs.guest_rootfs }}
     steps:
       - uses: actions/checkout@v5
@@ -95,15 +97,11 @@ jobs:
               - 'sdks/node/**'
             go:
               - 'sdks/go/**'
-            apps:
-              # paths-filter ORs its rules, so a '!apps/e2e/**' rule would make
-              # this filter true for everything outside apps/e2e. Carve the stack
-              # e2e suite out inside a single pattern instead; 'apps/*' keeps
-              # top-level files (package.json, nx.json) in scope. Note !(e2e)
-              # compiles to a segment-prefix negative lookahead, so a future
-              # apps/e2e-<something> sibling would drop out of this filter too.
-              - 'apps/*'
-              - 'apps/!(e2e)/**'
+            api:
+              - 'apps/api/**'
+              - 'apps/package.json'
+              - 'apps/yarn.lock'
+              - 'apps/nx.json'
             guest_rootfs:
               - '.cargo/**'
               - '.gitmodules'
@@ -306,27 +304,18 @@ jobs:
       - name: Run Go unit tests
         run: make test:unit:go
 
-  # apps/api (NestJS) unit tests — the nx `api` project's jest suite (org-quota,
-  # box-usage, box.service, organization, etc.). Pure/mocked specs, no native libs.
-  apps:
-    name: Apps API Tests
+  api:
+    name: API Tests
     needs: [config, changes]
-    if: ${{ needs.changes.outputs.apps == 'true' }}
+    if: ${{ needs.changes.outputs.api == 'true' }}
     runs-on: ubuntu-latest
-    # Read-only token: this job runs repository-controlled code (yarn install
-    # build scripts, Nx/Jest), so it must not carry write scopes.
     permissions:
       contents: read
-    # Redis lets the quota engine's real-Lua integration spec run and Postgres
-    # lets the usage ledger's spec run (each self-skips without its env vars);
-    # the rest of the api suite is pure/mocked.
     services:
       redis:
         image: redis:7
         ports:
           - 6379:6379
-        # Wait for Redis to accept connections before the job runs, so the
-        # real-Lua integration spec doesn't race container startup.
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -355,28 +344,20 @@ jobs:
       run:
         working-directory: apps
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
-          # Don't persist GITHUB_TOKEN in .git/config before untrusted code runs.
           persist-credentials: false
-
-      # corepack must be enabled before setup-node's yarn cache probe runs
-      - name: Enable corepack (yarn 4)
+      - name: Enable Corepack
         run: corepack enable
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: yarn
           cache-dependency-path: apps/yarn.lock
-
       - name: Install dependencies
         run: yarn install --immutable
-
-      - name: Run apps/api unit tests
+      - name: Run API unit tests
         run: yarn nx run api:test
 
   guest-rootfs:
@@ -429,7 +410,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [config, changes, rust, cli, python, node, go, apps, guest-rootfs]
+    needs: [config, changes, rust, cli, python, node, go, api, guest-rootfs]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

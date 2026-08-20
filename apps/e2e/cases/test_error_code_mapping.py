@@ -211,7 +211,7 @@ async def test_execution_invalid_command_returns_422(rt, image):
 
 @pytest.mark.asyncio
 async def test_resource_exhausted_over_cpu_quota_returns_429(rt):
-    """POST /boxes with cpus far above the org quota should surface
+    """POST /boxes with cpus far above the per-box limit should surface
     ResourceExhausted → 429 (not 400, not 500)."""
     ctx = auth_context()
     status, body = _api_call(

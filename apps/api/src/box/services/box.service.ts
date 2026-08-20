@@ -33,7 +33,6 @@ import { BoxStartedEvent } from '../events/box-started.event'
 import { BoxDesiredStateUpdatedEvent } from '../events/box-desired-state-updated.event'
 import { BoxStoppedEvent } from '../events/box-stopped.event'
 import { OrganizationService } from '../../organization/services/organization.service'
-import { OrganizationUsageService, PendingBoxReservation } from '../../organization/services/organization-usage.service'
 import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
 import { OrganizationSuspendedBoxStoppedEvent } from '../../organization/events/organization-suspended-box-stopped.event'
 import { TypedConfigService } from '../../config/typed-config.service'
@@ -108,7 +107,6 @@ export class BoxService {
     private readonly warmPoolService: BoxWarmPoolService,
     private readonly eventEmitter: EventEmitter2,
     private readonly organizationService: OrganizationService,
-    private readonly organizationUsageService: OrganizationUsageService,
     private readonly runnerAdapterFactory: RunnerAdapterFactory,
     private readonly redisLockProvider: RedisLockProvider,
     @InjectRedis() private readonly redis: Redis,
@@ -157,8 +155,8 @@ export class BoxService {
           return inserted
         }
       } catch (error) {
-        // Once insert committed, returning the entity keeps quota realization
-        // and CREATED event handling consistent even if the lease is lost while releasing.
+        // Once insert committed, returning the entity keeps CREATED event handling
+        // consistent even if the lease is lost while releasing.
         if (committed) {
           return committed
         }
@@ -203,10 +201,6 @@ export class BoxService {
   async create(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
 
-    // Released on the failure path; on success the box's CREATED/STATE_UPDATED event
-    // realizes the reservation into current usage.
-    let quotaReservation: PendingBoxReservation | null = null
-
     try {
       const boxClass = this.getValidatedOrDefaultClass(createBoxDto.class)
 
@@ -229,14 +223,6 @@ export class BoxService {
         organization.boxLimitedNetworkEgress
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
-
-      quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
-        organization,
-        cpu,
-        mem,
-        disk,
-        gpu,
-      )
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
@@ -331,10 +317,6 @@ export class BoxService {
 
       return this.toBoxDto(insertedBox)
     } catch (error) {
-      if (quotaReservation) {
-        await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
-      }
-
       if (error.code === '23505') {
         throw new ConflictException(
           createBoxDto.name
@@ -939,34 +921,16 @@ export class BoxService {
 
     this.organizationService.assertOrganizationIsNotSuspended(organization)
 
-    // A stopped box holds only disk; starting it re-adds compute and a running slot,
-    // so re-check the org quota. excludeBoxId keeps the box's own disk from being
-    // double counted. Realized into current usage once the box leaves STOPPED.
-    const quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
-      organization,
-      box.cpu,
-      box.mem,
-      box.disk,
-      box.gpu,
-      box.id,
-    )
-
     const updateData: Partial<Box> = {
       pending: true,
       desiredState: BoxDesiredState.STARTED,
       authToken: nanoid(32).toLocaleLowerCase(),
     }
 
-    let updatedBox: Box
-    try {
-      updatedBox = await this.boxRepository.updateWhere(box.id, {
-        updateData,
-        whereCondition: { pending: false, state: box.state },
-      })
-    } catch (error) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
-      throw error
-    }
+    const updatedBox = await this.boxRepository.updateWhere(box.id, {
+      updateData,
+      whereCondition: { pending: false, state: box.state },
+    })
 
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
 
@@ -988,27 +952,8 @@ export class BoxService {
       return box
     }
 
-    // Auto-resume also brings a stopped box back to running, so it must honor the
-    // org quota just like start(). Released if the box does not actually start.
-    const quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
-      organization,
-      box.cpu,
-      box.mem,
-      box.disk,
-      box.gpu,
-      box.id,
-    )
-
-    let updated: Box
-    try {
-      updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
-    } catch (error) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
-      throw error
-    }
-
+    const updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
     if (!updated) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
       return this.findOneByIdOrName(box.id, organization.id)
     }
 
@@ -1072,7 +1017,6 @@ export class BoxService {
     if (runner.apiVersion === '2') {
       // TODO: we need "recovering" state that can be set after calling recover
       // Once in recovering, we abort further processing and let the manager/job handler take care of it
-      // (Also, since desiredState would be STARTED, we need to check the quota)
       throw new ForbiddenException('Recovering boxes with runner API version 2 is not supported')
     }
 
@@ -1101,7 +1045,7 @@ export class BoxService {
     })
 
     // Now that box is in STOPPED state, use the normal start flow
-    // This handles quota validation, pending usage, event emission, etc.
+    // This handles state validation and event emission.
     return await this.start(box.id, organization)
   }
 

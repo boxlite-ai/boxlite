@@ -37,8 +37,8 @@ describe('BoxAutoResumeService', () => {
 
     await service.ensureReady('box-1', organization)
     expect(waiter.waitForStarted).not.toHaveBeenCalled()
-    expect(redisLockProvider.lock).toHaveBeenCalledWith('box:box-1:state-change', 30)
-    expect(redisLockProvider.unlock).toHaveBeenCalledWith('box:box-1:state-change')
+    expect(redisLockProvider.lock.mock.calls).toEqual([['box:box-1:state-change', 30]])
+    expect(redisLockProvider.unlock.mock.calls).toEqual([['box:box-1:state-change']])
   })
 
   it('joins an in-flight Start and waits for STARTED', async () => {

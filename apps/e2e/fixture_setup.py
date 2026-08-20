@@ -133,10 +133,8 @@ def register_snapshot(name: str):
     sys.exit(f"  {name} did not reach active within {SNAPSHOT_WAIT_SECONDS}s")
 
 
-def patch_admin_quota():
-    """The admin user is created on first API boot with org quotas at 0
-    (config defaults are 0 unless ADMIN_* env vars override). Bump them
-    so the box CREATE path doesn't 403 in tests."""
+def patch_admin_box_limits():
+    """Raise the admin organization's per-box resource limits for E2E boxes."""
     import subprocess
     sql = """
 UPDATE organization SET
@@ -153,7 +151,7 @@ WHERE personal = true;
     )
     if r.returncode != 0:
         sys.exit(f"quota patch failed: {r.stderr}")
-    print("  admin org quota: ok")
+    print("  admin per-box limits: ok")
 
 
 def ensure_p1_profile(prefix: str):
@@ -201,8 +199,8 @@ def ensure_p1_profile(prefix: str):
 def main():
     print(f"API_URL={API_URL}")
     print()
-    print("1. Bumping admin org quota...")
-    patch_admin_quota()
+    print("1. Raising admin per-box limits...")
+    patch_admin_box_limits()
     print()
     print("2. Querying /v1/me for prefix...")
     info = me()
