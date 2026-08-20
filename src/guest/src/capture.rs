@@ -50,9 +50,10 @@ impl Capture {
 
     /// Put `begin` on disk, durably, before the container is allowed to run.
     ///
-    /// The fsync is what lets a reader tell "capture never started" from
-    /// "capture started and its record was lost": once this returns, a file
-    /// without `begin` can only mean the former.
+    /// Syncing is what lets a reader tell "capture never started" from "capture
+    /// started and its record was lost": once this returns, a file without
+    /// `begin` can only mean the former. Both syncs are needed for that — the
+    /// file's for the record, the parent directory's for the entry naming it.
     ///
     /// `O_NOFOLLOW` applies to the final component, so a symlink planted at the
     /// log path fails the call instead of redirecting the write.
