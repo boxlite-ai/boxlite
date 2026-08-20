@@ -123,10 +123,32 @@ sequenceDiagram
   participant runtime as BoxliteRuntime
   participant box as LiteBox
   %% edge:create_box
-  runtime->>box: create
+  runtime->>box: create box<br/>File: src/boxlite/src/runtime/core.rs<br/>Namespace: boxlite::runtime::core<br/>Class: BoxliteRuntime<br/>Function: create<br/>LOC: L291-L300
 ```
 
 Notes and grouping statements may be untracked because they are not edges.
+
+Keep the message's action short, then explicitly label every source field:
+
+`<action><br/>File: <path><br/>Namespace: <full-chain><br/>Class: <owner><br/>Function: <name><br/>LOC: L<start>-L<end>`
+
+- `File` is the repository-relative path.
+- `Namespace` is the complete declared crate, module, or package chain from the
+  outermost scope to the innermost scope. Preserve every nested segment and use
+  the language's native separator. Use `Namespace: —` when none exists.
+- `Class` is the owning class, struct, type, or receiver. Use `Class: —` for a
+  free function so the field remains explicit.
+- `Function` is the unqualified function or method name.
+- `LOC` is the exact inclusive line range.
+
+Do not show only some of these fields. Omit the entire source block only when no
+concrete source symbol exists, such as an external interaction or explicitly
+proposed behavior. Never invent a value to fill the format.
+
+For a source-backed sequence call, the target node's source evidence uses the
+complete language-native symbol chain. The example above therefore uses
+`boxlite::runtime::core::BoxliteRuntime::create`, allowing the validator to
+derive and check `Namespace`, `Class`, and `Function` independently.
 
 ## Call graph
 
@@ -160,7 +182,7 @@ Source evidence:
   "path": "src/boxlite/src/runtime/core.rs",
   "line_start": 291,
   "line_end": 299,
-  "symbol": "BoxliteRuntime::create",
+  "symbol": "boxlite::runtime::core::BoxliteRuntime::create",
   "tokens": ["pub async fn create", "self.backend.create"]
 }
 ```

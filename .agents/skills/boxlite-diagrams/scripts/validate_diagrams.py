@@ -15,6 +15,7 @@ from validator.consistency import validate_consistency
 from validator.document import validate_document
 from validator.mermaid import validate_mermaid
 from validator.models import ValidationContext
+from validator.sequence import validate_sequence_source_labels
 from validator.source import validate_manifest, validate_source_evidence
 
 
@@ -54,6 +55,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         validate_document(ctx)
         validate_source_evidence(ctx)
         validate_mermaid(ctx)
+        validate_sequence_source_labels(ctx)
         validate_call_graph(ctx)
         validate_changes(ctx)
         validate_consistency(ctx)

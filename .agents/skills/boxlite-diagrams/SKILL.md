@@ -161,6 +161,20 @@ messages.
 ## Source grounding
 
 - Cite the exact revision, repository-relative path, and inclusive line range.
+- When a sequence message resolves to an implemented function, keep the action
+  short and explicitly label every source field:
+  `<action><br/>File: <path><br/>Namespace: <full-chain><br/>Class: <owner><br/>Function: <name><br/>LOC: L<start>-L<end>`.
+  `File` is the repository-relative path. `Namespace` is the complete declared
+  crate, module, or package chain from outermost to innermost; never collapse a
+  nested namespace to its leaf. Use `Namespace: —` when none exists. `Class` is
+  the owning class, struct, type, or receiver and is `—` for a free function.
+  `Function` is the unqualified function or method name. `LOC` is its inclusive
+  line range. Never show a partial source block. Omit the whole block only when
+  the message has no concrete source symbol, such as an external actor or
+  explicitly proposed behavior; never invent one.
+- For sequence-call target nodes, record `evidence[].symbol` as the complete
+  namespace, owner, and function chain so the validator can check every
+  displayed field rather than only their presence.
 - Include narrow evidence tokens that prove each node or relationship.
 - For a direct call, the edge evidence contains the callee's leaf symbol.
 - For RPC, dispatch, spawn, data flow, or state transitions, cite the concrete
@@ -179,6 +193,9 @@ hop cites the base revision; an added hop cites the head revision.
 - Keep every node at the selected altitude and in service of one scope sentence.
 - Architecture shows ownership, network, trust, process, and storage boundaries.
 - Sequence shows time, calls, responses, alternatives, concurrency, and failure.
+- Sequence messages keep the action concise while explicitly showing `File`,
+  `Namespace`, `Class`, `Function`, and `LOC` when source is available, for
+  example `create box<br/>File: apps/api/src/box/services/box.service.ts<br/>Namespace: —<br/>Class: BoxService<br/>Function: create<br/>LOC: L203-L348`.
 - Call graph uses one hop per line:
   `symbol (Type · path/file.ext:line) — role`.
 - Prefer `flowchart TB` for a whole cloud deployment and `LR` for a short path.

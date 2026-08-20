@@ -326,6 +326,40 @@ class DiagramValidatorTests(unittest.TestCase):
         result, report = self.validate(document, manifest)
         self.assertEqual(result.returncode, 0, json.dumps(report, indent=2))
 
+    def test_sequence_message_without_source_fields_is_rejected(self) -> None:
+        document, manifest = overview_fixture(self.head)
+        document = document.replace(sequence_message("load", "load", 8, 9), "load", 1)
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "sequence.source_labels")
+
+    def test_sequence_message_preserves_complete_nested_namespace(self) -> None:
+        document, manifest = overview_fixture(self.head)
+        load = next(node for node in manifest["nodes"] if node["id"] == "load")
+        load["evidence"][0]["symbol"] = "package.module.Loader.load"
+        document = document.replace(
+            sequence_message("load", "load", 8, 9),
+            sequence_message(
+                "load", "load", 8, 9, namespace="package.module", class_name="Loader"
+            ),
+            1,
+        )
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 0, json.dumps(report, indent=2))
+
+    def test_sequence_message_rejects_collapsed_nested_namespace(self) -> None:
+        document, manifest = overview_fixture(self.head)
+        load = next(node for node in manifest["nodes"] if node["id"] == "load")
+        load["evidence"][0]["symbol"] = "package.module.Loader.load"
+        document = document.replace(
+            sequence_message("load", "load", 8, 9),
+            sequence_message("load", "load", 8, 9, namespace="module", class_name="Loader"),
+            1,
+        )
+        result, report = self.validate(document, manifest)
+        self.assertEqual(result.returncode, 1)
+        self.assert_check_failed(report, "sequence.source_labels")
+
     def test_mermaid_left_arrow_is_not_treated_as_html(self) -> None:
         document, manifest = overview_fixture(self.head)
         document = document.replace("start_load@-->", "start_load@<-->", 1)
@@ -495,7 +529,7 @@ class DiagramValidatorTests(unittest.TestCase):
         document = diagrams(
             [("current", "Current")],
             {"current": [f"  fake (Module · {path}:1) — entry", "    └─ load (Module · app.py:8) — result"]},
-            {"current": [("fake_load", "fake", "load", "load")]},
+            {"current": [("fake_load", "fake", "load", "load", sequence_message("load", "load", 8, 9))]},
             {"current": [("fake", "fake"), ("load", "load")]},
         )
         data = manifest(
@@ -563,20 +597,36 @@ def manifest(context: dict[str, object], states: list[dict[str, object]], nodes:
             "annotations": annotations or []}
 
 
-def diagrams(states: list[tuple[str, str]], state_hops: dict[str, list[str]], state_edges: dict[str, list[tuple[str, str, str, str]]],
+def sequence_message(
+    action: str,
+    function: str,
+    line_start: int,
+    line_end: int,
+    *,
+    path: str = "app.py",
+    namespace: str = "—",
+    class_name: str = "—",
+) -> str:
+    return (
+        f"{action}<br/>File: {path}<br/>Namespace: {namespace}<br/>"
+        f"Class: {class_name}<br/>Function: {function}<br/>LOC: L{line_start}-L{line_end}"
+    )
+
+
+def diagrams(states: list[tuple[str, str]], state_hops: dict[str, list[str]], state_edges: dict[str, list[tuple[str, str, str, str, str]]],
              state_nodes: dict[str, list[tuple[str, str]]], footer: str = "") -> str:
     parts = ["# Diagram", "", "## Architecture", ""]
     for state_id, label in states:
         parts += [f"### {label}", "", "```mermaid", "flowchart LR"]
         parts += [f'  {item_id}["{item_label}"]' for item_id, item_label in state_nodes[state_id]]
-        parts += [f'  {source} {edge_id}@-->|"{edge_label}"| {target}' for edge_id, source, target, edge_label in state_edges[state_id]]
+        parts += [f'  {source} {edge_id}@-->|"{edge_label}"| {target}' for edge_id, source, target, edge_label, _sequence_label in state_edges[state_id]]
         parts += ["```", ""]
     parts += ["## Sequence", ""]
     for state_id, label in states:
         parts += [f"### {label}", "", "```mermaid", "sequenceDiagram"]
         parts += [f"  participant {item_id} as {item_label}" for item_id, item_label in state_nodes[state_id]]
-        for edge_id, source, target, edge_label in state_edges[state_id]:
-            parts += [f"  %% edge:{edge_id}", f"  {source}->>{target}: {edge_label}"]
+        for edge_id, source, target, _edge_label, sequence_label in state_edges[state_id]:
+            parts += [f"  %% edge:{edge_id}", f"  {source}->>{target}: {sequence_label}"]
         parts += ["```", ""]
     parts += ["## Call graph", ""]
     for state_id, label in states:
@@ -596,7 +646,7 @@ def overview_fixture(head: str) -> tuple[str, dict[str, object]]:
                   [source_evidence("current", head, "start", 1, 3, "load()")])]
     doc = diagrams([("current", "Current")], {"current": [
         "  start (Module · app.py:1) — entry", "    └─ load (Module · app.py:8) — load result"]},
-        {"current": [("start_load", "start", "load", "load")]},
+        {"current": [("start_load", "start", "load", "load", sequence_message("load", "load", 8, 9))]},
         {"current": [("start", "start"), ("load", "load")]})
     return doc, manifest({"kind": "overview", "change_kind": "none", "sources": {"repository": "local"}}, states, nodes, edges)
 
@@ -679,8 +729,8 @@ def issue_fixture(head: str) -> tuple[str, dict[str, object]]:
         [("current", "Current"), ("expected", "Expected (proposed)")],
         {"current": ["  start (Module · app.py:1) — entry", "    └─ load (Module · app.py:8) — load result"],
          "expected": ["  start (Module · app.py:1) — entry", "    └─ load (Module · app.py:8) — load result ← PROPOSED: validation behavior"]},
-        {"current": [("start_load", "start", "load", "load")],
-         "expected": [("start_load", "start", "load", "load PROPOSED: validation behavior")]},
+        {"current": [("start_load", "start", "load", "load", sequence_message("load", "load", 8, 9))],
+         "expected": [("start_load", "start", "load", "load PROPOSED: validation behavior", sequence_message("load PROPOSED: validation behavior", "load", 8, 9))]},
         {"current": [("start", "start"), ("load", "load")], "expected": [("start", "start"), ("load", "load")]},
     )
     return doc, data
@@ -703,8 +753,9 @@ def feature_pr_fixture(base: str, head: str) -> tuple[str, dict[str, object]]:
         [("before", "Before"), ("after", "After")],
         {"before": ["  start (Module · app.py:1) — entry", "    └─ load (Module · app.py:4) — load result"],
          "after": ["  start (Module · app.py:1) — entry", "    ├─ validate (Module · app.py:5) — validate input ← ADDED: validate input", "    └─ load (Module · app.py:8) — load result"]},
-        {"before": [("start_load", "start", "load", "load")],
-         "after": [("start_validate", "start", "validate", "validate ADDED: validate input"), ("start_load", "start", "load", "load")]},
+        {"before": [("start_load", "start", "load", "load", sequence_message("load", "load", 4, 5))],
+         "after": [("start_validate", "start", "validate", "validate ADDED: validate input", sequence_message("validate ADDED: validate input", "validate", 5, 6)),
+                   ("start_load", "start", "load", "load", sequence_message("load", "load", 8, 9))]},
         {"before": [("start", "start"), ("load", "load")],
          "after": [("start", "start"), ("validate", "validate ADDED: validate input"), ("load", "load")]})
     context = {"kind": "pr", "change_kind": "feature", "sources": {"repository": "local", "pr": 3,
