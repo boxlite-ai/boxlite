@@ -26,6 +26,23 @@ cache_parent="$common_git_dir/agent-tooling"
 checkout="$cache_parent/$tooling_sha"
 mkdir -p "$cache_parent"
 
+lock_dir="$cache_parent/.install.lock"
+if ! mkdir "$lock_dir" 2>/dev/null; then
+  printf 'agent-tooling: another installation is already in progress: %s\n' "$lock_dir" >&2
+  exit 1
+fi
+printf '%s\n' "$$" > "$lock_dir/pid"
+
+scratch=""
+cleanup() {
+  if [[ -n "$scratch" && -d "$scratch" && "$scratch" == "$cache_parent"/.install.* ]]; then
+    rm -rf -- "$scratch"
+  fi
+  rm -f -- "$lock_dir/pid"
+  rmdir "$lock_dir" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
 if [[ -e "$checkout" ]]; then
   actual="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)"
   [[ "$actual" == "$tooling_sha" ]] || {
@@ -34,13 +51,6 @@ if [[ -e "$checkout" ]]; then
   }
 else
   scratch="$(mktemp -d "$cache_parent/.install.XXXXXX")"
-  cleanup() {
-    if [[ -n "${scratch:-}" && -d "$scratch" && "$scratch" == "$cache_parent"/.install.* ]]; then
-      rm -rf -- "$scratch"
-    fi
-  }
-  trap cleanup EXIT INT TERM
-
   git -C "$scratch" init -q
   git -C "$scratch" remote add origin "https://github.com/$tooling_repo.git"
   git -C "$scratch" fetch -q --depth 1 origin "$tooling_sha"
@@ -52,9 +62,8 @@ else
   }
   mv "$scratch" "$checkout"
   scratch=""
-  trap - EXIT INT TERM
 fi
 
 setup="$checkout/plugins/boxlite-agent-tooling/scripts/setup.sh"
 [[ -x "$setup" ]] || { printf 'agent-tooling: pinned checkout has no executable setup script\n' >&2; exit 1; }
-exec "$setup" "$repo_root"
+"$setup" "$repo_root"
