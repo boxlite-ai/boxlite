@@ -4,7 +4,6 @@
 //! bytes are streamed end-to-end (no whole-file memory buffer, no temp file),
 //! bridged through `boxlite_shared::tar::{pack_stream, unpack_stream}`.
 
-use async_stream::stream;
 use boxlite_shared::{BoxliteError, BoxliteResult, DownloadRequest, FilesClient, UploadChunk};
 use futures::{Stream, StreamExt};
 use std::io;
@@ -29,43 +28,41 @@ impl FilesInterface {
     /// `tar` is a stream of raw tar bytes (from
     /// `boxlite_shared::tar::pack_stream`). `is_directory` is the packer's
     /// archive-shape hint, carried on the first chunk only.
-    pub async fn upload_tar_stream(
+    pub async fn upload_tar_stream<S>(
         &mut self,
         dest_path: &str,
         container_id: Option<&str>,
         mkdir_parents: bool,
         overwrite: bool,
-        is_directory: bool,
-        mut tar: boxlite_shared::tar::PackStream,
-    ) -> BoxliteResult<()> {
+        is_directory: Option<bool>,
+        tar: S,
+    ) -> BoxliteResult<()>
+    where
+        S: Stream<Item = io::Result<Vec<u8>>> + Send + 'static,
+    {
         let dest = dest_path.to_string();
         let cid = container_id.unwrap_or_default().to_string();
 
-        let stream = stream! {
-            let mut first = true;
-            while let Some(chunk) = tar.next().await {
-                match chunk {
-                    Ok(data) => {
-                        yield UploadChunk {
-                            dest_path: if first { dest.clone() } else { String::new() },
-                            container_id: cid.clone(),
-                            data,
-                            mkdir_parents,
-                            overwrite,
-                            is_directory: if first { Some(is_directory) } else { None },
-                        };
-                        first = false;
-                    }
-                    Err(e) => {
-                        // Host-side pack failure mid-stream. End the stream; the
-                        // guest aborts on the truncated archive and surfaces the
-                        // error through the upload response.
-                        tracing::warn!(error = %e, "tar pack failed mid-upload; aborting stream");
-                        return;
-                    }
+        // Map the byte stream into UploadChunks; the first chunk carries the
+        // destination and archive-shape hint. A mid-stream pack error is
+        // dropped (logged) — `PackStream` is terminal after an `Err`, so the
+        // guest aborts on the truncated archive and surfaces the failure.
+        let stream = tar.enumerate().filter_map(move |(i, chunk)| {
+            futures::future::ready(match chunk {
+                Ok(data) => Some(UploadChunk {
+                    dest_path: if i == 0 { dest.clone() } else { String::new() },
+                    container_id: cid.clone(),
+                    data,
+                    mkdir_parents,
+                    overwrite,
+                    is_directory: if i == 0 { is_directory } else { None },
+                }),
+                Err(e) => {
+                    tracing::warn!(error = %e, "tar pack failed mid-upload; aborting stream");
+                    None
                 }
-            }
-        };
+            })
+        });
 
         let response = self
             .client

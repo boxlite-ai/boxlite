@@ -40,8 +40,45 @@ use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
 use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
 use crate::{BoxID, BoxInfo};
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use config::BoxConfig;
+
+/// A named boxed stream of raw tar bytes crossing the host↔guest or HTTP↔guest
+/// boundary.
+///
+/// Returned by [`LiteBox::copy_out_tar`] so the `boxlite` CLI (`serve` relay)
+/// and the REST client can stream tar bytes without a whole-file buffer. The
+/// item is `io::Result<Vec<u8>>`; HTTP boundaries convert to/from `Bytes`.
+pub struct BoxTarStream(
+    std::pin::Pin<Box<dyn futures::Stream<Item = std::io::Result<Vec<u8>>> + Send>>,
+);
+
+impl BoxTarStream {
+    /// Box a `Stream<Item = io::Result<Vec<u8>>>` into a [`BoxTarStream`].
+    pub fn new<S>(stream: S) -> Self
+    where
+        S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
+    {
+        BoxTarStream(Box::pin(stream))
+    }
+
+    /// Unwrap the boxed byte stream.
+    pub fn into_inner(
+        self,
+    ) -> std::pin::Pin<Box<dyn futures::Stream<Item = std::io::Result<Vec<u8>>> + Send>> {
+        self.0
+    }
+}
+
+impl From<std::pin::Pin<Box<dyn futures::Stream<Item = std::io::Result<Vec<u8>>> + Send>>>
+    for BoxTarStream
+{
+    fn from(
+        stream: std::pin::Pin<Box<dyn futures::Stream<Item = std::io::Result<Vec<u8>>> + Send>>,
+    ) -> Self {
+        BoxTarStream(stream)
+    }
+}
 
 /// LiteBox - Handle to a box.
 ///
@@ -157,6 +194,54 @@ impl LiteBox {
         self.box_backend
             .copy_out(container_src.as_ref(), host_dst.as_ref(), opts)
             .await
+    }
+
+    /// Download a path from the box as a stream of raw tar bytes.
+    ///
+    /// Returns the archive shape (`is_directory`, `None` when the peer doesn't
+    /// report it) plus the byte stream. Intended for the REST relay; `copy_out`
+    /// is the higher-level path-based convenience. Only the local backend
+    /// supports it (the REST client has no server-side relay role).
+    pub async fn copy_out_tar(
+        &self,
+        container_src: impl AsRef<str>,
+        opts: copy::CopyOptions,
+    ) -> BoxliteResult<(Option<bool>, BoxTarStream)> {
+        self.streaming_backend()?
+            .copy_out_tar(container_src.as_ref(), opts)
+            .await
+    }
+
+    /// Upload a stream of raw tar bytes into the box at `container_dst`.
+    ///
+    /// `is_directory` is the archive-shape hint (`None` = unknown). Intended
+    /// for the REST relay; `copy_into` is the higher-level path-based
+    /// convenience. Only the local backend supports it.
+    pub async fn copy_in_tar<S>(
+        &self,
+        container_dst: &str,
+        opts: copy::CopyOptions,
+        is_directory: Option<bool>,
+        tar: S,
+    ) -> BoxliteResult<()>
+    where
+        S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
+    {
+        self.streaming_backend()?
+            .copy_in_tar(container_dst, opts, is_directory, tar)
+            .await
+    }
+
+    /// Downcast the backend to the local `BoxImpl` that supports streaming tar
+    /// relay.
+    fn streaming_backend(&self) -> BoxliteResult<Arc<crate::litebox::box_impl::BoxImpl>> {
+        let any = Arc::clone(&self.box_backend) as Arc<dyn std::any::Any + Send + Sync>;
+        any.downcast::<crate::litebox::box_impl::BoxImpl>()
+            .map_err(|_| {
+                BoxliteError::Unsupported(
+                    "streaming tar relay is only supported by the local backend".into(),
+                )
+            })
     }
 
     /// Get a network handle for raw tunnel operations.

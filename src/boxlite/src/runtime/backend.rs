@@ -68,7 +68,7 @@ pub(crate) trait RuntimeBackend: Send + Sync {
 /// Local backend is implemented directly by `BoxImpl`.
 /// REST backend delegates to HTTP API calls.
 #[async_trait]
-pub(crate) trait BoxBackend: Send + Sync {
+pub(crate) trait BoxBackend: Send + Sync + std::any::Any {
     fn id(&self) -> &BoxID;
 
     fn name(&self) -> Option<&str>;

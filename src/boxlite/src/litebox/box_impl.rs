@@ -882,7 +882,7 @@ impl BoxImpl {
                 Some(self.container_id()),
                 true,
                 opts.overwrite,
-                is_directory,
+                Some(is_directory),
                 tar,
             )
             .await?;
@@ -992,6 +992,65 @@ impl BoxImpl {
             "copy_out completed"
         );
         Ok(())
+    }
+
+    /// Download a path as a stream of raw tar bytes (REST relay primitive).
+    pub(crate) async fn copy_out_tar(
+        &self,
+        container_src: &str,
+        opts: CopyOptions,
+    ) -> BoxliteResult<(Option<bool>, crate::litebox::BoxTarStream)> {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+        self.ensure_usable_without_rerunning_main("copy out tar")?;
+        let live = self.live_state().await?;
+
+        let mut files_iface = live.guest_session.files().await?;
+        let (is_directory, stream) = files_iface
+            .download_tar_stream(
+                container_src,
+                Some(self.container_id()),
+                opts.include_parent,
+                opts.follow_symlinks,
+            )
+            .await?;
+        Ok((is_directory, crate::litebox::BoxTarStream::from(stream)))
+    }
+
+    /// Upload a stream of raw tar bytes to `container_dst` (REST relay
+    /// primitive).
+    pub(crate) async fn copy_in_tar<S>(
+        &self,
+        container_dst: &str,
+        opts: CopyOptions,
+        is_directory: Option<bool>,
+        tar: S,
+    ) -> BoxliteResult<()>
+    where
+        S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
+    {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+        self.ensure_usable_without_rerunning_main("copy in tar")?;
+        let live = self.live_state().await?;
+
+        let mut files_iface = live.guest_session.files().await?;
+        files_iface
+            .upload_tar_stream(
+                container_dst,
+                Some(self.container_id()),
+                true,
+                opts.overwrite,
+                is_directory,
+                tar,
+            )
+            .await
     }
 
     /// Drain a tar byte stream into a temp file — the legacy fallback for old
