@@ -8,16 +8,12 @@ use crate::service::server::GuestServer;
 use boxlite_shared::{
     files_server::Files, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
 };
+use futures::StreamExt;
 use std::path::{Path, PathBuf};
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::info;
-
-const CHUNK_SIZE: usize = 1 << 20; // 1 MiB
-const MAX_UPLOAD_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB safety cap
 
 #[tonic::async_trait]
 impl Files for GuestServer {
@@ -47,66 +43,42 @@ impl Files for GuestServer {
         // Build absolute dest root under container rootfs
         let dest_root = self.container_rootfs(&container_id, &dest_path)?;
 
-        // Overwrite / mkdir flags
+        // Overwrite / mkdir flags + archive shape hint (first chunk only)
         let mkdir_parents = first.mkdir_parents;
         let overwrite = first.overwrite;
+        let is_directory = first.is_directory;
 
-        // Temp file to hold tar stream
-        let temp_path =
-            std::env::temp_dir().join(format!("boxlite-upload-{}.tar", uuid::Uuid::new_v4()));
-        let mut file = File::create(&temp_path)
-            .await
-            .map_err(|e| Status::internal(format!("failed to create temp file: {}", e)))?;
-
-        // write first data chunk if present
-        let mut total: u64 = 0;
-        if !first.data.is_empty() {
-            total += first.data.len() as u64;
-            if total > MAX_UPLOAD_BYTES {
-                return Err(Status::resource_exhausted("upload too large"));
-            }
-            file.write_all(&first.data)
-                .await
-                .map_err(|e| Status::internal(format!("failed to write temp file: {}", e)))?;
-        }
-
-        // stream remaining chunks
-        while let Some(chunk) = stream.message().await? {
-            let len = chunk.data.len() as u64;
-            total += len;
-            if total > MAX_UPLOAD_BYTES {
-                return Err(Status::resource_exhausted("upload too large"));
-            }
-            file.write_all(&chunk.data)
-                .await
-                .map_err(|e| Status::internal(format!("failed to write temp file: {}", e)))?;
-        }
-
-        file.flush()
-            .await
-            .map_err(|e| Status::internal(format!("failed to flush temp file: {}", e)))?;
-
-        // Extract tar using shared logic
-        // The original dest_path may have trailing '/' indicating directory mode,
-        // but the resolved rootfs path won't. Use force_directory in that case.
+        // The original dest_path may have trailing '/' indicating directory
+        // mode, but the resolved rootfs path won't. Use force_directory then.
         let force_directory = dest_path.ends_with('/');
-        boxlite_shared::tar::unpack(
-            temp_path.clone(),
+
+        // Stream the tar bytes (first chunk's data + the remaining chunks)
+        // straight into the unpacker without staging a temp file.
+        let first_data = first.data;
+        let rest = stream.map(|r| {
+            r.map(|c| c.data)
+                .map_err(|e| std::io::Error::other(e.message()))
+        });
+        let bytes = futures::stream::once(async move {
+            Ok::<Vec<u8>, std::io::Error>(first_data)
+        })
+        .chain(rest);
+
+        boxlite_shared::tar::unpack_stream(
+            Box::pin(bytes),
             dest_root.clone(),
             boxlite_shared::tar::UnpackContext {
                 overwrite,
                 mkdir_parents,
                 force_directory,
+                is_directory,
             },
         )
         .await
         .map_err(|e| Status::internal(e.to_string()))?;
 
-        let _ = tokio::fs::remove_file(&temp_path).await;
-
         info!(
             dest = %dest_root.display(),
-            bytes = total,
             container_id = %container_id,
             "upload completed"
         );
@@ -137,66 +109,47 @@ impl Files for GuestServer {
             return Err(Status::not_found("source path does not exist"));
         }
 
-        // Build tar into temp file
-        let temp_path =
-            std::env::temp_dir().join(format!("boxlite-download-{}.tar", uuid::Uuid::new_v4()));
-
         let include_parent = req.include_parent;
         let follow_symlinks = req.follow_symlinks;
 
-        boxlite_shared::tar::pack(
-            src_path,
-            temp_path.clone(),
-            boxlite_shared::tar::PackContext {
-                follow_symlinks,
-                include_parent,
-            },
-        )
-        .await
-        .map_err(|e| Status::internal(e.to_string()))?;
-
-        // Stream file contents
+        // Stream the packed tar straight into the gRPC stream — no temp file.
         let (tx, rx) = mpsc::channel::<Result<DownloadChunk, Status>>(4);
         tokio::spawn(async move {
-            let mut file = match File::open(&temp_path).await {
-                Ok(f) => f,
+            let (is_directory, mut stream) = match boxlite_shared::tar::pack_stream(
+                src_path,
+                boxlite_shared::tar::PackContext {
+                    follow_symlinks,
+                    include_parent,
+                },
+            )
+            .await
+            {
+                Ok(x) => x,
                 Err(e) => {
-                    let _ = tx
-                        .send(Err(Status::internal(format!(
-                            "open temp tar failed: {}",
-                            e
-                        ))))
-                        .await;
+                    let _ = tx.send(Err(Status::internal(e.to_string()))).await;
                     return;
                 }
             };
-            let mut buf = vec![0u8; CHUNK_SIZE];
-            loop {
-                match file.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if tx
-                            .send(Ok(DownloadChunk {
-                                data: buf[..n].to_vec(),
-                            }))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
+
+            let mut first = true;
+            while let Some(chunk) = stream.next().await {
+                let data = match chunk {
+                    Ok(d) => d,
                     Err(e) => {
-                        let _ = tx
-                            .send(Err(Status::internal(format!(
-                                "read temp tar failed: {}",
-                                e
-                            ))))
-                            .await;
-                        break;
+                        let _ = tx.send(Err(Status::internal(e.to_string()))).await;
+                        return;
                     }
+                };
+                let dc = DownloadChunk {
+                    data,
+                    is_directory: if first { Some(is_directory) } else { None },
+                };
+                first = false;
+                if tx.send(Ok(dc)).await.is_err() {
+                    // Receiver dropped → client aborted.
+                    return;
                 }
             }
-            let _ = tokio::fs::remove_file(&temp_path).await;
         });
 
         info!(

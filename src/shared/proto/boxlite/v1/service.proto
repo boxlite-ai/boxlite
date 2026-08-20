@@ -577,6 +577,10 @@ message UploadChunk {
   bool mkdir_parents = 4;
   // If true, overwrite existing files (default: true)
   bool overwrite = 5;
+  // Packer-reported archive shape (first chunk only).
+  // true = directory archive; false = single-file archive;
+  // unset = unknown (older peer) -> unpacker falls back to legacy detection.
+  optional bool is_directory = 6;
 }
 
 message UploadResponse {
@@ -602,4 +606,8 @@ message DownloadRequest {
 message DownloadChunk {
   // Raw tar archive bytes
   bytes data = 1;
+  // Packer-reported archive shape (first chunk only).
+  // true = directory archive; false = single-file archive;
+  // unset = unknown (older peer) -> unpacker falls back to legacy detection.
+  optional bool is_directory = 2;
 }

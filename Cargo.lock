@@ -720,6 +720,7 @@ dependencies = [
 name = "boxlite-shared"
 version = "0.9.7"
 dependencies = [
+ "futures",
  "proptest",
  "prost",
  "serde",
