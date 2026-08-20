@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { EventEmitter } from 'node:events'
 import { ForbiddenException } from '@nestjs/common'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
@@ -35,6 +36,7 @@ function makeHarness() {
 
 describe('BoxliteProxyController', () => {
   beforeEach(() => jest.clearAllMocks())
+  afterEach(() => jest.useRealTimers())
 
   it('rewrites public box ids to internal box ids before proxying exec', async () => {
     const proxyHandler = jest.fn()
@@ -129,5 +131,69 @@ describe('BoxliteProxyController', () => {
       controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn()),
     ).rejects.toThrow(ForbiddenException)
     expect(proxyHandler).not.toHaveBeenCalled()
+  })
+
+  it('refreshes activity for the whole lifetime of a file transfer', async () => {
+    jest.useFakeTimers()
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller, boxService } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+      autoStop: 900,
+    })
+    const res = new EventEmitter()
+
+    await controller.proxyFiles(activeAuth as never, 'public-box', { url: '/files' } as never, res as never, jest.fn())
+
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
+
+    jest.advanceTimersByTime(450_000)
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(2)
+
+    res.emit('close')
+  })
+
+  it('keeps the heartbeat below half the autoStop window for a one-second setting', async () => {
+    jest.useFakeTimers()
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller, boxService } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+      autoStop: 1,
+    })
+    const res = new EventEmitter()
+
+    await controller.proxyFiles(activeAuth as never, 'public-box', { url: '/files' } as never, res as never, jest.fn())
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
+
+    // autoStop=1 → the heartbeat must fire within the window, not at its end.
+    jest.advanceTimersByTime(500)
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(2)
+
+    res.emit('close')
+  })
+
+  it('stops refreshing activity once the transfer completes', async () => {
+    jest.useFakeTimers()
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller, boxService } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+      autoStop: 900,
+    })
+    const res = new EventEmitter()
+
+    await controller.proxyFiles(activeAuth as never, 'public-box', { url: '/files' } as never, res as never, jest.fn())
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
+
+    res.emit('close')
+    jest.advanceTimersByTime(900_000)
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
   })
 })
