@@ -72,6 +72,7 @@ jobs:
       go: ${{ steps.filter.outputs.go }}
       api: ${{ steps.filter.outputs.api }}
       guest_artifacts: ${{ steps.filter.outputs.guest_artifacts }}
+      setup: ${{ steps.filter.outputs.setup }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v4
@@ -122,6 +123,13 @@ jobs:
               - '**/Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/config.yml'
+              - '.github/workflows/test.yml'
+            setup:
+              - '.gitmodules'
+              - 'scripts/setup/setup-submodules.sh'
+              - 'scripts/test/test-setup-submodules.sh'
+              - 'make/setup.mk'
+              - 'make/test.mk'
               - '.github/workflows/test.yml'
 
   # Rust unit tests (boxlite-shared only - boxlite requires native libs not available in CI)
@@ -347,6 +355,18 @@ jobs:
       - name: Build and qualify guest artifacts
         run: make test:guest-artifacts GUEST_TARGET=${{ matrix.target }} PROFILE=${{ matrix.profile }}
 
+  setup:
+    name: Submodule setup tests
+    needs: changes
+    if: ${{ needs.changes.outputs.setup == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Test worktree submodule setup
+        run: make test:setup:submodules
+
   # API tests need real Redis and Postgres services for integration coverage.
   api:
     name: API Tests
@@ -413,7 +433,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [config, changes, rust, cli, python, node, go, api, guest_artifacts]
+    needs: [config, changes, rust, cli, python, node, go, setup, api, guest_artifacts]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

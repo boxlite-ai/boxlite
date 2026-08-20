@@ -85,6 +85,9 @@ endef
 test:
 	@$(MAKE) test:changed
 
+test\:setup\:submodules:
+	@bash $(SCRIPT_DIR)/test/test-setup-submodules.sh
+
 # Pinned BoxLite diagram skill validator. This suite is deterministic: it uses
 # local stand-ins for gh and Mermaid CLI while exercising the real parser,
 # source, diff, and cross-view validation code from agent-tooling.

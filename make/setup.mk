@@ -3,6 +3,9 @@ PHONY_TARGETS += setup
 # Local-dev default: same as before (build + test/dev extras)
 setup: setup\:dev
 
+setup\:submodules:
+	@bash $(SCRIPT_DIR)/setup/setup-submodules.sh
+
 setup\:dev: setup\:build setup\:test
 
 # Build-only setup (preferred for CI)

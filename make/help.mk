@@ -5,6 +5,7 @@ help:
 	@echo ""
 	@echo "  Setup:"
 	@echo "    make setup          - Dev setup (same as make setup:dev)"
+	@echo "    make setup:submodules - Initialize missing Git submodules only"
 	@echo "    make setup:build    - Build-only deps (recommended for CI)"
 	@echo "    make setup:test     - Test/dev extras (nextest, node deps, hooks, python venv)"
 	@echo "    make setup:dev      - setup:build + setup:test"

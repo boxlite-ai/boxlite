@@ -13,5 +13,19 @@
   },
   "enabledPlugins": {
     "boxlite-agent-tooling@boxlite-agent-tooling": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "make -C \"$CLAUDE_PROJECT_DIR\" setup:submodules",
+            "timeout": 600
+          }
+        ]
+      }
+    ]
   }
 }

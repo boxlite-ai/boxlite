@@ -80,22 +80,7 @@ install_rust() {
 
 # Initialize git submodules
 init_submodules() {
-    print_step "Checking git submodules... "
-
-    # Check if we're in a git repository
-    if ! git rev-parse --git-dir > /dev/null 2>&1; then
-        print_error "Not in a git repository"
-        return 1
-    fi
-
-    # Check if submodules are already initialized
-    if git submodule status | grep -q "^-"; then
-        echo -e "${YELLOW}Initializing...${NC}"
-        git submodule update --init --recursive --depth 1
-        print_success "Submodules initialized"
-    else
-        print_success "Already initialized"
-    fi
+    "$SCRIPT_DIR/setup/setup-submodules.sh"
 }
 
 # Install cargo-nextest
