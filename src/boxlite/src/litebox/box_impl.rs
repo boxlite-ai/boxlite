@@ -857,15 +857,17 @@ impl BoxImpl {
             ));
         }
 
-        let temp_tar = self.runtime.layout.temp_dir().join(format!(
-            "cp-in-{}-{}.tar",
-            self.config.id.as_str(),
-            uuid::Uuid::new_v4()
-        ));
+        if !host_src.exists() {
+            return Err(BoxliteError::Storage(format!(
+                "source path {} does not exist",
+                host_src.display()
+            )));
+        }
 
-        boxlite_shared::tar::pack(
+        // Stream the packed tar straight into the guest upload stream — no
+        // whole-file memory buffer, no temp tar.
+        let (is_directory, tar) = boxlite_shared::tar::pack_stream(
             host_src.to_path_buf(),
-            temp_tar.clone(),
             boxlite_shared::tar::PackContext {
                 follow_symlinks: opts.follow_symlinks,
                 include_parent: opts.include_parent,
@@ -875,16 +877,15 @@ impl BoxImpl {
 
         let mut files_iface = live.guest_session.files().await?;
         files_iface
-            .upload_tar(
-                &temp_tar,
+            .upload_tar_stream(
                 container_dst,
                 Some(self.container_id()),
                 true,
                 opts.overwrite,
+                is_directory,
+                tar,
             )
             .await?;
-
-        let _ = tokio::fs::remove_file(&temp_tar).await;
 
         for listener in &self.event_listeners {
             listener.on_file_copied_in(
@@ -927,34 +928,53 @@ impl BoxImpl {
             return Err(BoxliteError::Config("source path cannot be empty".into()));
         }
 
-        let temp_tar = self.runtime.layout.temp_dir().join(format!(
-            "cp-out-{}-{}.tar",
-            self.config.id.as_str(),
-            uuid::Uuid::new_v4()
-        ));
-
         let mut files_iface = live.guest_session.files().await?;
-        files_iface
-            .download_tar(
+        let (is_directory, tar) = files_iface
+            .download_tar_stream(
                 container_src,
                 Some(self.container_id()),
                 opts.include_parent,
                 opts.follow_symlinks,
-                &temp_tar,
             )
             .await?;
 
-        boxlite_shared::tar::unpack(
-            temp_tar.clone(),
-            host_dst.to_path_buf(),
-            boxlite_shared::tar::UnpackContext {
-                overwrite: opts.overwrite,
-                mkdir_parents: true,
-                force_directory: false,
-            },
-        )
-        .await?;
-        let _ = tokio::fs::remove_file(&temp_tar).await;
+        match is_directory {
+            Some(_) => {
+                boxlite_shared::tar::unpack_stream(
+                    tar,
+                    host_dst.to_path_buf(),
+                    boxlite_shared::tar::UnpackContext {
+                        overwrite: opts.overwrite,
+                        mkdir_parents: true,
+                        force_directory: false,
+                        is_directory,
+                    },
+                )
+                .await?;
+            }
+            None => {
+                // Old guest (no archive-shape hint): buffer the stream to a
+                // temp file and use legacy peek-based detection.
+                let temp_tar = self.runtime.layout.temp_dir().join(format!(
+                    "cp-out-{}-{}.tar",
+                    self.config.id.as_str(),
+                    uuid::Uuid::new_v4()
+                ));
+                Self::drain_stream_to_file(tar, &temp_tar).await?;
+                boxlite_shared::tar::unpack(
+                    temp_tar.clone(),
+                    host_dst.to_path_buf(),
+                    boxlite_shared::tar::UnpackContext {
+                        overwrite: opts.overwrite,
+                        mkdir_parents: true,
+                        force_directory: false,
+                        is_directory: None,
+                    },
+                )
+                .await?;
+                let _ = tokio::fs::remove_file(&temp_tar).await;
+            }
+        }
 
         for listener in &self.event_listeners {
             listener.on_file_copied_out(
@@ -971,6 +991,35 @@ impl BoxImpl {
             dst = %host_dst.display(),
             "copy_out completed"
         );
+        Ok(())
+    }
+
+    /// Drain a tar byte stream into a temp file — the legacy fallback for old
+    /// guests that don't report the archive shape (`is_directory`).
+    async fn drain_stream_to_file(
+        mut stream: std::pin::Pin<
+            Box<dyn futures::Stream<Item = std::io::Result<Vec<u8>>> + Send>,
+        >,
+        path: &std::path::Path,
+    ) -> BoxliteResult<()> {
+        use futures::StreamExt;
+        use tokio::io::AsyncWriteExt;
+
+        let mut file = tokio::fs::File::create(path).await.map_err(|e| {
+            BoxliteError::Storage(format!("failed to create {}: {}", path.display(), e))
+        })?;
+
+        while let Some(chunk) = stream.next().await {
+            let data = chunk
+                .map_err(|e| BoxliteError::Storage(format!("download stream error: {e}")))?;
+            file.write_all(&data).await.map_err(|e| {
+                BoxliteError::Storage(format!("failed to write {}: {}", path.display(), e))
+            })?;
+        }
+
+        file.flush().await.map_err(|e| {
+            BoxliteError::Storage(format!("failed to flush {}: {}", path.display(), e))
+        })?;
         Ok(())
     }
 

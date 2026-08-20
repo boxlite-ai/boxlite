@@ -23,6 +23,7 @@ pub const GIT_COMMIT: Option<&str> = option_env!("BOXLITE_GIT_COMMIT");
 pub mod constants;
 pub mod errors;
 pub mod layout;
+pub mod streaming;
 pub mod tar;
 pub mod transport;
 
