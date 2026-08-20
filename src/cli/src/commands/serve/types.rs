@@ -337,4 +337,7 @@ pub(super) struct RemoveQuery {
 #[derive(Deserialize)]
 pub(super) struct FileQuery {
     pub path: String,
+    /// Archive-shape hint from the client (upload). `None` = unknown/legacy.
+    #[serde(default)]
+    pub is_directory: Option<bool>,
 }

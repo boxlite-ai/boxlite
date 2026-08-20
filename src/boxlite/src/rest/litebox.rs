@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use reqwest::Method;
 use tokio::sync::mpsc;
 
@@ -103,6 +104,98 @@ impl RestBox {
             Some(ExecStdout::new(stdout_rx)),
             Some(ExecStderr::new(stderr_rx)),
         )
+    }
+
+    /// Download a path as a tar byte stream over the REST API.
+    async fn download_tar(
+        &self,
+        container_src: &str,
+    ) -> BoxliteResult<(Option<bool>, crate::litebox::BoxTarStream)> {
+        let box_id = self.box_id_str();
+        let encoded_src = urlencoding::encode(container_src);
+        let path = format!("/boxes/{}/files?path={}", box_id, encoded_src);
+        let builder = self
+            .client
+            .authorized_request(Method::GET, &path)
+            .await?
+            .header("Accept", "application/x-tar");
+
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("copy_out download failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(BoxliteError::Internal(format!(
+                "copy_out failed (HTTP {}): {}",
+                status, text
+            )));
+        }
+
+        // The archive shape is carried on the response header (newer servers);
+        // absence means the peer predates it → the caller falls back.
+        let is_directory = resp
+            .headers()
+            .get("x-boxlite-is-directory")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s == "true");
+
+        let stream = resp
+            .bytes_stream()
+            .map(|r| r.map(|b| b.to_vec()).map_err(|e| std::io::Error::other(e.to_string())));
+        Ok((is_directory, crate::litebox::BoxTarStream::new(stream)))
+    }
+
+    /// Upload a tar byte stream to `container_dst` over the REST API.
+    async fn upload_tar(
+        &self,
+        container_dst: &str,
+        is_directory: Option<bool>,
+        tar: crate::litebox::BoxTarStream,
+    ) -> BoxliteResult<()> {
+        let box_id = self.box_id_str();
+        let encoded_dst = urlencoding::encode(container_dst);
+        let mut path = format!("/boxes/{}/files?path={}", box_id, encoded_dst);
+        if let Some(b) = is_directory {
+            path.push_str(&format!("&is_directory={}", b));
+        }
+
+        let body_stream = tar.into_inner().map(|r| r.map(bytes::Bytes::from));
+        let body = reqwest::Body::wrap_stream(body_stream);
+        let builder = self
+            .client
+            .authorized_request(Method::PUT, &path)
+            .await?
+            .header("Content-Type", "application/x-tar")
+            .body(body);
+
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("copy_into upload failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(BoxliteError::Internal(format!(
+                "copy_into failed (HTTP {}): {}",
+                status, text
+            )));
+        }
+        Ok(())
+    }
+
+    /// Drain a tar byte stream into a buffer (legacy fallback for servers that
+    /// don't report the archive shape).
+    async fn collect_stream(&self, tar: crate::litebox::BoxTarStream) -> BoxliteResult<Vec<u8>> {
+        let mut tar = tar.into_inner();
+        let mut buf = Vec::new();
+        while let Some(chunk) = tar.next().await {
+            buf.extend_from_slice(&chunk.map_err(|e| BoxliteError::Storage(e.to_string()))?);
+        }
+        Ok(buf)
     }
 }
 
@@ -274,8 +367,6 @@ impl BoxBackend for RestBox {
         container_dst: &str,
         opts: CopyOptions,
     ) -> BoxliteResult<()> {
-        let box_id = self.box_id_str();
-
         // Honor overwrite=false at the REST boundary. The runner's
         // upload handler always extracts the tar over whatever's at
         // container_dst (the test in apps/e2e/cases/test_files_io.py::
@@ -295,33 +386,19 @@ impl BoxBackend for RestBox {
             ));
         }
 
-        // Create tar archive from host path
-        let tar_bytes = create_tar_from_path(host_src)?;
+        // Stream the packed tar straight into the HTTP request body — no
+        // whole-file memory buffer.
+        let (is_directory, tar) = boxlite_shared::tar::pack_stream(
+            host_src.to_path_buf(),
+            boxlite_shared::tar::PackContext {
+                follow_symlinks: opts.follow_symlinks,
+                include_parent: opts.include_parent,
+            },
+        )
+        .await?;
 
-        // Upload tar to server
-        let encoded_dst = urlencoding::encode(container_dst);
-        let path = format!("/boxes/{}/files?path={}", box_id, encoded_dst);
-        let builder = self
-            .client
-            .authorized_request(Method::PUT, &path)
-            .await?
-            .header("Content-Type", "application/x-tar")
-            .body(tar_bytes);
-
-        let resp = builder
-            .send()
+        self.upload_tar(container_dst, Some(is_directory), crate::litebox::BoxTarStream::new(tar))
             .await
-            .map_err(|e| BoxliteError::Internal(format!("copy_into upload failed: {}", e)))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(BoxliteError::Internal(format!(
-                "copy_into failed (HTTP {}): {}",
-                status, text
-            )));
-        }
-        Ok(())
     }
 
     async fn copy_out(
@@ -330,38 +407,29 @@ impl BoxBackend for RestBox {
         host_dst: &Path,
         _opts: CopyOptions,
     ) -> BoxliteResult<()> {
-        let box_id = self.box_id_str();
+        let (is_directory, tar) = self.download_tar(container_src).await?;
 
-        // Download tar from server
-        let encoded_src = urlencoding::encode(container_src);
-        let path = format!("/boxes/{}/files?path={}", box_id, encoded_src);
-        let builder = self
-            .client
-            .authorized_request(Method::GET, &path)
-            .await?
-            .header("Accept", "application/x-tar");
-
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("copy_out download failed: {}", e)))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(BoxliteError::Internal(format!(
-                "copy_out failed (HTTP {}): {}",
-                status, text
-            )));
+        match is_directory {
+            Some(_) => boxlite_shared::tar::unpack_stream(
+                tar.into_inner(),
+                host_dst.to_path_buf(),
+                boxlite_shared::tar::UnpackContext {
+                    // REST copy_out historically ignores `opts.overwrite` and
+                    // always overwrites (see extract_tar_to_path); preserve that.
+                    overwrite: true,
+                    mkdir_parents: true,
+                    force_directory: false,
+                    is_directory,
+                },
+            )
+            .await,
+            None => {
+                // Old/independent server (no archive-shape header): buffer and
+                // use the legacy peek-based extraction.
+                let bytes = self.collect_stream(tar).await?;
+                extract_tar_to_path(&bytes, host_dst)
+            }
         }
-
-        let tar_bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("copy_out read body failed: {}", e)))?;
-
-        // Extract tar to host path
-        extract_tar_to_path(&tar_bytes, host_dst)
     }
 
     async fn clone_box(
@@ -1032,40 +1100,6 @@ async fn emit_or_fallback(
 // ============================================================================
 // Tar Helpers
 // ============================================================================
-
-/// Create a tar archive from a host file or directory.
-fn create_tar_from_path(host_src: &Path) -> BoxliteResult<Vec<u8>> {
-    let mut archive = tar::Builder::new(Vec::new());
-
-    if host_src.is_dir() {
-        archive.append_dir_all(".", host_src).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to create tar from {}: {}",
-                host_src.display(),
-                e
-            ))
-        })?;
-    } else {
-        let file_name = host_src
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "file".to_string());
-        let mut file = std::fs::File::open(host_src).map_err(|e| {
-            BoxliteError::Internal(format!("failed to open {}: {}", host_src.display(), e))
-        })?;
-        archive.append_file(&file_name, &mut file).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to add {} to tar: {}",
-                host_src.display(),
-                e
-            ))
-        })?;
-    }
-
-    archive
-        .into_inner()
-        .map_err(|e| BoxliteError::Internal(format!("failed to finalize tar archive: {}", e)))
-}
 
 /// Extract a tar archive to a host path.
 ///
