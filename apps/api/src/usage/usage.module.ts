@@ -22,9 +22,7 @@ import { Box } from '../box/entities/box.entity'
 import { Runner } from '../box/entities/runner.entity'
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([BoxUsagePeriod, Box, Runner, BoxUsagePeriodArchive, BoxUsageExportOutbox]),
-  ],
+  imports: [TypeOrmModule.forFeature([BoxUsagePeriod, Box, Runner, BoxUsagePeriodArchive, BoxUsageExportOutbox])],
   providers: [
     UsageService,
     UsageExportOutboxService,
