@@ -193,7 +193,7 @@ export class BoxliteWsProxyService {
       // 2. JWT (OIDC) — org comes from the URL tenant; membership required.
       if (!this.jwtStrategy) return null
       if (!urlTenant || urlTenant === 'default') return null
-      const payload = await this.jwtStrategy.verifyToken(token)
+      const payload = await this.jwtStrategy.verifyVerifiedToken(token)
       // Mirror JwtStrategy.validate's sub/uid handling (OKTA carries userId in `uid`).
       const claims = payload as { sub?: string; cid?: unknown; uid?: string }
       let userId = claims.sub

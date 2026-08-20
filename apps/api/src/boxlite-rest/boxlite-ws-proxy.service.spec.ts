@@ -51,7 +51,7 @@ describe('BoxliteWsProxyService', () => {
     }
     const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }
     const jwtStrategy = {
-      verifyToken: jest.fn(),
+      verifyVerifiedToken: jest.fn(),
     }
     const service = new BoxliteWsProxyService(
       apiKeyService as never,
@@ -134,26 +134,30 @@ describe('BoxliteWsProxyService', () => {
       organization: { id: 'org-1', suspended: false },
     })
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
-    expect(jwtStrategy.verifyToken).not.toHaveBeenCalled()
+    expect(jwtStrategy.verifyVerifiedToken).not.toHaveBeenCalled()
   })
 
-  it('authenticates JWT bearer tokens for websocket attach', async () => {
+  it('authenticates verified-email JWT bearer tokens for websocket attach', async () => {
     const { service, organizationUserService, jwtStrategy } = buildAuthHarness()
     const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEifQ.signature'
-    jwtStrategy.verifyToken.mockResolvedValue({ sub: 'user-1', email: 'dev@acme.test' })
+    jwtStrategy.verifyVerifiedToken.mockResolvedValue({
+      sub: 'user-1',
+      email: 'dev@acme.test',
+      email_verified: true,
+    })
     organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
 
     await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toEqual({
       organization: { id: 'org-1', suspended: false },
     })
-    expect(jwtStrategy.verifyToken).toHaveBeenCalledWith(jwt)
+    expect(jwtStrategy.verifyVerifiedToken).toHaveBeenCalledWith(jwt)
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
   })
 
   it('rejects invalid JWT bearer tokens for websocket attach', async () => {
     const { service, organizationUserService, jwtStrategy } = buildAuthHarness()
     const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEifQ.signature'
-    jwtStrategy.verifyToken.mockRejectedValue(new Error('bad jwt'))
+    jwtStrategy.verifyVerifiedToken.mockRejectedValue(new Error('bad jwt'))
 
     await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toBeNull()
     expect(organizationUserService.findOne).not.toHaveBeenCalled()
@@ -162,7 +166,11 @@ describe('BoxliteWsProxyService', () => {
   it('rejects JWT attach when organization membership has been removed', async () => {
     const { service, organizationUserService, jwtStrategy } = buildAuthHarness()
     const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEifQ.signature'
-    jwtStrategy.verifyToken.mockResolvedValue({ sub: 'user-1', email: 'dev@acme.test' })
+    jwtStrategy.verifyVerifiedToken.mockResolvedValue({
+      sub: 'user-1',
+      email: 'dev@acme.test',
+      email_verified: true,
+    })
     organizationUserService.findOne.mockResolvedValue(null)
 
     await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toBeNull()

@@ -14,6 +14,7 @@ import { useAuth } from 'react-oidc-context'
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { BannerProvider } from './components/Banner'
 import { CommandPaletteProvider } from './components/CommandPalette'
+import { RequireVerifiedEmail } from './components/auth/RequireVerifiedEmail'
 import LoadingFallback from './components/LoadingFallback'
 import { Button } from './components/ui/button'
 import {
@@ -32,6 +33,7 @@ import LandingPage from './pages/LandingPage'
 import Logout from './pages/Logout'
 import NotFound from './pages/NotFound'
 import Boxes from './pages/Boxes'
+import VerifyEmailPending from './pages/VerifyEmailPending'
 
 // Code-split the heavier, not-first-paint routes out of the main bundle. They
 // load on demand under the dashboard <Outlet> Suspense boundary, so the initial
@@ -90,15 +92,16 @@ function App() {
   const posthog = usePostHog()
   const { error: authError, isAuthenticated, user, removeUser } = useAuth()
   const boxesRedirect = `${RoutePath.BOXES}${location.search}`
+  const hasDashboardAccess = !config.oidc.emailVerificationRequired || user?.profile.email_verified === true
 
   useEffect(() => {
-    if (isAuthenticated && user && posthog?.get_distinct_id() !== user.profile.sub) {
+    if (isAuthenticated && user && hasDashboardAccess && posthog?.get_distinct_id() !== user.profile.sub) {
       posthog?.identify(user.profile.sub, {
         email: user.profile.email,
         name: user.profile.name,
       })
     }
-    if (import.meta.env.PROD && config.pylonAppId && isAuthenticated && user) {
+    if (import.meta.env.PROD && config.pylonAppId && isAuthenticated && user && hasDashboardAccess) {
       initPylon(config.pylonAppId, {
         chat_settings: {
           app_id: config.pylonAppId,
@@ -109,7 +112,7 @@ function App() {
         },
       })
     }
-  }, [isAuthenticated, user, posthog, config.pylonAppId])
+  }, [hasDashboardAccess, isAuthenticated, user, posthog, config.pylonAppId])
 
   // Hack for tracking PostHog pageviews in SPAs
   useEffect(() => {
@@ -148,6 +151,7 @@ function App() {
       <Route path={RoutePath.LANDING} element={<LandingPage />} />
       <Route path="/lander" element={<Navigate to={RoutePath.LANDING} replace />} />
       <Route path={RoutePath.LOGOUT} element={<Logout />} />
+      <Route path={RoutePath.EMAIL_VERIFICATION_PENDING} element={<VerifyEmailPending />} />
       <Route path={RoutePath.DOCS} element={<DocsRedirect />} />
       <Route path={RoutePath.SLACK} element={<SlackRedirect />} />
       <Route
@@ -161,23 +165,25 @@ function App() {
       <Route
         path={RoutePath.DASHBOARD}
         element={
-          <Suspense fallback={<LoadingFallback />}>
-            <ApiProvider>
-              <OrganizationsProvider>
-                <SelectedOrganizationProvider>
-                  <RegionsProvider>
-                    <NotificationSocketProvider>
-                      <CommandPaletteProvider>
-                        <BannerProvider>
-                          <Dashboard />
-                        </BannerProvider>
-                      </CommandPaletteProvider>
-                    </NotificationSocketProvider>
-                  </RegionsProvider>
-                </SelectedOrganizationProvider>
-              </OrganizationsProvider>
-            </ApiProvider>
-          </Suspense>
+          <RequireVerifiedEmail>
+            <Suspense fallback={<LoadingFallback />}>
+              <ApiProvider>
+                <OrganizationsProvider>
+                  <SelectedOrganizationProvider>
+                    <RegionsProvider>
+                      <NotificationSocketProvider>
+                        <CommandPaletteProvider>
+                          <BannerProvider>
+                            <Dashboard />
+                          </BannerProvider>
+                        </CommandPaletteProvider>
+                      </NotificationSocketProvider>
+                    </RegionsProvider>
+                  </SelectedOrganizationProvider>
+                </OrganizationsProvider>
+              </ApiProvider>
+            </Suspense>
+          </RequireVerifiedEmail>
         }
       >
         <Route index element={<Navigate to={boxesRedirect} replace />} />

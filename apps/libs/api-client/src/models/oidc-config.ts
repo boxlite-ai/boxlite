@@ -28,6 +28,10 @@ export interface OidcConfig {
      */
     'audience': string;
     /**
+     * Whether OIDC users must verify their email address before entering the dashboard
+     */
+    'emailVerificationRequired': boolean;
+    /**
      * OIDC end-session endpoint. Set when the IdP does not advertise one via discovery (e.g. Dex) and BoxLite hosts a compatible logout endpoint.
      */
     'endSessionEndpoint'?: string;

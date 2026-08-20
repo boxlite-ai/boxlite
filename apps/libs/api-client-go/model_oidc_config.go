@@ -27,6 +27,8 @@ type OidcConfig struct {
 	ClientId string `json:"clientId"`
 	// OIDC audience
 	Audience string `json:"audience"`
+	// Whether OIDC users must verify their email address before entering the dashboard
+	EmailVerificationRequired bool `json:"emailVerificationRequired"`
 	// OIDC end-session endpoint. Set when the IdP does not advertise one via discovery (e.g. Dex) and BoxLite hosts a compatible logout endpoint.
 	EndSessionEndpoint *string `json:"endSessionEndpoint,omitempty"`
 	AdditionalProperties map[string]interface{}
@@ -38,11 +40,12 @@ type _OidcConfig OidcConfig
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOidcConfig(issuer string, clientId string, audience string) *OidcConfig {
+func NewOidcConfig(issuer string, clientId string, audience string, emailVerificationRequired bool) *OidcConfig {
 	this := OidcConfig{}
 	this.Issuer = issuer
 	this.ClientId = clientId
 	this.Audience = audience
+	this.EmailVerificationRequired = emailVerificationRequired
 	return &this
 }
 
@@ -126,6 +129,30 @@ func (o *OidcConfig) SetAudience(v string) {
 	o.Audience = v
 }
 
+// GetEmailVerificationRequired returns the EmailVerificationRequired field value
+func (o *OidcConfig) GetEmailVerificationRequired() bool {
+	if o == nil {
+		var ret bool
+		return ret
+	}
+
+	return o.EmailVerificationRequired
+}
+
+// GetEmailVerificationRequiredOk returns a tuple with the EmailVerificationRequired field value
+// and a boolean to check if the value has been set.
+func (o *OidcConfig) GetEmailVerificationRequiredOk() (*bool, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.EmailVerificationRequired, true
+}
+
+// SetEmailVerificationRequired sets field value
+func (o *OidcConfig) SetEmailVerificationRequired(v bool) {
+	o.EmailVerificationRequired = v
+}
+
 // GetEndSessionEndpoint returns the EndSessionEndpoint field value if set, zero value otherwise.
 func (o *OidcConfig) GetEndSessionEndpoint() string {
 	if o == nil || IsNil(o.EndSessionEndpoint) {
@@ -171,6 +198,7 @@ func (o OidcConfig) ToMap() (map[string]interface{}, error) {
 	toSerialize["issuer"] = o.Issuer
 	toSerialize["clientId"] = o.ClientId
 	toSerialize["audience"] = o.Audience
+	toSerialize["emailVerificationRequired"] = o.EmailVerificationRequired
 	if !IsNil(o.EndSessionEndpoint) {
 		toSerialize["endSessionEndpoint"] = o.EndSessionEndpoint
 	}
@@ -190,6 +218,7 @@ func (o *OidcConfig) UnmarshalJSON(data []byte) (err error) {
 		"issuer",
 		"clientId",
 		"audience",
+		"emailVerificationRequired",
 	}
 
 	allProperties := make(map[string]interface{})
@@ -222,6 +251,7 @@ func (o *OidcConfig) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "issuer")
 		delete(additionalProperties, "clientId")
 		delete(additionalProperties, "audience")
+		delete(additionalProperties, "emailVerificationRequired")
 		delete(additionalProperties, "endSessionEndpoint")
 		o.AdditionalProperties = additionalProperties
 	}

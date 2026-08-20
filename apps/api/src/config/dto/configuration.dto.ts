@@ -117,6 +117,13 @@ export class OidcConfig {
   @IsString()
   audience: string
 
+  @ApiProperty({
+    description: 'Whether OIDC users must verify their email address before entering the dashboard',
+    example: true,
+  })
+  @IsBoolean()
+  emailVerificationRequired: boolean
+
   @ApiPropertyOptional({
     description:
       'OIDC end-session endpoint. Set when the IdP does not advertise one via discovery (e.g. Dex) and BoxLite hosts a compatible logout endpoint.',
@@ -237,6 +244,7 @@ export class ConfigurationDto {
       issuer: configService.get('oidc.publicIssuer') || configService.getOrThrow('oidc.issuer'),
       clientId: configService.getOrThrow('oidc.clientId'),
       audience: configService.getOrThrow('oidc.audience'),
+      emailVerificationRequired: !configService.get('skipUserEmailVerification'),
       // Only expose the BoxLite-hosted fallback when discovery proved the IdP
       // lacks end_session_endpoint. 'present' → trust the IdP; 'unknown' →
       // fail closed (don't override Auth0/Okta's real endpoint on a probe

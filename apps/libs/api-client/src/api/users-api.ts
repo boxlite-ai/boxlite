@@ -339,6 +339,41 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary Resend the pending OIDC user email verification
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        resendEmailVerification: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/users/me/email-verification/resend`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Unlink account
          * @param {string} provider 
          * @param {string} providerUserId 
@@ -492,6 +527,18 @@ export const UsersApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Resend the pending OIDC user email verification
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async resendEmailVerification(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.resendEmailVerification(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['UsersApi.resendEmailVerification']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Unlink account
          * @param {string} provider 
          * @param {string} providerUserId 
@@ -589,6 +636,15 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
          */
         regenerateKeyPair(id: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
             return localVarFp.regenerateKeyPair(id, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Resend the pending OIDC user email verification
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        resendEmailVerification(options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.resendEmailVerification(options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -691,6 +747,16 @@ export class UsersApi extends BaseAPI {
      */
     public regenerateKeyPair(id: string, options?: RawAxiosRequestConfig) {
         return UsersApiFp(this.configuration).regenerateKeyPair(id, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Resend the pending OIDC user email verification
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public resendEmailVerification(options?: RawAxiosRequestConfig) {
+        return UsersApiFp(this.configuration).resendEmailVerification(options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

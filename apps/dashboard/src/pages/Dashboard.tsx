@@ -14,7 +14,6 @@ import { OnboardingDialogHost } from '@/components/OnboardingDialogHost'
 import { Sidebar } from '@/components/Sidebar'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/sonner'
-import { VerifyEmailDialog } from '@/components/VerifyEmailDialog'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
 import { useTheme } from '@/contexts/ThemeContext'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
@@ -78,7 +77,6 @@ function useDashboardCommands() {
 
 const Dashboard: React.FC = () => {
   const { selectedOrganization } = useSelectedOrganization()
-  const [showVerifyEmailDialog, setShowVerifyEmailDialog] = useState(false)
   const config = useConfig()
   useOwnerWalletQuery() // prefetch wallet
 
@@ -86,15 +84,6 @@ const Dashboard: React.FC = () => {
   useDocsSearchCommands()
 
   useSuspensionBanner(selectedOrganization)
-
-  useEffect(() => {
-    if (
-      selectedOrganization?.suspended &&
-      selectedOrganization.suspensionReason === 'Please verify your email address'
-    ) {
-      setShowVerifyEmailDialog(true)
-    }
-  }, [selectedOrganization])
 
   const [bannerText, bannerLearnMoreUrl] = useMemo(() => {
     if (!config.announcements || Object.entries(config.announcements).length === 0) {
@@ -159,7 +148,6 @@ const Dashboard: React.FC = () => {
         </SidebarInset>
         <OnboardingDialogHost />
         <Toaster />
-        <VerifyEmailDialog open={showVerifyEmailDialog} onOpenChange={setShowVerifyEmailDialog} />
       </SidebarProvider>
     </div>
   )

@@ -245,6 +245,9 @@ const configuration = {
     postLogoutRedirectAllowlist: process.env.OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST,
     managementApi: {
       enabled: process.env.OIDC_MANAGEMENT_API_ENABLED === 'true',
+      baseUrl: process.env.OIDC_MANAGEMENT_API_BASE_URL,
+      tokenUrl: process.env.OIDC_MANAGEMENT_API_TOKEN_URL,
+      customDomain: process.env.OIDC_MANAGEMENT_API_CUSTOM_DOMAIN,
       clientId: process.env.OIDC_MANAGEMENT_API_CLIENT_ID,
       clientSecret: process.env.OIDC_MANAGEMENT_API_CLIENT_SECRET,
       audience: process.env.OIDC_MANAGEMENT_API_AUDIENCE,

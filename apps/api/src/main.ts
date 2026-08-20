@@ -31,6 +31,7 @@ import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino'
 import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
+import { dashboardCorsOptions } from './config/cors.config'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -57,27 +58,14 @@ async function bootstrap() {
   // fall back to reflecting the origin and warn — so an unconfigured deployment
   // is never silently broken, while configured stacks (SST sets DASHBOARD_URL)
   // are locked down.
-  // Gather configured origins, trim them, drop unset/empty entries (the
-  // `is string` guard also narrows the array to string[]), then dedupe.
-  const allowedOrigins = [
-    process.env.DASHBOARD_URL,
-    process.env.APP_URL,
-    ...(process.env.CORS_ALLOWED_ORIGINS?.split(',') ?? []),
-  ]
-    .map((origin) => origin?.trim())
-    .filter((origin): origin is string => !!origin)
-  const uniqueAllowedOrigins = [...new Set(allowedOrigins)]
-  if (uniqueAllowedOrigins.length === 0) {
+  const corsOptions = dashboardCorsOptions()
+  if (corsOptions.origin === true) {
     Logger.warn(
       'CORS: no DASHBOARD_URL / APP_URL / CORS_ALLOWED_ORIGINS set; reflecting request origin. Set one to restrict cross-origin access.',
       'Bootstrap',
     )
   }
-  app.enableCors({
-    origin: uniqueAllowedOrigins.length > 0 ? uniqueAllowedOrigins : true,
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    credentials: true,
-  })
+  app.enableCors(corsOptions)
 
   const configService = app.get(TypedConfigService)
   const failedAuthTracker = app.get(FailedAuthTrackerService)

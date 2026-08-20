@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger } from '@nestjs/common'
+import { ForbiddenException, Injectable, Logger } from '@nestjs/common'
 import { PassportStrategy } from '@nestjs/passport'
 import { ExtractJwt, Strategy } from 'passport-jwt'
 import { passportJwtSecret } from 'jwks-rsa'
@@ -49,6 +49,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(request: Request, payload: any): Promise<AuthContext> {
+    this.requireVerifiedEmail(payload)
+
     // OKTA does not return the userId in access_token sub claim
     // real userId is in the uid claim and email is in the sub claim
     let userId = payload.sub
@@ -109,5 +111,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       algorithms: ['RS256'],
     })
     return payload
+  }
+
+  async verifyVerifiedToken(token: string): Promise<JWTPayload> {
+    const payload = await this.verifyToken(token)
+    this.requireVerifiedEmail(payload)
+    return payload
+  }
+
+  private requireVerifiedEmail(payload: JWTPayload): void {
+    if (!this.configService.get('skipUserEmailVerification') && payload.email_verified !== true) {
+      throw new ForbiddenException('Email verification required')
+    }
   }
 }

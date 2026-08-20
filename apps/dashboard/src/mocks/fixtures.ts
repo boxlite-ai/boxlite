@@ -51,6 +51,7 @@ export function buildMockConfig(billingApiUrl: string): BoxliteConfiguration {
       issuer: 'https://mock.local/',
       clientId: 'mock-client',
       audience: 'https://mock.local/api',
+      emailVerificationRequired: true,
     },
     linkedAccountsEnabled: false,
     announcements: {},

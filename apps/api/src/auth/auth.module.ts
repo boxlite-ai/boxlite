@@ -18,6 +18,8 @@ import { OidcMetadataService } from '../config/oidc-metadata.service'
 import { FailedAuthTrackerService } from './failed-auth-tracker.service'
 import { RegionModule } from '../region/region.module'
 import { LogoutController } from './logout.controller'
+import { EmailVerificationAuthGuard, EmailVerificationController } from './email-verification.controller'
+import { EmailVerificationService } from './email-verification.service'
 @Module({
   imports: [
     PassportModule.register({
@@ -31,7 +33,7 @@ import { LogoutController } from './logout.controller'
     BoxModule,
     RegionModule,
   ],
-  controllers: [LogoutController],
+  controllers: [LogoutController, EmailVerificationController],
   providers: [
     ApiKeyStrategy,
     {
@@ -69,6 +71,8 @@ import { LogoutController } from './logout.controller'
       inject: [UserService, OidcMetadataService, TypedConfigService],
     },
     FailedAuthTrackerService,
+    EmailVerificationAuthGuard,
+    EmailVerificationService,
   ],
   exports: [PassportModule, JwtStrategy, ApiKeyStrategy, FailedAuthTrackerService],
 })

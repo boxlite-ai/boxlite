@@ -13,6 +13,7 @@ import { ReactNode, useMemo } from 'react'
 import { AuthProvider, AuthProviderProps } from 'react-oidc-context'
 import { ConfigContext } from '../contexts/ConfigContext'
 import { MockAuthProvider } from '../mocks/MockAuthProvider'
+import { signinDestination } from '@/lib/auth-session'
 
 const apiUrl = (import.meta.env.VITE_BASE_API_URL ?? window.location.origin) + '/api'
 const isMocking = import.meta.env.VITE_ENABLE_MOCKING === 'true'
@@ -58,7 +59,11 @@ export function ConfigProvider(props: Props) {
       userStore: new WebStorageStateStore({ store: window.sessionStorage }),
       onSigninCallback: (user) => {
         const state = user?.state as { returnTo?: string } | undefined
-        const targetUrl = state?.returnTo || RoutePath.DASHBOARD
+        const targetUrl = signinDestination({
+          emailVerificationRequired: config.oidc.emailVerificationRequired,
+          emailVerified: user?.profile.email_verified,
+          returnTo: state?.returnTo || RoutePath.DASHBOARD,
+        })
         window.history.replaceState({}, '', targetUrl)
         window.dispatchEvent(new PopStateEvent('popstate'))
       },

@@ -25,14 +25,12 @@ import { formatAmount } from '@/lib/utils'
 import { ArrowUpRight, CheckCircleIcon } from '@/components/ui/icon'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { NumericFormat } from 'react-number-format'
-import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 
 const DEFAULT_PAGE_SIZE = 10
 
 export function WalletSection() {
   const { selectedOrganization } = useSelectedOrganization()
-  const { user } = useAuth()
   const [automaticTopUp, setAutomaticTopUp] = useState<AutomaticTopUp | undefined>(undefined)
   const [couponCode, setCouponCode] = useState<string>('')
   const [redeemCouponError, setRedeemCouponError] = useState<string | null>(null)
@@ -379,43 +377,39 @@ export function WalletSection() {
                 </>
               )}
 
-              {user?.profile.email_verified && (
-                <>
-                  <div className="my-5 h-px bg-border" />
+              <div className="my-5 h-px bg-border" />
 
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-col gap-1.5">
-                      <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
-                        Redeem coupon
-                      </span>
-                      {redeemCouponError ? (
-                        <span className="font-mono text-[12px] text-destructive">{redeemCouponError}</span>
-                      ) : redeemCouponSuccess ? (
-                        <span className="font-mono text-[12px] text-success">{redeemCouponSuccess}</span>
-                      ) : (
-                        <span className="font-mono text-[12px] text-muted-foreground">
-                          Enter a coupon code to redeem your credits.
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex w-full items-center gap-2 sm:w-auto">
-                      <Input
-                        placeholder="Enter coupon code"
-                        value={couponCode}
-                        onChange={(e) => setCouponCode(e.target.value)}
-                        className="h-9 w-full font-mono text-[13px] sm:w-[200px]"
-                      />
-                      <AsciiButton
-                        onClick={handleRedeemCoupon}
-                        disabled={redeemCouponMutation.isPending}
-                        className="inline-flex shrink-0 items-center gap-2"
-                      >
-                        {redeemCouponMutation.isPending && <Spinner />} Redeem
-                      </AsciiButton>
-                    </div>
-                  </div>
-                </>
-              )}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+                    Redeem coupon
+                  </span>
+                  {redeemCouponError ? (
+                    <span className="font-mono text-[12px] text-destructive">{redeemCouponError}</span>
+                  ) : redeemCouponSuccess ? (
+                    <span className="font-mono text-[12px] text-success">{redeemCouponSuccess}</span>
+                  ) : (
+                    <span className="font-mono text-[12px] text-muted-foreground">
+                      Enter a coupon code to redeem your credits.
+                    </span>
+                  )}
+                </div>
+                <div className="flex w-full items-center gap-2 sm:w-auto">
+                  <Input
+                    placeholder="Enter coupon code"
+                    value={couponCode}
+                    onChange={(e) => setCouponCode(e.target.value)}
+                    className="h-9 w-full font-mono text-[13px] sm:w-[200px]"
+                  />
+                  <AsciiButton
+                    onClick={handleRedeemCoupon}
+                    disabled={redeemCouponMutation.isPending}
+                    className="inline-flex shrink-0 items-center gap-2"
+                  >
+                    {redeemCouponMutation.isPending && <Spinner />} Redeem
+                  </AsciiButton>
+                </div>
+              </div>
             </Panel>
           </section>
 

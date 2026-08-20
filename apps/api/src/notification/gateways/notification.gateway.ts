@@ -61,7 +61,7 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
 
       // Try JWT authentication first
       try {
-        const payload = await this.jwtStrategy.verifyToken(token)
+        const payload = await this.jwtStrategy.verifyVerifiedToken(token)
 
         // Join the user room for user scoped notifications
         await socket.join(payload.sub)

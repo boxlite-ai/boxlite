@@ -216,7 +216,9 @@ const api = new sst.aws.Service('Api', {
     ...(publicOidcIssuer && {
       PUBLIC_OIDC_DOMAIN: publicOidcIssuer,
     }),
-    // Optional: Auth0 Management API (enables account linking etc.)
+    SKIP_USER_EMAIL_VERIFICATION: envOr('SKIP_USER_EMAIL_VERIFICATION', 'false'),
+    // Auth0 Management API. Required unless email verification is explicitly
+    // skipped; also enables account linking and MFA enrollment.
     ...(process.env.OIDC_MANAGEMENT_API_ENABLED === 'true' && {
       OIDC_MANAGEMENT_API_ENABLED: 'true',
       ...(process.env.OIDC_MANAGEMENT_API_BASE_URL && {
@@ -224,6 +226,9 @@ const api = new sst.aws.Service('Api', {
       }),
       ...(process.env.OIDC_MANAGEMENT_API_TOKEN_URL && {
         OIDC_MANAGEMENT_API_TOKEN_URL: process.env.OIDC_MANAGEMENT_API_TOKEN_URL,
+      }),
+      ...(process.env.OIDC_MANAGEMENT_API_CUSTOM_DOMAIN && {
+        OIDC_MANAGEMENT_API_CUSTOM_DOMAIN: process.env.OIDC_MANAGEMENT_API_CUSTOM_DOMAIN,
       }),
       // Client id/secret come from the SST secret store now. If the feature
       // is enabled but a secret is unset, the value resolves to '' and the

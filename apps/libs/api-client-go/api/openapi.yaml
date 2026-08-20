@@ -1527,6 +1527,41 @@ paths:
       summary: OIDC RP-initiated logout endpoint
       tags:
       - auth
+  /users/me/email-verification/resend:
+    post:
+      operationId: resendEmailVerification
+      parameters: []
+      responses:
+        "202":
+          description: Email verification queued successfully
+        "401":
+          description: The OIDC access token is invalid or expired
+        "409":
+          description: The identity provider account is already verified
+        "422":
+          description: No usable email identity exists
+        "429":
+          description: A verification email was requested during the cooldown window
+          headers:
+            Retry-After:
+              description: Seconds until another request is allowed
+              explode: false
+              schema:
+                type: integer
+              style: simple
+        "502":
+          description: The identity provider rejected the request
+        "503":
+          description: The identity provider is unavailable
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Resend the pending OIDC user email verification
+      tags:
+      - users
   /box:
     get:
       operationId: listBoxes
@@ -3967,6 +4002,11 @@ components:
           description: OIDC audience
           example: boxlite-api
           type: string
+        emailVerificationRequired:
+          description: Whether OIDC users must verify their email address before entering
+            the dashboard
+          example: true
+          type: boolean
         endSessionEndpoint:
           description: OIDC end-session endpoint. Set when the IdP does not advertise
             one via discovery (e.g. Dex) and BoxLite hosts a compatible logout endpoint.
@@ -3975,6 +4015,7 @@ components:
       required:
       - audience
       - clientId
+      - emailVerificationRequired
       - issuer
       type: object
     RateLimitEntry:

@@ -15,6 +15,7 @@ export enum RoutePath {
   DASHBOARD = '/dashboard',
   DOCS = '/docs',
   SLACK = '/slack',
+  EMAIL_VERIFICATION_PENDING = '/verify-email',
 
   // Dashboard sub-routes
   KEYS = '/dashboard/keys',

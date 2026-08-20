@@ -3,11 +3,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { SparklesIcon, TriangleAlertIcon } from '@/components/ui/icon'
+import { SparklesIcon } from '@/components/ui/icon'
 import { useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { ReactNode } from 'react'
-import { useAuth } from 'react-oidc-context'
 
 /**
  * Page-level billing state banners. Every message is derived from a state the
@@ -15,7 +14,6 @@ import { useAuth } from 'react-oidc-context'
  */
 export function BillingAlerts() {
   const { selectedOrganization } = useSelectedOrganization()
-  const { user } = useAuth()
   const wallet = useOwnerWalletQuery().data
 
   if (!wallet) {
@@ -24,20 +22,11 @@ export function BillingAlerts() {
 
   return (
     <>
-      {user && !user.profile.email_verified && (
-        <StatusBanner tone="warning" icon={<TriangleAlertIcon className="size-4 shrink-0" />} title="Verify your email">
-          Please verify your email address to complete your account setup.
-          <br />A verification email was sent to you.
+      {!wallet.creditCardConnected && selectedOrganization?.isDefaultForAuthenticatedUser && (
+        <StatusBanner tone="neutral" icon={<SparklesIcon className="size-4 shrink-0" />}>
+          Connect a credit card to enable wallet top-ups.
         </StatusBanner>
       )}
-      {user &&
-        !wallet.creditCardConnected &&
-        user.profile.email_verified &&
-        selectedOrganization?.isDefaultForAuthenticatedUser && (
-          <StatusBanner tone="neutral" icon={<SparklesIcon className="size-4 shrink-0" />}>
-            Connect a credit card to enable wallet top-ups.
-          </StatusBanner>
-        )}
     </>
   )
 }

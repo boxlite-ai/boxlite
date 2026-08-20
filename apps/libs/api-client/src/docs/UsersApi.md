@@ -12,6 +12,7 @@ All URIs are relative to *http://localhost:3000*
 |[**linkAccount**](#linkaccount) | **POST** /users/linked-accounts | Link account|
 |[**listUsers**](#listusers) | **GET** /users | List all users|
 |[**regenerateKeyPair**](#regeneratekeypair) | **POST** /users/{id}/regenerate-key-pair | Regenerate user key pair|
+|[**resendEmailVerification**](#resendemailverification) | **POST** /users/me/email-verification/resend | Resend the pending OIDC user email verification|
 |[**unlinkAccount**](#unlinkaccount) | **DELETE** /users/linked-accounts/{provider}/{providerUserId} | Unlink account|
 
 # **createUser**
@@ -385,6 +386,55 @@ void (empty response body)
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**201** |  |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **resendEmailVerification**
+> resendEmailVerification()
+
+
+### Example
+
+```typescript
+import {
+    UsersApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new UsersApi(configuration);
+
+const { status, data } = await apiInstance.resendEmailVerification();
+```
+
+### Parameters
+This endpoint does not have any parameters.
+
+
+### Return type
+
+void (empty response body)
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: Not defined
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**202** | Email verification queued successfully |  -  |
+|**401** | The OIDC access token is invalid or expired |  -  |
+|**409** | The identity provider account is already verified |  -  |
+|**422** | No usable email identity exists |  -  |
+|**429** | A verification email was requested during the cooldown window |  * Retry-After - Seconds until another request is allowed <br>  |
+|**502** | The identity provider rejected the request |  -  |
+|**503** | The identity provider is unavailable |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
