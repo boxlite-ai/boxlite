@@ -46,9 +46,9 @@ repos:
             src/ffi/|
             src/guest/|
             sdks/|
-            apps/|
             \.github/workflows/|
             \.github/actions/|
+            apps/.*|
             .*/Cargo\.toml$|
             Cargo\.lock$
           )

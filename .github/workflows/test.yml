@@ -304,62 +304,6 @@ jobs:
       - name: Run Go unit tests
         run: make test:unit:go
 
-  api:
-    name: API Tests
-    needs: [config, changes]
-    if: ${{ needs.changes.outputs.api == 'true' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    services:
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: boxlite
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      REDIS_HOST: localhost
-      DB_HOST: localhost
-      DB_PORT: 5432
-      DB_USERNAME: postgres
-      DB_PASSWORD: postgres
-      DB_DATABASE: boxlite
-    defaults:
-      run:
-        working-directory: apps
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
-          persist-credentials: false
-      - name: Enable Corepack
-        run: corepack enable
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: yarn
-          cache-dependency-path: apps/yarn.lock
-      - name: Install dependencies
-        run: yarn install --immutable
-      - name: Run API unit tests
-        run: yarn nx run api:test
-
   guest-rootfs:
     name: Guest Rootfs (${{ matrix.os }} / ${{ matrix.target }} / ${{ matrix.profile }})
     needs: [config, changes]
@@ -402,6 +346,65 @@ jobs:
 
       - name: Build and qualify guest rootfs
         run: make test:guest-rootfs GUEST_TARGET=${{ matrix.target }} PROFILE=${{ matrix.profile }}
+
+  # API tests need real Redis and Postgres services for integration coverage.
+  api:
+    name: API Tests
+    needs: ["config", "changes"]
+    if: ${{ needs.changes.outputs.api == 'true' }}
+    runs-on: "ubuntu-latest"
+    permissions: # Repository-controlled tests need no write scopes.
+      contents: "read"
+    services: # Integration dependencies used by API specs.
+      redis: # Distributed-lock integration tests.
+        image: "redis:7"
+        ports: # Bind only on the ephemeral CI runner.
+          - "6379:6379"
+        options: >- # Wait for Redis before Jest starts.
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: boxlite
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env: # Service connection values are non-secret CI-local defaults.
+      REDIS_HOST: "localhost"
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: boxlite
+    defaults: # Keep package-manager commands inside the apps workspace.
+      run: # Applies only to shell steps, not actions.
+        working-directory: "apps"
+    steps: # Install exactly the lockfile-defined workspace before testing.
+      - uses: actions/checkout@v5
+        with: # Native workspace dependencies are submodules.
+          submodules: "recursive"
+          persist-credentials: ${{ false }}
+      - name: Enable Corepack
+        run: "corepack enable"
+      - uses: actions/setup-node@v4
+        with: # Match the apps workspace toolchain and cache key.
+          node-version: "22"
+          cache: "yarn"
+          cache-dependency-path: "apps/yarn.lock"
+      - name: Install app dependencies
+        run: "yarn install --immutable"
+      - name: Run API unit tests
+        run: "yarn nx run api:test"
+
+  # End API test job.
 
   # Single required status check for branch protection / merge queue.
   # Passes only if every job above succeeded or was skipped (path-filtered).
