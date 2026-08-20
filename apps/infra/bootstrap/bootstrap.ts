@@ -73,7 +73,13 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { decideCredentialRotation, writeCloudflareCredential } from './cloudflare-credentials.js'
-import { loadDeploymentEnvironment, resolveAwsRegion, resolveSstStage } from '../deployment/environment.js'
+import {
+  loadDeploymentEnvironment,
+  optionalPublicOidcIssuer,
+  requireOidcIssuer,
+  resolveAwsRegion,
+  resolveSstStage,
+} from '../deployment/environment.js'
 import {
   GITHUB_OIDC_PROVIDER_URL,
   MINIMUM_AWS_CLI_VERSION,
@@ -93,18 +99,13 @@ import {
 import { validateDotenvSyntax } from '../deployment/key-policy.js'
 import {
   bindActionArgs,
-  brandingThemeArgs,
   createActionArgs,
   customApiArgs,
-  defaultThemeArgs,
   deployActionArgs,
   enableRpLogoutDiscoveryArgs,
-  customTextRequests,
-  pageTemplateArgs,
   spaApplicationArgs,
-  templateAssetUrls,
-  themeAssetUrls,
 } from './auth0.js'
+import { Auth0BrandingDeployer } from './auth0-branding.js'
 import {
   environmentApiPath,
   githubEnvironmentPayload,
@@ -704,62 +705,27 @@ function requireAuth0Session() {
 }
 
 /*
- * A theme's font and logo are fetched by the browser, not by Auth0, so a URL
- * that does not resolve produces no API error at all: the widget silently
- * falls back to its default sans and the run still reports success. That is
- * the worst failure this script can have — it looks like it worked — so the
- * assets are probed before anything is written.
- */
-async function requireAssetsPublished(urls: any) {
-  for (const url of urls) {
-    let status
-    try {
-      status = (await fetch(url, { method: 'HEAD', redirect: 'follow' })).status
-    } catch (cause) {
-      throw new Error(`could not reach the Universal Login asset ${url}`, { cause })
-    }
-    if (status >= 400) {
-      throw new Error(
-        `the Universal Login asset ${url} returned ${status}. ` +
-          'Publish it to the asset host (or correct the URL in bootstrap/auth0/branding-theme.json) before applying branding — ' +
-          'Auth0 accepts an unreachable asset without complaint and the login page just keeps its default appearance.',
-      )
-    }
-  }
-}
-
-/*
  * Idempotent, unlike provisionAuth0: the theme is a PATCH and the template a
  * PUT. Kept on its own flag so the login page's appearance can be iterated on
  * without re-creating the application and API alongside it.
  */
-async function provisionAuth0Branding() {
+async function provisionAuth0Branding(environment: NodeJS.ProcessEnv) {
   requireAuth0Session()
 
   const theme = JSON.parse(readFileSync(BRANDING_THEME_PATH, 'utf8'))
   const template = readFileSync(PAGE_TEMPLATE_PATH, 'utf8')
-  // Both halves: the logo comes from the theme, the fonts from the template's
-  // @font-face rules (see templateAssetUrls for why they are not in the theme).
-  await requireAssetsPublished([...themeAssetUrls(theme), ...templateAssetUrls(template)])
-
-  // Auth0 stores no theme until one is set, so a fresh tenant 404s here and
-  // takes the create path instead of the update path.
-  let themeId
-  try {
-    themeId = auth0Json(defaultThemeArgs()).themeId
-  } catch {
-    themeId = undefined
-  }
-  auth0Run(brandingThemeArgs({ themeId, theme }))
-  console.log(`[${SCRIPT_NAME}] Auth0 Universal Login theme ... ${themeId ? 'updated' : 'created'}`)
-
-  auth0Run(pageTemplateArgs(template))
-  console.log(`[${SCRIPT_NAME}] Auth0 Universal Login page template ... applied`)
-
   const customText = JSON.parse(readFileSync(CUSTOM_TEXT_PATH, 'utf8'))
-  const requests = customTextRequests(customText)
-  for (const request of requests) auth0Run(request)
-  console.log(`[${SCRIPT_NAME}] Auth0 Universal Login copy ... applied to ${requests.length} prompt(s)`)
+  const auth0Origin = new URL(optionalPublicOidcIssuer(environment) ?? requireOidcIssuer(environment)).origin
+  const result = await new Auth0BrandingDeployer({ read: auth0Json, write: auth0Run }).apply({
+    theme,
+    template,
+    customText,
+    auth0Origin,
+  })
+  console.log(
+    `[${SCRIPT_NAME}] Auth0 Universal Login branding ... ${result.themeCreated ? 'created' : 'updated'} theme, ` +
+      `applied template and ${result.customTextCount} copy prompt(s)`,
+  )
 }
 
 /*
@@ -954,7 +920,7 @@ async function main() {
   // gets re-applied whenever the design changes, long after the application
   // and API exist.
   if (options['provision-auth0-branding']) {
-    await provisionAuth0Branding()
+    await provisionAuth0Branding(stageConfigLoad.payload)
   }
   await ensureCloudflareCredentials({ awsCliPath, region, stage, repo, force })
   // Before the first timed sst call, not inside it — see ensureSstPlatform. Both steps below are

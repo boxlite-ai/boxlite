@@ -175,6 +175,55 @@ export function themeAssetUrls(theme: any) {
   return [requireAssetUrl('widget.logo_url', theme?.widget?.logo_url)]
 }
 
+export function validatePublishedAssetResponse({
+  url,
+  status,
+  bodyLength,
+  allowOrigin,
+  auth0Origin,
+}: {
+  url: string
+  status: number
+  bodyLength: number
+  allowOrigin: string | null
+  auth0Origin: string
+}) {
+  validatePublishedAssetMetadata({ url, status, allowOrigin, auth0Origin })
+  validatePublishedAssetBody({ url, bodyLength })
+}
+
+export function validatePublishedAssetMetadata({
+  url,
+  status,
+  allowOrigin,
+  auth0Origin,
+}: {
+  url: string
+  status: number
+  allowOrigin: string | null
+  auth0Origin: string
+}) {
+  if (status !== 200) {
+    throw new Error(
+      `the Universal Login asset ${url} returned ${status}. ` +
+        'Publish it to the configured asset host before applying branding — ' +
+        'Auth0 accepts an unreachable asset without complaint and the login page just keeps its default appearance.',
+    )
+  }
+  if (allowOrigin !== '*' && allowOrigin !== auth0Origin) {
+    throw new Error(
+      `the Universal Login asset ${url} returned Access-Control-Allow-Origin '${allowOrigin ?? '<missing>'}', ` +
+        `expected '*' or '${auth0Origin}'. Auth0 can store the template, but the browser will refuse to load the asset.`,
+    )
+  }
+}
+
+export function validatePublishedAssetBody({ url, bodyLength }: { url: string; bodyLength: number }) {
+  if (bodyLength <= 0) {
+    throw new Error(`the Universal Login asset ${url} returned an empty body`)
+  }
+}
+
 /*
  * The fonts are referenced from the template's @font-face rules rather than
  * the theme's fonts.font_url, which accepts only one URL — IBM Plex Mono ships
@@ -182,10 +231,12 @@ export function themeAssetUrls(theme: any) {
  * would leave the 500 weight synthesized. Reading them back out of the CSS
  * keeps the template the only place a font URL is written down.
  */
-const TEMPLATE_ASSET_PATTERN = /url\(['"]?(https:\/\/[^'")]+)['"]?\)/g
+const TEMPLATE_ASSET_PATTERN = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^'")][^)]*))\s*\)/gi
 
 export function templateAssetUrls(template: any) {
-  return [...String(template ?? '').matchAll(TEMPLATE_ASSET_PATTERN)].map((match) => match[1])
+  return [...String(template ?? '').matchAll(TEMPLATE_ASSET_PATTERN)].map((match, index) =>
+    requireAssetUrl(`template asset URL ${index + 1}`, (match[1] ?? match[2] ?? match[3]).trim()),
+  )
 }
 
 /**
@@ -195,6 +246,14 @@ export function templateAssetUrls(template: any) {
  */
 export function defaultThemeArgs() {
   return ['api', 'get', 'branding/themes/default']
+}
+
+export function isAuth0ApiNotFound(cause: any) {
+  const stderr = typeof cause?.stderr === 'string' ? cause.stderr : cause?.stderr?.toString?.()
+  return (
+    typeof stderr === 'string' &&
+    /(?:status(?: code)?\s*[:=]?\s*404\b|HTTP(?:\/\d(?:\.\d)?)?\s+404\b|\b404 Not Found\b)/i.test(stderr)
+  )
 }
 
 export function brandingThemeArgs({ themeId, theme }: any) {
@@ -221,10 +280,28 @@ const REQUIRED_TEMPLATE_MARKERS = ['{%- auth0:head -%}', '{%- auth0:widget -%}']
  * keep — the same replace-not-merge shape as the Action bindings above.
  */
 export function customTextArgs({ prompt, language, text }: any) {
-  if (!prompt || !language) throw new Error('a custom-text override needs both a prompt and a language')
+  if (typeof prompt !== 'string' || !prompt.trim() || typeof language !== 'string' || !language.trim()) {
+    throw new Error('a custom-text override needs both a prompt and a language')
+  }
   const body = withoutComments(text)
-  if (!body || Object.keys(body).length === 0) {
+  if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length === 0) {
     throw new Error(`the custom-text override for prompt '${prompt}' is empty`)
+  }
+  for (const [screen, screenText] of Object.entries(body)) {
+    if (
+      !screen.trim() ||
+      !screenText ||
+      typeof screenText !== 'object' ||
+      Array.isArray(screenText) ||
+      Object.keys(screenText).length === 0
+    ) {
+      throw new Error(`the custom-text override for prompt '${prompt}' has an invalid '${screen}' screen`)
+    }
+    for (const [key, value] of Object.entries(screenText)) {
+      if (!key.trim() || typeof value !== 'string' || !value.trim()) {
+        throw new Error(`the custom-text override for prompt '${prompt}' has invalid text '${screen}.${key}'`)
+      }
+    }
   }
   return ['api', 'put', `prompts/${prompt}/custom-text/${language}`, '--data', JSON.stringify(body)]
 }
@@ -232,9 +309,14 @@ export function customTextArgs({ prompt, language, text }: any) {
 /** Flattens the checked-in document into one argv per prompt. */
 export function customTextRequests(document: any) {
   const language = document?.language
-  return Object.entries(document?.prompts ?? {}).map(([prompt, text]) =>
-    customTextArgs({ prompt, language, text }),
-  )
+  if (typeof language !== 'string' || !language.trim()) {
+    throw new Error('the custom-text document needs a non-empty language')
+  }
+  const prompts = withoutComments(document?.prompts)
+  if (!prompts || typeof prompts !== 'object' || Array.isArray(prompts) || Object.keys(prompts).length === 0) {
+    throw new Error('the custom-text document needs a non-empty prompts object')
+  }
+  return Object.entries(prompts).map(([prompt, text]) => customTextArgs({ prompt, language, text }))
 }
 
 export function pageTemplateArgs(template: any) {
@@ -243,4 +325,13 @@ export function pageTemplateArgs(template: any) {
     throw new Error(`the page template is missing required marker(s): ${missing.join(', ')}`)
   }
   return ['api', 'put', 'branding/templates/universal-login', '--data', JSON.stringify({ template })]
+}
+
+/** Validates every checked-in branding payload before the caller performs its first write. */
+export function prepareAuth0Branding({ theme, template, customText }: any) {
+  brandingThemeArgs({ themeId: 'preflight', theme })
+  const assetUrls = [...themeAssetUrls(theme), ...templateAssetUrls(template)]
+  const templateArgs = pageTemplateArgs(template)
+  const customTextArgs = customTextRequests(customText)
+  return { theme, assetUrls, templateArgs, customTextArgs }
 }

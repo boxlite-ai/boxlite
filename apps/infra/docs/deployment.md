@@ -94,6 +94,9 @@ npm run bootstrap -- --stage dev       # IAM role, GitHub Environment, secrets
 # Optional, and NOT idempotent — Auth0 has no upsert, so this duplicates apps:
 npm run bootstrap -- --stage dev --provision-auth0
 
+# Idempotent: apply the checked-in theme, page template, and custom copy:
+npm run bootstrap -- --stage dev --provision-auth0-branding
+
 gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false  # preview
 gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=true   # deploy
 ```
@@ -106,6 +109,12 @@ Cloudflare provider. On that Environment it also sets the `AWS_ACCOUNT_ID` and
 `AWS_REGION` variables, which the deploy workflow needs before it has any AWS
 credentials. `--force` re-prompts for an already-seeded Cloudflare credential. Its
 full flag list is in the script's header comment.
+
+Universal Login assets are published separately from the tenant configuration.
+Their exact sources, hashes, license, Pages project, and CORS rule are recorded
+in [`bootstrap/auth0/ASSETS.md`](../bootstrap/auth0/ASSETS.md). Branding
+provisioning fails before its first Auth0 write unless every referenced asset is
+reachable and permits the active Universal Login origin.
 
 A deploy takes 10–15 minutes and prints the service URLs. On a transient
 registry error, just rerun — SST resumes from the failed step.

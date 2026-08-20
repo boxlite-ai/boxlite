@@ -18,9 +18,12 @@ import {
   pageTemplateArgs,
   customTextArgs,
   customTextRequests,
+  isAuth0ApiNotFound,
+  prepareAuth0Branding,
   spaApplicationArgs,
   templateAssetUrls,
   themeAssetUrls,
+  validatePublishedAssetResponse,
 } from './auth0.js'
 
 const AUTH0_ASSETS = join(import.meta.dirname, 'auth0')
@@ -162,6 +165,71 @@ test('themeAssetUrls reports the theme-side asset bootstrap has to probe', () =>
   assert.deepEqual(themeAssetUrls(theme()), ['https://assets.example.com/logo.png'])
 })
 
+test('validatePublishedAssetResponse requires a successful CORS-enabled asset', () => {
+  assert.doesNotThrow(() =>
+    validatePublishedAssetResponse({
+      url: 'https://assets.example.com/mono.woff2',
+      status: 200,
+      bodyLength: 42,
+      allowOrigin: '*',
+      auth0Origin: 'https://auth.example.com',
+    }),
+  )
+  assert.doesNotThrow(() =>
+    validatePublishedAssetResponse({
+      url: 'https://assets.example.com/mono.woff2',
+      status: 200,
+      bodyLength: 42,
+      allowOrigin: 'https://auth.example.com',
+      auth0Origin: 'https://auth.example.com',
+    }),
+  )
+  assert.throws(
+    () =>
+      validatePublishedAssetResponse({
+        url: 'https://assets.example.com/mono.woff2',
+        status: 302,
+        bodyLength: 42,
+        allowOrigin: '*',
+        auth0Origin: 'https://auth.example.com',
+      }),
+    /returned 302/,
+  )
+  assert.throws(
+    () =>
+      validatePublishedAssetResponse({
+        url: 'https://assets.example.com/mono.woff2',
+        status: 404,
+        bodyLength: 42,
+        allowOrigin: '*',
+        auth0Origin: 'https://auth.example.com',
+      }),
+    /returned 404/,
+  )
+  assert.throws(
+    () =>
+      validatePublishedAssetResponse({
+        url: 'https://assets.example.com/mono.woff2',
+        status: 200,
+        bodyLength: 42,
+        allowOrigin: null,
+        auth0Origin: 'https://auth.example.com',
+      }),
+    /Access-Control-Allow-Origin/,
+  )
+  assert.throws(
+    () =>
+      validatePublishedAssetResponse({
+        url: 'https://assets.example.com/mono.woff2',
+        status: 200,
+        bodyLength: 0,
+        allowOrigin: '*',
+        auth0Origin: 'https://auth.example.com',
+      }),
+    /empty body/,
+  )
+})
+
 test('templateAssetUrls collects the fonts the template loads itself', () => {
   // fonts.font_url takes one URL and IBM Plex Mono has no variable face, so the
   // two weights are @font-face rules in the template — which means the probe
@@ -169,11 +237,16 @@ test('templateAssetUrls collects the fonts the template loads itself', () => {
   assert.deepEqual(
     templateAssetUrls(`
       @font-face { src: url('https://assets.example.com/mono-400.woff2') format('woff2'); }
-      @font-face { src: url("https://assets.example.com/mono-500.woff2") format('woff2'); }
+      @font-face { src: URL("https://assets.example.com/mono-(500).woff2") format('woff2'); }
     `),
-    ['https://assets.example.com/mono-400.woff2', 'https://assets.example.com/mono-500.woff2'],
+    ['https://assets.example.com/mono-400.woff2', 'https://assets.example.com/mono-(500).woff2'],
   )
   assert.deepEqual(templateAssetUrls('<html></html>'), [])
+})
+
+test('templateAssetUrls rejects every non-HTTPS CSS asset instead of skipping it', () => {
+  assert.throws(() => templateAssetUrls(`body { background: url('http://assets.example.com/bg.png') }`), /https/)
+  assert.throws(() => templateAssetUrls(`body { background: url('/bg.png') }`), /https/)
 })
 
 test('the checked-in template declares both weights behind a monospace fallback', () => {
@@ -189,6 +262,16 @@ test('the checked-in template declares both weights behind a monospace fallback'
 
 test('defaultThemeArgs reads the tenant theme rather than assuming one exists', () => {
   assert.deepEqual(defaultThemeArgs(), ['api', 'get', 'branding/themes/default'])
+})
+
+test('isAuth0ApiNotFound selects create only for an explicit API 404', () => {
+  assert.equal(isAuth0ApiNotFound({ stderr: 'Request failed with status code 404' }), true)
+  assert.equal(isAuth0ApiNotFound({ stderr: 'HTTP/2 404' }), true)
+  assert.equal(isAuth0ApiNotFound({ stderr: 'Request failed with status code 401' }), false)
+  assert.equal(isAuth0ApiNotFound({ stderr: 'HTTP request failed; retry after 404 seconds' }), false)
+  assert.equal(isAuth0ApiNotFound({ stderr: 'status unknown; body contained 404 bytes' }), false)
+  assert.equal(isAuth0ApiNotFound({ stderr: 'dial tcp: network is unreachable' }), false)
+  assert.equal(isAuth0ApiNotFound(new Error('unrelated failure')), false)
 })
 
 test('pageTemplateArgs refuses a template missing the markers Auth0 requires', () => {
@@ -232,6 +315,52 @@ test('customTextArgs refuses an override with nothing left to send', () => {
   assert.throws(() => customTextArgs({ prompt: 'login', language: 'en', text: {} }), /is empty/)
   assert.throws(() => customTextArgs({ prompt: 'login', language: 'en', text: { _comment: 'note' } }), /is empty/)
   assert.throws(() => customTextArgs({ prompt: 'login', text: { login: {} } }), /needs both a prompt and a language/)
+  assert.throws(() => customTextArgs({ prompt: 'login', language: 'en', text: { login: {} } }), /invalid 'login' screen/)
+  assert.throws(
+    () => customTextArgs({ prompt: 'login', language: 'en', text: { login: { title: 42 } } }),
+    /invalid text 'login.title'/,
+  )
+  assert.throws(
+    () => customTextArgs({ prompt: 'login', language: 'en', text: { login: { title: '  ' } } }),
+    /invalid text 'login.title'/,
+  )
+})
+
+test('customTextRequests rejects malformed documents instead of silently applying nothing', () => {
+  assert.throws(() => customTextRequests({ language: '', prompts: { login: { login: {} } } }), /language/)
+  assert.throws(() => customTextRequests({ language: 'en', prompts: [] }), /prompts/)
+  assert.throws(() => customTextRequests({ language: 'en', prompts: {} }), /prompts/)
+  assert.throws(() => customTextRequests({ language: 'en', prompts: { login: 'not an object' } }), /login/)
+  assert.throws(() => customTextRequests({ language: 'en', prompts: { _comment: 'metadata only' } }), /prompts/)
+})
+
+test('prepareAuth0Branding validates every payload before returning a write plan', () => {
+  assert.throws(
+    () =>
+      prepareAuth0Branding({
+        theme: { widget: { logo_url: 'https://assets.example.com/logo.png' } },
+        template: CHECKED_IN_TEMPLATE,
+        customText: CHECKED_IN_TEXT,
+      }),
+    /colors and fonts/,
+  )
+  assert.throws(
+    () =>
+      prepareAuth0Branding({
+        theme: theme(),
+        template: CHECKED_IN_TEMPLATE,
+        customText: { language: 'en', prompts: {} },
+      }),
+    /prompts/,
+  )
+  const plan = prepareAuth0Branding({
+    theme: CHECKED_IN_THEME,
+    template: CHECKED_IN_TEMPLATE,
+    customText: CHECKED_IN_TEXT,
+  })
+  assert.equal(plan.templateArgs[0], 'api')
+  assert.equal(plan.customTextArgs.length, 2)
+  assert.equal(plan.assetUrls.length, 3)
 })
 
 test('the checked-in copy shares a description but splits the titles', () => {

@@ -18,10 +18,9 @@
     "monospace fallback — ULP's own stack falls through to a system SANS, so a",
     "font that fails to load would otherwise undo the restyle silently.",
     "",
-    "UNPUBLISHED ASSETS: the two woff2 files the template references currently",
-    "404, and bootstrap refuses to apply until they resolve. widget.logo_url",
-    "below does resolve, but still points at the old raster mark and wants",
-    "replacing with a monochrome one."
+    "The logo and both woff2 files are published from the sources and exact",
+    "hashes recorded in ASSETS.md. Bootstrap refuses to apply unless every",
+    "asset resolves with CORS for the Universal Login origin."
   ],
 
   "displayName": "boxlite-console",
@@ -86,7 +85,7 @@
     "header_text_alignment": "center",
     "logo_position": "center",
     "logo_height": 36,
-    "logo_url": "https://boxlite-auth-assets.pages.dev/boxlite-light.png",
+    "logo_url": "https://boxlite-auth-assets-boxlite-ai.pages.dev/boxlite-light.png",
     "social_buttons_layout": "bottom"
   }
 }
