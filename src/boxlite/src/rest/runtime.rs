@@ -32,6 +32,18 @@ impl RestRuntime {
 }
 
 fn validate_remote_box_options(options: &BoxOptions) -> BoxliteResult<()> {
+    // The create request carries no capture field yet, so a server would accept
+    // this and run the workload with capture off. Refusing here keeps the
+    // promise the option makes: a caller learns capture is unavailable before
+    // their workload runs, not after it has already produced the output.
+    if options.capture_logs {
+        return Err(BoxliteError::Unsupported(
+            "capture_logs is local-only for now: remote runtimes cannot yet carry it, \
+             and a silently uncaptured run is worse than a refused one."
+                .to_string(),
+        ));
+    }
+
     if options.ports.is_empty() {
         return Ok(());
     }
@@ -502,6 +514,27 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
         assert!(error.to_string().contains("local runtime"));
+    }
+
+    /// The request has no capture field, so accepting this would hand back a box
+    /// that runs the workload with capture off and reports success — the failure
+    /// the startup barrier exists to make impossible, one layer up.
+    #[tokio::test]
+    async fn create_rejects_capture_logs_in_rest_mode() {
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            capture_logs: true,
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("REST capture_logs must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("capture_logs"), "{error}");
     }
 
     #[tokio::test]
