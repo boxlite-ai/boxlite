@@ -20,6 +20,16 @@ fail() {
 
 [[ -x "$subject" ]] || fail "production setup script is missing or not executable"
 
+missing_checkout="$scratch/missing-checkout"
+mkdir -p "$missing_checkout"
+if "$subject" "$missing_checkout" >"$scratch/missing-checkout.stdout" \
+    2>"$scratch/missing-checkout.stderr"; then
+    fail "missing checkout was accepted"
+fi
+[[ ! -s "$scratch/missing-checkout.stdout" ]] || fail "missing-checkout error was written to stdout"
+grep -qi 'expected a BoxLite checkout' "$scratch/missing-checkout.stderr" || \
+    fail "missing-checkout failure was not written to stderr"
+
 create_remote() {
     local owner="$1"
     local repository="$2"

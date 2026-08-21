@@ -24,7 +24,7 @@ validate_submodule() {
     actual_path="$(git config -f "$repo_root/.gitmodules" --get "submodule.$name.path" || true)"
     actual_url="$(git config -f "$repo_root/.gitmodules" --get "submodule.$name.url" || true)"
     if [[ "$actual_path" != "$expected_path" || "$actual_url" != "$expected_url" ]]; then
-        print_error "Refusing unexpected submodule $name (path=$actual_path, url=$actual_url)"
+        print_error "Refusing unexpected submodule $name (path=$actual_path, url=$actual_url)" >&2
         return 1
     fi
 }
@@ -35,13 +35,13 @@ validate_submodules() {
     local submodule_count
 
     if [[ ! -f "$repo_root/.gitmodules" ]]; then
-        print_error "Expected a BoxLite checkout with .gitmodules"
+        print_error "Expected a BoxLite checkout with .gitmodules" >&2
         return 1
     fi
 
     submodule_count="$(git config -f "$repo_root/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null | wc -l | tr -d ' ')"
     if [[ "$submodule_count" != "4" ]]; then
-        print_error "Expected 4 submodules, found $submodule_count"
+        print_error "Expected 4 submodules, found $submodule_count" >&2
         return 1
     fi
 
@@ -71,7 +71,7 @@ validate_jobs() {
     local jobs="$1"
 
     if [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]] || ((jobs > 16)); then
-        print_error "BOXLITE_SUBMODULE_JOBS must be between 1 and 16, got $jobs"
+        print_error "BOXLITE_SUBMODULE_JOBS must be between 1 and 16, got $jobs" >&2
         return 1
     fi
 }
@@ -86,7 +86,7 @@ main() {
 
     submodule_status="$(git -C "$repo_root" submodule status --recursive)"
     if grep -q '^U' <<<"$submodule_status"; then
-        print_error "Refusing to update conflicted submodules"
+        print_error "Refusing to update conflicted submodules" >&2
         return 1
     fi
 
