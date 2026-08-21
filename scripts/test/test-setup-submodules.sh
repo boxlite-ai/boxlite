@@ -33,6 +33,7 @@ grep -qi 'expected a BoxLite checkout' "$scratch/missing-checkout.stderr" || \
 create_remote() {
     local owner="$1"
     local repository="$2"
+    local nested_oid="${3:-}"
     local seed="$scratch/seed-$owner-$repository"
     local bare="$scratch/remotes/$owner/$repository.git"
 
@@ -42,12 +43,19 @@ create_remote() {
     git -C "$seed" config user.email "setup-test@boxlite.invalid"
     printf '%s/%s\n' "$owner" "$repository" >"$seed/README.md"
     git -C "$seed" add README.md
+    if [[ -n "$nested_oid" ]]; then
+        printf '[submodule "nested"]\n\tpath = nested\n\turl = https://example.invalid/unvalidated.git\n' \
+            >"$seed/.gitmodules"
+        git -C "$seed" add .gitmodules
+        git -C "$seed" update-index --add --cacheinfo "160000,$nested_oid,nested"
+    fi
     git -C "$seed" commit -qm "seed $owner/$repository"
     git clone -q --bare "$seed" "$bare"
     git -C "$seed" rev-parse HEAD
 }
 
-libkrun_oid="$(create_remote boxlite-ai libkrun)"
+nested_oid="$(create_remote untrusted nested)"
+libkrun_oid="$(create_remote boxlite-ai libkrun "$nested_oid")"
 libkrunfw_oid="$(create_remote boxlite-ai libkrunfw)"
 e2fsprogs_oid="$(create_remote tytso e2fsprogs)"
 bubblewrap_oid="$(create_remote containers bubblewrap)"
@@ -110,6 +118,8 @@ missing_count="$(git -C "$fixture" submodule status --recursive | grep -c '^-')"
 GIT_CONFIG_GLOBAL="$scratch/gitconfig" GIT_ALLOW_PROTOCOL=file:https \
     BOXLITE_SUBMODULE_JOBS=2 "$subject" "$fixture" \
     >"$scratch/first-run.log"
+grep -qi 'initializing with 2 jobs' "$scratch/first-run.log" || \
+    fail "first run did not use the configured job count"
 grep -qi 'initialized' "$scratch/first-run.log" || fail "first run did not initialize submodules"
 
 verify_oid() {
@@ -126,6 +136,10 @@ verify_oid "src/deps/libkrun-sys/vendor/libkrun"
 verify_oid "src/deps/libkrun-sys/vendor/libkrunfw"
 verify_oid "src/deps/e2fsprogs-sys/vendor/e2fsprogs"
 verify_oid "src/deps/bubblewrap-sys/vendor/bubblewrap"
+
+libkrun_path="$fixture/src/deps/libkrun-sys/vendor/libkrun"
+git -C "$libkrun_path" submodule status | grep -q '^-' || \
+    fail "unvalidated nested submodule was initialized"
 
 if git -C "$fixture" submodule status --recursive | grep -q '^[+-U]'; then
     fail "initialized submodule status was not clean"

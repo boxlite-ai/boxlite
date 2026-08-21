@@ -84,7 +84,7 @@ main() {
     validate_submodules "$repo_root"
     validate_jobs "$jobs"
 
-    submodule_status="$(git -C "$repo_root" submodule status --recursive)"
+    submodule_status="$(git -C "$repo_root" submodule status)"
     if grep -q '^U' <<<"$submodule_status"; then
         print_error "Refusing to update conflicted submodules" >&2
         return 1
@@ -97,8 +97,8 @@ main() {
     fi
 
     echo -e "${YELLOW}Initializing with $jobs jobs...${NC}"
-    git -C "$repo_root" submodule sync --recursive
-    git -C "$repo_root" submodule update --init --recursive --depth 1 --jobs "$jobs"
+    git -C "$repo_root" submodule sync
+    git -C "$repo_root" submodule update --init --depth 1 --jobs "$jobs"
     print_success "Submodules initialized"
 }
 
