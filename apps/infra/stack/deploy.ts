@@ -166,8 +166,8 @@ export async function deployStack() {
     })
     // One list for all three pipelines: traces used to fan out to Jaeger as well,
     // which was a second copy of spans ClickHouse already held.
-    if (clickStackGatewayEnabled && clickHouseResources.mode === 'disabled') {
-      throw new Error('CLICKSTACK_GATEWAY_ENABLED requires an active ClickHouse backend')
+    if (clickStackGatewayEnabled && clickHouseResources.mode !== 'self-hosted') {
+      throw new Error('CLICKSTACK_GATEWAY_ENABLED requires self-hosted ClickHouse')
     }
     const collectorExporters = clickHouseResources.active ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
 
@@ -310,7 +310,7 @@ export async function deployStack() {
       otelCollectorOtlpHttpUrl,
       stripTrailingSlash,
       clickStackGateway:
-        clickStackOidcConfig && clickStackOidcSecrets && clickHouseResources.mode !== 'disabled'
+        clickStackOidcConfig && clickStackOidcSecrets && clickHouseResources.mode === 'self-hosted'
           ? {
               clickHouse: clickHouseResources,
               domain: serviceDomain('clickstack'),

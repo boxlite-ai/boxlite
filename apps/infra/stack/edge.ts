@@ -8,10 +8,10 @@ import type { ClickHouseResources } from './clickhouse.js'
 import type { FoundationResources } from './foundation.js'
 import { PORTS, envOr, httpHealth } from './settings.js'
 
-type ActiveClickHouseResources = Exclude<ClickHouseResources, { mode: 'disabled' }>
+type SelfHostedClickHouseResources = Extract<ClickHouseResources, { mode: 'self-hosted' }>
 
 interface ClickStackGatewayInputs {
-  clickHouse: ActiveClickHouseResources
+  clickHouse: SelfHostedClickHouseResources
   domain: { name: string; dns: ReturnType<typeof sst.cloudflare.dns> }
   oidcAudience: string
   oidcClientId: sst.Secret
@@ -169,7 +169,7 @@ if (clickStackGateway) {
       },
     },
   }, {
-    dependsOn: clickStackGateway.clickHouse.mode === 'self-hosted' ? [clickStackGateway.clickHouse.ready] : [],
+    dependsOn: [clickStackGateway.clickHouse.ready],
   })
 }
 // ─── 9. CDN ROUTES ───────────────────────────────────────────────────────
