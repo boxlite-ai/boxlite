@@ -57,6 +57,9 @@ search and debugging; saved HyperDX state is not retained.
 
 ## Authenticated ClickStack gateway
 
+The gateway is supported only with the self-hosted backend, whose ClickHouse server exposes the
+embedded `/clickstack` UI. Managed mode does not define a ClickStack UI endpoint and is rejected.
+
 Set the five `CLICKSTACK_*` stage values documented in `.env.example`, then store a dedicated
 confidential OIDC application's credentials without writing them to `.env`:
 

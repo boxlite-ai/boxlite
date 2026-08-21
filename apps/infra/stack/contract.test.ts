@@ -490,6 +490,18 @@ test('publishes ClickStack only through OIDC and the read-only credential gatewa
   assert.doesNotMatch(gateway, /environment:\s*\{[^}]*CLICKSTACK_PASSWORD:/)
 })
 
+test('publishes the embedded ClickStack UI only for self-hosted ClickHouse', () => {
+  const deploy = liveText('scriptEmittingShell', readFileSync(new URL('./deploy.ts', import.meta.url), 'utf8'))
+  const edge = liveText('scriptEmittingShell', readFileSync(new URL('./edge.ts', import.meta.url), 'utf8'))
+
+  assert.match(deploy, /clickStackGatewayEnabled && clickHouseResources\.mode !== 'self-hosted'/)
+  assert.match(deploy, /CLICKSTACK_GATEWAY_ENABLED requires self-hosted ClickHouse/)
+  assert.match(deploy, /clickHouseResources\.mode === 'self-hosted'/)
+  assert.doesNotMatch(deploy, /clickHouseResources\.mode !== 'disabled'/)
+  assert.match(edge, /clickHouse: SelfHostedClickHouseResources/)
+  assert.match(edge, /dependsOn: \[clickStackGateway\.clickHouse\.ready\]/)
+})
+
 test('passes explicit management API endpoints into the API service', () => {
   const apiService = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
 

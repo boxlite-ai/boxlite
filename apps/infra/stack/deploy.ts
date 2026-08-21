@@ -151,8 +151,8 @@ export async function deployStack() {
       region: REGION,
       accountId,
     })
-    if (clickStackGatewayEnabled && clickHouseResources.mode === 'disabled') {
-      throw new Error('CLICKSTACK_GATEWAY_ENABLED requires an active ClickHouse backend')
+    if (clickStackGatewayEnabled && clickHouseResources.mode !== 'self-hosted') {
+      throw new Error('CLICKSTACK_GATEWAY_ENABLED requires self-hosted ClickHouse')
     }
     const collectorExporters = clickHouseResources.active ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
     // Traces additionally fan out to Jaeger; metrics/logs stay off it (Jaeger
@@ -294,7 +294,7 @@ export async function deployStack() {
       pgAdminPassword,
       stripTrailingSlash,
       clickStackGateway:
-        clickStackOidcConfig && clickStackOidcSecrets && clickHouseResources.mode !== 'disabled'
+        clickStackOidcConfig && clickStackOidcSecrets && clickHouseResources.mode === 'self-hosted'
           ? {
               clickHouse: clickHouseResources,
               domain: serviceDomain('clickstack'),
