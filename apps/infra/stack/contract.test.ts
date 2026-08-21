@@ -103,6 +103,11 @@ test('pins every Service load balancer type at the provider boundary', () => {
       type: 'network',
       section: configSection("new sst.aws.Service('Proxy'", '// ─── 9.'),
     },
+    {
+      name: 'ClickStackGateway',
+      type: 'application',
+      section: configSection("new sst.aws.Service('ClickStackGateway'", '// ─── 9.'),
+    },
   ]
 
   for (const service of services) {
@@ -466,6 +471,20 @@ test('deploys no internal admin UI, so no stage can expose one', () => {
   assert.doesNotMatch(liveConfig, /sst\.aws\.Service\('(PgAdmin|Jaeger|MailDev)'/)
   assert.doesNotMatch(liveConfig, /PGADMIN_|JAEGER_|MAILDEV_/)
   assert.doesNotMatch(environmentExample, /^\s*#?\s*(PGADMIN_|JAEGER_|MAILDEV_)/m)
+})
+
+test('publishes ClickStack only through OIDC and the read-only credential gateway', () => {
+  const gateway = configSection("new sst.aws.Service('ClickStackGateway'", '// ─── 9.')
+
+  assert.match(gateway, /listen: '443\/https'/)
+  assert.match(gateway, /type: 'authenticate-oidc'/)
+  assert.match(gateway, /onUnauthenticatedRequest: 'authenticate'/)
+  assert.match(gateway, /authenticationRequestExtraParams: \{ audience: clickStackGateway\.oidcAudience \}/)
+  assert.match(gateway, /scope: 'openid profile email boxlite-backoffice'/)
+  assert.match(gateway, /CLICKSTACK_OIDC_ROLE_CLAIM: clickStackGateway\.oidcRoleClaim/)
+  assert.match(gateway, /CLICKSTACK_OIDC_ALLOWED_ROLE_VALUES: clickStackGateway\.oidcAllowedRoleValues/)
+  assert.match(gateway, /ssm: \{ CLICKSTACK_PASSWORD: clickStackGateway\.clickHouse\.readerSecretArn \}/)
+  assert.doesNotMatch(gateway, /environment:\s*\{[^}]*CLICKSTACK_PASSWORD:/)
 })
 
 test('passes explicit management API endpoints into the API service', () => {

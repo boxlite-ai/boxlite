@@ -55,6 +55,25 @@ aws ssm start-session --target "$INSTANCE_ID" \
 Open `http://127.0.0.1:18123/clickstack` and use the `otel_reader` secret. The embedded UI is for
 search and debugging; saved HyperDX state is not retained.
 
+## Authenticated ClickStack gateway
+
+Set the five `CLICKSTACK_*` stage values documented in `.env.example`, then store a dedicated
+confidential OIDC application's credentials without writing them to `.env`:
+
+```bash
+npm run sst -- secret set CLICKSTACK_OIDC_CLIENT_ID --stage <stage>
+npm run sst -- secret set CLICKSTACK_OIDC_CLIENT_SECRET --stage <stage>
+```
+
+Register `https://clickstack.<STACK_DOMAIN>/oauth2/idpresponse` as that application's callback URL.
+After deployment, Backoffice can set `BACKOFFICE_CLICKSTACK_URL` to
+`https://clickstack.<STACK_DOMAIN>/clickstack`; no workstation SSM tunnel is required.
+
+The public ALB performs OIDC login. The gateway then verifies the Auth0 access-token signature,
+audience, `boxlite-backoffice` scope, and configured Operator/Admin provider-role values before it
+injects the server-side `otel_reader` credential. ClickHouse port 8123 remains private, and the
+browser never receives the database password. Keep the SSM procedure above as break-glass access.
+
 The EC2 instance may be replaced by bootstrap changes, but its data volume is retained and
 reattached. Switching to managed or disabled mode detaches and retains the old volume outside SST;
 take an EBS snapshot before deleting or restoring that retained data.
