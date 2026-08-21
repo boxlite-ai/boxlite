@@ -44,21 +44,32 @@ impl FilesInterface {
         let cid = container_id.unwrap_or_default().to_string();
 
         // Map the byte stream into UploadChunks; the first chunk carries the
-        // destination and archive-shape hint. A mid-stream pack error is
-        // dropped (logged) — `PackStream` is terminal after an `Err`, so the
-        // guest aborts on the truncated archive and surfaces the failure.
-        let stream = tar.enumerate().filter_map(move |(i, chunk)| {
+        // destination and archive-shape hint. `PackStream` is terminal after a
+        // mid-stream error, and tonic's client-streaming item type has no error
+        // slot — so record the pack error out-of-band and surface it below,
+        // instead of letting the guest synthesize a generic "unexpected EOF".
+        let pack_error = std::sync::Arc::new(std::sync::Mutex::new(None::<BoxliteError>));
+        let err_ref = std::sync::Arc::clone(&pack_error);
+
+        let mut first = true;
+        let stream = tar.filter_map(move |chunk| {
             futures::future::ready(match chunk {
-                Ok(data) => Some(UploadChunk {
-                    dest_path: if i == 0 { dest.clone() } else { String::new() },
-                    container_id: cid.clone(),
-                    data,
-                    mkdir_parents,
-                    overwrite,
-                    is_directory: if i == 0 { is_directory } else { None },
-                }),
+                Ok(data) => {
+                    let chunk = UploadChunk {
+                        dest_path: if first { dest.clone() } else { String::new() },
+                        container_id: cid.clone(),
+                        data,
+                        mkdir_parents,
+                        overwrite,
+                        is_directory: if first { is_directory } else { None },
+                    };
+                    first = false;
+                    Some(chunk)
+                }
                 Err(e) => {
                     tracing::warn!(error = %e, "tar pack failed mid-upload; aborting stream");
+                    *err_ref.lock().unwrap() =
+                        Some(BoxliteError::Storage(format!("tar pack failed: {e}")));
                     None
                 }
             })
@@ -73,6 +84,10 @@ impl FilesInterface {
 
         if response.success {
             Ok(())
+        } else if let Some(err) = pack_error.lock().unwrap().take() {
+            // Surface the real pack error rather than the guest's synthesized
+            // "unexpected EOF" from the truncated archive.
+            Err(err)
         } else {
             Err(BoxliteError::Internal(
                 response.error.unwrap_or_else(|| "Upload failed".into()),
@@ -115,12 +130,9 @@ impl FilesInterface {
             None => (None, Vec::new()),
         };
 
-        let rest = stream.map(|r| {
-            r.map(|c| c.data)
-                .map_err(|e| io::Error::other(e.message()))
-        });
-        let bytes = futures::stream::once(async move { Ok::<Vec<u8>, io::Error>(first_data) })
-            .chain(rest);
+        let rest = stream.map(|r| r.map(|c| c.data).map_err(|e| io::Error::other(e.message())));
+        let bytes =
+            futures::stream::once(async move { Ok::<Vec<u8>, io::Error>(first_data) }).chain(rest);
 
         Ok((is_directory, Box::pin(bytes)))
     }
@@ -134,8 +146,8 @@ fn map_tonic_err(err: tonic::Status) -> BoxliteError {
 mod tests {
     use super::*;
     use boxlite_shared::{
-        files_server::{Files, FilesServer},
         DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
+        files_server::{Files, FilesServer},
     };
     use futures::StreamExt;
     use std::net::SocketAddr;
@@ -181,10 +193,7 @@ mod tests {
     }
 
     async fn start_mock(is_directory: Option<bool>, data: Vec<u8>) -> (SocketAddr, JoinHandle<()>) {
-        let svc = FilesServer::new(MockFiles {
-            is_directory,
-            data,
-        });
+        let svc = FilesServer::new(MockFiles { is_directory, data });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let incoming =

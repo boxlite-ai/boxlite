@@ -52,17 +52,18 @@ impl Files for GuestServer {
         // mode, but the resolved rootfs path won't. Use force_directory then.
         let force_directory = dest_path.ends_with('/');
 
-        // Stream the tar bytes (first chunk's data + the remaining chunks)
-        // straight into the unpacker without staging a temp file.
+        // Stream the tar bytes (first chunk's data + the remaining chunks).
         let first_data = first.data;
         let rest = stream.map(|r| {
             r.map(|c| c.data)
                 .map_err(|e| std::io::Error::other(e.message()))
         });
-        let bytes = futures::stream::once(async move {
-            Ok::<Vec<u8>, std::io::Error>(first_data)
-        })
-        .chain(rest);
+        let bytes = futures::stream::once(async move { Ok::<Vec<u8>, std::io::Error>(first_data) })
+            .chain(rest);
+
+        let is_directory = is_directory.ok_or_else(|| {
+            Status::failed_precondition("host does not report the archive shape; upgrade the host")
+        })?;
 
         boxlite_shared::tar::unpack_stream(
             Box::pin(bytes),
@@ -71,7 +72,7 @@ impl Files for GuestServer {
                 overwrite,
                 mkdir_parents,
                 force_directory,
-                is_directory,
+                is_directory: Some(is_directory),
             },
         )
         .await

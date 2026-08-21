@@ -142,9 +142,10 @@ impl RestBox {
             .and_then(|v| v.to_str().ok())
             .map(|s| s == "true");
 
-        let stream = resp
-            .bytes_stream()
-            .map(|r| r.map(|b| b.to_vec()).map_err(|e| std::io::Error::other(e.to_string())));
+        let stream = resp.bytes_stream().map(|r| {
+            r.map(|b| b.to_vec())
+                .map_err(|e| std::io::Error::other(e.to_string()))
+        });
         Ok((is_directory, crate::litebox::BoxTarStream::new(stream)))
     }
 
@@ -185,17 +186,6 @@ impl RestBox {
             )));
         }
         Ok(())
-    }
-
-    /// Drain a tar byte stream into a buffer (legacy fallback for servers that
-    /// don't report the archive shape).
-    async fn collect_stream(&self, tar: crate::litebox::BoxTarStream) -> BoxliteResult<Vec<u8>> {
-        let mut tar = tar.into_inner();
-        let mut buf = Vec::new();
-        while let Some(chunk) = tar.next().await {
-            buf.extend_from_slice(&chunk.map_err(|e| BoxliteError::Storage(e.to_string()))?);
-        }
-        Ok(buf)
     }
 }
 
@@ -397,8 +387,12 @@ impl BoxBackend for RestBox {
         )
         .await?;
 
-        self.upload_tar(container_dst, Some(is_directory), crate::litebox::BoxTarStream::new(tar))
-            .await
+        self.upload_tar(
+            container_dst,
+            Some(is_directory),
+            crate::litebox::BoxTarStream::new(tar),
+        )
+        .await
     }
 
     async fn copy_out(
@@ -409,27 +403,25 @@ impl BoxBackend for RestBox {
     ) -> BoxliteResult<()> {
         let (is_directory, tar) = self.download_tar(container_src).await?;
 
-        match is_directory {
-            Some(_) => boxlite_shared::tar::unpack_stream(
-                tar.into_inner(),
-                host_dst.to_path_buf(),
-                boxlite_shared::tar::UnpackContext {
-                    // REST copy_out historically ignores `opts.overwrite` and
-                    // always overwrites (see extract_tar_to_path); preserve that.
-                    overwrite: true,
-                    mkdir_parents: true,
-                    force_directory: false,
-                    is_directory,
-                },
+        let is_directory = is_directory.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "server does not report the archive shape; upgrade the server".into(),
             )
-            .await,
-            None => {
-                // Old/independent server (no archive-shape header): buffer and
-                // use the legacy peek-based extraction.
-                let bytes = self.collect_stream(tar).await?;
-                extract_tar_to_path(&bytes, host_dst)
-            }
-        }
+        })?;
+
+        boxlite_shared::tar::unpack_stream(
+            tar.into_inner(),
+            host_dst.to_path_buf(),
+            boxlite_shared::tar::UnpackContext {
+                // REST copy_out historically ignores `opts.overwrite` and
+                // always overwrites; preserve that.
+                overwrite: true,
+                mkdir_parents: true,
+                force_directory: false,
+                is_directory: Some(is_directory),
+            },
+        )
+        .await
     }
 
     async fn clone_box(
@@ -1095,105 +1087,6 @@ async fn emit_or_fallback(
         exit_code: -1,
         error_message: Some(cause),
     });
-}
-
-// ============================================================================
-// Tar Helpers
-// ============================================================================
-
-/// Extract a tar archive to a host path.
-///
-/// When the archive contains exactly one regular file (the common case
-/// for `copy_out("/guest/file", "/host/file")`), the file is written
-/// at `host_dst` directly so the caller sees the layout they asked
-/// for. When the archive contains multiple entries (or any directory
-/// entry), `host_dst` is treated as a destination directory and the
-/// tree is unpacked into it.
-///
-/// Pre-fix this always called `archive.unpack(host_dst)`, which
-/// always treats `host_dst` as a directory and produces the wrong
-/// shape on single-file `copy_out` (callers received `/host/file/`
-/// as a directory containing the actual file under it).
-fn extract_tar_to_path(tar_bytes: &[u8], host_dst: &Path) -> BoxliteResult<()> {
-    // Probe the archive once to decide single-file vs multi-entry.
-    // tar::Archive iterators consume the underlying reader, so we
-    // re-open a fresh Archive for the actual extraction step.
-    let mut probe = tar::Archive::new(tar_bytes);
-    let mut file_count = 0usize;
-    let mut other_count = 0usize;
-    let mut single_entry_path: Option<std::path::PathBuf> = None;
-    for entry in probe
-        .entries()
-        .map_err(|e| BoxliteError::Internal(format!("failed to read tar archive: {}", e)))?
-    {
-        let entry = entry
-            .map_err(|e| BoxliteError::Internal(format!("failed to read tar entry: {}", e)))?;
-        let header = entry.header();
-        match header.entry_type() {
-            tar::EntryType::Regular => {
-                file_count += 1;
-                if single_entry_path.is_none() {
-                    single_entry_path =
-                        Some(entry.path().map(|c| c.into_owned()).unwrap_or_default());
-                }
-            }
-            _ => other_count += 1,
-        }
-    }
-
-    if file_count == 1 && other_count == 0 {
-        if let Some(parent) = host_dst.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                BoxliteError::Internal(format!(
-                    "failed to create directory {}: {}",
-                    parent.display(),
-                    e
-                ))
-            })?;
-        }
-        // Re-read the (single) entry from a fresh Archive and copy
-        // its bytes into host_dst directly.
-        let mut archive = tar::Archive::new(tar_bytes);
-        for entry in archive
-            .entries()
-            .map_err(|e| BoxliteError::Internal(format!("failed to re-read tar archive: {}", e)))?
-        {
-            let mut entry = entry.map_err(|e| {
-                BoxliteError::Internal(format!("failed to re-read tar entry: {}", e))
-            })?;
-            if entry.header().entry_type() != tar::EntryType::Regular {
-                continue;
-            }
-            let mut out = std::fs::File::create(host_dst).map_err(|e| {
-                BoxliteError::Internal(format!("failed to create {}: {}", host_dst.display(), e))
-            })?;
-            std::io::copy(&mut entry, &mut out).map_err(|e| {
-                BoxliteError::Internal(format!("failed to write {}: {}", host_dst.display(), e))
-            })?;
-            return Ok(());
-        }
-        // Probe said one regular file but the second pass found
-        // none — defensive fallthrough; shouldn't happen.
-        let _ = single_entry_path;
-    }
-
-    // Multi-entry archive: treat host_dst as a directory and unpack
-    // the tree into it. Matches the historical contract.
-    std::fs::create_dir_all(host_dst).map_err(|e| {
-        BoxliteError::Internal(format!(
-            "failed to create directory {}: {}",
-            host_dst.display(),
-            e
-        ))
-    })?;
-    let mut archive = tar::Archive::new(tar_bytes);
-    archive.unpack(host_dst).map_err(|e| {
-        BoxliteError::Internal(format!(
-            "failed to extract tar to {}: {}",
-            host_dst.display(),
-            e
-        ))
-    })
 }
 
 // ============================================================================

@@ -31,7 +31,11 @@ pub struct PackContext {
 pub async fn pack(src: PathBuf, tar_path: PathBuf, opts: PackContext) -> BoxliteResult<()> {
     tokio::task::spawn_blocking(move || {
         let tar_file = std::fs::File::create(&tar_path).map_err(|e| {
-            BoxliteError::Storage(format!("failed to create tar {}: {}", tar_path.display(), e))
+            BoxliteError::Storage(format!(
+                "failed to create tar {}: {}",
+                tar_path.display(),
+                e
+            ))
         })?;
         pack_blocking(&src, tar_file, &opts)
     })
@@ -144,10 +148,13 @@ pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<(bool
     let is_directory = src.is_dir();
     let (writer, rx) = pack_pipe();
     let task = tokio::task::spawn_blocking(move || pack_blocking(&src, writer, &opts));
-    Ok((is_directory, PackStream {
-        rx,
-        task: Some(task),
-    }))
+    Ok((
+        is_directory,
+        PackStream {
+            rx,
+            task: Some(task),
+        },
+    ))
 }
 
 // ── Unpack ────────────────────────────────────────────────────────
@@ -271,6 +278,15 @@ fn unpack_from_reader<R: Read>(
                         dest.display(),
                         e
                     ))
+                })?;
+            }
+            // Drain the remaining entries so a truncated stream (a partial
+            // header or trailing garbage after the single entry) surfaces as an
+            // error instead of a silent success. A well-formed single-file tar
+            // ends in the zero-block trailer, which `Entries` reads as EOF.
+            for entry in entries {
+                entry.map_err(|e| {
+                    BoxliteError::Storage(format!("failed to read tar entry: {}", e))
                 })?;
             }
             Ok(())
@@ -1149,9 +1165,13 @@ mod tests {
         assert!(!is_dir);
 
         let dest = tmp.path().join("out.txt");
-        unpack_stream(Box::pin(stream), dest.clone(), stream_unpack_opts(Some(is_dir)))
-            .await
-            .unwrap();
+        unpack_stream(
+            Box::pin(stream),
+            dest.clone(),
+            stream_unpack_opts(Some(is_dir)),
+        )
+        .await
+        .unwrap();
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "hello streaming");
     }
 
@@ -1168,9 +1188,13 @@ mod tests {
 
         let dest = tmp.path().join("dest");
         std::fs::create_dir(&dest).unwrap();
-        unpack_stream(Box::pin(stream), dest.clone(), stream_unpack_opts(Some(is_dir)))
-            .await
-            .unwrap();
+        unpack_stream(
+            Box::pin(stream),
+            dest.clone(),
+            stream_unpack_opts(Some(is_dir)),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(dest.join("mydir").join("a.txt")).unwrap(),
             "aaa"
@@ -1203,9 +1227,13 @@ mod tests {
         assert!(!is_dir);
 
         let dest = tmp.path().join("big-out.bin");
-        unpack_stream(Box::pin(stream), dest.clone(), stream_unpack_opts(Some(is_dir)))
-            .await
-            .unwrap();
+        unpack_stream(
+            Box::pin(stream),
+            dest.clone(),
+            stream_unpack_opts(Some(is_dir)),
+        )
+        .await
+        .unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), data);
     }
 }
