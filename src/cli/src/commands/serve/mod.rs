@@ -940,6 +940,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 // Box Handle Cache Helper
 // ============================================================================
 
+#[allow(clippy::result_large_err)]
 async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>, Response> {
     // Check cache first.
     //
@@ -1071,6 +1072,7 @@ where
 /// so attaching to a finished job would silently run the job again. `attach()`
 /// already does the right thing for every status by itself: it boots a
 /// `Configured` box (which has never run) and refuses a `Stopped` one.
+#[allow(clippy::result_large_err)]
 async fn get_or_attach_main_session(
     state: &AppState,
     box_id: &str,

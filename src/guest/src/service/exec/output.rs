@@ -139,6 +139,10 @@ impl OutputManager {
         }
     }
 
+    // `tonic::Status` is the guest's gRPC error type and is wide enough to trip
+    // `result_large_err`; these control-plane methods fail rarely, so boxing
+    // every `Err` costs more than it saves.
+    #[allow(clippy::result_large_err)]
     pub(crate) async fn attach(&self) -> Result<AttachStream, Status> {
         let lease = self.claim_consumer().await?;
         if self.inner.lock().await.sealed {
@@ -149,6 +153,7 @@ impl OutputManager {
         Ok(self.attach_stream(lease))
     }
 
+    #[allow(clippy::result_large_err)]
     pub(crate) async fn attach_retained(&self) -> Result<AttachStream, Status> {
         let lease = self.claim_consumer().await?;
         Ok(self.attach_stream(lease))
@@ -159,6 +164,7 @@ impl OutputManager {
         Arc::clone(&self.consumer_lease)
     }
 
+    #[allow(clippy::result_large_err)]
     async fn claim_consumer(&self) -> Result<ConsumerLease, Status> {
         if self
             .consumer_lease
