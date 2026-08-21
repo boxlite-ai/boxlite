@@ -366,8 +366,13 @@ pub struct BoxOptions {
     #[serde(default)]
     pub auto_delete: Option<u32>,
 
-    /// Capture the container init process's stdout and stderr to a durable log
-    /// the host can read after the box stops.
+    /// Capture the container init process's output to a durable log the host
+    /// can read after the box stops.
+    ///
+    /// Only the `begin` record is written so far: enough to prove capture was
+    /// armed for a run, and to fail `Container.Init` when it cannot be, but not
+    /// the output itself. Enabling this today yields a log a reader classifies
+    /// as interrupted, holding no stdout or stderr.
     ///
     /// Incompatible with remove-on-stop: removal deletes the box directory the
     /// log lives in.
