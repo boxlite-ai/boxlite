@@ -666,7 +666,6 @@ dependencies = [
  "base64 0.22.1",
  "boxlite-shared",
  "bytes",
- "chrono",
  "clap",
  "futures",
  "libcontainer",
