@@ -1,69 +1,105 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+# Setup git submodules for BoxLite development.
+#
+# This script is safe to run repeatedly. It initializes only missing
+# submodules and leaves existing submodule checkouts untouched.
 
-repo_root="${1:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
-if [[ -z "$repo_root" || ! -f "$repo_root/.gitmodules" ]]; then
-    printf 'setup:submodules: expected a BoxLite checkout with .gitmodules\n' >&2
-    exit 1
-fi
+set -e
 
+SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$SETUP_DIR/.." && pwd)"
+# common.sh is resolved from this script's directory above.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/common.sh"
+
+# Fail closed before an automatic checkout can contact an unexpected remote.
 validate_submodule() {
-    local name="$1"
-    local expected_path="$2"
-    local expected_url="$3"
+    local repo_root="$1"
+    local name="$2"
+    local expected_path="$3"
+    local expected_url="$4"
     local actual_path
     local actual_url
 
     actual_path="$(git config -f "$repo_root/.gitmodules" --get "submodule.$name.path" || true)"
     actual_url="$(git config -f "$repo_root/.gitmodules" --get "submodule.$name.url" || true)"
     if [[ "$actual_path" != "$expected_path" || "$actual_url" != "$expected_url" ]]; then
-        printf 'setup:submodules: refusing unexpected submodule %s (path=%s, url=%s)\n' \
-            "$name" "$actual_path" "$actual_url" >&2
-        exit 1
+        print_error "Refusing unexpected submodule $name (path=$actual_path, url=$actual_url)"
+        return 1
     fi
 }
 
-submodule_count="$(git config -f "$repo_root/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null | wc -l | tr -d ' ')"
-if [[ "$submodule_count" != "4" ]]; then
-    printf 'setup:submodules: expected 4 submodules, found %s\n' "$submodule_count" >&2
-    exit 1
-fi
+# Validate the complete set because this script performs an automatic network checkout.
+validate_submodules() {
+    local repo_root="$1"
+    local submodule_count
 
-validate_submodule \
-    "src/deps/libkrun-sys/vendor/libkrun" \
-    "src/deps/libkrun-sys/vendor/libkrun" \
-    "https://github.com/boxlite-ai/libkrun.git"
-validate_submodule \
-    "src/deps/libkrun-sys/vendor/libkrunfw" \
-    "src/deps/libkrun-sys/vendor/libkrunfw" \
-    "https://github.com/boxlite-ai/libkrunfw.git"
-validate_submodule \
-    "src/deps/e2fsprogs-sys/vendor/e2fsprogs" \
-    "src/deps/e2fsprogs-sys/vendor/e2fsprogs" \
-    "https://github.com/tytso/e2fsprogs.git"
-validate_submodule \
-    "src/deps/bubblewrap-sys/vendor/bubblewrap" \
-    "src/deps/bubblewrap-sys/vendor/bubblewrap" \
-    "https://github.com/containers/bubblewrap.git"
+    if [[ ! -f "$repo_root/.gitmodules" ]]; then
+        print_error "Expected a BoxLite checkout with .gitmodules"
+        return 1
+    fi
 
-jobs="${BOXLITE_SUBMODULE_JOBS:-4}"
-if [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]] || ((jobs > 16)); then
-    printf 'setup:submodules: BOXLITE_SUBMODULE_JOBS must be between 1 and 16, got %s\n' "$jobs" >&2
-    exit 1
-fi
+    submodule_count="$(git config -f "$repo_root/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null | wc -l | tr -d ' ')"
+    if [[ "$submodule_count" != "4" ]]; then
+        print_error "Expected 4 submodules, found $submodule_count"
+        return 1
+    fi
 
-submodule_status="$(git -C "$repo_root" submodule status --recursive)"
-if grep -q '^U' <<<"$submodule_status"; then
-    printf 'setup:submodules: refusing to update conflicted submodules\n' >&2
-    exit 1
-fi
+    validate_submodule \
+        "$repo_root" \
+        "src/deps/libkrun-sys/vendor/libkrun" \
+        "src/deps/libkrun-sys/vendor/libkrun" \
+        "https://github.com/boxlite-ai/libkrun.git"
+    validate_submodule \
+        "$repo_root" \
+        "src/deps/libkrun-sys/vendor/libkrunfw" \
+        "src/deps/libkrun-sys/vendor/libkrunfw" \
+        "https://github.com/boxlite-ai/libkrunfw.git"
+    validate_submodule \
+        "$repo_root" \
+        "src/deps/e2fsprogs-sys/vendor/e2fsprogs" \
+        "src/deps/e2fsprogs-sys/vendor/e2fsprogs" \
+        "https://github.com/tytso/e2fsprogs.git"
+    validate_submodule \
+        "$repo_root" \
+        "src/deps/bubblewrap-sys/vendor/bubblewrap" \
+        "src/deps/bubblewrap-sys/vendor/bubblewrap" \
+        "https://github.com/containers/bubblewrap.git"
+}
 
-if ! grep -q '^-' <<<"$submodule_status"; then
-    printf 'setup:submodules: already initialized\n'
-    exit 0
-fi
+validate_jobs() {
+    local jobs="$1"
 
-printf 'setup:submodules: initializing missing submodules with %s jobs\n' "$jobs"
-git -C "$repo_root" submodule sync --recursive
-git -C "$repo_root" submodule update --init --recursive --depth 1 --jobs "$jobs"
-printf 'setup:submodules: initialized\n'
+    if [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]] || ((jobs > 16)); then
+        print_error "BOXLITE_SUBMODULE_JOBS must be between 1 and 16, got $jobs"
+        return 1
+    fi
+}
+
+main() {
+    local repo_root="${1:-$PROJECT_ROOT}"
+    local jobs="${BOXLITE_SUBMODULE_JOBS:-4}"
+    local submodule_status
+
+    validate_submodules "$repo_root"
+    validate_jobs "$jobs"
+
+    submodule_status="$(git -C "$repo_root" submodule status --recursive)"
+    if grep -q '^U' <<<"$submodule_status"; then
+        print_error "Refusing to update conflicted submodules"
+        return 1
+    fi
+
+    print_step "Checking git submodules... "
+    if ! grep -q '^-' <<<"$submodule_status"; then
+        print_success "Already initialized"
+        return 0
+    fi
+
+    echo -e "${YELLOW}Initializing with $jobs jobs...${NC}"
+    git -C "$repo_root" submodule sync --recursive
+    git -C "$repo_root" submodule update --init --recursive --depth 1 --jobs "$jobs"
+    print_success "Submodules initialized"
+}
+
+main "$@"

@@ -64,7 +64,7 @@ git config -f "$fixture/.gitmodules" submodule.src/deps/libkrun-sys/vendor/libkr
 if "$subject" "$fixture" >"$scratch/unexpected-url.log" 2>&1; then
     fail "unexpected URL was accepted"
 fi
-grep -q 'refusing unexpected submodule' "$scratch/unexpected-url.log" || \
+grep -qi 'refusing unexpected submodule' "$scratch/unexpected-url.log" || \
     fail "unexpected URL failure was not explicit"
 cp "$scratch/gitmodules.original" "$fixture/.gitmodules"
 
@@ -73,7 +73,7 @@ git config -f "$fixture/.gitmodules" submodule.src/deps/libkrun-sys/vendor/libkr
 if "$subject" "$fixture" >"$scratch/unexpected-path.log" 2>&1; then
     fail "unexpected submodule path was accepted"
 fi
-grep -q 'refusing unexpected submodule' "$scratch/unexpected-path.log" || \
+grep -qi 'refusing unexpected submodule' "$scratch/unexpected-path.log" || \
     fail "unexpected path failure was not explicit"
 cp "$scratch/gitmodules.original" "$fixture/.gitmodules"
 
@@ -81,7 +81,7 @@ git config -f "$fixture/.gitmodules" submodule.extra.path extra
 if "$subject" "$fixture" >"$scratch/unexpected-count.log" 2>&1; then
     fail "unexpected submodule count was accepted"
 fi
-grep -q 'expected 4 submodules, found 5' "$scratch/unexpected-count.log" || \
+grep -qi 'expected 4 submodules, found 5' "$scratch/unexpected-count.log" || \
     fail "unexpected count failure was not explicit"
 cp "$scratch/gitmodules.original" "$fixture/.gitmodules"
 
@@ -100,7 +100,7 @@ missing_count="$(git -C "$fixture" submodule status --recursive | grep -c '^-')"
 GIT_CONFIG_GLOBAL="$scratch/gitconfig" GIT_ALLOW_PROTOCOL=file:https \
     BOXLITE_SUBMODULE_JOBS=2 "$subject" "$fixture" \
     >"$scratch/first-run.log"
-grep -q 'initialized' "$scratch/first-run.log" || fail "first run did not initialize submodules"
+grep -qi 'initialized' "$scratch/first-run.log" || fail "first run did not initialize submodules"
 
 verify_oid() {
     local path="$1"
@@ -123,6 +123,6 @@ fi
 
 GIT_CONFIG_GLOBAL="$scratch/gitconfig" GIT_ALLOW_PROTOCOL=file:https \
     "$subject" "$fixture" >"$scratch/second-run.log"
-grep -q 'already initialized' "$scratch/second-run.log" || fail "second run was not idempotent"
+grep -qi 'already initialized' "$scratch/second-run.log" || fail "second run was not idempotent"
 
 printf 'test-setup-submodules: all checks passed\n'
