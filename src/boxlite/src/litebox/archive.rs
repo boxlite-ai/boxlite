@@ -66,6 +66,13 @@ pub struct ArchiveManifest {
     /// Full box configuration (v3+). `None` for v1/v2 archives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub box_options: Option<crate::runtime::options::BoxOptions>,
+    /// SHA-256 checksum of the guest rootfs disk.
+    ///
+    /// Always empty: the guest rootfs is no longer bundled in archives (it ships
+    /// as a shared base image). Kept in the schema so pre-minimal-rootfs
+    /// importers, which require the field, can deserialize the manifest instead
+    /// of failing with "missing field `guest_disk_checksum`".
+    pub guest_disk_checksum: String,
     /// SHA-256 checksum of the container disk.
     pub container_disk_checksum: String,
     /// Timestamp when the archive was created.

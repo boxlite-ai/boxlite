@@ -305,6 +305,12 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         .map(|home| home.join("bases"))
         .filter(|p| p.exists())
     {
+        // The directly-mounted rootfs ext4 is addressed by its *canonical* bases
+        // path (BaseDiskManager::new canonicalizes at construction). Grant the
+        // canonical path too, or a symlinked BOXLITE_HOME / bases/ leaves bwrap
+        // mounting the logical path while libkrun opens the canonical one —
+        // "Disk image not found" inside the sandbox.
+        let bases_dir = bases_dir.canonicalize().unwrap_or(bases_dir);
         paths.push(PathAccess {
             path: bases_dir,
             writable: false,
@@ -736,9 +742,48 @@ mod tests {
 
         let paths = build_path_access(&layout, &[]);
 
-        let bases_paths: Vec<_> = paths.iter().filter(|p| p.path == bases_dir).collect();
+        // bases/ is granted by its canonical path; compare canonical forms so the
+        // assertion holds even when $TMPDIR itself contains a symlink.
+        let expected = bases_dir.canonicalize().unwrap_or_else(|_| bases_dir.clone());
+        let bases_paths: Vec<_> = paths
+            .iter()
+            .filter(|p| p.path.canonicalize().unwrap_or_else(|_| p.path.clone()) == expected)
+            .collect();
         assert_eq!(bases_paths.len(), 1, "Should include home_dir/bases/");
         assert!(!bases_paths[0].writable);
+    }
+
+    #[test]
+    fn test_build_path_access_canonicalizes_bases_dir_through_symlink() {
+        // A symlinked BOXLITE_HOME (or bases/) makes the logical home/bases path
+        // diverge from the canonical path the block device opens. The grant must
+        // be canonical, or bwrap mounts the logical path while libkrun opens the
+        // canonical one and fails with "Disk image not found".
+        let real_home = tempdir().unwrap();
+        let real_home = real_home.path().to_path_buf();
+        let link_root = tempdir().unwrap();
+        let link_home = link_root.path().join("boxlite-home-link");
+        std::os::unix::fs::symlink(&real_home, &link_home).unwrap();
+
+        // box_dir lives under the symlinked home.
+        let box_dir = link_home.join("boxes").join("test-box");
+        std::fs::create_dir_all(&box_dir).unwrap();
+
+        // bases/ under the real (canonical) home.
+        let real_bases = real_home.join("bases");
+        std::fs::create_dir_all(&real_bases).unwrap();
+
+        let layout = test_layout(box_dir);
+        let paths = build_path_access(&layout, &[]);
+
+        let expected = real_bases.canonicalize().unwrap();
+        assert!(
+            paths
+                .iter()
+                .any(|p| p.path == expected && !p.writable),
+            "bases/ must be granted by its canonical path ({}), not the logical symlink path",
+            expected.display()
+        );
     }
 
     #[test]

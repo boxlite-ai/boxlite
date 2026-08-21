@@ -1,29 +1,19 @@
-//! Ephemeral Ed25519 host identity for the embedded SSH server.
+//! SSH host identity is intentionally absent.
 //!
-//! The guest rootfs is read-only, so the host key is generated fresh each boot
-//! rather than persisted (see [`generate`]).
-
-use russh::keys::{Algorithm, PrivateKey};
+//! The guest rootfs is read-only and the host key is neither persisted nor
+//! generated, so the embedded SSH server cannot start (ignored for now).
 
 #[derive(Debug)]
 pub(crate) enum HostKeyError {
-    Parse(String),
+    Unavailable,
 }
 
 impl std::fmt::Display for HostKeyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Parse(error) => write!(f, "host key parse error: {error}"),
+            Self::Unavailable => write!(f, "SSH host key unavailable"),
         }
     }
 }
 
 impl std::error::Error for HostKeyError {}
-
-/// Generate a fresh ephemeral host key (not persisted — the guest root is
-/// read-only).
-pub(crate) fn generate() -> Result<PrivateKey, HostKeyError> {
-    let mut rng = russh::keys::key::safe_rng();
-    PrivateKey::random(&mut rng, Algorithm::Ed25519)
-        .map_err(|error| HostKeyError::Parse(error.to_string()))
-}

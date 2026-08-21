@@ -26,7 +26,6 @@ use crate::service::server::GuestServer;
 use auth::CertificateAuthorizer;
 use backoff::Backoff;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use russh::keys::HashAlg;
 use std::net::{Shutdown, SocketAddr};
 use std::sync::{Arc, OnceLock, Weak};
 use tokio::net::TcpListener;
@@ -503,16 +502,9 @@ fn listen_addresses_overlap(current: SocketAddr, next: SocketAddr) -> bool {
 }
 
 async fn prepare_listener(_ssh: &SshConfig) -> Result<PreparedListener, SshStartError> {
-    let host_key = host_key::generate().map_err(SshStartError::HostKey)?;
-    let host_key_fingerprint = host_key
-        .public_key()
-        .fingerprint(HashAlg::Sha256)
-        .to_string();
-    let config = Arc::new(server::build_config(host_key));
-    Ok(PreparedListener {
-        config,
-        host_key_fingerprint,
-    })
+    // The guest rootfs is read-only and no host key is generated, so SSH cannot
+    // start. Ignored for now.
+    Err(SshStartError::HostKey(host_key::HostKeyError::Unavailable))
 }
 
 async fn accept_loop(

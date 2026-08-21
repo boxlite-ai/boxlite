@@ -721,6 +721,7 @@ fn apply_pty_request(
     true
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_config(host_key: PrivateKey) -> russh::server::Config {
     let mut methods = MethodSet::empty();
     methods.push(MethodKind::PublicKey);

@@ -458,4 +458,46 @@ mod tests {
             "disabled networking never created implicit EXPOSE listeners"
         );
     }
+
+    #[test]
+    fn configure_guest_rootfs_attaches_disk_read_only() {
+        // The guest root must reject writes so a tenant workload that enters the
+        // container by fork (without execve) cannot reopen the agent binary
+        // through `/proc/<pid>/exe` for write (CVE-2019-5736). The rootfs is
+        // now read-only by construction — attached as a read-only block device —
+        // rather than remounted read-only after boot, so the regression guard
+        // lives here, on the `read_only` attach flag.
+        let disk_path = PathBuf::from("/tmp/fake-guest-rootfs.ext4");
+        let rootfs = GuestRootfs::new(
+            disk_path.clone(),
+            Strategy::Disk {
+                disk_path: disk_path.clone(),
+                device_path: None,
+            },
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        let mut volume_mgr = GuestVolumeManager::new();
+        let configured = configure_guest_rootfs(rootfs, &mut volume_mgr).unwrap();
+
+        // The attach happened and the strategy records the guest device path
+        // (a fresh manager hands out /dev/vda first).
+        match configured.strategy {
+            Strategy::Disk { device_path, .. } => {
+                assert_eq!(device_path.as_deref(), Some("/dev/vda"));
+            }
+            _ => panic!("expected disk-based strategy"),
+        }
+
+        let config = volume_mgr.build_vmm_config();
+        let devices = config.block_devices.devices();
+        assert_eq!(devices.len(), 1);
+        assert!(
+            devices[0].read_only,
+            "guest rootfs must attach read-only (is_disk_read_only)"
+        );
+    }
 }

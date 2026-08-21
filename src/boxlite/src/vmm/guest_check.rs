@@ -1,8 +1,9 @@
-//! Guest binary pre-flight validation.
+//! Guest artifact pre-flight validation.
 //!
-//! Validates that the `boxlite-guest` binary is a valid, runnable ELF before
-//! it gets injected into the guest rootfs ext4 image. Catches architecture
-//! mismatches and broken binaries early with clear error messages.
+//! Validates that a guest artifact (`boxlite-guest`, or the static
+//! `mke2fs`/`resize2fs` tools) is a valid, runnable ELF before it gets injected
+//! into the guest rootfs ext4 image. Catches architecture mismatches and broken
+//! binaries early with clear error messages.
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::path::Path;
@@ -17,7 +18,7 @@ const EM_AARCH64: u16 = 0xB7;
 /// ELF program header type for interpreter (PT_INTERP).
 const PT_INTERP: u32 = 3;
 
-/// Validate that guest binary contents are a runnable ELF for this host.
+/// Validate that guest artifact contents are a runnable ELF for this host.
 ///
 /// Checks:
 /// 1. Non-empty and large enough to hold an ELF header
@@ -25,14 +26,15 @@ const PT_INTERP: u32 = 3;
 /// 3. Machine type matches host architecture
 /// 4. Binary is statically linked (no PT_INTERP program header)
 ///
-/// Takes bytes rather than a path because the only caller
-/// ([`GuestBinary`](crate::vmm::guest_binary::GuestBinary)) has already read the
-/// ~18 MB file to digest it; reading it a second time to validate is waste.
-/// `path` names the binary in error messages only.
+/// Takes bytes rather than a path because the callers
+/// ([`GuestBinary`](crate::vmm::guest_binary::GuestBinary) and
+/// [`GuestArtifacts`](crate::vmm::guest_artifacts::GuestArtifacts)) have already
+/// read the file to digest it; reading it a second time to validate is waste.
+/// `path` names the artifact in error messages only.
 pub fn validate_guest_bytes(data: &[u8], path: &Path) -> BoxliteResult<()> {
     if data.len() < 64 {
         return Err(BoxliteError::Internal(format!(
-            "Guest binary {} is too small ({} bytes) — not a valid ELF",
+            "Guest artifact {} is too small ({} bytes) — not a valid ELF",
             path.display(),
             data.len()
         )));
@@ -40,14 +42,14 @@ pub fn validate_guest_bytes(data: &[u8], path: &Path) -> BoxliteResult<()> {
 
     if data[..4] != ELF_MAGIC {
         return Err(BoxliteError::Internal(format!(
-            "Guest binary {} is not a valid ELF file (bad magic bytes)",
+            "Guest artifact {} is not a valid ELF file (bad magic bytes)",
             path.display()
         )));
     }
 
     if data[4] != 2 {
         return Err(BoxliteError::Internal(format!(
-            "Guest binary {} is not 64-bit ELF (class={})",
+            "Guest artifact {} is not 64-bit ELF (class={})",
             path.display(),
             data[4]
         )));
@@ -62,7 +64,7 @@ pub fn validate_guest_bytes(data: &[u8], path: &Path) -> BoxliteResult<()> {
         arch => {
             tracing::warn!(
                 arch,
-                "Cannot validate guest binary architecture — unknown host arch"
+                "Cannot validate guest artifact architecture — unknown host arch"
             );
             return Ok(());
         }
@@ -75,12 +77,10 @@ pub fn validate_guest_bytes(data: &[u8], path: &Path) -> BoxliteResult<()> {
             _ => "unknown",
         };
         return Err(BoxliteError::Internal(format!(
-            "Guest binary {} is compiled for {} but host is {}\n\
-             Rebuild the guest binary for the correct target:\n  \
-             cargo build --target {}-unknown-linux-musl -p boxlite-guest",
+            "Guest artifact {} is compiled for {} but host is {}\n\
+             Rebuild the guest artifact for the correct target",
             path.display(),
             binary_arch,
-            std::env::consts::ARCH,
             std::env::consts::ARCH,
         )));
     }
@@ -88,7 +88,7 @@ pub fn validate_guest_bytes(data: &[u8], path: &Path) -> BoxliteResult<()> {
     if has_pt_interp(data) {
         tracing::warn!(
             path = %path.display(),
-            "Guest binary is dynamically linked — it may fail inside the VM"
+            "Guest artifact is dynamically linked — it may fail inside the VM"
         );
     }
 

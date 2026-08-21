@@ -302,6 +302,7 @@ fn do_export_finalize(
         box_name: config_name.map(|s| s.to_string()),
         image,
         box_options: Some(config_options.clone()),
+        guest_disk_checksum: String::new(),
         container_disk_checksum,
         exported_at: chrono::Utc::now().to_rfc3339(),
     };

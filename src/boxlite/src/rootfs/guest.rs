@@ -1154,8 +1154,8 @@ mod tests {
 
         let mke2fs = dir.path().join("guest-mke2fs");
         let resize2fs = dir.path().join("guest-resize2fs");
-        std::fs::write(&mke2fs, b"mke2fs-bytes").unwrap();
-        std::fs::write(&resize2fs, b"resize2fs-bytes").unwrap();
+        std::fs::write(&mke2fs, fake_guest(0x11)).unwrap();
+        std::fs::write(&resize2fs, fake_guest(0x22)).unwrap();
 
         GuestArtifacts::resolve_at(&guest, mke2fs, resize2fs).unwrap()
     }
