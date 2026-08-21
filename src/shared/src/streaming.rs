@@ -30,12 +30,14 @@ pub const PIPE_CHUNK_SIZE: usize = 1 << 20;
 
 /// Blocking `std::io::Write` feeding an async channel.
 ///
-/// Each `write` copies the buffer and blocks until the async side accepts it.
-/// When the receiver is dropped (consumer aborted), writes return
-/// [`io::ErrorKind::BrokenPipe`] so a `tar::Builder` aborts cleanly.
+/// Writes are buffered and coalesced into full [`PIPE_CHUNK_SIZE`] messages;
+/// each `flush` (or a full buffer) blocks until the async side accepts the
+/// pending bytes. When the receiver is dropped (consumer aborted), writes
+/// return [`io::ErrorKind::BrokenPipe`] so a `tar::Builder` aborts cleanly.
 pub struct PipeWriter {
     tx: mpsc::Sender<Chunk>,
     handle: Handle,
+    pending: Vec<u8>,
 }
 
 /// Blocking `std::io::Read` draining an async channel.
@@ -56,7 +58,14 @@ pub struct PipeReader {
 pub fn pack_pipe() -> (PipeWriter, mpsc::Receiver<Chunk>) {
     let handle = Handle::current();
     let (tx, rx) = mpsc::channel(PIPE_CHUNKS);
-    (PipeWriter { tx, handle }, rx)
+    (
+        PipeWriter {
+            tx,
+            handle,
+            pending: Vec::with_capacity(PIPE_CHUNK_SIZE),
+        },
+        rx,
+    )
 }
 
 /// Read-side pipe: an async sender feeding a blocking reader.
@@ -80,17 +89,49 @@ impl io::Write for PipeWriter {
         if buf.is_empty() {
             return Ok(0);
         }
-        match self.handle.block_on(self.tx.send(Ok(buf.to_vec()))) {
-            Ok(()) => Ok(buf.len()),
+        if self.tx.is_closed() {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "stream consumer dropped",
+            ));
+        }
+        self.pending.extend_from_slice(buf);
+        if self.pending.len() >= PIPE_CHUNK_SIZE {
+            self.flush_pending()?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_pending()
+    }
+}
+
+impl PipeWriter {
+    /// Send the pending buffer as one channel message.
+    fn flush_pending(&mut self) -> io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let data = std::mem::take(&mut self.pending);
+        match self.handle.block_on(self.tx.send(Ok(data))) {
+            Ok(()) => Ok(()),
             Err(_) => Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "stream consumer dropped",
             )),
         }
     }
+}
 
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+impl Drop for PipeWriter {
+    fn drop(&mut self) {
+        // Best-effort flush so a writer dropped without an explicit `flush()`
+        // (e.g. a panic mid-pack) doesn't silently lose its trailing bytes.
+        if !self.pending.is_empty() {
+            let data = std::mem::take(&mut self.pending);
+            let _ = self.handle.block_on(self.tx.send(Ok(data)));
+        }
     }
 }
 
@@ -112,7 +153,7 @@ impl io::Read for PipeReader {
 
             match self.handle.block_on(self.rx.recv()) {
                 None => return Ok(0), // channel closed → EOF
-                Some(Err(e)) => return Err(io::Error::other(e)),
+                Some(Err(e)) => return Err(e),
                 Some(Ok(data)) => {
                     // Skip zero-length chunks: Ok(0) reads as EOF to `tar`,
                     // which would truncate the archive.
@@ -197,9 +238,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn reader_surfaces_producer_error() {
         let (tx, mut reader) = unpack_pipe();
-        tx.send(Err(io::Error::new(io::ErrorKind::Other, "boom")))
-            .await
-            .unwrap();
+        tx.send(Err(io::Error::other("boom"))).await.unwrap();
         drop(tx);
         let err = tokio::task::spawn_blocking(move || {
             let mut buf = [0u8; 4];

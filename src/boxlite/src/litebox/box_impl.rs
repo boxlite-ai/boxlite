@@ -938,43 +938,23 @@ impl BoxImpl {
             )
             .await?;
 
-        match is_directory {
-            Some(_) => {
-                boxlite_shared::tar::unpack_stream(
-                    tar,
-                    host_dst.to_path_buf(),
-                    boxlite_shared::tar::UnpackContext {
-                        overwrite: opts.overwrite,
-                        mkdir_parents: true,
-                        force_directory: false,
-                        is_directory,
-                    },
-                )
-                .await?;
-            }
-            None => {
-                // Old guest (no archive-shape hint): buffer the stream to a
-                // temp file and use legacy peek-based detection.
-                let temp_tar = self.runtime.layout.temp_dir().join(format!(
-                    "cp-out-{}-{}.tar",
-                    self.config.id.as_str(),
-                    uuid::Uuid::new_v4()
-                ));
-                Self::drain_stream_to_file(tar, &temp_tar).await?;
-                boxlite_shared::tar::unpack(
-                    temp_tar.clone(),
-                    host_dst.to_path_buf(),
-                    boxlite_shared::tar::UnpackContext {
-                        overwrite: opts.overwrite,
-                        mkdir_parents: true,
-                        force_directory: false,
-                        is_directory: None,
-                    },
-                )
-                .await?;
-                let _ = tokio::fs::remove_file(&temp_tar).await;
-            }
-        }
+        let is_directory = is_directory.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "guest does not report the archive shape; upgrade the guest".into(),
+            )
+        })?;
+
+        boxlite_shared::tar::unpack_stream(
+            tar,
+            host_dst.to_path_buf(),
+            boxlite_shared::tar::UnpackContext {
+                overwrite: opts.overwrite,
+                mkdir_parents: true,
+                force_directory: false,
+                is_directory: Some(is_directory),
+            },
+        )
+        .await?;
 
         for listener in &self.event_listeners {
             listener.on_file_copied_out(
@@ -1051,35 +1031,6 @@ impl BoxImpl {
                 tar,
             )
             .await
-    }
-
-    /// Drain a tar byte stream into a temp file — the legacy fallback for old
-    /// guests that don't report the archive shape (`is_directory`).
-    async fn drain_stream_to_file(
-        mut stream: std::pin::Pin<
-            Box<dyn futures::Stream<Item = std::io::Result<Vec<u8>>> + Send>,
-        >,
-        path: &std::path::Path,
-    ) -> BoxliteResult<()> {
-        use futures::StreamExt;
-        use tokio::io::AsyncWriteExt;
-
-        let mut file = tokio::fs::File::create(path).await.map_err(|e| {
-            BoxliteError::Storage(format!("failed to create {}: {}", path.display(), e))
-        })?;
-
-        while let Some(chunk) = stream.next().await {
-            let data = chunk
-                .map_err(|e| BoxliteError::Storage(format!("download stream error: {e}")))?;
-            file.write_all(&data).await.map_err(|e| {
-                BoxliteError::Storage(format!("failed to write {}: {}", path.display(), e))
-            })?;
-        }
-
-        file.flush().await.map_err(|e| {
-            BoxliteError::Storage(format!("failed to flush {}: {}", path.display(), e))
-        })?;
-        Ok(())
     }
 
     // ========================================================================

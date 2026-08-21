@@ -65,14 +65,15 @@ pub(in crate::commands::serve) async fn download_files(
         Err(e) => return error_from_boxlite(&e),
     };
 
-    let is_dir_header = is_directory
-        .map(|b| if b { "true" } else { "false" })
-        .unwrap_or("");
-
-    Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
-        .header("Content-Type", "application/x-tar")
-        .header("X-Boxlite-Is-Directory", is_dir_header)
+        .header("Content-Type", "application/x-tar");
+    // Only emit the hint when known — an empty value would be read by the
+    // client as `Some(false)` and wrongly skip the legacy fallback path.
+    if let Some(b) = is_directory {
+        builder = builder.header("X-Boxlite-Is-Directory", if b { "true" } else { "false" });
+    }
+    builder
         .body(Body::from_stream(stream.into_inner()))
         .unwrap()
 }
