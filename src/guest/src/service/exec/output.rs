@@ -83,6 +83,10 @@ struct StreamState {
     last_sequence: Option<u64>,
 }
 
+// Every fallible method here answers a gRPC call, so its error is `tonic::Status`
+// because the boundary requires that type — not because a large error was chosen.
+// Boxing it would only be unboxed again one frame up.
+#[allow(clippy::result_large_err)]
 impl OutputManager {
     pub(crate) fn new(stdout: Option<ExecStdout>, stderr: Option<ExecStderr>) -> Self {
         let stdout_enabled = stdout.is_some();

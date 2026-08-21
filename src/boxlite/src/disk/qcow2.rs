@@ -1258,8 +1258,10 @@ impl FlattenLayer {
             ))
         })?;
         let l1_table: Vec<u64> = l1_buf
-            .chunks_exact(8)
-            .map(|c| u64::from_be_bytes(c.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|entry| u64::from_be_bytes(*entry))
             .collect();
 
         Ok((
