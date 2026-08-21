@@ -26,37 +26,53 @@ func run() int {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	cfg, err := config.GetConfig()
-	if err != nil {
-		logger.Error("Failed to get config", "error", err)
-		return 2
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	logger, shutdownLogger, err := initLogger(ctx, logger, cfg)
-	if err != nil {
-		logger.Error("Failed to initialize logger", "error", err)
-		return 2
-	}
-	defer shutdownLogger()
-
-	if cfg.OtelTracingEnabled && cfg.OtelEndpoint != "" {
-		logger.Info("OpenTelemetry tracing is enabled")
-
-		tp, err := telemetry.InitTracer(ctx, telemetry.Config{
-			Endpoint:       cfg.OtelEndpoint,
-			Headers:        cfg.GetOtelHeaders(),
-			ServiceName:    "boxlite-proxy",
-			ServiceVersion: internal.Version,
-			Environment:    cfg.Environment,
-		})
+	var start func(context.Context) error
+	if proxy.ClickStackGatewayEnabled() {
+		gatewayConfig, err := proxy.ClickStackGatewayConfigFromEnv()
 		if err != nil {
-			logger.Error("Failed to initialize tracer", "error", err)
+			logger.Error("Failed to get ClickStack gateway config", "error", err)
 			return 2
 		}
-		defer telemetry.ShutdownTracer(logger, tp)
+		start = func(ctx context.Context) error {
+			return proxy.StartClickStackGateway(ctx, gatewayConfig)
+		}
+	} else {
+		proxyConfig, err := config.GetConfig()
+		if err != nil {
+			logger.Error("Failed to get config", "error", err)
+			return 2
+		}
+
+		configuredLogger, shutdownLogger, err := initLogger(ctx, logger, proxyConfig)
+		if err != nil {
+			logger.Error("Failed to initialize logger", "error", err)
+			return 2
+		}
+		logger = configuredLogger
+		defer shutdownLogger()
+
+		if proxyConfig.OtelTracingEnabled && proxyConfig.OtelEndpoint != "" {
+			logger.Info("OpenTelemetry tracing is enabled")
+
+			tp, err := telemetry.InitTracer(ctx, telemetry.Config{
+				Endpoint:       proxyConfig.OtelEndpoint,
+				Headers:        proxyConfig.GetOtelHeaders(),
+				ServiceName:    "boxlite-proxy",
+				ServiceVersion: internal.Version,
+				Environment:    proxyConfig.Environment,
+			})
+			if err != nil {
+				logger.Error("Failed to initialize tracer", "error", err)
+				return 2
+			}
+			defer telemetry.ShutdownTracer(logger, tp)
+		}
+		start = func(ctx context.Context) error {
+			return proxy.StartProxy(ctx, proxyConfig)
+		}
 	}
 
 	sigChan := make(chan os.Signal, 1)
@@ -64,7 +80,7 @@ func run() int {
 
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- proxy.StartProxy(ctx, cfg)
+		errChan <- start(ctx)
 	}()
 
 	var lastSignalTime time.Time
