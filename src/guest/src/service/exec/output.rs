@@ -47,6 +47,19 @@ struct OutputState {
     stderr: StreamState,
 }
 
+/// Why an attach was refused.
+///
+/// Deliberately small: the caller maps this to its own error and never forwards
+/// a `tonic::Status` from here, so building one would size a 128-byte error only
+/// to discard it a frame later.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AttachRefused {
+    /// Another consumer already holds the lease.
+    AlreadyAttached,
+    /// Terminal output is being sealed, so no live attach can start.
+    Finalizing,
+}
+
 struct ConsumerLease {
     claimed: Arc<AtomicBool>,
     updated: watch::Sender<()>,
@@ -83,10 +96,6 @@ struct StreamState {
     last_sequence: Option<u64>,
 }
 
-// Every fallible method here answers a gRPC call, so its error is `tonic::Status`
-// because the boundary requires that type — not because a large error was chosen.
-// Boxing it would only be unboxed again one frame up.
-#[allow(clippy::result_large_err)]
 impl OutputManager {
     pub(crate) fn new(stdout: Option<ExecStdout>, stderr: Option<ExecStderr>) -> Self {
         let stdout_enabled = stdout.is_some();
@@ -143,17 +152,15 @@ impl OutputManager {
         }
     }
 
-    pub(crate) async fn attach(&self) -> Result<AttachStream, Status> {
+    pub(crate) async fn attach(&self) -> Result<AttachStream, AttachRefused> {
         let lease = self.claim_consumer().await?;
         if self.inner.lock().await.sealed {
-            return Err(Status::failed_precondition(
-                "execution output is finalizing",
-            ));
+            return Err(AttachRefused::Finalizing);
         }
         Ok(self.attach_stream(lease))
     }
 
-    pub(crate) async fn attach_retained(&self) -> Result<AttachStream, Status> {
+    pub(crate) async fn attach_retained(&self) -> Result<AttachStream, AttachRefused> {
         let lease = self.claim_consumer().await?;
         Ok(self.attach_stream(lease))
     }
@@ -163,13 +170,13 @@ impl OutputManager {
         Arc::clone(&self.consumer_lease)
     }
 
-    async fn claim_consumer(&self) -> Result<ConsumerLease, Status> {
+    async fn claim_consumer(&self) -> Result<ConsumerLease, AttachRefused> {
         if self
             .consumer_lease
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            return Err(Status::already_exists("Already attached"));
+            return Err(AttachRefused::AlreadyAttached);
         }
 
         let lease = ConsumerLease {
@@ -644,7 +651,7 @@ mod tests {
             .await
             .err()
             .expect("the second Attach must be rejected");
-        assert_eq!(error.code(), tonic::Code::AlreadyExists);
+        assert_eq!(error, AttachRefused::AlreadyAttached);
 
         drop(first);
 
@@ -700,7 +707,7 @@ mod tests {
             .await
             .err()
             .expect("sealed output must reject Attach");
-        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(error, AttachRefused::Finalizing);
     }
 
     #[tokio::test]
