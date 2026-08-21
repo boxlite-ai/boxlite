@@ -6,7 +6,9 @@ use boxlite::experimental::custom_kernel::{KernelFormat, KernelOptions, configur
 use boxlite::experimental::{
     EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
 };
-use boxlite::runtime::options::{NetworkConfig, NetworkMode, PortProtocol, PortSpec, VolumeSpec};
+use boxlite::runtime::options::{
+    NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec, VolumeSpec,
+};
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime, ImageRegistry,
     NetworkSpec,
@@ -649,7 +651,7 @@ impl NetworkFlags {
             Some(value) => value.parse::<NetworkMode>()?,
             None => NetworkMode::Enabled,
         };
-        opts.network = NetworkSpec::try_from(NetworkConfig {
+        opts.network = NetworkSpec::try_from(OutboundNetworkConfig {
             mode,
             allow_net: self.allow_net.clone(),
         })?;
@@ -983,6 +985,7 @@ impl ManagementFlags {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxlite::runtime::options::NetworkSpec;
     use clap::CommandFactory;
     use std::fs;
     use std::path::PathBuf;
@@ -1411,7 +1414,7 @@ mod tests {
             .apply_to(&mut opts)
             .expect_err("unknown mode must error");
 
-        assert!(err.to_string().contains("network.mode"));
+        assert!(err.to_string().contains("network mode"));
     }
 
     fn process_flags_with_entrypoint(entrypoint: Option<&str>) -> ProcessFlags {

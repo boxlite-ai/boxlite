@@ -216,4 +216,13 @@ mod tests {
         let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
         enabled.require_for_options(&options).unwrap();
     }
+
+    #[test]
+    fn privileged_shape_does_not_require_an_experimental_token() {
+        let mut options = BoxOptions::default();
+        options.advanced.privileged = true;
+        ExperimentalFeatures::default()
+            .require_for_options(&options)
+            .expect("privileged mode is a regular box option");
+    }
 }

@@ -34,6 +34,7 @@
 
 import { createHash } from 'node:crypto'
 
+import { CLICKHOUSE_REMOVED_STAGE_CONFIG_KEYS } from './clickhouse.js'
 import { isLocalOnlyDeploymentKey, isStorableStageConfigKey } from './key-policy.js'
 
 /*
@@ -172,6 +173,7 @@ export function hydrateStageConfig({ stored, environment = process.env }: any) {
   const apply: Record<string, string> = {}
   const alreadySet = []
   const unlisted = []
+  const unsupported = CLICKHOUSE_REMOVED_STAGE_CONFIG_KEYS.filter((key) => manifest.has(key))
   // Named by the manifest but absent from the store: bootstrap writes both together, so a gap means
   // the write did not finish or something removed a value afterwards.
   const missing = [...manifest]
@@ -199,7 +201,7 @@ export function hydrateStageConfig({ stored, environment = process.env }: any) {
     apply[key] = stored[key]
   }
 
-  return { apply, alreadySet, unlisted, missing, recordedDigest, actualDigest }
+  return { apply, alreadySet, unlisted, unsupported, missing, recordedDigest, actualDigest }
 }
 
 /*

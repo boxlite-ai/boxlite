@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,8 +24,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
-
-	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -228,7 +227,7 @@ func (p *Proxy) getBoxRunnerInfo(ctx context.Context, boxId string) (*RunnerInfo
 
 	err = p.boxRunnerCache.Set(ctx, boxId, info, 2*time.Minute)
 	if err != nil {
-		log.Errorf("Failed to set runner info in cache: %v", err)
+		slog.ErrorContext(ctx, "Failed to set runner info in cache", "box", boxId, "error", err)
 	}
 
 	return &info, nil
@@ -268,7 +267,7 @@ func (p *Proxy) getBoxPublic(ctx context.Context, boxId string) (*bool, error) {
 	}
 
 	if cacheErr := p.boxPublicCache.Set(ctx, boxId, isPublic, 3*time.Second); cacheErr != nil {
-		log.Errorf("Failed to set box public in cache: %v", cacheErr)
+		slog.ErrorContext(ctx, "Failed to set box public in cache", "error", cacheErr)
 	}
 
 	return &isPublic, nil
@@ -332,7 +331,7 @@ func (p *Proxy) validateAndCache(
 	}
 
 	if err := p.boxAuthKeyValidCache.Set(ctx, cacheKey, isValid, 2*time.Minute); err != nil {
-		log.Errorf("Failed to set box auth key valid in cache: %v", err)
+		slog.ErrorContext(ctx, "Failed to set box auth key valid in cache", "error", err)
 	}
 
 	return &isValid, nil
@@ -433,19 +432,19 @@ func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPoll
 
 	cached, err := p.boxLastActivityUpdateCache.Has(updateCtx, boxId)
 	if err != nil {
-		log.Errorf("failed to check last activity cache for box %s: %v", boxId, err)
+		slog.ErrorContext(updateCtx, "failed to check last activity cache", "box", boxId, "error", err)
 		return
 	}
 
 	if !cached {
 		if _, err := p.apiclient.BoxAPI.UpdateLastActivity(updateCtx, boxId).Execute(); err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				log.Errorf("failed to update last activity for box %s: %v", boxId, err)
+				slog.ErrorContext(updateCtx, "failed to update last activity", "box", boxId, "error", err)
 			}
 			return
 		}
 		if err := p.boxLastActivityUpdateCache.Set(updateCtx, boxId, true, pollInterval-5*time.Second); err != nil {
-			log.Errorf("failed to cache last activity update for box %s: %v", boxId, err)
+			slog.ErrorContext(updateCtx, "failed to cache last activity update", "box", boxId, "error", err)
 		}
 	}
 }

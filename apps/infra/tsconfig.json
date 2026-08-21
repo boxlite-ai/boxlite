@@ -23,6 +23,7 @@
     "deployment/**/*.ts",
     "policies/**/*.ts",
     "runner/**/*.ts",
+    "scripts/**/*.ts",
     "shared/**/*.ts",
     "stack/**/*.ts"
   ]

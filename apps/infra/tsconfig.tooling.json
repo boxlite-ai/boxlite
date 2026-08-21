@@ -1,0 +1,30 @@
+// The subset of this package that type-checks without `sst install`.
+//
+// sst.config.ts and the stack/ modules that build resources reference ambient globals — `sst`,
+// `$app`, `$util` — declared in .sst/platform/config.d.ts, which only exists after `sst install`
+// has run. Without it tsc reports 137 errors here that say nothing about the code, so a gate that
+// ran the full project would be unusable anywhere the install has not happened.
+//
+// What makes dropping them work is the inbound direction: nothing outside that set imports them.
+// (stack/contract.test.ts asserts against them as text, via shared/live-source.ts, rather than
+// importing them.) They do import outward — into artifacts/, deployment/, runner/ — but that only
+// pulls in files this config already checks. So dropping them from the root set drops them from
+// the program, instead of tsc pulling them back in through an import.
+//
+// Listing what to check rather than what to skip keeps this fail-safe: a new stack/ module that
+// needs the SST globals is simply absent here, and `test:apps:infra-config` — which runs the full
+// tsconfig.json in CI after `sst install` — is what covers it.
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "artifacts/**/*.ts",
+    "bootstrap/**/*.ts",
+    "deployment/**/*.ts",
+    "policies/**/*.ts",
+    "runner/**/*.ts",
+    "shared/**/*.ts",
+    "stack/**/*.test.ts",
+    "stack/app.ts",
+    "stack/settings.ts"
+  ]
+}

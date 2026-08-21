@@ -71,11 +71,13 @@ new sst.aws.Service('Proxy', {
     ...(publicOidcIssuer && {
       OIDC_PUBLIC_DOMAIN: publicOidcIssuer,
     }),
+    OTEL_LOGGING_ENABLED: envOr('OTEL_LOGGING_ENABLED', 'true'),
     OTEL_TRACING_ENABLED: envOr('OTEL_TRACING_ENABLED', 'true'),
     OTEL_EXPORTER_OTLP_ENDPOINT: envOr('OTEL_EXPORTER_OTLP_ENDPOINT', otelCollectorOtlpHttpUrl),
   },
   transform: {
-    loadBalancer: (_args: any, opts: any) => {
+    loadBalancer: (lbArgs: any, opts: any) => {
+      lbArgs.loadBalancerType = 'network'
       opts.protect = true
     },
     listener: (_args: any, opts: any) => {
@@ -128,6 +130,9 @@ new sst.aws.Service('PgAdmin', {
     PGADMIN_CONFIG_SERVER_MODE: pgAdminServerMode,
     PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: pgAdminMasterPassword,
   },
+  transform: {
+    loadBalancer: (lbArgs: any) => { lbArgs.loadBalancerType = 'application' },
+  },
 })
 
 // MailDev is an unauthenticated mail catcher with no first-class web auth, so it
@@ -145,6 +150,9 @@ new sst.aws.Service('MailDev', {
   cluster,
   image: IMAGES.maildev,
   loadBalancer: { public: false, rules: [{ listen: '80/http', forward: `${PORTS.MAILDEV_UI}/http` }] },
+  transform: {
+    loadBalancer: (lbArgs: any) => { lbArgs.loadBalancerType = 'application' },
+  },
 })
 
 // ─── 9. CDN ROUTES ───────────────────────────────────────────────────────

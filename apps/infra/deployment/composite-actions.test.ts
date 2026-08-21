@@ -373,11 +373,24 @@ test('a change under .github reaches this suite locally, not only in CI', () => 
     'the ci tag is not filtered out of FMT_COMPONENTS',
   )
 
+  const testMk = readFileSync(join(REPO_ROOT, 'make/test.mk'), 'utf8')
   assert.ok(
-    readFileSync(join(REPO_ROOT, 'make/test.mk'), 'utf8').includes(
-      'test\\:changed\\:ci:\n\t@$(MAKE) test:apps:infra',
-    ),
+    testMk.includes('test\\:changed\\:ci:\n\t@$(MAKE) test:apps:infra'),
     'the ci component tag dispatches to no test target',
+  )
+
+  // Dispatching here is only worth anything if what it reaches also type-checks. `tsx --test`
+  // strips types without checking them, so the suite alone stays green on a signature that no
+  // longer compiles — which is how a TS2559 in this very file reached CI as the only red.
+  // Order, not exact text: the echo lines around these two commands are cosmetic, and pinning
+  // them verbatim would turn a reworded message into a failure that reads like a missing gate.
+  const recipe = testMk.split('test\\:apps\\:infra: _ensure-infra-deps\n')[1]?.split('\n\n')[0]
+  assert.ok(recipe, 'make/test.mk declares no test:apps:infra recipe')
+  const typecheckAt = recipe.indexOf('npm run --silent typecheck:tooling')
+  assert.ok(typecheckAt >= 0, 'test:apps:infra never type-checks the suite it runs')
+  assert.ok(
+    typecheckAt < recipe.indexOf('npm test'),
+    'test:apps:infra runs the suite before type-checking it',
   )
 
   const hooks: any = loadYaml(readFileSync(join(REPO_ROOT, '.pre-commit-config.yaml'), 'utf8'))

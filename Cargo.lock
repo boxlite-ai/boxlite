@@ -556,7 +556,7 @@ dependencies = [
  "nix 0.30.1",
  "notify",
  "oci-client",
- "oci-spec 0.8.4",
+ "oci-spec 0.9.0",
  "parking_lot",
  "pathrs",
  "pkg-config",
@@ -670,7 +670,7 @@ dependencies = [
  "futures",
  "libcontainer",
  "nix 0.29.0",
- "oci-spec 0.6.7",
+ "oci-spec 0.9.0",
  "procfs",
  "rayon",
  "rtnetlink",
@@ -3698,21 +3698,6 @@ dependencies = [
 
 [[package]]
 name = "oci-spec"
-version = "0.6.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdf88ddc01cc6bccbe1044adb6a29057333f523deadcb4953c011a73158cfa5e"
-dependencies = [
- "derive_builder",
- "getset",
- "serde",
- "serde_json",
- "strum 0.26.3",
- "strum_macros 0.26.4",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "oci-spec"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc3da52b83ce3258fbf29f66ac784b279453c2ac3c22c5805371b921ede0d308"
@@ -3723,8 +3708,8 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "strum 0.27.2",
- "strum_macros 0.27.2",
+ "strum",
+ "strum_macros",
  "thiserror 2.0.18",
 ]
 
@@ -3740,8 +3725,8 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "strum 0.27.2",
- "strum_macros 0.27.2",
+ "strum",
+ "strum_macros",
  "thiserror 2.0.18",
 ]
 
@@ -5977,28 +5962,9 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "strum"
-version = "0.26.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
-
-[[package]]
-name = "strum"
 version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
-
-[[package]]
-name = "strum_macros"
-version = "0.26.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
-dependencies = [
- "heck 0.5.0",
- "proc-macro2",
- "quote",
- "rustversion",
- "syn 2.0.117",
-]
 
 [[package]]
 name = "strum_macros"

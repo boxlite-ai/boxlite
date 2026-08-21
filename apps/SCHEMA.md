@@ -27,7 +27,7 @@ control plane only through `runner` telemetry columns and `job` results.
 
 ## Overview
 
-The 22 tables sort into three planes. **Tenancy** is who a caller is and what
+The 21 tables sort into three planes. **Tenancy** is who a caller is and what
 they may do; **fleet** is the microVMs and the machines that run them;
 **metering** is what gets billed.
 
@@ -35,7 +35,6 @@ they may do; **fleet** is the microVMs and the machines that run them;
 flowchart LR
     subgraph tenancy["Tenancy · access · audit"]
         t_org["organization"]
-        t_quota["organization_quota"]
         t_orguser["organization_user"]
         t_role["organization_role"]
         t_invite["organization_invitation"]
@@ -64,7 +63,6 @@ flowchart LR
         t_outbox["box_usage_export_outbox"]
     end
 
-    t_quota ==>|"organizationId"| t_org
     t_orguser ==>|"organizationId"| t_org
     t_role ==>|"organizationId"| t_org
     t_invite ==>|"organizationId"| t_org
@@ -98,20 +96,19 @@ box request is matched against the pool by shape, not by id.
 
 ## Referential integrity
 
-The schema declares **10 foreign keys across 22 tables**. All of them live
+The schema declares **9 foreign keys across 21 tables**. All of them live
 inside the tenancy cluster or on the two tables owned outright by a box.
 Every edge that crosses a plane boundary — including `box.organizationId`,
 the most widely joined column in the system — is a bare `uuid` or
 `character varying` column with no constraint behind it.
 
 The practical consequence: deleting an `organization` row cascades its roles,
-users, invitations, quota, and role assignments, and leaves its boxes, API
+users, invitations, and role assignments, and leaves its boxes, API
 keys, audit entries, regions, volumes, and usage history pointing at an id
 that no longer resolves.
 
 | From                                     | Column(s)                    | To                             | Enforcement | On delete |
 | ---------------------------------------- | ---------------------------- | ------------------------------ | ----------- | --------- |
-| `organization_quota`                     | `organizationId`             | `organization.id`              | foreign key | `CASCADE` |
 | `organization_user`                      | `organizationId`             | `organization.id`              | foreign key | `CASCADE` |
 | `organization_role`                      | `organizationId`             | `organization.id`              | foreign key | `CASCADE` |
 | `organization_invitation`                | `organizationId`             | `organization.id`              | foreign key | `CASCADE` |
@@ -157,7 +154,7 @@ interleaved pair of handlers could otherwise violate all three.
 ### `organization`
 
 The tenant. Carries per-box resource ceilings, rate limits, and suspension
-state inline; aggregate quota lives in `organization_quota`.
+state inline.
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
@@ -183,24 +180,6 @@ state inline; aggregate quota lives in `organization_quota`.
 | `template_deactivation_timeout_minutes` | `integer` | default `20160` |
 | `boxLimitedNetworkEgress` | `boolean` | default `false` |
 | `experimentalConfig` | `jsonb` | nullable |
-| `createdAt` / `updatedAt` | `timestamptz` | |
-
-### `organization_quota`
-
-Aggregate ceiling across all of an organization's boxes, one row per
-organization. Kept in its own table so quota config has an independent
-lifecycle and can gain a scope dimension without reshaping `organization`. A
-missing row means the organization uses the built-in defaults; it is never
-treated as "no access".
-
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `organizationId` | `uuid` | primary key, FK → `organization.id` |
-| `total_cpu_quota` | `integer` | default `64` |
-| `total_memory_quota` | `integer` | default `256` |
-| `total_disk_quota` | `integer` | default `512` |
-| `total_gpu_quota` | `integer` | default `0` |
-| `max_concurrent_boxes` | `integer` | default `50` |
 | `createdAt` / `updatedAt` | `timestamptz` | |
 
 ### `user`
@@ -682,8 +661,8 @@ each other, and any join between these tables needs an explicit cast today.
 | `box_usage_periods_archive.organizationId` | `character varying` | `organization.id` | `uuid` |
 | `job.runnerId` | `character varying` | `runner.id` | `uuid` |
 
-The other nine organization-referencing columns — on `box`, `volume`,
-`region`, `api_key`, `organization_quota`, `organization_user`,
+The other eight organization-referencing columns — on `box`, `volume`,
+`region`, `api_key`, `organization_user`,
 `organization_role`, `organization_invitation`, and
 `organization_role_assignment` — are `uuid`, as are `box.runnerId`,
 `box.prevRunnerId`, and `box_migration.runnerId`.

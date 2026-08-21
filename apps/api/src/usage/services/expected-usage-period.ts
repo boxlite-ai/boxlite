@@ -57,11 +57,9 @@ const RESOURCE_EPSILON = 1e-6
  * nothing at all otherwise.
  *
  * This is the single source of truth for the state -> period rule, shared by
- * the event handler, the daily roll-over and the reconcile pass. It deliberately
- * does not reuse `BOX_STATES_CONSUMING_COMPUTE`: quota counts CREATING and
- * STARTING because the runner has already pinned the resources, while billing
- * does not charge for a box the tenant cannot use yet. The two answer different
- * questions — see the note in usage.service.ts.
+ * the event handler, the daily roll-over and the reconcile pass. Transitional
+ * states do not open a period because billing does not charge for a box the
+ * tenant cannot use yet.
  */
 export function expectedOpenPeriod(box: BillableBox | null | undefined): ExpectedOpenPeriod {
   if (!box) {

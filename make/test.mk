@@ -1,4 +1,4 @@
-PHONY_TARGETS += test test\:unit\:guest test\:guest-perms test\:guest-rootfs _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
+PHONY_TARGETS += test test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -20,6 +20,7 @@ export NEXTEST_FILTER_EXPR
 NEXTEST_FILTER   = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',))
 NEXTEST_CLI_FILTER = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',-E 'not binary(stress_disk)'))
 CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),)
+REST_CLIENT_CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),rest::client::tests::)
 PYTEST_FILTER    = $(if $(FILTER),-k '$(FILTER)',)
 VITEST_FILTER    = $(if $(FILTER),-t '$(FILTER)',)
 CTEST_FILTER     = $(if $(FILTER),-R '$(FILTER)',)
@@ -84,12 +85,18 @@ endef
 test:
 	@$(MAKE) test:changed
 
-# Repo-local BoxLite diagram skill validator. This suite is deterministic: it
-# uses local stand-ins for gh and Mermaid CLI while exercising the real parser,
-# source, diff, and cross-view validation code.
+test\:setup\:submodules:
+	@bash $(SCRIPT_DIR)/test/test-setup-submodules.sh
+
+# Pinned BoxLite diagram skill validator. This suite is deterministic: it uses
+# local stand-ins for gh and Mermaid CLI while exercising the real parser,
+# source, diff, and cross-view validation code from agent-tooling.
 test\:skill\:boxlite-diagrams:
 	@echo "🧪 Running BoxLite diagrams skill validator tests..."
-	@python3 -m unittest discover -s .agents/skills/boxlite-diagrams/tests -v
+	@./.agent-tooling/install.sh >/dev/null
+	@hooks_path="$$(git config --get core.hooksPath)"; \
+	tooling_root="$$(cd "$$hooks_path/.." && pwd)"; \
+	python3 -m unittest discover -s "$$tooling_root/.agents/skills/boxlite-diagrams/tests" -v
 
 # Smart test: only test components with changes, fall back to full matrix.
 test\:changed:
@@ -217,6 +224,7 @@ test\:unit\:rust:
 		cargo test -p boxlite --no-default-features --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 	fi; \
+	cargo test -p boxlite --no-default-features --features rest --lib -- --test-threads=1 $(REST_CLIENT_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
@@ -286,14 +294,14 @@ test\:guest-perms:
 		exit 1; \
 	fi
 
-# Build and structurally qualify the minimal guest rootfs. Native x86_64 release
-# also exercises verifier rejection paths; no guest executable is run.
-test\:guest-rootfs: export _BOXLITE_GUEST_TARGET_ARG := $(value GUEST_TARGET)
-test\:guest-rootfs: export _BOXLITE_PROFILE_ARG := $(value PROFILE)
-test\:guest-rootfs: guest
+# Build and qualify the standalone guest artifacts. Native x86_64 release also
+# exercises verifier rejection paths; matching native Linux runs tool smoke tests.
+test\:guest-artifacts: export _BOXLITE_GUEST_TARGET_ARG := $(value GUEST_TARGET)
+test\:guest-artifacts: export _BOXLITE_PROFILE_ARG := $(value PROFILE)
+test\:guest-artifacts:
 	@target="$${_BOXLITE_GUEST_TARGET_ARG:-$$(bash "$$PWD/scripts/util.sh" --target)}"; \
 	profile="$${_BOXLITE_PROFILE_ARG:-release}"; \
-	bash "$$PWD/scripts/test/test-guest-rootfs.sh" --target "$$target" --profile "$$profile"
+	bash "$$PWD/scripts/test/test-guest-artifacts.sh" --target "$$target" --profile "$$profile"
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
 test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)
@@ -319,6 +327,14 @@ test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:ru
 		cargo test -p boxlite --features krun,gvproxy --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(CARGOTEST_FILTER); \
 	fi
+
+# Manual release-mode benchmark. Kept out of every aggregate and CI suite.
+test\:perf\:import-export: runtime
+	@echo "📊 Running manual 1 GiB import/export benchmark (release, serial)..."
+	@echo "   Commit: $$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+	@echo "   Ensure at least 8 GiB of free disk space and no competing I/O workload."
+	@cargo test --release -p boxlite --features krun,gvproxy \
+		--test import_export_benchmark -- --ignored --test-threads=1 --nocapture
 
 # BoxLite C SDK unit tests.
 test\:unit\:ffi:
@@ -445,7 +461,12 @@ _ensure-infra-deps:
 		cd apps/infra && npm ci --no-audit --no-fund; \
 	fi
 
+# Type-check first: the suite runs under `tsx --test`, which strips types without checking them, so
+# a signature change that no longer compiles still leaves every test green. tsconfig.tooling.json
+# is the subset that checks without `sst install`; test:apps:infra-config below covers the rest.
 test\:apps\:infra: _ensure-infra-deps
+	@echo "🧪 Type-checking infrastructure scripts..."
+	@cd apps/infra && npm run --silent typecheck:tooling
 	@echo "🧪 Running infrastructure script tests..."
 	@cd apps/infra && npm test
 

@@ -8,7 +8,7 @@ jest.mock('./box/runner-adapter/runnerAdapter', () => ({
 const { AppService } = require('./app.service') as typeof import('./app.service')
 
 describe('AppService admin bootstrap', () => {
-  it('syncs existing admin organization quota from config', async () => {
+  it('preserves the existing admin organization API key', async () => {
     const configValues: Record<string, unknown> = {
       'admin.apiKey': 'boxlite-local-admin-key',
       'defaultRegion.id': 'us',

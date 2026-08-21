@@ -133,11 +133,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
             await this.openUsagePeriodFor(event.box, event.newState)
             break
           }
-          // Billing stops charging compute the moment a stop is requested, while
-          // quota keeps counting it (BOX_STATES_CONSUMING_COMPUTE includes
-          // STOPPING) because the runner has not released cpu/memory yet. The two
-          // answer different questions; do not "reconcile" them without a pricing
-          // decision.
+          // Billing stops charging compute the moment a stop is requested.
           case BoxState.STOPPING:
             await this.closeUsagePeriod(event.box.id)
             signal.throwIfAborted()

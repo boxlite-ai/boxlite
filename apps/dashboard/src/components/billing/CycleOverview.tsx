@@ -3,73 +3,78 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { OrganizationTier, OrganizationWallet, Tier } from '@/billing-api'
+import { OrganizationPlan, OrganizationWallet, Plan } from '@/billing-api'
 import { BRAND, Metric, Panel } from '@/components/ascii'
-import { formatAmount } from '@/lib/utils'
+import { formatAmount, formatWholeDollars } from '@/lib/utils'
 
 /**
- * Active-plan banner: a header strip naming the current tier, then the cycle
- * figures — prepaid balance, wallet spend since the last top-up, and tier
- * expiry. The plan's own quota meter and billing cycle live on the
- * Usage tab's This Cycle card (the `plan` block on the tier read);
- * this card keeps the tier-ladder view of the same wallet.
+ * Active-plan banner: a header strip naming the current plan, then the cycle
+ * figures from the organization plan and wallet. Catalog data is joined by
+ * plan id for the self-serve price and cosmetic tier label; negotiated plans
+ * remain honest when they have no public catalog row.
  */
-
-function daysUntil(date: Date): number {
-  return Math.max(0, Math.ceil((date.getTime() - Date.now()) / 86_400_000))
-}
 
 export function CycleOverview({
   wallet,
-  organizationTier,
-  currentTier,
+  organizationPlan,
+  catalogPlan,
+  catalogIndex,
 }: {
   wallet: OrganizationWallet
-  organizationTier?: OrganizationTier | null
-  currentTier?: Tier
+  organizationPlan?: OrganizationPlan | null
+  catalogPlan?: Plan
+  catalogIndex?: number
 }) {
-  const spentCents = wallet.balanceCents - wallet.ongoingBalanceCents
-  const expiresInDays = organizationTier?.expiresAt ? daysUntil(organizationTier.expiresAt) : null
-  const ceilings = currentTier
-    ? `${currentTier.tierLimit.concurrentCPU} vCPU · ${currentTier.tierLimit.concurrentRAMGiB} GiB RAM · ${currentTier.tierLimit.concurrentDiskGiB} GiB disk`
-    : null
+  const tierLabel = catalogIndex === undefined ? 'Plan' : `T${catalogIndex + 1}`
 
   return (
     <Panel>
       {/* Header strip */}
       <div className="flex flex-wrap items-center gap-4 px-[22px] py-5">
         <div className="flex items-center gap-3">
-          {organizationTier && (
+          {organizationPlan && (
             <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
-              <span style={{ color: BRAND }}>▸</span> T{organizationTier.tier}
+              <span style={{ color: BRAND }}>▸</span> {tierLabel}
             </span>
           )}
           <span className="font-mono text-[18px] font-semibold tracking-tight text-foreground">
-            {organizationTier ? `Tier ${organizationTier.tier}` : 'No tier'}
+            {organizationPlan ? organizationPlan.planName : 'No plan'}
             <span className="ml-1 animate-pulse text-muted-foreground">▮</span>
           </span>
-          {organizationTier && (
+          {organizationPlan && (
             <span className="bg-foreground px-2 py-0.5 font-mono text-[10px] uppercase tracking-[1px] text-background">
-              active
+              {organizationPlan.status}
             </span>
           )}
         </div>
-        {ceilings && <span className="ml-auto font-mono text-[11px] text-muted-foreground">{ceilings}</span>}
+        {catalogPlan?.priceMonthlyCents != null && (
+          <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+            {formatWholeDollars(catalogPlan.priceMonthlyCents)}/mo
+          </span>
+        )}
       </div>
 
       {/* Cycle figures */}
       <div className="grid grid-cols-2 gap-5 border-t border-border px-[22px] py-5 sm:flex sm:flex-row sm:gap-14">
-        <Metric label="Wallet balance" value={formatAmount(wallet.ongoingBalanceCents)} sub="prepaid balance" />
         <Metric
-          label="Spent this month"
-          value={formatAmount(spentCents)}
-          sub={`of ${formatAmount(wallet.balanceCents)} added`}
+          label="Subscription"
+          value={organizationPlan?.planName ?? 'No plan'}
+          sub={
+            catalogPlan?.priceMonthlyCents != null
+              ? `${formatWholeDollars(catalogPlan.priceMonthlyCents)}/mo`
+              : undefined
+          }
         />
-        {organizationTier && (
+        <Metric label="Wallet balance" value={formatAmount(wallet.ongoingBalanceCents)} />
+        {organizationPlan && (
           <Metric
-            label={expiresInDays === null ? 'Tier' : 'Tier expires in'}
-            value={expiresInDays === null ? `T${organizationTier.tier}` : `${expiresInDays}`}
-            sub={expiresInDays === null ? 'no expiry set' : 'days'}
+            label="Quota consumed"
+            value={formatAmount(organizationPlan.quotaConsumedCents)}
+            sub={
+              organizationPlan.includedQuotaCents == null
+                ? 'unlimited quota'
+                : `/ ${formatAmount(organizationPlan.includedQuotaCents)}`
+            }
           />
         )}
       </div>

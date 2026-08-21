@@ -1,1 +1,0 @@
-../../.agents/hooks/run-verdict-audit.sh

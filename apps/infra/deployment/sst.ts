@@ -297,7 +297,7 @@ function loadStageConfig(stage: string) {
     process.exit(1)
   }
 
-  const { apply, alreadySet, unlisted, missing, recordedDigest, actualDigest } = hydrateStageConfig({ stored })
+  const { apply, alreadySet, unlisted, unsupported, missing, recordedDigest, actualDigest } = hydrateStageConfig({ stored })
   // A `secret load` that was interrupted leaves some keys new and some old, with every manifest name
   // still present — undetectable from the manifest alone, and it would deploy a configuration that
   // never existed as a whole.
@@ -326,6 +326,15 @@ function loadStageConfig(stage: string) {
       `sst-with-cloudflare: the ${stage} stage configuration is incomplete — ${STAGE_CONFIG_MANIFEST_KEY} ` +
         `names ${missing.join(', ')} but the store holds no value for them; rerun ` +
         `\`npm run bootstrap -- --stage ${stage}\``,
+    )
+    process.exit(1)
+  }
+
+  if (unsupported.length > 0) {
+    const subject = unsupported.length === 1 ? `${unsupported[0]} is` : `${unsupported.join(', ')} are`
+    console.error(
+      `sst-with-cloudflare: ${subject} no longer supported; remove ${unsupported.join(', ')} from ` +
+        `apps/infra/.env and rerun \`npm run bootstrap -- --stage ${stage}\``,
     )
     process.exit(1)
   }

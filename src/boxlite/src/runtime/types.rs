@@ -422,7 +422,8 @@ impl BoxInfo {
         use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
         use crate::runtime::options::RootfsSpec;
 
-        let network_config = NetworkConfig::from(&config.options.network);
+        let network_config =
+            NetworkConfig::from_specs(&config.options.network, &config.options.inbound_network);
 
         Self {
             id: config.id.clone(),
@@ -438,8 +439,8 @@ impl BoxInfo {
             cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
             network: Some(NetworkInfo {
-                mode: network_config.mode,
-                allow_net: network_config.allow_net,
+                mode: network_config.outbound.mode,
+                allow_net: network_config.outbound.allow_net,
                 published_ports: crate::litebox::ports::resolved_from_state(config, state),
             }),
             labels: HashMap::new(),

@@ -67,7 +67,7 @@ test('all bounded asset probes finish before the first Auth0 write', async () =>
 
   const result = await deployer.apply(INPUT)
   const firstWrite = events.findIndex((event) => event.startsWith('write:'))
-  const lastValidation = events.findLastIndex((event) => event.startsWith('validated:'))
+  const lastValidation = events.map((event) => event.startsWith('validated:')).lastIndexOf(true)
   assert.equal(events.filter((event) => event.startsWith('fetch:')).length, 3)
   assert.equal(events.filter((event) => event.startsWith('validated:')).length, 3)
   assert.equal(events.filter((event) => event.startsWith('write:')).length, 4)

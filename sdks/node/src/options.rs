@@ -4,8 +4,9 @@ use std::time::Duration;
 use boxlite::runtime::advanced_options::{AdvancedBoxOptions, HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, NetworkConfig, NetworkMode,
-    NetworkSpec, PortProtocol, PortSpec, RegistryTransport, RootfsSpec, Secret, VolumeSpec,
+    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, NetworkMode, NetworkSpec,
+    OutboundNetworkConfig, PortProtocol, PortSpec, RegistryTransport, RootfsSpec, Secret,
+    VolumeSpec,
 };
 use napi::bindgen_prelude::Error;
 use napi_derive::napi;
@@ -392,7 +393,7 @@ impl TryFrom<JsNetworkSpec> for NetworkSpec {
 
     fn try_from(js_spec: JsNetworkSpec) -> Result<Self, Self::Error> {
         let mode = js_spec.mode.parse::<NetworkMode>()?;
-        NetworkSpec::try_from(NetworkConfig {
+        NetworkSpec::try_from(OutboundNetworkConfig {
             mode,
             allow_net: js_spec.allow_net.unwrap_or_default(),
         })
@@ -482,6 +483,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             rootfs,
             volumes,
             network,
+            inbound_network: Default::default(),
             ports,
             auto_remove,
             advanced: AdvancedBoxOptions {
@@ -613,6 +615,7 @@ impl From<&JsBoxliteRestOptions> for boxlite::BoxliteRestOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxlite::runtime::options::NetworkSpec;
 
     fn js_registry(host: &str) -> JsImageRegistry {
         JsImageRegistry {
@@ -910,6 +913,9 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(err.to_string().contains("network.mode=\"disabled\""));
+        assert!(
+            err.to_string()
+                .contains("network.outbound.mode=\"disabled\"")
+        );
     }
 }

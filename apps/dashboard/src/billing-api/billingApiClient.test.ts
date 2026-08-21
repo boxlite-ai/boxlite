@@ -18,12 +18,9 @@ afterEach(() => {
   axios.defaults.adapter = undefined as never
 })
 
-describe('getOrganizationTier plan hydration', () => {
-  it('turns the cycle bounds into Dates and passes the quota fields through', async () => {
+describe('getOrganizationPlan', () => {
+  it('unwraps the plan envelope and turns the cycle bounds into Dates', async () => {
     const api = serve({
-      tier: 2,
-      largestSuccessfulPaymentCents: 2500,
-      hasVerifiedBusinessEmail: true,
       plan: {
         planId: 'pro',
         planName: 'Pro',
@@ -35,10 +32,10 @@ describe('getOrganizationTier plan hydration', () => {
         quotaRemainingCents: 18750,
       },
     })
-    const tier = await api.getOrganizationTier('org-1')
-    expect(tier.plan?.cycleFrom).toEqual(new Date('2026-08-05T00:00:00.000Z'))
-    expect(tier.plan?.cycleTo).toEqual(new Date('2026-09-05T00:00:00.000Z'))
-    expect(tier.plan).toMatchObject({
+    const plan = await api.getOrganizationPlan('org-1')
+    expect(plan?.cycleFrom).toEqual(new Date('2026-08-05T00:00:00.000Z'))
+    expect(plan?.cycleTo).toEqual(new Date('2026-09-05T00:00:00.000Z'))
+    expect(plan).toMatchObject({
       planId: 'pro',
       includedQuotaCents: 25000,
       quotaConsumedCents: 6250,
@@ -46,11 +43,43 @@ describe('getOrganizationTier plan hydration', () => {
     })
   })
 
-  it('leaves the block absent for an unsubscribed organization', async () => {
-    const api = serve({ tier: 1, largestSuccessfulPaymentCents: 0, hasVerifiedBusinessEmail: true })
-    const tier = await api.getOrganizationTier('org-1')
-    expect(tier.plan).toBeUndefined()
-    expect(tier).not.toHaveProperty('plan')
+  it('hydrates dueAt when the plan is past due', async () => {
+    const api = serve({
+      plan: {
+        planId: 'pro',
+        planName: 'Pro',
+        status: 'past_due',
+        cycleFrom: '2026-08-05T00:00:00.000Z',
+        cycleTo: '2026-09-05T00:00:00.000Z',
+        includedQuotaCents: 25000,
+        quotaConsumedCents: 6250,
+        quotaRemainingCents: 18750,
+        dueAt: '2026-08-20T00:00:00.000Z',
+        amountDueCents: 14900,
+      },
+    })
+    const plan = await api.getOrganizationPlan('org-1')
+    expect(plan?.dueAt).toEqual(new Date('2026-08-20T00:00:00.000Z'))
+  })
+
+  it('returns null for an organization with no live plan (the {} envelope, not a bare null)', async () => {
+    const api = serve({})
+    const plan = await api.getOrganizationPlan('org-1')
+    expect(plan).toBeNull()
+  })
+})
+
+describe('upgradePlan', () => {
+  it('returns the checkout URL when a first subscribe needs one', async () => {
+    const api = serve({ url: 'https://checkout.stripe.com/pay/cs_test_123' })
+    const url = await api.upgradePlan('org-1', 'pro')
+    expect(url).toBe('https://checkout.stripe.com/pay/cs_test_123')
+  })
+
+  it('returns undefined when an in-place change applies with no redirect', async () => {
+    const api = serve(undefined)
+    const url = await api.upgradePlan('org-1', 'max')
+    expect(url).toBeUndefined()
   })
 })
 
@@ -80,5 +109,31 @@ describe('getUsageFundingSeries', () => {
         fromWalletCents: 15,
       },
     ])
+  })
+})
+
+describe('PR 829 real-data parity: settlement invoices', () => {
+  it('keeps only the read surface that current Commerce supports', async () => {
+    const response = {
+      items: [
+        {
+          id: 'invoice-1',
+          number: 'INV-000001',
+          sequentialId: 1,
+          chargedAt: '2026-08-18T12:00:00.000Z',
+          totalAmountCents: 1_250,
+          quotaCoveredCents: 1_000,
+          voided: false,
+        },
+      ],
+      totalItems: 1,
+      totalPages: 1,
+    }
+    const api = serve(response)
+
+    await expect(api.listInvoices('org-1', 2, 25)).resolves.toEqual(response)
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/invoices?page=2&perPage=25')
+    expect(api).not.toHaveProperty('createInvoicePaymentUrl')
+    expect(api).not.toHaveProperty('voidInvoice')
   })
 })

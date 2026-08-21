@@ -76,7 +76,11 @@ export class ObjectStorageService {
         },
       }
 
-      const isMinioServer = s3Config.endpoint.includes('minio')
+      // A host process commonly reaches a local MinIO through 127.0.0.1, so
+      // the S3 endpoint hostname itself need not contain "minio". MinIO's STS
+      // route is the stable discriminator in that setup.
+      const isMinioServer =
+        s3Config.endpoint.includes('minio') || new URL(s3Config.stsEndpoint).pathname.startsWith('/minio/')
 
       if (isMinioServer) {
         return this.getMinioCredentials(s3Config)

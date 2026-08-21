@@ -329,6 +329,13 @@ pub struct BoxOptions {
     pub rootfs: RootfsSpec,
     pub volumes: Vec<VolumeSpec>,
     pub network: NetworkSpec,
+    /// Inbound reachability of the services this box exposes. A sibling of
+    /// `network` rather than a field inside it: the two directions are
+    /// independent, and `network` keeps its pre-split meaning (egress
+    /// only). Same type as `network` — both directions have identical
+    /// shape.
+    #[serde(default)]
+    pub inbound_network: NetworkSpec,
     /// Explicit host publication for the local runtime.
     ///
     /// Remote runtimes reject port mappings; use a box network tunnel for
@@ -525,6 +532,7 @@ impl Default for BoxOptions {
             rootfs: RootfsSpec::default(),
             volumes: Vec::new(),
             network: NetworkSpec::default(),
+            inbound_network: NetworkSpec::default(),
             ports: Vec::new(),
             auto_remove: default_auto_remove(),
             auto_stop: None,
@@ -579,11 +587,24 @@ impl BoxOptions {
             ));
         }
 
+        self.advanced.validate_privileged_capability_conflict()?;
         self.advanced.capabilities.validate()?;
 
         if matches!(self.network, NetworkSpec::Disabled) && !self.ports.is_empty() {
             return Err(boxlite_shared::errors::BoxliteError::Config(
-                "ports require network.mode=\"enabled\"".to_string(),
+                "ports require network.outbound.mode=\"enabled\"".to_string(),
+            ));
+        }
+
+        // Wire conversions already reject this (the InboundNetworkConfig
+        // TryFrom), but FFI callers (C/Go) set the spec directly — catch
+        // them at create. See try_from for the rationale.
+        if matches!(&self.inbound_network, NetworkSpec::Enabled { allow_net } if !allow_net.is_empty())
+        {
+            return Err(boxlite_shared::errors::BoxliteError::Config(
+                "inbound.allow_net is not supported yet; remove it \
+                 (inbound access is controlled by mode only)"
+                    .to_string(),
             ));
         }
 
@@ -654,7 +675,7 @@ impl std::str::FromStr for NetworkMode {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
             _ => Err(boxlite_shared::errors::BoxliteError::Config(format!(
-                "invalid network.mode {:?}. Expected \"enabled\" or \"disabled\".",
+                "invalid network mode {:?}. Expected \"enabled\" or \"disabled\".",
                 value
             ))),
         }
@@ -665,22 +686,44 @@ impl std::str::FromStr for NetworkMode {
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NetworkConfig {
+    #[serde(default)]
+    pub outbound: OutboundNetworkConfig,
+    #[serde(default)]
+    pub inbound: InboundNetworkConfig,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboundNetworkConfig {
     pub mode: NetworkMode,
     #[serde(default)]
     pub allow_net: Vec<String>,
 }
 
-impl TryFrom<NetworkConfig> for NetworkSpec {
+/// Wire shape for the inbound direction, aligned field-for-field with
+/// [`OutboundNetworkConfig`]. `Enabled` means services the box exposes are
+/// publicly reachable; `Disabled` means they are private (unreachable from
+/// outside the box). `allow_net` exists for shape symmetry with outbound but
+/// is rejected when non-empty — no layer enforces an inbound allowlist yet.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InboundNetworkConfig {
+    pub mode: NetworkMode,
+    #[serde(default)]
+    pub allow_net: Vec<String>,
+}
+
+impl TryFrom<OutboundNetworkConfig> for NetworkSpec {
     type Error = boxlite_shared::errors::BoxliteError;
 
-    fn try_from(config: NetworkConfig) -> Result<Self, Self::Error> {
+    fn try_from(config: OutboundNetworkConfig) -> Result<Self, Self::Error> {
         match config.mode {
             NetworkMode::Enabled => Ok(Self::Enabled {
                 allow_net: config.allow_net,
             }),
             NetworkMode::Disabled if !config.allow_net.is_empty() => {
                 Err(boxlite_shared::errors::BoxliteError::Config(
-                    "network.mode=\"disabled\" is incompatible with allow_net. \
+                    "network.outbound.mode=\"disabled\" is incompatible with allow_net. \
                      Remove allow_net or use mode=\"enabled\"."
                         .to_string(),
                 ))
@@ -690,25 +733,67 @@ impl TryFrom<NetworkConfig> for NetworkSpec {
     }
 }
 
-impl From<&NetworkSpec> for NetworkConfig {
-    fn from(spec: &NetworkSpec) -> Self {
-        match spec {
-            NetworkSpec::Enabled { allow_net } => Self {
-                mode: NetworkMode::Enabled,
-                allow_net: allow_net.clone(),
-            },
-            NetworkSpec::Disabled => Self {
-                mode: NetworkMode::Disabled,
+impl TryFrom<InboundNetworkConfig> for NetworkSpec {
+    type Error = boxlite_shared::errors::BoxliteError;
+
+    fn try_from(config: InboundNetworkConfig) -> Result<Self, Self::Error> {
+        // No runtime sink enforces an inbound allowlist yet — reachability is
+        // gated purely on inbound mode — so accepting one would hand the
+        // caller a box that is fully open while they believe it is
+        // restricted. Reject under either mode; lift once enforcement lands.
+        if !config.allow_net.is_empty() {
+            return Err(boxlite_shared::errors::BoxliteError::Config(
+                "inbound.allow_net is not supported yet; remove it \
+                 (inbound access is controlled by mode only)"
+                    .to_string(),
+            ));
+        }
+        Ok(match config.mode {
+            NetworkMode::Enabled => Self::Enabled {
                 allow_net: Vec::new(),
             },
+            NetworkMode::Disabled => Self::Disabled,
+        })
+    }
+}
+
+impl From<&NetworkSpec> for OutboundNetworkConfig {
+    fn from(spec: &NetworkSpec) -> Self {
+        let (mode, allow_net) = match spec {
+            NetworkSpec::Enabled { allow_net } => (NetworkMode::Enabled, allow_net.clone()),
+            NetworkSpec::Disabled => (NetworkMode::Disabled, Vec::new()),
+        };
+        Self { mode, allow_net }
+    }
+}
+
+impl From<&NetworkSpec> for InboundNetworkConfig {
+    fn from(spec: &NetworkSpec) -> Self {
+        let (mode, allow_net) = match spec {
+            NetworkSpec::Enabled { allow_net } => (NetworkMode::Enabled, allow_net.clone()),
+            NetworkSpec::Disabled => (NetworkMode::Disabled, Vec::new()),
+        };
+        Self { mode, allow_net }
+    }
+}
+
+impl NetworkConfig {
+    /// Assemble the wire shape from the two independent directions.
+    pub fn from_specs(outbound: &NetworkSpec, inbound: &NetworkSpec) -> Self {
+        Self {
+            outbound: outbound.into(),
+            inbound: inbound.into(),
         }
     }
 }
 
 /// Internal Rust network configuration for a box.
 ///
-/// Controls whether the box has network access and what hosts it can reach.
+/// Separates outbound guest egress from inbound service access policy so future
+/// inbound restrictions (for example CIDR allowlists) can evolve without
+/// overloading outbound network mode.
 ///
+/// Outbound examples:
 /// - `Enabled { allow_net: [] }` — full internet access (default)
 /// - `Enabled { allow_net: ["api.openai.com"] }` — only listed hosts reachable
 /// - `Disabled` — no network interface at all
@@ -732,6 +817,11 @@ impl From<&NetworkSpec> for NetworkConfig {
 ///
 /// The gateway's DNS resolver and DHCP are unaffected: they are internal
 /// services, not egress.
+/// Guest egress policy. Untouched by the outbound/inbound split — same
+/// name, same variants, same wire form — so existing literals, match arms
+/// and persisted box configs keep working. It is the outbound half of
+/// `BoxOptions::network`; the inbound direction lives in the sibling
+/// field `BoxOptions::inbound_network`, which reuses this same type.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum NetworkSpec {
     /// Network enabled. Empty `allow_net` = full access.
@@ -1285,6 +1375,73 @@ mod tests {
     }
 
     #[test]
+    fn privileged_option_roundtrips() {
+        let stored: BoxOptions =
+            serde_json::from_str(r#"{"advanced":{"privileged":true}}"#).unwrap();
+        assert!(stored.advanced.privileged);
+        assert_eq!(
+            serde_json::to_value(stored).unwrap()["advanced"]["privileged"],
+            serde_json::Value::Bool(true)
+        );
+
+        let legacy: BoxOptions = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.advanced.privileged);
+    }
+
+    #[test]
+    fn privileged_rejects_explicit_capability_overrides() {
+        let options: BoxOptions = serde_json::from_str(
+            r#"{"advanced":{"privileged":true,"capabilities":{"add":["SYS_ADMIN"],"drop":["NET_RAW"]}}}"#,
+        )
+        .unwrap();
+
+        let error = options
+            .advanced
+            .validate_privileged_capability_conflict()
+            .expect_err("privileged capability overrides must be rejected");
+
+        assert!(error.to_string().contains("cannot be combined"));
+    }
+
+    #[test]
+    fn privileged_canonical_capability_shape_remains_accepted() {
+        let mut options: BoxOptions = serde_json::from_str(
+            r#"{"advanced":{"privileged":true,"capabilities":{"add":["ALL"],"drop":[]}}}"#,
+        )
+        .unwrap();
+
+        options
+            .advanced
+            .validate_privileged_capability_conflict()
+            .expect("normalized privileged shape should be accepted");
+        options.advanced.normalize_privileged();
+
+        assert_eq!(options.advanced.capabilities.add, ["ALL"]);
+        assert!(options.advanced.capabilities.drop.is_empty());
+    }
+
+    #[test]
+    fn privileged_security_is_resolved_before_guest_init() {
+        let options = BoxOptions {
+            advanced: crate::AdvancedBoxOptions {
+                privileged: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resolved = options
+            .advanced
+            .resolve_container_security()
+            .expect("privileged security should resolve");
+
+        assert!(resolved.linux.readonly_paths.is_empty());
+        assert!(!resolved.mount.options.contains(&"rro".to_string()));
+        assert_eq!(resolved.capabilities.add, ["ALL"]);
+        assert!(resolved.capabilities.drop.is_empty());
+    }
+
+    #[test]
     fn test_box_options_roundtrip() {
         let opts = BoxOptions {
             auto_delete: Some(0),
@@ -1314,12 +1471,12 @@ mod tests {
     #[test]
     fn test_network_mode_from_str_rejects_invalid_values() {
         let err = "broken".parse::<NetworkMode>().unwrap_err().to_string();
-        assert!(err.contains("invalid network.mode"));
+        assert!(err.contains("invalid network mode"));
     }
 
     #[test]
     fn test_network_config_enabled_converts_to_internal_network_spec() {
-        let spec = NetworkSpec::try_from(NetworkConfig {
+        let spec = NetworkSpec::try_from(OutboundNetworkConfig {
             mode: NetworkMode::Enabled,
             allow_net: vec!["example.com".to_string()],
         })
@@ -1334,22 +1491,64 @@ mod tests {
     }
 
     #[test]
+    fn test_inbound_config_converts_to_internal_spec() {
+        let spec = NetworkSpec::try_from(InboundNetworkConfig {
+            mode: NetworkMode::Disabled,
+            allow_net: Vec::new(),
+        })
+        .unwrap();
+        assert!(matches!(spec, NetworkSpec::Disabled));
+    }
+
+    #[test]
+    fn test_network_config_rejects_unsupported_inbound_allow_net() {
+        // No layer enforces an inbound allowlist yet; a non-empty one is
+        // rejected outright rather than accepted as a silent no-op.
+        let err = NetworkSpec::try_from(InboundNetworkConfig {
+            mode: NetworkMode::Enabled,
+            allow_net: vec!["10.0.0.0/8".to_string()],
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("not supported yet"));
+    }
+
+    #[test]
+    fn test_sanitize_rejects_unsupported_inbound_allow_net() {
+        // FFI callers (C/Go) set the spec directly, bypassing try_from —
+        // sanitize() is the create-time backstop for those paths.
+        let opts = BoxOptions {
+            inbound_network: NetworkSpec::Enabled {
+                allow_net: vec!["10.0.0.0/8".to_string()],
+            },
+            ..Default::default()
+        };
+        let err = opts.sanitize().unwrap_err().to_string();
+        assert!(err.contains("not supported yet"));
+    }
+
+    #[test]
     fn test_network_config_disabled_rejects_allow_net() {
-        let err = NetworkSpec::try_from(NetworkConfig {
+        let err = NetworkSpec::try_from(OutboundNetworkConfig {
             mode: NetworkMode::Disabled,
             allow_net: vec!["example.com".to_string()],
         })
         .unwrap_err()
         .to_string();
 
-        assert!(err.contains("network.mode=\"disabled\""));
+        assert!(err.contains("network.outbound.mode=\"disabled\""));
     }
 
     #[test]
     fn test_network_spec_converts_to_public_network_config() {
-        let config = NetworkConfig::from(&NetworkSpec::Disabled);
-        assert_eq!(config.mode, NetworkMode::Disabled);
-        assert!(config.allow_net.is_empty());
+        let config = NetworkConfig::from_specs(
+            &NetworkSpec::Disabled,
+            &NetworkSpec::Enabled {
+                allow_net: Vec::new(),
+            },
+        );
+        assert_eq!(config.outbound.mode, NetworkMode::Disabled);
+        assert!(config.outbound.allow_net.is_empty());
+        assert_eq!(config.inbound.mode, NetworkMode::Enabled);
     }
 
     #[test]

@@ -37,7 +37,7 @@ russh-sftp = "2.3.0"
 procfs = "0.18.0"
 tokio-vsock = { version = "0.7", features = ["tonic012"] }
 libcontainer = { version = "0.6", default-features = false, features = ["v2", "libseccomp"] }
-oci-spec = "0.6"
+oci-spec = "0.9"
 rtnetlink = "0.14"
 futures = "0.3"
 

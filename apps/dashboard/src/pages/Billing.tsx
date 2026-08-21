@@ -18,7 +18,8 @@ import { Link } from 'react-router-dom'
 // Verbatim from the design: square segments, right-divided, accent fill when active.
 const TAB_TRIGGER =
   'h-full gap-1.5 rounded-none border-0 border-r border-border px-5 text-xs text-muted-foreground transition-colors hover:text-foreground data-[state=active]:bg-accent data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:shadow-none'
-const TAB_PANE = 'px-[34px] pb-14 pt-6 lg:px-[40px]'
+const BILLING_PAGE_CONTAINER = 'mx-auto w-full max-w-[1440px] px-4 sm:px-5 2xl:px-0'
+const TAB_PANE = 'py-6'
 const TAB_TRIGGER_LAST =
   'h-full gap-1.5 rounded-none border-0 px-5 text-xs text-muted-foreground transition-colors hover:text-foreground data-[state=active]:bg-accent data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:shadow-none'
 
@@ -82,8 +83,7 @@ function BillingComingSoon() {
 /**
  * One page, three tabs — the arrangement in the design. Each tab is a section
  * that keeps its own hooks; this only composes and switches them. Alerts sit
- * above the strip so a blocking one (an outstanding invoice stops top-ups) is
- * visible whichever tab you land on.
+ * inside Overview, where identity and payment-setup guidance belongs.
  */
 function Billing() {
   const config = useConfig()
@@ -97,38 +97,40 @@ function Billing() {
 
   return (
     <Tabs value={tab} onValueChange={setTab} className="w-full gap-0">
-      <div className="px-[34px] pt-[26px] lg:px-[40px]">
-        <h1 className="font-mono text-[22px] font-medium leading-none tracking-[-0.5px]">Billing</h1>
-        <div className="mt-5 flex flex-col gap-4 empty:hidden">
-          <BillingAlerts />
+      <div className={BILLING_PAGE_CONTAINER}>
+        <div className="pt-6">
+          <h1 className="font-display text-2xl font-semibold leading-none tracking-tight">Billing</h1>
+          <TabsList className="mt-5 h-9 gap-0 rounded-none border border-border bg-transparent p-0">
+            <TabsTrigger value="overview" className={TAB_TRIGGER}>
+              Overview
+            </TabsTrigger>
+            <TabsTrigger value="usage" className={TAB_TRIGGER}>
+              Usage
+            </TabsTrigger>
+            <TabsTrigger value="wallet" className={TAB_TRIGGER_LAST}>
+              Wallet
+            </TabsTrigger>
+          </TabsList>
         </div>
-        <TabsList className="mt-5 h-9 gap-0 rounded-none border border-border bg-transparent p-0">
-          <TabsTrigger value="overview" className={TAB_TRIGGER}>
-            Overview
-          </TabsTrigger>
-          <TabsTrigger value="usage" className={TAB_TRIGGER}>
-            Usage
-          </TabsTrigger>
-          <TabsTrigger value="wallet" className={TAB_TRIGGER_LAST}>
-            Wallet
-          </TabsTrigger>
-        </TabsList>
+        <TabsContent value="overview">
+          <div className={TAB_PANE}>
+            <div className="mb-8 flex flex-col gap-4 empty:hidden">
+              <BillingAlerts />
+            </div>
+            <PlanSection />
+          </div>
+        </TabsContent>
+        <TabsContent value="usage">
+          <div className={TAB_PANE}>
+            <UsageSection onGoToWallet={() => setTab('wallet')} />
+          </div>
+        </TabsContent>
+        <TabsContent value="wallet">
+          <div className={TAB_PANE}>
+            <WalletSection />
+          </div>
+        </TabsContent>
       </div>
-      <TabsContent value="overview">
-        <div className={TAB_PANE}>
-          <PlanSection />
-        </div>
-      </TabsContent>
-      <TabsContent value="usage">
-        <div className={TAB_PANE}>
-          <UsageSection onGoToWallet={() => setTab('wallet')} />
-        </div>
-      </TabsContent>
-      <TabsContent value="wallet">
-        <div className={TAB_PANE}>
-          <WalletSection />
-        </div>
-      </TabsContent>
     </Tabs>
   )
 }

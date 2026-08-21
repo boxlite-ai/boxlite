@@ -417,10 +417,11 @@ if (args[0] === 'state' && args[1] === 'export') {
 /*
  * The store shapes the wrapper must refuse, each driven end to end.
  *
- * Six shapes across the wrapper's five refusals, not one apiece: an absent digest and a mismatched one
+ * Seven shapes across the wrapper's six refusals, not one apiece: an absent digest and a mismatched one
  * meet the same comparison, covered as two shapes because they arise from different accidents and a
- * reader would otherwise assume only one is handled. The other four — unreadable, no manifest, a
- * manifested value the store lacks, and a manifest that applies nothing — get one shape each.
+ * reader would otherwise assume only one is handled. The other five — unreadable, no manifest, a
+ * manifested value the store lacks, a removed key, and a manifest that applies nothing — get one
+ * shape each.
  *
  * They need the wrapper rather than a unit test: hydrateStageConfig can show a shape is detectable,
  * never that anything acts on it. Counting `process.exit(1)` in the source proves refusals exist; it
@@ -432,7 +433,7 @@ if (args[0] === 'state' && args[1] === 'export') {
  * so the test passes while the branch it names is dead — which is what a first draft did, and what
  * disabling a later refusal failed to reveal.
  *
- * And each case matches the wrapper's own message. Exit 1 is shared by all five, and the guards sit in
+ * And each case matches the wrapper's own message. Exit 1 is shared by all six, and the guards sit in
  * a chain where removing one usually lets the next catch the same fixture — so the exit code cannot
  * distinguish them, and a test that only checks it stays green through the regression it exists for.
  */
@@ -507,6 +508,19 @@ const REFUSED_STORES: RefusedStore[] = [
     values: { AWS_PROFILE: 'synthetic-refused-profile' },
     digest: 'correct',
     refusal: /applied nothing/,
+  },
+  {
+    // A key removed from the ClickHouse contract must not silently fall back to the new fixed
+    // value. The manifest proves the stage was configured under the older contract, so deploying
+    // it without a fresh bootstrap would apply a topology the operator never reviewed.
+    description: 'a manifest naming removed ClickHouse configuration',
+    manifest: ['STACK_DOMAIN', 'CLICKHOUSE_RETENTION_HOURS'],
+    values: {
+      STACK_DOMAIN: 'configured.example.test',
+      CLICKHOUSE_RETENTION_HOURS: '168',
+    },
+    digest: 'correct',
+    refusal: /CLICKHOUSE_RETENTION_HOURS is no longer supported/,
   },
 ]
 

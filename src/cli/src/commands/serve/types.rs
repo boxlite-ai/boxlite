@@ -78,6 +78,30 @@ pub(super) struct ContainerCapabilitiesRequest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct NetworkSpec {
+    #[serde(default)]
+    pub outbound: Option<OutboundNetworkSpec>,
+    #[serde(flatten)]
+    pub legacy: LegacyNetworkSpec,
+}
+
+impl NetworkSpec {
+    pub(super) fn uses_legacy_fields(&self) -> bool {
+        self.legacy.mode.is_some() || self.legacy.allow_net.is_some()
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct LegacyNetworkSpec {
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub allow_net: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct OutboundNetworkSpec {
     pub mode: String,
     #[serde(default)]
     pub allow_net: Vec<String>,

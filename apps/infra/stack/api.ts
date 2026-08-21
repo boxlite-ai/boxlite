@@ -6,6 +6,11 @@
 import { apiImageReference } from '../artifacts/api.js'
 import { resolveArtifactSource } from '../artifacts/source.js'
 import type { FoundationResources } from './foundation.js'
+import {
+  CLICKHOUSE_DATABASE,
+  CLICKHOUSE_READER_USERNAME,
+  type ClickHouseResources,
+} from './clickhouse.js'
 import { PORTS, envOr, httpHealth, requireEnv, runnerEndpoint } from './settings.js'
 
 export interface ApiInputs {
@@ -35,8 +40,8 @@ export interface ApiInputs {
   oidcIssuer: string
   publicOidcIssuer: string | undefined
   otelCollectorOtlpHttpUrl: $util.Output<string>
-  clickHouseReaderUrl: string | undefined
-  clickHouseReaderHost: string | undefined
+  clickHouseResources: ClickHouseResources
+  clickHouseReadyDependency?: any
 }
 
 export function buildApi(input: ApiInputs) {
@@ -67,8 +72,8 @@ export function buildApi(input: ApiInputs) {
     oidcIssuer,
     publicOidcIssuer,
     otelCollectorOtlpHttpUrl,
-    clickHouseReaderUrl,
-    clickHouseReaderHost,
+    clickHouseResources,
+    clickHouseReadyDependency,
   } = input
 
 const apiArtifact = resolveArtifactSource('api')
@@ -102,6 +107,7 @@ const api = new sst.aws.Service('Api', {
   // guidance: target keep-alive must be >= LB idle).
   transform: {
     loadBalancer: (lbArgs: any) => {
+      lbArgs.loadBalancerType = 'application'
       lbArgs.idleTimeout = 3600
     },
   },
@@ -140,6 +146,11 @@ const api = new sst.aws.Service('Api', {
     },
   ],
   scaling: { min: 1, max: 4 },
+  ssm: {
+    ...(clickHouseResources.mode !== 'disabled'
+      ? { CLICKHOUSE_PASSWORD: clickHouseResources.readerSecretArn }
+      : {}),
+  },
   environment: {
     // Core
     NODE_ENV: 'production',
@@ -270,23 +281,14 @@ const api = new sst.aws.Service('Api', {
     ...(process.env.OTEL_EXPORTER_OTLP_HEADERS && {
       OTEL_EXPORTER_OTLP_HEADERS: process.env.OTEL_EXPORTER_OTLP_HEADERS,
     }),
-    ...(clickHouseReaderUrl
+    ...(clickHouseResources.mode !== 'disabled'
       ? {
-          CLICKHOUSE_URL: clickHouseReaderUrl,
-          CLICKHOUSE_DATABASE: envOr('CLICKHOUSE_READER_DATABASE', envOr('CLICKHOUSE_DATABASE', 'otel')),
-          CLICKHOUSE_USERNAME: envOr('CLICKHOUSE_READER_USERNAME', envOr('CLICKHOUSE_USERNAME', 'default')),
-          CLICKHOUSE_PASSWORD: envOr('CLICKHOUSE_READER_PASSWORD', envOr('CLICKHOUSE_PASSWORD', '')),
+          CLICKHOUSE_URL: clickHouseResources.url,
+          CLICKHOUSE_DATABASE,
+          CLICKHOUSE_USERNAME: CLICKHOUSE_READER_USERNAME,
+          CLICKHOUSE_CREDENTIAL_VERSION: clickHouseResources.readerSecretVersionId,
         }
-      : clickHouseReaderHost
-        ? {
-            CLICKHOUSE_HOST: clickHouseReaderHost,
-            CLICKHOUSE_PORT: envOr('CLICKHOUSE_READER_PORT', envOr('CLICKHOUSE_PORT', '443')),
-            CLICKHOUSE_DATABASE: envOr('CLICKHOUSE_READER_DATABASE', envOr('CLICKHOUSE_DATABASE', 'otel')),
-            CLICKHOUSE_USERNAME: envOr('CLICKHOUSE_READER_USERNAME', envOr('CLICKHOUSE_USERNAME', 'default')),
-            CLICKHOUSE_PASSWORD: envOr('CLICKHOUSE_READER_PASSWORD', envOr('CLICKHOUSE_PASSWORD', '')),
-            CLICKHOUSE_PROTOCOL: envOr('CLICKHOUSE_READER_PROTOCOL', envOr('CLICKHOUSE_PROTOCOL', 'https')),
-          }
-        : {}),
+      : {}),
     BOX_OTEL_ENDPOINT_URL: envOr(
       'BOX_OTEL_ENDPOINT_URL',
       envOr('OTEL_EXPORTER_OTLP_ENDPOINT', otelCollectorOtlpHttpUrl),
@@ -346,8 +348,15 @@ const api = new sst.aws.Service('Api', {
       // shared secret would crash-loop on deploy instead of simply not
       // exporting yet. Setting the secret is what turns delivery on.
       USAGE_EXPORT_ENABLED: usageExportToken.value.apply((token: string) => (token.trim() ? 'true' : 'false')),
+      // The same destination and credential carry the five-minute full
+      // snapshot used by Commerce to estimate still-open usage.
+      USAGE_ALLOCATION_SNAPSHOT_ENABLED: usageExportToken.value.apply((token: string) =>
+        (token.trim() ? 'true' : 'false'),
+      ),
     }),
   },
+}, {
+  dependsOn: clickHouseReadyDependency ? [clickHouseReadyDependency] : [],
 })
 
 // Assumed by the Api task role to vend per-org box storage credentials

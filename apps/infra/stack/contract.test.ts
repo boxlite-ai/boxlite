@@ -13,6 +13,7 @@ const stackSource = [
   readFileSync(new URL('./settings.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('./deploy.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('./foundation.ts', import.meta.url), 'utf8'),
+  readFileSync(new URL('./clickhouse.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('./observability.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('./api.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('./edge.ts', import.meta.url), 'utf8'),
@@ -20,6 +21,7 @@ const stackSource = [
 ].join('\n')
 const source = `${entrypointSource}\n${stackSource}`
 const environmentExample = readFileSync(new URL('../.env.example', import.meta.url), 'utf8')
+const infraLocalNative = readFileSync(new URL('../../infra-local/compose/native.py', import.meta.url), 'utf8')
 const readme = [
   readFileSync(new URL('../README.md', import.meta.url), 'utf8'),
   readFileSync(new URL('../docs/deployment.md', import.meta.url), 'utf8'),
@@ -59,6 +61,7 @@ test('deploys domain builders in dependency order without ComponentResource pare
   const deploySource = liveText('scriptEmittingShell', readFileSync(new URL('./deploy.ts', import.meta.url), 'utf8'))
   const calls = [
     'createFoundation(',
+    'buildClickHouseStorage(',
     'buildObservability(',
     'buildApi(',
     'buildEdge(',
@@ -82,6 +85,49 @@ test('pins the AWS provider used by the deployed stack', () => {
   assert.match(liveConfig, /aws:\s*\{\s*version: '7\.24\.0',\s*region: REGION,/)
 })
 
+test('pins every Service load balancer type at the provider boundary', () => {
+  const services = [
+    {
+      name: 'Jaeger',
+      type: 'application',
+      section: configSection("const jaeger = new sst.aws.Service('Jaeger'", 'const jaegerOtlpHttpEndpoint'),
+    },
+    {
+      name: 'OtelCollector',
+      type: 'application',
+      section: configSection("const otelCollector = new sst.aws.Service('OtelCollector'", 'const otelCollectorOtlpHttpUrl'),
+    },
+    {
+      name: 'Api',
+      type: 'application',
+      section: configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role'),
+    },
+    {
+      name: 'Proxy',
+      type: 'network',
+      section: configSection("new sst.aws.Service('Proxy'", '// ─── 8.'),
+    },
+    {
+      name: 'PgAdmin',
+      type: 'application',
+      section: configSection("new sst.aws.Service('PgAdmin'", '// MailDev is an unauthenticated mail catcher'),
+    },
+    {
+      name: 'MailDev',
+      type: 'application',
+      section: configSection("new sst.aws.Service('MailDev'", '// ─── 9.'),
+    },
+  ]
+
+  for (const service of services) {
+    assert.match(
+      service.section,
+      new RegExp(`loadBalancerType\\s*=\\s*'${service.type}'`),
+      `${service.name} must pin its existing ${service.type} load balancer type`,
+    )
+  }
+})
+
 test('applies the deployment permissions boundary to every SST-created IAM role', () => {
   assert.match(liveConfig, /const runtimePermissionsBoundaryArn =/)
   assert.match(liveConfig, /requireIamPermissionsBoundaryStage\(\$app\.stage\)/)
@@ -94,6 +140,29 @@ test('applies the deployment permissions boundary to every SST-created IAM role'
   )
 })
 
+test('keeps every ClickHouse IAM resource inside the deploy-role namespace and provider name limits', () => {
+  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
+
+  for (const [resource, nextResource, suffix] of [
+    ['ClickHouseRole', 'ClickHouseSsmPolicy', 'instance'],
+    ['ClickHouseProfile', 'ClickHouseSecurityGroup', 'instance'],
+  ]) {
+    const resourceSection = extractSection(clickHouse, `'${resource}'`, `'${nextResource}'`)
+    assert.match(
+      resourceSection,
+      new RegExp(`name:\\s*\`\\$\\{\\$app\\.name\\}-\\$\\{\\$app\\.stage\\}-clickhouse-${suffix}\``),
+      `${resource} must use its bounded deterministic ClickHouse name`,
+    )
+    assert.doesNotMatch(resourceSection, /namePrefix:/, `${resource} must not inherit the provider's 38-character prefix limit`)
+  }
+
+  const longestStage = 'x'.repeat(32)
+  for (const suffix of ['instance']) {
+    const name = `boxlite-${longestStage}-clickhouse-${suffix}`
+    assert.ok(name.length <= 64, `${name} exceeds IAM's 64-character role name limit`)
+  }
+})
+
 test('uses the shared AWS region resolver and waits for the critical API service', () => {
   assert.match(
     liveConfig,
@@ -103,6 +172,97 @@ test('uses the shared AWS region resolver and waits for the critical API service
 
   const apiService = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
   assert.match(apiService, /wait: true,/)
+})
+
+test('waits for the active ClickHouse collector rollout before probing the writer', () => {
+  const collector = configSection("const otelCollector = new sst.aws.Service('OtelCollector'", 'const otelCollectorOtlpHttpUrl')
+  const writerReadiness = configSection('export function buildClickHouseWriterReady')
+
+  assert.match(collector, /wait: input\.clickHouseResources\.active,/)
+  assert.match(writerReadiness, /triggers:\s*\[[\s\S]*otelCollector\.nodes\.taskDefinition\.arn/)
+  assert.match(writerReadiness, /dependsOn:\s*\[otelCollector\]/)
+  assert.match(writerReadiness, /CLICKHOUSE_READER_SECRET_ARN: resources\.readerSecretArn/)
+  assert.doesNotMatch(writerReadiness, /return resources\.ready/)
+})
+
+test('injects only ClickHouse passwords through ECS secrets', () => {
+  const collector = configSection("const otelCollector = new sst.aws.Service('OtelCollector'", 'const otelCollectorOtlpHttpUrl')
+  const api = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+
+  assert.match(collector, /CLICKHOUSE_PASSWORD: input\.clickHouseResources\.writerSecretArn/)
+  assert.match(api, /CLICKHOUSE_PASSWORD: clickHouseResources\.readerSecretArn/)
+  assert.doesNotMatch(collector, /CLICKHOUSE_PASSWORD:\s*envOr/)
+  assert.doesNotMatch(api, /CLICKHOUSE_PASSWORD:\s*envOr/)
+})
+
+test('rolls each ECS client when its ClickHouse password version changes', () => {
+  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
+  const collector = configSection("const otelCollector = new sst.aws.Service('OtelCollector'", 'const otelCollectorOtlpHttpUrl')
+  const api = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+  const writerReadiness = configSection('export function buildClickHouseWriterReady')
+
+  assert.match(liveConfig, /getSecretVersionsOutput\(\{ secretId, region \}\)/)
+  assert.match(liveConfig, /versionStages\.includes\('AWSCURRENT'\)/)
+  assert.match(clickHouse, /writerSecretVersionId:\s*currentSecretVersionId\(/)
+  assert.match(clickHouse, /readerSecretVersionId:\s*currentSecretVersionId\(/)
+  assert.match(clickHouse, /writerSecretVersionId:\s*writerSecret\.version\.versionId/)
+  assert.match(clickHouse, /readerSecretVersionId:\s*readerSecret\.version\.versionId/)
+  assert.match(collector, /CLICKHOUSE_CREDENTIAL_VERSION:\s*input\.clickHouseResources\.writerSecretVersionId/)
+  assert.match(api, /CLICKHOUSE_CREDENTIAL_VERSION:\s*clickHouseResources\.readerSecretVersionId/)
+  assert.match(writerReadiness, /triggers:\s*\[[^\]]*resources\.readerSecretVersionId/)
+})
+
+test('the ClickHouse facade owns its self-hosted secrets', () => {
+  const deploy = liveText('scriptEmittingShell', readFileSync(new URL('./deploy.ts', import.meta.url), 'utf8'))
+  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
+
+  assert.doesNotMatch(deploy, /ClickHouse(?:Admin|Writer|Reader)Secret/)
+  assert.doesNotMatch(deploy, /resolveClickHouseConfig/)
+  assert.match(clickHouse, /resolveClickHouseConfig\(process\.env\)/)
+  assert.match(clickHouse, /ClickHouseAdminSecret/)
+  assert.match(clickHouse, /ClickHouseWriterSecret/)
+  assert.match(clickHouse, /ClickHouseReaderSecret/)
+})
+
+test('validates managed secret ARNs against the runtime boundary before wiring ECS', () => {
+  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
+
+  assert.match(clickHouse, /requireClickHouseSecretArn\(\s*'CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN'/)
+  assert.match(clickHouse, /requireClickHouseSecretArn\(\s*'CLICKHOUSE_READER_PASSWORD_SECRET_ARN'/)
+  assert.match(clickHouse, /region, accountId, appName: \$app\.name, stage: \$app\.stage/)
+})
+
+test('orders the API after ClickHouse writer readiness', () => {
+  const deploy = configSection('export async function deployStack()')
+  const api = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+
+  assert.match(deploy, /collectorExporters = clickHouseResources\.active/)
+  assert.match(liveConfig, /if \(resources\.mode === 'managed'\) return otelCollector/)
+  assert.match(api, /dependsOn: clickHouseReadyDependency \? \[clickHouseReadyDependency\] : \[\]/)
+  assert.doesNotMatch(liveConfig, /writerActivation|readerActivation|ClickHouseApiReaderReady/)
+})
+
+test('encodes ClickHouse user data before EC2 launch', () => {
+  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
+  const instance = extractSection(clickHouse, 'const userData =', 'const instance =')
+
+  assert.match(clickHouse, /encodeClickHouseUserData/)
+  assert.match(instance, /encodeClickHouseUserData\(\{/)
+  assert.doesNotMatch(instance, /Buffer\.from\(buildClickHouseUserData/)
+})
+
+test('replaces bootstrap compute while retaining data without blocking a mode switch', () => {
+  const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
+  const instance = extractSection(clickHouse, 'const instance = new aws.ec2.Instance(', 'const attachment =')
+  const volume = extractSection(clickHouse, "'ClickHouseData',", 'const ami =')
+
+  assert.match(instance, /userDataBase64: userData/)
+  assert.match(instance, /userDataReplaceOnChange: true/)
+  assert.match(instance, /ignoreChanges: \['ami'\]/)
+  assert.doesNotMatch(instance, /ignoreChanges:[^\n]*userDataBase64/)
+  assert.match(instance, /deleteBeforeReplace: true/)
+  assert.match(volume, /retainOnDelete: true/)
+  assert.doesNotMatch(volume, /protect: true/)
 })
 
 test('passes an explicitly configured box migration archive prefix to the API', () => {
@@ -149,11 +309,13 @@ test('tags Runner instances with their exact control-plane identity', () => {
 
 test('keeps every Runner instance protected from replacement during full-stack deploys', () => {
   const runnerFactory = configSection('const makeRunner =', '// Default runner')
+  const clickHouseInstance = configSection('const instance = new aws.ec2.Instance(', 'const attachment =')
 
   assert.match(runnerFactory, /new aws\.ec2\.Instance\(/)
   assert.match(runnerFactory, /ignoreChanges: \['ami', 'userDataBase64'\]/)
   assert.match(runnerFactory, /protect: true/)
-  assert.equal(liveConfig.match(/new aws\.ec2\.Instance\(/g)?.length, 1)
+  assert.equal(liveConfig.match(/new aws\.ec2\.Instance\(/g)?.length, 2)
+  assert.doesNotMatch(clickHouseInstance, /protect:/)
 
   // First boot reads the staged artifact with the instance role, and those two options mean a
   // host that boots before the grant exists never retries. The SSM upgrade path pins the same
@@ -166,6 +328,17 @@ test('passes both the internal and public OIDC issuers to Proxy', () => {
 
   assert.match(proxyService, /OIDC_DOMAIN: oidcIssuer,/)
   assert.match(proxyService, /publicOidcIssuer[\s\S]*OIDC_PUBLIC_DOMAIN: publicOidcIssuer/)
+})
+
+test('enables Proxy OTLP logging in hosted and local deployments', () => {
+  const proxyService = configSection("new sst.aws.Service('Proxy'", '// ─── 8.')
+
+  assert.match(proxyService, /OTEL_LOGGING_ENABLED: envOr\('OTEL_LOGGING_ENABLED', 'true'\)/)
+  assert.match(proxyService, /OTEL_EXPORTER_OTLP_ENDPOINT: envOr\('OTEL_EXPORTER_OTLP_ENDPOINT'/)
+  assert.match(
+    infraLocalNative,
+    /"proxy": _Component\([\s\S]*"OTEL_LOGGING_ENABLED": "true"[\s\S]*"OTEL_EXPORTER_OTLP_ENDPOINT": _OTEL_OTLP_HTTP_URL/,
+  )
 })
 
 test('requires the OIDC client ID through the SST secret store', () => {
@@ -530,6 +703,10 @@ test('usage is exported to the ingest origin, never to the dashboard billing URL
   assert.match(
     liveConfig,
     /USAGE_EXPORT_ENABLED: usageExportToken\.value\.apply\(\(token(?:: string)?\) => \(token\.trim\(\) \? 'true' : 'false'\)\)/,
+  )
+  assert.match(
+    liveConfig,
+    /USAGE_ALLOCATION_SNAPSHOT_ENABLED: usageExportToken\.value\.apply\(\(token(?:: string)?\) =>\s*\(token\.trim\(\) \? 'true' : 'false'\),?\s*\)/,
   )
   assert.match(liveConfig, /const usageExportToken = new sst\.Secret\('USAGE_EXPORT_TOKEN', ''\)/)
 

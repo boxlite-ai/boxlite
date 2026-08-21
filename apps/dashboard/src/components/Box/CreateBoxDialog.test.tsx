@@ -437,6 +437,23 @@ describe('CreateBoxDialog per-org resource cap', () => {
 
   // Mounts exist only at create time, so whatever the form holds has to reach
   // the create call — there is no later chance to attach it.
+  // Leaving Name empty is a supported path: the API assigns an adjective-animal name
+  // (box.service.ts -> persistWithGeneratedBoxName) and, on a per-org name collision,
+  // retries once as "<name>-<boxId>". The dialog must say that out loud — the
+  // "my-new-box" placeholder otherwise reads as what an unnamed box will be called —
+  // and it must keep sending `undefined`, since sending a concrete name would take the
+  // branch that has no collision fallback.
+  it('says an empty name is auto-generated, and submits undefined so the API does it', async () => {
+    await rerenderOpen()
+
+    expect(document.body.textContent).toContain('auto-named like')
+    expect(document.body.textContent).toContain('cozy-otter')
+
+    await submit()
+
+    expect(mutationMocks.createBox).toHaveBeenCalledWith(expect.objectContaining({ name: undefined }))
+  })
+
   it('submits the mounts it was pre-filled with', async () => {
     await rerenderOpenWith({ prefillVolume: 'vol-1' })
 

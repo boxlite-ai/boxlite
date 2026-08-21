@@ -62,9 +62,8 @@ Key test entry points:
 
 ### Watching CI and PR feedback
 
-Once the hooks are installed (`make setup`, once per clone),
-every `git push` arms a background watcher via
-[`.githooks/pre-push`](./.githooks/pre-push), so it
+Once the pinned agent tooling is installed (`make setup`, once per clone),
+every `git push` arms a background watcher via its shared pre-push hook, so it
 runs the same for a human, Claude Code, Codex, or any other agent. It waits for
 the push to land, waits for a PR to appear (which covers a later `gh pr create` —
 `gh` has no hook system), then emits one JSON line per event: each check as it
@@ -74,16 +73,18 @@ concludes, plus every new comment, review, and inline review thread.
 # follow the current branch's events; ends itself when the PR merges or closes.
 # `/` becomes `-` in the filename, so feature/foo logs to feature-foo.jsonl.
 branch="$(git branch --show-current)"
-.agents/watch/pr-watch-stream.sh "$(git rev-parse --git-path pr-watch)/${branch//\//-}.jsonl"
+hooks_path="$(git config --get core.hooksPath)"
+tooling_root="$(cd "$hooks_path/.." && pwd)"
+"$tooling_root/.agents/watch/pr-watch-stream.sh" "$(git rev-parse --git-path pr-watch)/${branch//\//-}.jsonl"
 
 # watch a specific PR in the foreground, without pushing
-.agents/watch/pr-watch.sh --pr 1234 --once
+"$tooling_root/.agents/watch/pr-watch.sh" --pr 1234 --once
 ```
 
 Events land under `$(git rev-parse --git-path pr-watch)/` — inside `.git/`, so
 they are per-worktree and never tracked. What an agent may fix unattended versus
-what needs a human is defined in
-[`.agents/watch/escalation-policy.md`](./.agents/watch/escalation-policy.md).
+what needs a human is defined by the
+[shared escalation policy](https://github.com/boxlite-ai/agent-tooling/blob/main/plugins/boxlite-agent-tooling/.agents/watch/escalation-policy.md).
 
 Set `BOXLITE_PR_WATCH=0` to disable. It is best-effort by construction: a
 watcher that cannot start never fails your push.

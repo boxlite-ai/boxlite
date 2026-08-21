@@ -17,7 +17,9 @@ use nix::mount::{mount, MsFlags};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
-use crate::container::{CapabilitySet, Container, ContainerDevices, UserMount};
+use crate::container::{
+    validate_mount_override, CapabilitySet, Container, ContainerDevices, MountOverride, UserMount,
+};
 use crate::layout::GuestLayout;
 use crate::storage::block_device::BlockDeviceMount;
 
@@ -184,16 +186,26 @@ impl ContainerService for GuestServer {
             }));
         }
 
-        // Validate and resolve the privilege policy before creating directories,
-        // mounting the rootfs, or modifying its trust store. A malformed or
-        // unsupported name is caller input, not a partially initialized box.
-        let capability_policy = config
-            .advanced
-            .unwrap_or_default()
-            .capabilities
-            .unwrap_or_default();
+        // Validate before resolving capabilities: an unsupported destination
+        // or empty options means either a host/guest version mismatch or a
+        // mount this guest doesn't know how to override (see
+        // container::mount_override), and capability resolution needs a
+        // live /proc read this box shouldn't pay for on a request we're
+        // about to reject anyway. The host has already expanded high-level
+        // security options into atomic OCI choices; capabilities are the one
+        // piece the guest still resolves itself, against its own kernel.
+        let advanced = config.advanced.unwrap_or_default();
+        let mount_options = advanced.mount.unwrap_or_default();
+        let mount_override = MountOverride {
+            source: mount_options.source,
+            options: mount_options.options,
+        };
+        validate_mount_override(&mount_options.destination, &mount_override)
+            .map_err(BoxliteError::into_validation_status)?;
+        let capability_policy = advanced.capabilities.unwrap_or_default();
         let capabilities = CapabilitySet::resolve(&capability_policy.add, &capability_policy.drop)
             .map_err(BoxliteError::into_validation_status)?;
+        let readonly_paths = advanced.linux.unwrap_or_default().readonly_paths;
 
         info!("🚀 Starting OCI container with received configuration");
 
@@ -343,6 +355,8 @@ impl ContainerService for GuestServer {
             user_mounts,
             config.tty,
             capabilities,
+            readonly_paths,
+            mount_override,
             devices,
         ) {
             Ok(mut container) => {

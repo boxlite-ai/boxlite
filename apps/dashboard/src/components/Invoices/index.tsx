@@ -15,9 +15,9 @@ import { InvoicesTableHeader } from './InvoicesTableHeader'
 import { InvoicesTableProps } from './types'
 import { useInvoicesTable } from './useInvoicesTable'
 
-// A phone fits about three columns. Keep the ones a reader acts on — which
-// invoice, how much, and whether it is paid — and bring the rest back at sm.
-const NARROW_SCREEN_HIDDEN = new Set(['issuingDate', 'paymentDueDate', 'type'])
+// A phone keeps the settlement id, charge date, cost and final state. The
+// funding split returns at sm, where both amounts fit without crowding.
+const NARROW_SCREEN_HIDDEN = new Set(['quotaCoveredCents', 'walletFundedCents'])
 
 // Matches the `sm:` boundary the classes below use, so the JS and CSS halves of
 // this layout never disagree in the 640-767px band.
@@ -30,10 +30,6 @@ export function InvoicesTable({
   pageCount,
   onPaginationChange,
   loading,
-  onViewInvoice,
-  onVoidInvoice,
-  onRowClick,
-  onPayInvoice,
 }: InvoicesTableProps) {
   const isNarrow = useMatchMedia(NARROW_SCREEN)
   const { table } = useInvoicesTable({
@@ -41,9 +37,6 @@ export function InvoicesTable({
     pagination,
     pageCount,
     onPaginationChange,
-    onViewInvoice,
-    onVoidInvoice,
-    onPayInvoice,
   })
 
   return (
@@ -84,27 +77,16 @@ export function InvoicesTable({
             </TableRow>
           ) : table.getRowModel().rows?.length ? (
             table.getRowModel().rows.map((row) => (
-              <TableRow
-                key={row.id}
-                className={`transition-colors duration-300 ${onRowClick ? 'cursor-pointer' : ''}`}
-                onClick={() => onRowClick?.(row.original)}
-              >
+              <TableRow key={row.id} className="transition-colors duration-300">
                 {row.getVisibleCells().map((cell) => (
                   <TableCell
                     key={cell.id}
-                    onClick={(e) => {
-                      if (cell.column.id === 'actions') {
-                        e.stopPropagation()
-                      }
-                    }}
                     className={cn(
                       'border-b border-border font-mono text-[12px]',
                       NARROW_SCREEN_HIDDEN.has(cell.column.id) && 'hidden sm:table-cell',
                     )}
-                    // The four columns kept below sm carry 440px of minimums
-                    // (100 default + 120 + 120 + 100) against a phone's ~322px of
-                    // content width, which pushed the sticky actions column off
-                    // screen. Below sm they size to their content instead.
+                    // Below sm, let the four essential columns size to their
+                    // content instead of imposing desktop minimum widths.
                     style={
                       isNarrow
                         ? undefined
@@ -114,7 +96,6 @@ export function InvoicesTable({
                             minWidth: cell.column.getSize(),
                           }
                     }
-                    sticky={cell.column.id === 'actions' ? 'right' : undefined}
                   >
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </TableCell>
@@ -124,11 +105,11 @@ export function InvoicesTable({
           ) : (
             <TableEmptyState
               colSpan={table.getAllColumns().length}
-              message="No invoices yet."
+              message="No usage settlements yet."
               icon={<FileText className="w-8 h-8" />}
               description={
                 <div className="space-y-2">
-                  <p>Invoices will appear here once they are generated.</p>
+                  <p>Settlements will appear here after metered usage is funded.</p>
                 </div>
               }
             />
@@ -137,7 +118,7 @@ export function InvoicesTable({
       </Table>
 
       <div className="flex items-center justify-end">
-        <Pagination className="pb-2 pt-6" table={table} entityName="Invoices" totalItems={totalItems} />
+        <Pagination className="pb-2 pt-6" table={table} entityName="Settlements" totalItems={totalItems} />
       </div>
     </>
   )

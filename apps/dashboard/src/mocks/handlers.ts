@@ -4,9 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { OrganizationEmail, OrganizationTier, OrganizationWallet } from '@/billing-api'
-import { Invoice, PaginatedInvoices, PaymentUrl } from '@/billing-api/types/Invoice'
-import { Tier } from '@/billing-api/types/tier'
+import { OrganizationEmail, OrganizationPlan, OrganizationWallet } from '@/billing-api'
+import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
+import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
+import { Plan } from '@/billing-api/types/Plan'
 import { http, HttpResponse } from 'msw'
 import {
   MOCK_BOXES,
@@ -97,47 +98,42 @@ export const handlers = [
   http.get(`${BILLING_API_URL}/organization/:organizationId/portal-url`, async () => {
     return HttpResponse.json<string>(`${BILLING_API_URL}/portal`)
   }),
-  http.get(`${BILLING_API_URL}/tier`, async () => {
-    return HttpResponse.json<Tier[]>([
+  http.get(`${BILLING_API_URL}/plan`, async () => {
+    // Mirrors the billing service's own standard-plan catalog (Subscription.md
+    // v2 §3). Enterprise carries nulls — the contact-sales card, not missing
+    // data — and is not self-serve.
+    return HttpResponse.json<Plan[]>([
       {
-        tier: 1,
-        tierLimit: {
-          concurrentCPU: 10,
-          concurrentRAMGiB: 20,
-          concurrentDiskGiB: 30,
-        },
-        minTopUpAmountCents: 0,
-        topUpIntervalDays: 0,
+        id: 'starter',
+        name: 'Starter',
+        priceMonthlyCents: 1_900,
+        includedQuotaCents: 3_000,
+        concurrencyLimit: 20,
+        selfServe: true,
       },
       {
-        tier: 2,
-        tierLimit: {
-          concurrentCPU: 100,
-          concurrentRAMGiB: 200,
-          concurrentDiskGiB: 300,
-        },
-        minTopUpAmountCents: 2500,
-        topUpIntervalDays: 0,
+        id: 'pro',
+        name: 'Pro',
+        priceMonthlyCents: 14_900,
+        includedQuotaCents: 25_000,
+        concurrencyLimit: 100,
+        selfServe: true,
       },
       {
-        tier: 3,
-        tierLimit: {
-          concurrentCPU: 250,
-          concurrentRAMGiB: 500,
-          concurrentDiskGiB: 2000,
-        },
-        minTopUpAmountCents: 50000,
-        topUpIntervalDays: 0,
+        id: 'max',
+        name: 'Max',
+        priceMonthlyCents: 49_900,
+        includedQuotaCents: 90_000,
+        concurrencyLimit: 1_000,
+        selfServe: true,
       },
       {
-        tier: 4,
-        tierLimit: {
-          concurrentCPU: 500,
-          concurrentRAMGiB: 1000,
-          concurrentDiskGiB: 5000,
-        },
-        minTopUpAmountCents: 200000,
-        topUpIntervalDays: 30,
+        id: 'enterprise',
+        name: 'Enterprise',
+        priceMonthlyCents: null,
+        includedQuotaCents: null,
+        concurrencyLimit: null,
+        selfServe: false,
       },
     ])
   }),
@@ -148,18 +144,16 @@ export const handlers = [
       name: 'Wallet',
       creditCardConnected: false,
       automaticTopUp: undefined,
-      hasFailedOrPendingInvoice: true,
+      creditGrantedCents: 10_000,
+      creditRemainingCents: 1_000,
     })
   }),
-  http.get(`${BILLING_API_URL}/organization/:organizationId/tier`, async () => {
-    return HttpResponse.json<OrganizationTier>({
-      tier: 2,
-      largestSuccessfulPaymentDate: new Date(),
-      largestSuccessfulPaymentCents: 1000,
-      expiresAt: new Date(),
-      hasVerifiedBusinessEmail: true,
-      // Mirrors the billing service's own mock seed: pro, a quarter used,
-      // pinned mid-cycle so the meter renders deterministically.
+  http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
+    // Mirrors the billing service's own mock seed: pro, a quarter used,
+    // pinned mid-cycle so the meter renders deterministically. The real
+    // route wraps this in a `plan` key ({} means no live plan), never a
+    // bare object or null.
+    return HttpResponse.json<{ plan?: OrganizationPlan }>({
       plan: {
         planId: 'pro',
         planName: 'Pro',
@@ -171,6 +165,12 @@ export const handlers = [
         quotaRemainingCents: 18750,
       },
     })
+  }),
+  http.post(`${BILLING_API_URL}/organization/:organizationId/plan/upgrade`, async () => {
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.post(`${BILLING_API_URL}/organization/:organizationId/plan/downgrade`, async () => {
+    return new HttpResponse(null, { status: 204 })
   }),
   // Deterministic funding series: quota-first against the seeded remaining
   // quota, wallet after — dense buckets so the chart shows honest zeros.
@@ -208,7 +208,7 @@ export const handlers = [
       },
     ])
   }),
-  http.get(`${BILLING_API_URL}/organization/:organizationId/invoices`, async ({ request, params }) => {
+  http.get(`${BILLING_API_URL}/organization/:organizationId/invoices`, async ({ request }) => {
     const url = new URL(request.url)
     const page = parseInt(url.searchParams.get('page') || '1', 10)
     const perPage = parseInt(url.searchParams.get('perPage') || '50', 10)
@@ -217,62 +217,38 @@ export const handlers = [
       {
         id: 'inv-001',
         number: 'INV-2026-001',
-        currency: 'USD',
-        issuingDate: new Date('2026-01-01').toISOString(),
-        paymentDueDate: new Date('2026-01-15').toISOString(),
-        paymentOverdue: false,
-        paymentStatus: 'succeeded',
         sequentialId: 1,
-        status: 'finalized',
+        chargedAt: new Date('2026-01-01').toISOString(),
         totalAmountCents: 9847,
-        totalDueAmountCents: 0,
-        type: 'subscription',
-        fileUrl: 'https://example.com/invoices/inv-001.pdf',
+        quotaCoveredCents: 8_000,
+        voided: false,
       },
       {
         id: 'inv-004',
         number: 'INV-2025-010',
-        currency: 'USD',
-        issuingDate: new Date('2025-10-01').toISOString(),
-        paymentDueDate: new Date('2025-10-15').toISOString(),
-        paymentOverdue: true,
-        paymentStatus: 'pending',
         sequentialId: 10,
-        status: 'finalized',
+        chargedAt: new Date('2025-10-01').toISOString(),
         totalAmountCents: 12150,
-        totalDueAmountCents: 12150,
-        type: 'subscription',
-        fileUrl: 'https://example.com/invoices/inv-004.pdf',
+        quotaCoveredCents: 12_150,
+        voided: false,
       },
       {
         id: 'inv-009',
         number: 'INV-2030-010',
-        currency: 'USD',
-        issuingDate: new Date('2025-10-01').toISOString(),
-        paymentDueDate: new Date('2030-10-15').toISOString(),
-        paymentOverdue: false,
-        paymentStatus: 'pending',
         sequentialId: 10,
-        status: 'pending',
+        chargedAt: new Date('2025-10-01').toISOString(),
         totalAmountCents: 12150,
-        totalDueAmountCents: 12150,
-        type: 'subscription',
-        fileUrl: 'https://example.com/invoices/inv-004.pdf',
+        quotaCoveredCents: 10_000,
+        voided: true,
       },
       {
         id: 'inv-005',
         number: 'INV-2025-009',
-        currency: 'USD',
-        issuingDate: new Date('2025-09-01').toISOString(),
-        paymentDueDate: new Date('2025-09-15').toISOString(),
-        paymentOverdue: false,
-        paymentStatus: 'failed',
         sequentialId: 9,
-        status: 'failed',
+        chargedAt: new Date('2025-09-01').toISOString(),
         totalAmountCents: 8900,
-        totalDueAmountCents: 0,
-        type: 'add_on',
-        fileUrl: 'https://example.com/invoices/inv-005.pdf',
+        quotaCoveredCents: 0,
+        voided: false,
       },
     ]
 
@@ -287,14 +263,6 @@ export const handlers = [
       totalItems,
       totalPages,
     })
-  }),
-  http.post(`${BILLING_API_URL}/organization/:organizationId/invoices/:invoiceId/payment-url`, async () => {
-    return HttpResponse.json<PaymentUrl>({
-      url: 'https://checkout.stripe.com/pay/cs_test_1234567890',
-    })
-  }),
-  http.post(`${BILLING_API_URL}/organization/:organizationId/invoices/:invoiceId/void`, async () => {
-    return HttpResponse.json({})
   }),
   http.post(`${BILLING_API_URL}/organization/:organizationId/wallet/top-up`, async () => {
     return HttpResponse.json<PaymentUrl>({

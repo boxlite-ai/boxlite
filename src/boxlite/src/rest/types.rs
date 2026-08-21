@@ -250,7 +250,7 @@ pub(crate) struct CreateBoxNetworkSpec {
 
 impl From<&crate::runtime::options::NetworkSpec> for CreateBoxNetworkSpec {
     fn from(spec: &crate::runtime::options::NetworkSpec) -> Self {
-        let config = crate::runtime::options::NetworkConfig::from(spec);
+        let config = crate::runtime::options::OutboundNetworkConfig::from(spec);
         let mode = match config.mode {
             crate::runtime::options::NetworkMode::Enabled => "enabled",
             crate::runtime::options::NetworkMode::Disabled => "disabled",

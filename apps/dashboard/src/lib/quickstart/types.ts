@@ -1,11 +1,13 @@
-export type QuickstartIconName = 'python' | 'typescript' | 'go' | 'rust' | 'terminal' | 'server' | 'badge'
+export type QuickstartIconName = 'python' | 'typescript' | 'go' | 'rust' | 'terminal' | 'server' | 'file'
+
+export type QuickstartGroup = 'sdk' | 'direct'
 
 export interface QuickstartInterfaceDefinition {
   id: string
   label: string
-  ariaLabel?: string
+  /** Which picker group the entry belongs to — 'sdk' is a language library, 'direct' talks to the API without one. */
+  group: QuickstartGroup
   icon: QuickstartIconName
-  badge?: string
   install: string
   run: string
   codeLanguage: string

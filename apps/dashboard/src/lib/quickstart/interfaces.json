@@ -2,6 +2,7 @@
   {
     "id": "python",
     "label": "Python",
+    "group": "sdk",
     "icon": "python",
     "install": "pip install boxlite",
     "run": "BOXLITE_API_KEY=$KEY python main.py",
@@ -14,6 +15,7 @@
   {
     "id": "typescript",
     "label": "Node",
+    "group": "sdk",
     "icon": "typescript",
     "install": "npm install @boxlite-ai/boxlite tsx",
     "run": "BOXLITE_API_KEY=$KEY npx tsx index.mts",
@@ -26,6 +28,7 @@
   {
     "id": "go",
     "label": "Go",
+    "group": "sdk",
     "icon": "go",
     "install": "go get github.com/boxlite-ai/boxlite/sdks/go\ngo run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup",
     "run": "BOXLITE_API_KEY=$KEY go run .",
@@ -38,6 +41,7 @@
   {
     "id": "rust",
     "label": "Rust",
+    "group": "sdk",
     "icon": "rust",
     "install": "cargo add boxlite --features rest\ncargo add tokio --features macros,rt-multi-thread\ncargo add futures",
     "run": "BOXLITE_API_KEY=$KEY cargo run",
@@ -49,10 +53,9 @@
   },
   {
     "id": "c",
-    "label": "SDK",
-    "ariaLabel": "C SDK",
-    "icon": "badge",
-    "badge": "C",
+    "label": "C",
+    "group": "sdk",
+    "icon": "file",
     "install": "VERSION=v0.9.5\nPLATFORM=darwin-arm64\n# Linux: PLATFORM=linux-x64-gnu or linux-arm64-gnu\ncurl -fsSL \"https://github.com/boxlite-ai/boxlite/releases/download/${VERSION}/boxlite-c-${VERSION}-${PLATFORM}.tar.gz\" \\\n  | tar xz\nmv \"boxlite-c-${VERSION}-${PLATFORM}\" boxlite-c-sdk",
     "run": "cc main.c -Iboxlite-c-sdk/include -Lboxlite-c-sdk/lib -lboxlite -pthread \\\n  -Wl,-rpath,\"$PWD/boxlite-c-sdk/lib\" -o quickstart\nBOXLITE_API_KEY=$KEY BOXLITE_REST_URL={{REST_API_URL}} ./quickstart",
     "codeLanguage": "c",
@@ -64,6 +67,7 @@
   {
     "id": "cli",
     "label": "CLI",
+    "group": "direct",
     "icon": "terminal",
     "install": "curl -fsSL https://sh.boxlite.ai | sh",
     "run": "BOXLITE_API_KEY=$KEY BOXLITE_REST_URL={{REST_API_URL}} boxlite run --rm --name \"sdk-quickstart-cli-$(date +%s)\" \\\n  ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0 \\\n  echo \"Hello from BoxLite CLI\"",
@@ -76,6 +80,7 @@
   {
     "id": "rest",
     "label": "REST",
+    "group": "direct",
     "icon": "server",
     "install": "command -v curl\ncommand -v jq",
     "run": "BOXLITE_API_KEY=$KEY BOXLITE_REST_URL={{REST_API_URL}} bash quickstart-rest.sh",

@@ -15,12 +15,13 @@ npm command -> domain CLI -> deployment facade -> SST -> stack/deployStack()
 - [Deployment](docs/deployment.md) — prerequisites, bootstrap, preview, deploy, artifact modes, routine commands, and troubleshooting
 - [Security](docs/security.md) — credentials, policy enforcement, and protected resources
 - [Networking](docs/networking.md) — VPC layout and traffic flows
+- [ClickHouse](CLICKHOUSE.md) — backend selection and private UI access
 
 Use the repository make targets for validation:
 
 ```bash
-make test:apps:infra
-make test:apps:infra-config
+make test:apps:infra         # type-checks what needs no `sst install`, then runs the suite
+make test:apps:infra-config  # installs the SST platform, then type-checks the whole package
 ```
 
 Never apply a preview merely to validate configuration. All deploys require an explicit stage and

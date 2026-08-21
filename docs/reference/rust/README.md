@@ -577,8 +577,11 @@ pub struct BoxOptions {
     /// Volume mounts
     pub volumes: Vec<VolumeSpec>,
 
-    /// Network isolation mode
+    /// Network policy, per direction
     pub network: NetworkSpec,
+
+    /// Inbound reachability of exposed services
+    pub inbound_network: NetworkSpec,
 
     /// Outbound HTTP(S) secret substitution rules
     pub secrets: Vec<Secret>,
@@ -697,18 +700,39 @@ pub struct VolumeSpec {
 
 ### NetworkSpec
 
-Network isolation options.
+Guest egress policy — unchanged by the outbound/inbound split.
 
 ```rust
 pub enum NetworkSpec {
     Enabled {
-        allow_net: Vec<String>, // empty = full outbound access
+        allow_net: Vec<String>, // empty = full access
     },
-    Disabled,
+    Disabled,                   // no guest network interface at all
 }
 ```
 
 `allow_net` supports exact hosts, wildcard hosts, IPs, and CIDRs, and restricts both TCP and UDP egress. Hostname rules rely on TLS SNI / HTTP Host inspection, which only TCP carries, so an `allow_net` holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP open. `Disabled` removes the guest network interface entirely.
+
+The inbound direction — whether services the box exposes are reachable from
+outside it — is the sibling field `BoxOptions::inbound_network`, which reuses
+this same type: `Enabled` = reachable (the default), `Disabled` = private.
+The two directions are independent, so a box may refuse egress while the
+services it exposes stay reachable, or the reverse.
+
+```rust
+let opts = BoxOptions {
+    network: NetworkSpec::Disabled,                                  // no egress
+    inbound_network: NetworkSpec::Enabled { allow_net: vec![] },     // still reachable
+    ..Default::default()
+};
+```
+
+`inbound_network`'s `allow_net` must be empty — no layer enforces an inbound
+allowlist yet, so a non-empty value is rejected at create. Inbound is
+controlled by enabled/disabled alone.
+
+Pre-split code needs no change: `network` keeps its name, type and meaning,
+and box configs persisted without `inbound_network` load with it defaulted.
 
 ### Secret
 

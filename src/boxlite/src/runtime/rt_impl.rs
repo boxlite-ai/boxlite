@@ -435,6 +435,18 @@ impl RuntimeImpl {
         name: Option<String>,
         reuse_existing: bool,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        // Every reachable caller is `LocalRuntime` (`RuntimeImpl` isn't
+        // re-exported), which normalizes via `sanitize_local_options` before
+        // reaching here — assert the invariant instead of re-normalizing.
+        debug_assert!(
+            !options.advanced.privileged
+                || options
+                    .advanced
+                    .capabilities
+                    .is_privileged_capability_shape(),
+            "create_inner expects options already normalized by sanitize_local_options"
+        );
+
         // Check if runtime has been shut down
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
@@ -537,10 +549,8 @@ impl RuntimeImpl {
         actual: &BoxConfig,
     ) -> BoxliteResult<()> {
         let box_name = actual.name.as_deref().unwrap_or_else(|| actual.id.as_str());
-        requested
-            .advanced
-            .capabilities
-            .check_compatibility(&actual.options.advanced.capabilities, box_name)?;
+        let mut actual_advanced = actual.options.advanced.clone();
+        actual_advanced.normalize_privileged();
 
         // One-way: a nested-capable box satisfies any request, but a plain box
         // cannot satisfy one that needs /dev/kvm. Reusing it would look like a
@@ -552,6 +562,16 @@ impl RuntimeImpl {
                 "box '{box_name}' was created without nested virtualization and cannot satisfy a required nested virtualization request; use a different name or recreate the box"
             )));
         }
+        if requested.advanced.privileged && !actual_advanced.privileged {
+            return Err(BoxliteError::Unsupported(format!(
+                "box '{box_name}' was created without privileged support and cannot satisfy a required privileged request; use a different name or recreate the box"
+            )));
+        }
+
+        requested
+            .advanced
+            .capabilities
+            .check_compatibility(&actual_advanced.capabilities, box_name)?;
 
         Ok(())
     }
@@ -1201,10 +1221,12 @@ impl RuntimeImpl {
         self: &Arc<Self>,
         staging_dir: std::path::PathBuf,
         name: Option<String>,
-        options: BoxOptions,
+        mut options: BoxOptions,
         initial_status: BoxStatus,
     ) -> BoxliteResult<LiteBox> {
         use crate::litebox::config::ContainerRuntimeConfig;
+
+        options.advanced.normalize_privileged();
 
         let box_id = BoxIDMint::mint();
         let container_id = ContainerID::new();
@@ -1726,11 +1748,12 @@ fn reject_local_lifecycle_policy(options: &BoxOptions) -> BoxliteResult<()> {
 
 async fn sanitize_local_options(
     features: &ExperimentalFeatures,
-    options: BoxOptions,
+    mut options: BoxOptions,
 ) -> BoxliteResult<BoxOptions> {
     features.require_for_options(&options)?;
     tokio::task::spawn_blocking(move || {
         options.sanitize()?;
+        options.advanced.normalize_privileged();
         Ok(options)
     })
     .await
@@ -2006,6 +2029,21 @@ mod tests {
 
         let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
         sanitize_local_options(&enabled, options).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn privileged_options_do_not_require_experimental_features() {
+        let options = BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                privileged: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        sanitize_local_options(&ExperimentalFeatures::default(), options)
+            .await
+            .expect("privileged mode should be available without an experimental opt-in");
     }
 
     /// Create a RuntimeImpl with isolated temp directory.
@@ -3091,6 +3129,50 @@ mod tests {
             }
             Err(other) => panic!("expected Unsupported error, got: {other}"),
             Ok(_) => panic!("get_or_create must not reuse a non-nested box"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_privileged_upgrade() {
+        let (runtime, _dir) = create_test_runtime();
+        let name = Some("plain-box".to_string());
+
+        let (_, created) = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    ..Default::default()
+                },
+                name.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(created);
+
+        // set_privileged (not a hand-built struct literal) so this request is
+        // already in the normalized shape a real caller produces — create_inner
+        // itself no longer normalizes; it trusts sanitize_local_options did.
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.set_privileged(true);
+
+        let result = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    advanced,
+                    ..Default::default()
+                },
+                name,
+            )
+            .await;
+
+        match result {
+            Err(BoxliteError::Unsupported(message)) => {
+                assert!(message.contains("privileged"));
+                assert!(message.contains("plain-box"));
+            }
+            Err(other) => panic!("expected Unsupported error, got: {other}"),
+            Ok(_) => panic!("get_or_create must not reuse a non-privileged box"),
         }
     }
 

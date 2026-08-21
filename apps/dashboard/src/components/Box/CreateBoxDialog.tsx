@@ -677,8 +677,15 @@ export const CreateBoxDialog = ({
                 onChange={(e) => setName(e.target.value)}
                 placeholder="my-new-box"
                 aria-invalid={!nameValid}
+                aria-describedby="create-box-name-hint"
                 className="w-full border border-border bg-card px-[13px] py-[11px] font-mono text-[13px] text-foreground outline-none focus:border-brand aria-[invalid=true]:border-destructive"
               />
+              {/* Submitting an empty name is a real, supported path — the API then assigns
+                  an adjective-animal name of its own. Say so here, or the placeholder reads
+                  as a promise that the box will be called something like "my-new-box". */}
+              <div id="create-box-name-hint" className="font-mono text-[11px] leading-relaxed text-muted-foreground">
+                Optional — auto-named like <span className="text-foreground">cozy-otter</span>.
+              </div>
             </div>
 
             <div className="flex flex-col gap-[9px]">

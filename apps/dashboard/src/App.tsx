@@ -186,7 +186,7 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.VOLUMES)} element={<Volumes />} />
         {/* Plan, wallet and usage are sections of the one Billing page. The old
             per-surface paths stay as redirects so existing links keep working.
-            The route is open to any member: the wallet/tier data is owner-scoped by
+            The route is open to any member: the wallet/plan data is owner-scoped by
             hooks/queries/billingQueries.ts, and the plan-switching surface is gated
             on the owner role inside components/billing/PlanSection.tsx. */}
         <Route path={getRouteSubPath(RoutePath.BILLING)} element={<Billing />} />
