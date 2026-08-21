@@ -83,10 +83,12 @@ export function validateRunnerResource(resource: any, inventory: any, baseline: 
     violations.push('Runner resources must ignore only AMI and user-data changes.')
   }
 
+  // A Runner the state does not hold yet is a create, and a create has nothing to be compared
+  // against — so the two fingerprint checks below are skipped rather than failed. Everything above
+  // still applies: a host this deploy is about to create is protected, ignores the same two
+  // properties, and carries the same identity as one that has been running for months.
   const currentProperties = baseline?.resources?.[resource.name]
-  if (currentProperties === undefined) {
-    violations.push('Routine deployment must not create a Runner resource.')
-  } else {
+  if (currentProperties !== undefined) {
     try {
       const desiredFingerprint = createRunnerSafetyFingerprint(resource.props)
       if (desiredFingerprint !== currentProperties.inputFingerprint) {
@@ -136,12 +138,13 @@ export function validateRunnerStack(resources: any, inventory: any, baseline: an
     violations.push('Runner inventory contains an undeclared resource.')
   }
 
-  const currentResourceNames = new Set(Object.keys(baseline?.resources ?? {}))
-  const inventoryDiffersFromState =
-    inventory.some((runner: any) => !currentResourceNames.has(runner.resourceName)) ||
-    [...currentResourceNames].some((name) => !expectedByResourceName.has(name))
-  if (inventoryDiffersFromState) {
-    violations.push('Runner inventory differs from the current deployment state.')
+  // Only one direction of inventory/state drift is refused. A declared Runner the state lacks is
+  // growth, and this pack lets a deploy create it; a state resource the inventory has stopped
+  // declaring is a scale-down, which Pulumi reads as a delete of a protected host holding live
+  // microVMs — the one shape no deploy of this stack may plan.
+  const currentResourceNames = Object.keys(baseline?.resources ?? {})
+  if (currentResourceNames.some((name) => !expectedByResourceName.has(name))) {
+    violations.push('Runner inventory must keep declaring every Runner the deployment state holds.')
   }
 
   return violations

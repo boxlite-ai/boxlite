@@ -293,21 +293,16 @@ test('rejects protected Runner property drift even when no preview event is avai
   }
 })
 
-test('rejects a currently missing Runner in routine deployments', () => {
-  const inventory = resolveRunnerInventory({ RUNNERS: '2' })
+test('creates every declared Runner the deployment state does not hold yet', () => {
+  // Growth needs no per-run permission. Raising RUNNERS is the decision; this pack's job is the
+  // hosts that already exist, and a declared instance the state lacks is not one of them.
+  const inventory = resolveRunnerInventory({ RUNNERS: '3' })
   const baseline = runnerBaseline(inventory, inventory.slice(0, 1))
   const resources = inventory.map((spec) => runnerResource(spec))
 
-  assert.ok(
-    validateRunnerResource(resources[1], inventory, baseline).includes(
-      'Routine deployment must not create a Runner resource.',
-    ),
-  )
-  assert.ok(
-    validateRunnerStack(resources, inventory, baseline).includes(
-      'Runner inventory differs from the current deployment state.',
-    ),
-  )
+  assert.deepEqual(validateRunnerResource(resources[1], inventory, baseline), [])
+  assert.deepEqual(validateRunnerResource(resources[2], inventory, baseline), [])
+  assert.deepEqual(validateRunnerStack(resources, inventory, baseline), [])
 })
 
 test('rejects Runner properties that cannot be resolved during preview', () => {
@@ -375,4 +370,67 @@ test('wires mandatory resource and stack validators to policy reports', () => {
     ),
     ['Runner inventory is missing a declared resource.'],
   )
+})
+
+test('a Runner this deploy creates still owes every lifecycle and identity guarantee', () => {
+  const inventory = resolveRunnerInventory({ RUNNERS: '2' })
+  const baseline = runnerBaseline(inventory, inventory.slice(0, 1))
+  const [, extraRunner] = inventory
+  const mismatchedNameTag = runnerResource(extraRunner)
+  mismatchedNameTag.props.tags.Name = 'boxlite-runner-9'
+
+  assert.deepEqual(
+    validateRunnerResource(runnerResource(extraRunner, { opts: { ...SAFE_OPTIONS, protect: false } }), inventory, baseline),
+    ['Runner resources must keep deletion protection enabled.'],
+  )
+  assert.deepEqual(
+    validateRunnerResource(
+      runnerResource(extraRunner, { opts: { protect: true, ignoreChanges: ['ami'] } }),
+      inventory,
+      baseline,
+    ),
+    ['Runner resources must ignore only AMI and user-data changes.'],
+  )
+  assert.deepEqual(validateRunnerResource(mismatchedNameTag, inventory, baseline), [
+    'Runner identity tags must match the deployment inventory.',
+  ])
+  assert.deepEqual(
+    validateRunnerResource(
+      runnerResource(extraRunner, { type: 'aws:ec2/launchTemplate:LaunchTemplate' }),
+      inventory,
+      baseline,
+    ),
+    ['Runner resources must remain EC2 instances.'],
+  )
+})
+
+test('creating one Runner never waives the guards on a Runner that already exists', () => {
+  // The two checks a create skips are skipped because it has no state to be compared against, not
+  // because the run is permitted to change hosts that do.
+  const inventory = resolveRunnerInventory({ RUNNERS: '3' })
+  const baseline = runnerBaseline(inventory, inventory.slice(0, 2))
+  const resource = runnerResource(inventory[1])
+  resource.props = { ...resource.props, instanceType: 'c8i.4xlarge' }
+
+  assert.deepEqual(validateRunnerResource(resource, inventory, baseline), [
+    'Runner protected properties must match the current deployment state.',
+  ])
+  assert.deepEqual(validateRunnerResource(runnerResource(inventory[2]), inventory, baseline), [])
+})
+
+test('a Runner the inventory has stopped declaring is refused, in either validator', () => {
+  // Scaling DOWN is the other direction of the same drift, and the one this pack still refuses:
+  // Pulumi reads an undeclared protected resource as a delete of a host holding live microVMs.
+  const currentInventory = resolveRunnerInventory({ RUNNERS: '2' })
+  const desiredInventory = resolveRunnerInventory({ RUNNERS: '1' })
+  const baseline = runnerBaseline(currentInventory)
+  const resources = desiredInventory.map((spec) => runnerResource(spec))
+
+  assert.deepEqual(validateRunnerStack(resources, desiredInventory, baseline), [
+    'Runner inventory must keep declaring every Runner the deployment state holds.',
+  ])
+  // Reached the other way — the instance still in the plan — it is an undeclared identity.
+  assert.deepEqual(validateRunnerResource(runnerResource(currentInventory[1]), desiredInventory, baseline), [
+    'Runner identity is not declared by the deployment inventory.',
+  ])
 })

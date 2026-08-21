@@ -77,11 +77,12 @@ and the stack itself:
 | A GitHub repo | `npm run login` runs `gh auth login` |
 | A Cloudflare domain + API token | One manual step — see [Cloudflare API token](#cloudflare-api-token) |
 | An OIDC tenant | Signup is always manual. `--provision-auth0` creates the app, API, and post-login Action **only on Auth0**; any other compliant IdP needs those created by hand |
-| An existing stack whose Runner count matches `RUNNERS` | First-Runner provisioning is not implemented here |
+| An existing stack that already has its first Runner | First-Runner provisioning is not implemented here; a *further* one is [scaling out](#scaling-runners-out) |
 
 ## Deploy an existing stack
 
-This updates an existing stack. It cannot create or replace a Runner.
+This updates an existing stack. It never replaces a Runner, and it creates one
+only when the dispatch explicitly names it — see [scaling out](#scaling-runners-out).
 
 ```bash
 cd apps/infra
@@ -162,9 +163,9 @@ credentials.
 Either path first runs deployment safety tests that require every Runner to
 retain `protect: true` and the AMI/user-data ignore rules. The build path then
 runs a full `sst diff` under the mandatory `policies/runner` policy pack, which
-rejects creating, replacing, or deleting a Runner instance and any in-place
-Runner change other than provider association or tags — the same pack the apply
-runs under, so a plan it refuses can never be applied. Workflow dispatch
+rejects replacing or deleting a Runner instance and any in-place Runner change
+other than provider association or tags — the same pack the apply runs under, so
+a plan it refuses can never be applied. Workflow dispatch
 defaults to a preview-only run; set `apply=true` only after reviewing it. An
 apply run repeats the same guarded preview before the full-stack deploy:
 
@@ -349,9 +350,39 @@ time and stops on the first failure.
 **The Runner holds state.** `/var/lib/boxlite` and the live microVMs are on its
 root disk, so `stack/runners.ts` marks it `protect: true` with
 `ignoreChanges: ['ami', 'userDataBase64']`. Routine deploys never replace it.
-The CI gate rejects any Runner create, delete, replace, or protected-property
-change — so scaling out, scaling down, and first-Runner provisioning are all
-separate reviewed operations that this repository does not implement.
+The CI gate rejects any Runner delete, replace, or protected-property change — so
+scaling down remains a separate operation this repository does not implement,
+while scaling out is an ordinary deploy.
+
+### Scaling Runners out
+
+`RUNNERS` in the stage's secret store says how many Runners the stack declares.
+Raising it is the whole decision; the next deploy creates the host:
+
+```bash
+cd apps/infra
+npm run sst -- secret set RUNNERS 2 --stage dev     # declare it
+
+gh workflow run deploy-infra.yml --ref main \
+  -f stage=dev -f components=api+runner -f apply=false   # preview the create
+gh workflow run deploy-infra.yml --ref main \
+  -f stage=dev -f components=api+runner -f apply=true    # create it
+```
+
+The policy pack guards the hosts that already exist, not the count. A Runner the
+inventory declares and the state does not hold yet is a create, and a create has
+no state to be compared against — so the two fingerprint checks are skipped for
+it. Nothing else is: the new host still has to be `protect: true`, ignore exactly
+`ami` and `userDataBase64`, and carry the identity tags its inventory entry
+specifies. A Runner the state holds but the inventory has stopped declaring is
+still refused, because Pulumi reads an undeclared protected resource as a delete.
+
+Keep the Runner in `components`. `--exclude Runner` leaves the new instance out of
+the plan, so the run reports success having created nothing and the host appears
+on whichever later deploy does include it.
+
+The API seeds only the default Runner. Extra ones are registered with the control
+plane after the deploy by `RegisterExtraRunners`, each with its own token.
 
 **Version bumps reach the fleet by rolling upgrade, not replacement.** A deploy
 runs `scripts/runner-update-binary.mjs` per host over SSM, chained so hosts

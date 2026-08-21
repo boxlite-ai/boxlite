@@ -145,7 +145,6 @@ test('every credential-context and artifact-selector key is refused', () => {
     'RUNNER_ARTIFACT_BUCKET',
     'RUNNER_ARTIFACT_REF',
     'RUNNER_ARTIFACT_SOURCE',
-    'RUNNER_CREATE_ALLOWLIST',
     'SST_BIN_PATH',
   ]
   for (const key of forbidden) {

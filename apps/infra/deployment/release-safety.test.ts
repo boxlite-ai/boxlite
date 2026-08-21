@@ -949,7 +949,6 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
     default: false,
     type: 'boolean',
   })
-  assert.equal(workflow.on.workflow_dispatch.inputs.runner_create_allowlist, undefined)
   assert.match(source, /environment: \$\{\{ inputs\.stage \}\}/)
   assert.equal(workflow.permissions['id-token'], 'write')
   assert.equal(workflow.jobs.deploy['runs-on'], 'ubuntu-24.04')
@@ -1169,7 +1168,6 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assertShellLine(archStep.run, /test "\$\(docker info --format '\{\{\.Architecture\}\}'\)" = "x86_64"/)
   assert.match(source, /aws-actions\/configure-aws-credentials@/)
   assertComposedDeployRoleArn(source, '${{ inputs.stage }}')
-  assert.equal(workflow.jobs.deploy.env.RUNNER_CREATE_ALLOWLIST, undefined)
   // Every sst step passes --stage "$STAGE"; without this job env they would all
   // run with an empty stage.
   assert.equal(workflow.jobs.deploy.env.STAGE, '${{ inputs.stage }}')
