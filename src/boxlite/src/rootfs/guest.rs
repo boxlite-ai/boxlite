@@ -556,37 +556,20 @@ impl GuestRootfsManager {
 
     /// Garbage-collect stale guest rootfs entries.
     ///
-    /// Uses DB records to identify rootfs entries. Preserves entries whose
-    /// version key contains the current guest binary hash (valid for future boxes).
-    /// Only deletes entries with outdated guest hashes that no existing box references.
+    /// Keeps the current minimal rootfs (keyed by the combined artifact id) and
+    /// any base an existing box overlay still backs onto. Deletes everything else
+    /// — including OCI Debian rootfs bases, which the boot path no longer produces.
     ///
     /// Returns the number of entries removed.
     pub fn gc(&self, boxes_dir: &Path) -> BoxliteResult<usize> {
         let gc_start = std::time::Instant::now();
 
-        // Version keys are "{image_12}-{guest_12}", so entries whose name ends
-        // with the current guest id are still valid for future boxes.
-        let current_guest_suffix = match GuestBinary::get() {
-            Ok(guest) => format!("-{}", guest.id()),
-            Err(e) => {
-                tracing::warn!("GC: cannot resolve the guest binary, skipping: {}", e);
-                return Ok(0);
-            }
-        };
-
-        // The minimal rootfs is keyed by the combined artifact id (not the guest
-        // suffix), so keep the current one when it resolves.
         let current_minimal_key = GuestArtifacts::get().ok().map(|a| a.id().to_string());
 
-        let result = self.gc_inner(
-            boxes_dir,
-            &current_guest_suffix,
-            current_minimal_key.as_deref(),
-        );
+        let result = self.gc_inner(boxes_dir, current_minimal_key.as_deref());
 
         tracing::info!(
             elapsed_ms = gc_start.elapsed().as_millis() as u64,
-            suffix = %current_guest_suffix,
             "GC completed"
         );
 
@@ -596,7 +579,6 @@ impl GuestRootfsManager {
     /// Inner GC logic, separated for testability.
     ///
     /// Queries the DB for all rootfs entries, then determines which to keep:
-    /// - Entries whose version key (name) ends with `current_guest_suffix`
     /// - The current minimal rootfs entry (name == `current_minimal_key`)
     /// - Entries whose base_path any box overlay backs onto (see
     ///   [`BaseDiskManager::referenced_backing_paths`], which covers both
@@ -604,7 +586,6 @@ impl GuestRootfsManager {
     fn gc_inner(
         &self,
         boxes_dir: &Path,
-        current_guest_suffix: &str,
         current_minimal_key: Option<&str>,
     ) -> BoxliteResult<usize> {
         let records = self
@@ -636,16 +617,6 @@ impl GuestRootfsManager {
             // Keep entries referenced by existing boxes
             if referenced.contains(&base_path) {
                 preserved_referenced += 1;
-                continue;
-            }
-
-            // Keep entries matching current guest binary version
-            if version_key.ends_with(current_guest_suffix) {
-                preserved_current += 1;
-                tracing::debug!(
-                    version_key = %version_key,
-                    "GC: keeping current-version entry"
-                );
                 continue;
             }
 
@@ -720,6 +691,17 @@ fn stage_tree(rootfs: &Path, artifacts: &GuestArtifacts) -> BoxliteResult<()> {
     // The guest invokes `mkfs.ext4` (`src/guest/src/storage/block_device.rs`);
     // mke2fs dispatches on argv[0], so a byte-identical copy is the alias.
     copy_artifact(artifacts.mke2fs().path(), &bin.join("mkfs.ext4"))?;
+
+    // The rootfs is attached read-only, so every directory that is created at
+    // boot must already exist:
+    // - `/tmp`, `/var/tmp`, `/run` — tmpfs mount points the guest mounts itself.
+    // - `/dev`, `/proc`, `/sys` — mount points libkrun's init.krun mkdirs before
+    //   mounting devtmpfs/proc/sysfs (init.c mount_filesystems).
+    for dir in ["tmp", "var/tmp", "run", "dev", "proc", "sys"] {
+        std::fs::create_dir_all(rootfs.join(dir)).map_err(|e| {
+            BoxliteError::Storage(format!("Failed to create mount point {dir}: {e}"))
+        })?;
+    }
 
     Ok(())
 }
@@ -1012,15 +994,16 @@ mod tests {
         let base_disk_mgr = BaseDiskManager::new(bases_dir, store);
         let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
 
-        // No boxes reference anything, old guest hash → both removed
-        let removed = mgr.gc_inner(&boxes_dir, "-currentguest", None).unwrap();
+        // No boxes reference anything and neither matches the current minimal
+        // key → both removed.
+        let removed = mgr.gc_inner(&boxes_dir, None).unwrap();
         assert_eq!(removed, 2);
         assert!(!file1.exists());
         assert!(!file2.exists());
     }
 
     #[test]
-    fn test_gc_preserves_current_version_entries() {
+    fn test_gc_preserves_current_minimal_entry() {
         let dir = tempfile::TempDir::new().unwrap();
         let bases_dir = dir.path().join("bases");
         let boxes_dir = dir.path().join("boxes");
@@ -1029,34 +1012,34 @@ mod tests {
 
         let store = test_store();
 
-        // Current-version entry (version_key ends with current guest suffix)
+        // Current minimal rootfs entry (name == current_minimal_key)
         let current_file = bases_dir.join("ccc33333.ext4");
-        std::fs::write(&current_file, "current version").unwrap();
+        std::fs::write(&current_file, "current minimal").unwrap();
         insert_rootfs_record(
             &store,
             "ccc33333",
-            "img123-currentguest",
+            "minimal-current",
             current_file.to_str().unwrap(),
         );
 
-        // Stale entry (old guest hash)
+        // Stale entry (a different rootfs key)
         let stale_file = bases_dir.join("ddd44444.ext4");
-        std::fs::write(&stale_file, "old version").unwrap();
+        std::fs::write(&stale_file, "stale").unwrap();
         insert_rootfs_record(
             &store,
             "ddd44444",
-            "img123-oldguest",
+            "minimal-old",
             stale_file.to_str().unwrap(),
         );
 
         let base_disk_mgr = BaseDiskManager::new(bases_dir, store);
         let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
 
-        let removed = mgr.gc_inner(&boxes_dir, "-currentguest", None).unwrap();
+        let removed = mgr.gc_inner(&boxes_dir, Some("minimal-current")).unwrap();
         assert_eq!(removed, 1);
         assert!(
             current_file.exists(),
-            "Current-version entry should be kept"
+            "Current minimal entry should be kept"
         );
         assert!(!stale_file.exists(), "Stale entry should be removed");
     }
@@ -1110,7 +1093,7 @@ mod tests {
         let base_disk_mgr = BaseDiskManager::new(bases_dir, store);
         let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
 
-        let removed = mgr.gc_inner(&boxes_dir, "-currentguest", None).unwrap();
+        let removed = mgr.gc_inner(&boxes_dir, None).unwrap();
         assert_eq!(removed, 1);
         assert!(referenced_file.exists(), "Referenced entry should be kept");
         assert!(
@@ -1124,7 +1107,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let mgr = make_mgr(dir.path().join("bases"), dir.path().to_path_buf());
 
-        let removed = mgr.gc_inner(dir.path(), "-anything", None).unwrap();
+        let removed = mgr.gc_inner(dir.path(), None).unwrap();
         assert_eq!(removed, 0);
     }
 
@@ -1136,7 +1119,7 @@ mod tests {
 
         let store = test_store();
 
-        // Stale entry (doesn't match current suffix)
+        // Stale entry (doesn't match the current minimal key)
         let stale = bases_dir.join("ggg77777.ext4");
         std::fs::write(&stale, "orphan").unwrap();
         insert_rootfs_record(&store, "ggg77777", "img-oldguest", stale.to_str().unwrap());
@@ -1145,7 +1128,7 @@ mod tests {
         let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
 
         let removed = mgr
-            .gc_inner(&dir.path().join("nonexistent-boxes"), "-currentguest", None)
+            .gc_inner(&dir.path().join("nonexistent-boxes"), None)
             .unwrap();
         assert_eq!(removed, 1);
     }

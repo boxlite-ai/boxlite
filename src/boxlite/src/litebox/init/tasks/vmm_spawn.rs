@@ -26,7 +26,7 @@ use crate::volumes::{
 use async_trait::async_trait;
 use boxlite_shared::BoxTransport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub struct VmmSpawnTask;
 
@@ -36,7 +36,6 @@ struct VmmSpawnInputs {
     container_image_config: ContainerImageConfig,
     prepared_kernel: Option<PreparedKernel>,
     container_disk_path: PathBuf,
-    guest_disk_path: Option<PathBuf>,
     container_id: ContainerID,
     runtime: SharedRuntimeImpl,
     reuse_rootfs: bool,
@@ -71,10 +70,6 @@ impl VmmSpawnInputs {
             container_image_config,
             prepared_kernel,
             container_disk_path,
-            guest_disk_path: ctx
-                .guest_disk
-                .as_ref()
-                .map(|disk| disk.path().to_path_buf()),
             container_id: ctx.config.container.id.clone(),
             runtime: ctx.runtime.clone(),
             reuse_rootfs: ctx.reuse_rootfs,
@@ -142,7 +137,6 @@ async fn build_config(
         container_image_config,
         prepared_kernel,
         container_disk_path,
-        guest_disk_path,
         container_id,
         runtime,
         reuse_rootfs,
@@ -224,8 +218,7 @@ async fn build_config(
         .ok_or_else(|| BoxliteError::Internal("guest_rootfs not initialized".into()))?
         .clone();
 
-    let guest_rootfs =
-        configure_guest_rootfs(guest_rootfs, guest_disk_path.as_deref(), &mut volume_mgr)?;
+    let guest_rootfs = configure_guest_rootfs(guest_rootfs, &mut volume_mgr)?;
 
     // Build VMM config from volume manager
     let vmm_config = volume_mgr.build_vmm_config();
@@ -280,17 +273,18 @@ async fn build_config(
 /// Configure guest rootfs with device path from volume manager.
 fn configure_guest_rootfs(
     mut guest_rootfs: GuestRootfs,
-    guest_disk_path: Option<&Path>,
     volume_mgr: &mut GuestVolumeManager,
 ) -> BoxliteResult<GuestRootfs> {
-    if let Some(disk_path_input) = guest_disk_path
-        && let Strategy::Disk { ref disk_path, .. } = guest_rootfs.strategy
-    {
-        // Add disk to volume manager (guest rootfs - no format/resize needed)
+    if let Strategy::Disk { ref disk_path, .. } = guest_rootfs.strategy {
+        // The guest rootfs is read-only: attach the base ext4 directly, with no
+        // per-box qcow2 COW overlay — the guest never writes its root disk.
+        // The block device is opened read-only (bases/ is mounted RO by the
+        // jailer), and the "ro" mount option in set_root_disk_remount makes the
+        // guest root read-only too.
         let device_path = volume_mgr.add_block_device(
-            disk_path_input,
-            DiskFormat::Qcow2,
-            false,
+            disk_path,
+            DiskFormat::Ext4,
+            true, // read_only
             None,
             false, // need_format
             false, // need_resize

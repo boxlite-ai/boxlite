@@ -58,7 +58,7 @@ fn test_run_fully_qualified_image_bypasses_registry() {
         .arg("--registry")
         .arg("invalid.registry.that.does.not.exist")
         .arg("--registry")
-        .arg(TEST_REGISTRIES[0]) // needed for guest rootfs (debian:bookworm-slim)
+        .arg(TEST_REGISTRIES[0]) // mirror for pulling the alpine container image
         .args(["run", "--rm", &qualified, "echo", "fully qualified"]);
     ctx.cmd.assert().success().stdout("fully qualified\n");
 }

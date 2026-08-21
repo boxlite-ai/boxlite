@@ -145,8 +145,6 @@ pub struct RuntimeImpl {
     pub(crate) guest_rootfs_mgr: GuestRootfsManager,
     /// Guest rootfs lazy initialization (Arc<OnceCell>)
     pub(crate) guest_rootfs: Arc<OnceCell<GuestRootfs>>,
-    /// Minimal rootfs lazy initialization (Arc<OnceCell>, background single-flight).
-    pub(crate) minimal_rootfs: Arc<OnceCell<GuestRootfs>>,
     /// Runtime-wide metrics (AtomicU64 based, lock-free)
     pub(crate) runtime_metrics: RuntimeMetricsStorage,
 
@@ -356,7 +354,6 @@ impl RuntimeImpl {
             image_disk_mgr,
             guest_rootfs_mgr,
             guest_rootfs: Arc::new(OnceCell::new()),
-            minimal_rootfs: Arc::new(OnceCell::new()),
             runtime_metrics: RuntimeMetricsStorage::new(),
             experimental_features,
             base_disk_mgr,
