@@ -842,6 +842,22 @@ impl Default for NetworkSpec {
     }
 }
 
+/// Per-direction network I/O rate limit, in bytes per second.
+///
+/// `None` (or `0`) for a direction means no limit. Enforced host-side in the
+/// gvproxy transport relay (guest → internet / internet → guest), so it is
+/// transparent to the guest's TCP stack, which only sees backpressure.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NetworkIoRateLimit {
+    /// Upload (guest → internet) limit, bytes/sec. `None`/`0` = unlimited.
+    #[serde(default)]
+    pub upload_bytes_per_sec: Option<u64>,
+
+    /// Download (internet → guest) limit, bytes/sec. `None`/`0` = unlimited.
+    #[serde(default)]
+    pub download_bytes_per_sec: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PortProtocol {
     #[default]

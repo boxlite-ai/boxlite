@@ -7,6 +7,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.22.0
+	golang.org/x/time v0.12.0
 	gvisor.dev/gvisor v0.0.0-20240916094835-a174eb65023f
 )
 
@@ -27,6 +28,5 @@ require (
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
-	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.47.0 // indirect
 )

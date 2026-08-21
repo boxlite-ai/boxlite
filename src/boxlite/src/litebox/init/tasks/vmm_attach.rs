@@ -96,6 +96,9 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
                 allow_net,
                 secrets,
                 ca_dir: layout.ca_dir(),
+                // Reattach produces no wire spec; the running gvproxy already has
+                // its rate limit baked in at spawn. Control only needs the socket.
+                rate_limit: None,
             };
             runtime.network_factory.create(&config)
         });

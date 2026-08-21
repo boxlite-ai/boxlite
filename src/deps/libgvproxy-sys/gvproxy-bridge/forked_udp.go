@@ -1,11 +1,12 @@
 package main
 
-// forked_udp.go — UDP forwarding gated by the allow_net allowlist.
+// forked_udp.go — UDP forwarding gated by the allow_net allowlist + egress
+// rate limiting.
 //
-// Unlike the TCP path, this is not a fork of upstream's forwarder. The policy
-// check runs at the protocol-handler level, before upstream's forwarder
-// creates an endpoint, and allowed datagrams are handed to that forwarder
-// untouched — same shape as Tailscale's wrapUDPProtocolHandler.
+// The policy check runs at the protocol-handler level, before the forwarder
+// creates an endpoint, and allowed datagrams are handed to that forwarder —
+// same shape as Tailscale's wrapUDPProtocolHandler. The forwarder itself is a
+// fork (UDPWithRateLimit in forked_udp_forwarder.go) that shapes ingress.
 //
 // Traffic that never reaches here: the gateway DNS resolver (bound to
 // GatewayIP:53, services.go:62) and DHCP (bound to :67, dhcp.go:93) are
@@ -16,8 +17,8 @@ package main
 import (
 	"net"
 	"sync"
+	"time"
 
-	"github.com/containers/gvisor-tap-vsock/pkg/services/forwarder"
 	logrus "github.com/sirupsen/logrus"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -28,26 +29,46 @@ import (
 // destination is outside the allowlist and forwards the rest through
 // upstream's forwarder. A nil filter forwards everything.
 func UDPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
-	natLock *sync.Mutex, filter *AllowNetFilter) func(stack.TransportEndpointID, *stack.PacketBuffer) bool {
+	natLock *sync.Mutex, filter *AllowNetFilter, rl *netRateLimiter) func(stack.TransportEndpointID, *stack.PacketBuffer) bool {
 
-	upstream := forwarder.UDP(s, nat, natLock)
+	upstream := UDPWithRateLimit(s, nat, natLock, rl)
+
+	var handler func(stack.TransportEndpointID, *stack.PacketBuffer) bool
 	if filter == nil {
-		return upstream.HandlePacket
+		handler = upstream.HandlePacket
+	} else {
+		blocked := newBlockedDestinationLog()
+		handler = func(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
+			// Policy sees the pre-NAT destination, matching the TCP path
+			// (resolveTCPDestination, forked_tcp.go:83). Upstream applies NAT
+			// itself once the datagram is allowed through.
+			if !udpDestinationAllowed(id.LocalAddress, filter) {
+				blocked.note(id.LocalAddress, id.LocalPort)
+				// Consumed: a silent drop. Returning false would make gVisor
+				// emit ICMP port-unreachable, handing the guest a probe oracle.
+				return true
+			}
+			return upstream.HandlePacket(id, pkt)
+		}
 	}
 
-	blocked := newBlockedDestinationLog()
-	return func(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
-		// Policy sees the pre-NAT destination, matching the TCP path
-		// (resolveTCPDestination, forked_tcp.go:83). Upstream applies NAT
-		// itself once the datagram is allowed through.
-		if !udpDestinationAllowed(id.LocalAddress, filter) {
-			blocked.note(id.LocalAddress, id.LocalPort)
-			// Consumed: a silent drop. Returning false would make gVisor
-			// emit ICMP port-unreachable, handing the guest a probe oracle.
-			return true
+	// UDP egress rate limiting: police the guest → internet datagrams before
+	// they reach the forwarder. UDP has no flow control, so over-limit
+	// datagrams are dropped rather than buffered — this also keeps the gVisor
+	// packet-processing path from blocking (which would stall TCP on the same
+	// NIC). Ingress (host → guest) is shaped in the forked UDPWithRateLimit
+	// (forked_udp_forwarder.go) by throttling the dialed conn's reads.
+	if rl != nil && rl.upload != nil {
+		upload := rl.upload
+		return func(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
+			if !upload.AllowN(time.Now(), pkt.Size()) {
+				return true // over-limit: drop the datagram
+			}
+			return handler(id, pkt)
 		}
-		return upstream.HandlePacket(id, pkt)
 	}
+
+	return handler
 }
 
 // udpDestinationAllowed applies the same link-local and broadcast guards as

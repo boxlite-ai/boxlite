@@ -366,6 +366,7 @@ fn build_network_backend(
         allow_net,
         secrets: options.secrets.clone(),
         ca_dir: layout.ca_dir(),
+        rate_limit: options.advanced.net_io_rate_limit.clone(),
     };
 
     // Hand the config to the backend abstraction — the one backend for this box.

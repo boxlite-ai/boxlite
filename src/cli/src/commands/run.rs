@@ -1,6 +1,6 @@
 use crate::cli::{
-    CapabilityFlags, GlobalFlags, KernelFlags, ManagementFlags, NetworkFlags, ProcessFlags,
-    PublishFlags, ResourceFlags, VolumeFlags,
+    CapabilityFlags, GlobalFlags, KernelFlags, ManagementFlags, NetworkFlags,
+    NetworkRateLimitFlags, ProcessFlags, PublishFlags, ResourceFlags, VolumeFlags,
 };
 use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
@@ -39,6 +39,9 @@ pub struct RunArgs {
     #[arg(index = 1, trailing_var_arg = true, value_name = "IMAGE|COMMAND")]
     pub args: Vec<String>,
 
+    #[command(flatten, next_help_heading = "Advanced options")]
+    pub rate_limit: NetworkRateLimitFlags,
+
     #[command(flatten, next_help_heading = "Advanced boot options")]
     pub boot: KernelFlags,
 }
@@ -55,6 +58,7 @@ pub async fn execute(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<i32>
     args.boot.require_enabled(global.experimental_features())?;
     args.management
         .require_enabled(global.experimental_features())?;
+    args.rate_limit.reject_in_rest_mode(global.is_rest_mode())?;
     let (rootfs, command_args) = args.rootfs_and_command()?;
     let command_args = command_args.to_vec();
     let mut runner = BoxRunner::new(args, global)?;
@@ -138,6 +142,7 @@ impl BoxRunner {
             .volume
             .apply_to(&mut options, self.home.as_deref())?;
         self.args.network.apply_to(&mut options)?;
+        self.args.rate_limit.apply_to(&mut options);
         self.args.process.apply_to(&mut options)?;
 
         // Detached boxes keep manual lifecycle control: detach silently

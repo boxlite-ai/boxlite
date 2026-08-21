@@ -40,6 +40,7 @@ func installAllowNetHandlers(
 	filter *AllowNetFilter,
 	ca *BoxCA,
 	secretMatcher *SecretHostMatcher,
+	rateLimiter *netRateLimiter,
 ) error {
 	s, err := stackOf(vn)
 	if err != nil {
@@ -51,11 +52,11 @@ func installAllowNetHandlers(
 	nat := natTable(config)
 	var natLock sync.Mutex
 
-	tcpFwd := TCPWithFilter(s, nat, &natLock, ec2MetadataAccess, filter, ca, secretMatcher)
+	tcpFwd := TCPWithFilter(s, nat, &natLock, ec2MetadataAccess, filter, ca, secretMatcher, rateLimiter)
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 	logrus.Info("allowNet TCP: handler overridden with SNI-inspecting forwarder")
 
-	s.SetTransportProtocolHandler(udp.ProtocolNumber, UDPWithFilter(s, nat, &natLock, filter))
+	s.SetTransportProtocolHandler(udp.ProtocolNumber, UDPWithFilter(s, nat, &natLock, filter, rateLimiter))
 	logrus.Info("allowNet UDP: handler overridden with allowlist-checking forwarder")
 
 	return nil

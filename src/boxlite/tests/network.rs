@@ -10,6 +10,7 @@ fn test_config(socket_path: PathBuf) -> NetworkBackendConfig {
         allow_net: Vec::new(),
         secrets: Vec::new(),
         ca_dir: PathBuf::from("/tmp/test-ca"),
+        rate_limit: None,
     }
 }
 
@@ -24,6 +25,7 @@ fn spec_carries_unique_socket_path_across_serde() {
         secrets: Vec::new(),
         ca_cert_pem: None,
         ca_key_pem: None,
+        rate_limit: None,
     };
 
     // socket_path survives serde — this is how it crosses to the shim.
@@ -88,6 +90,31 @@ fn factory_backend_carries_allowlist_and_secret_metadata_in_spec() {
     assert_eq!(spec.secrets[0].name, "openai");
     assert_eq!(spec.secrets[0].hosts, vec!["api.openai.com"]);
     assert_eq!(spec.secrets[0].placeholder, "<BOXLITE_SECRET:openai>");
+}
+
+#[test]
+fn factory_backend_carries_rate_limit_in_spec() {
+    // The rate limit crosses the config → spec boundary (the hop that feeds the
+    // shim), so a locally-created box's advanced setting reaches gvproxy.
+    use boxlite::net::{NetworkBackendFactory, default_factory};
+    use boxlite::NetworkIoRateLimit;
+
+    let mut config = test_config(PathBuf::from("/tmp/factory-rate-limit/net.sock"));
+    config.rate_limit = Some(NetworkIoRateLimit {
+        upload_bytes_per_sec: Some(1_000_000),
+        download_bytes_per_sec: Some(2_000_000),
+    });
+
+    let factory: std::sync::Arc<dyn NetworkBackendFactory> = default_factory();
+    let backend = factory.create(&config).expect("gvproxy backend");
+    let spec = backend.spec();
+    assert_eq!(
+        spec.rate_limit,
+        Some(NetworkIoRateLimit {
+            upload_bytes_per_sec: Some(1_000_000),
+            download_bytes_per_sec: Some(2_000_000),
+        })
+    );
 }
 
 #[test]
