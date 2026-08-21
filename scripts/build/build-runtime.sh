@@ -222,6 +222,20 @@ assemble_runtime() {
     cp "$GUEST_BINARY" "$RUNTIME_LIBS_DIR/"
     echo "✓"
 
+    # Guest e2fsprogs tools, embedded under distinct names so they never shadow
+    # the host mke2fs bundled by e2fsprogs-sys. Optional: absent unless `make guest`
+    # (or the CI guest build) produced them.
+    if [ -f "$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/mke2fs" ]; then
+        print_step "Copying guest-mke2fs... "
+        cp "$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/mke2fs" "$RUNTIME_LIBS_DIR/guest-mke2fs"
+        echo "✓"
+    fi
+    if [ -f "$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/resize2fs" ]; then
+        print_step "Copying guest-resize2fs... "
+        cp "$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/resize2fs" "$RUNTIME_LIBS_DIR/guest-resize2fs"
+        echo "✓"
+    fi
+
     # Sign shim on macOS (always, to ensure proper entitlements)
     if [ "$OS" = "macos" ] && [ -f "$RUNTIME_LIBS_DIR/boxlite-shim" ]; then
         echo ""

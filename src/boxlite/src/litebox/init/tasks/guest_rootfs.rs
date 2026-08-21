@@ -5,12 +5,14 @@
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
+use crate::experimental::ExperimentalFeature;
 use crate::images::ImageDiskManager;
 use crate::pipeline::PipelineTask;
 use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager, Strategy};
 use crate::runtime::constants::images;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
+use crate::vmm::guest_artifacts::GuestArtifacts;
 use async_trait::async_trait;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::path::Path;
@@ -79,11 +81,55 @@ async fn run_guest_rootfs(
         .await?
         .clone();
 
+    // Prepare the minimal rootfs image in the background (feature-gated,
+    // best-effort); it never blocks or fails this OCI boot path.
+    maybe_kick_off_minimal_rootfs(runtime);
+
     // Now create or reuse the per-box COW disk
     let (_updated_guest_rootfs, disk) =
         create_or_reuse_cow_disk(&guest_rootfs, layout, reuse_rootfs)?;
 
     Ok(disk)
+}
+
+/// Kick off a detached, best-effort build of the minimal guest rootfs image.
+///
+/// Gated behind `ExperimentalFeature::MinimalRootfs`. Runs off the boot path via
+/// `tokio::spawn` (precedent `box_impl.rs`) and single-flights on
+/// `runtime.minimal_rootfs`, so it only prepares the image the later "switch"
+/// step will consume. Failures are logged, never propagated.
+fn maybe_kick_off_minimal_rootfs(runtime: &SharedRuntimeImpl) {
+    if !runtime
+        .experimental_features
+        .is_enabled(ExperimentalFeature::MinimalRootfs)
+    {
+        return;
+    }
+    // Once built, the OnceCell is initialized — skip re-spawning so later box
+    // starts/restarts don't schedule no-op background tasks.
+    if runtime.minimal_rootfs.initialized() {
+        return;
+    }
+
+    let runtime = runtime.clone();
+    tokio::spawn(async move {
+        let result = runtime
+            .minimal_rootfs
+            .get_or_try_init(|| async {
+                let artifacts = GuestArtifacts::get()?;
+                runtime
+                    .guest_rootfs_mgr
+                    .get_or_create_minimal(artifacts)
+                    .await
+            })
+            .await;
+        match result {
+            Ok(_) => tracing::info!("Background minimal rootfs build ready"),
+            Err(e) => {
+                tracing::warn!(error = %e, "Background minimal rootfs build failed (boot unaffected)")
+            }
+        }
+    });
 }
 
 /// Create new COW disk or reuse existing one for restart.

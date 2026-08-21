@@ -21,6 +21,7 @@ pub const EXPERIMENTAL_FEATURES_ENV: &str = "BOXLITE_EXPERIMENTAL";
 pub enum ExperimentalFeature {
     CustomKernel,
     NestedVirtualization,
+    MinimalRootfs,
 }
 
 impl ExperimentalFeature {
@@ -29,6 +30,7 @@ impl ExperimentalFeature {
         match self {
             Self::CustomKernel => "custom-kernel",
             Self::NestedVirtualization => "nested-virtualization",
+            Self::MinimalRootfs => "minimal-rootfs",
         }
     }
 
@@ -36,6 +38,7 @@ impl ExperimentalFeature {
         match self {
             Self::CustomKernel => "custom kernel support",
             Self::NestedVirtualization => "nested virtualization support",
+            Self::MinimalRootfs => "minimal rootfs",
         }
     }
 }
@@ -58,6 +61,7 @@ impl ExperimentalFeatures {
             let feature = match token {
                 "custom-kernel" => ExperimentalFeature::CustomKernel,
                 "nested-virtualization" => ExperimentalFeature::NestedVirtualization,
+                "minimal-rootfs" => ExperimentalFeature::MinimalRootfs,
                 "" => {
                     return Err(BoxliteError::Config(format!(
                         "{EXPERIMENTAL_FEATURES_ENV} contains an empty feature name"
@@ -65,7 +69,7 @@ impl ExperimentalFeatures {
                 }
                 unknown => {
                     return Err(BoxliteError::Config(format!(
-                        "unknown feature '{unknown}' in {EXPERIMENTAL_FEATURES_ENV}; supported values: custom-kernel, nested-virtualization"
+                        "unknown feature '{unknown}' in {EXPERIMENTAL_FEATURES_ENV}; supported values: custom-kernel, nested-virtualization, minimal-rootfs"
                     )));
                 }
             };
@@ -160,6 +164,18 @@ mod tests {
 
         assert!(!features.is_enabled(ExperimentalFeature::CustomKernel));
         assert!(!features.is_enabled(ExperimentalFeature::NestedVirtualization));
+        assert!(!features.is_enabled(ExperimentalFeature::MinimalRootfs));
+    }
+
+    #[test]
+    fn minimal_rootfs_token_enables_the_feature() {
+        let features = ExperimentalFeatures::parse("minimal-rootfs").unwrap();
+        assert!(features.is_enabled(ExperimentalFeature::MinimalRootfs));
+
+        assert!(
+            !ExperimentalFeatures::default().is_enabled(ExperimentalFeature::MinimalRootfs),
+            "minimal rootfs must be disabled by default"
+        );
     }
 
     #[test]
