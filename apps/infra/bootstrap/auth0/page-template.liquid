@@ -45,8 +45,10 @@
      */
     
     /*
-     * The font is loaded here rather than through the theme's fonts.font_url for
-     * two reasons, both load-bearing.
+     * The theme's fonts.font_url loads the regular face as a baseline for tenants
+     * whose plan does not allow a custom page template. The template repeats it
+     * here and adds the medium face for tenants that support this paid feature.
+     * Two details remain load-bearing.
      *
      * One: font_url takes a single URL, and IBM Plex Mono ships no variable face
      * (IBM's own package has no Var-Roman file). Regular and Medium are separate

@@ -158,11 +158,19 @@ test('brandingThemeArgs refuses a theme whose assets are not absolute https URLs
     () => brandingThemeArgs({ theme: theme({ widget: { logo_url: '/brand/logo.png' } }) }),
     /widget.logo_url must be an absolute https URL/,
   )
+  assert.throws(
+    () => brandingThemeArgs({ theme: theme({ fonts: { font_url: '/brand/font.woff2' } }) }),
+    /fonts.font_url must be an absolute https URL/,
+  )
   assert.throws(() => brandingThemeArgs({ theme: { colors: {} } }), /needs at least colors and fonts/)
 })
 
 test('themeAssetUrls reports the theme-side asset bootstrap has to probe', () => {
   assert.deepEqual(themeAssetUrls(theme()), ['https://assets.example.com/logo.png'])
+  assert.deepEqual(themeAssetUrls(theme({ fonts: { font_url: 'https://assets.example.com/mono.woff2' } })), [
+    'https://assets.example.com/logo.png',
+    'https://assets.example.com/mono.woff2',
+  ])
 })
 
 test('validatePublishedAssetResponse requires a successful CORS-enabled asset', () => {
@@ -249,15 +257,17 @@ test('templateAssetUrls rejects every non-HTTPS CSS asset instead of skipping it
   assert.throws(() => templateAssetUrls(`body { background: url('/bg.png') }`), /https/)
 })
 
-test('the checked-in template declares both weights behind a monospace fallback', () => {
+test('the checked-in theme has a regular fallback and the template adds both weights', () => {
   // ULP's own stack ends in sans-serif, so a font that fails to load would take
   // the typography back to where it started while the run reports success.
   assert.equal(templateAssetUrls(CHECKED_IN_TEMPLATE).length, 2)
   assert.match(CHECKED_IN_TEMPLATE, /font-weight: 400/)
   assert.match(CHECKED_IN_TEMPLATE, /font-weight: 500/)
   assert.match(CHECKED_IN_TEMPLATE, /'IBM Plex Mono', ui-monospace,[^;]*monospace !important/)
-  // The single-URL theme field must stay unused, or it would fight the above.
-  assert.equal('font_url' in CHECKED_IN_THEME.fonts, false)
+  assert.equal(
+    CHECKED_IN_THEME.fonts.font_url,
+    'https://boxlite-auth-assets-boxlite-ai.pages.dev/ibm-plex-mono-400.woff2',
+  )
 })
 
 test('defaultThemeArgs reads the tenant theme rather than assuming one exists', () => {
@@ -293,8 +303,13 @@ test('the checked-in theme and template are the ones bootstrap will actually sen
   // tenant otherwise.
   assert.doesNotThrow(() => brandingThemeArgs({ themeId: 'thm_1', theme: CHECKED_IN_THEME }))
   assert.doesNotThrow(() => pageTemplateArgs(CHECKED_IN_TEMPLATE))
-  assert.equal(CHECKED_IN_THEME.borders.widget_corner_radius, 0)
+  assert.equal(CHECKED_IN_THEME.borders.button_border_radius, 1)
+  assert.equal(CHECKED_IN_THEME.borders.input_border_radius, 1)
+  assert.equal(CHECKED_IN_THEME.borders.widget_corner_radius, 1)
   assert.equal(CHECKED_IN_THEME.fonts.reference_text_size, 13)
+  assert.equal('page_background' in CHECKED_IN_THEME.colors, false)
+  assert.equal(CHECKED_IN_THEME.colors.read_only_background, '#232833')
+  assert.equal(CHECKED_IN_THEME.page_background.background_image_url, '')
 })
 
 test('customTextRequests emits one PUT per prompt, keyed by screen', () => {

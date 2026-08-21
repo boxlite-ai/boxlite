@@ -172,7 +172,11 @@ function requireAssetUrl(name: any, value: any) {
 
 /** Remote assets the theme depends on, for bootstrap to probe. */
 export function themeAssetUrls(theme: any) {
-  return [requireAssetUrl('widget.logo_url', theme?.widget?.logo_url)]
+  const urls = [requireAssetUrl('widget.logo_url', theme?.widget?.logo_url)]
+  if (theme?.fonts?.font_url !== undefined) {
+    urls.push(requireAssetUrl('fonts.font_url', theme.fonts.font_url))
+  }
+  return urls
 }
 
 export function validatePublishedAssetResponse({
@@ -225,11 +229,11 @@ export function validatePublishedAssetBody({ url, bodyLength }: { url: string; b
 }
 
 /*
- * The fonts are referenced from the template's @font-face rules rather than
- * the theme's fonts.font_url, which accepts only one URL — IBM Plex Mono ships
- * no variable face, so Regular and Medium are separate files and a single URL
- * would leave the 500 weight synthesized. Reading them back out of the CSS
- * keeps the template the only place a font URL is written down.
+ * The theme carries the regular face as the no-template fallback. Paid-plan
+ * tenants also load both real weights from the template's @font-face rules;
+ * font_url accepts only one URL, and IBM Plex Mono ships no variable face.
+ * Reading the template URLs back out keeps those extra assets in the same
+ * pre-write validation set as the theme fallback.
  */
 const TEMPLATE_ASSET_PATTERN = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^'")][^)]*))\s*\)/gi
 
@@ -330,7 +334,7 @@ export function pageTemplateArgs(template: any) {
 /** Validates every checked-in branding payload before the caller performs its first write. */
 export function prepareAuth0Branding({ theme, template, customText }: any) {
   brandingThemeArgs({ themeId: 'preflight', theme })
-  const assetUrls = [...themeAssetUrls(theme), ...templateAssetUrls(template)]
+  const assetUrls = [...new Set([...themeAssetUrls(theme), ...templateAssetUrls(template)])]
   const templateArgs = pageTemplateArgs(template)
   const customTextArgs = customTextRequests(customText)
   return { theme, assetUrls, templateArgs, customTextArgs }
