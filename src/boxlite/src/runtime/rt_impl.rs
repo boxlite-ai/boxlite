@@ -754,7 +754,17 @@ impl RuntimeImpl {
             let box_id = box_impl.id().to_string();
             async move {
                 let result = if let Some(duration) = timeout_duration {
-                    tokio::time::timeout(duration, box_impl.stop()).await
+                    // Keep the stop future alive after the shutdown deadline. In
+                    // particular, VMM stop may be running in Tokio's blocking
+                    // pool; cancelling the outer future must not skip the PID,
+                    // state, cache, and event cleanup that follows it.
+                    let stop_task = tokio::spawn(async move { box_impl.stop().await });
+                    match tokio::time::timeout(duration, stop_task).await {
+                        Ok(result) => result.map_err(|e| {
+                            BoxliteError::Internal(format!("Box stop task failed: {}", e))
+                        }),
+                        Err(_) => Err(BoxliteError::Internal("stop timed out".into())),
+                    }
                 } else {
                     // Infinite timeout
                     Ok(box_impl.stop().await)
@@ -948,10 +958,18 @@ impl RuntimeImpl {
                         // the synchronous VMM grace-period poll off their Tokio
                         // worker, while retaining direct-call support for the
                         // synchronous API.
-                        if tokio::runtime::Handle::try_current().is_ok() {
-                            let _ = tokio::task::block_in_place(stop);
-                        } else {
-                            let _ = stop();
+                        match tokio::runtime::Handle::try_current() {
+                            Ok(handle)
+                                if matches!(
+                                    handle.runtime_flavor(),
+                                    tokio::runtime::RuntimeFlavor::MultiThread
+                                ) =>
+                            {
+                                let _ = tokio::task::block_in_place(stop);
+                            }
+                            _ => {
+                                let _ = stop();
+                            }
                         }
                     }
                     // Update status to stopped and save
