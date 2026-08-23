@@ -102,10 +102,18 @@ impl EmbeddedRuntime {
         // Fast path: already extracted by this or a previous process.
         let stamp = dir.join(".complete");
         if stamp.exists() {
-            // Refresh mtime so stale cleanup measures "last used", not "first extracted"
-            let now = filetime::FileTime::now();
-            let _ = filetime::set_file_mtime(&stamp, now);
-            return Ok(Self { dir });
+            if !Self::has_all_manifest_files(&dir) {
+                tracing::warn!(
+                    dir = %dir.display(),
+                    "Embedded runtime cache is incomplete; re-extracting"
+                );
+                let _ = std::fs::remove_dir_all(&dir);
+            } else {
+                // Refresh mtime so stale cleanup measures "last used", not "first extracted"
+                let now = filetime::FileTime::now();
+                let _ = filetime::set_file_mtime(&stamp, now);
+                return Ok(Self { dir });
+            }
         }
 
         // PID-scoped temp dir avoids collision between concurrent processes.
@@ -191,6 +199,15 @@ impl EmbeddedRuntime {
     }
 
     // ── Helpers ─────────────────────────────────────────────────────
+
+    /// Check that a completed cache contains every file produced by this build.
+    ///
+    /// The completion stamp can survive a cache being populated by a different
+    /// build variant, so the stamp alone is not sufficient to trust the fast
+    /// path.
+    fn has_all_manifest_files(dir: &Path) -> bool {
+        MANIFEST.iter().all(|(name, _, _)| dir.join(name).is_file())
+    }
 
     fn versioned_dir() -> BoxliteResult<PathBuf> {
         let data_dir = dirs::data_local_dir()
@@ -310,6 +327,28 @@ mod tests {
             EmbeddedRuntime::dir_name("0.9.8", None, "4e5f6a7b8c9d"),
             "v0.9.8-4e5f6a7b8c9d"
         );
+    }
+
+    #[test]
+    fn incomplete_cache_is_not_accepted_as_complete() {
+        if MANIFEST.is_empty() {
+            return;
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(".complete"), "complete\n").unwrap();
+
+        assert!(!EmbeddedRuntime::has_all_manifest_files(tmp.path()));
+
+        for (name, _, data) in MANIFEST {
+            let path = tmp.path().join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, data).unwrap();
+        }
+
+        assert!(EmbeddedRuntime::has_all_manifest_files(tmp.path()));
     }
 
     #[test]
