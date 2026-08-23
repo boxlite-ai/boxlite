@@ -98,7 +98,10 @@ impl EmbeddedRuntime {
 
     fn extract() -> BoxliteResult<Self> {
         let dir = Self::versioned_dir()?;
+        Self::extract_into(dir)
+    }
 
+    fn extract_into(dir: PathBuf) -> BoxliteResult<Self> {
         // Fast path: already extracted by this or a previous process.
         let stamp = dir.join(".complete");
         if stamp.exists() {
@@ -156,7 +159,13 @@ impl EmbeddedRuntime {
                 );
             }
             Err(_) if dir.join(".complete").exists() => {
-                let _ = std::fs::remove_dir_all(&tmp);
+                std::fs::remove_dir_all(&tmp).map_err(|e| {
+                    BoxliteError::Storage(format!(
+                        "remove losing extraction directory {}: {}",
+                        tmp.display(),
+                        e
+                    ))
+                })?;
                 tracing::debug!("Embedded runtime already extracted by another process");
             }
             Err(e) => {
@@ -213,7 +222,11 @@ impl EmbeddedRuntime {
     /// build variant, so the stamp alone is not sufficient to trust the fast
     /// path.
     fn has_all_manifest_files(dir: &Path) -> bool {
-        MANIFEST.iter().all(|(name, _, _)| dir.join(name).is_file())
+        MANIFEST.iter().all(|(name, _, _)| {
+            std::fs::symlink_metadata(dir.join(name))
+                .map(|metadata| metadata.file_type().is_file())
+                .unwrap_or(false)
+        })
     }
 
     /// Atomically move an invalid cache out of the shared path.
@@ -230,10 +243,13 @@ impl EmbeddedRuntime {
         let quarantine = dir.with_extension(format!("invalid.{}.{}", std::process::id(), nonce));
 
         match std::fs::rename(dir, &quarantine) {
-            Ok(()) => {
-                let _ = std::fs::remove_dir_all(&quarantine);
-                Ok(())
-            }
+            Ok(()) => std::fs::remove_dir_all(&quarantine).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "remove quarantined embedded runtime {}: {}",
+                    quarantine.display(),
+                    e
+                ))
+            }),
             Err(_error) if !dir.exists() => Ok(()),
             Err(_) if Self::has_all_manifest_files(dir) => Ok(()),
             Err(error) => Err(BoxliteError::Storage(format!(
@@ -371,19 +387,31 @@ mod tests {
         }
 
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join(".complete"), "complete\n").unwrap();
+        let cache = tmp.path().join("runtime");
+        std::fs::create_dir(&cache).unwrap();
+        std::fs::write(cache.join(".complete"), "complete\n").unwrap();
 
-        assert!(!EmbeddedRuntime::has_all_manifest_files(tmp.path()));
+        let runtime = EmbeddedRuntime::extract_into(cache.clone()).unwrap();
+        assert_eq!(runtime.dir(), cache);
+        assert!(EmbeddedRuntime::has_all_manifest_files(runtime.dir()));
+    }
 
-        for (name, _, data) in MANIFEST {
-            let path = tmp.path().join(name);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).unwrap();
-            }
-            std::fs::write(path, data).unwrap();
+    #[cfg(unix)]
+    #[test]
+    fn manifest_symlink_is_not_accepted_as_a_runtime_file() {
+        if MANIFEST.is_empty() {
+            return;
         }
 
-        assert!(EmbeddedRuntime::has_all_manifest_files(tmp.path()));
+        let tmp = tempfile::tempdir().unwrap();
+        let (name, _, data) = MANIFEST[0];
+        let target = tmp.path().join("outside");
+        std::fs::write(&target, data).unwrap();
+        let linked = tmp.path().join(name);
+        std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&target, &linked).unwrap();
+
+        assert!(!EmbeddedRuntime::has_all_manifest_files(tmp.path()));
     }
 
     #[test]
