@@ -226,6 +226,7 @@ export async function deployStack() {
       resources: clickHouseResources,
       otelCollector,
       otelCollectorOtlpHttpUrl,
+      verificationTrigger: `clickstack-gateway:${clickStackGatewayFlag}:v1`,
     })
 
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────
@@ -297,6 +298,7 @@ export async function deployStack() {
         clickStackOidcConfig && clickStackOidcSecrets && clickHouseResources.mode === 'self-hosted'
           ? {
               clickHouse: clickHouseResources,
+              writerReady: clickHouseWriterReadyDependency,
               domain: serviceDomain('clickstack'),
               oidcIssuer: clickStackOidcConfig.issuer,
               oidcAudience: clickStackOidcConfig.audience,

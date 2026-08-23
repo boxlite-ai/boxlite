@@ -77,6 +77,53 @@ audience, `boxlite-backoffice` scope, and configured Operator/Admin provider-rol
 injects the server-side `otel_reader` credential. ClickHouse port 8123 remains private, and the
 browser never receives the database password. Keep the SSM procedure above as break-glass access.
 
+### Employee SSO deployment
+
+The Gateway and Backoffice are separate OIDC clients. Create a confidential Regular Web Application
+in the same isolated employee Auth0 tenant used by Backoffice; do not use the BoxLite customer tenant.
+Configure that application with:
+
+- callback URL `https://clickstack.<STACK_DOMAIN>/oauth2/idpresponse`;
+- the same API audience and `boxlite-backoffice` scope used by Backoffice;
+- the same custom role claim, with only the Operator/Admin provider-role values admitted by the Gateway.
+
+Put only the non-secret values in `apps/infra/.env`, then persist the stage configuration and set the
+two application secrets through the non-echoing SST secret prompt:
+
+```dotenv
+CLICKHOUSE_MODE=self-hosted
+CLICKSTACK_GATEWAY_ENABLED=true
+CLICKSTACK_OIDC_ISSUER_BASE_URL=https://YOUR_EMPLOYEE_TENANT.auth0.com/
+CLICKSTACK_OIDC_AUDIENCE=https://backoffice.boxlite.ai
+CLICKSTACK_OIDC_ROLE_CLAIM=https://boxlite.ai/roles
+CLICKSTACK_OIDC_ALLOWED_ROLE_VALUES=backoffice-operator,backoffice-admin
+```
+
+```bash
+cd apps/infra
+npm run bootstrap -- --stage <stage>
+npm run sst -- secret set CLICKSTACK_OIDC_CLIENT_ID --stage <stage>
+npm run sst -- secret set CLICKSTACK_OIDC_CLIENT_SECRET --stage <stage>
+npm run deploy -- --stage <stage>
+```
+
+Set `BACKOFFICE_CLICKSTACK_URL=https://clickstack.<STACK_DOMAIN>/clickstack` in the Backoffice deploy
+environment and redeploy Backoffice. Its Operator/Admin roles already carry
+`observability.clickstack.open`; other roles do not receive the link capability.
+
+Enabling or disabling the Gateway retriggers the real OTLP log smoke, and the Gateway deployment
+waits for its marker to reach `otel.otel_logs` through the Collector. At runtime, its ALB target
+check calls `/ready`, which reads from `otel.otel_logs` as `otel_reader` and validates the embedded
+ClickStack HTML shell at `/clickstack`. An unreachable ClickHouse, missing table or UI, invalid UI
+response, or invalid reader credential
+removes the target from service. A post-deploy public smoke also verifies that the unauthenticated
+HTTPS URL redirects to the configured employee Auth0 `/authorize` endpoint with the expected
+callback, audience, and `boxlite-backoffice` scope.
+After signing in through Backoffice, open ClickStack and search the last 24 hours for
+`ServiceName:"boxlite-clickhouse-readiness"` to confirm the deployment marker is queryable. An active
+Auth0 SSO session usually avoids another password prompt, but Auth0 may still require MFA, consent, or
+fresh authentication according to tenant policy.
+
 The EC2 instance may be replaced by bootstrap changes, but its data volume is retained and
 reattached. Switching to managed or disabled mode detaches and retains the old volume outside SST;
 take an EBS snapshot before deleting or restoring that retained data.

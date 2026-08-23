@@ -98,6 +98,11 @@ gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false  # previ
 gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=true   # deploy
 ```
 
+For local SST commands, the deploy wrapper detects the AWS CLI `login_session` created by
+`aws login` and exports its temporary process credentials only to SST/Pulumi. Nothing is written to
+a credentials file or printed. Static/shared-config profiles and CI's OIDC environment credentials
+keep using their existing credential paths.
+
 `npm run bootstrap` is safe to re-run. It prompts once per stage for the
 Cloudflare token and `OIDC_CLIENT_ID`, and loads your `.env` into the stage's SST
 secret store alongside `OIDC_CLIENT_ID`. The Cloudflare pair goes to SSM and to

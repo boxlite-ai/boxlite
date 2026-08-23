@@ -4,10 +4,13 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -20,7 +23,12 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 )
 
-const clickStackGatewayDefaultPort = 4000
+const (
+	clickStackGatewayDefaultPort    = 4000
+	clickStackReadinessTimeout      = 3 * time.Second
+	clickStackReadinessBodyLimit    = 1 << 20
+	clickStackResponseHeaderTimeout = 30 * time.Second
+)
 
 type ClickStackGatewayConfig struct {
 	UpstreamURL      string
@@ -121,6 +129,9 @@ func newClickStackGatewayHandler(
 	if verifier == nil {
 		return nil, fmt.Errorf("ClickStack token verifier is required")
 	}
+	if transport == nil {
+		transport = newClickStackTransport(clickStackResponseHeaderTimeout)
+	}
 
 	reverseProxy := &httputil.ReverseProxy{
 		Transport: transport,
@@ -159,6 +170,18 @@ func newClickStackGatewayHandler(
 		writer.WriteHeader(http.StatusOK)
 		_, _ = writer.Write([]byte(`{"status":"ok"}`))
 	})
+	mux.HandleFunc("GET /ready", func(writer http.ResponseWriter, request *http.Request) {
+		ctx, cancel := context.WithTimeout(request.Context(), clickStackReadinessTimeout)
+		defer cancel()
+		if err := checkClickStackReadiness(ctx, target, config, transport); err != nil {
+			slog.Warn("ClickStack readiness check failed", "error", err)
+			http.Error(writer, "ClickStack upstream is unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte(`{"status":"ready"}`))
+	})
 	mux.Handle("/", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		accessToken := request.Header.Get("X-Amzn-Oidc-Accesstoken")
 		if accessToken == "" {
@@ -172,6 +195,108 @@ func newClickStackGatewayHandler(
 		reverseProxy.ServeHTTP(writer, request)
 	}))
 	return mux, nil
+}
+
+func checkClickStackReadiness(
+	ctx context.Context,
+	target *url.URL,
+	config ClickStackGatewayConfig,
+	transport http.RoundTripper,
+) error {
+	queryURL := *target
+	query := queryURL.Query()
+	query.Set("query", "SELECT 1 FROM otel.otel_logs LIMIT 1")
+	queryURL.RawQuery = query.Encode()
+	uiURL := *target
+	uiURL.Path = "/clickstack"
+
+	probes := []struct {
+		name      string
+		url       url.URL
+		bodyLimit int64
+		validate  func(*http.Response, []byte) error
+	}{
+		{name: "query ClickHouse logs table", url: queryURL, bodyLimit: 1024},
+		{name: "load ClickStack UI", url: uiURL, bodyLimit: clickStackReadinessBodyLimit, validate: validateClickStackUI},
+	}
+	for _, probe := range probes {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, probe.url.String(), nil)
+		if err != nil {
+			return fmt.Errorf("build %s readiness request: %w", probe.name, err)
+		}
+		request.Header.Set("X-ClickHouse-User", config.Username)
+		request.Header.Set("X-ClickHouse-Key", config.Password)
+
+		response, err := transport.RoundTrip(request)
+		if err != nil {
+			return fmt.Errorf("%s: %w", probe.name, err)
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, probe.bodyLimit+1))
+		closeErr := response.Body.Close()
+		if readErr != nil {
+			return fmt.Errorf("%s response: %w", probe.name, readErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close %s response: %w", probe.name, closeErr)
+		}
+		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+			return fmt.Errorf("%s: unexpected HTTP status %d", probe.name, response.StatusCode)
+		}
+		if int64(len(body)) > probe.bodyLimit {
+			return fmt.Errorf("%s response exceeds %d bytes", probe.name, probe.bodyLimit)
+		}
+		if probe.validate != nil {
+			if err := probe.validate(response, body); err != nil {
+				return fmt.Errorf("%s: %w", probe.name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateClickStackUI(response *http.Response, body []byte) error {
+	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || mediaType != "text/html" {
+		return fmt.Errorf("expected text/html response")
+	}
+	for _, marker := range [][]byte{
+		[]byte(">ClickStack</title>"),
+		[]byte(`id="__NEXT_DATA__"`),
+		[]byte(`"assetPrefix":"/clickstack"`),
+	} {
+		if !bytes.Contains(body, marker) {
+			return fmt.Errorf("response is not the embedded ClickStack UI")
+		}
+	}
+	return nil
+}
+
+func newClickStackTransport(responseHeaderTimeout time.Duration) *http.Transport {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		ResponseHeaderTimeout: responseHeaderTimeout,
+	}
+}
+
+func newClickStackGatewayServer(port int, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+	}
 }
 
 func newOIDCClickStackTokenVerifier(ctx context.Context, config ClickStackGatewayConfig) (clickStackTokenVerifier, error) {
@@ -263,11 +388,7 @@ func StartClickStackGateway(ctx context.Context, config ClickStackGatewayConfig)
 	if err != nil {
 		return err
 	}
-	server := &http.Server{
-		Addr:              fmt.Sprintf(":%d", config.Port),
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	server := newClickStackGatewayServer(config.Port, handler)
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		return err

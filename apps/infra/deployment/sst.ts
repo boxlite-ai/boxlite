@@ -88,7 +88,7 @@ import { readRunnerStateBaseline } from '../runner/policy-baseline.js'
 import { resolveSstExecutable } from './sst-executable.js'
 import { SstProcessTerminator } from './sst-process.js'
 import { removePulumiEventLogs, withPulumiEventLogCleanup } from './pulumi-logs.js'
-import { resolveAwsCliPath, runAwsText } from '../shared/exec.js'
+import { materializeAwsLoginCredentials, resolveAwsCliPath, runAwsText } from '../shared/exec.js'
 
 const PULUMI_EVENT_LOG_ROOT = fileURLToPath(new URL('../.sst/pulumi', import.meta.url))
 const TERMINATION_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM']
@@ -157,6 +157,13 @@ for (const [key, value] of Object.entries(localEnvironment)) {
   if (!isLocalOnlyDeploymentKey(key)) continue
   if (process.env[key] !== undefined) continue // a real environment variable still wins
   process.env[key] = value
+}
+
+try {
+  materializeAwsLoginCredentials()
+} catch (error: any) {
+  console.error(`sst-with-cloudflare: ${error.message}`)
+  process.exit(1)
 }
 
 // Resolved before the store is read, because the Cloudflare SSM lookup below needs it. AWS_REGION

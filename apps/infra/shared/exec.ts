@@ -28,6 +28,14 @@ import { delimiter, join } from 'node:path'
 
 const AWS_CLI_TIMEOUT_MS = 15_000
 const STANDARD_AWS_CLI_DIRECTORIES = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']
+const AWS_LOGIN_SESSION_ARN = /^arn:(?:aws|aws-cn|aws-us-gov):iam::\d{12}:(?:user|role)\/.+$/
+
+type AwsCredentialProcessOutput = {
+  Version?: unknown
+  AccessKeyId?: unknown
+  SecretAccessKey?: unknown
+  SessionToken?: unknown
+}
 
 export function resolveAwsCliPath(environment: NodeJS.ProcessEnv = process.env): string {
   const configuredPath = environment.AWS_CLI_PATH?.trim()
@@ -54,6 +62,85 @@ export function resolveAwsCliPath(environment: NodeJS.ProcessEnv = process.env):
   const error = new Error(`AWS CLI not found via ${detail}`) as NodeJS.ErrnoException
   error.code = 'ENOENT'
   throw error
+}
+
+/**
+ * AWS CLI login sessions are supported by the CLI before they are supported by every SDK bundled
+ * into our SST/Pulumi version. Bridge only that credential source into this process, in memory, so
+ * the provider receives ordinary temporary environment credentials without a credentials file.
+ */
+export function materializeAwsLoginCredentials(environment: NodeJS.ProcessEnv = process.env): boolean {
+  const hasAccessKey = Boolean(environment.AWS_ACCESS_KEY_ID?.trim())
+  const hasSecretKey = Boolean(environment.AWS_SECRET_ACCESS_KEY?.trim())
+  if (hasAccessKey !== hasSecretKey) {
+    throw new Error('AWS environment credentials are incomplete')
+  }
+  if (hasAccessKey) {
+    // stack/app.ts passes AWS_PROFILE explicitly to Pulumi. Keeping it would make the provider
+    // ignore the complete environment credentials in favour of that profile.
+    delete environment.AWS_PROFILE
+    return false
+  }
+
+  const profile = environment.AWS_PROFILE?.trim() || 'default'
+  const awsCliPath = resolveAwsCliPath(environment)
+  let loginSession: string
+  try {
+    loginSession = execFileSync(awsCliPath, ['configure', 'get', 'login_session', '--profile', profile], {
+      encoding: 'utf8',
+      env: environment,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: AWS_CLI_TIMEOUT_MS,
+      killSignal: 'SIGTERM',
+    }).trim()
+  } catch (error: any) {
+    // `aws configure get` uses exit 1 for an unset key. Such profiles remain available to the SDK's
+    // normal shared-config credential chain and need no bridge.
+    if (error.status === 1) return false
+    throw new Error(`AWS profile ${profile} login session lookup failed`, { cause: error })
+  }
+  if (!AWS_LOGIN_SESSION_ARN.test(loginSession)) return false
+
+  let rawCredentials: string
+  try {
+    rawCredentials = execFileSync(
+      awsCliPath,
+      ['configure', 'export-credentials', '--format', 'process', '--profile', profile],
+      {
+        encoding: 'utf8',
+        env: environment,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: AWS_CLI_TIMEOUT_MS,
+        killSignal: 'SIGTERM',
+      },
+    )
+  } catch (error) {
+    throw new Error(`AWS profile ${profile} credential export failed`, { cause: error })
+  }
+
+  let credentials: AwsCredentialProcessOutput
+  try {
+    credentials = JSON.parse(rawCredentials)
+  } catch (error) {
+    throw new Error(`AWS profile ${profile} credential export returned invalid JSON`, { cause: error })
+  }
+  if (
+    credentials.Version !== 1 ||
+    typeof credentials.AccessKeyId !== 'string' ||
+    credentials.AccessKeyId.length === 0 ||
+    typeof credentials.SecretAccessKey !== 'string' ||
+    credentials.SecretAccessKey.length === 0 ||
+    (credentials.SessionToken !== undefined && typeof credentials.SessionToken !== 'string')
+  ) {
+    throw new Error(`AWS profile ${profile} credential export returned an invalid credential shape`)
+  }
+
+  environment.AWS_ACCESS_KEY_ID = credentials.AccessKeyId
+  environment.AWS_SECRET_ACCESS_KEY = credentials.SecretAccessKey
+  if (credentials.SessionToken) environment.AWS_SESSION_TOKEN = credentials.SessionToken
+  else delete environment.AWS_SESSION_TOKEN
+  delete environment.AWS_PROFILE
+  return true
 }
 
 export function signalProcessGroup(child: any, signal: any) {

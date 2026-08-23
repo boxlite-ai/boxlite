@@ -252,6 +252,7 @@ export function buildClickHouseWriterReady(input: {
   resources: ClickHouseResources
   otelCollector: any
   otelCollectorOtlpHttpUrl: $util.Output<string>
+  verificationTrigger: string
 }): any {
   const { region, resources, otelCollector, otelCollectorOtlpHttpUrl } = input
   if (resources.mode === 'disabled') return undefined
@@ -271,6 +272,7 @@ export function buildClickHouseWriterReady(input: {
       resources.readerSecretVersionId,
       otelCollectorOtlpHttpUrl,
       otelCollector.nodes.taskDefinition.arn,
+      input.verificationTrigger,
     ],
   }, { dependsOn: [otelCollector] })
 }

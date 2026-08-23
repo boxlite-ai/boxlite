@@ -110,7 +110,7 @@ test('pins every Service load balancer type at the provider boundary', () => {
     {
       name: 'ClickStackGateway',
       type: 'application',
-      section: configSection("new sst.aws.Service('ClickStackGateway'", '// ─── 8.'),
+      section: configSection("const gateway = new sst.aws.Service('ClickStackGateway'", '// ─── 8.'),
     },
     {
       name: 'PgAdmin',
@@ -181,12 +181,15 @@ test('uses the shared AWS region resolver and waits for the critical API service
 
 test('waits for the active ClickHouse collector rollout before probing the writer', () => {
   const collector = configSection("const otelCollector = new sst.aws.Service('OtelCollector'", 'const otelCollectorOtlpHttpUrl')
+  const deploy = liveText('scriptEmittingShell', readFileSync(new URL('./deploy.ts', import.meta.url), 'utf8'))
   const writerReadiness = configSection('export function buildClickHouseWriterReady')
 
   assert.match(collector, /wait: input\.clickHouseResources\.active,/)
   assert.match(writerReadiness, /triggers:\s*\[[\s\S]*otelCollector\.nodes\.taskDefinition\.arn/)
   assert.match(writerReadiness, /dependsOn:\s*\[otelCollector\]/)
   assert.match(writerReadiness, /CLICKHOUSE_READER_SECRET_ARN: resources\.readerSecretArn/)
+  assert.match(writerReadiness, /triggers:\s*\[[\s\S]*input\.verificationTrigger/)
+  assert.match(deploy, /verificationTrigger: `clickstack-gateway:\$\{clickStackGatewayFlag\}:v1`/)
   assert.doesNotMatch(writerReadiness, /return resources\.ready/)
 })
 
@@ -477,9 +480,10 @@ test('refuses to expose pgAdmin over its plain-HTTP listener', () => {
 })
 
 test('publishes ClickStack only through OIDC and the read-only credential gateway', () => {
-  const gateway = configSection("new sst.aws.Service('ClickStackGateway'", '// ─── 8.')
+  const gateway = configSection("const gateway = new sst.aws.Service('ClickStackGateway'", '// ─── 8.')
 
   assert.match(gateway, /listen: '443\/https'/)
+  assert.match(gateway, /health: \{ \[`\$\{PORTS\.PROXY\}\/http`\]: httpHealth\('\/ready'\) \}/)
   assert.match(gateway, /type: 'authenticate-oidc'/)
   assert.match(gateway, /onUnauthenticatedRequest: 'authenticate'/)
   assert.match(gateway, /authenticationRequestExtraParams: \{ audience: clickStackGateway\.oidcAudience \}/)
@@ -487,6 +491,13 @@ test('publishes ClickStack only through OIDC and the read-only credential gatewa
   assert.match(gateway, /CLICKSTACK_OIDC_ROLE_CLAIM: clickStackGateway\.oidcRoleClaim/)
   assert.match(gateway, /CLICKSTACK_OIDC_ALLOWED_ROLE_VALUES: clickStackGateway\.oidcAllowedRoleValues/)
   assert.match(gateway, /ssm: \{ CLICKSTACK_PASSWORD: clickStackGateway\.clickHouse\.readerSecretArn \}/)
+  assert.match(gateway, /dependsOn: \[clickStackGateway\.clickHouse\.ready, clickStackGateway\.writerReady\]/)
+  assert.match(gateway, /new command\.local\.Command\(\s*'ClickStackGatewayPublicReady'/)
+  assert.match(gateway, /create: 'node scripts\/clickstack-gateway-smoke\.mjs'/)
+  assert.match(gateway, /CLICKSTACK_GATEWAY_URL: `https:\/\/\$\{clickStackGateway\.domain\.name\}\/clickstack`/)
+  assert.match(gateway, /CLICKSTACK_OIDC_ISSUER: issuer\.toString\(\)/)
+  assert.match(gateway, /CLICKSTACK_OIDC_AUDIENCE: clickStackGateway\.oidcAudience/)
+  assert.match(gateway, /dependsOn: \[gateway\]/)
   assert.doesNotMatch(gateway, /environment:\s*\{[^}]*CLICKSTACK_PASSWORD:/)
 })
 
@@ -499,7 +510,7 @@ test('publishes the embedded ClickStack UI only for self-hosted ClickHouse', () 
   assert.match(deploy, /clickHouseResources\.mode === 'self-hosted'/)
   assert.doesNotMatch(deploy, /clickHouseResources\.mode !== 'disabled'/)
   assert.match(edge, /clickHouse: SelfHostedClickHouseResources/)
-  assert.match(edge, /dependsOn: \[clickStackGateway\.clickHouse\.ready\]/)
+  assert.match(deploy, /writerReady: clickHouseWriterReadyDependency/)
 })
 
 test('passes explicit management API endpoints into the API service', () => {

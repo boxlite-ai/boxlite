@@ -12,6 +12,7 @@ type SelfHostedClickHouseResources = Extract<ClickHouseResources, { mode: 'self-
 
 interface ClickStackGatewayInputs {
   clickHouse: SelfHostedClickHouseResources
+  writerReady: any
   domain: { name: string; dns: ReturnType<typeof sst.cloudflare.dns> }
   oidcAudience: string
   oidcClientId: sst.Secret
@@ -124,14 +125,14 @@ if (clickStackGateway) {
     throw new Error('CLICKSTACK_OIDC_ISSUER_BASE_URL must be a clean HTTPS URL')
   }
 
-  new sst.aws.Service('ClickStackGateway', {
+  const gateway = new sst.aws.Service('ClickStackGateway', {
     cluster,
     wait: true,
     image: proxyImage,
     loadBalancer: {
       domain: clickStackGateway.domain,
       rules: [{ listen: '443/https', forward: `${PORTS.PROXY}/http` }],
-      health: { [`${PORTS.PROXY}/http`]: httpHealth('/health') },
+      health: { [`${PORTS.PROXY}/http`]: httpHealth('/ready') },
     },
     ssm: { CLICKSTACK_PASSWORD: clickStackGateway.clickHouse.readerSecretArn },
     environment: {
@@ -171,8 +172,30 @@ if (clickStackGateway) {
       },
     },
   }, {
-    dependsOn: [clickStackGateway.clickHouse.ready],
+    dependsOn: [clickStackGateway.clickHouse.ready, clickStackGateway.writerReady],
   })
+
+  new command.local.Command(
+    'ClickStackGatewayPublicReady',
+    {
+      dir: $cli.paths.root,
+      create: 'node scripts/clickstack-gateway-smoke.mjs',
+      update: 'node scripts/clickstack-gateway-smoke.mjs',
+      environment: {
+        CLICKSTACK_GATEWAY_URL: `https://${clickStackGateway.domain.name}/clickstack`,
+        CLICKSTACK_OIDC_ISSUER: issuer.toString(),
+        CLICKSTACK_OIDC_AUDIENCE: clickStackGateway.oidcAudience,
+      },
+      triggers: [
+        gateway.nodes.taskDefinition.arn,
+        clickStackGateway.domain.name,
+        issuer.toString(),
+        clickStackGateway.oidcAudience,
+        'v1',
+      ],
+    },
+    { dependsOn: [gateway] },
+  )
 }
 
 // ─── 8. ADMIN UIs ────────────────────────────────────────────────────────

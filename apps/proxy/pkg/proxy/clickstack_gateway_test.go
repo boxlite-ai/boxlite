@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 )
@@ -117,6 +118,173 @@ func TestClickStackGatewayHealthDoesNotReachClickHouse(t *testing.T) {
 	}
 	if upstreamCalls != 0 {
 		t.Fatalf("health request reached ClickHouse %d times", upstreamCalls)
+	}
+}
+
+func TestClickStackGatewayReadinessChecksClickHouse(t *testing.T) {
+	upstreamCalls := 0
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		upstreamCalls++
+		header := make(http.Header)
+		body := "1\n"
+		if got := request.Header.Get("X-ClickHouse-User"); got != "otel_reader" {
+			t.Fatalf("unexpected ClickHouse user: %q", got)
+		}
+		if got := request.Header.Get("X-ClickHouse-Key"); got != "reader-password" {
+			t.Fatalf("unexpected ClickHouse password: %q", got)
+		}
+		if upstreamCalls == 1 {
+			if got := request.URL.Query().Get("query"); got != "SELECT 1 FROM otel.otel_logs LIMIT 1" {
+				t.Fatalf("unexpected readiness query: %q", got)
+			}
+		} else {
+			if request.URL.Path != "/clickstack" {
+				t.Fatalf("unexpected ClickStack readiness path: %q", request.URL.Path)
+			}
+			header.Set("Content-Type", "text/html; charset=utf-8")
+			body = `<!doctype html><html><head><title data-next-head="">ClickStack</title></head><body><script id="__NEXT_DATA__" type="application/json">{"assetPrefix":"/clickstack"}</script></body></html>`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})
+
+	handler, err := newClickStackGatewayHandler(testClickStackGatewayConfig(), transport, tokenVerifierFunc(func(string) error {
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", response.Code)
+	}
+	if upstreamCalls != 2 {
+		t.Fatalf("readiness request reached ClickHouse %d times", upstreamCalls)
+	}
+}
+
+func TestClickStackGatewayReadinessRejectsMissingUI(t *testing.T) {
+	upstreamCalls := 0
+	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		upstreamCalls++
+		status := http.StatusOK
+		if upstreamCalls == 2 {
+			status = http.StatusNotFound
+		}
+		return &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("response")),
+		}, nil
+	})
+	handler, err := newClickStackGatewayHandler(testClickStackGatewayConfig(), transport, tokenVerifierFunc(func(string) error {
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unexpected status: %d", response.Code)
+	}
+}
+
+func TestClickStackGatewayReadinessRejectsUnexpectedUIBody(t *testing.T) {
+	upstreamCalls := 0
+	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		upstreamCalls++
+		header := make(http.Header)
+		body := "1\n"
+		if upstreamCalls == 2 {
+			header.Set("Content-Type", "text/html; charset=utf-8")
+			body = "<!doctype html><html><head><title>Not ClickStack</title></head></html>"
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})
+	handler, err := newClickStackGatewayHandler(testClickStackGatewayConfig(), transport, tokenVerifierFunc(func(string) error {
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unexpected status: %d", response.Code)
+	}
+}
+
+func TestClickStackGatewayReadinessRejectsUnavailableClickHouse(t *testing.T) {
+	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused")
+	})
+	handler, err := newClickStackGatewayHandler(testClickStackGatewayConfig(), transport, tokenVerifierFunc(func(string) error {
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unexpected status: %d", response.Code)
+	}
+}
+
+func TestClickStackGatewayServerSetsConnectionTimeouts(t *testing.T) {
+	server := newClickStackGatewayServer(4000, http.NewServeMux())
+	for name, timeout := range map[string]time.Duration{
+		"read header": server.ReadHeaderTimeout,
+		"read":        server.ReadTimeout,
+		"write":       server.WriteTimeout,
+		"idle":        server.IdleTimeout,
+	} {
+		if timeout <= 0 {
+			t.Fatalf("%s timeout must be positive", name)
+		}
+	}
+}
+
+func TestClickStackGatewayBoundsUpstreamResponseHeaderWait(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	config := testClickStackGatewayConfig()
+	config.UpstreamURL = upstream.URL
+	handler, err := newClickStackGatewayHandler(config, newClickStackTransport(20*time.Millisecond), tokenVerifierFunc(func(string) error {
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/clickstack", nil)
+	request.Header.Set("X-Amzn-Oidc-Accesstoken", "employee-token")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("unexpected status: %d", response.Code)
 	}
 }
 
