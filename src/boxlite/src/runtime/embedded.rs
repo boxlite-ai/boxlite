@@ -107,7 +107,14 @@ impl EmbeddedRuntime {
                     dir = %dir.display(),
                     "Embedded runtime cache is incomplete; re-extracting"
                 );
-                let _ = std::fs::remove_dir_all(&dir);
+                Self::quarantine_incomplete_cache(&dir)?;
+                // Another process may have replaced the cache while this
+                // process was quarantining the incomplete copy.
+                if stamp.exists() && Self::has_all_manifest_files(&dir) {
+                    let now = filetime::FileTime::now();
+                    let _ = filetime::set_file_mtime(&stamp, now);
+                    return Ok(Self { dir });
+                }
             } else {
                 // Refresh mtime so stale cleanup measures "last used", not "first extracted"
                 let now = filetime::FileTime::now();
@@ -207,6 +214,34 @@ impl EmbeddedRuntime {
     /// path.
     fn has_all_manifest_files(dir: &Path) -> bool {
         MANIFEST.iter().all(|(name, _, _)| dir.join(name).is_file())
+    }
+
+    /// Atomically move an invalid cache out of the shared path.
+    ///
+    /// Removing the directory in place would race with another process that
+    /// has already accepted or is replacing the cache. Renaming it first
+    /// leaves the shared path either untouched or absent, so a new extraction
+    /// can be published with the existing atomic rename below.
+    fn quarantine_incomplete_cache(dir: &Path) -> BoxliteResult<()> {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let quarantine = dir.with_extension(format!("invalid.{}.{}", std::process::id(), nonce));
+
+        match std::fs::rename(dir, &quarantine) {
+            Ok(()) => {
+                let _ = std::fs::remove_dir_all(&quarantine);
+                Ok(())
+            }
+            Err(_error) if !dir.exists() => Ok(()),
+            Err(_) if Self::has_all_manifest_files(dir) => Ok(()),
+            Err(error) => Err(BoxliteError::Storage(format!(
+                "quarantine incomplete embedded runtime {}: {}",
+                dir.display(),
+                error
+            ))),
+        }
     }
 
     fn versioned_dir() -> BoxliteResult<PathBuf> {
@@ -349,6 +384,25 @@ mod tests {
         }
 
         assert!(EmbeddedRuntime::has_all_manifest_files(tmp.path()));
+    }
+
+    #[test]
+    fn incomplete_cache_is_quarantined_before_replacement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("runtime");
+        std::fs::create_dir(&cache).unwrap();
+        std::fs::write(cache.join(".complete"), "complete\n").unwrap();
+
+        EmbeddedRuntime::quarantine_incomplete_cache(&cache).unwrap();
+
+        assert!(!cache.exists());
+        assert!(!tmp.path().read_dir().unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("invalid.")
+        }));
     }
 
     #[test]
