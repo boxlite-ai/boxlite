@@ -943,7 +943,16 @@ impl RuntimeImpl {
                     if let Some(pid) = state.pid {
                         tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
                         let mut handler = ShimHandler::from_pid(pid, config.id.clone());
-                        let _ = handler.stop();
+                        let stop = || handler.stop();
+                        // `remove_box` is also used by async runtime paths. Keep
+                        // the synchronous VMM grace-period poll off their Tokio
+                        // worker, while retaining direct-call support for the
+                        // synchronous API.
+                        if tokio::runtime::Handle::try_current().is_ok() {
+                            let _ = tokio::task::block_in_place(stop);
+                        } else {
+                            let _ = stop();
+                        }
                     }
                     // Update status to stopped and save
                     state.set_status(BoxStatus::Stopped);
