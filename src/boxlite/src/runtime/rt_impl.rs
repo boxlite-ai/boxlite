@@ -751,6 +751,7 @@ impl RuntimeImpl {
 
         // Stop all boxes concurrently
         let stop_futures = active_boxes.iter().map(|box_impl| {
+            let box_impl = Arc::clone(box_impl);
             let box_id = box_impl.id().to_string();
             async move {
                 let result = if let Some(duration) = timeout_duration {
