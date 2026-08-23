@@ -410,6 +410,11 @@ mod tests {
         let linked = tmp.path().join(name);
         std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&target, &linked).unwrap();
+        for (other_name, _, other_data) in MANIFEST.iter().skip(1) {
+            let path = tmp.path().join(other_name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, other_data).unwrap();
+        }
 
         assert!(!EmbeddedRuntime::has_all_manifest_files(tmp.path()));
     }
