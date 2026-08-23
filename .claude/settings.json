@@ -7,7 +7,7 @@
       "source": {
         "source": "github",
         "repo": "boxlite-ai/agent-tooling",
-        "ref": "b06fcd921c50a54bf2b05ba820bba838a5de0992"
+        "ref": "main"
       }
     }
   },
