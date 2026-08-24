@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::litebox::BoxStatus;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::runtime::advanced_options::ContainerCapabilities;
+use crate::runtime::id::VolumeID;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 
 // ============================================================================
@@ -235,15 +236,15 @@ impl TryFrom<&crate::runtime::options::VolumeSpec> for CreateBoxVolumeSpec {
     /// `-v /host:/guest` mount puts a real path. Serializing that third case
     /// as `volume` asks the server for a volume whose id is a path — it 404s,
     /// or matches something that is not what the caller asked for. Reject it
-    /// where the union is read rather than putting it on the wire. `/` and
-    /// `\` are the characters `NamedVolumeStore` already refuses in an id, so
-    /// both ends of the wire agree on what an id is.
+    /// where the union is read rather than putting it on the wire, and ask
+    /// [`VolumeID`] what an id is so the wire and the local store answer that
+    /// question the same way.
     fn try_from(volume: &crate::runtime::options::VolumeSpec) -> Result<Self, Self::Error> {
         let id = volume
             .host_path
             .strip_prefix("volume://")
             .unwrap_or(&volume.host_path);
-        if id.is_empty() || id.contains('/') || id.contains('\\') {
+        if !VolumeID::is_valid(id) {
             return Err(BoxliteError::InvalidArgument(format!(
                 "REST runtimes mount named volumes only: expected a volume id or volume://<id> for guest path {}, got {:?}",
                 volume.guest_path, volume.host_path
@@ -808,7 +809,16 @@ mod tests {
     fn host_path_mounts_are_rejected_instead_of_sent_as_volume_ids() {
         use crate::runtime::options::{BoxOptions, VolumeSpec};
 
-        for host_path in ["/etc", "./data", "volume:///etc", "C:\\data", ""] {
+        for host_path in [
+            "/etc",
+            "./data",
+            "volume:///etc",
+            "C:\\data",
+            "",
+            ".",
+            "..",
+            "a b",
+        ] {
             let opts = BoxOptions {
                 volumes: vec![VolumeSpec {
                     host_path: host_path.into(),

@@ -11,6 +11,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::runtime::id::{VolumeID, VolumeIDMint};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use chrono::{DateTime, Utc};
@@ -51,7 +52,7 @@ impl NamedVolumeStore {
 
     /// Create a new volume and return its metadata (including the assigned id).
     pub fn create(&self) -> BoxliteResult<VolumeInfo> {
-        let id = crate::runtime::id::BoxIDMint::mint().to_string();
+        let id = VolumeIDMint::mint().to_string();
         let dir = self.volumes_dir.join(&id);
         fs::create_dir_all(&dir).map_err(|e| {
             BoxliteError::Storage(format!(
@@ -140,13 +141,7 @@ impl NamedVolumeStore {
     ///
     /// The reserved `anonymous/` subtree (the CLI's anonymous volumes) is also rejected — this store must never touch it, neither to list nor to delete.
     fn volume_dir(&self, id: &str) -> BoxliteResult<PathBuf> {
-        if id.is_empty()
-            || id == "."
-            || id == ".."
-            || id.contains('/')
-            || id.contains('\\')
-            || id == ANONYMOUS_VOLUMES_DIR
-        {
+        if !VolumeID::is_valid(id) || id == ANONYMOUS_VOLUMES_DIR {
             return Err(BoxliteError::InvalidArgument(format!(
                 "invalid volume id: {id:?}"
             )));
@@ -319,6 +314,41 @@ mod tests {
             assert!(
                 store.remove(bad, true).is_err(),
                 "id {bad:?} must be rejected by remove"
+            );
+        }
+    }
+
+    /// The blacklist only knew five bad shapes, so everything else — spaces,
+    /// leading dots, non-ASCII, control characters, ids of any length —
+    /// became a real directory name. Asking [`VolumeID`] what a valid id is
+    /// rejects them at the boundary instead, which is a different error than
+    /// "no such volume".
+    #[test]
+    fn ids_outside_the_volume_id_character_set_are_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = NamedVolumeStore::new(tmp.path());
+        let too_long = "a".repeat(VolumeID::MAX_LENGTH + 1);
+
+        for bad in [
+            "a b",
+            ".hidden",
+            "\u{65e5}\u{672c}",
+            "a\u{0}b",
+            too_long.as_str(),
+        ] {
+            assert!(
+                matches!(
+                    store.get(bad).unwrap_err(),
+                    BoxliteError::InvalidArgument(_)
+                ),
+                "id {bad:?} must be rejected by get, not looked up"
+            );
+            assert!(
+                matches!(
+                    store.remove(bad, true).unwrap_err(),
+                    BoxliteError::InvalidArgument(_)
+                ),
+                "id {bad:?} must be rejected by remove, not treated as missing"
             );
         }
     }
