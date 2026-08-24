@@ -43,6 +43,8 @@ pub(super) struct CreateBoxRequest {
     #[serde(default)]
     pub advanced: CreateBoxAdvancedOptions,
     #[serde(default)]
+    pub volumes: Vec<CreateVolumeMount>,
+    #[serde(default)]
     pub network: Option<NetworkSpec>,
     #[serde(default)]
     pub auto_stop: Option<u32>,
@@ -137,6 +139,15 @@ pub(super) struct ListBoxesResponse {
 // ============================================================================
 // Named volume types (`/v1/volumes`)
 // ============================================================================
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CreateVolumeMount {
+    pub volume_id: String,
+    pub guest_path: String,
+    #[serde(default)]
+    pub read_only: bool,
+}
 
 #[derive(Serialize)]
 pub(super) struct VolumeResponse {

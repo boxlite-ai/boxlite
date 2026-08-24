@@ -30,6 +30,7 @@ use boxlite::{
 };
 
 use crate::cli::GlobalFlags;
+use crate::commands::serve::types::CreateVolumeMount;
 use crate::defaults::{LOCAL_SERVE_HOST, LOCAL_SERVE_PORT};
 
 use self::types::{BoxResponse, CreateBoxRequest, ErrorBody, ErrorDetail, ExecRequest};
@@ -725,6 +726,39 @@ fn volume_info_to_response(info: &boxlite::runtime::types::VolumeInfo) -> types:
     }
 }
 
+/// A volume mount's `guest_path` must name an absolute path inside the guest.
+///
+/// Rejecting a non-absolute path here (rather than downstream) keeps a
+/// malformed mount from reaching the runtime, and makes the rule unit-testable
+/// without constructing a runtime.
+fn validate_guest_path(guest_path: &str) -> Result<(), boxlite::BoxliteError> {
+    if guest_path.trim().is_empty() || !guest_path.starts_with('/') {
+        return Err(boxlite::BoxliteError::InvalidArgument(format!(
+            "volume guest_path must be an absolute path, got {:?}",
+            guest_path
+        )));
+    }
+    Ok(())
+}
+
+async fn resolve_volume_mounts(
+    runtime: &BoxliteRuntime,
+    mounts: &[CreateVolumeMount],
+) -> Result<Vec<boxlite::runtime::options::VolumeSpec>, boxlite::BoxliteError> {
+    let volume_handle = runtime.volumes()?;
+    let mut specs = Vec::with_capacity(mounts.len());
+    for m in mounts {
+        validate_guest_path(&m.guest_path)?;
+        let info = volume_handle.get(&m.volume_id).await?;
+        specs.push(boxlite::runtime::options::VolumeSpec {
+            host_path: info.host_path.to_string_lossy().into_owned(),
+            guest_path: m.guest_path.clone(),
+            read_only: m.read_only,
+        });
+    }
+    Ok(specs)
+}
+
 fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::BoxliteError> {
     let rootfs = if let Some(ref path) = req.rootfs_path {
         RootfsSpec::RootfsPath(path.clone())
@@ -787,6 +821,10 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         cmd: req.cmd.clone(),
         user: req.user.clone(),
         tty: req.tty.unwrap_or(false),
+        // Empty here; the caller (`create_box`) injects the resolved mounts
+        // through the pub `volumes` field. Volume resolution is async, so it
+        // cannot run inside this sync builder.
+        volumes: Vec::new(),
         advanced: boxlite::AdvancedBoxOptions {
             capabilities: boxlite::ContainerCapabilities {
                 add: req.advanced.capabilities.add.clone(),
@@ -1543,6 +1581,114 @@ mod tests {
             msg.contains("unknown field") && msg.contains("security_settings"),
             "expected deny-unknown-fields rejection mentioning `security_settings`; got {msg}"
         );
+    }
+
+    // ============================================================
+    // REST named-volume wire contract: `volume_id` only, never `host_path`.
+    //
+    // Mirrors the `security` boundary above: `CreateVolumeMount` carries
+    // `#[serde(deny_unknown_fields)]`, so a client cannot smuggle a
+    // `host_path` (arbitrary host directory) into a mount request. The
+    // server resolves the backing directory from the volume id itself.
+    // ============================================================
+
+    #[test]
+    fn create_volume_mount_rejects_client_supplied_host_path() {
+        let json = r#"{"volume_id":"v1","guest_path":"/data","host_path":"/etc"}"#;
+        let msg = match serde_json::from_str::<super::types::CreateVolumeMount>(json) {
+            Ok(_) => panic!("`host_path` must be rejected at deserialize"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("unknown field") && msg.contains("host_path"),
+            "expected deny-unknown-fields rejection mentioning `host_path`; got {msg}"
+        );
+    }
+
+    #[test]
+    fn create_box_request_accepts_volume_mounts() {
+        let json = r#"{"image":"alpine:latest","volumes":[{"volume_id":"v1","guest_path":"/data","read_only":false}]}"#;
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(json).expect("volume mounts must deserialize");
+        assert_eq!(req.volumes.len(), 1);
+        assert_eq!(req.volumes[0].volume_id, "v1");
+        assert_eq!(req.volumes[0].guest_path, "/data");
+        assert!(!req.volumes[0].read_only);
+    }
+
+    #[test]
+    fn validate_guest_path_rejects_non_absolute() {
+        for bad in ["", "   ", "relative/path", "data"] {
+            let err = validate_guest_path(bad).expect_err("non-absolute guest_path must fail");
+            assert!(
+                matches!(err, boxlite::BoxliteError::InvalidArgument(_)),
+                "expected InvalidArgument for {bad:?}, got {err}"
+            );
+        }
+        assert!(validate_guest_path("/data").is_ok());
+        assert!(validate_guest_path("/").is_ok());
+    }
+
+    #[tokio::test]
+    async fn resolve_volume_mounts_maps_volume_id_to_host_path() {
+        let home = tempfile::tempdir().expect("runtime home");
+        let runtime = BoxliteRuntime::new(boxlite::BoxliteOptions {
+            home_dir: home.path().join("boxlite"),
+            ..Default::default()
+        })
+        .expect("local runtime");
+
+        let volume = runtime
+            .volumes()
+            .expect("volumes handle")
+            .create()
+            .await
+            .expect("create volume");
+        let mounts = [CreateVolumeMount {
+            volume_id: volume.id.clone(),
+            guest_path: "/data".to_string(),
+            read_only: true,
+        }];
+
+        let specs = resolve_volume_mounts(&runtime, &mounts)
+            .await
+            .expect("resolve mounts");
+
+        assert_eq!(specs.len(), 1);
+        assert_eq!(
+            specs[0].host_path,
+            volume.host_path.to_string_lossy().into_owned()
+        );
+        assert_eq!(specs[0].guest_path, "/data");
+        assert!(specs[0].read_only);
+
+        runtime.shutdown(Some(1)).await.expect("shutdown runtime");
+    }
+
+    #[tokio::test]
+    async fn resolve_volume_mounts_rejects_missing_volume() {
+        let home = tempfile::tempdir().expect("runtime home");
+        let runtime = BoxliteRuntime::new(boxlite::BoxliteOptions {
+            home_dir: home.path().join("boxlite"),
+            ..Default::default()
+        })
+        .expect("local runtime");
+
+        let mounts = [CreateVolumeMount {
+            volume_id: "no-such-volume".to_string(),
+            guest_path: "/data".to_string(),
+            read_only: false,
+        }];
+
+        let err = resolve_volume_mounts(&runtime, &mounts)
+            .await
+            .expect_err("missing volume must fail");
+        assert!(
+            matches!(err, boxlite::BoxliteError::NotFound(_)),
+            "expected NotFound, got {err}"
+        );
+
+        runtime.shutdown(Some(1)).await.expect("shutdown runtime");
     }
 
     fn uploaded_v3_archive(box_options: serde_json::Value) -> Vec<u8> {
