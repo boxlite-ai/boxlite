@@ -25,8 +25,8 @@ type TimelinePoint = { time: number; runningBoxes: number }
 
 const shortDay = (value: number) => new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 
-export function concurrencyAxisMaximum(points: TimelinePoint[], limit: number | null): number {
-  const highest = Math.max(limit ?? 0, ...points.map((point) => point.runningBoxes), 1)
+export function concurrencyAxisMaximum(points: TimelinePoint[]): number {
+  const highest = Math.max(...points.map((point) => point.runningBoxes), 1)
   const interval = highest <= 10 ? 2 : highest <= 50 ? 10 : highest <= 200 ? 20 : 100
   return Math.max(interval, (Math.floor(highest / interval) + 1) * interval)
 }
@@ -48,7 +48,8 @@ export function ConcurrencyTimeline() {
       })),
     [query.data?.points],
   )
-  const axisMaximum = concurrencyAxisMaximum(points, limit)
+  const axisMaximum = concurrencyAxisMaximum(points)
+  const isLimitInChartRange = limit != null && limit <= axisMaximum
 
   return (
     <section>
@@ -107,12 +108,11 @@ export function ConcurrencyTimeline() {
                   width={36}
                   tick={{ fontSize: 10 }}
                 />
-                {limit != null && (
+                {isLimitInChartRange && (
                   <ReferenceLine
                     y={limit}
                     stroke="hsl(var(--muted-foreground))"
                     strokeDasharray="6 4"
-                    ifOverflow="extendDomain"
                   />
                 )}
                 <ChartTooltip
