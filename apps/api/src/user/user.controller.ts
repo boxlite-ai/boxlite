@@ -20,6 +20,7 @@ import {
 } from '@nestjs/common'
 import { User } from './user.entity'
 import { UserService } from './user.service'
+import { UserCreationSource } from './enums/user-creation-source.enum'
 import { CreateUserDto } from './dto/create-user.dto'
 import { ApiOAuth2, ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
@@ -95,7 +96,7 @@ export class UserController {
     },
   })
   async create(@Body() createUserDto: CreateUserDto): Promise<User> {
-    return this.userService.create(createUserDto)
+    return this.userService.create(createUserDto, UserCreationSource.ADMIN_API)
   }
 
   @Get()

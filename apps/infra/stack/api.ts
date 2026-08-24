@@ -37,6 +37,7 @@ export interface ApiInputs {
   posthogApiKey: sst.Secret
   svixAuthToken: sst.Secret
   usageExportToken: sst.Secret
+  signupCreditExportToken: sst.Secret
   oidcIssuer: string
   publicOidcIssuer: string | undefined
   otelCollectorOtlpHttpUrl: $util.Output<string>
@@ -71,6 +72,7 @@ export function buildApi(input: ApiInputs) {
     posthogApiKey,
     svixAuthToken,
     usageExportToken,
+    signupCreditExportToken,
     oidcIssuer,
     publicOidcIssuer,
     otelCollectorOtlpHttpUrl,
@@ -329,6 +331,19 @@ const api = new sst.aws.Service('Api', {
     // Svix (webhook delivery; empty token = off → dashboard logs cosmetic errors)
     SVIX_AUTH_TOKEN: svixAuthToken.value,
     ...(process.env.SVIX_SERVER_URL && { SVIX_SERVER_URL: process.env.SVIX_SERVER_URL }),
+
+    // Signup-credit policy is safe-off by default. The credential is injected
+    // independently from usage export so either channel can be rotated or
+    // disabled without affecting the other. An explicit export URL works even
+    // when the dashboard billing surface is disabled; otherwise it defaults to
+    // the bare Commerce origin below.
+    SIGNUP_CREDIT_CENTS: envOr('SIGNUP_CREDIT_CENTS', '0'),
+    SIGNUP_CREDIT_EXPORT_TOKEN: signupCreditExportToken.value,
+    ...(process.env.SIGNUP_CREDIT_EXPORT_URL
+      ? { SIGNUP_CREDIT_EXPORT_URL: process.env.SIGNUP_CREDIT_EXPORT_URL }
+      : process.env.BILLING_API_URL
+        ? { SIGNUP_CREDIT_EXPORT_URL: new URL(process.env.BILLING_API_URL).origin }
+        : {}),
 
     // Where the dashboard's billing client calls, surfaced to it through
     // GET /api/config. No default: this stack deploys no billing service,

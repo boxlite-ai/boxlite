@@ -16,6 +16,7 @@ import { UpdateUserDto } from './dto/update-user.dto'
 import { UserCreatedEvent } from './events/user-created.event'
 import { UserDeletedEvent } from './events/user-deleted.event'
 import { UserEmailVerifiedEvent } from './events/user-email-verified.event'
+import { UserCreationSource } from './enums/user-creation-source.enum'
 
 @Injectable()
 export class UserService {
@@ -26,7 +27,7 @@ export class UserService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async create(createUserDto: CreateUserDto): Promise<User> {
+  async create(createUserDto: CreateUserDto, creationSource: UserCreationSource): Promise<User> {
     const defaultOrganizationDefaultRegionId =
       createUserDto.defaultOrganizationDefaultRegionId ?? createUserDto.personalOrganizationDefaultRegionId
     let user = new User()
@@ -49,7 +50,7 @@ export class UserService {
       user = await em.save(user)
       await this.eventEmitter.emitAsync(
         UserEvents.CREATED,
-        new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
+        new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId, creationSource),
       )
     })
 

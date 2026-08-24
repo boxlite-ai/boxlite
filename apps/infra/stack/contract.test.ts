@@ -769,3 +769,16 @@ test("the mail configuration set falls inside the deploy role's stage-scoped SES
     `the configuration set '${composed}' falls outside the deploy role's configuration-set/boxlite-<stage>-* grant`,
   )
 })
+
+test('signup credit is safe-off and uses an independent Commerce ingest channel', () => {
+  assert.match(liveConfig, /SIGNUP_CREDIT_CENTS: envOr\('SIGNUP_CREDIT_CENTS', '0'\)/)
+  assert.match(liveConfig, /SIGNUP_CREDIT_EXPORT_TOKEN: signupCreditExportToken\.value/)
+  assert.match(liveConfig, /SIGNUP_CREDIT_EXPORT_URL: new URL\(process\.env\.BILLING_API_URL\)\.origin/)
+  assert.doesNotMatch(liveConfig, /SIGNUP_CREDIT_EXPORT_TOKEN: usageExportToken\.value/)
+  assert.match(liveConfig, /const signupCreditExportToken = new sst\.Secret\('SIGNUP_CREDIT_EXPORT_TOKEN', ''\)/)
+
+  assert.match(environmentExample, /^# SIGNUP_CREDIT_CENTS=0$/m)
+  assert.match(environmentExample, /^# SIGNUP_CREDIT_EXPORT_URL=/m)
+  assert.match(environmentExample, /boxlite-commerce\/<stage>\/signup-credit-ingest-token/)
+  assert.doesNotMatch(environmentExample, /^SIGNUP_CREDIT_EXPORT_TOKEN=/m)
+})

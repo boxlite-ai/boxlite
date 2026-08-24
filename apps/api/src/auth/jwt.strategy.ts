@@ -15,6 +15,7 @@ import { Request } from 'express'
 import { CustomHeaders } from '../common/constants/header.constants'
 import { TypedConfigService } from '../config/typed-config.service'
 import { EmailVerificationRequiredException } from '../exceptions/email-verification-required.exception'
+import { UserCreationSource } from '../user/enums/user-creation-source.enum'
 
 interface JwtStrategyConfig {
   jwksUri: string
@@ -91,18 +92,21 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     if (!user) {
-      user = await this.userService.create({
-        id: userId,
-        name: payload.name || payload.username || 'Unknown',
-        email: email || '',
-        emailVerified: payload.email_verified || false,
-        // Anchor the auto-created default organization to the platform's
-        // default region, matching the admin-seed path in AppService. Without
-        // this, OrganizationService.handleUserCreatedEvent creates the org
-        // with defaultRegionId=undefined and downstream callers that read
-        // organization.defaultRegionId fail for every OIDC-created user.
-        defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
-      })
+      user = await this.userService.create(
+        {
+          id: userId,
+          name: payload.name || payload.username || 'Unknown',
+          email: email || '',
+          emailVerified: payload.email_verified || false,
+          // Anchor the auto-created default organization to the platform's
+          // default region, matching the admin-seed path in AppService. Without
+          // this, OrganizationService.handleUserCreatedEvent creates the org
+          // with defaultRegionId=undefined and downstream callers that read
+          // organization.defaultRegionId fail for every OIDC-created user.
+          defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
+        },
+        UserCreationSource.OIDC,
+      )
       this.logger.debug(`Created new user with ID: ${userId}`)
     } else if (user.name === 'Unknown' || !user.email) {
       await this.userService.update(user.id, {

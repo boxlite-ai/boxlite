@@ -47,6 +47,7 @@ import { EncryptionService } from '../../encryption/encryption.service'
 import { OtelConfigDto } from '../dto/otel-config.dto'
 import { boxLookupCacheKeyByAuthToken } from '../../box/utils/box-lookup-cache.util'
 import { BoxRepository } from '../../box/repositories/box.repository'
+import { SignupCreditOutboxService } from '../../signup-credit/services/signup-credit-outbox.service'
 
 @Injectable()
 export class OrganizationService implements OnModuleInit, TrackableJobExecutions, OnApplicationShutdown {
@@ -68,6 +69,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     private readonly regionRepository: Repository<Region>,
     private readonly regionService: RegionService,
     private readonly encryptionService: EncryptionService,
+    private readonly signupCreditOutboxService: SignupCreditOutboxService,
   ) {
     this.defaultBoxLimitedNetworkEgress = this.configService.getOrThrow('organizationBoxDefaultLimitedNetworkEgress')
   }
@@ -507,7 +509,10 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     await entityManager.remove(organization)
   }
 
-  private async unsuspendDefaultForUserWithEntityManager(entityManager: EntityManager, userId: string): Promise<void> {
+  private async unsuspendDefaultForUserWithEntityManager(
+    entityManager: EntityManager,
+    userId: string,
+  ): Promise<Organization> {
     const organization = await this.findDefaultForUserWithEntityManager(entityManager, userId)
 
     // Email verification owns only the suspension it created. Billing, abuse,
@@ -517,14 +522,14 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       !organization.suspended ||
       organization.suspensionReason !== OrganizationService.EMAIL_VERIFICATION_SUSPENSION_REASON
     ) {
-      return
+      return organization
     }
 
     organization.suspended = false
     organization.suspendedAt = null
     organization.suspensionReason = null
     organization.suspendedUntil = null
-    await entityManager.save(organization)
+    return entityManager.save(organization)
   }
 
   private async findDefaultForUserWithEntityManager(
@@ -622,7 +627,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   })
   @TrackJobExecution()
   async handleUserCreatedEvent(payload: UserCreatedEvent): Promise<Organization> {
-    return this.createWithEntityManager(
+    const organization = await this.createWithEntityManager(
       payload.entityManager,
       {
         name: OrganizationService.DEFAULT_ORGANIZATION_NAME,
@@ -633,6 +638,13 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       true,
       payload.user.role === SystemRole.ADMIN ? false : undefined,
     )
+    await this.signupCreditOutboxService.enqueueForDefaultOrganization(
+      payload.entityManager,
+      organization.id,
+      payload.creationSource,
+      payload.user.emailVerified,
+    )
+    return organization
   }
 
   @OnAsyncEvent({
@@ -640,7 +652,8 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   })
   @TrackJobExecution()
   async handleUserEmailVerifiedEvent(payload: UserEmailVerifiedEvent): Promise<void> {
-    await this.unsuspendDefaultForUserWithEntityManager(payload.entityManager, payload.userId)
+    const organization = await this.unsuspendDefaultForUserWithEntityManager(payload.entityManager, payload.userId)
+    await this.signupCreditOutboxService.markVerified(payload.entityManager, organization.id)
   }
 
   @OnAsyncEvent({
@@ -649,6 +662,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   @TrackJobExecution()
   async handleUserDeletedEvent(payload: UserDeletedEvent): Promise<void> {
     const organization = await this.findDefaultForUserWithEntityManager(payload.entityManager, payload.userId)
+    await this.signupCreditOutboxService.cancelAwaiting(payload.entityManager, organization.id)
     const membersCount = await payload.entityManager.count(OrganizationUser, {
       where: {
         organizationId: organization.id,

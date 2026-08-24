@@ -28,6 +28,19 @@ function requiredCount(value: string | undefined, fallback: number, name: string
   return parsed
 }
 
+function requiredNonNegativeCount(value: string | undefined, fallback: number, name: string): number {
+  const raw = value?.trim()
+  if (!raw) return fallback
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`${name} must be a non-negative whole number, got "${value}"`)
+  }
+  const parsed = Number(raw)
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} must be a safe whole number, got "${value}"`)
+  }
+  return parsed
+}
+
 /**
  * How long a claimed usage-export batch stays invisible to other publishers,
  * and the TTL of the lock the publish cycle holds.
@@ -36,6 +49,9 @@ function requiredCount(value: string | undefined, fallback: number, name: string
  * can enforce the one relationship between them that has to hold.
  */
 export const USAGE_EXPORT_VISIBILITY_TIMEOUT_MS = 60_000
+export const SIGNUP_CREDIT_VISIBILITY_TIMEOUT_MS = 30_000
+export const SIGNUP_CREDIT_LOCK_TIMEOUT_MS = 1_000
+export const SIGNUP_CREDIT_MAX_CENTS = 100_000_000
 
 /**
  * An absolute http(s) URL with no query or fragment, or a hard failure.
@@ -76,6 +92,19 @@ function requiredHttpUrl(value: string, name: string): string {
     throw new Error(`${name} must not carry a query or fragment`)
   }
   return value.replace(/\/+$/, '')
+}
+
+function requiredHttpOrigin(value: string, name: string): string {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error(`${name} must be an absolute http(s) URL`)
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`${name} must use http or https`)
+  }
+  return parsed.origin
 }
 
 /**
@@ -145,6 +174,59 @@ export function usageExportConfig(env: NodeJS.ProcessEnv = process.env) {
   }
 
   return { ...settings, url: requiredHttpUrl(rawUrl, 'USAGE_EXPORT_URL') }
+}
+
+/** Signup-credit policy and its independent control-plane delivery channel. */
+export function signupCreditConfig(env: NodeJS.ProcessEnv = process.env) {
+  const amountCents = requiredNonNegativeCount(env.SIGNUP_CREDIT_CENTS, 0, 'SIGNUP_CREDIT_CENTS')
+  if (amountCents > SIGNUP_CREDIT_MAX_CENTS) {
+    throw new Error(`SIGNUP_CREDIT_CENTS must be at most ${SIGNUP_CREDIT_MAX_CENTS}`)
+  }
+
+  const explicitUrl = env.SIGNUP_CREDIT_EXPORT_URL?.trim() || undefined
+  const billingApiUrl = env.BILLING_API_URL?.trim() || undefined
+  const token = env.SIGNUP_CREDIT_EXPORT_TOKEN?.trim()
+  const settings = {
+    amountCents,
+    deliveryEnabled: Boolean(token),
+    token,
+    batchSize: requiredCount(env.SIGNUP_CREDIT_EXPORT_BATCH_SIZE, 50, 'SIGNUP_CREDIT_EXPORT_BATCH_SIZE'),
+    concurrency: requiredCount(env.SIGNUP_CREDIT_EXPORT_CONCURRENCY, 10, 'SIGNUP_CREDIT_EXPORT_CONCURRENCY'),
+    timeoutMs: requiredCount(env.SIGNUP_CREDIT_EXPORT_TIMEOUT_MS, 3_000, 'SIGNUP_CREDIT_EXPORT_TIMEOUT_MS'),
+  }
+
+  if (settings.concurrency > settings.batchSize) {
+    throw new Error('SIGNUP_CREDIT_EXPORT_CONCURRENCY must not exceed SIGNUP_CREDIT_EXPORT_BATCH_SIZE')
+  }
+  const worstCaseRequestTimeMs =
+    Math.ceil(settings.batchSize / settings.concurrency) * (settings.timeoutMs + SIGNUP_CREDIT_LOCK_TIMEOUT_MS)
+  if (worstCaseRequestTimeMs >= SIGNUP_CREDIT_VISIBILITY_TIMEOUT_MS) {
+    throw new Error(
+      `Signup credit batch worst-case request time must be below ${SIGNUP_CREDIT_VISIBILITY_TIMEOUT_MS}ms visibility window`,
+    )
+  }
+
+  if (amountCents > 0 && !token) {
+    throw new Error('SIGNUP_CREDIT_EXPORT_TOKEN is required when SIGNUP_CREDIT_CENTS is greater than 0')
+  }
+
+  // The destination is consumed only while a delivery channel exists (token
+  // set). BILLING_API_URL is owned by the dashboard's billing surface —
+  // signup credit merely borrows it as a default — so a value it cannot parse
+  // must not block boot while nothing on this path reads it. The same
+  // leniency usageExportConfig grants its own URL while export is off.
+  let url: string | undefined
+  if (token) {
+    if (explicitUrl) {
+      url = requiredHttpOrigin(explicitUrl, 'SIGNUP_CREDIT_EXPORT_URL')
+    } else if (billingApiUrl) {
+      url = requiredHttpOrigin(billingApiUrl, 'BILLING_API_URL')
+    } else {
+      throw new Error('SIGNUP_CREDIT_EXPORT_URL is required when SIGNUP_CREDIT_EXPORT_TOKEN is set')
+    }
+  }
+
+  return { ...settings, url }
 }
 
 // The object-store key namespace migration archives land in by default, inside
@@ -353,6 +435,7 @@ const configuration = {
   billingApiUrl: process.env.BILLING_API_URL,
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
   usageExport: usageExportConfig(),
+  signupCredit: signupCreditConfig(),
   defaultRunner: {
     domain: process.env.DEFAULT_RUNNER_DOMAIN,
     apiKey: process.env.DEFAULT_RUNNER_API_KEY,

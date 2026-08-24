@@ -6,11 +6,13 @@
 
 import { EntityManager } from 'typeorm'
 import { User } from '../user.entity'
+import { UserCreationSource } from '../enums/user-creation-source.enum'
 
 export class UserCreatedEvent {
   constructor(
     public readonly entityManager: EntityManager,
     public readonly user: User,
-    public readonly defaultOrganizationDefaultRegionId?: string,
+    public readonly defaultOrganizationDefaultRegionId: string | undefined,
+    public readonly creationSource: UserCreationSource,
   ) {}
 }

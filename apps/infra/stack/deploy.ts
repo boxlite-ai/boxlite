@@ -102,6 +102,10 @@ export async function deployStack() {
     //
     // Empty means the exporter stays off; see USAGE_EXPORT_ENABLED below.
     const usageExportToken = new sst.Secret('USAGE_EXPORT_TOKEN', '')
+    // Independent credential for the one-time signup-credit command. It must
+    // match Commerce's SIGNUP_CREDIT_INGEST_TOKEN, but remains empty until the
+    // receiving endpoint is deployed and configured.
+    const signupCreditExportToken = new sst.Secret('SIGNUP_CREDIT_EXPORT_TOKEN', '')
 
     // SES SMTP credentials for outbound mail (stack/mail.ts). Optional, so a
     // stage without them deploys and simply sends nothing.
@@ -265,6 +269,7 @@ export async function deployStack() {
       posthogApiKey,
       svixAuthToken,
       usageExportToken,
+      signupCreditExportToken,
       oidcIssuer,
       publicOidcIssuer,
       otelCollectorOtlpHttpUrl,

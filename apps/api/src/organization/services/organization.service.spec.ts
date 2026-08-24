@@ -24,6 +24,11 @@ const makeService = (found: Organization | null) => {
     findOne: jest.fn().mockResolvedValue(found),
     save: jest.fn().mockImplementation((org: Organization) => Promise.resolve(org)),
   }
+  const signupCreditOutboxService = {
+    enqueueForDefaultOrganization: jest.fn().mockResolvedValue(false),
+    markVerified: jest.fn().mockResolvedValue(false),
+    cancelAwaiting: jest.fn().mockResolvedValue(false),
+  }
   const configService = { getOrThrow: jest.fn().mockReturnValue(false), get: jest.fn() }
 
   const service = new OrganizationService(
@@ -35,9 +40,10 @@ const makeService = (found: Organization | null) => {
     {} as any,
     {} as any,
     {} as any,
+    signupCreditOutboxService as any,
   )
 
-  return { service, organizationRepository }
+  return { service, organizationRepository, signupCreditOutboxService }
 }
 
 describe('OrganizationService.unsuspend', () => {
@@ -108,13 +114,18 @@ describe('OrganizationService.handleUserEmailVerifiedEvent', () => {
       findOne: jest.fn().mockResolvedValue({ organization: found }),
       save: jest.fn().mockImplementation((org: Organization) => Promise.resolve(org)),
     }
-    const { service } = makeService(null)
-    return { service, entityManager, payload: { entityManager, userId: 'user-1' } as any }
+    const { service, signupCreditOutboxService } = makeService(null)
+    return {
+      service,
+      entityManager,
+      signupCreditOutboxService,
+      payload: { entityManager, userId: 'user-1' } as any,
+    }
   }
 
   it('clears the default organization suspension created by email verification', async () => {
     const suspendedAt = new Date()
-    const { service, entityManager, payload } = eventContext(
+    const { service, entityManager, signupCreditOutboxService, payload } = eventContext(
       organization({ suspended: true, suspensionReason: verificationReason, suspendedAt }),
     )
 
@@ -123,24 +134,27 @@ describe('OrganizationService.handleUserEmailVerifiedEvent', () => {
     expect(entityManager.save).toHaveBeenCalledWith(
       expect.objectContaining({ suspended: false, suspensionReason: null, suspendedAt: null }),
     )
+    expect(signupCreditOutboxService.markVerified).toHaveBeenCalledWith(entityManager, 'org-1')
   })
 
   it('preserves an unrelated administrator or billing suspension', async () => {
     const suspended = organization({ suspended: true, suspensionReason: 'Payment method required' })
-    const { service, entityManager, payload } = eventContext(suspended)
+    const { service, entityManager, signupCreditOutboxService, payload } = eventContext(suspended)
 
     await service.handleUserEmailVerifiedEvent(payload)
 
     expect(entityManager.save).not.toHaveBeenCalled()
     expect(suspended).toMatchObject({ suspended: true, suspensionReason: 'Payment method required' })
+    expect(signupCreditOutboxService.markVerified).toHaveBeenCalledWith(entityManager, 'org-1')
   })
 
-  it('does nothing when the organization is already active', async () => {
-    const { service, entityManager, payload } = eventContext(organization())
+  it('leaves an active organization unchanged and advances its signup credit', async () => {
+    const { service, entityManager, signupCreditOutboxService, payload } = eventContext(organization())
 
     await service.handleUserEmailVerifiedEvent(payload)
 
     expect(entityManager.save).not.toHaveBeenCalled()
+    expect(signupCreditOutboxService.markVerified).toHaveBeenCalledWith(entityManager, 'org-1')
   })
 })
 

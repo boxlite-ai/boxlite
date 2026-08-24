@@ -10,6 +10,7 @@ import { UserService } from './user/user.service'
 import { ApiKeyService } from './api-key/api-key.service'
 import { EventEmitterReadinessWatcher } from '@nestjs/event-emitter'
 import { SystemRole } from './user/enums/system-role.enum'
+import { UserCreationSource } from './user/enums/user-creation-source.enum'
 import { TypedConfigService } from './config/typed-config.service'
 import { SchedulerRegistry } from '@nestjs/schedule'
 import { RegionService } from './region/services/region.service'
@@ -159,12 +160,15 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
   private async initializeAdminUser(): Promise<void> {
     let user = await this.userService.findOne(BOXLITE_ADMIN_USER_ID)
     if (!user) {
-      user = await this.userService.create({
-        id: BOXLITE_ADMIN_USER_ID,
-        name: 'BoxLite Admin',
-        defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
-        role: SystemRole.ADMIN,
-      })
+      user = await this.userService.create(
+        {
+          id: BOXLITE_ADMIN_USER_ID,
+          name: 'BoxLite Admin',
+          defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
+          role: SystemRole.ADMIN,
+        },
+        UserCreationSource.SYSTEM_BOOTSTRAP,
+      )
     }
 
     const defaultOrg = await this.organizationService.findDefaultForUser(user.id)

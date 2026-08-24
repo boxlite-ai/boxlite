@@ -13,7 +13,9 @@ import { OrganizationInvitationAcceptedEvent } from '../events/organization-invi
 import { SystemRole } from '../../user/enums/system-role.enum'
 import { UserCreatedEvent } from '../../user/events/user-created.event'
 import { UserDeletedEvent } from '../../user/events/user-deleted.event'
+import { UserEmailVerifiedEvent } from '../../user/events/user-email-verified.event'
 import { OrganizationDto } from '../dto/organization.dto'
+import { UserCreationSource } from '../../user/enums/user-creation-source.enum'
 
 const legacyOrganizationPersonalFlag = ['pers', 'onal'].join('')
 
@@ -33,7 +35,13 @@ function createEntityManager() {
   return { entityManager, saved }
 }
 
-function createOrganizationService() {
+function createOrganizationService(
+  signupCreditOutboxService = {
+    enqueueForDefaultOrganization: jest.fn().mockResolvedValue(true),
+    markVerified: jest.fn().mockResolvedValue(true),
+    cancelAwaiting: jest.fn().mockResolvedValue(true),
+  },
+) {
   const configService = {
     get: jest.fn(() => undefined),
     getOrThrow: jest.fn((key: string) => {
@@ -54,6 +62,7 @@ function createOrganizationService() {
     {} as never,
     {} as never,
     {} as never,
+    signupCreditOutboxService as never,
   )
 }
 
@@ -88,7 +97,12 @@ describe('default organization membership semantics', () => {
 
   it('creates signup default organizations as normal organizations with a default owner membership', async () => {
     const { entityManager, saved } = createEntityManager()
-    const service = createOrganizationService()
+    const signupCreditOutboxService = {
+      enqueueForDefaultOrganization: jest.fn().mockResolvedValue(true),
+      markVerified: jest.fn(),
+      cancelAwaiting: jest.fn(),
+    }
+    const service = createOrganizationService(signupCreditOutboxService)
 
     const organization = await service.handleUserCreatedEvent(
       new UserCreatedEvent(
@@ -98,6 +112,8 @@ describe('default organization membership semantics', () => {
           emailVerified: true,
           role: SystemRole.USER,
         } as never,
+        undefined,
+        UserCreationSource.OIDC,
       ),
     )
 
@@ -110,6 +126,30 @@ describe('default organization membership semantics', () => {
       isDefaultForUser: true,
     })
     expect(saved).toContain(organization)
+    expect(signupCreditOutboxService.enqueueForDefaultOrganization).toHaveBeenCalledWith(
+      entityManager,
+      organization.id,
+      UserCreationSource.OIDC,
+      true,
+    )
+  })
+
+  it('advances only the default organization outbox row when email verification is observed', async () => {
+    const organization = { id: 'org-1' }
+    const entityManager = {
+      findOne: jest.fn().mockResolvedValue({ organization }),
+      save: jest.fn(async (entity) => entity),
+    }
+    const signupCreditOutboxService = {
+      enqueueForDefaultOrganization: jest.fn(),
+      markVerified: jest.fn().mockResolvedValue(true),
+      cancelAwaiting: jest.fn(),
+    }
+    const service = createOrganizationService(signupCreditOutboxService)
+
+    await service.handleUserEmailVerifiedEvent(new UserEmailVerifiedEvent(entityManager as never, 'user-1'))
+
+    expect(signupCreditOutboxService.markVerified).toHaveBeenCalledWith(entityManager, 'org-1')
   })
 
   it('allows invitations to default organizations because they are regular organizations', async () => {
@@ -228,7 +268,12 @@ describe('default organization membership semantics', () => {
       remove: jest.fn().mockResolvedValue(undefined),
       save: jest.fn(async (entity) => entity),
     }
-    const service = createOrganizationService()
+    const signupCreditOutboxService = {
+      enqueueForDefaultOrganization: jest.fn(),
+      markVerified: jest.fn(),
+      cancelAwaiting: jest.fn().mockResolvedValue(true),
+    }
+    const service = createOrganizationService(signupCreditOutboxService)
 
     await service.handleUserDeletedEvent(new UserDeletedEvent(entityManager as never, 'user-1'))
 
@@ -236,5 +281,6 @@ describe('default organization membership semantics', () => {
     expect(entityManager.save).toHaveBeenCalledWith(fallbackOwner)
     expect(entityManager.remove).toHaveBeenCalledWith(deletedUserMembership)
     expect(entityManager.remove).not.toHaveBeenCalledWith(organization)
+    expect(signupCreditOutboxService.cancelAwaiting).toHaveBeenCalledWith(entityManager, 'org-1')
   })
 })

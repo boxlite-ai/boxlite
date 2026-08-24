@@ -32,6 +32,7 @@ import { Region } from '../region/entities/region.entity'
 import { EncryptionModule } from '../encryption/encryption.module'
 import { UsageModule } from '../usage/usage.module'
 import { UsageController } from '../usage/controllers/usage.controller'
+import { SignupCreditModule } from '../signup-credit/signup-credit.module'
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { UsageController } from '../usage/controllers/usage.controller'
     ]),
     EncryptionModule,
     UsageModule,
+    SignupCreditModule,
   ],
   controllers: [
     OrganizationController,

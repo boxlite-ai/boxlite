@@ -56,6 +56,7 @@ describe('JwtStrategy.validate — auto-created user', () => {
     expect(userService.create).toHaveBeenCalledTimes(1)
     expect(userService.create).toHaveBeenCalledWith(
       expect.objectContaining({ defaultOrganizationDefaultRegionId: DEFAULT_REGION_ID }),
+      'oidc',
     )
   })
 
