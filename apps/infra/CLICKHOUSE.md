@@ -85,8 +85,17 @@ Configure that application with:
 
 - callback URL `https://clickstack.<STACK_DOMAIN>/oauth2/idpresponse`;
 - the same API audience used by Backoffice, whose Auth0 API defines the `boxlite-backoffice` scope;
-- an Auth0 Action that adds the configured namespaced role claim to the access token, with only the
-  Operator/Admin provider-role values admitted by the Gateway.
+- the same corporate connection(s) enabled for the Backoffice client;
+- the Backoffice tenant's existing post-login Action, which adds the configured namespaced role
+  claim to the access token, with only the Operator/Admin provider-role values admitted by the
+  Gateway.
+
+Do not infer the audience, role-claim name, or provider-role values from the examples below. Copy
+the exact non-secret values from Backoffice's authoritative
+`/boxlite/backoffice/<stage>/stage-auth-config` SSM parameter: use `audience`, `roleClaim`, and the
+entries under `roleMappings.operator` and `roleMappings.admin`. The issuer must name that same
+employee Auth0 tenant. A mismatch passes static configuration validation but causes authenticated
+requests to be rejected by the Gateway.
 
 Put only the non-secret values in `apps/infra/.env`, then persist the stage configuration and set the
 two application secrets through the non-echoing SST secret prompt:
@@ -95,8 +104,8 @@ two application secrets through the non-echoing SST secret prompt:
 CLICKHOUSE_MODE=self-hosted
 CLICKSTACK_GATEWAY_ENABLED=true
 CLICKSTACK_OIDC_ISSUER_BASE_URL=https://YOUR_EMPLOYEE_TENANT.auth0.com/
-CLICKSTACK_OIDC_AUDIENCE=https://backoffice.boxlite.ai
-CLICKSTACK_OIDC_ROLE_CLAIM=https://boxlite.ai/roles
+CLICKSTACK_OIDC_AUDIENCE=YOUR_EXACT_BACKOFFICE_API_AUDIENCE
+CLICKSTACK_OIDC_ROLE_CLAIM=YOUR_EXACT_BACKOFFICE_ROLE_CLAIM
 CLICKSTACK_OIDC_ALLOWED_ROLE_VALUES=backoffice-operator,backoffice-admin
 ```
 
