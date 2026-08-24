@@ -32,19 +32,21 @@ vi.mock('recharts', () => ({
     createElement('div', { 'data-testid': 'line-chart', 'data-points': JSON.stringify(data) }, children),
   ReferenceLine: ({ y }: { y: number }) => createElement('div', { 'data-testid': 'limit-line' }, String(y)),
   XAxis: () => null,
-  YAxis: () => null,
+  YAxis: ({ domain }: { domain: [number, number] }) =>
+    createElement('div', { 'data-testid': 'y-axis', 'data-domain': JSON.stringify(domain) }),
 }))
 
 import { ConcurrencyTimeline, concurrencyAxisMaximum } from './ConcurrencyTimeline'
 
 describe('concurrencyAxisMaximum', () => {
-  it('keeps both the observed peak and the plan limit inside the chart', () => {
-    expect(concurrencyAxisMaximum([{ time: 0, runningBoxes: 105 }], 100)).toBe(120)
-    expect(concurrencyAxisMaximum([{ time: 0, runningBoxes: 30 }], 100)).toBe(120)
+  it('adds readable headroom above the observed peak', () => {
+    expect(concurrencyAxisMaximum([{ time: 0, runningBoxes: 105 }])).toBe(120)
+    expect(concurrencyAxisMaximum([{ time: 0, runningBoxes: 30 }])).toBe(40)
+    expect(concurrencyAxisMaximum([{ time: 0, runningBoxes: 1 }])).toBe(2)
   })
 
   it('keeps an empty series readable', () => {
-    expect(concurrencyAxisMaximum([], null)).toBe(2)
+    expect(concurrencyAxisMaximum([])).toBe(2)
   })
 })
 
@@ -127,7 +129,30 @@ describe('ConcurrencyTimeline', () => {
     ])
   })
 
-  it('renders the optional plan-limit label and reference line', () => {
+  it('scales low usage independently from a distant plan limit', () => {
+    mocks.concurrencyQuery.mockReturnValue({
+      data: { points: [{ observedAt: '2026-08-23T00:00:00.000Z', runningBoxes: 1 }] },
+      isError: false,
+      isLoading: false,
+      refetch,
+    })
+    mocks.planConcurrencyLimit.mockReturnValue(1000)
+
+    renderTimeline()
+
+    const yAxis = document.querySelector<HTMLElement>('[data-testid="y-axis"]')
+    expect(JSON.parse(yAxis?.dataset.domain ?? '[]')).toEqual([0, 2])
+    expect(document.body.textContent).toContain('limit = 1000')
+    expect(document.querySelector('[data-testid="limit-line"]')).toBeNull()
+  })
+
+  it('renders the optional plan-limit label and an in-range reference line', () => {
+    mocks.concurrencyQuery.mockReturnValue({
+      data: { points: [{ observedAt: '2026-08-23T00:00:00.000Z', runningBoxes: 100 }] },
+      isError: false,
+      isLoading: false,
+      refetch,
+    })
     mocks.planConcurrencyLimit.mockReturnValue(100)
 
     renderTimeline()
