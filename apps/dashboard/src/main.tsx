@@ -25,7 +25,7 @@ const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement)
 function Application() {
   const location = useLocation()
 
-  if (location.pathname === RoutePath.STATUS) {
+  if (location.pathname === RoutePath.STATUS || location.pathname === `${RoutePath.STATUS}/`) {
     return <Status />
   }
 

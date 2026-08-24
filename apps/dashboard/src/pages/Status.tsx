@@ -1,8 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { ChevronDown } from '@/components/ui/icon'
-import { fetchStatusSnapshot, type ServiceStatus } from '@/lib/status-snapshot'
+import {
+  fetchStatusSnapshot,
+  isStatusSnapshotFresh,
+  type ServiceStatus,
+  STATUS_SNAPSHOT_MAX_AGE_MS,
+} from '@/lib/status-snapshot'
 import { cn } from '@/lib/utils'
 
 const PUBLIC_STATUS_SNAPSHOT_PATH = '/public-status.json'
@@ -101,6 +106,7 @@ function RegionStatus({
 }
 
 export default function Status() {
+  const [freshnessNow, setFreshnessNow] = useState(() => Date.now())
   const statusQuery = useQuery({
     queryKey: ['public-status-snapshot'],
     queryFn: ({ signal }) => fetchStatusSnapshot(PUBLIC_STATUS_SNAPSHOT_PATH, signal),
@@ -109,6 +115,26 @@ export default function Status() {
   })
 
   const snapshot = statusQuery.data
+  const snapshotGeneratedAt = snapshot?.generatedAt
+  const snapshotIsFresh = snapshot ? isStatusSnapshotFresh(snapshot, freshnessNow) : false
+
+  useEffect(() => {
+    setFreshnessNow(Date.now())
+
+    if (!snapshotGeneratedAt) {
+      return
+    }
+
+    const expiresAt = Date.parse(snapshotGeneratedAt) + STATUS_SNAPSHOT_MAX_AGE_MS
+    const refreshFreshness = () => setFreshnessNow(Date.now())
+    const timeoutId = window.setTimeout(refreshFreshness, Math.max(0, expiresAt - Date.now() + 1))
+
+    document.addEventListener('visibilitychange', refreshFreshness)
+    return () => {
+      window.clearTimeout(timeoutId)
+      document.removeEventListener('visibilitychange', refreshFreshness)
+    }
+  }, [snapshotGeneratedAt])
 
   return (
     <main className="mx-auto w-full max-w-5xl p-4 sm:p-5 lg:p-8">
@@ -127,7 +153,7 @@ export default function Status() {
         <div className="border border-border bg-card px-5 py-8 font-mono text-sm text-muted-foreground" role="status">
           Loading current status…
         </div>
-      ) : statusQuery.isError || !snapshot ? (
+      ) : statusQuery.isError || !snapshot || !snapshotIsFresh ? (
         <StatusUnavailable />
       ) : (
         <div className="space-y-5">

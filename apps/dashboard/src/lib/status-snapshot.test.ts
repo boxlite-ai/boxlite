@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseStatusSnapshot, StaleStatusSnapshotError } from './status-snapshot'
+import { FutureStatusSnapshotError, parseStatusSnapshot, StaleStatusSnapshotError } from './status-snapshot'
 
 const generatedAt = '2026-08-24T04:00:00.000Z'
 
@@ -30,6 +30,13 @@ describe('parseStatusSnapshot', () => {
   it('rejects a stale snapshot instead of leaving an operational status visible', () => {
     expect(() => parseStatusSnapshot(snapshot(), Date.parse(generatedAt) + 5 * 60_000 + 1)).toThrow(
       StaleStatusSnapshotError,
+    )
+  })
+
+  it('rejects a snapshot generated beyond the allowed clock skew', () => {
+    expect(() => parseStatusSnapshot(snapshot(), Date.parse(generatedAt) - 60_000)).not.toThrow()
+    expect(() => parseStatusSnapshot(snapshot(), Date.parse(generatedAt) - 60_000 - 1)).toThrow(
+      FutureStatusSnapshotError,
     )
   })
 
