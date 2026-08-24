@@ -17,9 +17,17 @@ import { useCreateApiKeyMutation } from '@/hooks/mutations/useCreateApiKeyMutati
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard'
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  groupSelectionState,
+  permissionActionLabel,
+  selectableGroups,
+  toggleGroup,
+  togglePermission,
+} from '@/lib/api-key-permissions'
 import { CreateApiKeyPermissionsEnum } from '@boxlite-ai/api-client'
 import { Calendar, Info, Plus } from '@/components/ui/icon'
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
 interface CreateApiKeyDialogProps {
@@ -46,7 +54,10 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
   const [expiryIdx, setExpiryIdx] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [revealKey, setRevealKey] = useState<string | null>(null)
+  const [selectedPermissions, setSelectedPermissions] = useState<CreateApiKeyPermissionsEnum[]>(availablePermissions)
   const [copied, copy] = useCopyToClipboard()
+
+  const permissionGroups = useMemo(() => selectableGroups(availablePermissions), [availablePermissions])
 
   const { mutateAsync } = useCreateApiKeyMutation()
 
@@ -56,8 +67,9 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
       setExpiryIdx(0)
       setSubmitting(false)
       setRevealKey(null)
+      setSelectedPermissions(availablePermissions)
     }
-  }, [open])
+  }, [open, availablePermissions])
 
   const handleCreate = async (event?: React.FormEvent<HTMLFormElement>) => {
     event?.preventDefault()
@@ -73,7 +85,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
       const created = await mutateAsync({
         organizationId,
         name: name.trim(),
-        permissions: availablePermissions,
+        permissions: selectedPermissions,
         expiresAt,
       })
       toast.success('API key created successfully')
@@ -139,7 +151,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
             <DialogHeader className="px-[26px] pb-0 pt-6">
               <DialogTitle className="text-[21px] font-bold tracking-[-0.3px]">Create New API Key</DialogTitle>
               <DialogDescription className="text-[13px] text-muted-foreground">
-                Create a key for Boxes API access.
+                Choose what this key is allowed to do.
               </DialogDescription>
             </DialogHeader>
 
@@ -188,14 +200,48 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                   <div className="text-[12px] text-muted-foreground">Optional expiration date for the API key.</div>
                 </div>
 
-                {/* info */}
-                <div className="flex gap-3 border border-brand/25 bg-brand/[0.06] px-[18px] py-4">
-                  <Info className="mt-0.5 size-[17px] shrink-0 text-brand" strokeWidth={2} />
-                  <div>
-                    <div className="text-[13px] font-semibold text-brand">Boxes API access</div>
-                    <div className="mt-[5px] text-[12.5px] leading-relaxed text-muted-foreground">
-                      This key can create and manage Boxes. Shared Linux base images are available automatically.
-                    </div>
+                {/* permissions */}
+                <div className="flex flex-col gap-[10px]">
+                  <div className="text-[13px] font-semibold">Permissions</div>
+                  <div className="flex flex-col border border-border bg-card">
+                    {permissionGroups.map((group) => {
+                      const state = groupSelectionState(selectedPermissions, group.permissions)
+                      return (
+                        <div
+                          key={group.name}
+                          className="flex flex-col gap-[10px] border-b border-border px-[14px] py-[13px] last:border-b-0"
+                        >
+                          <label className="flex cursor-pointer items-center gap-[10px]">
+                            <Checkbox
+                              checked={state === 'all' ? true : state === 'partial' ? 'indeterminate' : false}
+                              onCheckedChange={() =>
+                                setSelectedPermissions((current) => toggleGroup(current, group.permissions))
+                              }
+                            />
+                            <span className="text-[13px] font-semibold">{group.name}</span>
+                          </label>
+                          <div className="flex flex-wrap gap-x-[18px] gap-y-[8px] pl-[26px]">
+                            {group.permissions.map((permission) => (
+                              <label key={permission} className="flex cursor-pointer items-center gap-[8px]">
+                                <Checkbox
+                                  checked={selectedPermissions.includes(permission)}
+                                  onCheckedChange={() =>
+                                    setSelectedPermissions((current) => togglePermission(current, permission))
+                                  }
+                                />
+                                <span className="font-mono text-[12px] text-muted-foreground">
+                                  {permissionActionLabel(permission)}
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <div className="flex gap-2 text-[12px] text-muted-foreground">
+                    <Info className="mt-[1px] size-[14px] shrink-0 text-brand" strokeWidth={2} />
+                    <span>Shared Linux base images are available to every key automatically.</span>
                   </div>
                 </div>
               </div>
@@ -212,7 +258,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
               <button
                 type="submit"
                 form="create-api-key-form"
-                disabled={!name.trim() || submitting || !organizationId || availablePermissions.length === 0}
+                disabled={!name.trim() || submitting || !organizationId || selectedPermissions.length === 0}
                 className="bg-primary px-[26px] py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 {submitting ? 'Creating…' : 'Create'}
