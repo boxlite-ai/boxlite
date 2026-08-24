@@ -2,9 +2,10 @@
 // Copyright (c) 2026 BoxLite AI
 
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
@@ -15,21 +16,24 @@ import {
   defaultThemeArgs,
   deployActionArgs,
   enableRpLogoutDiscoveryArgs,
-  pageTemplateArgs,
   customTextArgs,
   customTextRequests,
   isAuth0ApiNotFound,
   prepareAuth0Branding,
+  resolveAuth0BrandingAssets,
   spaApplicationArgs,
-  templateAssetUrls,
   themeAssetUrls,
   validatePublishedAssetResponse,
 } from './auth0.js'
 
 const AUTH0_ASSETS = join(import.meta.dirname, 'auth0')
 const CHECKED_IN_THEME = JSON.parse(readFileSync(join(AUTH0_ASSETS, 'branding-theme.json'), 'utf8'))
-const CHECKED_IN_TEMPLATE = readFileSync(join(AUTH0_ASSETS, 'page-template.liquid'), 'utf8')
 const CHECKED_IN_TEXT = JSON.parse(readFileSync(join(AUTH0_ASSETS, 'custom-text.json'), 'utf8'))
+const DASHBOARD_AUTH0_ASSETS = join(import.meta.dirname, '..', '..', 'dashboard', 'public', 'auth0')
+const RESOLVED_CHECKED_IN = resolveAuth0BrandingAssets({
+  theme: CHECKED_IN_THEME,
+  stackDomain: 'dev.boxlite.example',
+})
 
 function theme(overrides = {}) {
   return { colors: { page_background: '#13161B' }, fonts: { reference_text_size: 13 },
@@ -165,6 +169,18 @@ test('brandingThemeArgs refuses a theme whose assets are not absolute https URLs
   assert.throws(() => brandingThemeArgs({ theme: { colors: {} } }), /needs at least colors and fonts/)
 })
 
+test('resolveAuth0BrandingAssets binds checked-in assets to the selected stack domain', () => {
+  const resolved = resolveAuth0BrandingAssets({
+    theme: CHECKED_IN_THEME,
+    stackDomain: 'dev.boxlite.example',
+  })
+
+  assert.equal(resolved.theme.widget.logo_url, 'https://dev.boxlite.example/auth0/boxlite-light-ec0b1243.png')
+  assert.equal(resolved.theme.fonts.font_url, 'https://dev.boxlite.example/auth0/ibm-plex-mono-400-ba204497.woff2')
+  assert.doesNotMatch(JSON.stringify(resolved), /pages\.dev|__BOXLITE_STACK_DOMAIN__/)
+  assert.throws(() => resolveAuth0BrandingAssets({ theme: CHECKED_IN_THEME, stackDomain: '' }), /stackDomain/)
+})
+
 test('themeAssetUrls reports the theme-side asset bootstrap has to probe', () => {
   assert.deepEqual(themeAssetUrls(theme()), ['https://assets.example.com/logo.png'])
   assert.deepEqual(themeAssetUrls(theme({ fonts: { font_url: 'https://assets.example.com/mono.woff2' } })), [
@@ -179,6 +195,7 @@ test('validatePublishedAssetResponse requires a successful CORS-enabled asset', 
       url: 'https://assets.example.com/mono.woff2',
       status: 200,
       bodyLength: 42,
+      contentType: 'font/woff2',
       allowOrigin: '*',
       auth0Origin: 'https://auth.example.com',
     }),
@@ -188,6 +205,7 @@ test('validatePublishedAssetResponse requires a successful CORS-enabled asset', 
       url: 'https://assets.example.com/mono.woff2',
       status: 200,
       bodyLength: 42,
+      contentType: 'font/woff2; charset=binary',
       allowOrigin: 'https://auth.example.com',
       auth0Origin: 'https://auth.example.com',
     }),
@@ -198,6 +216,7 @@ test('validatePublishedAssetResponse requires a successful CORS-enabled asset', 
         url: 'https://assets.example.com/mono.woff2',
         status: 302,
         bodyLength: 42,
+        contentType: 'font/woff2',
         allowOrigin: '*',
         auth0Origin: 'https://auth.example.com',
       }),
@@ -209,6 +228,7 @@ test('validatePublishedAssetResponse requires a successful CORS-enabled asset', 
         url: 'https://assets.example.com/mono.woff2',
         status: 404,
         bodyLength: 42,
+        contentType: 'font/woff2',
         allowOrigin: '*',
         auth0Origin: 'https://auth.example.com',
       }),
@@ -220,6 +240,7 @@ test('validatePublishedAssetResponse requires a successful CORS-enabled asset', 
         url: 'https://assets.example.com/mono.woff2',
         status: 200,
         bodyLength: 42,
+        contentType: 'font/woff2',
         allowOrigin: null,
         auth0Origin: 'https://auth.example.com',
       }),
@@ -231,43 +252,51 @@ test('validatePublishedAssetResponse requires a successful CORS-enabled asset', 
         url: 'https://assets.example.com/mono.woff2',
         status: 200,
         bodyLength: 0,
+        contentType: 'font/woff2',
         allowOrigin: '*',
         auth0Origin: 'https://auth.example.com',
       }),
     /empty body/,
   )
-})
-
-test('templateAssetUrls collects the fonts the template loads itself', () => {
-  // fonts.font_url takes one URL and IBM Plex Mono has no variable face, so the
-  // two weights are @font-face rules in the template — which means the probe
-  // has to read them back out of the CSS rather than out of the theme.
-  assert.deepEqual(
-    templateAssetUrls(`
-      @font-face { src: url('https://assets.example.com/mono-400.woff2') format('woff2'); }
-      @font-face { src: URL("https://assets.example.com/mono-(500).woff2") format('woff2'); }
-    `),
-    ['https://assets.example.com/mono-400.woff2', 'https://assets.example.com/mono-(500).woff2'],
+  assert.throws(
+    () =>
+      validatePublishedAssetResponse({
+        url: 'https://assets.example.com/logo.png',
+        status: 200,
+        bodyLength: 42,
+        contentType: 'text/html; charset=UTF-8',
+        allowOrigin: '*',
+        auth0Origin: 'https://auth.example.com',
+      }),
+    /Content-Type 'text\/html; charset=UTF-8'.*image\/png/,
   )
-  assert.deepEqual(templateAssetUrls('<html></html>'), [])
 })
 
-test('templateAssetUrls rejects every non-HTTPS CSS asset instead of skipping it', () => {
-  assert.throws(() => templateAssetUrls(`body { background: url('http://assets.example.com/bg.png') }`), /https/)
-  assert.throws(() => templateAssetUrls(`body { background: url('/bg.png') }`), /https/)
+test('the checked-in Free-plan theme carries the regular font face', () => {
+  const resolved = resolveAuth0BrandingAssets({
+    theme: CHECKED_IN_THEME,
+    stackDomain: 'dev.boxlite.example',
+  })
+  assert.equal(resolved.theme.fonts.font_url, 'https://dev.boxlite.example/auth0/ibm-plex-mono-400-ba204497.woff2')
+  assert.deepEqual(themeAssetUrls(resolved.theme), [
+    'https://dev.boxlite.example/auth0/boxlite-light-ec0b1243.png',
+    'https://dev.boxlite.example/auth0/ibm-plex-mono-400-ba204497.woff2',
+  ])
 })
 
-test('the checked-in theme has a regular fallback and the template adds both weights', () => {
-  // ULP's own stack ends in sans-serif, so a font that fails to load would take
-  // the typography back to where it started while the run reports success.
-  assert.equal(templateAssetUrls(CHECKED_IN_TEMPLATE).length, 2)
-  assert.match(CHECKED_IN_TEMPLATE, /font-weight: 400/)
-  assert.match(CHECKED_IN_TEMPLATE, /font-weight: 500/)
-  assert.match(CHECKED_IN_TEMPLATE, /'IBM Plex Mono', ui-monospace,[^;]*monospace !important/)
-  assert.equal(
-    CHECKED_IN_THEME.fonts.font_url,
-    'https://boxlite-auth-assets-boxlite-ai.pages.dev/ibm-plex-mono-400.woff2',
-  )
+test('the dashboard ships only the documented content-addressed Auth0 assets', () => {
+  const expectedHashes = {
+    'IBM-Plex-OFL-d741e57d.txt': 'd741e57d5f865e294df801f96b7b5161a88b211df65887e4358d271c9fc5fb4f',
+    'boxlite-light-ec0b1243.png': 'ec0b124340e956a6619e866809e2dad8e5f75e83e10a301c766ecdd81710f8e0',
+    'ibm-plex-mono-400-ba204497.woff2': 'ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350',
+  }
+
+  assert.deepEqual(readdirSync(DASHBOARD_AUTH0_ASSETS).sort(), Object.keys(expectedHashes).sort())
+  for (const [fileName, expectedHash] of Object.entries(expectedHashes)) {
+    const body = readFileSync(join(DASHBOARD_AUTH0_ASSETS, fileName))
+    assert.equal(createHash('sha256').update(body).digest('hex'), expectedHash, fileName)
+    assert.match(fileName.toLowerCase(), new RegExp(expectedHash.slice(0, 8)), fileName)
+  }
 })
 
 test('defaultThemeArgs reads the tenant theme rather than assuming one exists', () => {
@@ -284,25 +313,14 @@ test('isAuth0ApiNotFound selects create only for an explicit API 404', () => {
   assert.equal(isAuth0ApiNotFound(new Error('unrelated failure')), false)
 })
 
-test('pageTemplateArgs refuses a template missing the markers Auth0 requires', () => {
-  // Auth0 rejects these with an opaque 400, so the message is worth producing here.
-  assert.throws(() => pageTemplateArgs('<html></html>'), /auth0:head.*auth0:widget|auth0:head/)
-  assert.throws(() => pageTemplateArgs('{%- auth0:head -%}'), /auth0:widget/)
-})
-
-test('pageTemplateArgs wraps the template in the payload the API expects', () => {
-  const template = '<html>{%- auth0:head -%}<body>{%- auth0:widget -%}</body></html>'
-  const args = pageTemplateArgs(template)
-  assert.deepEqual(args.slice(0, 3), ['api', 'put', 'branding/templates/universal-login'])
-  assert.deepEqual(JSON.parse(valueAfter(args, '--data')), { template })
-})
-
-test('the checked-in theme and template are the ones bootstrap will actually send', () => {
-  // Guards the assets, not the builders: these two files are edited by hand
-  // when the design changes, and a typo in either only surfaces against a real
-  // tenant otherwise.
-  assert.doesNotThrow(() => brandingThemeArgs({ themeId: 'thm_1', theme: CHECKED_IN_THEME }))
-  assert.doesNotThrow(() => pageTemplateArgs(CHECKED_IN_TEMPLATE))
+test('the checked-in Free-plan theme is the one bootstrap will actually send', () => {
+  // Guards the hand-edited payload; a typo otherwise surfaces only against a
+  // real tenant.
+  const resolved = resolveAuth0BrandingAssets({
+    theme: CHECKED_IN_THEME,
+    stackDomain: 'dev.boxlite.example',
+  })
+  assert.doesNotThrow(() => brandingThemeArgs({ themeId: 'thm_1', theme: resolved.theme }))
   assert.equal(CHECKED_IN_THEME.borders.button_border_radius, 1)
   assert.equal(CHECKED_IN_THEME.borders.input_border_radius, 1)
   assert.equal(CHECKED_IN_THEME.borders.widget_corner_radius, 1)
@@ -310,6 +328,7 @@ test('the checked-in theme and template are the ones bootstrap will actually sen
   assert.equal('page_background' in CHECKED_IN_THEME.colors, false)
   assert.equal(CHECKED_IN_THEME.colors.read_only_background, '#232833')
   assert.equal(CHECKED_IN_THEME.page_background.background_image_url, '')
+  assert.equal(CHECKED_IN_THEME.widget.social_buttons_layout, 'top')
 })
 
 test('customTextRequests emits one PUT per prompt, keyed by screen', () => {
@@ -354,7 +373,6 @@ test('prepareAuth0Branding validates every payload before returning a write plan
     () =>
       prepareAuth0Branding({
         theme: { widget: { logo_url: 'https://assets.example.com/logo.png' } },
-        template: CHECKED_IN_TEMPLATE,
         customText: CHECKED_IN_TEXT,
       }),
     /colors and fonts/,
@@ -363,19 +381,16 @@ test('prepareAuth0Branding validates every payload before returning a write plan
     () =>
       prepareAuth0Branding({
         theme: theme(),
-        template: CHECKED_IN_TEMPLATE,
         customText: { language: 'en', prompts: {} },
       }),
     /prompts/,
   )
   const plan = prepareAuth0Branding({
-    theme: CHECKED_IN_THEME,
-    template: CHECKED_IN_TEMPLATE,
+    theme: RESOLVED_CHECKED_IN.theme,
     customText: CHECKED_IN_TEXT,
   })
-  assert.equal(plan.templateArgs[0], 'api')
   assert.equal(plan.customTextArgs.length, 2)
-  assert.equal(plan.assetUrls.length, 3)
+  assert.equal(plan.assetUrls.length, 2)
 })
 
 test('the checked-in copy shares a description but splits the titles', () => {

@@ -123,20 +123,17 @@ export function enableRpLogoutDiscoveryArgs() {
  * ---------------------------------------------------------------------------
  * Universal Login branding
  *
- * Unlike everything above, these are idempotent: the theme is a PATCH and the
- * page template a PUT, so re-running overwrites rather than duplicates. That
- * is why bootstrap exposes them under their own flag instead of folding them
- * into --provision-auth0 — the login page's appearance gets iterated on, and
- * nobody should have to re-create an application to change a border radius.
+ * Unlike application and API provisioning, these writes are idempotent: the
+ * theme is patched (or created once) and custom text is replaced per prompt.
+ * Bootstrap keeps them behind their own flag so iterating on appearance never
+ * re-creates an application.
  *
- * The split between the two payloads is not stylistic. The Branding Theme API
- * has no field for spacing, control height, widget width, line-height or
- * letter-spacing, and its reference_text_size only reaches the selectors that
- * consume --default-font-size — which buttons, social buttons and labels do
- * not. Those gaps can only be closed by CSS, and CSS can only reach the page
- * through a page template, which in turn requires the custom domain the
- * deployment already has. Hence: colors/radii/fonts in the theme, everything
- * the theme cannot express in the template.
+ * This path deliberately uses only APIs available on Auth0's Free plan. The
+ * Branding Theme API cannot express spacing, control height, widget width,
+ * line-height or letter-spacing; those values therefore remain Auth0 defaults.
+ * A Universal Login page template could override them, but Auth0 reserves that
+ * endpoint for paid plans and rejects it with 402 on Free, so including it
+ * would make every apply partially update the theme before failing.
  */
 
 /*
@@ -155,16 +152,33 @@ function withoutComments(value: any): any {
   )
 }
 
+const STACK_DOMAIN_TOKEN = '__BOXLITE_STACK_DOMAIN__'
+
+function replaceStackDomain(value: any, stackDomain: string): any {
+  if (Array.isArray(value)) return value.map((nested) => replaceStackDomain(nested, stackDomain))
+  if (value === null || typeof value !== 'object') {
+    return typeof value === 'string' ? value.replaceAll(STACK_DOMAIN_TOKEN, stackDomain) : value
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, nested]) => [key, replaceStackDomain(nested, stackDomain)]),
+  )
+}
+
+/** Resolves stage-owned asset URLs before any payload validation or network I/O. */
+export function resolveAuth0BrandingAssets({ theme, stackDomain }: any) {
+  requireHostname('stackDomain', stackDomain)
+  return { theme: replaceStackDomain(theme, stackDomain) }
+}
+
 /*
- * Remote assets are the one part of this the repo cannot vouch for: the logo
- * and the fonts live on a static host, and an unpublished file produces no
- * error from Auth0 at all — the browser simply falls back, so the most visible
- * half of the restyle does not happen and the run still reports success.
- * Requiring an absolute https URL catches the shape here; bootstrap checks
- * that the files actually resolve.
+ * The repo vouches for the source bytes, but not for the selected stage having
+ * deployed them yet. An unpublished file produces no error from Auth0 at all —
+ * the browser simply falls back, so the most visible half of the restyle does
+ * not happen and the run still reports success. Requiring an absolute https
+ * URL catches the shape here; bootstrap checks the deployed response.
  */
 function requireAssetUrl(name: any, value: any) {
-  if (typeof value !== 'string' || !value.startsWith('https://')) {
+  if (typeof value !== 'string' || !value.startsWith('https://') || value.includes(STACK_DOMAIN_TOKEN)) {
     throw new Error(`${name} must be an absolute https URL, got '${value}'`)
   }
   return value
@@ -183,27 +197,43 @@ export function validatePublishedAssetResponse({
   url,
   status,
   bodyLength,
+  contentType,
   allowOrigin,
   auth0Origin,
 }: {
   url: string
   status: number
   bodyLength: number
+  contentType: string | null
   allowOrigin: string | null
   auth0Origin: string
 }) {
-  validatePublishedAssetMetadata({ url, status, allowOrigin, auth0Origin })
+  validatePublishedAssetMetadata({ url, status, contentType, allowOrigin, auth0Origin })
   validatePublishedAssetBody({ url, bodyLength })
+}
+
+const ASSET_CONTENT_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.woff2': 'font/woff2',
+}
+
+function expectedAssetContentType(url: string) {
+  const pathname = new URL(url).pathname.toLowerCase()
+  const extension = Object.keys(ASSET_CONTENT_TYPES).find((candidate) => pathname.endsWith(candidate))
+  if (!extension) throw new Error(`the Universal Login asset ${url} has an unsupported file extension`)
+  return ASSET_CONTENT_TYPES[extension]
 }
 
 export function validatePublishedAssetMetadata({
   url,
   status,
+  contentType,
   allowOrigin,
   auth0Origin,
 }: {
   url: string
   status: number
+  contentType: string | null
   allowOrigin: string | null
   auth0Origin: string
 }) {
@@ -214,10 +244,18 @@ export function validatePublishedAssetMetadata({
         'Auth0 accepts an unreachable asset without complaint and the login page just keeps its default appearance.',
     )
   }
+  const expectedContentType = expectedAssetContentType(url)
+  const mediaType = contentType?.split(';', 1)[0].trim().toLowerCase()
+  if (mediaType !== expectedContentType) {
+    throw new Error(
+      `the Universal Login asset ${url} returned Content-Type '${contentType ?? '<missing>'}', ` +
+        `expected '${expectedContentType}'. A SPA fallback can return HTML with status 200 while the asset is missing.`,
+    )
+  }
   if (allowOrigin !== '*' && allowOrigin !== auth0Origin) {
     throw new Error(
       `the Universal Login asset ${url} returned Access-Control-Allow-Origin '${allowOrigin ?? '<missing>'}', ` +
-        `expected '*' or '${auth0Origin}'. Auth0 can store the template, but the browser will refuse to load the asset.`,
+        `expected '*' or '${auth0Origin}'. Auth0 can store the theme URL, but the browser will refuse to load the asset.`,
     )
   }
 }
@@ -226,21 +264,6 @@ export function validatePublishedAssetBody({ url, bodyLength }: { url: string; b
   if (bodyLength <= 0) {
     throw new Error(`the Universal Login asset ${url} returned an empty body`)
   }
-}
-
-/*
- * The theme carries the regular face as the no-template fallback. Paid-plan
- * tenants also load both real weights from the template's @font-face rules;
- * font_url accepts only one URL, and IBM Plex Mono ships no variable face.
- * Reading the template URLs back out keeps those extra assets in the same
- * pre-write validation set as the theme fallback.
- */
-const TEMPLATE_ASSET_PATTERN = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^'")][^)]*))\s*\)/gi
-
-export function templateAssetUrls(template: any) {
-  return [...String(template ?? '').matchAll(TEMPLATE_ASSET_PATTERN)].map((match, index) =>
-    requireAssetUrl(`template asset URL ${index + 1}`, (match[1] ?? match[2] ?? match[3]).trim()),
-  )
 }
 
 /**
@@ -270,13 +293,6 @@ export function brandingThemeArgs({ themeId, theme }: any) {
     ? ['api', 'patch', `branding/themes/${themeId}`, '--data', data]
     : ['api', 'post', 'branding/themes', '--data', data]
 }
-
-/*
- * Auth0 requires both markers and rejects the template without them. That
- * rejection arrives as an opaque 400 from the API, so the check is worth
- * having here where the message can name what is missing.
- */
-const REQUIRED_TEMPLATE_MARKERS = ['{%- auth0:head -%}', '{%- auth0:widget -%}']
 
 /*
  * One PUT per prompt. The endpoint replaces that prompt's whole custom-text
@@ -323,19 +339,10 @@ export function customTextRequests(document: any) {
   return Object.entries(prompts).map(([prompt, text]) => customTextArgs({ prompt, language, text }))
 }
 
-export function pageTemplateArgs(template: any) {
-  const missing = REQUIRED_TEMPLATE_MARKERS.filter((marker) => !template?.includes(marker))
-  if (missing.length > 0) {
-    throw new Error(`the page template is missing required marker(s): ${missing.join(', ')}`)
-  }
-  return ['api', 'put', 'branding/templates/universal-login', '--data', JSON.stringify({ template })]
-}
-
 /** Validates every checked-in branding payload before the caller performs its first write. */
-export function prepareAuth0Branding({ theme, template, customText }: any) {
+export function prepareAuth0Branding({ theme, customText }: any) {
   brandingThemeArgs({ themeId: 'preflight', theme })
-  const assetUrls = [...new Set([...themeAssetUrls(theme), ...templateAssetUrls(template)])]
-  const templateArgs = pageTemplateArgs(template)
+  const assetUrls = [...new Set(themeAssetUrls(theme))]
   const customTextArgs = customTextRequests(customText)
-  return { theme, assetUrls, templateArgs, customTextArgs }
+  return { theme, assetUrls, customTextArgs }
 }

@@ -94,11 +94,11 @@ npm run bootstrap -- --stage dev       # IAM role, GitHub Environment, secrets
 # Optional, and NOT idempotent — Auth0 has no upsert, so this duplicates apps:
 npm run bootstrap -- --stage dev --provision-auth0
 
-# Idempotent: apply the checked-in theme, page template, and custom copy:
-npm run bootstrap -- --stage dev --provision-auth0-branding
-
 gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false  # preview
 gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=true   # deploy
+
+# Idempotent: after the dashboard deploy publishes /auth0/*, apply Free-plan branding:
+npm run bootstrap -- --stage dev --provision-auth0-branding
 ```
 
 `npm run bootstrap` is safe to re-run. It prompts once per stage for the
@@ -110,11 +110,15 @@ Cloudflare provider. On that Environment it also sets the `AWS_ACCOUNT_ID` and
 credentials. `--force` re-prompts for an already-seeded Cloudflare credential. Its
 full flag list is in the script's header comment.
 
-Universal Login assets are published separately from the tenant configuration.
-Their exact sources, hashes, license, Pages project, and CORS rule are recorded
-in [`bootstrap/auth0/ASSETS.md`](../bootstrap/auth0/ASSETS.md). Branding
-provisioning fails before its first Auth0 write unless every referenced asset is
-reachable and permits the active Universal Login origin.
+Universal Login assets ship in the dashboard/API deployment under `/auth0/`.
+Their exact sources, content-hashed filenames, license, headers, and update
+procedure are recorded in
+[`bootstrap/auth0/ASSETS.md`](../bootstrap/auth0/ASSETS.md). Deploy the dashboard
+first. Branding provisioning then resolves URLs from the stage's `STACK_DOMAIN`
+and fails before its first Auth0 write unless every asset is reachable, has the
+expected media type, and permits the active Universal Login origin.
+It applies the Auth0 theme and custom prompt text only. Widget geometry remains
+Auth0-managed because custom Universal Login page templates require a paid plan.
 
 A deploy takes 10–15 minutes and prints the service URLs. On a transient
 registry error, just rerun — SST resumes from the failed step.

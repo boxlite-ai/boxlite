@@ -6,6 +6,7 @@ import {
   defaultThemeArgs,
   isAuth0ApiNotFound,
   prepareAuth0Branding,
+  resolveAuth0BrandingAssets,
   validatePublishedAssetBody,
   validatePublishedAssetMetadata,
 } from './auth0.js'
@@ -23,9 +24,9 @@ interface Auth0BrandingDependencies {
 
 interface Auth0BrandingInput {
   theme: any
-  template: string
   customText: any
   auth0Origin: string
+  stackDomain: string
 }
 
 async function responseBodyLength(response: Response, url: string, maxAssetBytes: number) {
@@ -76,8 +77,9 @@ export class Auth0BrandingDeployer {
     this.maxAssetBytes = maxAssetBytes
   }
 
-  async apply({ theme, template, customText, auth0Origin }: Auth0BrandingInput) {
-    const plan = prepareAuth0Branding({ theme, template, customText })
+  async apply({ theme, customText, auth0Origin, stackDomain }: Auth0BrandingInput) {
+    const resolved = resolveAuth0BrandingAssets({ theme, stackDomain })
+    const plan = prepareAuth0Branding({ theme: resolved.theme, customText })
     for (const url of plan.assetUrls) await this.requirePublishedAsset(url, auth0Origin)
 
     let themeId: string | undefined
@@ -92,11 +94,7 @@ export class Auth0BrandingDeployer {
       themeCreated = true
     }
 
-    const writes = [
-      brandingThemeArgs({ themeId, theme: plan.theme }),
-      plan.templateArgs,
-      ...plan.customTextArgs,
-    ]
+    const writes = [brandingThemeArgs({ themeId, theme: plan.theme }), ...plan.customTextArgs]
     for (const args of writes) this.write(args)
     return { themeCreated, customTextCount: plan.customTextArgs.length }
   }
@@ -118,6 +116,7 @@ export class Auth0BrandingDeployer {
       validatePublishedAssetMetadata({
         url,
         status: response.status,
+        contentType: response.headers.get('content-type'),
         allowOrigin: response.headers.get('access-control-allow-origin'),
         auth0Origin,
       })

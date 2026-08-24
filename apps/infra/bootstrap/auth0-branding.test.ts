@@ -8,30 +8,38 @@ import { Auth0BrandingDeployer } from './auth0-branding.js'
 
 const THEME = {
   colors: { page_background: '#13161B' },
-  fonts: { reference_text_size: 13 },
+  fonts: { font_url: 'https://assets.example.com/mono-400.woff2', reference_text_size: 13 },
   widget: { logo_url: 'https://assets.example.com/logo.png' },
 }
-const TEMPLATE = `
-  <html>{%- auth0:head -%}<style>
-  @font-face { src: url('https://assets.example.com/mono-400.woff2') }
-  @font-face { src: url('https://assets.example.com/mono-500.woff2') }
-  </style><body>{%- auth0:widget -%}</body></html>
-`
 const CUSTOM_TEXT = {
   language: 'en',
   prompts: { login: { login: { title: 'Welcome back' } }, signup: { signup: { title: 'Create account' } } },
 }
-const INPUT = { theme: THEME, template: TEMPLATE, customText: CUSTOM_TEXT, auth0Origin: 'https://auth.example.com' }
+const INPUT = {
+  theme: THEME,
+  customText: CUSTOM_TEXT,
+  auth0Origin: 'https://auth.example.com',
+  stackDomain: 'dev.example.com',
+}
 
-function assetResponse(body = 'asset') {
-  return new Response(body, { status: 200, headers: { 'access-control-allow-origin': '*' } })
+function assetResponse(url: string, body = 'asset') {
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'access-control-allow-origin': '*',
+      'content-type': url.endsWith('.png') ? 'image/png' : 'font/woff2',
+    },
+  })
 }
 
 function trackedAssetResponse(url: string, events: string[]) {
   let reads = 0
   return {
     status: 200,
-    headers: new Headers({ 'access-control-allow-origin': '*' }),
+    headers: new Headers({
+      'access-control-allow-origin': '*',
+      'content-type': url.endsWith('.png') ? 'image/png' : 'font/woff2',
+    }),
     body: {
       getReader: () => ({
         read: async () => {
@@ -47,7 +55,7 @@ function trackedAssetResponse(url: string, events: string[]) {
   } as unknown as Response
 }
 
-test('all bounded asset probes finish before the first Auth0 write', async () => {
+test('free-plan branding probes only theme assets and never writes a paid page template', async () => {
   const events: string[] = []
   const deployer = new Auth0BrandingDeployer({
     fetchAsset: async (url, init) => {
@@ -68,9 +76,13 @@ test('all bounded asset probes finish before the first Auth0 write', async () =>
   const result = await deployer.apply(INPUT)
   const firstWrite = events.findIndex((event) => event.startsWith('write:'))
   const lastValidation = events.map((event) => event.startsWith('validated:')).lastIndexOf(true)
-  assert.equal(events.filter((event) => event.startsWith('fetch:')).length, 3)
-  assert.equal(events.filter((event) => event.startsWith('validated:')).length, 3)
-  assert.equal(events.filter((event) => event.startsWith('write:')).length, 4)
+  assert.equal(events.filter((event) => event.startsWith('fetch:')).length, 2)
+  assert.equal(events.filter((event) => event.startsWith('validated:')).length, 2)
+  assert.equal(events.filter((event) => event.startsWith('write:')).length, 3)
+  assert.equal(
+    events.some((event) => event.includes('branding/templates/universal-login')),
+    false,
+  )
   assert.ok(firstWrite >= 0)
   assert.ok(lastValidation < firstWrite)
   assert.ok(
@@ -85,7 +97,7 @@ test('all bounded asset probes finish before the first Auth0 write', async () =>
 test('only an explicit default-theme 404 selects the create path', async () => {
   const writes: string[][] = []
   const deployer = new Auth0BrandingDeployer({
-    fetchAsset: async () => assetResponse(),
+    fetchAsset: async (url) => assetResponse(url),
     read: () => {
       throw Object.assign(new Error('theme not found'), { stderr: 'Request failed with status code 404' })
     },
@@ -101,20 +113,23 @@ test('a non-404 theme read error is rethrown before the first write', async () =
   const writes: string[][] = []
   const cause = Object.assign(new Error('unauthorized'), { stderr: 'Request failed with status code 401' })
   const deployer = new Auth0BrandingDeployer({
-    fetchAsset: async () => assetResponse(),
+    fetchAsset: async (url) => assetResponse(url),
     read: () => {
       throw cause
     },
     write: (args) => writes.push(args),
   })
-  await assert.rejects(() => deployer.apply(INPUT), (error) => error === cause)
+  await assert.rejects(
+    () => deployer.apply(INPUT),
+    (error) => error === cause,
+  )
   assert.deepEqual(writes, [])
 })
 
 test('a successful theme read without an id fails before the first write', async () => {
   const writes: string[][] = []
   const deployer = new Auth0BrandingDeployer({
-    fetchAsset: async () => assetResponse(),
+    fetchAsset: async (url) => assetResponse(url),
     read: () => ({}),
     write: (args) => writes.push(args),
   })
@@ -167,10 +182,29 @@ test('an asset fetch failure stops the apply before any Auth0 call', async () =>
   assert.deepEqual(calls, [])
 })
 
+test('a 200 HTML SPA fallback stops the apply before any Auth0 call', async () => {
+  const calls: string[] = []
+  const deployer = new Auth0BrandingDeployer({
+    fetchAsset: async () =>
+      new Response('<!doctype html><title>dashboard</title>', {
+        status: 200,
+        headers: { 'access-control-allow-origin': '*', 'content-type': 'text/html; charset=UTF-8' },
+      }),
+    read: () => {
+      calls.push('read')
+      return {}
+    },
+    write: () => calls.push('write'),
+  })
+
+  await assert.rejects(() => deployer.apply(INPUT), /Content-Type 'text\/html; charset=UTF-8'/)
+  assert.deepEqual(calls, [])
+})
+
 test('an oversized asset is cancelled before any Auth0 call', async () => {
   const calls: string[] = []
   const deployer = new Auth0BrandingDeployer({
-    fetchAsset: async () => assetResponse('12345'),
+    fetchAsset: async (url) => assetResponse(url, '12345'),
     read: () => {
       calls.push('read')
       return {}
@@ -203,11 +237,14 @@ test('the asset timeout aborts a stalled fetch before any Auth0 call', async () 
 test('the asset timeout aborts a stalled response body before any Auth0 call', async () => {
   const calls: string[] = []
   const deployer = new Auth0BrandingDeployer({
-    fetchAsset: async (_url, init) => {
+    fetchAsset: async (url, init) => {
       const signal = init.signal as AbortSignal
       return {
         status: 200,
-        headers: new Headers({ 'access-control-allow-origin': '*' }),
+        headers: new Headers({
+          'access-control-allow-origin': '*',
+          'content-type': url.endsWith('.png') ? 'image/png' : 'font/woff2',
+        }),
         body: {
           getReader: () => ({
             read: () =>
@@ -228,6 +265,9 @@ test('the asset timeout aborts a stalled response body before any Auth0 call', a
     write: () => calls.push('write'),
     assetTimeoutMs: 1,
   })
-  await assert.rejects(() => deployer.apply(INPUT), (error: any) => error?.name === 'TimeoutError')
+  await assert.rejects(
+    () => deployer.apply(INPUT),
+    (error: any) => error?.name === 'TimeoutError',
+  )
   assert.deepEqual(calls, [])
 })

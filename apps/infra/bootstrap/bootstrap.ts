@@ -50,12 +50,13 @@
  *                (requires `npm run login` first). NOT idempotent — Auth0 has no
  *                upsert for apps or APIs, so rerunning creates duplicates.
  *   --provision-auth0-branding
- *                Apply the Universal Login theme and page template so the hosted
- *                login matches the console (requires `npm run login` first).
- *                Idempotent — a PATCH and a PUT — so rerun it freely; that is why
- *                it is a separate flag from --provision-auth0 rather than part of
- *                it. Run it against every stage: branding is per-tenant, and dev
- *                and prod are different tenants.
+ *                Apply the Free-plan Universal Login theme and custom text
+ *                (requires `npm run login` first). Idempotent, so rerun it freely;
+ *                that is why it is a separate flag from --provision-auth0 rather
+ *                than part of it. Deploy the dashboard first so /auth0/* exists.
+ *                Run it against every stage: branding is per-tenant, and dev and
+ *                prod differ. Custom page templates require a paid Auth0 plan and
+ *                are deliberately outside this workflow.
  *
  * Sign-in: run `npm run login` first, which walks the browser sign-in for every
  * provider this needs (AWS via `aws login`, AWS CLI 2.32.0+ — no IAM user,
@@ -131,7 +132,6 @@ const SST_INSTALL_TIMEOUT_MS = 240_000
 const SST_COLD_INSTALL_TIMEOUT_MS = 90_000
 const ACTION_SOURCE_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'set-custom-claims.js')
 const BRANDING_THEME_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'branding-theme.json')
-const PAGE_TEMPLATE_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'page-template.liquid')
 const CUSTOM_TEXT_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'custom-text.json')
 
 const CLOUDFLARE_CREDENTIALS = [
@@ -705,26 +705,28 @@ function requireAuth0Session() {
 }
 
 /*
- * Idempotent, unlike provisionAuth0: the theme is a PATCH and the template a
- * PUT. Kept on its own flag so the login page's appearance can be iterated on
- * without re-creating the application and API alongside it.
+ * Idempotent, unlike provisionAuth0: the theme and prompt text are upserts.
+ * Kept on its own flag so the login page's appearance can be iterated on
+ * without re-creating the application and API alongside it. The paid-only page
+ * template endpoint is intentionally not called, so this works on Auth0 Free.
  */
 async function provisionAuth0Branding(environment: NodeJS.ProcessEnv) {
   requireAuth0Session()
 
   const theme = JSON.parse(readFileSync(BRANDING_THEME_PATH, 'utf8'))
-  const template = readFileSync(PAGE_TEMPLATE_PATH, 'utf8')
   const customText = JSON.parse(readFileSync(CUSTOM_TEXT_PATH, 'utf8'))
   const auth0Origin = new URL(optionalPublicOidcIssuer(environment) ?? requireOidcIssuer(environment)).origin
+  const stackDomain = environment.STACK_DOMAIN
+  if (!stackDomain) throw new Error(`STACK_DOMAIN must be set in ${ENV_PATH} before Auth0 branding can be applied`)
   const result = await new Auth0BrandingDeployer({ read: auth0Json, write: auth0Run }).apply({
     theme,
-    template,
     customText,
     auth0Origin,
+    stackDomain,
   })
   console.log(
     `[${SCRIPT_NAME}] Auth0 Universal Login branding ... ${result.themeCreated ? 'created' : 'updated'} theme, ` +
-      `applied template and ${result.customTextCount} copy prompt(s)`,
+      `applied ${result.customTextCount} copy prompt(s)`,
   )
 }
 

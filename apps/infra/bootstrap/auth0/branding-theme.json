@@ -7,21 +7,20 @@
     "Keys beginning with _ are stripped before this is sent (see withoutComments",
     "in ../auth0.ts) — the Management API rejects unknown fields.",
     "",
-    "This file covers only what the theme API can express. Spacing, control",
-    "height, widget width, line-height and letter-spacing have no fields here",
-    "and live in page-template.liquid instead.",
+    "This is the complete Free-plan branding contract. Spacing, control height,",
+    "widget width, line-height and letter-spacing have no theme fields, so they",
+    "remain Auth0 defaults unless the tenant is upgraded for page templates.",
     "",
-    "fonts.font_url carries the Regular face as the fallback for tenants whose",
-    "plan does not support a page template. IBM Plex Mono has no variable face,",
-    "so the paid-plan template adds explicit Regular and Medium @font-face rules",
-    "behind a real monospace fallback.",
+    "fonts.font_url carries the IBM Plex Mono Regular face. The theme API accepts",
+    "one font URL, so Auth0 may synthesize heavier text from that face.",
     "",
     "Auth0 validates all three radius fields with a minimum of 1 even when the",
     "style is sharp, so 1 is the closest API-valid representation of square.",
     "",
-    "The logo and both woff2 files are published from the sources and exact",
-    "hashes recorded in ASSETS.md. Bootstrap refuses to apply unless every",
-    "asset resolves with CORS for the Universal Login origin."
+    "The logo and woff2 file ship with the dashboard from public/auth0.",
+    "Their content hashes are part of the filenames and recorded in ASSETS.md.",
+    "Bootstrap resolves __BOXLITE_STACK_DOMAIN__ from the selected stage and",
+    "refuses to apply unless every asset has the expected MIME type and CORS."
   ],
 
   "displayName": "boxlite-console",
@@ -67,7 +66,7 @@
   },
 
   "fonts": {
-    "font_url": "https://boxlite-auth-assets-boxlite-ai.pages.dev/ibm-plex-mono-400.woff2",
+    "font_url": "https://__BOXLITE_STACK_DOMAIN__/auth0/ibm-plex-mono-400-ba204497.woff2",
     "reference_text_size": 13,
     "title": { "bold": false, "size": 123 },
     "subtitle": { "bold": false, "size": 92 },
@@ -88,7 +87,7 @@
     "header_text_alignment": "center",
     "logo_position": "center",
     "logo_height": 36,
-    "logo_url": "https://boxlite-auth-assets-boxlite-ai.pages.dev/boxlite-light.png",
-    "social_buttons_layout": "bottom"
+    "logo_url": "https://__BOXLITE_STACK_DOMAIN__/auth0/boxlite-light-ec0b1243.png",
+    "social_buttons_layout": "top"
   }
 }
