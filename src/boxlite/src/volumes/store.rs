@@ -139,7 +139,7 @@ impl NamedVolumeStore {
     /// the id must be a single directory name, never a path.
     ///
     /// The reserved `anonymous/` subtree (the CLI's anonymous volumes) is also rejected — this store must never touch it, neither to list nor to delete.
-    pub fn volume_dir(&self, id: &str) -> BoxliteResult<PathBuf> {
+    fn volume_dir(&self, id: &str) -> BoxliteResult<PathBuf> {
         if id.is_empty()
             || id == "."
             || id == ".."
@@ -162,7 +162,7 @@ impl NamedVolumeStore {
     /// Filesystems that cannot report a birth time (`ErrorKind::Unsupported`)
     /// leave the mtime as the only available answer; any other IO error is a
     /// real failure and is reported, never papered over with the current time.
-    pub fn volume_info(&self, id: String, dir: &Path) -> BoxliteResult<VolumeInfo> {
+    fn volume_info(&self, id: String, dir: &Path) -> BoxliteResult<VolumeInfo> {
         let metadata = fs::metadata(dir).map_err(|e| {
             BoxliteError::Storage(format!("failed to stat volume {}: {}", dir.display(), e))
         })?;
