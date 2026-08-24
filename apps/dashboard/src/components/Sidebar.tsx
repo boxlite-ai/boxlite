@@ -65,6 +65,7 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
   { label: 'Boxes', path: RoutePath.BOXES },
   { label: 'Volumes', path: RoutePath.VOLUMES },
   { label: 'Billing', path: RoutePath.BILLING },
+  { label: 'Status', path: RoutePath.STATUS },
 ]
 
 const themeOptions: { value: Theme; label: string; icon: React.ReactElement }[] = [

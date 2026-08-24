@@ -53,7 +53,10 @@ describe('Sidebar primary navigation', () => {
     document.body.innerHTML = ''
   })
 
-  it('keeps Volumes in primary navigation', () => {
+  it.each([
+    ['Volumes', '/dashboard/volumes'],
+    ['Status', '/status'],
+  ])('keeps %s in primary navigation', (label, href) => {
     const host = document.createElement('div')
     document.body.appendChild(host)
 
@@ -66,11 +69,11 @@ describe('Sidebar primary navigation', () => {
       )
     })
 
-    const volumeLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>('a')).filter(
-      (link) => link.getAttribute('href') === '/dashboard/volumes',
+    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a')).filter(
+      (link) => link.getAttribute('href') === href,
     )
 
-    expect(volumeLinks.length).toBeGreaterThan(0)
-    expect(volumeLinks.every((link) => link.textContent === 'Volumes')).toBe(true)
+    expect(links.length).toBeGreaterThan(0)
+    expect(links.every((link) => link.textContent === label)).toBe(true)
   })
 })

@@ -8,17 +8,39 @@ import { NuqsAdapter } from 'nuqs/adapters/react-router/v6'
 import React, { Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
 import { ErrorBoundary } from 'react-error-boundary'
-import { BrowserRouter } from 'react-router-dom'
+import { BrowserRouter, useLocation } from 'react-router-dom'
 import App from './App'
 import { ErrorBoundaryFallback } from './components/ErrorBoundaryFallback'
 import LoadingFallback from './components/LoadingFallback'
 import { PostHogProviderWrapper } from './components/PostHogProviderWrapper'
 import { ThemeProvider } from './contexts/ThemeContext'
+import { RoutePath } from './enums/RoutePath'
 import './index.css'
+import Status from './pages/Status'
 import { ConfigProvider } from './providers/ConfigProvider'
 import { QueryProvider } from './providers/QueryProvider'
 
 const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement)
+
+function Application() {
+  const location = useLocation()
+
+  if (location.pathname === RoutePath.STATUS) {
+    return <Status />
+  }
+
+  return (
+    <Suspense fallback={<LoadingFallback />}>
+      <ConfigProvider>
+        <PostHogProviderWrapper>
+          <NuqsAdapter>
+            <App />
+          </NuqsAdapter>
+        </PostHogProviderWrapper>
+      </ConfigProvider>
+    </Suspense>
+  )
+}
 
 async function enableMocking() {
   if (import.meta.env.VITE_ENABLE_MOCKING !== 'true') {
@@ -35,17 +57,9 @@ enableMocking().then(() =>
       <ErrorBoundary FallbackComponent={ErrorBoundaryFallback}>
         <QueryProvider>
           <ThemeProvider>
-            <Suspense fallback={<LoadingFallback />}>
-              <ConfigProvider>
-                <BrowserRouter>
-                  <PostHogProviderWrapper>
-                    <NuqsAdapter>
-                      <App />
-                    </NuqsAdapter>
-                  </PostHogProviderWrapper>
-                </BrowserRouter>
-              </ConfigProvider>
-            </Suspense>
+            <BrowserRouter>
+              <Application />
+            </BrowserRouter>
           </ThemeProvider>
         </QueryProvider>
       </ErrorBoundary>
