@@ -5,6 +5,7 @@
  */
 
 import type { OrganizationWallet } from '@/billing-api/types/OrganizationWallet'
+import type { SeriesGranularity } from '@/billing-api'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { UseQueryOptions } from '@tanstack/react-query'
@@ -14,8 +15,9 @@ import {
   useIsOrganizationCheckoutUrlFetching,
 } from './useOrganizationCheckoutUrlQuery'
 import { useOrganizationInvoicesQuery } from './useOrganizationInvoicesQuery'
-import { useOrganizationTierQuery } from './useOrganizationTierQuery'
+import { useOrganizationPlanQuery } from './useOrganizationPlanQuery'
 import { useOrganizationWalletQuery } from './useOrganizationWalletQuery'
+import { useUsageFundingSeriesQuery } from './useUsageFundingSeriesQuery'
 
 function useSelectedOrgBillingScope() {
   const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
@@ -37,9 +39,9 @@ export function useOwnerWalletQuery(
   })
 }
 
-export function useOwnerTierQuery() {
+export function useOwnerPlanQuery() {
   const scope = useSelectedOrgBillingScope()
-  return useOrganizationTierQuery(scope)
+  return useOrganizationPlanQuery(scope)
 }
 
 export function useOwnerBillingPortalUrlQuery() {
@@ -64,5 +66,16 @@ export function useOwnerInvoicesQuery(page?: number, perPage?: number) {
     ...scope,
     page,
     perPage,
+  })
+}
+
+export function useOwnerUsageSeriesQuery(granularity: SeriesGranularity, from: Date, to: Date, enabled = true) {
+  const scope = useSelectedOrgBillingScope()
+  return useUsageFundingSeriesQuery({
+    organizationId: scope.organizationId,
+    granularity,
+    from,
+    to,
+    enabled: scope.enabled && enabled,
   })
 }

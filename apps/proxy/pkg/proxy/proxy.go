@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
@@ -21,12 +22,11 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/securecookie"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type RunnerInfo struct {
@@ -147,6 +147,9 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 		common_errors.Recovery()(ctx)
 	})
 
+	// CONNECT tunnels bypass gin via connectAwareHandler, so they are unspanned.
+	router.Use(otelgin.Middleware("boxlite-proxy"))
+
 	router.Use(common_errors.NewErrorMiddleware(func(ctx *gin.Context, err error) common_errors.ErrorResponse {
 		return common_errors.ErrorResponse{
 			StatusCode: http.StatusInternalServerError,
@@ -216,7 +219,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 		return err
 	}
 
-	log.Infof("Proxy server is running on port %d", config.ProxyPort)
+	slog.Info("Proxy server is running", "port", config.ProxyPort)
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -245,9 +248,9 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 			wgChan := make(chan struct{})
 
 			go func() {
-				log.Info("Waiting for active requests to finish...")
+				slog.Info("Waiting for active requests to finish...")
 				shutdownWg.Wait()
-				log.Info("All active requests finished, shutting down proxy")
+				slog.Info("All active requests finished, shutting down proxy")
 				close(wgChan)
 			}()
 

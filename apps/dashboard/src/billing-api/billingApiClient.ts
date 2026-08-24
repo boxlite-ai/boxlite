@@ -9,12 +9,14 @@ import axios, { AxiosInstance } from 'axios'
 import {
   AutomaticTopUp,
   OrganizationEmail,
-  OrganizationTier,
-  OrganizationUsage,
+  OrganizationPlan,
   OrganizationWallet,
   PaginatedInvoices,
   PaymentUrl,
-  Tier,
+  Plan,
+  SeriesGranularity,
+  UsageFundingBucket,
+  UsagePrices,
   WalletTopUpRequest,
 } from './types'
 
@@ -41,16 +43,6 @@ export class BillingApiClient {
     )
   }
 
-  public async getOrganizationUsage(organizationId: string): Promise<OrganizationUsage> {
-    const response = await this.axiosInstance.get(`/organization/${organizationId}/usage`)
-    return response.data
-  }
-
-  public async getPastOrganizationUsage(organizationId: string, periods?: number): Promise<OrganizationUsage[]> {
-    const response = await this.axiosInstance.get(`/organization/${organizationId}/usage/past?periods=${periods || 12}`)
-    return response.data
-  }
-
   public async getOrganizationWallet(organizationId: string): Promise<OrganizationWallet> {
     const response = await this.axiosInstance.get(`/organization/${organizationId}/wallet`)
     return response.data
@@ -75,31 +67,61 @@ export class BillingApiClient {
     return response.data?.message || 'Coupon redeemed successfully'
   }
 
-  public async getOrganizationTier(organizationId: string): Promise<OrganizationTier> {
-    const response = await this.axiosInstance.get(`/organization/${organizationId}/tier`)
-    const orgTier: OrganizationTier = {
-      tier: response.data.tier,
-      largestSuccessfulPaymentDate: response.data.largestSuccessfulPaymentDate
-        ? new Date(response.data.largestSuccessfulPaymentDate)
-        : undefined,
-      largestSuccessfulPaymentCents: response.data.largestSuccessfulPaymentCents,
-      expiresAt: response.data.expiresAt ? new Date(response.data.expiresAt) : undefined,
-      hasVerifiedBusinessEmail: response.data.hasVerifiedBusinessEmail,
+  public async getOrganizationPlan(organizationId: string): Promise<OrganizationPlan | null> {
+    const response = await this.axiosInstance.get(`/organization/${organizationId}/plan`)
+    // {} (no `plan` key) means no live plan — the server never sends a bare null.
+    const plan = response.data?.plan
+    if (!plan) {
+      return null
     }
-
-    return orgTier
+    return {
+      ...plan,
+      cycleFrom: new Date(plan.cycleFrom),
+      cycleTo: new Date(plan.cycleTo),
+      ...(plan.dueAt && { dueAt: new Date(plan.dueAt) }),
+    }
   }
 
-  public async upgradeTier(organizationId: string, tier: number): Promise<void> {
-    await this.axiosInstance.post(`/organization/${organizationId}/tier/upgrade`, { tier })
+  public async getUsageFundingSeries(
+    organizationId: string,
+    granularity: SeriesGranularity,
+    from: Date,
+    to: Date,
+  ): Promise<UsageFundingBucket[]> {
+    const params = new URLSearchParams({ granularity, from: from.toISOString(), to: to.toISOString() })
+    const response = await this.axiosInstance.get(`/organization/${organizationId}/usage/series?${params}`)
+    return (
+      response.data as Array<{ from: string; to: string; quotaCoveredCents: number; fromWalletCents: number }>
+    ).map((bucket) => ({ ...bucket, from: new Date(bucket.from), to: new Date(bucket.to) }))
   }
 
-  public async downgradeTier(organizationId: string, tier: number): Promise<void> {
-    await this.axiosInstance.post(`/organization/${organizationId}/tier/downgrade`, { tier })
+  /**
+   * A first subscribe has no Stripe Subscription to update in place, so the
+   * server sends back a Checkout URL to visit instead of applying the change
+   * here; an in-place change on an existing subscription applies immediately
+   * and returns nothing. Callers must check for a URL before assuming done.
+   */
+  public async upgradePlan(organizationId: string, planId: string): Promise<string | undefined> {
+    const response = await this.axiosInstance.post(`/organization/${organizationId}/plan/upgrade`, { planId })
+    return response.data?.url
   }
 
-  public async listTiers(): Promise<Tier[]> {
-    const response = await this.axiosInstance.get('/tier')
+  public async downgradePlan(organizationId: string, planId: string | null): Promise<void> {
+    await this.axiosInstance.post(`/organization/${organizationId}/plan/downgrade`, { planId })
+  }
+
+  public async listPlans(): Promise<Plan[]> {
+    const response = await this.axiosInstance.get('/plan')
+    return response.data
+  }
+
+  /**
+   * Commerce serves this one anonymously, but it is reached through this client
+   * anyway so the dashboard keeps a single billing base URL. The bearer token
+   * the client always sends is simply ignored.
+   */
+  public async getUsagePrices(): Promise<UsagePrices> {
+    const response = await this.axiosInstance.get('/usage-prices')
     return response.data
   }
 
@@ -139,15 +161,6 @@ export class BillingApiClient {
     const url = `/organization/${organizationId}/invoices${queryString ? `?${queryString}` : ''}`
     const response = await this.axiosInstance.get(url)
     return response.data
-  }
-
-  public async createInvoicePaymentUrl(organizationId: string, invoiceId: string): Promise<PaymentUrl> {
-    const response = await this.axiosInstance.post(`/organization/${organizationId}/invoices/${invoiceId}/payment-url`)
-    return response.data
-  }
-
-  public async voidInvoice(organizationId: string, invoiceId: string): Promise<void> {
-    await this.axiosInstance.post(`/organization/${organizationId}/invoices/${invoiceId}/void`)
   }
 
   public async topUpWallet(organizationId: string, amountCents: number): Promise<PaymentUrl> {

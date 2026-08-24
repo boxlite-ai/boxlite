@@ -80,22 +80,7 @@ install_rust() {
 
 # Initialize git submodules
 init_submodules() {
-    print_step "Checking git submodules... "
-
-    # Check if we're in a git repository
-    if ! git rev-parse --git-dir > /dev/null 2>&1; then
-        print_error "Not in a git repository"
-        return 1
-    fi
-
-    # Check if submodules are already initialized
-    if git submodule status | grep -q "^-"; then
-        echo -e "${YELLOW}Initializing...${NC}"
-        git submodule update --init --recursive --depth 1
-        print_success "Submodules initialized"
-    else
-        print_success "Already initialized"
-    fi
+    "$SCRIPT_DIR/setup/setup-submodules.sh"
 }
 
 # Install cargo-nextest
@@ -525,29 +510,62 @@ install_git_hooks_best_effort() {
     fi
 
     local root_dir="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-    local git_dir="$root_dir/.git"
     local config_path="$root_dir/.pre-commit-config.yaml"
 
-    if [ ! -d "$git_dir" ]; then
-        print_warning ".git directory not found at $git_dir; skipping hook installation"
+    # Ask git, rather than testing for a directory named .git: in a linked
+    # worktree .git is a FILE pointing at the real gitdir, so the directory test
+    # returned early and installed nothing in any worktree.
+    if ! (cd "$root_dir" && git rev-parse --git-dir >/dev/null 2>&1); then
+        print_warning "not a git repository at $root_dir; skipping hook installation"
         return 0
     fi
+
+    # prek first, agent-tooling second, and the redirect cleared in between — the
+    # order is load-bearing. prek writes .git/hooks/{pre-commit,pre-push} and refuses
+    # outright while core.hooksPath is set ("Cowardly refusing to install hooks
+    # with core.hooksPath set"), while the gate CHAINS into the very files prek
+    # writes (agent-tooling/.githooks/pre-commit ->
+    # --git-common-dir/hooks/pre-commit). Set the
+    # redirect first and prek installs nothing, so the gate chains into a file
+    # that does not exist and lint-fix and the test matrix silently stop running.
+    # Clearing up front also makes a re-run of `make setup` idempotent.
+    (cd "$root_dir" && git config --unset core.hooksPath) 2>/dev/null || true
 
     if [ ! -f "$config_path" ]; then
         print_warning ".pre-commit-config.yaml not found at $config_path; skipping hook installation"
-        return 0
-    fi
-
-    if ! command_exists prek; then
+    elif ! command_exists prek; then
         print_warning "prek not available; skipping hook installation"
-        return 0
+    else
+        # Local scope only — a user's global config is theirs. But prek refuses on
+        # a global core.hooksPath too, and would then fail with a generic message
+        # while the gate still reports success, so name that case exactly. Inside
+        # this branch, not above it: elsewhere prek was never going to run, and the
+        # warning would contradict the one already printed.
+        local global_hooks_path
+        global_hooks_path="$(git config --global core.hooksPath 2>/dev/null || true)"
+        if [ -n "$global_hooks_path" ]; then
+            print_warning "core.hooksPath is set globally to '$global_hooks_path'; prek cannot install while it is. Clear it with: git config --global --unset core.hooksPath"
+        fi
+        print_step "Installing pre-commit and pre-push hooks... "
+        if (cd "$root_dir" && prek install -t pre-commit -t pre-push --overwrite); then
+            print_success "installed"
+        else
+            print_warning "Hook installation failed; continuing setup"
+        fi
     fi
 
-    print_step "Installing pre-commit and pre-push hooks... "
-    if (cd "$root_dir" && prek install -t pre-commit -t pre-push --overwrite); then
-        print_success "installed"
+    # Resolve the immutable agent-tooling pin and point git at its gate layer.
+    # The bootstrap validates the consumer profile and all native activation
+    # files before changing core.hooksPath. Reached whether or not prek ran: the
+    # branches above warn rather than return because the gate does not depend on
+    # prek.
+    local agent_tooling_installer="$root_dir/.agent-tooling/install.sh"
+    if [ ! -x "$agent_tooling_installer" ]; then
+        print_warning "Agent tooling installer not found at $agent_tooling_installer"
+    elif (cd "$root_dir" && "$agent_tooling_installer"); then
+        print_success "Pinned agent-tooling gate active"
     else
-        print_warning "Hook installation failed; continuing setup"
+        print_warning "Agent tooling installation failed; the agent gate will not run"
     fi
 }
 

@@ -34,7 +34,7 @@ export function InvoicesTableHeader({ table }: InvoicesTableHeaderProps) {
         <div className="relative w-full max-w-sm">
           <Search className="absolute left-2 top-2 h-4 w-4 text-muted-foreground" />
           <DebouncedInput
-            placeholder="Search invoices..."
+            placeholder="Search settlements..."
             value={globalFilter ?? ''}
             onChange={(value) => {
               setGlobalFilter(String(value))

@@ -33,7 +33,9 @@ mod rest;
 mod rootfs;
 mod volumes;
 
-pub use litebox::{BoxConnection, BoxTunnel, LiteBox};
+pub use litebox::{
+    BoxConnection, BoxReader, BoxTunnel, BoxWriter, LiteBox, SocketAddress, TunnelForwarder,
+};
 pub use portal::GuestSession;
 pub use runtime::{AuthHandle, BoxliteRuntime, ImageHandle, Principal};
 

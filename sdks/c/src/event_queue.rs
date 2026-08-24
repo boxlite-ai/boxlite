@@ -5,7 +5,8 @@
 //! thread. Callbacks therefore NEVER fire on Tokio worker threads.
 
 use std::collections::VecDeque;
-use std::os::raw::{c_int, c_void};
+use std::ffi::CString;
+use std::os::raw::{c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 
@@ -88,6 +89,16 @@ pub type CBoxGetOrCreateBoxCb =
     Option<extern "C" fn(*mut crate::CBoxHandle, bool, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxGetOrCreateBoxFn =
     extern "C" fn(*mut crate::CBoxHandle, bool, *mut crate::CBoxliteError, *mut c_void);
+
+/// Box export completion.
+pub type CBoxExportCb = Option<extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxExportFn = extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void);
+
+/// Runtime import completion.
+pub type CRuntimeImportCb =
+    Option<extern "C" fn(*mut crate::CBoxHandle, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CRuntimeImportFn =
+    extern "C" fn(*mut crate::CBoxHandle, *mut crate::CBoxliteError, *mut c_void);
 
 /// Box start completion.
 pub type CBoxStartBoxCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
@@ -197,6 +208,14 @@ pub(crate) type CExecutionSignalFn = extern "C" fn(*mut crate::CBoxliteError, *m
 /// Execution PTY resize completion.
 pub type CExecutionResizeCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CExecutionResizeFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
+/// Tunnel forwarder wait completion.
+pub type CTunnelForwarderWaitCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CTunnelForwarderWaitFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
+/// Tunnel forwarder close completion.
+pub type CTunnelForwarderCloseCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CTunnelForwarderCloseFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
 // ─── Owned FFI payload ─────────────────────────────────────────────────────
 //
@@ -320,6 +339,16 @@ pub enum RuntimeEvent {
         user_data: usize,
         result: Result<(OwnedFfiPtr<crate::CBoxHandle>, bool), BoxliteError>,
     },
+    BoxExport {
+        cb: CBoxExportFn,
+        user_data: usize,
+        result: Result<CString, BoxliteError>,
+    },
+    RuntimeImport {
+        cb: CRuntimeImportFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<crate::CBoxHandle>, BoxliteError>,
+    },
     StartBox {
         cb: CBoxStartBoxFn,
         user_data: usize,
@@ -420,6 +449,16 @@ pub enum RuntimeEvent {
         user_data: usize,
         result: Result<(), BoxliteError>,
     },
+    TunnelForwarderWait {
+        cb: CTunnelForwarderWaitFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    TunnelForwarderClose {
+        cb: CTunnelForwarderCloseFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
 }
 
 // SAFETY: every contained field is `Send`:
@@ -448,10 +487,15 @@ impl EventQueue {
         }
     }
 
-    /// Mark the queue closed and wake every parked drainer so they observe it.
+    /// Close the queue, discard pending events, and wake every parked drainer.
     pub fn mark_closed(&self) {
-        self.closed.store(true, Ordering::Release);
+        let pending = {
+            let mut events = self.inner.lock().unwrap();
+            self.closed.store(true, Ordering::Release);
+            std::mem::take(&mut *events)
+        };
         self.cv.notify_all();
+        drop(pending);
     }
 
     pub fn is_closed(&self) -> bool {
@@ -489,6 +533,10 @@ pub(crate) async fn push_event_with_capacity(
         }
         {
             let mut g = queue.inner.lock().unwrap();
+            if queue.is_closed() {
+                drop(g);
+                return;
+            }
             if g.len() < capacity {
                 g.push_back(ev.take().expect("event consumed exactly once"));
                 drop(g);
@@ -839,7 +887,9 @@ mod phase2_regression_tests {
 mod close_and_free_tests {
     use super::*;
 
+    use std::ffi::CString;
     use std::sync::Arc;
+    use std::sync::atomic::Ordering as AtomicOrdering;
     use std::sync::mpsc::{TryRecvError, channel};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -847,8 +897,9 @@ mod close_and_free_tests {
     use tokio::runtime::Builder as TokioBuilder;
 
     use crate::error::FFIError;
+    use crate::images::{CImagePullResult, free_image_pull_result};
     use crate::runtime::{RuntimeHandle, RuntimeLiveness};
-    use crate::{boxlite_runtime_drain, boxlite_runtime_free};
+    use crate::{FREE_STR_CALLS, FREE_STR_LOCK, boxlite_runtime_drain, boxlite_runtime_free};
 
     fn new_stub_runtime_handle() -> *mut RuntimeHandle {
         let tokio_rt = Arc::new(
@@ -890,6 +941,28 @@ mod close_and_free_tests {
     }
 
     extern "C" fn dummy_stdout_cb(_data: *const u8, _len: usize, _ud: *mut c_void) {}
+
+    extern "C" fn noop_image_pull_cb(
+        _result: *mut CImagePullResult,
+        _error: *mut crate::CBoxliteError,
+        _user_data: *mut c_void,
+    ) {
+    }
+
+    fn tracked_owned_event() -> RuntimeEvent {
+        RuntimeEvent::ImagePull {
+            cb: noop_image_pull_cb,
+            user_data: 0,
+            result: Ok(OwnedFfiPtr::new_with(
+                Box::new(CImagePullResult {
+                    reference: CString::new("alpine:latest").unwrap().into_raw(),
+                    config_digest: CString::new("sha256:queued").unwrap().into_raw(),
+                    layer_count: 1,
+                }),
+                free_image_pull_result,
+            )),
+        }
+    }
 
     /// Closes the queue while a drain is parked on `cv.wait(timeout=-1)`.
     /// Asserts drain returns within 100ms.
@@ -947,6 +1020,66 @@ mod close_and_free_tests {
         ));
 
         assert_eq!(queue.inner.lock().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn runtime_free_reclaims_already_queued_owned_payload() {
+        let guard = FREE_STR_LOCK.lock().unwrap();
+        let before = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+        let rt_ptr = new_stub_runtime_handle();
+        let queue = unsafe { (*rt_ptr).queue.clone() };
+        let tokio_rt = unsafe { (*rt_ptr).tokio_rt.clone() };
+
+        tokio_rt.block_on(push_event_with_capacity(&queue, tracked_owned_event(), 4));
+        assert_eq!(queue.inner.lock().unwrap().len(), 1);
+
+        unsafe { boxlite_runtime_free(rt_ptr) };
+
+        let reclaimed = FREE_STR_CALLS.load(AtomicOrdering::SeqCst) - before;
+        let pending = queue.inner.lock().unwrap().len();
+        drop(queue);
+        drop(guard);
+
+        assert_eq!(
+            reclaimed, 2,
+            "runtime_free returned while the queued owned payload was still retained"
+        );
+        assert_eq!(
+            pending, 0,
+            "runtime_free left a pending event in the closed queue"
+        );
+    }
+
+    #[test]
+    fn closed_queue_reclaims_late_owned_payload() {
+        let guard = FREE_STR_LOCK.lock().unwrap();
+        let before = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+        let queue = Arc::new(EventQueue::new());
+        queue.mark_closed();
+        let tokio_rt = TokioBuilder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        tokio_rt.block_on(push_event_with_capacity(&queue, tracked_owned_event(), 4));
+
+        let reclaimed = FREE_STR_CALLS.load(AtomicOrdering::SeqCst) - before;
+        let pending = queue.inner.lock().unwrap().len();
+        drop(queue);
+        drop(guard);
+
+        assert_eq!(reclaimed, 2, "late event payload was not reclaimed");
+        assert_eq!(pending, 0, "late event was queued after close");
+    }
+
+    #[test]
+    fn closing_queue_twice_is_idempotent() {
+        let queue = EventQueue::new();
+        queue.mark_closed();
+        queue.mark_closed();
+
+        assert!(queue.is_closed());
+        assert!(queue.inner.lock().unwrap().is_empty());
     }
 
     /// The actual UAF reproducer: drain is parked when runtime_free runs.
@@ -1073,50 +1206,6 @@ mod owned_ffi_ptr_tests {
         }
         assert_eq!(counter.load(AtomicOrdering::SeqCst), 1);
     }
-
-    /// End-to-end guard: an event whose payload is an `OwnedFfiPtr<T>`,
-    /// pushed into a closed queue, must reclaim the allocation.
-    ///
-    /// We use the real `RuntimeEvent::Info` variant because `CBoxInfo` is a
-    /// plain repr(C) struct that's trivial to construct in a test.
-    #[test]
-    fn closed_queue_drops_event_with_owned_payload_does_not_leak() {
-        // SAFETY: CBoxInfo is repr(C) with all-pointer/integer fields — zero
-        // is a valid bit pattern for our construction-only test (the Drop
-        // counter we care about is on the wrapping Box's ownership chain,
-        // not on CBoxInfo's internals).
-        use std::sync::atomic::AtomicUsize;
-        let counter = Arc::new(AtomicUsize::new(0));
-
-        // Use OwnedFfiPtr<TrackedResource> directly, not via RuntimeEvent —
-        // the variant is typed for FFI structs and TrackedResource isn't
-        // one. The point of the test is the close-path behaviour, which
-        // depends only on Drop running on the OwnedFfiPtr.
-        let queue = Arc::new(EventQueue::new());
-        queue.mark_closed();
-
-        // Stand-in: simulate the producer side of CreateBox by allocating a
-        // tracked resource, immediately wrapping in OwnedFfiPtr, then
-        // explicitly dropping the wrapper to mirror what happens when
-        // push_event_with_capacity short-circuits on a closed queue.
-        let owned = OwnedFfiPtr::new(Box::new(TrackedResource {
-            counter: counter.clone(),
-        }));
-        drop(owned);
-
-        // The wrapper's Drop must have reclaimed the underlying Box.
-        assert_eq!(
-            counter.load(AtomicOrdering::SeqCst),
-            1,
-            "dropping the OwnedFfiPtr (i.e. closed-queue event drop path) \
-             did NOT reclaim the underlying allocation"
-        );
-
-        // Sanity: marking the queue closed shouldn't change anything — the
-        // test never actually pushes; it directly drops, which is the same
-        // outcome the close-path produces.
-        assert!(queue.is_closed());
-    }
 }
 
 // ─── OwnedFfiPtr must reclaim nested CString allocations ──────────────────
@@ -1189,6 +1278,10 @@ mod owned_ffi_ptr_nested_leak_tests {
             pid: 0,
             cpus: 1,
             memory_mib: 256,
+            auto_stop: 900,
+            auto_delete: 0,
+            auto_resume: 1,
+            created_at: 0,
             network: crate::info::network_to_c_ptr(&Some(NetworkInfo {
                 mode: NetworkMode::Enabled,
                 allow_net: vec!["api.example.com".to_string()],
@@ -1199,10 +1292,7 @@ mod owned_ffi_ptr_nested_leak_tests {
                     protocol: PortProtocol::Tcp,
                 }]),
             })),
-            created_at: 0,
-            auto_pause: 900,
-            auto_delete: 0,
-            auto_resume: 1,
+            started_at: 0,
         });
 
         let owned = OwnedFfiPtr::new_with(payload, crate::info::free_box_info_ptr);
@@ -1269,11 +1359,12 @@ mod owned_ffi_ptr_nested_leak_tests {
             pid: 0,
             cpus: 2,
             memory_mib: 512,
-            network: std::ptr::null_mut(),
-            created_at: 0,
-            auto_pause: 900,
+            auto_stop: 900,
             auto_delete: 0,
             auto_resume: 1,
+            created_at: 0,
+            network: std::ptr::null_mut(),
+            started_at: 0,
         }];
         let items_ptr = items_vec.as_mut_ptr();
         let items_len = items_vec.len();

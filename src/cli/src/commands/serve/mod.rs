@@ -23,7 +23,7 @@ use tokio::sync::RwLock;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
-use boxlite::runtime::options::{NetworkConfig, NetworkMode};
+use boxlite::runtime::options::{NetworkMode, OutboundNetworkConfig};
 use boxlite::{
     BoxCommand, BoxInfo, BoxOptions, BoxliteRuntime, ExecStdin, Execution, LiteBox, NetworkSpec,
     RootfsSpec,
@@ -710,7 +710,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         cpus: info.cpus,
         memory_mib: info.memory_mib,
         labels: info.labels.clone(),
-        auto_pause: info.auto_pause,
+        auto_stop: info.auto_stop,
         auto_delete: info.auto_delete,
         auto_resume: info.auto_resume,
         exit_code: info.exit_code,
@@ -739,10 +739,31 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         .unwrap_or_default();
 
     let network = match &req.network {
-        Some(network) => NetworkSpec::try_from(NetworkConfig {
-            mode: network.mode.parse::<NetworkMode>()?,
-            allow_net: network.allow_net.clone(),
-        })?,
+        Some(network) => {
+            if network.uses_legacy_fields() && network.outbound.is_some() {
+                return Err(boxlite::BoxliteError::InvalidArgument(
+                    "network must use either nested outbound fields or legacy flat fields, not both"
+                        .into(),
+                ));
+            }
+
+            let (mode, allow_net) = match &network.outbound {
+                Some(outbound) => (
+                    outbound.mode.parse::<NetworkMode>()?,
+                    outbound.allow_net.clone(),
+                ),
+                None => (
+                    network
+                        .legacy
+                        .mode
+                        .as_deref()
+                        .unwrap_or("enabled")
+                        .parse::<NetworkMode>()?,
+                    network.legacy.allow_net.clone().unwrap_or_default(),
+                ),
+            };
+            NetworkSpec::try_from(OutboundNetworkConfig { mode, allow_net })?
+        }
         None => NetworkSpec::default(),
     };
 
@@ -773,7 +794,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
             },
             ..Default::default()
         },
-        auto_pause: req.auto_pause,
+        auto_stop: req.auto_stop,
         auto_delete: Some(auto_delete),
         auto_resume: req.auto_resume,
         // Preserve the serve API's historical detached default for persistent
@@ -919,6 +940,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 // Box Handle Cache Helper
 // ============================================================================
 
+#[allow(clippy::result_large_err)]
 async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>, Response> {
     // Check cache first.
     //
@@ -1050,6 +1072,7 @@ where
 /// so attaching to a finished job would silently run the job again. `attach()`
 /// already does the right thing for every status by itself: it boots a
 /// `Configured` box (which has never run) and refuses a `Stopped` one.
+#[allow(clippy::result_large_err)]
 async fn get_or_attach_main_session(
     state: &AppState,
     box_id: &str,
@@ -1247,6 +1270,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxlite::runtime::options::NetworkSpec;
     use std::time::Duration;
 
     // --- API-key auth decision (pure; no runtime/network needed) ---
@@ -1349,11 +1373,11 @@ mod tests {
     #[test]
     fn build_box_options_carries_lifecycle_policy_and_uses_compatible_detach_default() {
         let req: super::types::CreateBoxRequest = serde_json::from_str(
-            r#"{"auto_pause": 900, "auto_delete": 3600, "auto_resume": false}"#,
+            r#"{"auto_stop": 900, "auto_delete": 3600, "auto_resume": false}"#,
         )
         .expect("lifecycle body must deserialize");
         let opts = build_box_options(&req).expect("build lifecycle options");
-        assert_eq!(opts.auto_pause, Some(900));
+        assert_eq!(opts.auto_stop, Some(900));
         assert_eq!(opts.auto_delete, Some(3600));
         assert_eq!(opts.auto_resume, Some(false));
         assert!(!opts.detach, "remove-on-stop must not default to detached");
@@ -1363,6 +1387,95 @@ mod tests {
         assert!(
             build_box_options(&persistent).expect("build").detach,
             "persistent boxes keep the serve API's historical detached default"
+        );
+    }
+
+    #[test]
+    fn build_box_options_legacy_network_defaults_inbound_to_enabled() {
+        // Legacy flat `network` never carried an inbound concept — it
+        // predates the outbound/inbound split — so inbound falls back to
+        // its default (Enabled/public) regardless of outbound mode.
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{
+                "image": "alpine:latest",
+                "network": {
+                    "mode": "enabled"
+                }
+            }"#,
+        )
+        .expect("legacy flat body must deserialize");
+        let opts = build_box_options(&req).expect("build");
+        assert!(
+            matches!(opts.inbound_network, NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty())
+        );
+    }
+
+    #[test]
+    fn build_box_options_accepts_nested_network_spec() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{
+                "image": "alpine:latest",
+                "network": {
+                    "outbound": {
+                        "mode": "enabled",
+                        "allow_net": ["api.openai.com"]
+                    }
+                }
+            }"#,
+        )
+        .expect("nested network body must deserialize");
+        let opts = build_box_options(&req).expect("build");
+        match opts.network {
+            NetworkSpec::Enabled { allow_net } => {
+                assert_eq!(allow_net, vec!["api.openai.com"]);
+            }
+            NetworkSpec::Disabled => panic!("network should be enabled"),
+        }
+        assert!(
+            matches!(opts.inbound_network, NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty())
+        );
+    }
+
+    #[test]
+    fn build_box_options_rejects_mixed_legacy_and_nested_network_spec() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{
+                "image": "alpine:latest",
+                "network": {
+                    "mode": "enabled",
+                    "outbound": {
+                        "mode": "enabled",
+                        "allow_net": ["api.openai.com"]
+                    }
+                }
+            }"#,
+        )
+        .expect("mixed network body still deserializes for compatibility validation");
+        let err = build_box_options(&req).expect_err("mixed network body must fail");
+        assert!(
+            matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("either nested")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn build_box_options_rejects_empty_legacy_allow_net_mixed_with_nested_network_spec() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{
+                "image": "alpine:latest",
+                "network": {
+                    "allow_net": [],
+                    "outbound": {
+                        "mode": "enabled"
+                    }
+                }
+            }"#,
+        )
+        .expect("mixed network body still deserializes for compatibility validation");
+        let err = build_box_options(&req).expect_err("mixed network body must fail");
+        assert!(
+            matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("either nested")),
+            "unexpected error: {err}"
         );
     }
 

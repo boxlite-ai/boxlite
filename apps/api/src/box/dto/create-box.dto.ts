@@ -135,14 +135,14 @@ export class CreateBoxDto {
   disk?: number
 
   @ApiPropertyOptional({
-    description: 'Auto-pause interval in seconds (0 means disabled)',
+    description: 'Auto-stop interval in seconds (0 means disabled)',
     example: 900,
     type: 'integer',
   })
   @IsOptional()
   @IsInt()
   @Min(0)
-  autoPause?: number
+  autoStop?: number
 
   @ApiPropertyOptional({
     description: 'Auto-delete interval in seconds (0 means disabled)',

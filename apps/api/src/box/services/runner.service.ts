@@ -25,7 +25,7 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerAdapterFactory, RunnerInfo } from '../runner-adapter/runnerAdapter'
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { RedisLockProvider, withRedisLockLease } from '../common/redis-lock.provider'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
@@ -40,10 +40,10 @@ import { generateApiKeyValue } from '../../common/utils/api-key'
 import { RunnerFullDto } from '../dto/runner-full.dto'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
-import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import { getRunnerAssignmentLockKey } from '../utils/lock-key.util'
 
 @Injectable()
 export class RunnerService {
@@ -184,20 +184,6 @@ export class RunnerService {
     return runners.map(RunnerDto.fromRunner)
   }
 
-  async findDrainingPaginated(skip: number, take: number): Promise<Runner[]> {
-    return this.runnerRepository.find({
-      where: {
-        draining: true,
-        state: Not(RunnerState.DECOMMISSIONED),
-      },
-      order: {
-        id: 'ASC',
-      },
-      skip,
-      take,
-    })
-  }
-
   async findAllReady(): Promise<Runner[]> {
     return this.runnerRepository.find({
       where: {
@@ -218,6 +204,14 @@ export class RunnerService {
 
   async findOneOrFail(id: string): Promise<Runner> {
     const runner = await this.findOne(id)
+    if (!runner) {
+      throw new NotFoundException(`Runner with ID ${id} not found`)
+    }
+    return runner
+  }
+
+  async findOneUncachedOrFail(id: string): Promise<Runner> {
+    const runner = await this.runnerRepository.findOne({ where: { id } })
     if (!runner) {
       throw new NotFoundException(`Runner with ID ${id} not found`)
     }
@@ -447,7 +441,9 @@ export class RunnerService {
       })
     }
 
-    await this.updateRunner(runnerId, updateData)
+    if (!(await this.updateRunnerUnlessDecommissioned(runnerId, updateData))) {
+      return
+    }
     this.logger.debug(`Updated health for runner ${runnerId}`)
 
     this.eventEmitter.emit(
@@ -469,10 +465,14 @@ export class RunnerService {
       return
     }
 
-    await this.updateRunner(runnerId, {
-      state: newState,
-      lastChecked: new Date(),
-    })
+    if (
+      !(await this.updateRunnerUnlessDecommissioned(runnerId, {
+        state: newState,
+        lastChecked: new Date(),
+      }))
+    ) {
+      return
+    }
 
     this.eventEmitter.emit(RunnerEvents.STATE_UPDATED, new RunnerStateUpdatedEvent(runner, runner.state, newState))
   }
@@ -660,39 +660,61 @@ export class RunnerService {
       await Promise.allSettled(
         drainingRunners.map(async (runner) => {
           try {
-            // Check if runner has any boxes with desiredState != DESTROYED
-            const nonDestroyedBoxCount = await this.boxRepository.count({
+            // A box releases runnerId only after runtime destruction is confirmed.
+            // Treat every remaining assignment as a blocker, including boxes whose
+            // desired state is already DESTROYED but are still being reconciled.
+            const assignedBoxCount = await this.boxRepository.count({
               where: {
                 runnerId: runner.id,
-                desiredState: Not(BoxDesiredState.DESTROYED),
               },
             })
 
             const redisKey = `runner:draining-check:${runner.id}`
 
-            if (nonDestroyedBoxCount > 0) {
-              // Reset counter if there are non-destroyed boxes
+            if (assignedBoxCount > 0) {
+              // Reset counter while any box still references this runner.
               await this.redis.set(redisKey, '0', 'EX', 600) // 10 minute TTL
-              this.logger.debug(
-                `Runner ${runner.id} has ${nonDestroyedBoxCount} boxes with desiredState != DESTROYED, reset counter`,
-              )
+              this.logger.debug(`Runner ${runner.id} still has ${assignedBoxCount} assigned boxes, reset counter`)
             } else {
               // Increment counter
               const currentCount = await this.redis.get(redisKey)
               const count = currentCount ? parseInt(currentCount, 10) + 1 : 1
 
               if (count >= 3) {
-                // Decommission the runner
-                await this.updateRunner(runner.id, {
-                  state: RunnerState.DECOMMISSIONED,
+                const assignmentLockKey = getRunnerAssignmentLockKey(runner.id)
+                const assignmentLease = await this.redisLockProvider.acquireLease(assignmentLockKey, 30)
+                if (!assignmentLease) {
+                  return
+                }
+
+                await withRedisLockLease(assignmentLease, async (signal) => {
+                  const currentRunner = await this.findOneUncachedOrFail(runner.id)
+                  if (!currentRunner.draining || currentRunner.state === RunnerState.DECOMMISSIONED) {
+                    await this.redis.del(redisKey)
+                    return
+                  }
+
+                  const finalAssignedBoxCount = await this.boxRepository.count({
+                    where: { runnerId: runner.id },
+                  })
+                  if (finalAssignedBoxCount > 0) {
+                    await this.redis.set(redisKey, '0', 'EX', 600)
+                    this.logger.warn(
+                      `Runner ${runner.id} received ${finalAssignedBoxCount} box assignments during decommission verification`,
+                    )
+                    return
+                  }
+
+                  signal.throwIfAborted()
+                  await this.updateRunner(runner.id, {
+                    state: RunnerState.DECOMMISSIONED,
+                  })
+                  await this.redis.del(redisKey)
+                  this.logger.log(`Runner ${runner.id} has been decommissioned after 3 successful draining checks`)
                 })
-                await this.redis.del(redisKey)
-                this.logger.log(`Runner ${runner.id} has been decommissioned after 3 successful draining checks`)
               } else {
                 await this.redis.set(redisKey, count.toString(), 'EX', 600) // 10 minute TTL
-                this.logger.debug(
-                  `Runner ${runner.id} draining check passed (${count}/3), all boxes have desiredState = DESTROYED`,
-                )
+                this.logger.debug(`Runner ${runner.id} draining check passed (${count}/3), no boxes remain assigned`)
               }
             }
           } catch (e) {
@@ -713,10 +735,21 @@ export class RunnerService {
   }
 
   async updateDrainingStatus(id: string, draining: boolean): Promise<Runner> {
-    const runner = await this.findOneOrFail(id)
-    runner.draining = draining
-    await this.runnerRepository.save(runner)
-    return runner
+    const lease = await this.redisLockProvider.waitForLease(
+      getRunnerAssignmentLockKey(id),
+      30,
+      new AbortController().signal,
+    )
+    return withRedisLockLease(lease, async (signal) => {
+      const runner = await this.findOneUncachedOrFail(id)
+      if (runner.state === RunnerState.DECOMMISSIONED) {
+        throw new ConflictException('Cannot update draining status of a decommissioned runner')
+      }
+      signal.throwIfAborted()
+      await this.redis.del(`runner:draining-check:${id}`)
+      runner.draining = draining
+      return this.runnerRepository.save(runner)
+    })
   }
 
   async getRandomAvailableRunner(params: GetRunnerParams): Promise<Runner> {
@@ -755,6 +788,15 @@ export class RunnerService {
     const result = await this.runnerRepository.update(id, data)
     this.invalidateRunnerCache(id)
     return result
+  }
+
+  private async updateRunnerUnlessDecommissioned(
+    id: string,
+    data: Partial<Omit<Runner, 'id' | 'createdAt' | 'updatedAt'>>,
+  ): Promise<boolean> {
+    const result = await this.runnerRepository.update({ id, state: Not(RunnerState.DECOMMISSIONED) }, data)
+    this.invalidateRunnerCache(id)
+    return (result.affected ?? 0) > 0
   }
 
   private invalidateRunnerCache(runnerId: string): void {

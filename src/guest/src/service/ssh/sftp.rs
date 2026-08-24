@@ -789,8 +789,10 @@ fn unpack_ids(data: &[u8]) -> Result<Vec<u32>, StatusReply> {
         return Err(StatusCode::Failure.with_message("too many account ID lookups"));
     }
     Ok(data
-        .chunks_exact(4)
-        .map(|id| u32::from_be_bytes(id.try_into().expect("four-byte chunk")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|id| u32::from_be_bytes(*id))
         .collect())
 }
 

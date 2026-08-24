@@ -126,6 +126,61 @@ describe('BoxTable pagination controls', () => {
     return props
   }
 
+  it('does not navigate when the click ends a text selection over a row', () => {
+    const onRowClick = vi.fn()
+    renderBoxTable({ onRowClick, data: [makeBox('1')] })
+
+    // Desktop row and mobile card both carry the row-navigation click handler.
+    const clickTargets = Array.from(document.querySelectorAll<HTMLElement>('div.cursor-pointer'))
+    expect(clickTargets.length).toBeGreaterThan(0)
+
+    const nameEl = Array.from(document.querySelectorAll('span')).find((el) => el.textContent === 'box-1')
+    if (!nameEl) throw new Error('Missing box name element')
+
+    // Simulate the tail end of a drag-to-copy: text is selected when the
+    // mouseup fires the row's click.
+    const selection = window.getSelection()
+    if (!selection) throw new Error('Missing selection API')
+    const range = document.createRange()
+    range.selectNodeContents(nameEl)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    expect(selection.isCollapsed).toBe(false)
+
+    for (const target of clickTargets) {
+      act(() => {
+        target.click()
+      })
+    }
+    expect(onRowClick).not.toHaveBeenCalled()
+
+    // A plain click (no selection) still navigates.
+    selection.removeAllRanges()
+    act(() => {
+      clickTargets[0].click()
+    })
+    expect(onRowClick).toHaveBeenCalledWith(expect.objectContaining({ id: '1' }))
+  })
+
+  it('copies the box name without navigating when the copy button is clicked', () => {
+    const writeText = vi.fn()
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+
+    const onRowClick = vi.fn()
+    renderBoxTable({ onRowClick, data: [makeBox('1')] })
+
+    const copyButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('button[title="Copy name"]'))
+    // Desktop row and mobile card each render one.
+    expect(copyButtons.length).toBe(2)
+
+    act(() => {
+      copyButtons[0].click()
+    })
+
+    expect(writeText).toHaveBeenCalledWith('box-1')
+    expect(onRowClick).not.toHaveBeenCalled()
+  })
+
   it('lets the user choose how many boxes are shown per page', () => {
     const onPaginationChange = vi.fn()
     renderBoxTable({ onPaginationChange })

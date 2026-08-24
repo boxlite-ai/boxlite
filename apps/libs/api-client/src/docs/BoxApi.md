@@ -966,7 +966,7 @@ const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
 let boxIdOrName: string; //ID or name of the box (default to undefined)
-let interval: number; //Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-pause interval. (default to undefined)
+let interval: number; //Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval. (default to undefined)
 let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
 
 const { status, data } = await apiInstance.setAutostopInterval(
@@ -981,7 +981,7 @@ const { status, data } = await apiInstance.setAutostopInterval(
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
 | **boxIdOrName** | [**string**] | ID or name of the box | defaults to undefined|
-| **interval** | [**number**] | Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-pause interval. | defaults to undefined|
+| **interval** | [**number**] | Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval. | defaults to undefined|
 | **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
 
 

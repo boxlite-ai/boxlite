@@ -22,6 +22,14 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 /// one long after its own release.
 const MIN_CAPABILITY_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion = (0, 9, 8);
 
+/// Oldest guest release that applies the privileged DinD spec shape. The
+/// privileged field ships in the same release as the capability policy above,
+/// so it carries the same floor: a guest new enough to honor one understands
+/// the other. Requiring a later release would reject the very guest that
+/// introduces the feature.
+const MIN_PRIVILEGED_CONTAINER_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion =
+    (0, 9, 8);
+
 /// Oldest guest release that honors `devices` on `Container.Init`. Same trap as
 /// capabilities above: an earlier guest drops the field and starts the workload
 /// with no `/dev/kvm` while the caller believes nesting was granted.
@@ -71,6 +79,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                 }),
                 crate::runtime::options::NetworkSpec::Disabled => None,
             };
+            let advanced = ctx.config.options.advanced.resolve_container_security()?;
             let bootstrap = GuestBootstrapConfig {
                 guest: GuestInitConfig {
                     volumes: volume_mgr.build_guest_mounts(),
@@ -88,9 +97,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     } else {
                         Vec::new()
                     },
-                    advanced: crate::portal::interfaces::container::ContainerAdvancedConfig {
-                        capabilities: ctx.config.options.advanced.capabilities.clone(),
-                    },
+                    advanced: advanced.into(),
                 },
             };
 
@@ -134,6 +141,17 @@ async fn run_guest_init(
             .require_min_version(MIN_CAPABILITY_GUEST_VERSION)
             .await?;
     }
+    // An older guest's Container.Init doesn't understand
+    // readonly_paths/mount.options at all and would silently keep its own
+    // hardened defaults, so privileged mode needs a version gate the same way
+    // capability overrides do. (No masked_paths here: it never varies with
+    // `privileged` — see advanced_options.rs — so it carries no version
+    // requirement of its own.)
+    if bootstrap.container.advanced.linux.readonly_paths.is_empty() {
+        guest_interface
+            .require_min_version(MIN_PRIVILEGED_CONTAINER_GUEST_VERSION)
+            .await?;
+    }
     if !bootstrap.container.devices.is_empty() {
         guest_interface
             .require_min_version(MIN_DEVICE_GUEST_VERSION)
@@ -163,5 +181,23 @@ fn kvm_device() -> ContainerDevice {
         source: "/dev/kvm".to_string(),
         destination: "/dev/kvm".to_string(),
         file_mode: Some(0o666),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// A privileged request always carries the capability policy it expands to,
+    /// so any guest that satisfies the privileged floor must already satisfy
+    /// the capability floor. Pinning the constants to literals only restates
+    /// them; this is the relation that catches a privileged floor set to a
+    /// release later than the one introducing the feature, which would reject
+    /// that very guest.
+    #[test]
+    fn privileged_gate_is_never_newer_than_the_capability_gate() {
+        assert!(
+            MIN_PRIVILEGED_CONTAINER_GUEST_VERSION <= MIN_CAPABILITY_GUEST_VERSION,
+            "privileged floor {MIN_PRIVILEGED_CONTAINER_GUEST_VERSION:?} is newer than the capability floor {MIN_CAPABILITY_GUEST_VERSION:?}"
+        );
     }
 }

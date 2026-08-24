@@ -585,6 +585,12 @@ impl ContainerCapabilities {
         self.add.is_empty() && self.drop.is_empty()
     }
 
+    pub(crate) fn is_privileged_capability_shape(&self) -> bool {
+        self.drop.is_empty()
+            && self.add.len() == 1
+            && canonical_capability_name(&self.add[0]) == "ALL"
+    }
+
     pub(crate) fn validate(&self) -> boxlite_shared::errors::BoxliteResult<()> {
         validate_capability_names("advanced.capabilities.add", &self.add)?;
         validate_capability_names("advanced.capabilities.drop", &self.drop)
@@ -717,4 +723,227 @@ pub struct AdvancedBoxOptions {
     #[doc(hidden)]
     #[serde(default)]
     pub nested_virtualization: bool,
+
+    /// Docker-style privileged OCI spec shape for DinD.
+    #[serde(default)]
+    pub privileged: bool,
+}
+
+impl AdvancedBoxOptions {
+    /// Reject capability overrides that conflict with privileged mode.
+    ///
+    /// The canonical `add=["ALL"]` shape is allowed for persisted and FFI
+    /// options that have already been normalized. Other explicit overrides
+    /// must not be silently discarded by privileged mode.
+    pub(crate) fn validate_privileged_capability_conflict(
+        &self,
+    ) -> boxlite_shared::errors::BoxliteResult<()> {
+        if self.privileged
+            && !self.capabilities.is_empty()
+            && !self.capabilities.is_privileged_capability_shape()
+        {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                "privileged mode cannot be combined with cap_add or cap_drop".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Toggle privileged mode, keeping the capability policy consistent in
+    /// both directions.
+    ///
+    /// Enabling expands to the canonical shape; disabling withdraws it again,
+    /// so a handle that is toggled off does not leave a non-privileged box
+    /// holding `ALL`. An explicit policy the caller set themselves is left
+    /// alone — only the shape this method produced is taken back.
+    pub fn set_privileged(&mut self, enabled: bool) {
+        self.privileged = enabled;
+
+        if enabled {
+            self.normalize_privileged();
+        } else if self.capabilities.is_privileged_capability_shape() {
+            self.capabilities = ContainerCapabilities::default();
+        }
+    }
+
+    /// Expand the high-level privileged mode into the explicit capability
+    /// policy consumed by the guest. Call
+    /// `validate_privileged_capability_conflict` before this method; a
+    /// conflicting explicit override is deliberately left untouched so it
+    /// cannot be silently discarded.
+    pub(crate) fn normalize_privileged(&mut self) {
+        if self.privileged
+            && (self.capabilities.is_empty() || self.capabilities.is_privileged_capability_shape())
+        {
+            self.capabilities.add = vec!["ALL".to_string()];
+            self.capabilities.drop.clear();
+        }
+    }
+
+    /// Resolve the container security request before it crosses into the guest.
+    ///
+    /// The host owns the public option semantics *and* the literal OCI values
+    /// that follow from it — the readonly-path list and the `/sys` bind's
+    /// mount options are resolved here, not re-derived by the guest from a
+    /// flag (see docs/architecture/privileged-mode-design.md, Trade-offs,
+    /// option F). Masked paths are deliberately not part of this: nothing in
+    /// DinD reads a masked path, so the guest keeps applying its own oci-spec
+    /// default unconditionally, the same way it did before `privileged`
+    /// existed — see the Trade-offs note on the finding that motivated
+    /// dropping it. The guest still resolves the canonical capability names
+    /// against its own kernel ceiling, but it must not reinterpret
+    /// `privileged` or silently discard capability overrides.
+    pub(crate) fn resolve_container_security(
+        &self,
+    ) -> boxlite_shared::errors::BoxliteResult<ResolvedContainerSecurityConfig> {
+        self.validate_privileged_capability_conflict()?;
+
+        let mut normalized = self.clone();
+        normalized.normalize_privileged();
+
+        let readonly_paths = if normalized.privileged {
+            Vec::new()
+        } else {
+            default_readonly_paths()
+        };
+
+        Ok(ResolvedContainerSecurityConfig {
+            capabilities: normalized.capabilities,
+            linux: ResolvedLinuxSecurity { readonly_paths },
+            mount: ResolvedMountSecurity {
+                options: mount_options(normalized.privileged),
+            },
+        })
+    }
+}
+
+/// Default OCI readonly-path list for a non-privileged container. Sourced
+/// from `oci_spec::runtime::get_default_readonly_paths()` for the same
+/// no-drift reason `advanced_options.rs`'s other host-resolved values follow.
+fn default_readonly_paths() -> Vec<String> {
+    oci_spec::runtime::get_default_readonly_paths()
+}
+
+/// Full resolved option list for the guest's `/sys` recursive bind mount.
+/// Recursive: `/sys` is an rbind, and OCI's plain `ro` is applied without
+/// `AT_RECURSIVE`, which would leave the guest's cgroup2 submount writable
+/// inside the container — hence `rro`, not `ro`, for the non-privileged case.
+fn mount_options(privileged: bool) -> Vec<String> {
+    let mut options: Vec<String> = ["rbind", "nosuid", "noexec", "nodev"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    if !privileged {
+        options.push("rro".to_string());
+    }
+    options
+}
+
+/// Atomic container security configuration crossing the host-to-guest
+/// boundary. `readonly_paths`/`mount.options` are literal, host-resolved
+/// OCI values the guest assigns verbatim — matching how Docker, Podman, and
+/// Kata Containers all hand the enforcing side a finished shape rather than a
+/// flag to reinterpret (see docs/architecture/privileged-mode-design.md,
+/// Trade-offs, option F). `capabilities` is the one exception: only the
+/// guest, across the VM boundary, knows its own kernel's capability ceiling,
+/// so it stays as add/drop deltas the guest resolves itself.
+///
+/// No masked-path field, no cgroup namespace, no allow-all device-cgroup
+/// rule: all three were tested and found unnecessary for DinD — nothing in
+/// the DinD workflow reads a masked path, the guest never enforced a
+/// restrictive device-cgroup default in the first place, and `dockerd`
+/// tolerated running without a private cgroup namespace view. The guest keeps
+/// applying its own oci-spec masked-path default unconditionally.
+///
+/// `linux`/`mount` are grouped the same way OCI runtime-spec groups the
+/// fields they resolve to — parallel top-level fields of one Spec — rather
+/// than flattened across a level of structure that doesn't exist in the
+/// source concept. Matches the wire shape (`ContainerAdvancedOptions`) it
+/// eventually becomes verbatim. `capabilities` stays flat, not nested under
+/// a matching `process` field: it predates this grouping (added in #1047,
+/// guest version floor 0.9.8) as a plain field on the wire message, and
+/// wrapping it now would collide with what already-deployed guests expect
+/// there — see `ContainerAdvancedOptions.capabilities` in service.proto.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ResolvedContainerSecurityConfig {
+    pub(crate) capabilities: ContainerCapabilities,
+    pub(crate) linux: ResolvedLinuxSecurity,
+    pub(crate) mount: ResolvedMountSecurity,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ResolvedLinuxSecurity {
+    pub(crate) readonly_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ResolvedMountSecurity {
+    pub(crate) options: Vec<String>,
+}
+
+#[cfg(test)]
+mod resolved_security_tests {
+    use super::*;
+
+    /// `default_readonly_paths` calls straight into
+    /// `oci_spec::runtime::get_default_readonly_paths()` — a caret
+    /// dependency, so a semver-compatible release could change what that
+    /// returns without BoxLite choosing to. Pinned to the exact list so that
+    /// happening is a decision to review, not a silent security-posture
+    /// change picked up on the next `cargo update`.
+    #[test]
+    fn unprivileged_resolves_hardened_path_defaults() {
+        let resolved = AdvancedBoxOptions::default()
+            .resolve_container_security()
+            .expect("default (unprivileged) security should resolve");
+
+        assert_eq!(
+            resolved.linux.readonly_paths,
+            [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger",
+            ]
+            .map(String::from)
+        );
+        assert!(resolved.mount.options.contains(&"rro".to_string()));
+    }
+
+    #[test]
+    fn privileged_resolves_cleared_readonly_paths_and_writable_sys() {
+        let mut options = AdvancedBoxOptions::default();
+        options.set_privileged(true);
+
+        let resolved = options
+            .resolve_container_security()
+            .expect("privileged security should resolve");
+
+        assert!(resolved.linux.readonly_paths.is_empty());
+        assert!(!resolved.mount.options.contains(&"rro".to_string()));
+        assert_eq!(resolved.capabilities.add, ["ALL"]);
+    }
+
+    /// Capabilities and the OCI path/mount shape are resolved from the same
+    /// `privileged` bool but are otherwise independent knobs: a capability
+    /// override alone (no `privileged`) must not relax the hardened paths.
+    #[test]
+    fn capability_override_without_privileged_keeps_hardened_paths() {
+        let options = AdvancedBoxOptions {
+            capabilities: ContainerCapabilities {
+                add: vec!["SYS_ADMIN".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resolved = options
+            .resolve_container_security()
+            .expect("capability-only options should resolve");
+
+        assert!(!resolved.linux.readonly_paths.is_empty());
+        assert!(resolved.mount.options.contains(&"rro".to_string()));
+    }
 }

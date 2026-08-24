@@ -10,7 +10,6 @@ import { UserService } from '../user/user.service'
 import { TypedConfigService } from '../config/typed-config.service'
 
 const DEFAULT_REGION_ID = 'region-default-id'
-const DEFAULT_ORG_QUOTA = { totalCpuQuota: 8 }
 
 function buildStrategy() {
   const createdUser = { id: 'user-1', role: 'user', email: 'new@boxlite.dev' }
@@ -24,7 +23,6 @@ function buildStrategy() {
   const configService = {
     getOrThrow: jest.fn((key: string) => {
       if (key === 'defaultRegion.id') return DEFAULT_REGION_ID
-      if (key === 'defaultOrganizationQuota') return DEFAULT_ORG_QUOTA
       throw new Error(`unexpected config key: ${key}`)
     }),
   } as unknown as TypedConfigService

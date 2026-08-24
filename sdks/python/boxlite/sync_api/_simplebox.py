@@ -252,7 +252,7 @@ class SyncSimpleBox:
         return self._runtime._sync(_exec_and_collect())
 
     def tunnel(self, port: int):
-        """Establish a tunnel handle; call ``connect()`` to consume its socket."""
+        """Establish and return a one-shot tunnel for a port inside this box."""
         if self._box is None:
             raise RuntimeError(
                 "Box not started. Use 'with SyncSimpleBox(...) as box:' first."

@@ -18,7 +18,6 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
 import { Theme, useTheme } from '@/contexts/ThemeContext'
 import { RoutePath } from '@/enums/RoutePath'
-import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useCopyToClipboard } from 'usehooks-ts'
 import { toast } from 'sonner'
@@ -39,21 +38,16 @@ import {
   MoonIcon,
   MoreHorizontal,
   SearchIcon,
-  ShieldCheck,
   SunIcon,
 } from '@/components/ui/icon'
 import { usePostHog } from 'posthog-js/react'
-import { useQuery } from '@tanstack/react-query'
 import { useCallback, useMemo } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { CommandConfig, useCommandPaletteActions, useRegisterCommands } from './CommandPalette'
 
-const ADMIN_UI_HEADERS = { 'X-BoxLite-Source': 'ui' } as const
-
 interface SidebarProps {
   isBannerVisible: boolean
-  billingEnabled: boolean
   version: string
 }
 
@@ -63,6 +57,15 @@ interface NavItem {
   path: RoutePath | string
   onClick?: () => void
 }
+
+// Billing is one entry either way: the page shows the real surfaces where a billing
+// service is deployed and the placeholder otherwise. Which of those surfaces a member
+// may see is decided in the page, not here.
+const PRIMARY_NAV_ITEMS: NavItem[] = [
+  { label: 'Boxes', path: RoutePath.BOXES },
+  { label: 'Volumes', path: RoutePath.VOLUMES },
+  { label: 'Billing', path: RoutePath.BILLING },
+]
 
 const themeOptions: { value: Theme; label: string; icon: React.ReactElement }[] = [
   { value: 'system', label: 'System', icon: <Monitor className="size-3.5" /> },
@@ -128,7 +131,6 @@ const useNavCommands = (items: NavItem[]) => {
  */
 export function Sidebar({ isBannerVisible }: SidebarProps) {
   const posthog = usePostHog()
-  const { axiosInstance } = useApi()
   const { theme, setTheme } = useTheme()
   const { user, signoutRedirect } = useAuth()
   const { pathname } = useLocation()
@@ -158,34 +160,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   )
   useRegisterCommands(orgCommands, { groupId: 'organization', groupLabel: 'Organization', groupOrder: 5 })
 
-  const adminAccessQuery = useQuery({
-    queryKey: ['admin', 'sidebar-access'],
-    queryFn: async () => {
-      await axiosInstance.get('/admin/overview', { headers: ADMIN_UI_HEADERS })
-      return true
-    },
-    enabled: !!user,
-    retry: false,
-    // Admin status doesn't change within a session. Cache it for the whole
-    // session so this /admin/overview probe (which 403s for non-admins and
-    // competes with the first-paint API burst) fires once, not on every
-    // sidebar mount / navigation. Login/logout go through a full OIDC page
-    // redirect, which discards the in-memory queryClient — so a same-tab user
-    // switch can't carry a stale admin flag across.
-    staleTime: Infinity,
-    gcTime: Infinity,
-    refetchOnWindowFocus: false,
-  })
-  const canViewAdmin = adminAccessQuery.data === true
-
-  const primaryItems = useMemo<NavItem[]>(
-    () => [
-      { label: 'Boxes', path: RoutePath.BOXES },
-      { label: 'Billing', path: RoutePath.BILLING },
-      ...(canViewAdmin ? [{ label: 'Admin', path: RoutePath.ADMIN }] : []),
-    ],
-    [canViewAdmin],
-  )
+  const primaryItems: NavItem[] = PRIMARY_NAV_ITEMS
 
   const openOnboardingGuide = useCallback(() => {
     const event = new Event(ONBOARDING_OPEN_EVENT, { cancelable: true })
@@ -356,14 +331,6 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
               Discord
             </a>
           </DropdownMenuItem>
-          {canViewAdmin && (
-            <DropdownMenuItem asChild className="cursor-pointer">
-              <Link to={RoutePath.ADMIN}>
-                <ShieldCheck className="size-4" />
-                Admin
-              </Link>
-            </DropdownMenuItem>
-          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem className="cursor-pointer" onClick={handleSignOut}>
             <LogOut className="size-4" />

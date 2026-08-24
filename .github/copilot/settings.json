@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "boxlite-agent-tooling": {
+      "source": {
+        "source": "github",
+        "repo": "boxlite-ai/agent-tooling",
+        "ref": "main"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "boxlite-agent-tooling@boxlite-agent-tooling": true
+  }
+}

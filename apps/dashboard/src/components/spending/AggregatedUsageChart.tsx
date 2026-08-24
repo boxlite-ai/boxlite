@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { BRAND } from '@/components/ascii'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { ModelsAggregatedUsage } from '@boxlite-ai/analytics-api-client'
@@ -45,11 +46,18 @@ export const UsageSummary: React.FC<AggregatedUsageChartProps> = ({ data, isLoad
   const boxCount = data?.boxCount ?? 0
 
   return (
-    <div className="flex gap-4 sm:gap-12 sm:flex-row flex-col p-4">
+    <div className="flex flex-col gap-6 px-[22px] py-5 sm:flex-row sm:gap-14">
       <div className="flex flex-col gap-1">
-        <div>Total Cost</div>
+        <div className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+          <span style={{ color: BRAND }}>▸</span> Total Cost
+        </div>
         <div className="relative">
-          <div className={cn('text-2xl font-semibold', isLoading && 'invisible')}>
+          <div
+            className={cn(
+              'font-mono text-[26px] font-semibold leading-none tracking-tight tabular-nums',
+              isLoading && 'invisible',
+            )}
+          >
             $
             <NumberFlow
               value={Math.round(totalPrice * 100) / 100}
@@ -60,9 +68,16 @@ export const UsageSummary: React.FC<AggregatedUsageChartProps> = ({ data, isLoad
         </div>
       </div>
       <div className="flex flex-col gap-1">
-        <div>Boxes</div>
+        <div className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+          <span style={{ color: BRAND }}>▸</span> Boxes
+        </div>
         <div className="relative">
-          <div className={cn('text-2xl font-semibold', isLoading && 'invisible')}>
+          <div
+            className={cn(
+              'font-mono text-[26px] font-semibold leading-none tracking-tight tabular-nums',
+              isLoading && 'invisible',
+            )}
+          >
             <NumberFlow value={boxCount} />
           </div>
           {isLoading && <Skeleton className="absolute inset-y-1 left-0 w-14" />}
@@ -110,12 +125,14 @@ function StatItem({
   isLoading?: boolean
 }) {
   return (
-    <div className="px-4 py-2 sm:p-4 border-b border-r border-border flex items-center gap-2 sm:block">
-      <p className="text-sm text-muted-foreground">{label}</p>
+    <div className="flex items-center gap-2 border-b border-r border-border px-[22px] py-3 sm:block sm:py-4">
+      <p className="font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">{label}</p>
       <div className="relative">
-        <p className={cn('text-xl font-semibold', isLoading && 'invisible')}>
+        <p className={cn('font-mono text-[18px] font-semibold leading-none tabular-nums', isLoading && 'invisible')}>
           {children}
-          {suffix && <span className="text-base font-medium text-muted-foreground">{suffix}</span>}
+          {suffix && (
+            <span className="text-[10px] font-normal uppercase tracking-[0.5px] text-muted-foreground">{suffix}</span>
+          )}
         </p>
         {isLoading && <Skeleton className="absolute top-1 h-5 w-16" />}
       </div>
@@ -136,10 +153,12 @@ export const ResourceUsageBreakdown: React.FC<{ data: ModelsAggregatedUsage | un
   const total = cpuSeconds + ramGBSeconds + diskGBSeconds
 
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <p className="text-xl font-semibold leading-none tracking-tight">Resource Breakdown</p>
+    <div className="flex flex-col gap-4 px-[22px] py-5">
+      <p className="font-mono text-[11px] uppercase tracking-[1.5px] text-foreground">
+        <span style={{ color: BRAND }}>▸</span> Resource Breakdown
+      </p>
       <div className="flex flex-col gap-2">
-        <div className="w-full h-2 bg-muted rounded-full overflow-clip flex">
+        <div className="flex h-1.5 w-full overflow-clip bg-brand/15">
           {total === 0
             ? null
             : SEGMENTS.map(({ key, color }) => {
@@ -157,11 +176,11 @@ export const ResourceUsageBreakdown: React.FC<{ data: ModelsAggregatedUsage | un
                 )
               })}
         </div>
-        <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex flex-wrap items-center gap-4">
           {SEGMENTS.map(({ key, label, color }) => (
-            <div key={key} className="flex items-center gap-1.5 text-xs">
-              <div className={cn('w-2 h-2 rounded-full', color)} />
-              <span>
+            <div key={key} className="flex items-center gap-1.5 font-mono text-[11px] tabular-nums">
+              <div className={cn('size-2', color)} />
+              <span className="uppercase tracking-[0.5px] text-muted-foreground">
                 {label} {total > 0 ? `${Math.round((segmentValues[key] / total) * 100)}%` : '0%'}
               </span>
             </div>

@@ -22,14 +22,6 @@ const REDIS_BLOCKING_COMMAND_TIMEOUT_BUFFER_MS = 3_000
 
 const DEFAULT_STALE_TIMEOUT_MINUTES = 10
 
-/**
- * Per-job-type stale timeout overrides in minutes.
- * Jobs not listed here use DEFAULT_STALE_TIMEOUT_MINUTES.
- */
-const JOB_STALE_TIMEOUT_MINUTES: Partial<Record<JobType, number>> = {
-  [JobType.PULL_ARTIFACT]: 120,
-}
-
 @Injectable()
 export class JobService {
   private readonly logger = new Logger(JobService.name)
@@ -235,33 +227,38 @@ export class JobService {
     errorMessage?: string,
     resultMetadata?: string,
   ): Promise<Job> {
-    const job = await this.findOne(jobId)
-    if (!job) {
-      throw new NotFoundException(`Job with ID ${jobId} not found`)
-    }
+    const updatedJob = await this.jobRepository.manager.transaction(async (manager) => {
+      const job = await manager.findOne(Job, {
+        where: { id: jobId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!job) {
+        throw new NotFoundException(`Job with ID ${jobId} not found`)
+      }
 
-    if (!this.isValidStatusTransition(job.status, status)) {
-      throw new ConflictException(`Invalid job status transition from ${job.status} to ${status} for job ${jobId}`)
-    }
+      if (!this.isValidStatusTransition(job.status, status)) {
+        throw new ConflictException(`Invalid job status transition from ${job.status} to ${status} for job ${jobId}`)
+      }
 
-    job.status = status
-    if (errorMessage) {
-      job.errorMessage = errorMessage
-    }
+      job.status = status
+      if (errorMessage) {
+        job.errorMessage = errorMessage
+      }
 
-    if (status === JobStatus.IN_PROGRESS && !job.startedAt) {
-      job.startedAt = new Date()
-    }
+      if (status === JobStatus.IN_PROGRESS && !job.startedAt) {
+        job.startedAt = new Date()
+      }
 
-    if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
-      job.completedAt = new Date()
-    }
+      if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
+        job.completedAt = new Date()
+      }
 
-    if (resultMetadata) {
-      job.resultMetadata = resultMetadata
-    }
+      if (resultMetadata) {
+        job.resultMetadata = resultMetadata
+      }
 
-    const updatedJob = await this.jobRepository.save(job)
+      return manager.save(Job, job)
+    })
     this.logger.debug(`Updated job ${jobId} status to ${status}`)
 
     // Handle job completion for v2 runners - update box, artifact, or backup state.
@@ -394,53 +391,41 @@ export class JobService {
   /**
    * Cron job to check for stale jobs and mark them as failed
    * Runs every minute to find jobs that have been IN_PROGRESS for too long
-   * Different job types can have different timeout thresholds (see JOB_STALE_TIMEOUT_MINUTES)
    */
   @Cron(CronExpression.EVERY_MINUTE)
   async handleStaleJobs(): Promise<void> {
     try {
-      // Group job types by their timeout value to minimize queries
-      const timeoutGroups = new Map<number, JobType[]>()
+      const threshold = new Date(Date.now() - DEFAULT_STALE_TIMEOUT_MINUTES * 60 * 1000)
+      const staleJobs = await this.jobRepository.find({
+        where: {
+          status: JobStatus.IN_PROGRESS,
+          type: In(Object.values(JobType)),
+          updatedAt: LessThan(threshold),
+        },
+        take: 500,
+      })
 
-      for (const jobType of Object.values(JobType)) {
-        const timeout = JOB_STALE_TIMEOUT_MINUTES[jobType] ?? DEFAULT_STALE_TIMEOUT_MINUTES
-        const group = timeoutGroups.get(timeout) ?? []
-        group.push(jobType)
-        timeoutGroups.set(timeout, group)
+      if (staleJobs.length === 0) {
+        return
       }
 
-      for (const [timeoutMinutes, jobTypes] of timeoutGroups) {
-        const threshold = new Date(Date.now() - timeoutMinutes * 60 * 1000)
+      this.logger.warn(
+        `Found ${staleJobs.length} stale jobs for timeout ${DEFAULT_STALE_TIMEOUT_MINUTES}m, marking as failed`,
+      )
 
-        const staleJobs = await this.jobRepository.find({
-          where: {
-            status: JobStatus.IN_PROGRESS,
-            type: In(jobTypes),
-            updatedAt: LessThan(threshold),
-          },
-          take: 500,
-        })
+      for (const job of staleJobs) {
+        try {
+          await this.updateJobStatus(
+            job.id,
+            JobStatus.FAILED,
+            `Job timed out - no update received for ${DEFAULT_STALE_TIMEOUT_MINUTES} minutes`,
+          )
 
-        if (staleJobs.length === 0) {
-          continue
-        }
-
-        this.logger.warn(`Found ${staleJobs.length} stale jobs for timeout ${timeoutMinutes}m, marking as failed`)
-
-        for (const job of staleJobs) {
-          try {
-            await this.updateJobStatus(
-              job.id,
-              JobStatus.FAILED,
-              `Job timed out - no update received for ${timeoutMinutes} minutes`,
-            )
-
-            this.logger.warn(
-              `Marked job ${job.id} (type: ${job.type}, resource: ${job.resourceType} ${job.resourceId}) as failed due to timeout`,
-            )
-          } catch (error) {
-            this.logger.error(`Error marking job ${job.id} as failed: ${error.message}`, error.stack)
-          }
+          this.logger.warn(
+            `Marked job ${job.id} (type: ${job.type}, resource: ${job.resourceType} ${job.resourceId}) as failed due to timeout`,
+          )
+        } catch (error) {
+          this.logger.error(`Error marking job ${job.id} as failed: ${error.message}`, error.stack)
         }
       }
     } catch (error) {
@@ -469,24 +454,35 @@ export class JobService {
       return []
     }
 
-    // Update jobs to IN_PROGRESS
     const now = new Date()
+    // A single conditional UPDATE prevents a later-row error from leaving
+    // earlier claims committed. The status predicate retains the compare-and-swap,
+    // so a concurrent poll may still win a subset of these candidates.
+    const claim = await this.jobRepository.update(
+      {
+        id: In(jobs.map((job) => job.id)),
+        status: JobStatus.PENDING,
+      },
+      {
+        status: JobStatus.IN_PROGRESS,
+        startedAt: now,
+        updatedAt: now,
+      },
+      { returning: ['id'] },
+    )
+    const claimedIds = new Set((claim.raw as Array<Pick<Job, 'id'>>).map((row) => row.id))
     const claimedJobs: JobDto[] = []
 
     for (const job of jobs) {
-      try {
-        job.status = JobStatus.IN_PROGRESS
-        job.startedAt = now
-        job.updatedAt = now
-
-        // save() with @VersionColumn will automatically check version and throw OptimisticLockVersionMismatchError if changed
-        const savedJob = await this.jobRepository.save(job)
-
-        claimedJobs.push(new JobDto(savedJob))
-      } catch (error) {
-        // If optimistic lock fails, job was already claimed by another runner - skip it
-        this.logger.debug(`Job ${job.id} already claimed by another runner (version mismatch)`)
+      if (!claimedIds.has(job.id)) {
+        this.logger.debug(`Job ${job.id} was already claimed by a concurrent poll`)
+        continue
       }
+
+      job.status = JobStatus.IN_PROGRESS
+      job.startedAt = now
+      job.updatedAt = now
+      claimedJobs.push(new JobDto(job))
     }
 
     if (claimedJobs.length > 0) {

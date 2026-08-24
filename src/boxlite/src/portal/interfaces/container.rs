@@ -5,13 +5,16 @@ use boxlite_shared::{
     ContainerAdvancedOptions as ProtoContainerAdvancedOptions,
     ContainerCapabilities as ProtoContainerCapabilities, ContainerClient,
     ContainerConfig as ProtoContainerConfig, ContainerDevice, ContainerInitErrorKind,
-    ContainerInitRequest, DiskRootfs, MergedRootfs, OverlayRootfs, RootfsInit,
-    container_init_response,
+    ContainerInitRequest, DiskRootfs, LinuxOptions, MergedRootfs, MountOptions, OverlayRootfs,
+    RootfsInit, container_init_response,
 };
 use tonic::transport::Channel;
 
 use crate::images::ContainerImageConfig;
-use crate::runtime::advanced_options::ContainerCapabilities;
+use crate::runtime::advanced_options::{
+    ContainerCapabilities, ResolvedContainerSecurityConfig, ResolvedLinuxSecurity,
+    ResolvedMountSecurity,
+};
 use crate::volumes::ContainerMount;
 
 /// Container rootfs initialization strategy.
@@ -90,9 +93,21 @@ pub struct ContainerInitConfig {
     pub advanced: ContainerAdvancedConfig,
 }
 
-/// Expert-only options crossing the host-to-guest container boundary.
+#[derive(Debug, Clone, Default)]
 pub struct ContainerAdvancedConfig {
     pub capabilities: ContainerCapabilities,
+    pub(crate) linux: ResolvedLinuxSecurity,
+    pub(crate) mount: ResolvedMountSecurity,
+}
+
+impl From<ResolvedContainerSecurityConfig> for ContainerAdvancedConfig {
+    fn from(value: ResolvedContainerSecurityConfig) -> Self {
+        Self {
+            capabilities: value.capabilities,
+            linux: value.linux,
+            mount: value.mount,
+        }
+    }
 }
 
 /// Container service interface.
@@ -136,6 +151,16 @@ impl ContainerInterface {
                 capabilities: Some(ProtoContainerCapabilities {
                     add: advanced.capabilities.add,
                     drop: advanced.capabilities.drop,
+                }),
+                linux: Some(LinuxOptions {
+                    readonly_paths: advanced.linux.readonly_paths,
+                }),
+                mount: Some(MountOptions {
+                    // The only guest-side mount host policy ever overrides
+                    // today (see `advanced_options::mount_options`).
+                    source: "/sys".to_string(),
+                    destination: "/sys".to_string(),
+                    options: advanced.mount.options,
                 }),
             }),
         };
@@ -444,7 +469,21 @@ mod tests {
                     file_mode: Some(0o666),
                 }],
                 advanced: ContainerAdvancedConfig {
-                    capabilities: Default::default(),
+                    capabilities: crate::runtime::advanced_options::ContainerCapabilities {
+                        add: vec!["ALL".into()],
+                        ..Default::default()
+                    },
+                    linux: ResolvedLinuxSecurity {
+                        readonly_paths: Vec::new(),
+                    },
+                    mount: ResolvedMountSecurity {
+                        options: vec![
+                            "rbind".to_string(),
+                            "nosuid".to_string(),
+                            "noexec".to_string(),
+                            "nodev".to_string(),
+                        ],
+                    },
                 },
             })
             .await
@@ -456,7 +495,29 @@ mod tests {
         assert_eq!(request.devices[0].file_mode, Some(0o666));
         assert_eq!(request.container_id, "container-1");
         assert_eq!(request.execution_id, "container-1");
+        let container_config = request.container_config.expect("process config");
         // Non-default, so it proves the field is threaded rather than defaulted.
-        assert!(request.container_config.expect("process config").tty);
+        assert!(container_config.tty);
+        let advanced = container_config.advanced.expect("advanced options");
+        // Non-default resolved values, so they prove the fields are threaded
+        // verbatim rather than defaulted or recomputed on the way to the wire.
+        // capabilities is flat on this message (not nested under a process
+        // submessage the way linux/mount are) — see ContainerAdvancedOptions
+        // in service.proto for why.
+        assert_eq!(
+            advanced.capabilities.expect("capabilities").add,
+            vec!["ALL".to_string()]
+        );
+        assert!(
+            advanced
+                .linux
+                .expect("linux options")
+                .readonly_paths
+                .is_empty()
+        );
+        let mount = advanced.mount.expect("mount options");
+        assert_eq!(mount.source, "/sys");
+        assert_eq!(mount.destination, "/sys");
+        assert!(!mount.options.contains(&"rro".to_string()));
     }
 }

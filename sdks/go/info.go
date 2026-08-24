@@ -14,11 +14,19 @@ import (
 // State represents the lifecycle state of a box.
 type State string
 
+// The full set the runtime can report, 1:1 with the core's BoxStatus
+// (src/boxlite/src/litebox/state.rs) as the FFI layer spells it
+// (sdks/c/src/info.rs). Unknown, Paused and Failed were previously unnameable
+// from Go, so callers switching on State silently funnelled them into their
+// default branch.
 const (
+	StateUnknown    State = "unknown"
 	StateConfigured State = "configured"
 	StateRunning    State = "running"
 	StateStopping   State = "stopping"
 	StateStopped    State = "stopped"
+	StatePaused     State = "paused"
+	StateFailed     State = "failed"
 )
 
 // PublishedPort is a concrete host publication for a guest service port.
@@ -49,10 +57,16 @@ type BoxInfo struct {
 	CPUs       int
 	MemoryMiB  int
 	Network    *NetworkInfo
-	AutoPause  uint32
+	AutoStop   uint32
 	AutoDelete uint32
 	AutoResume bool
 	CreatedAt  time.Time
+	// StartedAt is when the box most recently entered Running; the zero time
+	// means no such start time has been recorded. It is preserved after stop or
+	// reboot and describes PID whenever PID is nonzero. It does not report when
+	// the configured user task becomes ready, exits, or completes; those are
+	// workload lifecycle outcomes.
+	StartedAt time.Time
 }
 
 // Info returns information about the box.
@@ -141,6 +155,10 @@ func (r *Runtime) GetInfo(ctx context.Context, idOrName string) (*BoxInfo, error
 
 func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 	pid := int(info.pid)
+	var boxStartedAt time.Time
+	if ms := int64(info.started_at); ms > 0 {
+		boxStartedAt = time.UnixMilli(ms)
+	}
 	return BoxInfo{
 		ID:         cString(info.id),
 		Name:       cString(info.name),
@@ -151,10 +169,12 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 		CPUs:       int(info.cpus),
 		MemoryMiB:  int(info.memory_mib),
 		Network:    cNetworkInfoToGo(info.network),
-		AutoPause:  uint32(info.auto_pause),
+		AutoStop:   uint32(info.auto_stop),
 		AutoDelete: uint32(info.auto_delete),
 		AutoResume: info.auto_resume != 0,
 		CreatedAt:  time.Unix(int64(info.created_at), 0),
+
+		StartedAt: boxStartedAt,
 	}
 }
 

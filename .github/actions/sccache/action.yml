@@ -1,0 +1,126 @@
+# Requirement: ./.github/actions/setup-rust should be run before this in any job that compiles.
+# Kept separate from it because the two are not always adjacent — lint.yml installs musl-cross and
+# build dependencies between them — and because warm-caches.yml wants the toolchain without a
+# tolerated cache failure.
+
+#
+# mozilla-actions/sccache-action installs the binary and exports the cache credentials, but sets
+# neither RUSTC_WRAPPER nor SCCACHE_GHA_ENABLED. Without both, cargo never calls sccache and the
+# job compiles uncached however healthy the setup looked — which is what every workflow except
+# warm-caches.yml, the only one that declared them at workflow level, used to do.
+#
+# sccache caches individual compilation units, so it works on the host and inside the Docker and
+# cibuildwheel manylinux containers alike. The cache is pre-warmed by warm-caches.yml on push to main.
+
+name: Setup sccache
+description: >-
+  Installs sccache, points it at the GitHub Actions cache, and turns it on for the
+  rest of the job.
+
+inputs:
+  tolerate-failure:
+    description: >-
+      Whether a failed sccache setup lets the job carry on uncached. This is the
+      graceful fallback every build workflow depends on. warm-caches.yml passes
+      'false' — populating the cache is its entire purpose, so a failed setup
+      there is a failed run rather than a slow one.
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - uses: mozilla-actions/sccache-action@v0.0.9
+      continue-on-error: ${{ inputs.tolerate-failure == 'true' }}
+      with:
+        # Pinned rather than floating on "latest", which is what an omitted version
+        # means: the settings below are version-dependent, and a silent upstream bump
+        # should not be able to change how CI caches.
+        version: v0.17.0
+
+    - name: Enable sccache for this job
+      shell: bash
+      env:
+        TOLERATE_FAILURE: ${{ inputs.tolerate-failure }}
+      run: |
+        # Exported for this step (so the server restart below picks them up) and
+        # appended to GITHUB_ENV (so every later step, and the docker invocation in
+        # ./.github/actions/run-in-manylinux, sees them too).
+        # Heredoc form rather than `name=value`: GITHUB_ENV parses a bare line up to the first
+        # newline, so a value that ever contained one would inject the remainder as further
+        # assignments. None of today's values do — a URL, a token and `on` — which is exactly why
+        # the weaker form would survive review until the day it did.
+        set_env() {
+          export "$1=$2"
+          {
+            printf '%s<<__BOXLITE_ENV__\n' "$1"
+            printf '%s\n' "$2"
+            printf '__BOXLITE_ENV__\n'
+          } >> "$GITHUB_ENV"
+        }
+
+        # Re-exported because sccache-action resolves these in its own process, while
+        # later host steps and the manylinux container read them from the job env.
+        for name in ACTIONS_RESULTS_URL ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_SERVICE_V2; do
+          set_env "$name" "$(printenv "$name" || true)"
+        done
+
+        set_env SCCACHE_GHA_ENABLED true
+
+        # sccache cannot cache incremental compilation, so this is not optional — it is
+        # what makes the wrapper below worth setting. Unconditional rather than an input:
+        # every workflow that uses this action already wanted it, and a future one that
+        # forgot would lose caching silently rather than loudly.
+        set_env CARGO_INCREMENTAL 0
+
+        # The daemon otherwise exits after ten idle minutes. A manylinux container build
+        # can easily exceed that without touching the host server, and a restart in the
+        # middle of a job re-reads config and drops in-flight state for no benefit.
+        set_env SCCACHE_IDLE_TIMEOUT 0
+
+        # Strip the workspace prefix from cache keys. Without it the absolute path is part
+        # of the key, so the same crate compiled on the host and at /work inside the
+        # container can never share an entry. run-in-manylinux sets the container's own
+        # basedir to /work, so both sides normalize to the same relative paths.
+        set_env SCCACHE_BASEDIRS "$GITHUB_WORKSPACE"
+
+        # Somewhere to look when the cache silently degrades. `tolerate-failure` means a
+        # broken cache does not fail the job, which is right, but it also means nothing
+        # would otherwise say so.
+        set_env SCCACHE_ERROR_LOG "$RUNNER_TEMP/sccache-error.log"
+
+        # Every way the cache can fail to come up routes through here, so `tolerate-failure`
+        # means the same thing for all of them. A caller that passed 'false' — warm-caches.yml,
+        # whose entire purpose is to populate the cache — must not be told about it in a warning
+        # it then ignores.
+        unusable() {
+          if [ "$TOLERATE_FAILURE" = 'true' ]; then
+            echo "::warning::$1; this job compiles uncached"
+            exit 0
+          fi
+          # stdout, like every other workflow command in .github: the runner parses ::error::
+          # from stdout, so on stderr it would print but never become an annotation.
+          echo "::error::$1"
+          exit 1
+        }
+
+        command -v sccache >/dev/null 2>&1 || unusable 'sccache is not on PATH'
+
+        # Restarted rather than left as sccache-action started it: the settings above are read at
+        # server startup, so a server already running would ignore them.
+        sccache --stop-server >/dev/null 2>&1 || true
+        sccache --start-server || unusable 'sccache server failed to start'
+
+        # Only once the server is actually serving. RUSTC_WRAPPER pointing at an sccache that
+        # cannot answer turns every later cargo invocation into a hard failure — the exact
+        # outcome tolerating the failure exists to avoid.
+        #
+        # Host-side only; the containers decide separately, and .github/workflows/README.md's
+        # sccache section is where that split is written down.
+        #
+        # SCCACHE_IGNORE_SERVER_IO_ERROR covers the window after startup, narrowly: it turns a
+        # failure to read the compile response from the server into a local compile instead of a
+        # failed build. Undocumented, but real at the pinned version — sccache/src/commands.rs:544
+        # reads it as `== "1"`.
+        [ "$TOLERATE_FAILURE" != 'true' ] || set_env SCCACHE_IGNORE_SERVER_IO_ERROR 1
+        set_env RUSTC_WRAPPER sccache

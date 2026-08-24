@@ -9,11 +9,15 @@ import { Test } from '@nestjs/testing'
 import { getRepositoryToken } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 import { Box } from '../box/entities/box.entity'
+import { Runner } from '../box/entities/runner.entity'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
 import { RedisLockProvider } from '../box/common/redis-lock.provider'
 import { BoxUsagePeriod } from './entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from './entities/box-usage-period-archive.entity'
+import { BoxUsageExportOutbox } from './entities/box-usage-export-outbox.entity'
+import { UsageExportOutboxService } from './services/usage-export-outbox.service'
+import { UsageExportPublisherService } from './services/usage-export-publisher.service'
 import { UsageService } from './services/usage.service'
 import { UsageModule } from './usage.module'
 
@@ -39,6 +43,8 @@ describe('UsageModule', () => {
     expect(moduleRef.get(UsageService)).toBeInstanceOf(UsageService)
     expect(moduleRef.get(RedisLockProvider)).toBeInstanceOf(RedisLockProvider)
     expect(moduleRef.get(BoxRepository)).toBeInstanceOf(BoxRepository)
+    expect(moduleRef.get(UsageExportOutboxService)).toBeInstanceOf(UsageExportOutboxService)
+    expect(moduleRef.get(UsageExportPublisherService)).toBeInstanceOf(UsageExportPublisherService)
   })
 
   it('registers every entity repository and provider its service resolves through', () => {
@@ -50,10 +56,16 @@ describe('UsageModule', () => {
       expect.arrayContaining([
         getRepositoryToken(BoxUsagePeriod),
         getRepositoryToken(BoxUsagePeriodArchive),
+        getRepositoryToken(BoxUsageExportOutbox),
         getRepositoryToken(Box),
+        getRepositoryToken(Runner),
       ]),
     )
     expect(providers).toContain(BoxLookupCacheInvalidationService)
+    // Dropping either of these leaves every service-level test green while the
+    // exporter silently stops running.
+    expect(providers).toContain(UsageExportOutboxService)
+    expect(providers).toContain(UsageExportPublisherService)
   })
 
   // This module hand-rolls its own BoxRepository factory instead of importing

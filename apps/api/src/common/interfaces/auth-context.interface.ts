@@ -13,12 +13,13 @@ import { RunnerContext } from './runner-context.interface'
 import { RegionProxyContext } from './region-proxy.interface'
 import { OtelCollectorContext } from './otel-collector-context.interface'
 import { HealthCheckContext } from './health-check-context.interface'
+import { BillingContext } from './billing-context.interface'
 
 export interface BaseAuthContext {
   role: ApiRole
 }
 
-export type ApiRole = SystemRole | 'proxy' | 'runner' | 'region-proxy' | 'otel-collector' | 'health-check'
+export type ApiRole = SystemRole | 'proxy' | 'runner' | 'region-proxy' | 'otel-collector' | 'health-check' | 'billing'
 
 export interface AuthContext extends BaseAuthContext {
   userId: string
@@ -50,3 +51,4 @@ export type AuthContextType =
   | RegionProxyContext
   | OtelCollectorContext
   | HealthCheckContext
+  | BillingContext

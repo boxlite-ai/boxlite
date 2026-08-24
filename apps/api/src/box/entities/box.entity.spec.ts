@@ -5,6 +5,8 @@
  */
 
 import { BOX_ID_LENGTH, BOX_ID_REGEX } from '../utils/box-id.util'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { BoxState } from '../enums/box-state.enum'
 import { Box } from './box.entity'
 
 describe('Box entity public identity', () => {
@@ -15,5 +17,18 @@ describe('Box entity public identity', () => {
     expect(box.id).toMatch(BOX_ID_REGEX)
     expect((box as any).boxId).toBeUndefined()
     expect(box.name).toBe('data-loader')
+  })
+})
+
+describe('Box entity destroy invariant', () => {
+  it('keeps an errored box pending while a destroy intent is being reconciled', () => {
+    const box = new Box('us', 'errored-box')
+    box.state = BoxState.ERROR
+    box.desiredState = BoxDesiredState.DESTROYED
+    box.pending = true
+
+    box.enforceInvariants()
+
+    expect(box.pending).toBe(true)
   })
 })

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { PaymentUrl } from '@/billing-api/types/Invoice'
+import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../queries/queryKeys'
 import { useApi } from '../useApi'

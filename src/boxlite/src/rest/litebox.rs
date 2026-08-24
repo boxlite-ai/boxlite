@@ -278,7 +278,7 @@ impl BoxBackend for RestBox {
 
         // Honor overwrite=false at the REST boundary. The runner's
         // upload handler always extracts the tar over whatever's at
-        // container_dst (the test in scripts/test/e2e/cases/test_files_io.py::
+        // container_dst (the test in apps/e2e/cases/test_files_io.py::
         // test_copy_in_overwrite_false_rejects_conflict was catching
         // 'overwrite=False replaced guest content'). The test contract
         // explicitly accepts a raised exception OR a no-op — the

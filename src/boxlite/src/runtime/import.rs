@@ -110,6 +110,9 @@ fn options_from_manifest(
     if options.advanced.nested_virtualization {
         return Err(rejected_upload("nested virtualization"));
     }
+    if options.advanced.privileged {
+        return Err(rejected_upload("privileged mode"));
+    }
     if matches!(options.rootfs, RootfsSpec::RootfsPath(_)) {
         return Err(rejected_upload("host rootfs paths"));
     }
@@ -312,6 +315,24 @@ mod tests {
     }
 
     #[test]
+    fn untrusted_import_rejects_privileged() {
+        let options = BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                privileged: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("privileged mode"));
+    }
+
+    #[test]
     fn untrusted_import_rejects_custom_kernel() {
         // A real file, so `sanitize()` passes and the upload policy — not path
         // validation — is what rejects the archive.
@@ -378,6 +399,7 @@ mod tests {
         let mut options = BoxOptions {
             advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
                 nested_virtualization: true,
+                privileged: true,
                 ..Default::default()
             },
             ..Default::default()
@@ -388,6 +410,7 @@ mod tests {
             options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::Trusted).unwrap();
 
         assert!(resolved.advanced.nested_virtualization);
+        assert!(resolved.advanced.privileged);
         assert_eq!(resolved.advanced.security, SecurityOptions::disabled());
     }
 

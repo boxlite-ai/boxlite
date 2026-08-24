@@ -6,7 +6,6 @@
   "scripts": {
     "postinstall": "node -e \"process.exit(process.env.CI === 'true' || process.env.HUSKY === '0' ? 0 : 1)\" || husky",
     "start": "node scripts/start-dashboard.mjs",
-    "clickstack:cloud": "node scripts/clickstack-cloud.mjs",
     "start:dev": "node scripts/start-dashboard.mjs --target=dev",
     "start:prod": "node scripts/start-dashboard.mjs --target=prod",
     "start:mock": "node scripts/start-dashboard.mjs --target=mock",
@@ -17,7 +16,6 @@
     "dev:dex": "node scripts/dev-dex.mjs",
     "e2e:local": "node scripts/e2e-local.mjs",
     "e2e:dev": "node scripts/e2e-dev-smoke.mjs",
-    "observability:agent-smoke": "node scripts/admin-observability-agent-smoke.mjs",
     "format": "nx run-many --target=format --all --parallel=$(getconf _NPROCESSORS_ONLN) && prettier --write \"*.{ts,js,json,yaml}\"",
     "lint": "yarn lint:ts",
     "lint:ts": "eslint \"**/*.{ts,tsx}\"",
@@ -50,7 +48,6 @@
     "@astrojs/starlight": "0.30.0",
     "@astrojs/starlight-tailwind": "^2.0.1",
     "@astrojs/tailwind": "5.1.0",
-    "@aws-sdk/client-cloudwatch-logs": "^3.787.0",
     "@aws-sdk/client-s3": "^3.787.0",
     "@aws-sdk/client-sts": "^3.803.0",
     "@aws-sdk/credential-provider-node": "^3.901.0",

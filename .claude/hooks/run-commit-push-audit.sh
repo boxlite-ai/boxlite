@@ -1,1 +1,0 @@
-../../.agents/hooks/run-commit-push-audit.sh

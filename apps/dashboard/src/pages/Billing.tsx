@@ -4,9 +4,24 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { BillingAlerts } from '@/components/billing/BillingAlerts'
+import { PlanSection } from '@/components/billing/PlanSection'
+import { UsageSection } from '@/components/billing/UsageSection'
+import { WalletSection } from '@/components/billing/WalletSection'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RoutePath } from '@/enums/RoutePath'
+import { useConfig } from '@/hooks/useConfig'
 import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components/ui/icon'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
+
+// Verbatim from the design: square segments, right-divided, accent fill when active.
+const TAB_TRIGGER =
+  'h-full gap-1.5 rounded-none border-0 border-r border-border px-5 text-xs text-muted-foreground transition-colors hover:text-foreground data-[state=active]:bg-accent data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:shadow-none'
+const BILLING_PAGE_CONTAINER = 'mx-auto w-full max-w-[1440px] px-4 sm:px-5 2xl:px-0'
+const TAB_PANE = 'py-6'
+const TAB_TRIGGER_LAST =
+  'h-full gap-1.5 rounded-none border-0 px-5 text-xs text-muted-foreground transition-colors hover:text-foreground data-[state=active]:bg-accent data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:shadow-none'
 
 const DIMENSIONS: { icon: LucideIcon; name: string; unit: string }[] = [
   { icon: Cpu, name: 'CPU', unit: 'per vCPU·hr' },
@@ -25,7 +40,8 @@ function SegBars() {
   )
 }
 
-function Billing() {
+/** Stands in until a billing service is deployed — nothing below it can load without one. */
+function BillingComingSoon() {
   return (
     <div className="flex min-h-[calc(100svh-60px)] items-center justify-center px-6 py-14 lg:px-[40px]">
       <div className="w-full max-w-[560px] text-center" style={{ animation: 'stat-in 0.5s ease both' }}>
@@ -61,6 +77,61 @@ function Billing() {
         </Link>
       </div>
     </div>
+  )
+}
+
+/**
+ * One page, three tabs — the arrangement in the design. Each tab is a section
+ * that keeps its own hooks; this only composes and switches them. Alerts sit
+ * inside Overview, where identity and payment-setup guidance belongs.
+ */
+function Billing() {
+  const config = useConfig()
+  // Controlled, so a section can send the user to a sibling tab — the usage
+  // tab's low-balance banner tops up in the wallet tab.
+  const [tab, setTab] = useState('overview')
+
+  if (!config.billingApiUrl) {
+    return <BillingComingSoon />
+  }
+
+  return (
+    <Tabs value={tab} onValueChange={setTab} className="w-full gap-0">
+      <div className={BILLING_PAGE_CONTAINER}>
+        <div className="pt-6">
+          <h1 className="font-display text-2xl font-semibold leading-none tracking-tight">Billing</h1>
+          <TabsList className="mt-5 h-9 gap-0 rounded-none border border-border bg-transparent p-0">
+            <TabsTrigger value="overview" className={TAB_TRIGGER}>
+              Overview
+            </TabsTrigger>
+            <TabsTrigger value="usage" className={TAB_TRIGGER}>
+              Usage
+            </TabsTrigger>
+            <TabsTrigger value="wallet" className={TAB_TRIGGER_LAST}>
+              Wallet
+            </TabsTrigger>
+          </TabsList>
+        </div>
+        <TabsContent value="overview">
+          <div className={TAB_PANE}>
+            <div className="mb-8 flex flex-col gap-4 empty:hidden">
+              <BillingAlerts />
+            </div>
+            <PlanSection />
+          </div>
+        </TabsContent>
+        <TabsContent value="usage">
+          <div className={TAB_PANE}>
+            <UsageSection onGoToWallet={() => setTab('wallet')} />
+          </div>
+        </TabsContent>
+        <TabsContent value="wallet">
+          <div className={TAB_PANE}>
+            <WalletSection />
+          </div>
+        </TabsContent>
+      </div>
+    </Tabs>
   )
 }
 

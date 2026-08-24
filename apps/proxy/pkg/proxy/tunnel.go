@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -18,7 +19,6 @@ import (
 	"time"
 
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
-	log "github.com/sirupsen/logrus"
 )
 
 const runnerTunnelSetupTimeout = 10 * time.Second
@@ -64,7 +64,7 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 	defer clientConn.Close()
 
 	if err := common_proxy.ProxyBidirectionalStream(request.Context(), clientConn, runnerConn); err != nil {
-		log.WithError(err).WithFields(log.Fields{"box": boxID, "port": port}).Warn("tunnel stream closed with error")
+		slog.WarnContext(request.Context(), "tunnel stream closed with error", "box", boxID, "port", port, "error", err)
 	}
 }
 

@@ -1,5 +1,21 @@
 name: Deploy stack
-run-name: Deploy ${{ inputs.stage }} stack
+run-name: Deploy ${{ inputs.components }} to ${{ inputs.stage }}
+
+# A build deploy sources both deployable components from one commit — on main, or the merge of an
+# open pull request when a change needs a real stage before it merges — each in its own job:
+#
+#   Api    → Build commit Api image ───────────────→ per-commit ECR tag
+#   Runner → Build C SDK → Build Runner Binary ────→ private per-commit S3 object
+#
+# The two legs share only resolve-ref, so they run side by side. The final deploy sets one
+# BOXLITE_ARTIFACT_SOURCE=build selector for both and compiles neither. A release deploy uses the
+# other selector and consumes the Api image / Runner tarball published for VERSION instead.
+#
+# `components` narrows both halves at once: an unselected leg is neither built nor deployed. It
+# drops the build jobs here and becomes `--exclude <Component>` on the SST commands below, which
+# apps/infra/deployment/scope.ts accepts as one of exactly two reviewed partial shapes.
+# Never `--target`: PR #1095 stalled this stack mid-provider-migration that way, because a targeted
+# update omits the shared resources it still depends on. `--exclude` keeps them in the plan.
 
 on:
   workflow_dispatch:
@@ -11,11 +27,28 @@ on:
         type: choice
         options:
           - dev
+      components:
+        description: 'Which legs to build and deploy. An unselected leg is neither built nor reconciled.'
+        required: true
+        default: api+runner
+        type: choice
+        options:
+          - api+runner
+          - api
+          - runner
       apply:
-        description: Preview again, then deploy the full stack
+        description: Preview again, then deploy the selected components
         required: true
         default: false
         type: boolean
+      ref:
+        description: 'Full SHA of a commit on main. Mutually exclusive with pr. Defaults to current main.'
+        required: false
+        type: string
+      pr:
+        description: 'PR number. Deploys its merge with main, not its head. Mutually exclusive with ref.'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -26,9 +59,178 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy ${{ inputs.stage }} stack
+  resolve-ref:
+    name: Resolve deployable commit
     if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # A job-level block replaces the workflow-level one rather than merging with it, so
+    # contents: read is restated. pull-requests: read is what lets a PR's merge resolve below.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+    steps:
+      - name: Checkout main history
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a commit on main or an open pull request
+        id: ref
+        shell: bash
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_PR: ${{ inputs.pr }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [ -z "$INPUT_REF" ] || [ -z "$INPUT_PR" ] || {
+            echo "ref and pr are mutually exclusive — give at most one" >&2
+            exit 1
+          }
+
+          # A PR number needs no SHA-shape check of its own: `gh pr view` is the validation, and
+          # it fails on a nonexistent PR the same way cat-file fails on a nonexistent commit below.
+          # This is the fix for the SHA-first design PR #1148 shipped: that guard took a SHA and
+          # asked the API which PR (if any) it belonged to via /commits/{sha}/pulls, which returns
+          # an empty array for a fork PR's head — confirmed live — so no patch to that lookup could
+          # ever accept a fork. Asking the API for a known PR NUMBER's head, instead, works
+          # unconditionally for same-repo and fork PRs alike; there is no lookup to fail.
+          if [ -n "$INPUT_PR" ]; then
+            [[ "$INPUT_PR" =~ ^[0-9]+$ ]] || { echo "pr must be a PR number" >&2; exit 1; }
+            pr_json="$(gh pr view "$INPUT_PR" --json state,headRefOid,isCrossRepository,mergeable,potentialMergeCommit)"
+            state="$(jq -r '.state' <<<"$pr_json")"
+            [ "$state" = "OPEN" ] || {
+              echo "PR #$INPUT_PR is $state, not open" >&2
+              exit 1
+            }
+            # The MERGE, not the head. This workflow's definition comes from main while this job
+            # decides what gets checked out, so deploying the head pairs main's YAML with the
+            # tooling the branch happens to carry — which is how a components=api dispatch reached
+            # an apps/infra that could not scope at all. refs/pull/N/merge is main+PR by
+            # construction, so the deployed tree can never be behind main. Resolved before `fork`
+            # below so the conflict refusals stay out of the fork-acceptance path.
+            #
+            # GitHub recomputes this ref whenever main or the head moves, so the SHA is a snapshot
+            # of "this PR against main right now" — pinned once here and consumed by every
+            # downstream job, but not a commit in anyone's history and not necessarily a tree any
+            # CI run built (CI triggers on pull_request, not on every push to the base).
+            #
+            # Mergeability is computed lazily, so UNKNOWN is a "not yet", not a verdict; retry it
+            # rather than failing a dispatch on a cold cache. There is no event to await here —
+            # the answer only exists once GitHub recomputes it — so this polls.
+            for attempt in 1 2 3 4 5; do
+              mergeable="$(jq -r '.mergeable' <<<"$pr_json")"
+              sha="$(jq -r '.potentialMergeCommit.oid // empty' <<<"$pr_json")"
+              [ "$mergeable" = "UNKNOWN" ] || [ -z "$sha" ] || break
+              [ "$attempt" -lt 5 ] || break
+              sleep 5
+              pr_json="$(gh pr view "$INPUT_PR" --json state,headRefOid,isCrossRepository,mergeable,potentialMergeCommit)"
+            done
+            [ "$mergeable" != "CONFLICTING" ] || {
+              echo "PR #$INPUT_PR conflicts with main, so it has no merge commit to deploy." >&2
+              echo "Resolve the conflict and redispatch." >&2
+              exit 1
+            }
+            [ -n "$sha" ] || {
+              echo "PR #$INPUT_PR has no merge commit yet (mergeable=$mergeable) after 5 attempts." >&2
+              echo "GitHub computes this lazily; open the PR once to force it, then redispatch." >&2
+              exit 1
+            }
+            head_sha="$(jq -r '.headRefOid' <<<"$pr_json")"
+            fork="$(jq -r '.isCrossRepository' <<<"$pr_json")"
+            # $fork is logged for whoever reviews the run below, never gated on: PR #1148 refused a
+            # fork head here deliberately, as its own security boundary. Accepting one is the point
+            # of this change (it's how #1141 becomes deployable) — dispatching this workflow at all
+            # already requires repo write access, and build-api/deploy additionally sit behind the
+            # dev environment's required reviewer before their AWS OIDC role activates, same as for
+            # any ref. That part is unchanged: a fork head reaches those two jobs' secrets no more
+            # easily than a same-repo head always could.
+            #
+            # build-c/build-runner are the honest exception: neither declares an `environment:` or
+            # touches AWS credentials, so a fork's own Cargo/Go/make code now runs on a GitHub-hosted
+            # runner right after resolve-ref, with no second human look and nothing to steal. Risk
+            # there is compute abuse and build-time tampering (e.g. a rewritten .gitmodules URL), not
+            # credential theft — call it out rather than fold it into the build-api/deploy gate above.
+            echo "PR #$INPUT_PR ($([ "$fork" = "true" ] && echo fork || echo same-repo)) head is $head_sha; deploying merge $sha"
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Otherwise: a commit already on main. `cat-file` only rules out a SHA this clone has
+          # never seen — fetch-depth: 0 brings every branch, so `merge-base` is the real test.
+          candidate="${INPUT_REF:-$GITHUB_SHA}"
+          [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be a full commit SHA" >&2; exit 1; }
+          if ! git cat-file -e "$candidate^{commit}" 2>/dev/null \
+            || ! git merge-base --is-ancestor "$candidate" origin/main; then
+            echo "$candidate is not a commit on main" >&2
+            exit 1
+          fi
+          echo "$candidate is on main"
+          echo "sha=$candidate" >> "$GITHUB_OUTPUT"
+
+  build-api:
+    name: Build commit Api image
+    needs: resolve-ref
+    # `contains` rather than equality: the value is one of api+runner / api / runner, and no
+    # option's name contains the other's, so a substring test reads as the membership it is.
+    if: ${{ contains(inputs.components, 'api') }}
+    # Nothing here depends on the C SDK, so this runs beside build-c rather than behind it.
+    # The called workflow reaches ECR through OIDC, and a job-level block replaces the
+    # workflow-level one rather than merging with it, so contents: read is restated.
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/build-apps-api-image.yml
+    with:
+      stage: ${{ inputs.stage }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
+
+  build-c:
+    name: Build commit C SDK
+    needs: resolve-ref
+    if: ${{ contains(inputs.components, 'runner') }}
+    # The called workflow's release-upload job declares contents: write, and a callee cannot go
+    # past what its caller grants (see the caller-grant test in apps/infra/deployment/release-safety.test.ts
+    # for what is documented and what is inferred). Granted here rather than at workflow level so
+    # the deploy job below keeps contents: read.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build-c.yml
+    with:
+      ref: ${{ needs.resolve-ref.outputs.sha }}
+      linux_x64_only: true
+
+  build-runner:
+    name: Build commit Runner
+    needs: [resolve-ref, build-c]
+    # Stated as well as inherited: a skipped build-c already cascades here, but the C SDK is an
+    # input to this job rather than the reason it exists, so the scope is declared on both.
+    if: ${{ contains(inputs.components, 'runner') }}
+    # The called workflow's release-upload job declares contents: write, and a callee cannot go
+    # past what its caller grants (see the caller-grant test in apps/infra/deployment/release-safety.test.ts
+    # for what is documented and what is inferred). Granted here rather than at workflow level so
+    # the deploy job below keeps contents: read.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build-runner-binary.yml
+    with:
+      ref: ${{ needs.resolve-ref.outputs.sha }}
+      libboxlite_source: artifact
+
+  deploy:
+    name: Deploy ${{ inputs.components }} to ${{ inputs.stage }}
+    needs: [resolve-ref, build-api, build-runner]
+    # A narrowed scope SKIPS a build job, and a skipped `needs` entry would cascade a skip to this
+    # job under the implicit success(). Naming any status-check function turns that off, so the
+    # states that must still stop the deploy — a build that failed or was cancelled — are listed.
+    if: >-
+      ${{ !cancelled()
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+      && github.ref == 'refs/heads/main' }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -37,12 +239,74 @@ jobs:
       AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
       STAGE: ${{ inputs.stage }}
       IAM_PERMISSIONS_BOUNDARY_STAGE: ${{ inputs.stage }}
+      BOXLITE_ARTIFACT_SOURCE: build
+      API_ARTIFACT_SOURCE: build
+      RUNNER_ARTIFACT_SOURCE: build
+      BOXLITE_ARTIFACT_REF: ${{ needs.resolve-ref.outputs.sha }}
+      # The SST resource whose leg this run leaves alone; empty for a full deploy. Both selectors
+      # stay `build` above even when one leg is excluded: everything the plan declares still comes
+      # from this one commit, and an exclusion that turned out to be narrower than the leg would
+      # then fail loudly on the missing artifact rather than quietly reinstalling a release.
+      DEPLOY_EXCLUDE: ${{ inputs.components == 'api' && 'Runner' || inputs.components == 'runner' && 'Api' || '' }}
 
     steps:
-      - name: Checkout main
+      - name: Checkout selected commit
         uses: actions/checkout@v5
         with:
+          ref: ${{ needs.resolve-ref.outputs.sha }}
           persist-credentials: false
+
+      # workflow_dispatch takes the workflow definition from the dispatch ref — main's tip — while
+      # this job checks out the SELECTED commit. The two halves are versioned independently, so the
+      # tree being deployed, not this workflow, decides what the deploy can actually do. A commit
+      # predating the stage configuration store expects apps/infra/.env from a DEPLOY_ENV secret
+      # this workflow no longer writes, and would deploy with whatever defaults survived; one
+      # predating component selection would ignore --exclude and reconcile the full stack. Both are
+      # refused here rather than half-way through a reconcile.
+      #
+      # A backstop, not the primary defence: resolve-ref answers `pr` with the merge commit, which
+      # carries main's tooling, so only `ref` — which names any commit on main, including an old
+      # one — routinely reaches this. Asked of the deployed tree rather than assumed, because the
+      # alternative failure is `partial SST deploys are disabled` from that commit's own wrapper:
+      # true of it, but it reads as a statement about this workflow and sends the operator to the
+      # wrong file.
+      #
+      # It answers "can this tree scope at all", not "does it support THIS scope". A commit that
+      # knew `--exclude Runner` but not some later selector passes here and is refused by
+      # resolveDeployScope's own allowlist instead.
+      #
+      # Runs before the AWS credential step on purpose: an unsupported commit is knowable from the
+      # checkout alone, so it should never reach the deploy role.
+      #
+      # The version set is a range, not `=== 1`: a capability file is one document with one version,
+      # so pinning a single number rejects a commit that bumped it for an unrelated capability while
+      # still declaring this one (#1253).
+      - name: Require deployment capabilities in the selected commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          capability=apps/infra/deployment/capabilities.json
+          if [ ! -f "$capability" ]; then
+            echo "commit $BOXLITE_ARTIFACT_REF declares no $capability, so this workflow cannot tell" >&2
+            echo "what its deploy supports. Redispatch naming a newer ref." >&2
+            exit 1
+          fi
+          if ! status=$(node -e "
+            const c = JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))
+            const selectable = process.argv[2] === '' || c.componentSelection === true
+            console.log([1, 2].includes(c.version) && c.stageConfigStore === true && selectable ? 'supported' : 'unsupported')
+          " "$capability" "$DEPLOY_EXCLUDE"); then
+            echo "$capability exists at commit $BOXLITE_ARTIFACT_REF but failed to load (reason" >&2
+            echo "above); fix the file rather than deploying without its configuration." >&2
+            exit 1
+          fi
+          if [ "$status" != supported ]; then
+            echo "commit $BOXLITE_ARTIFACT_REF does not declare the capabilities this deploy needs:" >&2
+            echo "reading stage configuration from the SST secret store, and — when components are" >&2
+            echo "narrowed — honouring --exclude $DEPLOY_EXCLUDE rather than deploying the full" >&2
+            echo "stack. Redispatch with components=api+runner, or name a newer ref." >&2
+            exit 1
+          fi
 
       - name: Verify native AMD64 Docker
         shell: bash
@@ -51,12 +315,75 @@ jobs:
           test "$(uname -m)" = "x86_64"
           test "$(docker info --format '{{.Architecture}}')" = "x86_64"
 
+      - name: Resolve commit version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          # Composed from the stage's AWS_ACCOUNT_ID, not a stored AWS_DEPLOY_ROLE_ARN: the role
+          # name is fixed per stage (apps/infra/bootstrap/environment.ts's githubDeployRoleName, pinned
+          # against the CloudFormation template by a test), so only the account id has to be configured.
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage }}-github-deploy
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: deploy-${{ inputs.stage }}-stack-${{ github.run_id }}
+
+      - name: Download commit Runner artifact
+        if: ${{ contains(inputs.components, 'runner') }}
+        uses: actions/download-artifact@v4
+        with:
+          name: runner-linux-amd64
+          path: dist/runner
+
+      # Both steps are gated: with the Runner out of scope build-runner never ran, so there is no
+      # artifact to download and nothing to publish under this commit's prefix.
+      - name: Stage commit Runner artifact
+        if: ${{ contains(inputs.components, 'runner') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          account_id=$(aws sts get-caller-identity --query Account --output text)
+          bucket="boxlite-app-${STAGE}-artifacts-${account_id}"
+          archive="boxlite-runner-v${VERSION}-${BOXLITE_ARTIFACT_REF}-linux-amd64.tar.gz"
+          test -f "dist/runner/$archive"
+          test -f "dist/runner/$archive.sha256"
+          if ! aws s3api head-bucket --bucket "$bucket" >/dev/null 2>&1; then
+            echo "artifact bucket $bucket is missing; bootstrap $STAGE from apps/infra/bootstrap/aws/github-deploy-role.yaml first" >&2
+            exit 1
+          fi
+          # Write-once: the Pulumi trigger and the host's health-route comparison treat
+          # version+ref as an identity, so republishing different bytes under it would strand
+          # already-installed hosts on the old build. S3 returns 412 rather than overwriting.
+          #
+          # Decided over the ref as a whole, never per key — the same rule
+          # apps/infra/artifacts/runner-build.ts applies locally. A fully published ref is
+          # the desired end state. A half-published one is not completed here: the rebuild is not
+          # byte-identical (tar czf alone stamps a gzip mtime), so writing the absent manifest
+          # would describe bytes that are not the ones stored, and write-once then makes that
+          # unrepairable while every host fails the digest check.
+          prefix="runner/${BOXLITE_ARTIFACT_REF}"
+          present=0
+          for name in "$archive" "$archive.sha256"; do
+            if aws s3api head-object --bucket "$bucket" --key "$prefix/$name" >/dev/null 2>&1; then
+              present=$((present + 1))
+            fi
+          done
+          if [ "$present" -eq 2 ]; then
+            echo "$prefix/ is already published; leaving it untouched"
+          elif [ "$present" -eq 1 ]; then
+            echo "$prefix/ is partially published; delete the objects under it and rerun" >&2
+            exit 1
+          else
+            for name in "$archive" "$archive.sha256"; do
+              aws s3api put-object --bucket "$bucket" --key "$prefix/$name" \
+                --body "dist/runner/$name" --if-none-match '*' >/dev/null
+            done
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -75,31 +402,26 @@ jobs:
 
       - name: Verify deploy role IAM boundary permissions
         working-directory: apps/infra
-        run: node scripts/verify-deploy-role-boundary.mjs
-
-      - name: Materialize stage configuration
         shell: bash
-        env:
-          DEPLOY_ENV: ${{ secrets.DEPLOY_ENV }}
-        run: |
-          set -euo pipefail
-          test -n "$DEPLOY_ENV"
-          umask 077
-          printf '%s\n' "$DEPLOY_ENV" > apps/infra/.env
-          node apps/infra/scripts/deploy-environment-validation.mjs apps/infra/.env
+        run: npm run --silent verify-deploy-role
 
       - name: Install SST providers
         working-directory: apps/infra
+        # The same credentials the deploy steps get. `install` evaluates sst.config.ts, which
+        # initializes every provider it declares — so without these the step falls back to the SSM copy
+        # whose readability from this role has never been verified. Supplying them costs nothing and
+        # removes the only place the workflow would have depended on that.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
         run: npm run --silent sst -- install --stage "$STAGE"
 
-      # These stay hand-made scoped API tokens. Cloudflare's `cf` CLI can mint
-      # an OAuth token carrying dns_records:edit, but it expires in about an
-      # hour and is renewed through a browser, which this unattended job has
-      # no way to complete. Supplying them as Environment secrets is optional:
-      # scripts/sst-with-cloudflare.mjs prefers an already-set env var and
-      # otherwise reads SSM, so a stage seeded via SSM keeps working with
-      # these unset.
-      - name: Preview the full stack
+      # These stay hand-made scoped API tokens, and they stay GitHub Environment secrets rather than
+      # joining the stage's SST secret store: reading that store initializes the Cloudflare provider,
+      # so a token kept there would be needed in order to read itself. Whether this job could instead
+      # read the SSM copy apps/infra/deployment/sst.ts uses locally is untested — see the note there.
+      # Cloudflare also has no machine-to-machine OAuth grant to automate these with.
+      - name: Preview the selected components
         shell: bash
         working-directory: apps/infra
         env:
@@ -107,17 +429,49 @@ jobs:
           CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          npm run --silent sst -- diff --stage "$STAGE" --policy . --json |
-            node scripts/deployment-preview.mjs
+          # An array, so an empty scope contributes no argument at all rather than an empty string
+          # SST would read as a component name. The fixed arguments seed it because expanding an
+          # EMPTY array under `set -u` is an unbound-variable error before bash 4.4 — seeded, it
+          # is never empty, so the line does not depend on the runner image's bash version.
+          args=(diff --stage "$STAGE" --policy policies/runner)
+          [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
+          npm run --silent sst -- "${args[@]}"
 
-      - name: Deploy the full stack
+      - name: Deploy the selected components
         if: ${{ inputs.apply }}
+        shell: bash
         working-directory: apps/infra
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_DEFAULT_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_DEFAULT_ACCOUNT_ID }}
-        run: npm run deploy -- --stage "$STAGE" --policy .
+        run: |
+          set -euo pipefail
+          # Seeded for the same reason as the preview above: an empty array must never be expanded.
+          args=(--stage "$STAGE" --policy policies/runner)
+          [ -z "$DEPLOY_EXCLUDE" ] || args+=(--exclude "$DEPLOY_EXCLUDE")
+          npm run deploy -- "${args[@]}"
 
-      - name: Remove materialized configuration
-        if: always()
-        run: rm -f apps/infra/.env
+  # E2E cloud has no automatic trigger of its own; a deploy is the one
+  # event that makes running it meaningful, because only here are the
+  # deployed stack and the SDKs under test the same commit.
+  #
+  # Gated on `apply`: without it the deploy job only previews, so the
+  # stack is whatever it already was and the suite would just spend dev
+  # capacity re-testing it. The `if` carries no status check function, so
+  # the default success() still applies and a failed deploy skips this.
+  #
+  # The stage is always `dev`, so the suite's own BOXLITE_DEV_API_URL
+  # default is the right target and no api_url is passed.
+  #
+  # Runs whatever `components` was: a narrowed deploy leaves the excluded leg on the commit some
+  # earlier run put there, so the suite is then testing a mixed-commit stack. That is the point of
+  # exercising it — the pairing is exactly what a partial deploy makes uncertain.
+  e2e:
+    name: E2E suite against ${{ inputs.stage }}
+    needs: [resolve-ref, deploy]
+    if: ${{ inputs.apply }}
+    uses: ./.github/workflows/e2e-cloud.yml
+    with:
+      ref: ${{ needs.resolve-ref.outputs.sha }}
+    secrets:
+      BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}

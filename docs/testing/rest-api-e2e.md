@@ -9,7 +9,7 @@ CLI command matrix, and both API-key and OIDC authentication modes.
 ```mermaid
 flowchart LR
   OpenAPI["openapi/box.openapi.yaml"] --> Inventory["test:rest:inventory"]
-  Pytest["scripts/test/e2e/cases"] --> E2E["test:rest:e2e AUTH=api-key|oidc"]
+  Pytest["apps/e2e/cases"] --> E2E["test:rest:e2e AUTH=api-key|oidc"]
   CLI["boxlite CLI"] --> Matrix["test:rest:cli AUTH=api-key|oidc SCOPE=smoke|full"]
   Inventory --> Report["test:rest:report"]
   E2E --> Report
@@ -22,7 +22,7 @@ flowchart LR
 
 ## Existing Base
 
-The suite under `scripts/test/e2e` is already REST-backed. It builds a Python
+The suite under `apps/e2e` is already REST-backed. It builds a Python
 SDK REST client and verifies that requests reach the API and Runner. It is not
 a local FFI test path.
 

@@ -1,4 +1,4 @@
-PHONY_TARGETS += test test\:unit\:guest _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config
+PHONY_TARGETS += test test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -20,6 +20,7 @@ export NEXTEST_FILTER_EXPR
 NEXTEST_FILTER   = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',))
 NEXTEST_CLI_FILTER = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',-E 'not binary(stress_disk)'))
 CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),)
+REST_CLIENT_CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),rest::client::tests::)
 PYTEST_FILTER    = $(if $(FILTER),-k '$(FILTER)',)
 VITEST_FILTER    = $(if $(FILTER),-t '$(FILTER)',)
 CTEST_FILTER     = $(if $(FILTER),-R '$(FILTER)',)
@@ -84,6 +85,19 @@ endef
 test:
 	@$(MAKE) test:changed
 
+test\:setup\:submodules:
+	@bash $(SCRIPT_DIR)/test/test-setup-submodules.sh
+
+# Pinned BoxLite diagram skill validator. This suite is deterministic: it uses
+# local stand-ins for gh and Mermaid CLI while exercising the real parser,
+# source, diff, and cross-view validation code from agent-tooling.
+test\:skill\:boxlite-diagrams:
+	@echo "🧪 Running BoxLite diagrams skill validator tests..."
+	@./.agent-tooling/install.sh >/dev/null
+	@hooks_path="$$(git config --get core.hooksPath)"; \
+	tooling_root="$$(cd "$$hooks_path/.." && pwd)"; \
+	python3 -m unittest discover -s "$$tooling_root/.agents/skills/boxlite-diagrams/tests" -v
+
 # Smart test: only test components with changes, fall back to full matrix.
 test\:changed:
 ifeq ($(CHANGED_COMPONENTS),)
@@ -122,6 +136,12 @@ test\:changed\:go:
 
 test\:changed\:apps:
 	@$(MAKE) test:apps
+
+# Workflow and composite-action changes. Runs the infra suite rather than the whole apps matrix:
+# that suite is what asserts across .github (caller/callee permissions, Environment allowlists,
+# the deploy step list, and the composite actions' own shell), and it finishes in seconds.
+test\:changed\:ci:
+	@$(MAKE) test:apps:infra
 
 # Integration-only for changed components (used by E2E CI on PRs).
 test\:integration\:changed:
@@ -204,6 +224,7 @@ test\:unit\:rust:
 		cargo test -p boxlite --no-default-features --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
 	fi; \
+	cargo test -p boxlite --no-default-features --features rest --lib -- --test-threads=1 $(REST_CLIENT_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
@@ -223,6 +244,64 @@ test\:unit\:guest:
 	else \
 		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests; \
 	fi
+
+# Keep ordinary ownership tests unprivileged. Only explicitly ignored tests
+# whose names contain `privileged_` run as root, inside a private mount
+# namespace so bind mounts cannot escape into the host namespace.
+test\:guest-perms:
+	@if [ "$$(uname)" != "Linux" ]; then \
+		echo "⏭️  Guest ownership tests require Linux"; \
+		exit 0; \
+	fi; \
+	echo "🧪 Running guest ownership tests..."; \
+	cargo test -p boxlite-guest --bin boxlite-guest 'storage::perms::tests' -- \
+		--test-threads=1 --skip privileged_ || exit $$?; \
+	if ! command -v jq >/dev/null 2>&1; then \
+		echo "❌ jq is required to locate the prebuilt guest test executable"; \
+		exit 1; \
+	fi; \
+	if ! test_metadata=$$(mktemp "$${TMPDIR:-/tmp}/boxlite-guest-perms.XXXXXX"); then \
+		echo "❌ Could not create temporary Cargo metadata file"; \
+		exit 1; \
+	fi; \
+	trap 'rm -f -- "$$test_metadata"' EXIT; \
+	if ! cargo test -p boxlite-guest --bin boxlite-guest --no-run \
+		--message-format=json >"$$test_metadata"; then \
+		echo "❌ Failed to build the boxlite-guest test executable"; \
+		exit 1; \
+	fi; \
+	if ! test_binary=$$(jq --slurp --raw-output --exit-status \
+		'[.[] | select(.reason == "compiler-artifact" and .profile.test == true and .target.name == "boxlite-guest" and .executable != null) | .executable] | last' \
+		"$$test_metadata"); then \
+		echo "❌ Could not parse the prebuilt boxlite-guest test executable"; \
+		exit 1; \
+	fi; \
+	if [ -z "$$test_binary" ] || [ ! -x "$$test_binary" ]; then \
+		echo "❌ Could not locate the prebuilt boxlite-guest test executable"; \
+		exit 1; \
+	fi; \
+	echo "🔐 Running privileged guest ownership tests..."; \
+	if [ "$$(id -u)" -eq 0 ]; then \
+		unshare --mount --propagation private -- \
+			"$$test_binary" 'storage::perms::tests::privileged_' \
+			--ignored --test-threads=1; \
+	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then \
+		sudo -n unshare --mount --propagation private -- \
+			"$$test_binary" 'storage::perms::tests::privileged_' \
+			--ignored --test-threads=1; \
+	else \
+		echo "❌ Privileged ownership tests require root or passwordless sudo"; \
+		exit 1; \
+	fi
+
+# Build and qualify the standalone guest artifacts. Native x86_64 release also
+# exercises verifier rejection paths; matching native Linux runs tool smoke tests.
+test\:guest-artifacts: export _BOXLITE_GUEST_TARGET_ARG := $(value GUEST_TARGET)
+test\:guest-artifacts: export _BOXLITE_PROFILE_ARG := $(value PROFILE)
+test\:guest-artifacts:
+	@target="$${_BOXLITE_GUEST_TARGET_ARG:-$$(bash "$$PWD/scripts/util.sh" --target)}"; \
+	profile="$${_BOXLITE_PROFILE_ARG:-release}"; \
+	bash "$$PWD/scripts/test/test-guest-artifacts.sh" --target "$$target" --profile "$$profile"
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
 test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)
@@ -248,6 +327,14 @@ test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:ru
 		cargo test -p boxlite --features krun,gvproxy --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(CARGOTEST_FILTER); \
 	fi
+
+# Manual release-mode benchmark. Kept out of every aggregate and CI suite.
+test\:perf\:import-export: runtime
+	@echo "📊 Running manual 1 GiB import/export benchmark (release, serial)..."
+	@echo "   Commit: $$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+	@echo "   Ensure at least 8 GiB of free disk space and no competing I/O workload."
+	@cargo test --release -p boxlite --features krun,gvproxy \
+		--test import_export_benchmark -- --ignored --test-threads=1 --nocapture
 
 # BoxLite C SDK unit tests.
 test\:unit\:ffi:
@@ -348,6 +435,12 @@ test\:unit\:go:
 	@$(MAKE) dev:go
 	@cd sdks/go && go test -tags boxlite_dev -v $(GOTEST_FILTER) ./...
 
+# Go SDK archive round-trip integration test. Intentionally excluded from
+# default test matrices and CI.
+test\:integration\:go: dev\:go
+	@echo "🧪 Running Go SDK archive integration test (requires VM)..."
+	@cd sdks/go && go test -count=1 -tags=boxlite_dev,boxlite_integration -v $(GOTEST_FILTER) ./integration/archive
+
 # Go SDK full suite.
 test\:all\:go:
 	@$(MAKE) test:unit:go
@@ -368,15 +461,19 @@ _ensure-infra-deps:
 		cd apps/infra && npm ci --no-audit --no-fund; \
 	fi
 
+# Type-check first: the suite runs under `tsx --test`, which strips types without checking them, so
+# a signature change that no longer compiles still leaves every test green. tsconfig.tooling.json
+# is the subset that checks without `sst install`; test:apps:infra-config below covers the rest.
 test\:apps\:infra: _ensure-infra-deps
+	@echo "🧪 Type-checking infrastructure scripts..."
+	@cd apps/infra && npm run --silent typecheck:tooling
 	@echo "🧪 Running infrastructure script tests..."
 	@cd apps/infra && npm test
 
 test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 	@echo "🧪 Installing and type-checking the SST deployment config..."
 	@cd apps/infra && IAM_PERMISSIONS_BOUNDARY_STAGE=ci npm run sst -- install --stage ci
-	@cd apps/infra && ../node_modules/.bin/tsc --noEmit --allowJs --checkJs false \
-		--module NodeNext --moduleResolution NodeNext --target ES2022 --skipLibCheck sst.config.ts
+	@cd apps/infra && npm run typecheck
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
@@ -390,7 +487,7 @@ test\:rest\:cli:
 	@bash scripts/test/rest/run_cli_matrix.sh "$${AUTH:-oidc}" "$${SCOPE:-smoke}"
 
 test\:rest\:e2e:
-	@cd scripts/test/e2e && BOXLITE_E2E_AUTH=$${AUTH:-api-key} python3 -m pytest cases/ -v $(PYTEST_FILTER)
+	@cd apps/e2e && BOXLITE_E2E_AUTH=$${AUTH:-api-key} python3 -m pytest cases/ -v $(PYTEST_FILTER)
 
 test\:rest\:report:
 	@python3 scripts/test/rest/report.py
@@ -404,14 +501,14 @@ test\:install-script:
 
 # ─── E2E: SDK → API → Runner → VM ───────────────────────────────────────────
 test\:e2e\:setup:
-	@scripts/test/e2e/bootstrap.sh
-	@python3 scripts/test/e2e/fixture_setup.py
+	@apps/e2e/bootstrap.sh
+	@python3 apps/e2e/fixture_setup.py
 
 test\:e2e:
-	@cd scripts/test/e2e && python3 -m pytest cases/ -v
+	@cd apps/e2e && python3 -m pytest cases/ -v
 
 test\:e2e\:two-sided:
-	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash scripts/test/e2e/two_sided.sh
+	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash apps/e2e/two_sided.sh
 
 # ─── Stress: deployed REST API ─────────────────────────────────────────────
 test\:stress\:api-read:

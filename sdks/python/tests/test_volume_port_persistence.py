@@ -1,7 +1,7 @@
 """Integration test: read-write host volume persistence + host port mapping.
 
 This pins a direct-SDK capability that the REST surface deliberately does NOT
-expose (see ``scripts/test/e2e/cases/test_volume_readonly.py``): a long-lived
+expose (see ``apps/e2e/cases/test_volume_host_bind_mount.py``): a long-lived
 box that
 
   1. mounts a **read-write** host directory and writes through to the host,

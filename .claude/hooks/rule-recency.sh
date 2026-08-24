@@ -1,1 +1,0 @@
-../../.agents/hooks/rule-recency.sh

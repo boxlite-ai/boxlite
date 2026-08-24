@@ -46,6 +46,7 @@
     "tsApiClient": ["apiClient", "{workspaceRoot}/hack/ts-client/postprocess.mjs"]
   },
   "neverConnectToCloud": true,
+  "useDaemonProcess": false,
   "plugins": [
     {
       "plugin": "@nx/webpack/plugin",
@@ -67,8 +68,7 @@
       "plugin": "@nx/jest/plugin",
       "options": {
         "targetName": "test"
-      },
-      "exclude": ["apps/boxlite-e2e/**/*"]
+      }
     },
     {
       "plugin": "@nx/vite/plugin",

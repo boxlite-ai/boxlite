@@ -190,6 +190,18 @@ describe("SimpleBoxOptions", () => {
     expect(opts.network?.mode).toBe("disabled");
   });
 
+  test("accepts managed volume source mounts", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const box = new SimpleBox({
+      volumes: [{ source: "volume://vol_123", guestPath: "/data" }],
+    });
+    const nativeOptions = (box as any)._boxOpts;
+
+    expect(nativeOptions.volumes).toEqual([
+      { source: "volume://vol_123", guestPath: "/data" },
+    ]);
+  });
+
   test("accepts secrets", () => {
     const secret: Secret = {
       name: "openai",

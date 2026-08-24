@@ -5,6 +5,7 @@
  */
 
 import 'reflect-metadata'
+import { ValidationPipe } from '@nestjs/common'
 import { validate } from 'class-validator'
 import { plainToInstance } from 'class-transformer'
 import { CreateBoxDto } from './create-box.dto'
@@ -42,7 +43,7 @@ describe('CreateBoxDto resource minimums', () => {
 
 describe('CreateBoxDto lifecycle policy', () => {
   it('accepts second-based lifecycle fields', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { auto_pause: 900, auto_delete: 604800 }))
+    const errors = await validate(plainToInstance(CreateBoxDto, { auto_stop: 900, auto_delete: 604800 }))
 
     expect(errors).toHaveLength(0)
   })
@@ -60,7 +61,7 @@ describe('CreateBoxDto lifecycle policy', () => {
   })
 
   it.each([
-    ['auto_pause', -1],
+    ['auto_stop', -1],
     ['auto_delete', -2],
   ])('rejects invalid %s values', async (field, value) => {
     const errors = await validate(plainToInstance(CreateBoxDto, { [field]: value }))
@@ -74,8 +75,10 @@ describe('CreateBoxDto network validation', () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
         network: {
-          mode: 'enabled',
-          allow_net: ['api.openai.com', '*.anthropic.com', '192.168.1.1', '10.0.0.0/8'],
+          outbound: {
+            mode: 'enabled',
+            allow_net: ['api.openai.com', '*.anthropic.com', '192.168.1.1', '10.0.0.0/8'],
+          },
         },
       }),
     )
@@ -89,8 +92,10 @@ describe('CreateBoxDto network validation', () => {
       const errors = await validate(
         plainToInstance(CreateBoxDto, {
           network: {
-            mode: 'enabled',
-            allow_net: [entry],
+            outbound: {
+              mode: 'enabled',
+              allow_net: [entry],
+            },
           },
         }),
       )
@@ -103,8 +108,10 @@ describe('CreateBoxDto network validation', () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
         network: {
-          mode: 'enabled',
-          allow_net: Array.from({ length: 11 }, (_, index) => `api-${index}.example.com`),
+          outbound: {
+            mode: 'enabled',
+            allow_net: Array.from({ length: 11 }, (_, index) => `api-${index}.example.com`),
+          },
         },
       }),
     )
@@ -115,10 +122,232 @@ describe('CreateBoxDto network validation', () => {
   it('rejects unsupported network modes', async () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
-        network: { mode: 'public' },
+        network: { outbound: { mode: 'public' } },
       }),
     )
 
     expect(JSON.stringify(errors)).toContain('isIn')
+  })
+
+  it.each([
+    ['mode', { mode: 'disabled' }, { outbound: { mode: 'disabled' } }],
+    ['allow_net', { allow_net: ['api.openai.com'] }, { outbound: { mode: 'enabled', allow_net: ['api.openai.com'] } }],
+  ])('accepts deprecated legacy flat network.%s, normalized to %j', async (_field, network, expected) => {
+    const instance = plainToInstance(CreateBoxDto, { network })
+    const errors = await validate(instance)
+
+    expect(errors).toEqual([])
+    expect(instance.network).toMatchObject(expected)
+  })
+
+  it('rejects legacy flat fields mixed with nested outbound/inbound', () => {
+    expect(() =>
+      plainToInstance(CreateBoxDto, {
+        network: { mode: 'enabled', outbound: { mode: 'disabled' } },
+      }),
+    ).toThrow('network must not mix legacy top-level fields with nested outbound/inbound fields')
+  })
+
+  // `network: []` is deliberately absent here: it was accepted before the
+  // split and stays accepted (see the request-pipeline tests below).
+  it.each([
+    ['network', [{ mode: 'enabled' }]],
+    ['network.outbound', { outbound: [] }],
+    ['network.inbound', { inbound: [] }],
+  ])('rejects array-valued %s', async (_field, network) => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        network,
+      }),
+    )
+
+    expect(JSON.stringify(errors)).toContain('isObject')
+  })
+
+  it.each(['enabled', 'disabled'])('accepts inbound.mode=%s', async (mode) => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        network: { outbound: { mode: 'enabled' }, inbound: { mode } },
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('rejects unsupported inbound.mode values', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        network: { outbound: { mode: 'enabled' }, inbound: { mode: 'shared' } },
+      }),
+    )
+
+    expect(JSON.stringify(errors)).toContain('isIn')
+  })
+
+  // No layer enforces an inbound allowlist yet, so a non-empty allow_net
+  // is rejected outright — under either mode — rather than accepted as a
+  // restriction that silently doesn't apply.
+  it.each(['enabled', 'disabled'])('rejects a non-empty inbound.allow_net under mode=%s', async (mode) => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        network: {
+          outbound: { mode: 'enabled' },
+          inbound: { mode, allow_net: ['10.0.0.0/8'] },
+        },
+      }),
+    )
+
+    expect(JSON.stringify(errors)).toContain('isUnsupportedInboundAllowNet')
+  })
+
+  it('accepts an explicitly empty inbound.allow_net', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        network: {
+          outbound: { mode: 'enabled' },
+          inbound: { mode: 'enabled', allow_net: [] },
+        },
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+})
+
+describe('CreateBoxDto managed volumes', () => {
+  function getReadOnlyConstraints(errors: Awaited<ReturnType<typeof validate>>) {
+    return errors
+      .find((error) => error.property === 'volumes')
+      ?.children?.[0]?.children?.find((error) => error.property === 'read_only')?.constraints
+  }
+
+  it('accepts read-write managed volume mounts', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ source: 'volume://volume-123', guest_path: '/data', read_only: false }],
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('rejects volume mounts with neither source nor host_path', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ guest_path: '/data', read_only: false }],
+      }),
+    )
+
+    expect(JSON.stringify(errors)).toContain('hasVolumeSource')
+  })
+
+  it('accepts the deprecated host_path in place of source', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ host_path: 'volume://volume-123', guest_path: '/data' }],
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('rejects an empty source', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ source: '', guest_path: '/data' }],
+      }),
+    )
+
+    expect(JSON.stringify(errors)).toContain('isNotEmpty')
+  })
+
+  it('rejects an empty host_path', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ host_path: '', guest_path: '/data' }],
+      }),
+    )
+
+    expect(JSON.stringify(errors)).toContain('isNotEmpty')
+  })
+
+  it('rejects an empty source even with a valid host_path fallback available', async () => {
+    // An empty string is a malformed `source`, not an absent one - it must
+    // not be silently swapped for host_path in the mapper.
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ source: '', host_path: 'volume://volume-123', guest_path: '/data' }],
+      }),
+    )
+
+    expect(JSON.stringify(errors)).toContain('isNotEmpty')
+  })
+
+  it('rejects read-only cloud volume mounts until the backend supports them', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ source: 'volume://volume-123', guest_path: '/data', read_only: true }],
+      }),
+    )
+
+    expect(getReadOnlyConstraints(errors)).toHaveProperty('isIn')
+  })
+
+  it('rejects null read_only values', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ source: 'volume://volume-123', guest_path: '/data', read_only: null }],
+      }),
+    )
+
+    expect(getReadOnlyConstraints(errors)).toHaveProperty('isIn')
+  })
+})
+
+// The DTO-level cases above call plainToInstance directly. This block drives
+// the same ValidationPipe main.ts installs, so it proves an already-deployed
+// client's request survives the whole request pipeline — the DTO shape
+// changed, the accepted wire format did not.
+describe('CreateBoxDto legacy network compatibility through the request pipeline', () => {
+  const pipe = new ValidationPipe({ transform: true })
+  const meta = { type: 'body' as const, metatype: CreateBoxDto }
+
+  it('accepts the pre-split flat shape and normalizes it to outbound', async () => {
+    const dto: CreateBoxDto = await pipe.transform(
+      { image: 'alpine:latest', network: { mode: 'enabled', allow_net: ['api.openai.com'] } },
+      meta,
+    )
+
+    expect(dto.network?.outbound?.mode).toBe('enabled')
+    expect(dto.network?.outbound?.allow_net).toEqual(['api.openai.com'])
+  })
+
+  it('accepts the pre-split flat disabled mode', async () => {
+    const dto: CreateBoxDto = await pipe.transform({ image: 'alpine:latest', network: { mode: 'disabled' } }, meta)
+
+    expect(dto.network?.outbound?.mode).toBe('disabled')
+  })
+
+  it('accepts the nested shape', async () => {
+    const dto: CreateBoxDto = await pipe.transform(
+      { image: 'alpine:latest', network: { outbound: { mode: 'disabled' }, inbound: { mode: 'disabled' } } },
+      meta,
+    )
+
+    expect(dto.network?.outbound?.mode).toBe('disabled')
+    expect(dto.network?.inbound?.mode).toBe('disabled')
+  })
+
+  // The one payload the added @IsObject() would otherwise have started
+  // rejecting: an empty array passed the old @ValidateNested()-only field and
+  // behaved like an absent `network`.
+  it('still accepts an empty array for network, treating it as absent', async () => {
+    const dto: CreateBoxDto = await pipe.transform({ image: 'alpine:latest', network: [] }, meta)
+
+    expect(dto.network).toBeUndefined()
+  })
+
+  it('rejects a non-empty array for network, as before', async () => {
+    await expect(pipe.transform({ image: 'alpine:latest', network: [{ mode: 'enabled' }] }, meta)).rejects.toThrow()
   })
 })

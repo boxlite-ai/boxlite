@@ -28,6 +28,7 @@ const drainTimeoutMs = 100
 type Runtime struct {
 	handle *C.CBoxliteRuntime
 
+	drainMu   sync.Mutex
 	drainOnce sync.Once
 	drainStop chan struct{}
 	drainDone chan struct{}
@@ -82,15 +83,9 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 // Close releases the runtime. Implements io.Closer.
 //
 // Order matters: closing the `r.closing` channel first wakes every in-flight
-// async caller (Create, Pull, Shutdown, etc.) that's parked on its result
-// channel. They observe ErrRuntimeClosed and return promptly, releasing
-// their cgo.Handles via abandonAsync. Only then do we stop the drain
-// goroutine and free the C runtime handle — at that point no Go caller is
-// still depending on the drain to deliver a result.
-//
-// Without this ordering, an in-flight caller with a non-cancellable ctx
-// would block forever after stopDrain killed the only goroutine that
-// pumps events from C to its result channel.
+// async caller that's parked on its result channel. They return
+// ErrRuntimeClosed and release their per-call resources before the drain
+// goroutine and native runtime are stopped.
 func (r *Runtime) Close() error {
 	if r.handle == nil {
 		return nil
@@ -339,6 +334,19 @@ func (r *Runtime) removeBox(ctx context.Context, idOrName string, force bool) er
 // M). Because the M is already a Go thread, callbacks like pipe writes or
 // channel sends do not need to hijack a new thread.
 func (r *Runtime) ensureDrainRunning() {
+	if r == nil {
+		return
+	}
+	r.drainMu.Lock()
+	defer r.drainMu.Unlock()
+	select {
+	case <-r.closing:
+		return
+	default:
+	}
+	if r.handle == nil {
+		return
+	}
 	r.drainOnce.Do(func() {
 		r.drainStop = make(chan struct{})
 		r.drainDone = make(chan struct{})
@@ -367,17 +375,22 @@ func (r *Runtime) drainLoop() {
 }
 
 func (r *Runtime) stopDrain() {
+	r.drainMu.Lock()
 	if r.drainStop == nil {
+		r.drainMu.Unlock()
 		return
 	}
 	select {
 	case <-r.drainStop:
+		r.drainMu.Unlock()
 		return
 	default:
 	}
 	close(r.drainStop)
-	if r.drainDone != nil {
-		<-r.drainDone
+	done := r.drainDone
+	r.drainMu.Unlock()
+	if done != nil {
+		<-done
 	}
 }
 

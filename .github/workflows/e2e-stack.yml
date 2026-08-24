@@ -23,7 +23,7 @@ on:
       - 'src/boxlite/src/cli/**'
       - 'apps/runner/**'
       - 'apps/api/src/**'
-      - 'scripts/test/e2e/**'
+      - 'apps/e2e/**'
       - '.github/workflows/e2e-stack.yml'
   pull_request:
     branches: [main]
@@ -34,7 +34,7 @@ on:
       - 'src/boxlite/src/cli/**'
       - 'apps/runner/**'
       - 'apps/api/src/**'
-      - 'scripts/test/e2e/**'
+      - 'apps/e2e/**'
       - '.github/workflows/e2e-stack.yml'
   workflow_dispatch:
     inputs:

@@ -3,9 +3,9 @@
 //! Replaces per-process blocking `waitpid(pid)` — one OS thread parked per wait,
 //! and correctness hostage to how a container init reparents — with one task
 //! that drains `waitpid(-1, WNOHANG)` on every `SIGCHLD` and deposits each pid's
-//! exit into an `ExitSlot`. The reaper answers no queries: callers claim a slot
-//! at spawn and park on it, so there is one place a caller ever waits, and an
-//! exit that lands early is simply already there. A claim may also register an
+//! exit into an `ExitSlot`. The reaper answers no queries: callers register a
+//! slot at spawn and park on it, so there is one place a caller ever waits, and
+//! an exit that lands early is simply already there. Callers may also attach an
 //! `ExitAction` (`on_exit`) — a follow-up the reaper fires exactly once, after
 //! the delivery, outside its lock. The container init and exec
 //! tenants are cloned `CLONE_PARENT` (youki `as_sibling`) so they are our
@@ -21,14 +21,14 @@
 //! `Slot::stray_since`, which ages such strays out.
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
 use nix::errno::Errno;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::sync::{watch, Mutex};
+use tokio::sync::watch;
 use tracing::{debug, error, warn};
 
 use crate::service::exec::exec_handle::ExitStatus;
@@ -40,7 +40,7 @@ pub(crate) struct Reaper {
     inner: Mutex<Inner>,
 }
 
-/// Unclaimed strays are dropped after this long. The genuine reaped-before-claim
+/// Unregistered strays are dropped after this long. The genuine reaped-before-registration
 /// race resolves in well under a second; the TTL only keeps strays from
 /// accumulating. It is not what makes pid recycling safe — a fresh spawn landing
 /// on a stale slot is caught by the spawn-timestamp check in `register`.
@@ -56,6 +56,9 @@ const REAPED_TTL: Duration = Duration::from_secs(60);
 /// other, only against the sweep.
 static REAP_LOCK: RwLock<()> = RwLock::new(());
 
+#[cfg(test)]
+static REAP_TEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
 /// Hold this across a call that waits for its own child (`Command::output()`,
 /// `Child::wait()`) so the reaper cannot reap that child out from under it.
 ///
@@ -64,6 +67,19 @@ pub(crate) fn reap_fence() -> RwLockReadGuard<'static, ()> {
     REAP_LOCK
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+fn reap_test_lock() -> &'static tokio::sync::Mutex<()> {
+    REAP_TEST_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+/// Serialize tests that spawn real children or take the reap fence, so one
+/// test's waits cannot perturb another's assertions. Async-aware because
+/// callers hold the guard across their awaits.
+#[cfg(test)]
+pub(crate) async fn reap_test_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    reap_test_lock().lock().await
 }
 
 /// A follow-up the reaper runs when a pid's exit is delivered.
@@ -98,7 +114,7 @@ impl ExitSlot {
             Ok(None) => unreachable!("wait_for returns only once the slot is Some"),
             Err(_) => {
                 // Unreachable: a slot is only ever removed after it has been
-                // filled — pruned stray, claim replaced by `register`, or slot
+                // filled — pruned stray, registration replaced by `register`, or slot
                 // detached by `deliver` — so the fast path above returned.
                 error!("reaper: exit slot dropped while a caller was waiting on it");
                 ExitStatus::Code(-1)
@@ -132,11 +148,11 @@ struct Slot {
     tx: watch::Sender<Option<ExitStatus>>,
     /// When this slot was created by an unexpected exit, i.e. a stray — a
     /// libcontainer intermediate reparents here via `as_sibling` and nobody
-    /// waits for it. `None` once a spawn claims the pid; only strays age out.
+    /// waits for it. `None` once a spawn registers the pid; only strays age out.
     stray_since: Option<Instant>,
-    /// When an exit was deposited here, whether or not anyone claimed the pid.
+    /// When an exit was deposited here, whether or not anyone registered the pid.
     ///
-    /// Separate from `stray_since` because it must outlive the claim: a claimed
+    /// Separate from `stray_since` because it must outlive registration: a registered
     /// slot never ages out, so once its execution finishes it sits here holding
     /// a status until the guest exits. Only this timestamp can tell that corpse
     /// apart from a fresh spawn's own exit after the kernel recycles the pid.
@@ -158,9 +174,9 @@ impl Inner {
         })
     }
 
-    /// Drop unclaimed strays past `REAPED_TTL`.
+    /// Drop unregistered strays past `REAPED_TTL`.
     ///
-    /// Claimed slots (`stray_since: None`) are exempt outright — their owner may
+    /// Registered slots (`stray_since: None`) are exempt outright — their owner may
     /// ask arbitrarily later, which is what a detached exec does. A slot still
     /// marked stray has no holder by construction: `register` clears the mark
     /// before it hands out a receiver, so pruning one cannot strand a caller.
@@ -209,14 +225,11 @@ impl Reaper {
     /// Reap every child that has exited. `SIGCHLD` coalesces, so one delivery may
     /// stand for several exits.
     ///
-    /// Exits are swept under `REAP_LOCK` first and delivered only after the guard
-    /// is dropped: `deliver` awaits, and a std lock must never be held across an
-    /// await.
     async fn drain(&self) {
-        for (pid, status) in Self::sweep_exits() {
-            if let Some(action) = self.deliver(pid, status).await {
-                // Fired here, after deliver released the registry lock, so a
-                // slow or re-entrant action cannot block other deliveries.
+        for (status, action) in self.sweep_exits() {
+            if let Some(action) = action {
+                // Actions run after the sweep releases both locks, so a slow or
+                // re-entrant callback cannot block reaping or delivery.
                 action(status);
             }
         }
@@ -227,15 +240,21 @@ impl Reaper {
     ///
     /// Blocks on the lock rather than `try_write`: skipping a sweep could strand
     /// an exit until the next `SIGCHLD`, which may never arrive.
-    fn sweep_exits() -> Vec<(Pid, ExitStatus)> {
+    fn sweep_exits(&self) -> Vec<(ExitStatus, Option<ExitAction>)> {
         let _fence = REAP_LOCK
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut exits = Vec::new();
         loop {
             match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
-                Ok(WaitStatus::Exited(pid, code)) => exits.push((pid, ExitStatus::Code(code))),
-                Ok(WaitStatus::Signaled(pid, sig, _)) => exits.push((pid, ExitStatus::Signal(sig))),
+                Ok(WaitStatus::Exited(pid, code)) => {
+                    let status = ExitStatus::Code(code);
+                    exits.push((status, self.deliver(pid, status)));
+                }
+                Ok(WaitStatus::Signaled(pid, sig, _)) => {
+                    let status = ExitStatus::Signal(sig);
+                    exits.push((status, self.deliver(pid, status)));
+                }
                 // WNOHANG with a live-but-unexited child, or no children left.
                 Ok(WaitStatus::StillAlive) | Err(Errno::ECHILD) => break,
                 Err(Errno::EINTR) => continue,
@@ -250,29 +269,11 @@ impl Reaper {
         exits
     }
 
-    /// Claim this pid's exit slot. The only way to obtain one.
-    ///
-    /// Call the moment the pid is known — right after the spawn or build returns
-    /// it — not when a Wait arrives. A detached exec sends no Wait until its
-    /// caller chooses to; claiming at spawn is what keeps its exit from ageing
-    /// out as an ownerless stray in the meantime.
-    ///
-    /// `spawned_at` must be read *before* the spawn. A slot already sitting
-    /// under this pid may be a stray, or a finished execution's — the registry
-    /// never drops entries, so a claimed slot outlives its execution. Either
-    /// way `settled_at` separates the two things it might be:
-    ///
-    /// - settled **before** we spawned → the previous owner of a recycled pid.
-    ///   Claimed slots never age out, so this must be dropped or wraparound
-    ///   would hand us someone else's exit as our own.
-    /// - settled **after** we spawned → *our* child, which exited before its pid
-    ///   finished travelling back from the zygote. Dropping it would strand the
-    ///   waiter forever, so it is kept and adopted.
-    ///
-    /// Slots grow with the execution registry, which is likewise only cleared
-    /// when the guest exits, so this adds no new unbounded growth.
     pub(crate) async fn register(&self, pid: Pid, spawned_at: Instant) -> ExitSlot {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if inner
             .slots
             .get(&pid)
@@ -285,9 +286,23 @@ impl Reaper {
         ExitSlot(slot.tx.subscribe())
     }
 
-    /// Claim this pid's exit slot *and* register the follow-up the reaper runs
-    /// when the exit is delivered. Same claim semantics as `register` — the
-    /// returned slot serves any number of readers — plus one action, fired
+    pub(crate) fn release_slot(&self, exit: &ExitSlot) {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let pid = inner
+            .slots
+            .iter()
+            .find_map(|(pid, slot)| slot.tx.subscribe().same_channel(&exit.0).then_some(*pid));
+        if let Some(pid) = pid {
+            inner.slots.remove(&pid);
+        }
+    }
+
+    /// Register this pid's exit slot *and* register the follow-up the reaper runs
+    /// when the exit is delivered. Like `register`, the returned slot serves any
+    /// number of readers — plus one action, fired
     /// exactly once.
     ///
     /// If the exit already landed (a fast child reaped before its owner could
@@ -301,7 +316,10 @@ impl Reaper {
     ) -> ExitSlot {
         let mut action = Some(action);
         let (slot_rx, fire_with) = {
-            let mut inner = self.inner.lock().await;
+            let mut inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if inner
                 .slots
                 .get(&pid)
@@ -328,9 +346,12 @@ impl Reaper {
     /// before its owner registers is simply already there when the owner
     /// arrives. Returns the pid's registered action, if any, for the caller to
     /// fire once the lock is released.
-    async fn deliver(&self, pid: Pid, status: ExitStatus) -> Option<ExitAction> {
-        let mut inner = self.inner.lock().await;
-
+    fn deliver(&self, pid: Pid, status: ExitStatus) -> Option<ExitAction> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let settled_at = Instant::now();
         // We are the only writer, and the kernel reaps a pid once per
         // incarnation, so an already-settled slot under this pid can only
         // belong to an owner the kernel has since recycled away. Detach it
@@ -347,21 +368,20 @@ impl Reaper {
             inner.slots.remove(&pid);
         }
 
-        let claimed = inner.slots.contains_key(&pid);
-        if !claimed {
+        let registered = inner.slots.contains_key(&pid);
+        if !registered {
             // Nobody registered this pid: a stray we own but nobody waits for (a
             // libcontainer intermediate reparented here by `as_sibling`), or an
             // exit that beat its own spawn's `register`. Age old strays out here
             // so the map cannot grow without bound.
             debug!(
                 pid = pid.as_raw(),
-                "reaper: exit with no claim (race or stray)"
+                "reaper: exit with no registration (race or stray)"
             );
             inner.prune_stale();
         }
-        let now = Instant::now();
-        let slot = inner.slot(pid, (!claimed).then_some(now));
-        slot.settled_at = Some(now);
+        let slot = inner.slot(pid, (!registered).then_some(settled_at));
+        slot.settled_at = Some(settled_at);
         slot.tx.send_replace(Some(status));
         slot.action.take()
     }
@@ -378,7 +398,7 @@ mod tests {
 
     use nix::sys::signal::Signal;
     use nix::unistd::Pid;
-    use tokio::sync::Mutex;
+    use std::sync::Mutex;
 
     use tokio::sync::watch;
 
@@ -388,6 +408,10 @@ mod tests {
         Arc::new(Reaper {
             inner: Mutex::new(Inner::default()),
         })
+    }
+
+    fn spawned_at() -> Instant {
+        Instant::now()
     }
 
     /// A settled slot nobody holds, reaped at a chosen time.
@@ -436,14 +460,14 @@ mod tests {
         let slot = r
             .on_exit(
                 pid(801),
-                Instant::now(),
+                spawned_at(),
                 Box::new(move |status| {
                     tx.send(status).expect("test channel");
                 }),
             )
             .await;
 
-        if let Some(action) = r.deliver(pid(801), ExitStatus::Code(5)).await {
+        if let Some(action) = r.deliver(pid(801), ExitStatus::Code(5)) {
             action(ExitStatus::Code(5));
         }
         assert_eq!(
@@ -453,7 +477,7 @@ mod tests {
         );
 
         // Pid recycled: a second deliver settles a fresh slot with no action.
-        if let Some(action) = r.deliver(pid(801), ExitStatus::Code(6)).await {
+        if let Some(action) = r.deliver(pid(801), ExitStatus::Code(6)) {
             action(ExitStatus::Code(6));
         }
         assert!(
@@ -461,7 +485,6 @@ mod tests {
             "a recycled pid's exit must not re-fire the previous owner's action"
         );
 
-        // The claim's readers still work like any register-claimed slot.
         assert_eq!(code(slot.get().await), Some(5));
     }
 
@@ -471,8 +494,8 @@ mod tests {
     #[tokio::test]
     async fn an_action_registered_after_the_exit_fires_immediately() {
         let r = bare();
-        let spawned_at = Instant::now();
-        r.deliver(pid(802), ExitStatus::Code(3)).await;
+        let spawned_at = spawned_at();
+        r.deliver(pid(802), ExitStatus::Code(3));
 
         let (tx, rx) = std::sync::mpsc::channel();
         let slot = r
@@ -499,14 +522,14 @@ mod tests {
         );
     }
 
-    /// Normal path: the owner claims a slot, then the reaper deposits into it.
+    /// Normal path: the owner registers a slot, then the reaper deposits into it.
     #[tokio::test]
     async fn register_then_deliver_wakes_the_waiter() {
         let r = bare();
-        let slot = r.register(pid(101), Instant::now()).await;
+        let slot = r.register(pid(101), spawned_at()).await;
         let waiter = tokio::spawn(async move { slot.get().await });
 
-        r.deliver(pid(101), ExitStatus::Code(7)).await;
+        r.deliver(pid(101), ExitStatus::Code(7));
 
         let got = tokio::time::timeout(Duration::from_secs(5), waiter)
             .await
@@ -515,15 +538,32 @@ mod tests {
         assert_eq!(code(got), Some(7));
     }
 
-    /// The reaped-before-claim RACE: the exit lands before its owner registers.
+    #[tokio::test]
+    async fn release_slot_removes_only_its_registered_slot() {
+        let r = bare();
+        let released = r.register(pid(110), spawned_at()).await;
+        let retained = r.register(pid(111), spawned_at()).await;
+
+        r.release_slot(&released);
+
+        let inner = r
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(!inner.slots.contains_key(&pid(110)));
+        assert!(inner.slots.contains_key(&pid(111)));
+        drop(retained);
+    }
+
+    /// The reaped-before-registration race: the exit lands before its owner registers.
     /// `deliver` creates the slot, so the later `register` adopts a slot that is
     /// already settled and `get` returns without blocking.
     #[tokio::test]
     async fn deliver_before_register_is_still_readable() {
         let r = bare();
         // Read before the spawn, exactly as the exec path does.
-        let spawned_at = Instant::now();
-        r.deliver(pid(102), ExitStatus::Code(3)).await; // no owner yet
+        let spawned_at = spawned_at();
+        r.deliver(pid(102), ExitStatus::Code(3));
 
         let slot = r.register(pid(102), spawned_at).await;
         let got = tokio::time::timeout(Duration::from_secs(5), slot.get())
@@ -536,9 +576,8 @@ mod tests {
     #[tokio::test]
     async fn signaled_exit_is_delivered_as_signal() {
         let r = bare();
-        let slot = r.register(pid(103), Instant::now()).await;
-        r.deliver(pid(103), ExitStatus::Signal(Signal::SIGTERM))
-            .await;
+        let slot = r.register(pid(103), spawned_at()).await;
+        r.deliver(pid(103), ExitStatus::Signal(Signal::SIGTERM));
         assert_eq!(sig(slot.get().await), Some(Signal::SIGTERM));
     }
 
@@ -546,11 +585,11 @@ mod tests {
     #[tokio::test]
     async fn distinct_pids_do_not_cross() {
         let r = bare();
-        let first = r.register(pid(201), Instant::now()).await;
-        let second = r.register(pid(202), Instant::now()).await;
+        let first = r.register(pid(201), spawned_at()).await;
+        let second = r.register(pid(202), spawned_at()).await;
 
-        r.deliver(pid(201), ExitStatus::Code(1)).await;
-        r.deliver(pid(202), ExitStatus::Code(2)).await;
+        r.deliver(pid(201), ExitStatus::Code(1));
+        r.deliver(pid(202), ExitStatus::Code(2));
 
         assert_eq!(code(second.get().await), Some(2));
         assert_eq!(code(first.get().await), Some(1));
@@ -564,8 +603,8 @@ mod tests {
     #[tokio::test]
     async fn a_settled_slot_answers_every_caller() {
         let r = bare();
-        let slot = r.register(pid(104), Instant::now()).await;
-        r.deliver(pid(104), ExitStatus::Code(5)).await;
+        let slot = r.register(pid(104), spawned_at()).await;
+        r.deliver(pid(104), ExitStatus::Code(5));
 
         for attempt in 0..3 {
             let got = tokio::time::timeout(Duration::from_millis(500), slot.get())
@@ -583,7 +622,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_waiters_all_get_the_real_status() {
         let r = bare();
-        let slot = r.register(pid(105), Instant::now()).await;
+        let slot = r.register(pid(105), spawned_at()).await;
 
         let waiters: Vec<_> = (0..4)
             .map(|_| {
@@ -592,7 +631,7 @@ mod tests {
             })
             .collect();
 
-        r.deliver(pid(105), ExitStatus::Code(6)).await;
+        r.deliver(pid(105), ExitStatus::Code(6));
 
         for (n, waiter) in waiters.into_iter().enumerate() {
             let got = tokio::time::timeout(Duration::from_secs(5), waiter)
@@ -611,7 +650,10 @@ mod tests {
     #[tokio::test]
     async fn prune_stale_drops_expired_keeps_fresh() {
         let r = bare();
-        let mut inner = r.inner.lock().await;
+        let mut inner = r
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         inner
             .slots
             .insert(pid(301), stray_slot(ExitStatus::Code(9), expired_at()));
@@ -631,20 +673,27 @@ mod tests {
 
     /// Pruning a stray can never strand a caller: `register` clears the stray
     /// mark before it hands out a receiver, so a slot still marked stray has no
-    /// holder. Claiming one makes it exempt from pruning thereafter.
+    /// holder. Registering one makes it exempt from pruning thereafter.
     #[tokio::test]
-    async fn claiming_a_stray_exempts_it_from_pruning() {
+    async fn registering_a_stray_exempts_it_from_pruning() {
         let r = bare();
-        r.deliver(pid(305), ExitStatus::Code(4)).await; // stray
-        let slot = r.register(pid(305), Instant::now()).await; // ...now claimed
+        r.deliver(pid(305), ExitStatus::Code(4));
+        let slot = r.register(pid(305), spawned_at()).await;
 
-        r.inner.lock().await.prune_stale();
+        r.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .prune_stale();
 
         assert!(
-            r.inner.lock().await.slots.contains_key(&pid(305)),
-            "a claimed slot is exempt from pruning whatever its age"
+            r.inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .slots
+                .contains_key(&pid(305)),
+            "a registered slot is exempt from pruning whatever its age"
         );
-        // The claim discarded the stray's status (it settled before the spawn),
+        // Registration discarded the stray's status because it settled before the spawn.
         // so this slot is empty and waiting — not holding the old code 4.
         assert!(tokio::time::timeout(Duration::from_millis(200), slot.get())
             .await
@@ -656,20 +705,32 @@ mod tests {
     #[tokio::test]
     async fn stray_is_kept_then_aged_out() {
         let r = bare();
-        r.deliver(pid(303), ExitStatus::Code(0)).await; // stray, unclaimed
-        assert!(r.inner.lock().await.slots.contains_key(&pid(303)));
+        r.deliver(pid(303), ExitStatus::Code(0));
+        assert!(r
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .slots
+            .contains_key(&pid(303)));
 
         // Backdate it past the TTL, then trigger a prune with an unrelated stray.
         {
-            let mut inner = r.inner.lock().await;
+            let mut inner = r
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             inner
                 .slots
                 .insert(pid(303), stray_slot(ExitStatus::Code(0), expired_at()));
         }
-        r.deliver(pid(999), ExitStatus::Code(0)).await; // unclaimed → prune_stale
+        r.deliver(pid(999), ExitStatus::Code(0));
 
         assert!(
-            !r.inner.lock().await.slots.contains_key(&pid(303)),
+            !r.inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .slots
+                .contains_key(&pid(303)),
             "aged-out stray must be gone so a recycled pid can't read it"
         );
     }
@@ -678,75 +739,75 @@ mod tests {
     ///
     /// A detached exec (`boxlite exec -d`, cli/commands/exec.rs) returns before
     /// any Wait RPC, so nothing reads its tenant's exit when it lands. Every
-    /// later exec produces a stray whose `deliver` runs `prune_stale`. Claimed
+    /// later exec produces a stray whose `deliver` runs `prune_stale`. Registered
     /// slots are exempt, so the detached exec's status is still there whenever
     /// its owner finally asks.
     #[tokio::test]
-    async fn a_claimed_exit_survives_a_later_prune() {
+    async fn a_registered_exit_survives_a_later_prune() {
         let r = bare();
 
-        // The exec path claims the slot as soon as the spawn returns the pid,
+        // The exec path registers the slot as soon as the spawn returns the pid,
         // long before any Wait arrives.
-        let slot = r.register(pid(401), Instant::now()).await;
+        let slot = r.register(pid(401), spawned_at()).await;
 
         // A detached exec's tenant exits with nobody reading yet.
-        r.deliver(pid(401), ExitStatus::Code(7)).await;
+        r.deliver(pid(401), ExitStatus::Code(7));
 
-        // A later stray (an intermediate nobody claims) triggers prune_stale().
-        r.deliver(pid(402), ExitStatus::Code(0)).await;
+        // A later stray (an intermediate nobody registered) triggers prune_stale().
+        r.deliver(pid(402), ExitStatus::Code(0));
 
         // The detached exec's owner finally asks. It must still get 7.
         let got = tokio::time::timeout(Duration::from_millis(500), slot.get())
             .await
-            .expect("a claimed exit must not be pruned away");
+            .expect("a registered exit must not be pruned away");
         assert_eq!(code(got), Some(7));
     }
 
-    /// The claim can arrive AFTER the exit, and that exit is ours to keep.
+    /// Registration can arrive after the exit, and that exit is ours to keep.
     ///
     /// A tenant is built in the zygote and is already running when its pid comes
     /// back over IPC, so a short command can exit before we ever see the pid:
-    /// `deliver` lands first, `register` second. Discarding on claim would throw
+    /// `deliver` lands first, `register` second. Discarding on registration would throw
     /// away the real exit and strand the waiter forever.
     #[tokio::test]
-    async fn claiming_keeps_an_exit_reaped_after_the_spawn() {
+    async fn registering_keeps_an_exit_reaped_after_the_spawn() {
         let r = bare();
-        let spawned_at = Instant::now();
+        let spawned_at = spawned_at();
 
         // The tenant exits while its pid is still travelling back to us.
-        r.deliver(pid(601), ExitStatus::Code(3)).await;
-        // Only now does the exec path learn the pid and claim it.
+        r.deliver(pid(601), ExitStatus::Code(3));
+        // Only now does the exec path learn the pid and register it.
         let slot = r.register(pid(601), spawned_at).await;
 
         let got = tokio::time::timeout(Duration::from_millis(500), slot.get())
             .await
-            .expect("claim must not discard an exit reaped after the spawn");
+            .expect("registration must not discard an exit reaped after the spawn");
         assert_eq!(code(got), Some(3));
     }
 
     /// A recycled pid must not hand its new owner the previous process's exit.
     ///
-    /// The execution registry never drops entries, so a *claimed* slot outlives
-    /// its execution — and `prune_stale` exempts claimed slots outright, so a
+    /// The execution registry never drops entries, so a registered slot outlives
+    /// its execution — and `prune_stale` exempts registered slots outright, so a
     /// finished exec's status sits here until the guest exits. When the kernel
     /// wraps around, the only thing separating that corpse from the new owner's
     /// own exit is when it settled. Guarding on "is this a stray?" instead of
     /// "when did this settle?" hands the new owner the old status immediately.
     #[tokio::test]
-    async fn claiming_discards_an_exit_reaped_before_the_spawn() {
+    async fn registering_discards_an_exit_reaped_before_the_spawn() {
         let r = bare();
 
-        // A previous exec claimed this pid, ran, and exited. Its slot remains.
-        let previous = r.register(pid(602), Instant::now()).await;
-        r.deliver(pid(602), ExitStatus::Code(9)).await;
+        // A previous exec registered this pid, ran, and exited. Its slot remains.
+        let previous = r.register(pid(602), spawned_at()).await;
+        r.deliver(pid(602), ExitStatus::Code(9));
         assert_eq!(
             code(previous.get().await),
             Some(9),
             "the previous owner's own read"
         );
 
-        // The kernel recycles the pid and a new spawn claims it.
-        let slot = r.register(pid(602), Instant::now()).await;
+        // The kernel recycles the pid and a new spawn registers it.
+        let slot = r.register(pid(602), spawned_at()).await;
 
         // The new owner waits for its own exit rather than being handed code 9.
         assert!(
@@ -769,15 +830,15 @@ mod tests {
     async fn a_recycled_deliver_does_not_overwrite_the_previous_owner() {
         let r = bare();
 
-        // Exec A: claims the pid, runs, exits. Its slot and receiver persist.
-        let first = r.register(pid(701), Instant::now()).await;
-        r.deliver(pid(701), ExitStatus::Code(1)).await;
+        // Exec A registers the pid, runs, exits. Its slot and receiver persist.
+        let first = r.register(pid(701), spawned_at()).await;
+        r.deliver(pid(701), ExitStatus::Code(1));
         assert_eq!(code(first.get().await), Some(1));
 
         // Pid recycled. B's spawn instant is read before B runs, as the exec
         // path does; B then exits before its own register lands.
-        let b_spawned_at = Instant::now();
-        r.deliver(pid(701), ExitStatus::Code(2)).await;
+        let b_spawned_at = spawned_at();
+        r.deliver(pid(701), ExitStatus::Code(2));
 
         assert_eq!(
             code(first.get().await),
@@ -792,15 +853,15 @@ mod tests {
 
     /// A stray settled before our spawn is likewise not ours.
     #[tokio::test]
-    async fn claiming_discards_a_stray_reaped_before_the_spawn() {
+    async fn registering_discards_a_stray_reaped_before_the_spawn() {
         let r = bare();
         r.inner
             .lock()
-            .await
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .slots
             .insert(pid(603), stray_slot(ExitStatus::Code(9), expired_at()));
 
-        let slot = r.register(pid(603), Instant::now()).await;
+        let slot = r.register(pid(603), spawned_at()).await;
 
         assert!(
             tokio::time::timeout(Duration::from_millis(200), slot.get())
@@ -823,26 +884,25 @@ mod tests {
     /// `sweep_exits` (or the read guard in `reap_fence`) and this fails.
     /// Phase 3 checks the lock shape: shared for callers, exclusive vs the sweep.
     ///
-    /// This is the only test that touches the process-global `REAP_LOCK`; keep it
-    /// that way so parallel tests cannot perturb the assertions.
+    /// Real-child reaper tests serialize through `reap_test_guard` so their
+    /// waits cannot interfere with this test's fence assertions.
     #[test]
     fn reap_fence_prevents_the_sweep_from_stealing_a_waiters_child() {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::mpsc;
         use std::thread;
 
+        let _test_guard = super::reap_test_lock().blocking_lock();
+
         // ---- Phase 1: unfenced, the sweep steals the child and its owner's
         // wait fails with ECHILD. Order is forced, so this is deterministic.
+        let reaper = bare();
         let mut victim = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg("exit 0")
             .spawn()
             .expect("spawn victim");
-        let victim_pid = victim.id() as i32;
-        while !Reaper::sweep_exits()
-            .iter()
-            .any(|(pid, _)| pid.as_raw() == victim_pid)
-        {
+        while reaper.sweep_exits().is_empty() {
             thread::sleep(Duration::from_millis(10)); // wait for it to exit, then sweep
         }
         let stolen = victim.wait().expect_err("sweep already took this child");
@@ -857,9 +917,10 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let sweeper = {
             let stop = Arc::clone(&stop);
+            let reaper = Arc::clone(&reaper);
             thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
-                    let _ = Reaper::sweep_exits();
+                    let _ = reaper.sweep_exits();
                     thread::yield_now();
                 }
             })
@@ -890,8 +951,9 @@ mod tests {
         let first = reap_fence();
         let second = reap_fence(); // must not block on `first`
         let (tx, rx) = mpsc::channel();
+        let reaper = Arc::clone(&reaper);
         let blocked = thread::spawn(move || {
-            let _ = Reaper::sweep_exits();
+            let _ = reaper.sweep_exits();
             let _ = tx.send(());
         });
         assert!(
@@ -922,7 +984,7 @@ mod tests {
 
         // Read before any deliver, as the exec path does: an exit landing after
         // this instant is ours to adopt, not a recycled pid's leftover.
-        let spawned_at = Instant::now();
+        let spawned_at = spawned_at();
 
         let mut waiters = Vec::new();
         for i in 0..n {
@@ -940,7 +1002,7 @@ mod tests {
         for i in (0..n).rev() {
             let r2 = Arc::clone(&r);
             deliverers.push(tokio::spawn(async move {
-                r2.deliver(pid(1000 + i), ExitStatus::Code(i)).await
+                r2.deliver(pid(1000 + i), ExitStatus::Code(i))
             }));
         }
         for d in deliverers {

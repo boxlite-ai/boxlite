@@ -45,7 +45,7 @@ pub(super) struct CreateBoxRequest {
     #[serde(default)]
     pub network: Option<NetworkSpec>,
     #[serde(default)]
-    pub auto_pause: Option<u32>,
+    pub auto_stop: Option<u32>,
     #[serde(default)]
     pub auto_delete: Option<u32>,
     #[serde(default)]
@@ -78,6 +78,30 @@ pub(super) struct ContainerCapabilitiesRequest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct NetworkSpec {
+    #[serde(default)]
+    pub outbound: Option<OutboundNetworkSpec>,
+    #[serde(flatten)]
+    pub legacy: LegacyNetworkSpec,
+}
+
+impl NetworkSpec {
+    pub(super) fn uses_legacy_fields(&self) -> bool {
+        self.legacy.mode.is_some() || self.legacy.allow_net.is_some()
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct LegacyNetworkSpec {
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub allow_net: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct OutboundNetworkSpec {
     pub mode: String,
     #[serde(default)]
     pub allow_net: Vec<String>,
@@ -95,7 +119,7 @@ pub(super) struct BoxResponse {
     pub cpus: u8,
     pub memory_mib: u32,
     pub labels: HashMap<String, String>,
-    pub auto_pause: u32,
+    pub auto_stop: u32,
     pub auto_delete: u32,
     pub auto_resume: bool,
     /// The status the box's main command exited with, once it has. `None`

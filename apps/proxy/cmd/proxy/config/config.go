@@ -17,6 +17,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type Config struct {
@@ -32,6 +33,11 @@ type Config struct {
 	Redis                 *cache.RedisConfig `envconfig:"REDIS"`
 	PreviewWarningEnabled bool               `envconfig:"PREVIEW_WARNING_ENABLED"`
 	ShutdownTimeoutSec    int                `envconfig:"SHUTDOWN_TIMEOUT_SEC"`
+	OtelLoggingEnabled    bool               `envconfig:"OTEL_LOGGING_ENABLED"`
+	OtelTracingEnabled    bool               `envconfig:"OTEL_TRACING_ENABLED"`
+	OtelEndpoint          string             `envconfig:"OTEL_EXPORTER_OTLP_ENDPOINT"`
+	OtelHeaders           string             `envconfig:"OTEL_EXPORTER_OTLP_HEADERS"`
+	Environment           string             `envconfig:"ENVIRONMENT"`
 	ApiClient             *apiclient.APIClient
 }
 
@@ -98,7 +104,7 @@ func GetConfig() (*Config, error) {
 	config.ApiClient = apiclient.NewAPIClient(clientConfig)
 
 	config.ApiClient.GetConfig().HTTPClient = &http.Client{
-		Transport: http.DefaultTransport,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
 	}
 
 	ctx := context.Background()
@@ -140,4 +146,23 @@ func GetConfig() (*Config, error) {
 	}
 
 	return config, nil
+}
+
+func (c *Config) GetOtelHeaders() map[string]string {
+	headers := map[string]string{}
+	for _, pair := range strings.Split(c.OtelHeaders, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+
+		k, v, found := strings.Cut(pair, "=")
+		if !found {
+			continue
+		}
+
+		headers[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+
+	return headers
 }

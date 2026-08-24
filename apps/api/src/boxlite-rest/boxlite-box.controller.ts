@@ -76,9 +76,10 @@ export class BoxliteBoxController {
         entrypoint: req.body?.entrypoint,
         cmd: req.body?.cmd,
         detach: req.body?.detach,
-        auto_pause: req.body?.auto_pause,
+        auto_stop: req.body?.auto_stop,
         auto_delete: req.body?.auto_delete,
         auto_resume: req.body?.auto_resume,
+        network: req.body?.network,
       }),
     },
   })

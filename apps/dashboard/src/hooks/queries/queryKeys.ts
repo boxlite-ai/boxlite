@@ -30,11 +30,11 @@ export const queryKeys = {
     usage: {
       overview: (organizationId: string) =>
         [...queryKeys.organization.all, organizationId, 'usage', 'overview'] as const,
-      current: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'usage', 'current'] as const,
-      past: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'usage', 'past'] as const,
+      series: (organizationId: string, params: object) =>
+        [...queryKeys.organization.all, organizationId, 'usage', 'series', params] as const,
     },
 
-    tier: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'tier'] as const,
+    plan: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'plan'] as const,
     wallet: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'wallet'] as const,
   },
   user: {
@@ -43,7 +43,8 @@ export const queryKeys = {
   },
   billing: {
     all: ['billing'] as const,
-    tiers: () => [...queryKeys.billing.all, 'tiers'] as const,
+    plans: () => [...queryKeys.billing.all, 'plans'] as const,
+    usagePrices: () => [...queryKeys.billing.all, 'usage-prices'] as const,
     emails: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'emails'] as const,
     portalUrl: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'portal-url'] as const,
     checkoutUrl: (organizationId: string) => [...queryKeys.billing.all, organizationId, 'checkout-url'] as const,
@@ -80,6 +81,7 @@ export const queryKeys = {
     all: ['boxes'] as const,
     detail: (organizationId: string, boxId: string) =>
       [...queryKeys.boxes.all, organizationId, boxId, 'detail'] as const,
+    runningCount: (organizationId: string) => [...queryKeys.boxes.all, organizationId, 'running-count'] as const,
     terminalSession: (boxId: string) => [...queryKeys.boxes.all, boxId, 'terminal-session'] as const,
   },
   telemetry: {

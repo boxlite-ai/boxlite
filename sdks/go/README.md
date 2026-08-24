@@ -66,6 +66,30 @@ func main() {
 }
 ```
 
+### Archive Export and Import
+
+```go
+archivePath, err := box.Export(ctx, "/var/lib/my-app/archives")
+if err != nil {
+	log.Fatal(err)
+}
+
+// An empty name uses the same unnamed-box behavior as Create without
+// WithName. The imported box receives a new ID and starts stopped.
+restored, err := rt.Import(ctx, archivePath, "")
+if err != nil {
+	log.Fatal(err)
+}
+defer restored.Close()
+```
+
+A local runtime treats the archive as trusted because local applications own
+both the runtime and archive. A REST runtime uploads the file and relies on the
+server's untrusted-upload policy.
+
+Export and Import never delete the archive. The caller owns its retention and
+must explicitly remove it when it is no longer needed.
+
 ### Runtime Image Management
 
 ```go
@@ -112,20 +136,24 @@ for _, image := range cached {
   ```
 
 Port publication is local-only. Remote runtimes reject it with guidance to use
-the existing network tunnel API. Each tunnel handle represents one connection.
+the existing network tunnel API. Each tunnel handle is one-shot.
 OCI `EXPOSE` metadata does not publish ports.
 
 ## Service Tunnels
 
-The same one-connection workflow works with local and remote runtimes:
+The same route workflow works with local and remote runtimes:
 
 - `box.Network() (*Network, error)` returns box-scoped network operations.
-- `network.Tunnel(ctx, port) (*BoxTunnel, error)` prepares one TCP connection.
-- `tunnel.Endpoint() (BoxEndpoint, error)` returns a remote URI or borrowed local file descriptor.
-- `tunnel.Connect(ctx) (net.Conn, error)` consumes the tunnel's single connection.
+- `network.Tunnel(ctx, port) (*BoxTunnel, error)` prepares a one-shot tunnel.
+- `TCPListenAddress(host, port)` and `UnixListenAddress(path)` return validated
+  standard `net.Addr` values for `tunnel.Forward(ctx, addr)`. The returned
+  `TunnelForwarder` has `Addr() net.Addr`, `Wait(ctx) error`, and repeatable
+  `Close() error`; canceling a wait context does not close the listener.
+- `tunnel.URI() (string, error)` returns the public URL of a remotely served tunnel, or an empty string for a local one.
+- `tunnel.Connect(ctx) (net.Conn, error)` consumes the prepared connection.
 
-Call `Tunnel` again for each additional or concurrent connection, and close the
-returned `net.Conn`. This differs from `WithPort`, which creates a persistent,
+Choose `Connect` or `Forward`; a forwarder prepares fresh tunnels for later
+clients. This differs from `WithPort`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 
 ## Development

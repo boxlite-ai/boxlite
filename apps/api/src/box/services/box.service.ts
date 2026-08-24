@@ -12,8 +12,9 @@ import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
+import { RunnerState } from '../enums/runner-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
-import { RunnerService } from './runner.service'
+import { GetRunnerParams, RunnerService } from './runner.service'
 import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
@@ -32,7 +33,6 @@ import { BoxStartedEvent } from '../events/box-started.event'
 import { BoxDesiredStateUpdatedEvent } from '../events/box-desired-state-updated.event'
 import { BoxStoppedEvent } from '../events/box-stopped.event'
 import { OrganizationService } from '../../organization/services/organization.service'
-import { OrganizationUsageService, PendingBoxReservation } from '../../organization/services/organization-usage.service'
 import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
 import { OrganizationSuspendedBoxStoppedEvent } from '../../organization/events/organization-suspended-box-stopped.event'
 import { TypedConfigService } from '../../config/typed-config.service'
@@ -50,11 +50,15 @@ import {
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { RedisLockProvider, withRedisLockLease } from '../common/redis-lock.provider'
 import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { validateMountPaths, validateSubpaths } from '../utils/volume-mount-path-validation.util'
 import { BoxRepository } from '../repositories/box.repository'
+import { getRunnerAssignmentLockKey } from '../utils/lock-key.util'
+import { Job } from '../entities/job.entity'
+import { JobService } from './job.service'
+import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { PortPreviewUrlDto, SignedPortPreviewUrlDto } from '../dto/port-preview-url.dto'
 import { RegionService } from '../../region/services/region.service'
 import { BoxCreatedEvent } from '../events/box-create.event'
@@ -76,8 +80,8 @@ import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import {
   AUTO_DELETE_DISABLED,
-  AUTO_PAUSE_DISABLED,
-  DEFAULT_AUTO_PAUSE_SECONDS,
+  AUTO_STOP_DISABLED,
+  DEFAULT_AUTO_STOP_SECONDS,
   DEFAULT_AUTO_RESUME,
 } from '../constants/box-lifecycle.constants'
 
@@ -103,17 +107,64 @@ export class BoxService {
     private readonly warmPoolService: BoxWarmPoolService,
     private readonly eventEmitter: EventEmitter2,
     private readonly organizationService: OrganizationService,
-    private readonly organizationUsageService: OrganizationUsageService,
     private readonly runnerAdapterFactory: RunnerAdapterFactory,
     private readonly redisLockProvider: RedisLockProvider,
     @InjectRedis() private readonly redis: Redis,
     private readonly regionService: RegionService,
     private readonly boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
     private readonly boxActivityService: BoxActivityService,
+    @InjectRepository(Job)
+    private readonly jobRepository: Repository<Job>,
+    private readonly jobService: JobService,
   ) {}
 
   protected getLockKey(id: string): string {
     return `box:${id}:state-change`
+  }
+
+  private async persistWithRunnerAssignmentFence(
+    box: Box,
+    runnerParams: GetRunnerParams,
+    persist: () => Promise<Box>,
+  ): Promise<Box> {
+    const excludedRunnerIds = [...(runnerParams.excludedRunnerIds ?? [])]
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const runner = await this.runnerService.getRandomAvailableRunner({ ...runnerParams, excludedRunnerIds })
+      const lockKey = getRunnerAssignmentLockKey(runner.id)
+      const lease = await this.redisLockProvider.acquireLease(lockKey, 30)
+      if (!lease) {
+        excludedRunnerIds.push(runner.id)
+        continue
+      }
+
+      let committed: Box | null = null
+      try {
+        const inserted = await withRedisLockLease(lease, async (signal) => {
+          const currentRunner = await this.runnerService.findOneUncachedOrFail(runner.id)
+          if (currentRunner.draining || currentRunner.state !== RunnerState.READY) {
+            excludedRunnerIds.push(runner.id)
+            return null
+          }
+
+          signal.throwIfAborted()
+          box.runnerId = currentRunner.id
+          committed = await persist()
+          return committed
+        })
+        if (inserted) {
+          return inserted
+        }
+      } catch (error) {
+        // Once insert committed, returning the entity keeps CREATED event handling
+        // consistent even if the lease is lost while releasing.
+        if (committed) {
+          return committed
+        }
+        throw error
+      }
+    }
+
+    throw new BadRequestError('No runner remained available while assigning the box')
   }
 
   private assertBoxNotErrored(box: Box): void {
@@ -138,25 +189,17 @@ export class BoxService {
     box.mem = warmPoolItem.mem
     box.disk = warmPoolItem.disk
 
-    // TODO(image-rewrite): box image resolution removed with the image subsystem; rebuild here.
-    const runner = await this.runnerService.getRandomAvailableRunner({
-      regions: [box.region],
-      boxClass: box.class,
-    })
-
-    box.runnerId = runner.id
     box.pending = true
 
-    await this.boxRepository.insert(box)
-    return box
+    return this.persistWithRunnerAssignmentFence(
+      box,
+      { regions: [box.region], boxClass: box.class },
+      () => this.boxRepository.insert(box),
+    )
   }
 
   async create(createBoxDto: CreateBoxDto, organization: Organization): Promise<BoxDto> {
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
-
-    // Released on the failure path; on success the box's CREATED/STATE_UPDATED event
-    // realizes the reservation into current usage.
-    let quotaReservation: PendingBoxReservation | null = null
 
     try {
       const boxClass = this.getValidatedOrDefaultClass(createBoxDto.class)
@@ -174,21 +217,17 @@ export class BoxService {
       // Restrict box creation to the supported pinned images; reject anything else
       // at the request boundary (defaults undefined -> base image).
       const image = assertSupportedImage(createBoxDto.image)
+      const requiresFreshBoxForNetworkPolicy =
+        createBoxDto.networkBlockAll !== undefined ||
+        createBoxDto.networkAllowList !== undefined ||
+        organization.boxLimitedNetworkEgress
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
-
-      quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
-        organization,
-        cpu,
-        mem,
-        disk,
-        gpu,
-      )
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
         await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
-      } else if (image) {
+      } else if (image && !requiresFreshBoxForNetworkPolicy) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec
         //  before creating a fresh one.
         const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
@@ -213,11 +252,6 @@ export class BoxService {
         }
       }
 
-      const runner = await this.runnerService.getRandomAvailableRunner({
-        regions: [region.id],
-        boxClass,
-      })
-
       const box = new Box(region.id, createBoxDto.name)
 
       box.organizationId = organization.id
@@ -239,6 +273,8 @@ export class BoxService {
 
       if (createBoxDto.networkBlockAll !== undefined) {
         box.networkBlockAll = createBoxDto.networkBlockAll
+      } else if (organization.boxLimitedNetworkEgress) {
+        box.networkBlockAll = true
       }
 
       if (createBoxDto.networkAllowList !== undefined) {
@@ -246,11 +282,11 @@ export class BoxService {
       }
 
       const lifecyclePolicy = this.resolveLifecyclePolicy({
-        autoPause: createBoxDto.autoPause,
+        autoStop: createBoxDto.autoStop,
         autoDelete: createBoxDto.autoDelete,
         autoResume: createBoxDto.autoResume,
       })
-      box.autoPause = lifecyclePolicy.autoPause
+      box.autoStop = lifecyclePolicy.autoStop
       box.autoDelete = lifecyclePolicy.autoDelete
       box.autoResume = lifecyclePolicy.autoResume
 
@@ -258,18 +294,22 @@ export class BoxService {
         box.volumes = this.resolveVolumes(createBoxDto.volumes)
       }
 
-      box.runnerId = runner.id
       box.pending = true
 
       // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),
       // falling back to "cozy-otter-{boxId}" if it collides with the per-org
       // @Unique(['organizationId', 'name']) constraint.
-      const insertedBox = createBoxDto.name
-        ? await this.boxRepository.insert(box)
-        : await persistWithGeneratedBoxName(box.id, (name) => {
-            box.name = name
-            return this.boxRepository.insert(box)
-          })
+      const insertedBox = await this.persistWithRunnerAssignmentFence(
+        box,
+        { regions: [region.id], boxClass },
+        () =>
+          createBoxDto.name
+            ? this.boxRepository.insert(box)
+            : persistWithGeneratedBoxName(box.id, (name) => {
+                box.name = name
+                return this.boxRepository.insert(box)
+              }),
+      )
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
@@ -277,10 +317,6 @@ export class BoxService {
 
       return this.toBoxDto(insertedBox)
     } catch (error) {
-      if (quotaReservation) {
-        await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
-      }
-
       if (error.code === '23505') {
         throw new ConflictException(
           createBoxDto.name
@@ -307,11 +343,11 @@ export class BoxService {
     }
 
     const lifecyclePolicy = this.resolveLifecyclePolicy({
-      autoPause: createBoxDto.autoPause,
+      autoStop: createBoxDto.autoStop,
       autoDelete: createBoxDto.autoDelete,
       autoResume: createBoxDto.autoResume,
     })
-    updateData.autoPause = lifecyclePolicy.autoPause
+    updateData.autoStop = lifecyclePolicy.autoStop
     updateData.autoDelete = lifecyclePolicy.autoDelete
     updateData.autoResume = lifecyclePolicy.autoResume
 
@@ -325,21 +361,6 @@ export class BoxService {
 
     if (!warmPoolBox.runnerId) {
       throw new BoxError('Runner not found for warm pool box')
-    }
-
-    if (
-      createBoxDto.networkBlockAll !== undefined ||
-      createBoxDto.networkAllowList !== undefined ||
-      organization.boxLimitedNetworkEgress
-    ) {
-      const runner = await this.runnerService.findOneOrFail(warmPoolBox.runnerId)
-      const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-      await runnerAdapter.updateNetworkSettings(
-        warmPoolBox.id,
-        createBoxDto.networkBlockAll,
-        createBoxDto.networkAllowList,
-        organization.boxLimitedNetworkEgress,
-      )
     }
 
     // Resolve the name at persist time. A caller-provided name updates in one
@@ -553,15 +574,63 @@ export class BoxService {
     return this.getExpectedDesiredStateForState(state) !== undefined
   }
 
+  private getStartupJobTypeForState(state: BoxState): JobType | undefined {
+    switch (state) {
+      case BoxState.CREATING:
+        return JobType.CREATE_BOX
+      case BoxState.STARTING:
+        return JobType.START_BOX
+      default:
+        return undefined
+    }
+  }
+
+  /**
+   * The box's own startup job, if it was claimed by its runner and has since
+   * stopped making progress.
+   *
+   * "Stalled" is measured from when the runner claimed the job, because that
+   * is what a lost completion callback looks like from here: claimed, never
+   * closed. A job still within the window is assumed to be running normally,
+   * and an unclaimed (PENDING) job has no runner to have lost anything.
+   */
+  private async findStalledStartupJob(box: Box): Promise<Job | null> {
+    const startupJobType = this.getStartupJobTypeForState(box.state)
+    if (!startupJobType || !box.runnerId) {
+      return null
+    }
+
+    const stallSeconds = this.configService.getOrThrow('boxSync.startConfirmationStallSeconds')
+    const claimedBefore = new Date(Date.now() - stallSeconds * 1000)
+
+    return this.jobRepository.findOne({
+      where: {
+        runnerId: box.runnerId,
+        resourceType: ResourceType.BOX,
+        resourceId: box.id,
+        type: startupJobType,
+        status: JobStatus.IN_PROGRESS,
+        startedAt: LessThan(claimedBefore),
+      },
+      order: { createdAt: 'DESC' },
+    })
+  }
+
   async findByRunnerId(runnerId: string, states?: BoxState[], skipReconcilingBoxes?: boolean): Promise<Box[]> {
     const where: FindOptionsWhere<Box> = { runnerId }
     if (states && states.length > 0) {
-      // Validate that all states have corresponding desired states
-      states.forEach((state) => {
-        if (!this.hasValidDesiredState(state)) {
-          throw new BadRequestError(`State ${state} does not have a corresponding desired state`)
-        }
-      })
+      // Only the skip filter needs a state to have a corresponding desired
+      // state — it is defined as "state already matches desired state". Asking
+      // for a transitional state is a legitimate query on its own (a runner
+      // reconciling a startup whose job completion was lost does exactly
+      // that), so the requirement belongs to the filter, not to the parameter.
+      if (skipReconcilingBoxes) {
+        states.forEach((state) => {
+          if (!this.hasValidDesiredState(state)) {
+            throw new BadRequestError(`State ${state} does not have a corresponding desired state`)
+          }
+        })
+      }
       where.state = In(states)
     }
 
@@ -852,34 +921,16 @@ export class BoxService {
 
     this.organizationService.assertOrganizationIsNotSuspended(organization)
 
-    // A stopped box holds only disk; starting it re-adds compute and a running slot,
-    // so re-check the org quota. excludeBoxId keeps the box's own disk from being
-    // double counted. Realized into current usage once the box leaves STOPPED.
-    const quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
-      organization,
-      box.cpu,
-      box.mem,
-      box.disk,
-      box.gpu,
-      box.id,
-    )
-
     const updateData: Partial<Box> = {
       pending: true,
       desiredState: BoxDesiredState.STARTED,
       authToken: nanoid(32).toLocaleLowerCase(),
     }
 
-    let updatedBox: Box
-    try {
-      updatedBox = await this.boxRepository.updateWhere(box.id, {
-        updateData,
-        whereCondition: { pending: false, state: box.state },
-      })
-    } catch (error) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
-      throw error
-    }
+    const updatedBox = await this.boxRepository.updateWhere(box.id, {
+      updateData,
+      whereCondition: { pending: false, state: box.state },
+    })
 
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
 
@@ -901,27 +952,8 @@ export class BoxService {
       return box
     }
 
-    // Auto-resume also brings a stopped box back to running, so it must honor the
-    // org quota just like start(). Released if the box does not actually start.
-    const quotaReservation = await this.organizationUsageService.validateOrganizationQuotas(
-      organization,
-      box.cpu,
-      box.mem,
-      box.disk,
-      box.gpu,
-      box.id,
-    )
-
-    let updated: Box
-    try {
-      updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
-    } catch (error) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
-      throw error
-    }
-
+    const updated = await this.boxRepository.conditionalStartForProxy(box.id, organization.id)
     if (!updated) {
-      await this.organizationUsageService.rollbackPendingUsage(organization.id, quotaReservation)
       return this.findOneByIdOrName(box.id, organization.id)
     }
 
@@ -985,7 +1017,6 @@ export class BoxService {
     if (runner.apiVersion === '2') {
       // TODO: we need "recovering" state that can be set after calling recover
       // Once in recovering, we abort further processing and let the manager/job handler take care of it
-      // (Also, since desiredState would be STARTED, we need to check the quota)
       throw new ForbiddenException('Recovering boxes with runner API version 2 is not supported')
     }
 
@@ -1014,7 +1045,7 @@ export class BoxService {
     })
 
     // Now that box is in STOPPED state, use the normal start flow
-    // This handles quota validation, pending usage, event emission, etc.
+    // This handles state validation and event emission.
     return await this.start(box.id, organization)
   }
 
@@ -1206,7 +1237,7 @@ export class BoxService {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
     const updateData: Partial<Box> = {
-      autoPause: this.minutesToSeconds(interval),
+      autoStop: this.minutesToSeconds(interval),
     }
 
     return await this.boxRepository.update(box.id, { updateData, entity: box })
@@ -1272,7 +1303,31 @@ export class BoxService {
 
     //  only allow updating the state of started | stopped boxes
     if (![BoxState.STARTED, BoxState.STOPPED].includes(box.state)) {
-      throw new BadRequestError('Box is not in a valid state to be updated')
+      // One exception: a runner reporting STARTED for a box we still show as
+      // coming up. That means its startup job finished on the runner but the
+      // completion never reached us. Believe it only once the job has stopped
+      // making progress on its own — until then the normal callback is still
+      // the better answer, and we say nothing rather than reject a runner that
+      // is telling the truth.
+      if (newState !== BoxState.STARTED || box.desiredState !== BoxDesiredState.STARTED) {
+        throw new BadRequestError('Box is not in a valid state to be updated')
+      }
+
+      const stalledStartupJob = await this.findStalledStartupJob(box)
+      if (!stalledStartupJob) {
+        this.logger.debug(`Box ${boxId} start not yet confirmable; startup job still progressing`)
+        return
+      }
+
+      // Completing the job is what moves the box: the normal completion
+      // handler owns the STARTED transition, the pending flag, the activity
+      // stamp, the state-change event, and releasing the box's Redis lock.
+      // Doing any of that here instead would fork that logic.
+      this.logger.warn(
+        `Completing stalled startup job ${stalledStartupJob.id} for box ${boxId} from runner-reported state`,
+      )
+      await this.jobService.updateJobStatus(stalledStartupJob.id, JobStatus.COMPLETED)
+      return
     }
 
     if (box.desiredState == BoxDesiredState.DESTROYED) {
@@ -1375,26 +1430,26 @@ export class BoxService {
     return interval * 60
   }
 
-  private resolveLifecyclePolicy(input: { autoPause?: number; autoDelete?: number; autoResume?: boolean }): {
-    autoPause: number
+  private resolveLifecyclePolicy(input: { autoStop?: number; autoDelete?: number; autoResume?: boolean }): {
+    autoStop: number
     autoDelete: number
     autoResume: boolean
   } {
-    const autoPause = input.autoPause ?? DEFAULT_AUTO_PAUSE_SECONDS
+    const autoStop = input.autoStop ?? DEFAULT_AUTO_STOP_SECONDS
     const autoDelete = input.autoDelete ?? AUTO_DELETE_DISABLED
     const autoResume = input.autoResume ?? DEFAULT_AUTO_RESUME
 
-    if (!Number.isInteger(autoPause) || autoPause < AUTO_PAUSE_DISABLED) {
-      throw new BadRequestError('Auto-pause interval must be a non-negative integer number of seconds')
+    if (!Number.isInteger(autoStop) || autoStop < AUTO_STOP_DISABLED) {
+      throw new BadRequestError('Auto-stop interval must be a non-negative integer number of seconds')
     }
     if (!Number.isInteger(autoDelete) || autoDelete < AUTO_DELETE_DISABLED) {
       throw new BadRequestError('Auto-delete interval must be a non-negative integer number of seconds')
     }
-    if (autoDelete > 0 && autoDelete <= autoPause) {
-      throw new BadRequestError('Auto-delete interval must be greater than auto-pause interval')
+    if (autoDelete > 0 && autoDelete <= autoStop) {
+      throw new BadRequestError('Auto-delete interval must be greater than auto-stop interval')
     }
 
-    return { autoPause, autoDelete, autoResume }
+    return { autoStop, autoDelete, autoResume }
   }
 
   private resolveNetworkAllowList(networkAllowList: string): string {

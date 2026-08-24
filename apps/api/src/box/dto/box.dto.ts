@@ -170,13 +170,13 @@ export class BoxDto {
   recoverable?: boolean
 
   @ApiPropertyOptional({
-    description: 'Auto-pause interval in seconds (0 means disabled)',
+    description: 'Auto-stop interval in seconds (0 means disabled)',
     example: 900,
     type: 'integer',
     required: false,
   })
   @IsOptional()
-  autoPause?: number
+  autoStop?: number
 
   @ApiPropertyOptional({
     description: 'Auto-delete interval in seconds (0 means disabled)',
@@ -274,7 +274,7 @@ export class BoxDto {
       desiredState: box.desiredState,
       errorReason: box.errorReason,
       recoverable: box.recoverable,
-      autoPause: box.autoPause,
+      autoStop: box.autoStop,
       autoDelete: box.autoDelete,
       autoResume: box.autoResume,
       class: box.class,

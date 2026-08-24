@@ -1,0 +1,3 @@
+runtime: nodejs
+main: index.ts
+description: Mandatory BoxLite Runner lifecycle and identity policy

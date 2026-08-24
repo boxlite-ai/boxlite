@@ -176,6 +176,7 @@ export class BoxliteProxyController {
       res,
       next,
       USER_OPERATION,
+      { proxyTimeoutMs: 0 },
     )
   }
 
@@ -217,7 +218,7 @@ export class BoxliteProxyController {
     res: Response,
     next: NextFunction,
     policy: ProxyActivityPolicy,
-    opts?: { ws?: boolean },
+    opts?: { ws?: boolean; proxyTimeoutMs?: number },
   ) {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     if (!box) {
@@ -227,10 +228,27 @@ export class BoxliteProxyController {
     if (policy.activity) {
       // Persist activity before the readiness gate. The lifecycle sweeper rechecks
       // this Redis-buffered timestamp after taking its state lock, closing the
-      // request-vs-AutoPause race without holding a lock through cold start.
+      // request-vs-AutoStop race without holding a lock through cold start.
       await this.boxService
         .updateLastActivityAt(box.id, new Date())
         .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
+    }
+
+    if (policy.activity && typeof box.autoStop === 'number' && box.autoStop > 0) {
+      // A long-running operation (a file upload/download, a streaming exec) is
+      // still activity for its whole lifetime, not just its first request.
+      // Refresh the idle timer periodically so the AutoStop sweeper does not
+      // reap the box mid-transfer; stop once the response completes or errors.
+      const stopHeartbeat = this.startActivityHeartbeat(box.id, box.autoStop)
+      let stopped = false
+      const stop = (): void => {
+        if (stopped) return
+        stopped = true
+        stopHeartbeat()
+      }
+      res.once('close', stop)
+      res.once('finish', stop)
+      res.once('error', stop)
     }
 
     if (policy.autoResume && box.autoResume) {
@@ -260,9 +278,23 @@ export class BoxliteProxyController {
           fixRequestBody(proxyReq, originalReq)
         },
       },
-      proxyTimeout: 5 * 60 * 1000,
+      proxyTimeout: opts?.proxyTimeoutMs ?? 5 * 60 * 1000,
     }
 
     return createProxyMiddleware(proxyOptions)(req, res, next)
+  }
+
+  private startActivityHeartbeat(boxId: string, autoStopSeconds: number): () => void {
+    // Half the autoStop window (in ms) so the idle deadline can never lapse
+    // between two beats, however the sweeper samples it. Redis writes are
+    // throttled by the activity service's own per-box lock.
+    const intervalMs = autoStopSeconds * 500
+    const timer = setInterval(() => {
+      void this.boxService
+        .updateLastActivityAt(boxId, new Date())
+        .catch((err) => this.logger.warn(`updateLastActivityAt heartbeat failed for ${boxId}: ${err}`))
+    }, intervalMs)
+    timer.unref?.()
+    return () => clearInterval(timer)
   }
 }

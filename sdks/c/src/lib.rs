@@ -8,6 +8,7 @@
 #![allow(clippy::too_many_arguments)]
 
 mod advanced_options;
+mod archive;
 mod box_handle;
 mod copy;
 mod error;
@@ -46,6 +47,7 @@ pub type CBoxliteRuntime = runtime::RuntimeHandle;
 pub type CBoxHandle = box_handle::BoxHandle;
 pub type CBoxNetworkHandle = network::BoxNetworkHandle;
 pub type CBoxTunnelHandle = network::BoxTunnelHandle;
+pub type CTunnelForwarderHandle = network::TunnelForwarderHandle;
 pub type CBoxliteImageHandle = images::ImageHandle;
 pub type CBoxliteVolumeHandle = volumes::VolumeHandle;
 pub type CBoxliteOptions = options::OptionsHandle;

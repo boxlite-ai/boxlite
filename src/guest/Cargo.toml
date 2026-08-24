@@ -20,7 +20,7 @@ base64 = "0.22"
 bytes = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-nix = { version = "0.29", features = ["mount", "process", "fs", "sched", "socket", "poll", "user"] }
+nix = { version = "0.29", features = ["mount", "process", "fs", "dir", "sched", "socket", "poll", "user"] }
 async-trait = "0.1"
 uuid = { version = "1.10", features = ["v4"] }
 tonic = "0.12"
@@ -37,7 +37,7 @@ russh-sftp = "2.3.0"
 procfs = "0.18.0"
 tokio-vsock = { version = "0.7", features = ["tonic012"] }
 libcontainer = { version = "0.6", default-features = false, features = ["v2", "libseccomp"] }
-oci-spec = "0.6"
+oci-spec = "0.9"
 rtnetlink = "0.14"
 futures = "0.3"
 

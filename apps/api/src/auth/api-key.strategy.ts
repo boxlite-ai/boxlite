@@ -76,6 +76,13 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
       }
     }
 
+    const billingApiKey = this.configService.get('billing.apiKey')
+    if (billingApiKey && billingApiKey === token) {
+      return {
+        role: 'billing',
+      }
+    }
+
     try {
       let apiKey = await this.getApiKeyCache(token)
       if (!apiKey) {

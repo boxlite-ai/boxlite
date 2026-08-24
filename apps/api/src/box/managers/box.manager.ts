@@ -24,6 +24,7 @@ import { BoxStoppedEvent } from '../events/box-stopped.event'
 import { BoxStartedEvent } from '../events/box-started.event'
 import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import { BoxCreatedEvent } from '../events/box-create.event'
+import { Box } from '../entities/box.entity'
 
 import { WithInstrumentation, WithSpan } from '../../common/decorators/otel.decorator'
 
@@ -40,7 +41,6 @@ import { BoxRepository } from '../repositories/box.repository'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { sanitizeBoxError } from '../utils/sanitize-error.util'
-import { Box } from '../entities/box.entity'
 
 @Injectable()
 export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown {
@@ -95,9 +95,9 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
               desiredState: BoxDesiredState.STARTED,
             })
             .andWhere('box.pending != true')
-            .andWhere('box."autoPause" != 0')
+            .andWhere('box."autoStop" != 0')
             .andWhere(
-              'COALESCE(activity."lastActivityAt", box."updatedAt") < NOW() - INTERVAL \'1 second\' * box."autoPause"',
+              'COALESCE(activity."lastActivityAt", box."updatedAt") < NOW() - INTERVAL \'1 second\' * box."autoStop"',
             )
             .orderBy('COALESCE(activity."lastActivityAt", box."updatedAt")', 'ASC')
             .limit(100)
@@ -114,9 +114,9 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
               try {
                 // Activity is buffered in Redis before the periodic DB flush.
                 // Recheck after taking the state lock so a recent Exec/Files
-                // call cannot be paused based on a stale SQL timestamp.
+                // call cannot be stopped based on a stale SQL timestamp.
                 const lastActivityAt = await this.boxActivityService.getLastActivityAt(box.id)
-                if (lastActivityAt && Date.now() - lastActivityAt.getTime() < box.autoPause * 1000) {
+                if (lastActivityAt && Date.now() - lastActivityAt.getTime() < box.autoStop * 1000) {
                   return
                 }
 
@@ -125,16 +125,14 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
                   desiredState: BoxDesiredState.STOPPED,
                 }
 
-                this.logger.log(
-                  `Auto-pausing box ${box.id}: autoPause=${box.autoPause}s, autoDelete=${box.autoDelete}s`,
-                )
+                this.logger.log(`Auto-stopping box ${box.id}: autoStop=${box.autoStop}s, autoDelete=${box.autoDelete}s`)
                 await this.boxRepository.updateWhere(box.id, {
                   updateData,
                   whereCondition: {
                     pending: false,
                     state: box.state,
                     desiredState: BoxDesiredState.STARTED,
-                    autoPause: box.autoPause,
+                    autoStop: box.autoStop,
                   },
                 })
 
@@ -333,7 +331,10 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
       })
 
       while (new Date().getTime() - startedAt.getTime() <= 10000) {
-        if ([BoxState.DESTROYED, BoxState.RESIZING].includes(box.state) || box.state === BoxState.ERROR) {
+        if (
+          [BoxState.DESTROYED, BoxState.RESIZING].includes(box.state) ||
+          (box.state === BoxState.ERROR && box.desiredState !== BoxDesiredState.DESTROYED)
+        ) {
           // Break sync loop if box reaches a terminal state.
           break
         }

@@ -235,7 +235,7 @@ type BoxAPI interface {
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxIdOrName ID or name of the box
-	@param interval Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-pause interval.
+	@param interval Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval.
 	@return BoxAPISetAutostopIntervalRequest
 	*/
 	SetAutostopInterval(ctx context.Context, boxIdOrName string, interval float32) BoxAPISetAutostopIntervalRequest
@@ -2448,7 +2448,7 @@ SetAutostopInterval Set box auto-stop interval
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxIdOrName ID or name of the box
- @param interval Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-pause interval.
+ @param interval Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval.
  @return BoxAPISetAutostopIntervalRequest
 */
 func (a *BoxAPIService) SetAutostopInterval(ctx context.Context, boxIdOrName string, interval float32) BoxAPISetAutostopIntervalRequest {

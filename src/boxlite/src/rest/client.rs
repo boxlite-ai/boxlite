@@ -18,6 +18,8 @@ use crate::runtime::auth::Principal;
 
 /// Re-request a token once it is within this leeway of `expires_at`.
 const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
+/// File transfers cannot outlive the runner's 24-hour box lifetime cap.
+const FILE_REQUEST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const TUNNEL_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 type TunnelConnector =
@@ -64,6 +66,7 @@ impl ApiClient {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(300))
+            .connect_timeout(std::time::Duration::from_secs(300))
             .build()
             .map_err(|e| BoxliteError::Config(format!("failed to create HTTP client: {}", e)))?;
         let tunnel_connector = hyper_rustls::HttpsConnectorBuilder::new()
@@ -358,7 +361,7 @@ impl ApiClient {
     pub(crate) async fn connect_box_network_tunnel(
         &self,
         uri: &str,
-    ) -> BoxliteResult<tokio::io::DuplexStream> {
+    ) -> BoxliteResult<hyper_util::rt::TokioIo<hyper::upgrade::Upgraded>> {
         use http_body_util::Empty;
         use hyper::{Method, Request, Uri};
         use hyper_util::rt::TokioIo;
@@ -399,12 +402,11 @@ impl ApiClient {
         let upgraded = hyper::upgrade::on(response)
             .await
             .map_err(|e| BoxliteError::Network(format!("CONNECT upgrade failed: {e}")))?;
-        let (local, mut pump_end) = tokio::io::duplex(64 * 1024);
-        let mut remote = TokioIo::new(upgraded);
-        tokio::spawn(async move {
-            let _ = tokio::io::copy_bidirectional(&mut pump_end, &mut remote).await;
-        });
-        Ok(local)
+        // The upgraded stream is already AsyncRead + AsyncWrite, so hand it
+        // over directly. Bridging it through `tokio::io::duplex` would only buy
+        // a concrete type we already have, at the cost of a buffer, a pump task
+        // and a copy of every byte in both directions.
+        Ok(TokioIo::new(upgraded))
     }
 
     /// Prepare a box service tunnel and return its public descriptor.
@@ -440,13 +442,16 @@ impl ApiClient {
         Ok(descriptor.uri)
     }
 
-    /// Build an authorized request (for custom operations like file upload/download).
+    /// Build an authorized file request bounded by the box lifetime.
     pub async fn authorized_request(
         &self,
         method: Method,
         path: &str,
     ) -> BoxliteResult<RequestBuilder> {
-        let builder = self.http.request(method, self.url(path));
+        let builder = self
+            .http
+            .request(method, self.url(path))
+            .timeout(FILE_REQUEST_TIMEOUT);
         self.authorize(builder).await
     }
 
@@ -645,6 +650,31 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+
+    async fn serve_response_body_on_signal(
+        listener: TcpListener,
+        response_started: oneshot::Sender<()>,
+        finish_body: oneshot::Receiver<()>,
+    ) {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut headers = Vec::new();
+        while !headers.ends_with(b"\r\n\r\n") {
+            headers.push(socket.read_u8().await.unwrap());
+        }
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\n\
+                  Content-Type: application/json\r\n\
+                  Content-Length: 2\r\n\
+                  Connection: close\r\n\r\n{",
+            )
+            .await
+            .unwrap();
+        response_started.send(()).unwrap();
+        finish_body.await.unwrap();
+        let _ = socket.write_all(b"}").await;
+    }
 
     /// Rotating credential with a finite expiry already in the past, so
     /// `current_bearer` must re-request on every call. Proves the cache
@@ -674,6 +704,74 @@ mod tests {
     fn client_with(cred: Arc<dyn Credential>) -> ApiClient {
         let opts = BoxliteRestOptions::new("http://localhost:1").with_credential(cred);
         ApiClient::new(&opts).expect("client")
+    }
+
+    #[tokio::test]
+    async fn file_request_outlives_default_timeout() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (response_started_tx, response_started_rx) = oneshot::channel();
+        let (finish_body_tx, finish_body_rx) = oneshot::channel();
+        let server = tokio::spawn(serve_response_body_on_signal(
+            listener,
+            response_started_tx,
+            finish_body_rx,
+        ));
+
+        let client =
+            ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let request = client
+            .authorized_request(Method::GET, "/boxes/box1/files")
+            .await
+            .unwrap();
+        let response = request.send().await.unwrap();
+
+        response_started_rx.await.unwrap();
+        tokio::time::pause();
+        tokio::time::sleep(Duration::from_secs(301)).await;
+        tokio::time::resume();
+        finish_body_tx.send(()).unwrap();
+
+        let bytes = tokio::time::timeout(Duration::from_secs(5), response.bytes())
+            .await
+            .expect("file response body must arrive after the timeout boundary")
+            .expect("file request must outlive the default 300-second timeout");
+        assert_eq!(bytes.as_ref(), b"{}");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn control_request_keeps_total_timeout() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (response_started_tx, response_started_rx) = oneshot::channel();
+        let (finish_body_tx, finish_body_rx) = oneshot::channel();
+        let server = tokio::spawn(serve_response_body_on_signal(
+            listener,
+            response_started_tx,
+            finish_body_rx,
+        ));
+
+        let client =
+            ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let control_request =
+            tokio::spawn(async move { client.get::<serde_json::Value>("/slow").await });
+
+        response_started_rx.await.unwrap();
+        tokio::time::pause();
+        tokio::time::sleep(Duration::from_secs(301)).await;
+        tokio::time::resume();
+
+        let error = control_request
+            .await
+            .unwrap()
+            .expect_err("control request must retain its total timeout");
+        assert!(
+            matches!(&error, BoxliteError::Network(detail) if detail.contains("timed out")),
+            "control request must fail because its total timeout elapsed, got {error:?}"
+        );
+        finish_body_tx.send(()).unwrap();
+        server.await.unwrap();
     }
 
     #[tokio::test]
@@ -710,6 +808,19 @@ mod tests {
         let mut response = [0; 4];
         stream.read_exact(&mut response).await.unwrap();
         assert_eq!(&response, b"ping");
+
+        // A remotely served connection has no descriptor to lend or surrender:
+        // hyper owns the socket and may hold already-read tunnel bytes.
+        let connection = crate::litebox::BoxConnection::new(stream);
+        assert_eq!(connection.raw_fd(), None);
+        let error = connection
+            .into_fd()
+            .expect_err("an upgraded remote stream has no descriptor");
+        assert!(
+            error.to_string().contains("no local descriptor"),
+            "unexpected error: {error}"
+        );
+
         server.await.unwrap();
     }
 

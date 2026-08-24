@@ -495,10 +495,9 @@ Each job is dispatched to a goroutine and handled in
 Supported job types:
 
 ```
-CREATE_SANDBOX, START_SANDBOX, STOP_SANDBOX, DESTROY_SANDBOX,
-RESIZE_SANDBOX, RECOVER_SANDBOX, UPDATE_SANDBOX_NETWORK_SETTINGS,
-CREATE_BACKUP,
-BUILD_ARTIFACT, PULL_ARTIFACT, REMOVE_ARTIFACT, INSPECT_ARTIFACT_IN_REGISTRY
+CREATE_BOX, START_BOX, STOP_BOX, DESTROY_BOX,
+EXPORT_BOX, IMPORT_BOX,
+ROLLBACK_EXPORT_BOX, ROLLBACK_IMPORT_BOX, DISCARD_EXPORTED_BOX
 ```
 
 After the handler returns, `updateJobStatus` reports `COMPLETED` or
@@ -582,7 +581,7 @@ Optional features are toggled by env vars:
   `BOXLITE_SHUTDOWN_GRACE` — exec reaping timers.
 
 The runner is normally bootstrapped by the SST EC2 user-data script;
-see `apps/infra/sst.config.ts:buildRunnerUserData`. For local
+see `apps/infra/stack/runners.ts:buildRunnerUserData`. For local
 development against the Rust SDK directly, see `boxlite serve` at
 [`src/cli/src/commands/serve/`](../../src/cli/src/commands/serve/)
 (Rust REST server with parity coverage).

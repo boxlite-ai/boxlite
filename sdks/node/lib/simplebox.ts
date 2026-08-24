@@ -15,15 +15,20 @@ import type {
   JsBox,
   JsBoxInfo,
   JsBoxOptions,
+  JsVolumeSpec,
   NativeBoxConnection,
   NativeBoxTunnel,
+  NativeTunnelForwarder,
+  SocketAddress,
   JsExecStderr,
   JsExecStdout,
 } from "./native-contracts.js";
 
+export type { SocketAddress } from "./native-contracts.js";
+
 type BoxLike = Omit<JsBox, "network"> & {
   readonly network: {
-    tunnel(port: number): Promise<NativeBoxTunnel | BoxTunnel>;
+    tunnel(port: number): Promise<NativeBoxTunnel>;
   };
 };
 
@@ -211,12 +216,8 @@ export interface SimpleBoxOptions {
   /** Environment variables */
   env?: Record<string, string>;
 
-  /** Volume mounts */
-  volumes?: Array<{
-    hostPath: string;
-    guestPath: string;
-    readOnly?: boolean;
-  }>;
+  /** Volume mounts: local hostPath or managed source such as volume://vol_123. */
+  volumes?: JsVolumeSpec[];
 
   /** Port mappings */
   ports?: Array<{
@@ -286,26 +287,48 @@ export class NetworkHandle {
   /** @internal */
   constructor(private readonly ensureBox: () => Promise<BoxLike>) {}
 
-  /** Establish and return a tunnel handle for a port inside this box. */
+  /** Establish and return a one-shot tunnel for a port inside this box. */
   async tunnel(port: number): Promise<BoxTunnel> {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new RangeError("port must be an integer between 1 and 65535");
+    }
     const box = await this.ensureBox();
-    const tunnel = await box.network.tunnel(port);
-    return tunnel instanceof BoxTunnel ? tunnel : new BoxTunnel(tunnel);
+    return new BoxTunnel(await box.network.tunnel(port));
+  }
+}
+
+export class TunnelForwarder {
+  constructor(private readonly forwarder: NativeTunnelForwarder) {}
+
+  localAddr(): SocketAddress {
+    return this.forwarder.localAddr();
+  }
+
+  wait(): Promise<void> {
+    return this.forwarder.wait();
+  }
+
+  close(): Promise<void> {
+    return this.forwarder.close();
   }
 }
 
 export class BoxTunnel {
-  /** Wrap the native tunnel handle for a box service port. */
+  /** Wrap a prepared native tunnel handle. */
   constructor(private readonly tunnel: NativeBoxTunnel) {}
 
-  /** Return the public endpoint for this service. */
-  endpoint(): string | number {
-    return this.tunnel.endpoint();
+  /** Public URL of a remotely served tunnel, or null for a local one. */
+  uri(): string | null {
+    return this.tunnel.uri();
   }
 
   /** Consume the tunnel and return its bidirectional byte stream. */
   async connect(): Promise<NativeBoxConnection> {
     return this.tunnel.connect();
+  }
+
+  async forward(listen: SocketAddress): Promise<TunnelForwarder> {
+    return new TunnelForwarder(await this.tunnel.forward(listen));
   }
 }
 
@@ -745,7 +768,7 @@ export class SimpleBox {
     return box.metrics();
   }
 
-  /** Open a raw bidirectional socket to a port inside this box. */
+  /** Establish and return a one-shot tunnel to a port inside this box. */
   async tunnel(port: number): Promise<BoxTunnel> {
     return this.network.tunnel(port);
   }

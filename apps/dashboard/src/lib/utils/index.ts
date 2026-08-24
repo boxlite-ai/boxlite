@@ -120,6 +120,11 @@ export function formatAmount(amount: number): string {
   }).format((amount ?? 0) / 100)
 }
 
+/** Whole-dollar rendering of a cents amount — plan prices and quotas have no fractional part. */
+export function formatWholeDollars(cents: number): string {
+  return formatMoney((cents ?? 0) / 100, { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+}
+
 export function formatMoney(
   value: number,
   options?: { minimumFractionDigits?: number; maximumFractionDigits?: number },

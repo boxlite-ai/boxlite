@@ -71,10 +71,10 @@ export class BoxResponseDto {
   labels: Record<string, string>
 
   @ApiProperty({
-    description: 'Idle time in seconds before AutoPause; 0 disables AutoPause',
+    description: 'Idle time in seconds before AutoStop; 0 disables AutoStop',
     example: 900,
   })
-  auto_pause: number
+  auto_stop: number
 
   @ApiProperty({
     description: 'Stopped time in seconds before AutoDelete; 0 disables AutoDelete',

@@ -1,3 +1,4 @@
+use crate::images::OverrideStat;
 use crate::util;
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use std::io::Write;
@@ -60,24 +61,44 @@ fn calculate_dir_size(dir: &Path) -> BoxliteResult<u64> {
 }
 
 /// Calculate appropriate disk size with ext4 overhead.
-fn calculate_disk_size(source: &Path) -> u64 {
-    let dir_size = calculate_dir_size(source).unwrap_or(DEFAULT_DIR_SIZE_BYTES);
+fn calculate_disk_size(source: &Path, reserve_bytes: u64) -> u64 {
+    disk_size_with_overhead(
+        calculate_dir_size(source).unwrap_or(DEFAULT_DIR_SIZE_BYTES),
+        reserve_bytes,
+    )
+}
 
+/// Apply ext4 overhead to a measured tree size and clamp to the minimum image.
+///
+/// Split from [`calculate_disk_size`] so the unprivileged path — which measures
+/// the tree during its own single scan — shares one definition of the sizing
+/// policy instead of restating the arithmetic.
+///
+/// `reserve_bytes` is extra room for content the *caller* adds to the image
+/// after it is built (e.g. `GuestRootfsManager` injects the `boxlite-guest`
+/// binary into a copy of this image once it exists — an unstripped debug
+/// build runs ~231 MiB, well over the free space a floor-sized image
+/// otherwise has). Added once, verbatim, after the tree-size overhead
+/// multiplier: it's an exact byte count, not an estimate that needs the same
+/// safety margin as the measured tree.
+fn disk_size_with_overhead(dir_size: u64, reserve_bytes: u64) -> u64 {
     // ext4 overhead:
     // - Metadata (superblock, block groups, inode tables): ~1-5%
     // - Journal: 64MB
     // - We set reserved blocks to 0% via mke2fs
     // Use 1.1x multiplier (10% overhead) plus 64MB for journal
     // Testing showed ~0.5% overhead needed, 10% provides safety margin
-    let size_with_overhead =
-        dir_size * SIZE_MULTIPLIER_NUM / SIZE_MULTIPLIER_DEN + JOURNAL_OVERHEAD_BYTES;
+    let size_with_overhead = dir_size * SIZE_MULTIPLIER_NUM / SIZE_MULTIPLIER_DEN
+        + JOURNAL_OVERHEAD_BYTES
+        + reserve_bytes;
 
     // Minimum 256MB for small images
     let final_size = size_with_overhead.max(MIN_DISK_SIZE_BYTES);
 
     tracing::debug!(
-        "Calculated disk size: dir_size={}MB, with_overhead={}MB, final={}MB",
+        "Calculated disk size: dir_size={}MB, reserve={}MB, with_overhead={}MB, final={}MB",
         dir_size / (1024 * 1024),
+        reserve_bytes / (1024 * 1024),
         size_with_overhead / (1024 * 1024),
         final_size / (1024 * 1024)
     );
@@ -96,8 +117,89 @@ struct WidenedPerm {
     mode: u32,
 }
 
-/// Temporarily grant the owner read (and search, for directories) on entries the
-/// unprivileged owner cannot otherwise read, so `mke2fs -d` can copy them.
+/// The ownership one inode must carry inside the image.
+struct InodeOwner {
+    /// Absolute path inside the ext4 image, e.g. `/var/dex`.
+    ext4_path: String,
+    uid: u32,
+    gid: u32,
+}
+
+/// Everything the unprivileged build needs from the source tree, gathered in a
+/// single pass: the size estimate and the ownership to stamp into each inode.
+struct SourceScan {
+    /// Per-inode ownership for the debugfs pass. The source root is excluded —
+    /// `mke2fs -E root_owner=0:0` already sets the image's root inode.
+    owners: Vec<InodeOwner>,
+    /// Entries with no readable `override_stat` record, which default to 0:0.
+    unrecorded: usize,
+    total_blocks: u64,
+    entry_count: u64,
+}
+
+impl SourceScan {
+    /// Bytes the tree occupies on ext4 before overhead: block storage plus one
+    /// inode per entry. Feed to [`disk_size_with_overhead`].
+    fn dir_size(&self) -> u64 {
+        self.total_blocks * BLOCK_SIZE + self.entry_count * INODE_SIZE
+    }
+
+    fn account(&mut self, meta: &std::fs::Metadata) {
+        self.entry_count += 1;
+        if meta.is_file() {
+            // Each file needs at least one block, round up
+            self.total_blocks += meta.len().div_ceil(BLOCK_SIZE).max(1);
+        } else if meta.is_dir() {
+            // Directories need at least one block
+            self.total_blocks += 1;
+        }
+    }
+
+    /// Record the ownership `path` must end up with inside the image.
+    ///
+    /// Unprivileged extraction cannot `chown`, so `LayerExtractor` parks the tar
+    /// header's uid/gid in the `override_stat` xattr and `mke2fs -d` records the
+    /// *host* uid instead. Entries with no record — the guest rootfs, injected
+    /// binaries — stay 0:0, which is what those paths require.
+    ///
+    /// A *present-but-malformed* record is different: it is the only copy of
+    /// that file's real ownership, so it must abort the build rather than
+    /// silently default to 0:0 like a genuinely absent one — see
+    /// `OverrideStat::read_xattr`'s doc comment for why `Ok(None)` and `Err`
+    /// are deliberately distinct.
+    fn record_owner(&mut self, source_root: &Path, path: &Path) -> BoxliteResult<()> {
+        let rel = path.strip_prefix(source_root).unwrap_or(path);
+        if rel.as_os_str().is_empty() {
+            return Ok(()); // the source root maps to the image root
+        }
+
+        let (uid, gid) = match OverrideStat::read_xattr(path).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to read ownership xattr on {}: {}",
+                path.display(),
+                e
+            ))
+        })? {
+            Some(stat) => (stat.uid, stat.gid),
+            None => {
+                self.unrecorded += 1;
+                (0, 0)
+            }
+        };
+
+        self.owners.push(InodeOwner {
+            // Absolute path in ext4 (starting with /)
+            ext4_path: format!("/{}", rel.display()),
+            uid,
+            gid,
+        });
+        Ok(())
+    }
+}
+
+/// Walk the source tree once, temporarily granting the owner read (and search,
+/// for directories) on entries the unprivileged owner cannot otherwise read, and
+/// gathering the size estimate and declared ownership along the way.
 ///
 /// e2fsprogs opens every source file as the calling user; a `0000` file (e.g.
 /// `/etc/gshadow` in RHEL UBI images) is denied because POSIX consults only the
@@ -108,28 +210,44 @@ struct WidenedPerm {
 /// tree and, authoritatively, inside the image via debugfs: `mke2fs` records the
 /// *widened* mode, so the image must be corrected afterward.
 ///
+/// Sizing and the ownership read are fused into this walk rather than run as
+/// their own traversals because the ordering is load-bearing: both need the same
+/// owner-read bit `mke2fs` needs, so both must follow the widen *for that entry*
+/// — which one pass guarantees by construction.
+///
 /// Entries are appended as they are mutated, so a partial failure still leaves the
 /// caller's guard owning every already-widened entry. Walks top-down: a `0000`
 /// directory cannot be listed until its own owner read+search bits are restored,
 /// so each directory is widened before descent.
-fn widen_unreadable_owner(source: &Path, widened: &mut Vec<WidenedPerm>) -> BoxliteResult<()> {
-    widen_dir_recursive(source, source, widened)
+fn scan_source_tree(source: &Path, widened: &mut Vec<WidenedPerm>) -> BoxliteResult<SourceScan> {
+    let mut scan = SourceScan {
+        owners: Vec::new(),
+        unrecorded: 0,
+        total_blocks: 0,
+        entry_count: 0,
+    };
+    scan_dir_recursive(source, source, &mut scan, widened)?;
+    Ok(scan)
 }
 
-fn widen_dir_recursive(
+fn scan_dir_recursive(
     source_root: &Path,
     dir: &Path,
+    scan: &mut SourceScan,
     widened: &mut Vec<WidenedPerm>,
 ) -> BoxliteResult<()> {
     use std::os::unix::fs::MetadataExt;
 
-    // A directory needs owner read+search (0o500) before we can list it.
-    let dir_mode = std::fs::symlink_metadata(dir)
-        .map_err(|e| BoxliteError::Storage(format!("Failed to stat {}: {}", dir.display(), e)))?
-        .mode();
+    // A directory needs owner read+search (0o500) before we can list it, read its
+    // xattr, or descend.
+    let dir_meta = std::fs::symlink_metadata(dir)
+        .map_err(|e| BoxliteError::Storage(format!("Failed to stat {}: {}", dir.display(), e)))?;
+    let dir_mode = dir_meta.mode();
     if dir_mode & 0o500 != 0o500 {
         record_and_widen(source_root, dir, dir_mode, dir_mode | 0o500, widened)?;
     }
+    scan.account(&dir_meta);
+    scan.record_owner(source_root, dir)?;
 
     let entries = std::fs::read_dir(dir).map_err(|e| {
         BoxliteError::Storage(format!("Failed to read dir {}: {}", dir.display(), e))
@@ -144,13 +262,13 @@ fn widen_dir_recursive(
             BoxliteError::Storage(format!("Failed to stat {}: {}", path.display(), e))
         })?;
         let file_type = meta.file_type();
-        if file_type.is_symlink() {
-            // Symlink perms are irrelevant; readlink needs no read bit.
+        if file_type.is_dir() {
+            scan_dir_recursive(source_root, &path, scan, widened)?;
             continue;
         }
-        if file_type.is_dir() {
-            widen_dir_recursive(source_root, &path, widened)?;
-        } else if file_type.is_file() && meta.mode() & 0o400 == 0 {
+        // Symlink perms are irrelevant; readlink needs no read bit, so symlinks
+        // are never widened — but they still occupy an inode and carry ownership.
+        if file_type.is_file() && meta.mode() & 0o400 == 0 {
             record_and_widen(
                 source_root,
                 &path,
@@ -159,6 +277,8 @@ fn widen_dir_recursive(
                 widened,
             )?;
         }
+        scan.account(&meta);
+        scan.record_owner(source_root, &path)?;
     }
     Ok(())
 }
@@ -230,15 +350,16 @@ impl Drop for SourceModeGuard {
 /// from a source directory, which is much simpler than using libext2fs.
 ///
 /// Size is automatically calculated based on directory contents with
-/// appropriate overhead for ext4 metadata, journal, and reserved blocks.
+/// appropriate overhead for ext4 metadata, journal, and reserved blocks, plus
+/// `reserve_bytes` of extra headroom for whatever the caller injects into the
+/// image afterward (0 when nothing will be).
 ///
 /// Returns a non-persistent Disk (will be cleaned up on drop).
-pub fn create_ext4_from_dir(source: &Path, output_path: &Path) -> BoxliteResult<Disk> {
-    let size_bytes = calculate_disk_size(source);
-
-    // With -b 4096, mke2fs expects size in 4KB blocks
-    let size_blocks = size_bytes / 4096;
-
+pub fn create_ext4_from_dir(
+    source: &Path,
+    output_path: &Path,
+    reserve_bytes: u64,
+) -> BoxliteResult<Disk> {
     let output_str = output_path.to_str().ok_or_else(|| {
         BoxliteError::Storage(format!("Invalid output path: {}", output_path.display()))
     })?;
@@ -249,16 +370,32 @@ pub fn create_ext4_from_dir(source: &Path, output_path: &Path) -> BoxliteResult<
 
     // `mke2fs -d` opens every source file as the current user. When unprivileged,
     // an unreadable file (mode 0000, e.g. /etc/gshadow in RHEL UBI images) is
-    // denied, aborting the build. Temporarily widen owner-read on such entries;
-    // the guard restores the source modes on every exit path (drop), and the
-    // original modes are written back into the image via debugfs below. As root
-    // the read bit is bypassed, so skip the widen.
+    // denied, aborting the build. One scan widens owner-read on such entries and
+    // collects the size and declared ownership as it goes; the guard restores the
+    // source modes on every exit path (drop), and the original modes are written
+    // back into the image via debugfs below. As root the read bit is bypassed and
+    // `mke2fs -d` applies real ownership, so neither is needed.
     let mut source_modes = SourceModeGuard {
         widened: Vec::new(),
     };
-    if unsafe { libc::geteuid() } != 0 {
-        widen_unreadable_owner(source, &mut source_modes.widened)?;
-    }
+    let scan = if unsafe { libc::geteuid() } != 0 {
+        Some(scan_source_tree(source, &mut source_modes.widened)?)
+    } else {
+        None
+    };
+
+    // The scan measured each entry right after widening it. Sizing from a
+    // separate walk would miss a `0000` directory, and `calculate_disk_size`
+    // swallows that failure by falling back to a fixed default — discarding the
+    // measurement for the whole tree, not just the unreadable subtree, and
+    // under-sizing the image for `mke2fs`.
+    let size_bytes = match &scan {
+        Some(scan) => disk_size_with_overhead(scan.dir_size(), reserve_bytes),
+        None => calculate_disk_size(source, reserve_bytes),
+    };
+
+    // With -b 4096, mke2fs expects size in 4KB blocks
+    let size_blocks = size_bytes / 4096;
 
     let mke2fs = get_mke2fs_path();
 
@@ -303,25 +440,79 @@ pub fn create_ext4_from_dir(source: &Path, output_path: &Path) -> BoxliteResult<
         )));
     }
 
-    // Normalize ownership to 0:0 and restore widened modes in the image. This
-    // re-walks the source while it is still widened, so it must run before the
-    // guard drops and restores the source modes.
-    normalize_inodes_with_debugfs(output_path, source, &source_modes.widened)?;
+    // Apply the ownership and modes gathered by the scan. Rootless only: as root
+    // `mke2fs -d` already wrote real ownership and nothing was widened.
+    if let Some(scan) = &scan {
+        normalize_inodes_with_debugfs(output_path, scan, &source_modes.widened)?;
+    }
 
     let disk = Disk::new(output_path.to_path_buf(), DiskFormat::Ext4, false);
     // `source_modes` drops here, restoring the widened source entries bottom-up.
     Ok(disk)
 }
 
-/// Normalize inode metadata in the ext4 image via debugfs: set every file's
-/// ownership to 0:0, and restore the original mode on any entry whose owner-read
-/// bit was temporarily widened so `mke2fs` could read it.
+/// Check a `debugfs -w -f -` batch-script invocation actually succeeded,
+/// including per-command failures the process exit code alone can't see.
 ///
-/// `mke2fs -E root_owner=0:0` only sets the root inode, and `mke2fs -d` records
-/// the *widened* (readable) mode for entries we relaxed — both are corrected here.
+/// `debugfs -f -` logs a per-command failure (e.g. `sif` on a path it can't
+/// resolve, or `write` on a source file that vanished — both via `com_err`) to
+/// the same stderr stream as its one-line startup banner, then continues to
+/// the next command rather than aborting. So a clean exit code isn't proof
+/// every command landed; anything beyond that first banner line means a
+/// command failed silently. `what` names the operation for the error message
+/// (e.g. `"normalizing {path}"`, `"injecting {src} -> {dst}"`).
+fn check_debugfs_output(what: &str, output: &std::process::Output) -> BoxliteResult<()> {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(BoxliteError::Storage(format!(
+            "debugfs failed (exit {:?}) while {}: {}",
+            output.status.code(),
+            what,
+            stderr
+        )));
+    }
+
+    let after_banner = match output.stderr.iter().position(|&b| b == b'\n') {
+        Some(newline) => &output.stderr[newline + 1..],
+        None => &output.stderr[..],
+    };
+    if !after_banner.is_empty() {
+        return Err(BoxliteError::Storage(format!(
+            "debugfs reported unexpected output while {}: {}",
+            what,
+            String::from_utf8_lossy(after_banner)
+        )));
+    }
+
+    Ok(())
+}
+
+/// Quote a path passed through debugfs's command parser.
+///
+/// Whitespace is significant to that parser, so even an otherwise ordinary
+/// OCI path such as `launcher manifest.xml` must be one quoted argument. The
+/// parser does not provide an escape for a literal double quote or a line
+/// break inside a quoted argument; reject those paths instead of emitting a
+/// malformed (or additional) command.
+fn quote_debugfs_path(path: &str) -> BoxliteResult<String> {
+    if path.contains(['"', '\n', '\r']) {
+        return Err(BoxliteError::Storage(format!(
+            "debugfs cannot safely address path {path:?}"
+        )));
+    }
+    Ok(format!("\"{path}\""))
+}
+
+/// Normalize inode metadata in the ext4 image via debugfs: give every file the
+/// ownership its layer declared (0:0 when none was recorded), and restore the
+/// original mode on any entry whose owner-read bit was temporarily widened so
+/// `mke2fs` could read it.
+///
+/// `mke2fs -d` records the *host* uid/gid and the *widened* (readable) mode — and
+/// `-E root_owner=0:0` only fixes the root inode — so both are corrected here.
 fn normalize_inodes_with_debugfs(
     image_path: &Path,
-    source_dir: &Path,
+    scan: &SourceScan,
     widened: &[WidenedPerm],
 ) -> BoxliteResult<()> {
     // Skip if already running as root - mke2fs creates files with current uid/gid
@@ -334,47 +525,28 @@ fn normalize_inodes_with_debugfs(
     }
 
     let start = std::time::Instant::now();
+    let owners = &scan.owners;
 
-    // Collect all paths relative to source_dir
-    let mut paths = Vec::new();
-    for entry in WalkDir::new(source_dir).follow_links(false) {
-        let entry =
-            entry.map_err(|e| BoxliteError::Storage(format!("Failed to walk directory: {}", e)))?;
-
-        // Get path relative to source_dir
-        let rel_path = entry
-            .path()
-            .strip_prefix(source_dir)
-            .unwrap_or(entry.path());
-
-        // Skip root (already handled by root_owner=0:0)
-        if rel_path.as_os_str().is_empty() {
-            continue;
-        }
-
-        // Convert to absolute path in ext4 (starting with /)
-        let ext4_path = format!("/{}", rel_path.display());
-        paths.push(ext4_path);
-    }
-
-    if paths.is_empty() && widened.is_empty() {
+    if owners.is_empty() && widened.is_empty() {
         tracing::debug!("No inodes to normalize");
         return Ok(());
     }
 
-    // Build debugfs commands to set uid=0 and gid=0 for each file
+    // Build debugfs commands to set the owning uid/gid for each file
     // Using sif (set inode field) command: sif <path> <field> <value>
     let mut commands = String::new();
-    for path in &paths {
+    for owner in owners {
+        let ext4_path = quote_debugfs_path(&owner.ext4_path)?;
         // sif sets inode field by path
-        commands.push_str(&format!("sif {} uid 0\n", path));
-        commands.push_str(&format!("sif {} gid 0\n", path));
+        commands.push_str(&format!("sif {} uid {}\n", ext4_path, owner.uid));
+        commands.push_str(&format!("sif {} gid {}\n", ext4_path, owner.gid));
     }
     // Restore the original mode on entries we widened for mke2fs. The value is
     // the full st_mode incl. type bits (e.g. a 0000 regular file -> 0100000),
     // matching the `sif … mode 0100555` form used by inject_file_into_ext4.
     for w in widened {
-        commands.push_str(&format!("sif {} mode 0{:o}\n", w.ext4_path, w.mode));
+        let ext4_path = quote_debugfs_path(&w.ext4_path)?;
+        commands.push_str(&format!("sif {} mode 0{:o}\n", ext4_path, w.mode));
     }
 
     let debugfs = get_debugfs_path();
@@ -405,19 +577,12 @@ fn normalize_inodes_with_debugfs(
     // This is the only pass that writes the original 0000 modes back into the
     // image, so a failure must abort the build rather than yield an image with
     // wrong inode metadata.
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(BoxliteError::Storage(format!(
-            "debugfs inode normalization failed (exit {:?}) on {}: {}",
-            output.status.code(),
-            image_path.display(),
-            stderr
-        )));
-    }
+    check_debugfs_output(&format!("normalizing {}", image_path.display()), &output)?;
 
     tracing::info!(
-        "Normalized {} inodes to 0:0 ({} mode-restored) in {:?}",
-        paths.len(),
+        "Normalized {} inodes ({} without recorded ownership → 0:0, {} mode-restored) in {:?}",
+        owners.len(),
+        scan.unrecorded,
         widened.len(),
         duration
     );
@@ -468,15 +633,10 @@ pub fn inject_file_into_ext4(
         .wait_with_output()
         .map_err(|e| BoxliteError::Storage(format!("Failed to wait for debugfs: {}", e)))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(BoxliteError::Storage(format!(
-            "debugfs injection failed for {} -> {}: {}",
-            host_file.display(),
-            guest_path,
-            stderr
-        )));
-    }
+    check_debugfs_output(
+        &format!("injecting {} -> {}", host_file.display(), guest_path),
+        &output,
+    )?;
 
     tracing::debug!(
         "Injected {} into ext4 image at /{}",
@@ -531,6 +691,130 @@ fn build_inject_commands(host_file_str: &str, guest_path: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn quote_debugfs_path_preserves_whitespace_and_rejects_command_delimiters() {
+        assert_eq!(
+            quote_debugfs_path("/usr/lib/launcher manifest.xml").unwrap(),
+            "\"/usr/lib/launcher manifest.xml\""
+        );
+        assert!(quote_debugfs_path("/tmp/quote\"file").is_err());
+        assert!(quote_debugfs_path("/tmp/line\nbreak").is_err());
+    }
+
+    /// A `sif` command targeting a path debugfs cannot resolve makes the whole
+    /// batch script exit 0 — e2fsprogs's `-f -` mode logs the failure via
+    /// `com_err` to the same stderr stream as the one-line startup banner, and
+    /// moves on to the next command rather than aborting. The doc comment on
+    /// `normalize_inodes_with_debugfs` states "a failure must abort the build",
+    /// but checking only `output.status.success()` cannot see this class of
+    /// failure at all.
+    ///
+    /// Verified empirically before writing this test: 20 failing `sif` commands
+    /// against a real image still produced `exit=0`, with each failure adding a
+    /// `"<path>: File not found by ext2_lookup"` line to stderr, after the fixed
+    /// one-line banner.
+    #[test]
+    fn normalize_inodes_with_debugfs_fails_on_unresolvable_path() {
+        if util::find_binary("mke2fs").is_err() || util::find_binary("debugfs").is_err() {
+            eprintln!("skipping: mke2fs/debugfs not found (run `make runtime:debug`)");
+            return;
+        }
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: root skips debugfs normalization entirely");
+            return;
+        }
+
+        let src_root = tempfile::tempdir().expect("source tempdir");
+        let src = src_root.path().join("rootfs");
+        std::fs::create_dir_all(&src).expect("mkdir rootfs");
+        std::fs::write(src.join("real"), b"x").expect("write real");
+
+        let out_root = tempfile::tempdir().expect("output tempdir");
+        let out = out_root.path().join("rootfs.ext4");
+        let _disk = create_ext4_from_dir(&src, &out, 0).expect("ext4 build must succeed");
+
+        // A path that does not exist in the image just built.
+        let scan = SourceScan {
+            owners: vec![InodeOwner {
+                ext4_path: "/does-not-exist".to_string(),
+                uid: 1001,
+                gid: 1001,
+            }],
+            unrecorded: 0,
+            total_blocks: 0,
+            entry_count: 0,
+        };
+
+        let result = normalize_inodes_with_debugfs(&out, &scan, &[]);
+        assert!(
+            result.is_err(),
+            "an unresolvable sif target must fail the build, not silently succeed \
+             with the image left partially unnormalized"
+        );
+    }
+
+    /// A tree larger than `MIN_DISK_SIZE_BYTES` must still build when it
+    /// contains an unreadable (mode `0000`) directory.
+    ///
+    /// `calculate_disk_size` ran *before* `widen_unreadable_owner`, so `WalkDir`
+    /// could not list the `0000` directory and `calculate_dir_size` failed.
+    /// `calculate_disk_size` swallows that with `.unwrap_or(DEFAULT_DIR_SIZE_BYTES)`
+    /// (`:65`), discarding the measurement for the *entire* tree — not just the
+    /// unreadable subtree — and clamping to the 256 MiB floor. `mke2fs` is then
+    /// handed a filesystem too small for the content it is told to copy in.
+    ///
+    /// Sparse source files keep setup cheap; `calculate_dir_size` measures
+    /// `metadata.len()`, and `mke2fs -d` still has to place every byte.
+    ///
+    /// Skipped without e2fsprogs, or as root (root can list a `0000` directory,
+    /// so the mis-sizing never occurs).
+    #[test]
+    fn create_ext4_sizes_tree_containing_unreadable_dir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if util::find_binary("mke2fs").is_err() || util::find_binary("debugfs").is_err() {
+            eprintln!("skipping: mke2fs/debugfs not found (run `make runtime:debug`)");
+            return;
+        }
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: root can list a 0000 directory, so the bug cannot reproduce");
+            return;
+        }
+
+        // Enough content that a correct size must exceed MIN_DISK_SIZE_BYTES.
+        let root = tempfile::tempdir().expect("tempdir");
+        let src = root.path().join("rootfs");
+        let data = src.join("data");
+        std::fs::create_dir_all(&data).expect("mkdir data");
+        for i in 0..200 {
+            let f = std::fs::File::create(data.join(format!("blob{i}"))).expect("create blob");
+            f.set_len(1024 * 1024).expect("size blob"); // sparse 1 MiB
+        }
+
+        let secret = src.join("secret");
+        std::fs::create_dir_all(&secret).expect("mkdir secret");
+        std::fs::write(secret.join("locked"), b"x").expect("write locked");
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod 0000 secret");
+
+        let out_root = tempfile::tempdir().expect("output tempdir");
+        let out = out_root.path().join("rootfs.ext4");
+        let built = create_ext4_from_dir(&src, &out, 0);
+
+        // Restore before asserting so TempDir::drop can always recurse.
+        let _ = std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o755));
+
+        let _disk = built
+            .expect("ext4 build must size the image from the real tree, not the fallback default");
+        let image_len = std::fs::metadata(&out).expect("stat image").len();
+        assert!(
+            image_len > MIN_DISK_SIZE_BYTES,
+            "image must be sized from the ~200 MiB tree, not clamped to the {} MiB floor (got {} MiB)",
+            MIN_DISK_SIZE_BYTES / (1024 * 1024),
+            image_len / (1024 * 1024)
+        );
+    }
+
     /// Regression: building an ext4 image from a tree containing an unreadable
     /// (mode `0000`) file — e.g. `/etc/gshadow` in RHEL UBI images — must
     /// succeed when running unprivileged, and the image must still record the
@@ -575,7 +859,7 @@ mod tests {
 
         // Pre-fix this returns Err (mke2fs aborts on the 0000 file). Bind the
         // returned Disk: it is non-persistent and deletes the image on drop.
-        let _disk = create_ext4_from_dir(&src, &out)
+        let _disk = create_ext4_from_dir(&src, &out, 0)
             .expect("ext4 build must tolerate a 0000-mode source file");
 
         // The image must carry the ORIGINAL 0000 mode (data crosses the
@@ -655,7 +939,7 @@ mod tests {
 
         let out_root = tempfile::tempdir().expect("output tempdir");
         let out = out_root.path().join("rootfs.ext4");
-        let _disk = create_ext4_from_dir(&src, &out).expect("ext4 build must succeed");
+        let _disk = create_ext4_from_dir(&src, &out, 0).expect("ext4 build must succeed");
 
         // The dir restores fine even with the bug (it's restored first).
         assert_eq!(
@@ -673,12 +957,178 @@ mod tests {
         );
     }
 
-    /// The widen pass must handle a `0000` directory: it can't be listed until
-    /// its own owner read+search bits are restored, so the walk has to widen it
-    /// before descending. Records must carry the original full modes (incl. type
-    /// bits) and the in-image paths. No e2fsprogs binaries needed.
+    /// Read `User:`/`Group:` for an in-image path out of `debugfs stat`.
+    fn image_owner(image: &Path, ext4_path: &str) -> (String, String) {
+        let debugfs = get_debugfs_path();
+        let stat = Command::new(&debugfs)
+            .args(["-R", &format!("stat {}", ext4_path)])
+            .arg(image)
+            .output()
+            .expect("run debugfs stat");
+        assert!(
+            stat.status.success(),
+            "debugfs stat {} failed: {}",
+            ext4_path,
+            String::from_utf8_lossy(&stat.stderr)
+        );
+        let out = String::from_utf8_lossy(&stat.stdout);
+        let tokens: Vec<&str> = out.split_whitespace().collect();
+        let field = |name: &str| {
+            tokens
+                .iter()
+                .position(|t| *t == name)
+                .and_then(|i| tokens.get(i + 1))
+                .copied()
+                .unwrap_or_else(|| panic!("no {name} field in debugfs stat {ext4_path}:\n{out}"))
+                .to_string()
+        };
+        (field("User:"), field("Group:"))
+    }
+
+    /// The image must carry the ownership the *layer* declared, not a blanket
+    /// `0:0`.
+    ///
+    /// Unprivileged extraction cannot `chown`, so `LayerExtractor` parks the tar
+    /// header's uid/gid in `user.containers.override_stat`. `mke2fs -d` then
+    /// stamps the *host* uid on every inode, and this module's debugfs pass
+    /// rewrote every inode to `0:0` — so an image whose non-root `USER` depends
+    /// on a layer-chowned directory (dexidp/dex's `/var/dex`, 1001:1001) got it
+    /// `root:root` and could not create its database there.
+    ///
+    /// Entries with no recorded ownership must still land `0:0`, which is what
+    /// keeps the guest-rootfs and injected-binary paths correct.
+    ///
+    /// Skipped when e2fsprogs is absent or running as root (as root the
+    /// extractor `lchown`s for real, so the xattr path never runs).
     #[test]
-    fn widen_unreadable_owner_handles_zero_mode_dir_and_file() {
+    fn create_ext4_applies_override_stat_ownership() {
+        use crate::images::{OverrideFileType, OverrideStat};
+
+        if util::find_binary("mke2fs").is_err() || util::find_binary("debugfs").is_err() {
+            eprintln!("skipping: mke2fs/debugfs not found (run `make runtime:debug`)");
+            return;
+        }
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: must run unprivileged (as root ownership is applied directly)");
+            return;
+        }
+
+        let src_root = tempfile::tempdir().expect("source tempdir");
+        let src = src_root.path().join("rootfs");
+        let dex_dir = src.join("var/dex");
+        std::fs::create_dir_all(&dex_dir).expect("mkdir var/dex");
+        let dex_file = dex_dir.join("keep");
+        std::fs::write(&dex_file, b"x").expect("write keep");
+        std::fs::create_dir_all(src.join("etc")).expect("mkdir etc");
+        std::fs::write(src.join("etc/passwd"), b"root:x:0:0\n").expect("write passwd");
+
+        // Encode through the production writer, exactly as the extractor does.
+        OverrideStat::new(1001, 1001, 0o755, OverrideFileType::Dir)
+            .write_xattr(&dex_dir)
+            .expect("write override_stat on var/dex");
+        OverrideStat::new(1001, 1001, 0o644, OverrideFileType::File)
+            .write_xattr(&dex_file)
+            .expect("write override_stat on var/dex/keep");
+
+        let out_root = tempfile::tempdir().expect("output tempdir");
+        let out = out_root.path().join("rootfs.ext4");
+        let _disk = create_ext4_from_dir(&src, &out, 0).expect("ext4 build must succeed");
+
+        assert_eq!(
+            image_owner(&out, "/var/dex"),
+            ("1001".to_string(), "1001".to_string()),
+            "a layer-chowned directory must keep its declared ownership in the image"
+        );
+        assert_eq!(
+            image_owner(&out, "/var/dex/keep"),
+            ("1001".to_string(), "1001".to_string()),
+            "a layer-chowned file must keep its declared ownership in the image"
+        );
+        assert_eq!(
+            image_owner(&out, "/etc/passwd"),
+            ("0".to_string(), "0".to_string()),
+            "an entry with no recorded ownership must still normalize to 0:0"
+        );
+    }
+
+    /// A malformed `override_stat` xattr must abort the scan, not silently
+    /// default to 0:0.
+    ///
+    /// `OverrideStat::read_xattr` distinguishes a genuinely absent xattr
+    /// (`Ok(None)`, correctly defaults to 0:0) from a present-but-unparseable
+    /// one (`Err`) — but `record_owner` treated both the same, logging a
+    /// warning and defaulting to 0:0 either way. Unprivileged extraction
+    /// can't `chown`, so a layer-declared xattr is the *only* copy of that
+    /// file's real ownership; silently discarding a corrupt one is exactly
+    /// the silent-failure class this file's `check_debugfs_output` already
+    /// guards against one layer down — the scan itself must not repeat it.
+    #[test]
+    fn scan_source_tree_fails_on_malformed_override_stat() {
+        // Matches OverrideStat::CONTAINERS_OVERRIDE_XATTR (private to
+        // images::archive::override_stat) — the containers/storage xattr name,
+        // not expected to ever change.
+        const CONTAINERS_OVERRIDE_XATTR: &str = "user.containers.override_stat";
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let src = root.path().join("rootfs");
+        std::fs::create_dir_all(&src).expect("mkdir rootfs");
+        let f = src.join("file");
+        std::fs::write(&f, b"x").expect("write file");
+        xattr::set(&f, CONTAINERS_OVERRIDE_XATTR, b"not-a-valid-record")
+            .expect("seed malformed xattr");
+
+        let mut widened = Vec::new();
+        let result = scan_source_tree(&src, &mut widened);
+        assert!(
+            result.is_err(),
+            "a malformed override_stat xattr is the only copy of a layer's \
+             declared ownership; the scan must fail, not silently default to 0:0"
+        );
+    }
+
+    /// The scan's size accounting must match the standalone `WalkDir` walk it
+    /// replaced, entry for entry.
+    ///
+    /// `calculate_dir_size` still serves the root path, so the two must not
+    /// drift: a silent divergence here resizes every image built unprivileged.
+    /// Uses a fully readable tree so both can measure the same thing, and covers
+    /// the entry kinds whose accounting differs (file blocks vs. directory block
+    /// vs. symlink, which occupies an inode but no block).
+    #[test]
+    fn scan_source_tree_size_matches_standalone_walk() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let src = root.path().join("rootfs");
+        std::fs::create_dir_all(src.join("etc/nested")).expect("mkdir tree");
+        std::fs::write(src.join("etc/small"), b"x").expect("write small");
+        std::fs::write(src.join("etc/nested/empty"), b"").expect("write empty");
+        // Spans several blocks, so rounding differences would show up.
+        std::fs::write(src.join("etc/nested/big"), vec![0u8; 9000]).expect("write big");
+        symlink("small", src.join("etc/link")).expect("symlink");
+
+        let mut widened = Vec::new();
+        let scan = scan_source_tree(&src, &mut widened).expect("scan must succeed");
+        assert!(widened.is_empty(), "nothing to widen in a readable tree");
+
+        assert_eq!(
+            scan.dir_size(),
+            calculate_dir_size(&src).expect("standalone walk must succeed"),
+            "merged scan must measure the tree exactly as the walk it replaced"
+        );
+    }
+
+    /// The scan must handle a `0000` directory: it can't be listed until its own
+    /// owner read+search bits are restored, so the walk has to widen it before
+    /// descending. Records must carry the original full modes (incl. type bits)
+    /// and the in-image paths.
+    ///
+    /// The same pass also has to *measure* and *record ownership for* entries it
+    /// just widened — the whole reason sizing, ownership and widening share one
+    /// traversal — so those outputs are asserted here too. No e2fsprogs binaries
+    /// needed.
+    #[test]
+    fn scan_source_tree_widens_and_measures_zero_mode_dir_and_file() {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
         let root = tempfile::tempdir().expect("tempdir");
@@ -694,7 +1144,31 @@ mod tests {
             .expect("chmod 0000 dir");
 
         let mut widened = Vec::new();
-        widen_unreadable_owner(&src, &mut widened).expect("widen must succeed as owner");
+        let scan = scan_source_tree(&src, &mut widened).expect("scan must succeed as owner");
+
+        // Content under the 0000 directory is reached, so it is measured: root,
+        // etc, etc/secret, etc/secret/locked.
+        assert_eq!(
+            scan.entry_count, 4,
+            "every entry counted, including the root"
+        );
+        assert!(
+            scan.dir_size() > 0,
+            "a tree reached through a 0000 dir must measure non-zero"
+        );
+
+        // Ownership is recorded for the widened entries, and the source root is
+        // excluded (mke2fs -E root_owner=0:0 owns the image root).
+        let owned: Vec<&str> = scan.owners.iter().map(|o| o.ext4_path.as_str()).collect();
+        assert!(
+            owned.contains(&"/etc/secret"),
+            "0000 dir recorded: {owned:?}"
+        );
+        assert!(
+            owned.contains(&"/etc/secret/locked"),
+            "0000 file recorded: {owned:?}"
+        );
+        assert!(!owned.contains(&"/"), "source root excluded: {owned:?}");
 
         // Dir and file are now owner read/searchable.
         assert_eq!(
@@ -726,6 +1200,117 @@ mod tests {
 
         // Make the tree removable so TempDir can clean up.
         std::fs::set_permissions(&secret_dir, std::fs::Permissions::from_mode(0o700)).ok();
+    }
+
+    /// `inject_file_into_ext4` runs the same `debugfs -w -f -` batch-script
+    /// pattern as `normalize_inodes_with_debugfs`, and has the identical gap: a
+    /// failing `write` (e.g. the host source file vanished) makes every
+    /// subsequent `sif` on that never-created guest path fail too, but the
+    /// whole script still exits 0.
+    ///
+    /// Verified empirically before writing this test: `write` on a nonexistent
+    /// host path produces `"do_write_internal: No such file or directory..."` on
+    /// stderr, followed by three `"File not found by ext2_lookup"` lines (one per
+    /// cascading `sif`), with the process still exiting 0.
+    #[test]
+    fn inject_file_into_ext4_fails_on_missing_host_file() {
+        if util::find_binary("mke2fs").is_err() || util::find_binary("debugfs").is_err() {
+            eprintln!("skipping: mke2fs/debugfs not found (run `make runtime:debug`)");
+            return;
+        }
+
+        let src_root = tempfile::tempdir().expect("source tempdir");
+        let src = src_root.path().join("rootfs");
+        std::fs::create_dir_all(&src).expect("mkdir rootfs");
+        std::fs::write(src.join("real"), b"x").expect("write real");
+
+        let out_root = tempfile::tempdir().expect("output tempdir");
+        let out = out_root.path().join("rootfs.ext4");
+        let _disk = create_ext4_from_dir(&src, &out, 0).expect("ext4 build must succeed");
+
+        let missing_host_file = src_root.path().join("does-not-exist-on-host");
+        let result = inject_file_into_ext4(&out, &missing_host_file, "injected");
+        assert!(
+            result.is_err(),
+            "a missing host source file must fail the injection, not silently \
+             succeed with the guest path never actually written"
+        );
+    }
+
+    /// Write `len` non-zero, non-repeating bytes to `path`.
+    ///
+    /// `debugfs write` (verified empirically before writing this test, against
+    /// a real image) treats a long run of *zero* bytes in the source file as
+    /// sparse and allocates no real ext4 blocks for it at all — a same-length
+    /// all-zero stand-in file would consume no free space and make the
+    /// reproducer below tautologically green regardless of how little room
+    /// the image actually has.
+    fn write_random_file(path: &Path, len: u64) {
+        use std::io::Read;
+
+        let mut urandom = std::fs::File::open("/dev/urandom").expect("open /dev/urandom");
+        let mut limited = (&mut urandom).take(len);
+        let mut out = std::fs::File::create(path).expect("create random payload file");
+        std::io::copy(&mut limited, &mut out).expect("write random payload");
+    }
+
+    /// A guest binary injected *after* the image is built must actually fit.
+    ///
+    /// `create_ext4_from_dir` sizes the image purely from the source tree it
+    /// is given — a near-empty tree lands at the `MIN_DISK_SIZE_BYTES` floor,
+    /// with no headroom budgeted for anything injected afterward. But
+    /// `GuestRootfsManager::build_and_install` (rootfs/guest.rs) copies
+    /// exactly that image and then injects the `boxlite-guest` binary into
+    /// it — an unstripped debug build runs ~231 MiB, well over the ~223 MiB
+    /// of free space a floor-sized image has once mke2fs/journal overhead is
+    /// accounted for (measured empirically against a real image before
+    /// writing this test).
+    ///
+    /// Pre-fix, this fails: `create_ext4_from_dir` has no way to reserve
+    /// headroom, so a same-shape oversized payload cannot fit and
+    /// `inject_file_into_ext4` correctly reports `Err` (`check_debugfs_output`
+    /// above already catches the underlying `debugfs` silent-failure class) —
+    /// proving this is a real, present-day capacity bug, not a hypothetical
+    /// one.
+    #[test]
+    fn create_ext4_from_dir_reserves_headroom_for_post_build_injection() {
+        if util::find_binary("mke2fs").is_err() || util::find_binary("debugfs").is_err() {
+            eprintln!("skipping: mke2fs/debugfs not found (run `make runtime:debug`)");
+            return;
+        }
+
+        let src_root = tempfile::tempdir().expect("source tempdir");
+        let src = src_root.path().join("rootfs");
+        std::fs::create_dir_all(&src).expect("mkdir rootfs");
+        std::fs::write(src.join("real"), b"x").expect("write real");
+
+        // Larger than the ~223 MiB of free space measured on a floor-sized
+        // image with no reserve — comfortably over, well under a real debug
+        // guest binary (~231 MiB).
+        let payload_len = 235 * 1024 * 1024u64;
+        let payload_root = tempfile::tempdir().expect("payload tempdir");
+        let payload = payload_root.path().join("guest-binary-stand-in");
+        write_random_file(&payload, payload_len);
+
+        let out_root = tempfile::tempdir().expect("output tempdir");
+        let out = out_root.path().join("rootfs.ext4");
+        // Exercises the reserve_bytes mechanism itself, at this function's
+        // own level — not the specific value runtime/rt_impl.rs picks (a
+        // fixed constant; see IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES there).
+        // Sized to the payload plus a small fixed margin, not a percentage of
+        // it: the payload length is already exact, unlike the tree-size
+        // estimate `disk_size_with_overhead`'s multiplier compensates for.
+        let reserve_bytes = payload_len + 8 * 1024 * 1024;
+        let _disk =
+            create_ext4_from_dir(&src, &out, reserve_bytes).expect("ext4 build must succeed");
+
+        let result = inject_file_into_ext4(&out, &payload, "boxlite/bin/boxlite-guest");
+        assert!(
+            result.is_ok(),
+            "a guest binary must always fit in the image it is injected into, \
+             but injection into an unpadded floor-sized image failed: {:?}",
+            result.err()
+        );
     }
 
     #[test]

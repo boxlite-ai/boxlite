@@ -196,7 +196,9 @@ pub fn process_whiteouts(dir: &Path) -> BoxliteResult<()> {
 /// The virtio-fs implementation respects the "user.containers.override_stat" attribute.
 ///
 /// Sets directory permissions to 700 and applies user.containers.override_stat
-/// per-file to preserve each file's actual permissions while virtualizing ownership to root (0:0).
+/// per-file to preserve each file's actual permissions. Ownership already recorded
+/// by the layer extractor is carried through unchanged; entries with none recorded
+/// are virtualized to root (0:0).
 /// This ensures setuid binaries and executables maintain their correct permission bits.
 /// Ignores errors on symlinks and special files.
 ///
@@ -207,6 +209,7 @@ pub fn process_whiteouts(dir: &Path) -> BoxliteResult<()> {
 /// * `Ok(())` if permissions and xattr were set successfully
 /// * `Err(...)` if critical operations failed
 pub fn fix_rootfs_permissions(rootfs: &Path) -> BoxliteResult<()> {
+    use crate::images::{OverrideFileType, OverrideStat};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
@@ -235,8 +238,32 @@ pub fn fix_rootfs_permissions(rootfs: &Path) -> BoxliteResult<()> {
         // Get actual mode bits (preserve setuid/setgid/sticky bits)
         let mode = metadata.permissions().mode() & 0o7777;
 
-        // Format as 4-digit octal with leading zeros (e.g., "0:0:0755")
-        let xattr_value = format!("0:0:{:04o}", mode);
+        // Refresh the recorded mode without discarding the recorded ownership.
+        // `LayerExtractor` stores the layer's uid/gid here because unprivileged
+        // extraction cannot `chown`; overwriting it with 0:0 would drop the only
+        // copy before the ext4 builder reads it back. Entries with no prior
+        // record default to root, as before.
+        //
+        // A *present-but-malformed* record must abort instead: it is the only
+        // copy of that file's real ownership, and the `xattr::set` below would
+        // otherwise permanently overwrite it with a fresh 0:0 record — see
+        // `OverrideStat::read_xattr`'s doc comment for why `Ok(None)` and `Err`
+        // are deliberately distinct.
+        let recorded = OverrideStat::read_xattr(path).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to read ownership xattr on {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+        let (uid, gid) = recorded.as_ref().map_or((0, 0), |s| (s.uid, s.gid));
+        let default_type = if metadata.is_dir() {
+            OverrideFileType::Dir
+        } else {
+            OverrideFileType::File
+        };
+        let file_type = recorded.map_or(default_type, |s| s.file_type);
+        let xattr_value = OverrideStat::new(uid, gid, mode, file_type).format();
 
         // Temporarily add write permission if needed to set xattr
         let needs_write = (mode & 0o200) == 0;
@@ -328,5 +355,35 @@ mod tests {
         process_whiteouts(dir).unwrap();
 
         assert!(!dir.join(".wh..wh..opq").exists());
+    }
+
+    /// A malformed `override_stat` xattr must abort `fix_rootfs_permissions`,
+    /// not be silently overwritten with a fresh 0:0 record.
+    ///
+    /// Before this fix, `set_xattr_recursive` treated a read `Err` the same
+    /// as "no record" — defaulting to 0:0 and then calling `xattr::set` with
+    /// that default, permanently destroying the only copy of the file's real
+    /// ownership (unprivileged extraction can't `chown`). This is the sibling
+    /// of the same bug fixed in `disk::ext4::SourceScan::record_owner` — same
+    /// root cause (`OverrideStat::read_xattr`'s `Err` swallowed), reachable
+    /// on the extraction-based rootfs path this function serves.
+    #[test]
+    fn fix_rootfs_permissions_fails_on_malformed_override_stat() {
+        const CONTAINERS_OVERRIDE_XATTR: &str = "user.containers.override_stat";
+
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path();
+        let f = dir.join("file");
+        fs::write(&f, b"x").unwrap();
+        xattr::set(&f, CONTAINERS_OVERRIDE_XATTR, b"not-a-valid-record")
+            .expect("seed malformed xattr");
+
+        let result = fix_rootfs_permissions(dir);
+        assert!(
+            result.is_err(),
+            "a malformed override_stat xattr is the only copy of a file's \
+             declared ownership; fix_rootfs_permissions must fail, not \
+             silently overwrite it with a fresh 0:0 record"
+        );
     }
 }

@@ -1,14 +1,13 @@
 #!/bin/bash
-# Build boxlite-runtime directory with all binaries and libraries
+# Populate cargo's OUT_DIR/runtime with all binaries and libraries
 #
-# This script creates a complete runtime directory that contains everything
+# This script completes the runtime directory that contains everything
 # needed to run BoxLite: shim binary, guest binary, and all FFI libraries.
 #
 # Usage:
-#   ./build-runtime.sh [--dest-dir DIR] [--profile PROFILE]
+#   ./build-runtime.sh [--profile PROFILE]
 #
 # Options:
-#   --dest-dir DIR      Destination directory (default: cargo OUT_DIR/runtime)
 #   --profile PROFILE   Build profile: release or debug (default: release)
 #
 # The runtime directory will contain:
@@ -24,20 +23,15 @@ SCRIPT_DIR="$(cd "$SCRIPT_BUILD_DIR/.." && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-# Capture original working directory before any cd commands
-ORIG_DIR="$(pwd)"
-
 # Print help message
 print_help() {
     cat <<EOF
 Usage: build-runtime.sh [OPTIONS]
 
-Build boxlite-runtime directory with all binaries and libraries.
+Populate cargo's OUT_DIR/runtime with all binaries and libraries.
 
 Options:
-  --dest-dir DIR      Destination directory (default: cargo OUT_DIR/runtime)
   --profile PROFILE   Build profile: release or debug (default: release)
-  --libs-dir DIR      Directory containing FFI libraries (if not provided, will build and collect)
   --help, -h          Show this help message
 
 The runtime directory will contain:
@@ -52,12 +46,6 @@ Examples:
   # Build debug runtime
   ./build-runtime.sh --profile debug
 
-  # Build runtime in custom directory
-  ./build-runtime.sh --dest-dir /tmp/my-runtime
-
-  # Build runtime with pre-collected libraries
-  ./build-runtime.sh --libs-dir /path/to/libs
-
   # Full workflow
   bash scripts/build/build-guest.sh
   bash scripts/build/build-shim.sh
@@ -68,22 +56,12 @@ EOF
 
 # Parse command-line arguments
 parse_args() {
-    DEST_DIR_ARG=""
     PROFILE="release"
-    LIBS_DIR_ARG=""
 
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --dest-dir)
-                DEST_DIR_ARG="$2"
-                shift 2
-                ;;
             --profile)
                 PROFILE="$2"
-                shift 2
-                ;;
-            --libs-dir)
-                LIBS_DIR_ARG="$2"
                 shift 2
                 ;;
             --help|-h)
@@ -103,29 +81,6 @@ parse_args() {
         echo "Invalid profile: $PROFILE"
         echo "Run with --profile release or --profile debug"
         exit 1
-    fi
-
-    # Set destination if provided (otherwise resolved after collect_libraries)
-    if [ -z "$DEST_DIR_ARG" ]; then
-        DEST_DIR=""
-    else
-        # Resolve destination path to absolute path
-        if [[ "$DEST_DIR_ARG" != /* ]]; then
-            DEST_DIR="$ORIG_DIR/$DEST_DIR_ARG"
-        else
-            DEST_DIR="$DEST_DIR_ARG"
-        fi
-    fi
-
-    # Resolve libs directory if provided
-    if [ -n "$LIBS_DIR_ARG" ]; then
-        if [[ "$LIBS_DIR_ARG" != /* ]]; then
-            LIBS_DIR="$ORIG_DIR/$LIBS_DIR_ARG"
-        else
-            LIBS_DIR="$LIBS_DIR_ARG"
-        fi
-    else
-        LIBS_DIR=""
     fi
 }
 
@@ -202,22 +157,6 @@ build_guest() {
 
 # Find and collect FFI libraries
 collect_libraries() {
-    # If caller provided libs directory, use it
-    if [ -n "$LIBS_DIR" ]; then
-        echo ""
-        print_section "Using provided libraries directory..."
-
-        if [ ! -d "$LIBS_DIR" ]; then
-            print_error "Libraries directory not found: $LIBS_DIR"
-            exit 1
-        fi
-
-        RUNTIME_LIBS_DIR="$LIBS_DIR"
-        print_success "Using libraries from: $RUNTIME_LIBS_DIR"
-        return 0
-    fi
-
-    # Otherwise, build and collect libraries
     echo ""
     print_section "Collecting FFI libraries..."
 
@@ -267,47 +206,41 @@ collect_libraries() {
     print_success "Found libraries at: $RUNTIME_LIBS_DIR"
 }
 
-# Create runtime directory and copy all components
+# Add the binaries alongside the libraries cargo already staged
 assemble_runtime() {
     echo ""
     print_section "Assembling runtime directory..."
 
-    if [ "$DEST_DIR" = "$RUNTIME_LIBS_DIR" ]; then
-        # Outputting to cargo OUT_DIR/runtime — libs are already there, just add binaries
-        mkdir -p "$DEST_DIR"
+    # The libraries are already in place — only the binaries are missing
+    mkdir -p "$RUNTIME_LIBS_DIR"
 
-        print_step "Copying boxlite-shim... "
-        cp "$SHIM_BINARY" "$DEST_DIR/"
+    print_step "Copying boxlite-shim... "
+    cp "$SHIM_BINARY" "$RUNTIME_LIBS_DIR/"
+    echo "✓"
+
+    print_step "Copying boxlite-guest... "
+    cp "$GUEST_BINARY" "$RUNTIME_LIBS_DIR/"
+    echo "✓"
+
+    # Guest e2fsprogs tools, embedded under distinct names so they never shadow
+    # the host mke2fs bundled by e2fsprogs-sys. Optional: absent unless `make guest`
+    # (or the CI guest build) produced them.
+    if [ -f "$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/mke2fs" ]; then
+        print_step "Copying guest-mke2fs... "
+        cp "$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/mke2fs" "$RUNTIME_LIBS_DIR/guest-mke2fs"
         echo "✓"
-
-        print_step "Copying boxlite-guest... "
-        cp "$GUEST_BINARY" "$DEST_DIR/"
-        echo "✓"
-    else
-        # Separate destination — full copy
-        rm -rf "$DEST_DIR"
-        mkdir -p "$DEST_DIR"
-
-        # Copy binaries
-        print_step "Copying boxlite-shim... "
-        cp "$SHIM_BINARY" "$DEST_DIR/"
-        echo "✓"
-
-        print_step "Copying boxlite-guest... "
-        cp "$GUEST_BINARY" "$DEST_DIR/"
-        echo "✓"
-
-        # Copy all libraries (preserve symlinks)
-        print_step "Copying libraries... "
-        cp -P "$RUNTIME_LIBS_DIR"/* "$DEST_DIR/" 2>/dev/null || true
+    fi
+    if [ -f "$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/resize2fs" ]; then
+        print_step "Copying guest-resize2fs... "
+        cp "$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/resize2fs" "$RUNTIME_LIBS_DIR/guest-resize2fs"
         echo "✓"
     fi
 
     # Sign shim on macOS (always, to ensure proper entitlements)
-    if [ "$OS" = "macos" ] && [ -f "$DEST_DIR/boxlite-shim" ]; then
+    if [ "$OS" = "macos" ] && [ -f "$RUNTIME_LIBS_DIR/boxlite-shim" ]; then
         echo ""
         print_section "Signing boxlite-shim... "
-        "$SCRIPT_BUILD_DIR/sign.sh" "$DEST_DIR/boxlite-shim"
+        "$SCRIPT_BUILD_DIR/sign.sh" "$RUNTIME_LIBS_DIR/boxlite-shim"
         echo "✓"
     fi
 
@@ -318,17 +251,17 @@ assemble_runtime() {
 show_summary() {
     echo ""
     print_section "Runtime Directory Summary"
-    echo "Location: $DEST_DIR"
+    echo "Location: $RUNTIME_LIBS_DIR"
     echo ""
     echo "Contents:"
-    ls -lh "$DEST_DIR" | tail -n +2 | while read -r line; do
+    ls -lh "$RUNTIME_LIBS_DIR" | tail -n +2 | while read -r line; do
         echo "  $line"
     done
     echo ""
 
     # Show file types
     echo "File types:"
-    for file in "$DEST_DIR"/*; do
+    for file in "$RUNTIME_LIBS_DIR"/*; do
         if [ -f "$file" ]; then
             local filename
             local filetype
@@ -351,12 +284,7 @@ main() {
     build_shim
     build_guest
     collect_libraries
-
-    # Resolve default destination after collect_libraries discovers RUNTIME_LIBS_DIR
-    if [ -z "$DEST_DIR" ]; then
-        DEST_DIR="$RUNTIME_LIBS_DIR"
-    fi
-    echo "Destination: $DEST_DIR"
+    echo "Destination: $RUNTIME_LIBS_DIR"
 
     assemble_runtime
     show_summary

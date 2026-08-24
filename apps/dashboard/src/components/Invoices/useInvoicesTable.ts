@@ -27,37 +27,18 @@ interface UseInvoicesTableProps {
   pageCount: number
   onPaginationChange: (pagination: { pageIndex: number; pageSize: number }) => void
   data: Invoice[]
-  onViewInvoice?: (invoice: Invoice) => void
-  onVoidInvoice?: (invoice: Invoice) => void
-  onPayInvoice?: (invoice: Invoice) => void
 }
 
-export function useInvoicesTable({
-  data,
-  pagination,
-  pageCount,
-  onPaginationChange,
-  onViewInvoice,
-  onVoidInvoice,
-  onPayInvoice,
-}: UseInvoicesTableProps) {
+export function useInvoicesTable({ data, pagination, pageCount, onPaginationChange }: UseInvoicesTableProps) {
   const [sorting, setSorting] = useState<SortingState>([
     {
-      id: 'issuingDate',
+      id: 'chargedAt',
       desc: true,
     },
   ])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
 
-  const columns = useMemo(
-    () =>
-      getColumns({
-        onViewInvoice,
-        onVoidInvoice,
-        onPayInvoice,
-      }),
-    [onViewInvoice, onVoidInvoice, onPayInvoice],
-  )
+  const columns = useMemo(() => getColumns(), [])
 
   const table = useReactTable({
     data,

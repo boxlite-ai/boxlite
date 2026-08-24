@@ -5,9 +5,13 @@
 //! period to enforce the hard deadline against workloads that ignore
 //! or trap SIGTERM.
 
-use crate::service::exec::state::ExecutionState;
 use std::time::Duration;
+
+use nix::errno::Errno;
+use nix::sys::signal::Signal;
 use tracing::{info, warn};
+
+use crate::service::exec::process_instance::ProcessInstance;
 
 /// Grace period between SIGTERM and SIGKILL on exec timeout.
 ///
@@ -17,26 +21,47 @@ use tracing::{info, warn};
 /// used by `ExecRegistry::shutdown_all` and `Container::shutdown`.
 const TIMEOUT_GRACE: Duration = Duration::from_secs(2);
 
+pub(super) struct TimeoutTarget {
+    process: Option<ProcessInstance>,
+}
+
+impl TimeoutTarget {
+    pub(super) fn new(process: Option<ProcessInstance>) -> Self {
+        Self { process }
+    }
+
+    fn signal_if_live(&self, signal: Signal) -> Result<bool, Errno> {
+        match self.process {
+            Some(process) => process.signal(signal, false),
+            None => Ok(false),
+        }
+    }
+}
+
 /// Start timeout watcher.
 ///
 /// After `timeout` elapses, sends SIGTERM and waits up to `TIMEOUT_GRACE`
 /// for the process to exit, then escalates to SIGKILL. SIGKILL is
 /// uncatchable, so a workload that installs `SIG_IGN`/handlers for
 /// SIGTERM (or SIGALRM, etc.) cannot outlive its deadline.
+///
+/// The handle is returned so a retained session can cancel the watcher instead
+/// of leaving a task parked on a deadline its process already beat.
 pub(super) fn start_timeout_watcher(
-    exec_state: ExecutionState,
+    target: TimeoutTarget,
     exec_id: String,
     timeout: Duration,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         tokio::time::sleep(timeout).await;
 
-        use nix::sys::signal::Signal;
-
-        // Stage 1: SIGTERM — polite termination request.
-        if !exec_state.kill(Signal::SIGTERM, false).await {
-            // Process already exited on its own; nothing more to do.
-            return;
+        match target.signal_if_live(Signal::SIGTERM) {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                warn!(execution_id = %exec_id, %error, "timeout SIGTERM failed");
+                return;
+            }
         }
         info!(
             execution_id = %exec_id,
@@ -44,20 +69,51 @@ pub(super) fn start_timeout_watcher(
             "SIGTERM on timeout; grace before SIGKILL"
         );
 
-        // Stage 2: wait for the grace window. `exec_state.kill` already
-        // returns false once the process is reaped, so we do not need to
-        // poll — we just sleep the full grace then ask for SIGKILL.
         tokio::time::sleep(TIMEOUT_GRACE).await;
 
-        // Stage 3: SIGKILL fallback. Returns false if SIGTERM was honored
-        // during the grace window (clean exit, no escalation needed).
-        if exec_state.kill(Signal::SIGKILL, false).await {
-            warn!(
-                execution_id = %exec_id,
-                "SIGKILL after grace expired; workload did not exit on SIGTERM"
-            );
-        } else {
-            info!(execution_id = %exec_id, "exited within grace after SIGTERM");
+        match target.signal_if_live(Signal::SIGKILL) {
+            Ok(true) => {
+                warn!(
+                    execution_id = %exec_id,
+                    "SIGKILL after grace expired; workload did not exit on SIGTERM"
+                );
+            }
+            Ok(false) => info!(execution_id = %exec_id, "exited within grace after SIGTERM"),
+            Err(error) => warn!(execution_id = %exec_id, %error, "timeout SIGKILL failed"),
         }
-    });
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::process::ExitStatusExt;
+
+    use nix::sys::signal::Signal;
+    use nix::unistd::Pid;
+
+    use super::TimeoutTarget;
+    use crate::reaper::{reap_fence, reap_test_guard};
+    use crate::service::exec::process_instance::ProcessInstance;
+
+    #[tokio::test]
+    async fn timeout_target_signals_its_live_leader() {
+        let _test_guard = reap_test_guard().await;
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let leader = Pid::from_raw(child.id() as i32);
+        let target = TimeoutTarget::new(ProcessInstance::capture(leader));
+
+        assert!(target
+            .signal_if_live(Signal::SIGTERM)
+            .expect("signal the matching leader"));
+        let status = tokio::task::spawn_blocking(move || {
+            let _fence = reap_fence();
+            child.wait().expect("wait for terminated child")
+        })
+        .await
+        .expect("wait task must not panic");
+        assert_eq!(status.signal(), Some(Signal::SIGTERM as i32));
+    }
 }

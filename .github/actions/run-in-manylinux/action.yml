@@ -1,0 +1,109 @@
+# Requirement: ./.github/actions/sccache should be run before this, and
+# ./.github/actions/build-guest if the build needs the guest artifacts. This action mounts the
+# sccache binary the first produced and restores the artifacts the second staged; neither is created here.
+
+#
+# The prologue is not boilerplate — every line is load-bearing:
+#   - /work is marked a safe git directory; the container runs as a different user than the checkout
+#   - RUSTC_WRAPPER is dropped when sccache did not reach the container, which is what turns a cold
+#     cache into a slow build rather than a failed one
+#   - the host-built guest artifacts are restored from .cache/<target> and SKIP_GUEST_BUILD stops
+#     boxlite-guest from being rebuilt
+#   - Go and cargo go on PATH before `make setup:build runtime`, which every caller needs first
+#
+# warm-caches.yml supplies no script at all: there the prologue *is* the payload, since running
+# `make setup:build runtime` under sccache is the whole point of that job.
+
+name: Run in manylinux
+description: >-
+  Runs a build script inside the manylinux_2_28 container every Linux artifact is
+  compiled in, supplying the shared prologue, the sccache plumbing and the
+  container invocation.
+
+inputs:
+  target:
+    description: >-
+      The matrix target being built. Anything containing "arm64" selects the
+      aarch64 image; everything else gets x86_64.
+    required: true
+  script:
+    description: >-
+      Build commands to run inside the container after the prologue. Written
+      literally — no host-side expansion — so $VARS resolve in the container, the
+      same as under the quoted heredoc each call site used before. Empty runs the
+      prologue alone.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        # Through env rather than interpolated into this body: the values are inputs rather
+        # than event data, but executable source stays free of expressions regardless.
+        TARGET: ${{ inputs.target }}
+        BUILD_SCRIPT: ${{ inputs.script }}
+      run: |
+        {
+          cat <<'PROLOGUE'
+        set -ex
+        git config --global --add safe.directory /work
+
+        # sccache fallback: if not available, disable wrapper for normal compilation
+        if [ -n "${RUSTC_WRAPPER:-}" ] && ! command -v "$RUSTC_WRAPPER" &>/dev/null; then
+          echo "::warning::sccache not available in container, falling back to normal compilation"
+          unset RUSTC_WRAPPER
+        fi
+
+        GUEST_TARGET=$(scripts/util.sh --target)
+        if [ -d ".cache/$GUEST_TARGET" ]; then
+          echo "Restoring guest artifacts from .cache/$GUEST_TARGET"
+          mkdir -p target
+          cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
+        fi
+
+        export SKIP_GUEST_BUILD=1
+        export PATH="/usr/local/go/bin:$CARGO_HOME/bin:$PATH"
+        make setup:build runtime
+        PROLOGUE
+
+          # Command substitution strips whatever trailing newlines the caller's block
+          # scalar left, so `|` and `|-` both land as exactly one. Emitted only when
+          # there is a script, so a caller that supplies none (warm-caches.yml) gets the
+          # prologue and epilogue separated by the same single blank line as everyone else.
+          script="$(printf '%s' "$BUILD_SCRIPT")"
+          if [ -n "$script" ]; then
+            printf '\n%s\n' "$script"
+          fi
+
+          cat <<'EPILOGUE'
+
+        command -v sccache &>/dev/null && sccache --show-stats || true
+        EPILOGUE
+        } > "$RUNNER_TEMP/build.sh"
+
+        # Conditionally mount the sccache binary and pass its env vars into Docker.
+        # If sccache-action failed or the binary is missing, the build proceeds without caching.
+        # SCCACHE_BASEDIRS is /work rather than the host's workspace: it names the path the
+        # source sits at *inside* the container, so stripping it yields the same relative
+        # paths ./.github/actions/sccache produces on the host, and one cache entry serves
+        # both. SCCACHE_IDLE_TIMEOUT keeps the container's own daemon alive for the build.
+        SCCACHE_DOCKER_ARGS=""
+        if command -v sccache &>/dev/null; then
+          SCCACHE_DOCKER_ARGS="-v $(which sccache):/usr/local/bin/sccache:ro -e SCCACHE_GHA_ENABLED=true -e RUSTC_WRAPPER=sccache -e SCCACHE_BASEDIRS=/work -e SCCACHE_IDLE_TIMEOUT=0 -e CARGO_INCREMENTAL=0 -e ACTIONS_CACHE_SERVICE_V2 -e ACTIONS_RESULTS_URL -e ACTIONS_RUNTIME_TOKEN"
+        fi
+
+        case "$TARGET" in
+          *arm64*) image_arch=aarch64 ;;
+          *) image_arch=x86_64 ;;
+        esac
+
+        docker run --rm \
+          -v "$GITHUB_WORKSPACE":/work \
+          -v "$RUNNER_TEMP/build.sh:/tmp/build.sh:ro" \
+          $SCCACHE_DOCKER_ARGS \
+          -w /work \
+          -e CARGO_HOME=/work/.cargo-manylinux \
+          "quay.io/pypa/manylinux_2_28_$image_arch" \
+          bash /tmp/build.sh

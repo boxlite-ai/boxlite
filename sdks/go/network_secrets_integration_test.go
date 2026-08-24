@@ -95,12 +95,12 @@ func TestIntegrationSecretSubstitution(t *testing.T) {
 		"python:slim",
 		WithNetwork(NetworkSpec{
 			Mode:     NetworkModeEnabled,
-			AllowNet: []string{"httpbin.org"},
+			AllowNet: []string{"httpbingo.org"},
 		}),
 		WithSecret(Secret{
 			Name:  "testkey",
 			Value: "super-secret-value",
-			Hosts: []string{"httpbin.org"},
+			Hosts: []string{"httpbingo.org"},
 		}),
 		WithAutoRemove(false),
 	)
@@ -108,7 +108,7 @@ func TestIntegrationSecretSubstitution(t *testing.T) {
 	script := strings.Join([]string{
 		"import os, urllib.request",
 		"req = urllib.request.Request(",
-		"    'https://httpbin.org/headers',",
+		"    'https://httpbingo.org/headers',",
 		"    headers={'Authorization': 'Bearer ' + os.environ['BOXLITE_SECRET_TESTKEY']},",
 		")",
 		"print(urllib.request.urlopen(req, timeout=20).read().decode())",

@@ -43,9 +43,8 @@ export class ObjectStorageService {
       const bucket = this.configService.getOrThrow('s3.defaultBucket')
       const accessKey = this.configService.get('s3.accessKey')
       const secretKey = this.configService.get('s3.secretKey')
-      // Both-or-neither (mirrors observability-s3.reader.ts): a lone key is a
-      // typo'd pair, and silently falling back to the SDK default chain would
-      // mask the misconfig.
+      // Both-or-neither: a lone key is a typo'd pair, and silently falling
+      // back to the SDK default chain would mask the misconfig.
       if ((accessKey && !secretKey) || (!accessKey && secretKey)) {
         throw new BadRequestException('S3_ACCESS_KEY and S3_SECRET_KEY must be set together')
       }
@@ -77,7 +76,11 @@ export class ObjectStorageService {
         },
       }
 
-      const isMinioServer = s3Config.endpoint.includes('minio')
+      // A host process commonly reaches a local MinIO through 127.0.0.1, so
+      // the S3 endpoint hostname itself need not contain "minio". MinIO's STS
+      // route is the stable discriminator in that setup.
+      const isMinioServer =
+        s3Config.endpoint.includes('minio') || new URL(s3Config.stsEndpoint).pathname.startsWith('/minio/')
 
       if (isMinioServer) {
         return this.getMinioCredentials(s3Config)

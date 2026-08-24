@@ -263,10 +263,25 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     await this.organizationRepository.save(organization)
   }
 
-  async unsuspend(organizationId: string): Promise<void> {
+  /**
+   * @param organizationId - The ID of the organization.
+   * @param ifReason - When given, unsuspend only if the organization is currently suspended
+   *   with exactly this reason. Omit for the unconditional admin unsuspend.
+   * @throws {NotFoundException} If the organization is not found.
+   * @throws {ConflictException} If ifReason is given and does not match the organization's
+   *   current suspension reason — e.g. an admin re-suspended it for a different reason in the
+   *   meantime. The organization is left untouched.
+   */
+  async unsuspend(organizationId: string, ifReason?: string): Promise<void> {
     const organization = await this.organizationRepository.findOne({ where: { id: organizationId } })
     if (!organization) {
       throw new NotFoundException(`Organization with ID ${organizationId} not found`)
+    }
+
+    // suspensionReason is free text an admin or support agent wrote, so it is never echoed
+    // back into the response — only that the caller's expectation didn't hold.
+    if (ifReason !== undefined && organization.suspensionReason !== ifReason) {
+      throw new ConflictException('Organization suspension reason does not match the expected reason')
     }
 
     organization.suspended = false
@@ -440,7 +455,11 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       organization.suspended = true
       organization.suspendedAt = new Date()
       organization.suspensionReason = 'Please verify your email address'
-    } else if (this.configService.get('billingApiUrl') && !defaultForCreator) {
+    } else if (this.configService.get('requirePaymentMethod') && !defaultForCreator) {
+      // Gated on requirePaymentMethod, not on billingApiUrl: a stage can point the
+      // dashboard at a billing service without also demanding a card up front.
+      // Keyed off billingApiUrl, any deployed billing service that cannot register
+      // a payment method left every new organization suspended with no way out.
       organization.suspended = true
       organization.suspendedAt = new Date()
       organization.suspensionReason = 'Payment method required'
@@ -676,12 +695,10 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       return
     }
 
+    // suspensionReason is free text an admin or support agent wrote and is never echoed back —
+    // it can carry details about a case (e.g. a fraud investigation) beyond "you are suspended".
     if (organization.suspendedUntil ? organization.suspendedUntil > new Date() : true) {
-      if (organization.suspensionReason) {
-        throw new ForbiddenException(`Organization is suspended: ${organization.suspensionReason}`)
-      } else {
-        throw new ForbiddenException('Organization is suspended')
-      }
+      throw new ForbiddenException('Organization is suspended')
     }
   }
 }

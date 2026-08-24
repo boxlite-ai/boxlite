@@ -8,8 +8,6 @@ Why these exist (gaps `compose up` otherwise assumes are pre-handled):
     they hit the anonymous Docker Hub rate limit / a private-ghcr 401 — the
     BoxLite puller does NOT read ~/.docker/config.json, so creds must be
     threaded in. The curated box base itself is public.
-  • the maturin *editable* SDK build does not embed boxlite-guest/shim into the
-    runtime cache, so box boot fails with "boxlite-guest not found".
   • the box base is pulled from the published multi-arch agent image
     (ghcr.io/boxlite-ai/boxlite-agent-base), which now carries linux/arm64 — so
     an arm64 Mac boots a usable box straight from ghcr, no local image build.
@@ -129,24 +127,6 @@ def export_ghcr_env() -> None:
         os.environ.setdefault("GHCR_TOKEN", t)
         os.environ.setdefault("BOXLITE_GHCR_USER", u)
         os.environ.setdefault("BOXLITE_GHCR_TOKEN", t)
-
-
-def fix_runtime_cache() -> None:
-    """maturin editable builds leave the SDK runtime cache missing the big
-    boxlite-guest/shim binaries; copy them from the cargo build output."""
-    base = Path.home() / "Library" / "Application Support" / "boxlite" / "runtimes"
-    caches = sorted(base.glob("v*"))
-    if not caches:
-        return
-    cache = caches[0]
-    if (cache / "boxlite-guest").is_file():
-        return
-    for d in REPO.glob("target/debug/build/boxlite-*/out/runtime"):
-        if (d / "boxlite-guest").is_file():
-            for f in ("boxlite-guest", "boxlite-shim"):
-                shutil.copy2(d / f, cache / f)
-            print(f"  patched runtime cache: boxlite-guest+shim -> {cache}")
-            return
 
 
 def ensure_shared_target() -> None:

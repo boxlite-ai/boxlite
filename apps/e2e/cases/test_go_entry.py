@@ -1,0 +1,86 @@
+"""Go SDK entry-point e2e: builds and runs apps/e2e/sdks/go/e2e_basic.go,
+asserts a successful box round-trip + runner journal contains the box id.
+"""
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+from e2e_auth import auth_context
+from images import default_image
+from path_verification import runner_journal_seek, runner_hits_for_box
+
+REPO = Path(__file__).resolve().parents[3]
+SRC = REPO / "apps/e2e/sdks/go/e2e_basic.go"
+# Each driver is its own `package main`, so the shared image constant has to be
+# named on the build line rather than picked up from the directory.
+SHARED = SRC.parent / "e2e_image.go"
+BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
+
+def _go_bin():
+    return shutil.which("go")
+
+
+@pytest.fixture(scope="module")
+def go_binary():
+    if auth_context().auth != "api-key":
+        pytest.skip("Go SDK REST E2E only supports API-key credentials today")
+    if not _go_bin():
+        pytest.skip("go toolchain not installed")
+    if not SRC.exists():
+        pytest.skip(f"{SRC} missing")
+
+    bin_path = Path("/tmp/boxlite_e2e_go")
+    try:
+        subprocess.run(
+            ["go", "build", "-o", str(bin_path), str(SHARED), str(SRC)],
+            cwd=str(REPO / "sdks/go"),
+            check=True, capture_output=True, text=True, timeout=180,
+        )
+    except subprocess.CalledProcessError as e:
+        pytest.skip(f"go build failed: {e.stderr[:600]}")
+    return bin_path
+
+
+def test_go_sdk_create_exec_remove(go_binary):
+    ctx = auth_context()
+    journal_since = runner_journal_seek()
+
+    env = {
+        **os.environ,
+        **ctx.api_key_sdk_env(),
+        "BOXLITE_E2E_IMAGE": default_image(),
+        # CGO dev tag — uses libboxlite.so from the workspace target/release,
+        # not a vendored prebuilt one.
+        "LD_LIBRARY_PATH": str(REPO / "target/release"),
+    }
+    r = subprocess.run(
+        [str(go_binary)], env=env, timeout=180,
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, (
+        f"go driver exit={r.returncode}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    )
+
+    m = BOX_ID_RE.search(r.stdout)
+    assert m, f"go driver did not print BOX_ID: {r.stdout!r}"
+    box_id = m.group(0)
+
+    assert "HELLO-FROM-GO" in r.stdout, (
+        f"stdout marker missing: {r.stdout!r}"
+    )
+    assert "EXIT_CODE=0" in r.stdout, (
+        f"non-zero exit reported: {r.stdout!r}"
+    )
+
+    hits = runner_hits_for_box(journal_since, box_id)
+    assert hits >= 1, (
+        f"runner journal did not see box {box_id} created by Go SDK"
+    )

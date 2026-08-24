@@ -12,7 +12,6 @@ import (
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/common"
-	"github.com/containerd/errdefs"
 )
 
 func (e *Executor) createBox(ctx context.Context, job *apiclient.Job) (any, error) {
@@ -76,35 +75,4 @@ func (e *Executor) destroyBox(ctx context.Context, job *apiclient.Job) (any, err
 	common.ContainerOperationCount.WithLabelValues("destroy", string(common.PrometheusOperationStatusSuccess)).Inc()
 
 	return nil, nil
-}
-
-func (e *Executor) updateNetworkSettings(ctx context.Context, job *apiclient.Job) (any, error) {
-	var updateNetworkSettingsDto dto.UpdateNetworkSettingsDTO
-	err := e.parsePayload(job.Payload, &updateNetworkSettingsDto)
-	if err != nil {
-		return nil, common.FormatRecoverableError(fmt.Errorf("failed to unmarshal payload: %w", err))
-	}
-
-	return nil, e.backend.UpdateNetworkSettings(ctx, job.ResourceId, updateNetworkSettingsDto)
-}
-
-func (e *Executor) recoverBox(ctx context.Context, job *apiclient.Job) (any, error) {
-	var recoverBoxDto dto.RecoverBoxDTO
-	err := e.parsePayload(job.Payload, &recoverBoxDto)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
-	}
-
-	err = e.backend.RecoverBox(ctx, job.ResourceId, recoverBoxDto)
-	if err != nil {
-		return nil, common.FormatRecoverableError(err)
-	}
-
-	return nil, nil
-}
-
-// resizeBox remains as a compatibility sink for jobs created by older API
-// deployments. It must fail before touching the box.
-func (e *Executor) resizeBox(_ context.Context, _ *apiclient.Job) (any, error) {
-	return nil, errdefs.ErrNotImplemented.WithMessage("box resource resize is not supported")
 }

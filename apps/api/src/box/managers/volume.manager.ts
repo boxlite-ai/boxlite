@@ -54,9 +54,8 @@ export class VolumeManager
     const secretAccessKey = this.configService.get('s3.secretKey')
     this.skipTestConnection = this.configService.get('skipConnections')
 
-    // Both-or-neither (mirrors observability-s3.reader.ts): a lone key is a
-    // typo'd pair, and silently falling back to the SDK default chain would
-    // mask the misconfig.
+    // Both-or-neither: a lone key is a typo'd pair, and silently falling back
+    // to the SDK default chain would mask the misconfig.
     if ((accessKeyId && !secretAccessKey) || (!accessKeyId && secretAccessKey)) {
       throw new Error('S3_ACCESS_KEY and S3_SECRET_KEY must be set together')
     }

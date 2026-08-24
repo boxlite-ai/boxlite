@@ -72,4 +72,26 @@ describe('ApiKeyStrategy', () => {
     expect(mocks.configService.getOrThrow).not.toHaveBeenCalled()
     expect(mocks.apiKeyService.getApiKeyByValue).toHaveBeenCalledWith('unknown-api-key')
   })
+
+  it('authenticates a token matching the configured billing API key as the billing role', async () => {
+    const { strategy, mocks } = createStrategy()
+    mocks.configService.get.mockImplementation((key: string) =>
+      key === 'billing.apiKey' ? 'billing-secret' : undefined,
+    )
+
+    await expect(strategy.validate('billing-secret')).resolves.toEqual({ role: 'billing' })
+
+    expect(mocks.apiKeyService.getApiKeyByValue).not.toHaveBeenCalled()
+  })
+
+  it('falls through to ordinary API-key lookup when the token does not match the billing key', async () => {
+    const { strategy, mocks } = createStrategy()
+    mocks.configService.get.mockImplementation((key: string) =>
+      key === 'billing.apiKey' ? 'billing-secret' : undefined,
+    )
+
+    await expect(strategy.validate('not-the-billing-secret')).resolves.toBeNull()
+
+    expect(mocks.apiKeyService.getApiKeyByValue).toHaveBeenCalledWith('not-the-billing-secret')
+  })
 })

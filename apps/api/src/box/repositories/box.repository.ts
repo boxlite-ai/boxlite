@@ -7,8 +7,10 @@
 import { DataSource, EntityManager, FindOptionsWhere } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
+import { BoxMigration } from '../entities/box-migration.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { BoxConflictError } from '../errors/box-conflict.error'
 import { InjectDataSource } from '@nestjs/typeorm'
@@ -34,6 +36,9 @@ const PROXY_START_LOCK_TIMEOUT_MS = 2000
 // SQLSTATE for `lock_not_available` — raised when a statement waits longer than
 // lock_timeout to acquire a lock.
 const PG_LOCK_TIMEOUT_CODE = '55P03'
+
+// A box the migration marker may claim, with the stamp its claim copies.
+type ParkedBox = { id: string; updatedAt: Date }
 
 @Injectable()
 export class BoxRepository extends BaseRepository<Box> {
@@ -247,6 +252,117 @@ export class BoxRepository extends BaseRepository<Box> {
       }
       throw err
     }
+  }
+
+  /**
+   * Opens a migration on every parked box currently owned by one of `runnerIds`,
+   * as a `box_migration` row the later steps drive forward.
+   *
+   * A box is parked when it is stopped and wants to stay stopped, which is the
+   * only shape a migration can move. Boxes already part-way through one are left
+   * alone; the row a COMPLETED migration left behind is taken over, so a runner
+   * that drains a second time re-migrates what it took back.
+   *
+   * The lock the select takes has to still be held when the insert copies the
+   * stamp it read, so both steps share one transaction.
+   *
+   * @returns How many boxes were marked.
+   */
+  async markParkedBoxesForExport(runnerIds: string[]): Promise<number> {
+    if (runnerIds.length === 0) {
+      return 0
+    }
+
+    return this.manager.transaction(async (entityManager) => {
+      const parked = await this.lockParkedBoxes(entityManager, runnerIds)
+      if (parked.length === 0) {
+        return 0
+      }
+
+      return this.openMigrations(entityManager, parked)
+    })
+  }
+
+  /**
+   * Locks the parked boxes owned by `runnerIds` and reads the stamp to copy.
+   *
+   * The box is locked rather than written: the lock is what stops a write landing
+   * between the read of `updatedAt` and the insert that copies it, and leaving the
+   * row untouched keeps a claim from looking like a change to everything else that
+   * watches `box.updatedAt`. The lock lives until the caller's transaction ends.
+   *
+   * SKIP LOCKED passes over the boxes another transaction is holding right now.
+   * Those are the boxes about to break the equality anyway, and blocking on one
+   * would hold the tick — and the Redis lock it runs under — open behind someone
+   * else's transaction.
+   */
+  private async lockParkedBoxes(entityManager: EntityManager, runnerIds: string[]): Promise<ParkedBox[]> {
+    // A box is claimable when no migration owns it — either no row at all, or the
+    // row a finished migration left behind — so COMPLETED reads as "not
+    // claimable" here and as "claimable" in the conflict guard on the insert.
+    const migrationInFlight = entityManager
+      .createQueryBuilder()
+      .subQuery()
+      .select('1')
+      .from(BoxMigration, 'migration')
+      .where('migration.boxId = box.id')
+      .andWhere('migration.state <> :claimable')
+
+    return entityManager
+      .createQueryBuilder(Box, 'box')
+      .select('box.id', 'id')
+      .addSelect('box.updatedAt', 'updatedAt')
+      .where('box.runnerId IN (:...runnerIds)', { runnerIds })
+      .andWhere('box.state = :state', { state: BoxState.STOPPED })
+      .andWhere('box.desiredState = :desiredState', { desiredState: BoxDesiredState.STOPPED })
+      .andWhere('box.pending = false')
+      .andWhere(`NOT EXISTS ${migrationInFlight.getQuery()}`)
+      .setParameter('claimable', BoxMigrationState.COMPLETED)
+      .setLock('pessimistic_write')
+      .setOnLocked('skip_locked')
+      .getRawMany<ParkedBox>()
+  }
+
+  /**
+   * Opens a migration on each locked box, on a copy of the stamp read under the
+   * lock.
+   *
+   * The conflict guard is what a migration opened since the select survives: the
+   * select's view of this table is a statement older than the lock, so a row
+   * inserted in between is only visible here, and DO UPDATE takes over the
+   * COMPLETED row a finished migration left while leaving a live one alone.
+   *
+   * @returns How many boxes got a migration — the rows the guard let through.
+   */
+  private async openMigrations(entityManager: EntityManager, parked: ParkedBox[]): Promise<number> {
+    // ON CONFLICT names the row already there by the table's own name, and the
+    // guard is written against that name by hand: an object-form condition is
+    // built against the builder's alias for the target instead, which is the
+    // entity's table path — under a non-default schema that is quoted whole,
+    // as "schema.box_migration", a table no clause of the statement has.
+    const conflictTarget = entityManager.connection.getMetadata(BoxMigration).tableName
+
+    const claimed = await entityManager
+      .createQueryBuilder()
+      .insert()
+      .into(BoxMigration)
+      .values(
+        parked.map(({ id, updatedAt }) => ({
+          boxId: id,
+          state: BoxMigrationState.PENDING_EXPORT,
+          updatedAt,
+        })),
+      )
+      .orUpdate(['state', 'updatedAt'], ['boxId'], {
+        overwriteCondition: {
+          where: `"${conflictTarget}"."state" = :claimable`,
+          parameters: { claimable: BoxMigrationState.COMPLETED },
+        },
+      })
+      .returning('"boxId"')
+      .execute()
+
+    return (claimed.raw as Array<{ boxId: string }>).length
   }
 
   /**

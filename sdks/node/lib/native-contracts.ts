@@ -77,7 +77,29 @@ export interface JsEnvVar {
   value: string;
 }
 
-export interface JsVolumeSpec {
+export type JsVolumeSpec =
+  | {
+      /** Scheme-qualified managed volume source, e.g. volume://vol_123. */
+      source: string;
+      guestPath: string;
+      readOnly?: boolean;
+    }
+  | {
+      /** Path on the local host for host-path mounts. */
+      hostPath: string;
+      guestPath: string;
+      readOnly?: boolean;
+    };
+
+export interface JsVolumeSourceSpec {
+  /** Scheme-qualified managed volume source, e.g. volume://vol_123. */
+  source: string;
+  guestPath: string;
+  readOnly?: boolean;
+}
+
+export interface JsHostPathVolumeSpec {
+  /** Path on the local host for host-path mounts. */
   hostPath: string;
   guestPath: string;
   readOnly?: boolean;
@@ -148,11 +170,11 @@ export interface JsBoxOptions {
    */
   autoRemove?: boolean;
   detach?: boolean;
-  /** Idle time in seconds before AutoPause; 0 disables AutoPause. */
-  autoPause?: number;
+  /** Idle time in seconds before AutoStop; 0 disables AutoStop. */
+  autoStop?: number;
   /** Time in seconds after stop before AutoDelete; 0 disables AutoDelete. */
   autoDelete?: number;
-  /** Whether access automatically resumes an auto-paused box. */
+  /** Whether access automatically resumes an auto-stopped box. */
   autoResume?: boolean;
   entrypoint?: string[];
   cmd?: string[];
@@ -247,11 +269,12 @@ export interface JsBoxInfo {
   name?: string;
   state: JsBoxStateInfo;
   createdAt: string;
+  startedAt?: string;
   image: string;
   cpus: number;
   memoryMib: number;
   network: JsNetworkInfo | null;
-  autoPause: number;
+  autoStop: number;
   autoDelete: number;
   autoResume: boolean;
   healthStatus: JsHealthStatus;
@@ -339,16 +362,26 @@ export interface JsSnapshotHandle {
 }
 
 export interface JsNetworkHandle {
-  /** Establish a tunnel to a service port inside the box. */
+  /** Prepare a one-shot tunnel to a service port inside the box. */
   tunnel(port: number): Promise<NativeBoxTunnel>;
+}
+
+export type SocketAddress =
+  { type: "tcp"; host?: string; port: number } | { type: "unix"; path: string };
+
+export interface NativeTunnelForwarder {
+  localAddr(): SocketAddress;
+  wait(): Promise<void>;
+  close(): Promise<void>;
 }
 
 /** Internal contract implemented by the native N-API tunnel binding. */
 export interface NativeBoxTunnel {
-  /** Return the public endpoint for this tunnel. */
-  endpoint(): string | number;
+  /** Public URL of a remotely served tunnel, or null for a local one. */
+  uri(): string | null;
   /** Consume the tunnel and return its bidirectional byte stream. */
   connect(): Promise<NativeBoxConnection>;
+  forward(listen: SocketAddress): Promise<NativeTunnelForwarder>;
 }
 
 export interface NativeBoxConnection {

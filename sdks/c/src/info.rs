@@ -72,12 +72,18 @@ pub struct CBoxInfo {
     pub pid: c_int,
     pub cpus: c_int,
     pub memory_mib: c_int,
-    pub auto_pause: u32,
+    pub auto_stop: u32,
     pub auto_delete: u32,
     pub auto_resume: c_int,
     pub created_at: i64,
     /// Owned typed network metadata; null when network metadata is unavailable.
     pub network: *mut CNetworkInfo,
+    /// Unix milliseconds when the box most recently entered `Running`; `0`
+    /// when no start time was recorded. Preserved after stop or reboot; when
+    /// [`Self::pid`] is nonzero, the timestamp describes that live PID.
+    /// Milliseconds — not `created_at`'s seconds — preserve sub-second ordering
+    /// against a job's timeline.
+    pub started_at: i64,
 }
 
 #[repr(C)]
@@ -238,11 +244,12 @@ impl CBoxInfo {
             pid: info.pid.map(|p| p as c_int).unwrap_or(0),
             cpus: info.cpus as c_int,
             memory_mib: info.memory_mib as c_int,
-            network: network_to_c_ptr(&info.network),
-            auto_pause: info.auto_pause,
+            auto_stop: info.auto_stop,
             auto_delete: info.auto_delete,
             auto_resume: if info.auto_resume { 1 } else { 0 },
             created_at: info.created_at.timestamp(),
+            network: network_to_c_ptr(&info.network),
+            started_at: info.started_at.map(|at| at.timestamp_millis()).unwrap_or(0),
         }
     }
 }

@@ -5,8 +5,8 @@ use boxlite::litebox::copy::CopyOptions;
 use boxlite::runtime::advanced_options::{HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, NetworkConfig, NetworkMode,
-    NetworkSpec, PortProtocol, PortSpec, RegistryTransport, RootfsSpec, VolumeSpec,
+    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, NetworkMode, NetworkSpec,
+    OutboundNetworkConfig, PortProtocol, PortSpec, RegistryTransport, RootfsSpec, VolumeSpec,
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -276,7 +276,7 @@ impl TryFrom<PyNetworkSpec> for NetworkSpec {
 
     fn try_from(py_spec: PyNetworkSpec) -> Result<Self, Self::Error> {
         let mode = py_spec.mode.parse::<NetworkMode>()?;
-        NetworkSpec::try_from(NetworkConfig {
+        NetworkSpec::try_from(OutboundNetworkConfig {
             mode,
             allow_net: py_spec.allow_net,
         })
@@ -387,7 +387,7 @@ pub(crate) struct PyBoxOptions {
     #[pyo3(get, set)]
     pub(crate) auto_remove: Option<bool>,
     #[pyo3(get, set)]
-    pub(crate) auto_pause: Option<u32>,
+    pub(crate) auto_stop: Option<u32>,
     #[pyo3(get, set)]
     pub(crate) auto_delete: Option<u32>,
     #[pyo3(get, set)]
@@ -432,7 +432,7 @@ impl PyBoxOptions {
         network=None,
         ports=vec![],
         auto_remove=None,
-        auto_pause=None,
+        auto_stop=None,
         auto_delete=None,
         auto_resume=None,
         detach=None,
@@ -455,7 +455,7 @@ impl PyBoxOptions {
         network: Option<PyNetworkSpec>,
         ports: Vec<PyPortSpec>,
         auto_remove: Option<bool>,
-        auto_pause: Option<u32>,
+        auto_stop: Option<u32>,
         auto_delete: Option<u32>,
         auto_resume: Option<bool>,
         detach: Option<bool>,
@@ -477,7 +477,7 @@ impl PyBoxOptions {
             network,
             ports,
             auto_remove,
-            auto_pause,
+            auto_stop,
             auto_delete,
             auto_resume,
             detach,
@@ -539,7 +539,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             volumes,
             network,
             ports,
-            auto_pause: py_opts.auto_pause,
+            auto_stop: py_opts.auto_stop,
             auto_delete,
             auto_resume: py_opts.auto_resume,
             entrypoint: py_opts.entrypoint,
@@ -638,13 +638,21 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
         }
 
         if let Ok(d) = obj.cast::<PyDict>() {
-            let host: String = if let Ok(Some(v)) = d.get_item("host") {
+            let host: String = if let Ok(Some(v)) = d.get_item("source") {
+                let source: String = v.extract()?;
+                if !source.starts_with("volume://") {
+                    return Err(PyRuntimeError::new_err(
+                        "volume source must use the volume:// scheme",
+                    ));
+                }
+                source
+            } else if let Ok(Some(v)) = d.get_item("host") {
                 v.extract()?
             } else if let Ok(Some(v)) = d.get_item("host_path") {
                 v.extract()?
             } else {
                 return Err(PyRuntimeError::new_err(
-                    "volume dict missing host/host_path",
+                    "volume dict missing source/host/host_path",
                 ));
             };
 
@@ -951,5 +959,30 @@ impl From<PyBoxliteRestOptions> for BoxliteRestOptions {
             opts = opts.with_path_prefix(path_prefix);
         }
         opts
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn py_volume_source_requires_volume_scheme() {
+        Python::attach(|py| {
+            let valid = PyDict::new(py);
+            valid.set_item("source", "volume://vol_123").unwrap();
+            valid.set_item("guest_path", "/data").unwrap();
+
+            let volume = valid.extract::<PyVolumeSpec>().unwrap();
+            assert_eq!(volume.host, "volume://vol_123");
+            assert_eq!(volume.guest, "/data");
+            assert!(!volume.read_only);
+
+            let invalid = PyDict::new(py);
+            invalid.set_item("source", "vol_123").unwrap();
+            invalid.set_item("guest_path", "/data").unwrap();
+
+            let err = invalid.extract::<PyVolumeSpec>().unwrap_err();
+            assert!(err.to_string().contains("volume:// scheme"));
+        });
     }
 }

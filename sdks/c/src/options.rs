@@ -151,11 +151,11 @@ pub unsafe extern "C" fn boxlite_options_set_auto_remove(opts: *mut CBoxliteOpti
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_options_set_auto_pause_interval(
+pub unsafe extern "C" fn boxlite_options_set_auto_stop_interval(
     opts: *mut CBoxliteOptions,
     seconds: u32,
 ) {
-    options_set_auto_pause_interval(opts, seconds)
+    options_set_auto_stop_interval(opts, seconds)
 }
 
 #[unsafe(no_mangle)]
@@ -174,9 +174,9 @@ pub unsafe extern "C" fn boxlite_options_set_auto_resume_enabled(
     options_set_auto_resume_enabled(opts, val)
 }
 
-pub unsafe fn options_set_auto_pause_interval(handle: *mut OptionsHandle, seconds: u32) {
+pub unsafe fn options_set_auto_stop_interval(handle: *mut OptionsHandle, seconds: u32) {
     if let Some(handle) = unsafe { handle.as_mut() } {
-        handle.options.auto_pause = Some(seconds);
+        handle.options.auto_stop = Some(seconds);
     }
 }
 

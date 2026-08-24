@@ -86,6 +86,13 @@ func freeBoxHandlePayload(b **C.CBoxHandle) {
 	C.boxlite_box_free(*b)
 }
 
+func freeBoxliteStringPayload(value **C.char) {
+	if value == nil || *value == nil {
+		return
+	}
+	freeBoxliteString(*value)
+}
+
 //export goBoxliteOnCreateBox
 func goBoxliteOnCreateBox(box *C.CBoxHandle, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
@@ -98,6 +105,46 @@ func goBoxliteOnCreateBox(box *C.CBoxHandle, errPtr *C.CBoxliteError, userData u
 	defer h.Delete()
 	ch, ok := h.Value().(chan handleResult[*C.CBoxHandle])
 	if !ok {
+		return
+	}
+	ch <- handleResult[*C.CBoxHandle]{value: box, err: errorFromCError(errPtr)}
+}
+
+//export goBoxliteOnBoxExport
+func goBoxliteOnBoxExport(archivePath *C.char, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		freeBoxliteStringPayload(&archivePath)
+		return
+	}
+	if !claimOrFreePayload(h, &archivePath, freeBoxliteStringPayload) {
+		return
+	}
+	defer h.Delete()
+
+	ch, ok := h.Value().(chan handleResult[*C.char])
+	if !ok {
+		freeBoxliteStringPayload(&archivePath)
+		return
+	}
+	ch <- handleResult[*C.char]{value: archivePath, err: errorFromCError(errPtr)}
+}
+
+//export goBoxliteOnRuntimeImport
+func goBoxliteOnRuntimeImport(box *C.CBoxHandle, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		freeBoxHandlePayload(&box)
+		return
+	}
+	if !claimOrFreePayload(h, &box, freeBoxHandlePayload) {
+		return
+	}
+	defer h.Delete()
+
+	ch, ok := h.Value().(chan handleResult[*C.CBoxHandle])
+	if !ok {
+		freeBoxHandlePayload(&box)
 		return
 	}
 	ch <- handleResult[*C.CBoxHandle]{value: box, err: errorFromCError(errPtr)}
@@ -465,6 +512,16 @@ func goBoxliteOnExecutionSignal(errPtr *C.CBoxliteError, userData unsafe.Pointer
 
 //export goBoxliteOnExecutionResize
 func goBoxliteOnExecutionResize(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
+//export goBoxliteOnTunnelForwarderWait
+func goBoxliteOnTunnelForwarderWait(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
+//export goBoxliteOnTunnelForwarderClose
+func goBoxliteOnTunnelForwarderClose(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	deliverUnitResult(userData, errPtr)
 }
 

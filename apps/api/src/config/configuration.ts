@@ -4,11 +4,199 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-function csvEnv(value?: string): string[] {
-  return (value ?? '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean)
+/**
+ * A whole number at least 1, or a hard failure.
+ *
+ * `parseInt` is not usable for a setting that must be right: it reads "1e9" as
+ * 1 and a typo as NaN, and both spellings look deliberate in an env file. A
+ * retry budget of NaN never compares true, so nothing would ever stop retrying;
+ * a budget of 1 gives up on the first blip. Refusing at boot is the only point
+ * where either is still visible.
+ */
+function requiredCount(value: string | undefined, fallback: number, name: string): number {
+  const raw = value?.trim()
+  if (!raw) {
+    return fallback
+  }
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`${name} must be a whole number, got "${value}"`)
+  }
+  const parsed = Number(raw)
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a whole number of at least 1, got "${value}"`)
+  }
+  return parsed
+}
+
+/**
+ * How long a claimed usage-export batch stays invisible to other publishers,
+ * and the TTL of the lock the publish cycle holds.
+ *
+ * Lives here rather than beside the publisher so the timeout validation below
+ * can enforce the one relationship between them that has to hold.
+ */
+export const USAGE_EXPORT_VISIBILITY_TIMEOUT_MS = 60_000
+
+/**
+ * An absolute http(s) URL with no query or fragment, or a hard failure.
+ *
+ * The caller appends its own path to whatever comes back, so `…/api?x=1` would
+ * produce `…/api?x=1/internal/usage-events`, which reaches nothing. Such a
+ * value is rejected rather than stripped, because stripping it would deliver
+ * somewhere other than the configured destination. Rejecting it is also what
+ * keeps the trailing-slash trim below honest: on a raw string that trim would
+ * otherwise eat a slash inside a query value.
+ *
+ * The delimiters are looked for in the raw string rather than in `parsed.search`
+ * and `parsed.hash`, which are both empty for a bare `?` or `#`. Asking the
+ * parsed value would answer "no query" while the delimiter sits in the string
+ * this returns, and `…/api?` would go out as `…/api?/internal/usage-events`.
+ *
+ * Only the trailing slash is normalized. Returning `origin + pathname` instead
+ * would look equivalent and quietly drop userinfo, drop an explicit port and
+ * lowercase the host — and axios builds Basic auth from userinfo and then
+ * deletes the Authorization header, so dropping it would change which
+ * credential the publisher sends.
+ *
+ * The offending value is deliberately not echoed: a URL is the one setting that
+ * can carry credentials in its userinfo, and a boot log is the wrong place to
+ * put them. The variable name is enough to find it.
+ */
+function requiredHttpUrl(value: string, name: string): string {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error(`${name} must be an absolute http(s) URL`)
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`${name} must use http or https`)
+  }
+  if (value.includes('?') || value.includes('#')) {
+    throw new Error(`${name} must not carry a query or fragment`)
+  }
+  return value.replace(/\/+$/, '')
+}
+
+/**
+ * Export of finalized usage periods, and snapshots of still-open ones, to the
+ * Commerce service. Kept separate from billingApiUrl on purpose, for the same
+ * reason requirePaymentMethod is: pointing the dashboard at a billing service
+ * and shipping usage to it are different decisions. `enabled` gates the outbox
+ * write as well as delivery, so a stage that never exports accumulates no rows.
+ *
+ * The allocation snapshot cron posts to the same destination with the same
+ * token (it is the same Commerce service, just a different internal route), so
+ * it shares this URL/token pair rather than getting its own — but it can be
+ * turned on independently of finalized-usage export, so either flag alone must
+ * be enough to require them.
+ *
+ * Exported so its rules can be tested directly rather than through an import
+ * whose side effect is reading the process environment.
+ */
+export function usageExportConfig(env: NodeJS.ProcessEnv = process.env) {
+  const enabled = env.USAGE_EXPORT_ENABLED === 'true'
+  const allocationSnapshotEnabled = env.USAGE_ALLOCATION_SNAPSHOT_ENABLED === 'true'
+  const rawUrl = env.USAGE_EXPORT_URL?.trim()
+  const token = env.USAGE_EXPORT_TOKEN?.trim()
+
+  // Counts are checked whether or not export is on: a value like "1e9" or a
+  // typo is malformed in every state, and rejecting it costs a stage nothing it
+  // could legitimately have wanted.
+  const settings = {
+    enabled,
+    allocationSnapshotEnabled,
+    url: rawUrl,
+    token,
+    batchSize: requiredCount(env.USAGE_EXPORT_BATCH_SIZE, 200, 'USAGE_EXPORT_BATCH_SIZE'),
+    timeoutMs: requiredCount(env.USAGE_EXPORT_TIMEOUT_MS, 10_000, 'USAGE_EXPORT_TIMEOUT_MS'),
+    maxAttempts: requiredCount(env.USAGE_EXPORT_MAX_ATTEMPTS, 10, 'USAGE_EXPORT_MAX_ATTEMPTS'),
+  }
+
+  // Everything below describes how delivery must behave, and delivery does not
+  // happen while both flags are off. A stage that leaves a placeholder
+  // destination or an unused timeout behind should keep booting: refusing
+  // would fail it for a setting nothing reads.
+  if (!enabled && !allocationSnapshotEnabled) {
+    return settings
+  }
+
+  // Enabled without a destination would post to "undefined/internal/usage-events",
+  // spend the retry budget, and block the batch — a silent stall dressed up as
+  // delivery failure. A destination that is merely unusable, like "commerce",
+  // fails exactly the same way, so the check has to be the URL's shape rather
+  // than its length.
+  const enabledBy = enabled ? 'USAGE_EXPORT_ENABLED' : 'USAGE_ALLOCATION_SNAPSHOT_ENABLED'
+  if (!rawUrl) {
+    throw new Error(`USAGE_EXPORT_URL is required when ${enabledBy} is true`)
+  }
+  if (!token) {
+    throw new Error(`USAGE_EXPORT_TOKEN is required when ${enabledBy} is true`)
+  }
+  // A request still in flight when its rows become claimable again is delivered
+  // twice — harmless, since the receiver deduplicates, but it doubles the load
+  // exactly when the receiver is already too slow to answer in time. Only the
+  // claim-based outbox export has this failure mode; the snapshot cron is a
+  // stateless full-replace push with no claim to double up.
+  if (enabled && settings.timeoutMs >= USAGE_EXPORT_VISIBILITY_TIMEOUT_MS) {
+    throw new Error(
+      `USAGE_EXPORT_TIMEOUT_MS must be below the ${USAGE_EXPORT_VISIBILITY_TIMEOUT_MS}ms claim visibility window, got "${env.USAGE_EXPORT_TIMEOUT_MS}"`,
+    )
+  }
+
+  return { ...settings, url: requiredHttpUrl(rawUrl, 'USAGE_EXPORT_URL') }
+}
+
+// The object-store key namespace migration archives land in by default, inside
+// whichever bucket each runner is configured with.
+const DEFAULT_MIGRATION_ARCHIVE_PREFIX = 'box-migrations/'
+
+// An arcPath that names its own bucket instead of using the runner's own
+// (runner: pkg/storage/archive_store.go, resolveArcPath).
+const S3_URI_SCHEME = 's3://'
+
+// One segment of an archive prefix: alphanumeric first, then object-store-safe
+// characters. Requiring the first character is what rejects an empty segment —
+// a leading or doubled slash — along with ".", ".." and anything whitespace.
+const ARCHIVE_PREFIX_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+/**
+ * Where a box migration's archive lives in the object store: the prefix the
+ * exporting runner writes under and the importing one reads back.
+ *
+ * A bare prefix keys into the bucket each runner is configured with; an
+ * `s3://<bucket>/…` prefix carries the bucket in the key, which is what lets one
+ * migration span two runners whose own buckets differ. The runner resolves both
+ * forms, so both are accepted here.
+ *
+ * The shape is checked at boot because the alternative is learning about it one
+ * migration at a time: a prefix the runner cannot resolve fails every export job
+ * it is handed, and one with a leading or doubled slash uploads to a key nobody
+ * would look under. Only the trailing slash is normalized, so `box-migrations`
+ * and `box-migrations/` name the same namespace.
+ *
+ * Changing it with migrations in flight is safe: only the export leg derives a
+ * key, and every leg after it acts on the one recorded in `box_migration.arcPath`.
+ *
+ * Exported so its rules can be tested directly rather than through an import
+ * whose side effect is reading the process environment.
+ */
+export function boxMigrationConfig(env: NodeJS.ProcessEnv = process.env) {
+  const raw = env.BOX_MIGRATION_ARCHIVE_PREFIX?.trim()
+  if (!raw) {
+    return { archivePrefix: DEFAULT_MIGRATION_ARCHIVE_PREFIX }
+  }
+
+  const scheme = raw.startsWith(S3_URI_SCHEME) ? S3_URI_SCHEME : ''
+  const segments = raw.slice(scheme.length).replace(/\/+$/, '').split('/')
+  if (!segments.every((segment) => ARCHIVE_PREFIX_SEGMENT.test(segment))) {
+    throw new Error(
+      'BOX_MIGRATION_ARCHIVE_PREFIX must be a slash-separated object-store prefix, optionally ' +
+        `bucket-qualified — "box-migrations" or "s3://bucket/box-migrations" — got "${env.BOX_MIGRATION_ARCHIVE_PREFIX}"`,
+    )
+  }
+
+  return { archivePrefix: `${scheme}${segments.join('/')}/` }
 }
 
 const configuration = {
@@ -157,10 +345,14 @@ const configuration = {
   healthCheck: {
     apiKey: process.env.HEALTH_CHECK_API_KEY,
   },
+  billing: {
+    apiKey: process.env.BILLING_API_KEY,
+  },
   organizationBoxDefaultLimitedNetworkEgress: process.env.ORGANIZATION_BOX_DEFAULT_LIMITED_NETWORK_EGRESS === 'true',
   pylonAppId: process.env.PYLON_APP_ID,
   billingApiUrl: process.env.BILLING_API_URL,
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
+  usageExport: usageExportConfig(),
   defaultRunner: {
     domain: process.env.DEFAULT_RUNNER_DOMAIN,
     apiKey: process.env.DEFAULT_RUNNER_API_KEY,
@@ -275,6 +467,12 @@ const configuration = {
     apiKey: process.env.ADMIN_API_KEY,
   },
   skipUserEmailVerification: process.env.SKIP_USER_EMAIL_VERIFICATION === 'true',
+  // Whether a newly created non-default organization starts suspended until a
+  // payment method exists. Separate from billingApiUrl on purpose: pointing the
+  // dashboard at a billing service and demanding payment up front are different
+  // decisions, and conflating them means any billing service — including one that
+  // cannot register a card — locks every new organization out permanently.
+  requirePaymentMethod: process.env.REQUIRE_PAYMENT_METHOD === 'true',
   apiKey: {
     prefix: process.env.API_KEY_PREFIX || 'blk',
     validationCacheTtlSeconds: parseInt(process.env.API_KEY_VALIDATION_CACHE_TTL_SECONDS || '10', 10),
@@ -299,34 +497,20 @@ const configuration = {
     password: process.env.CLICKHOUSE_PASSWORD,
     protocol: process.env.CLICKHOUSE_PROTOCOL || 'https',
   },
-  adminObservability: {
-    cloudwatch: {
-      region: process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_REGION || process.env.AWS_REGION || process.env.S3_REGION,
-      logGroups: csvEnv(process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUPS),
-      logGroupPrefix: process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUP_PREFIX,
-      maxLogGroups: parseInt(process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_MAX_LOG_GROUPS || '20', 10),
-      limitPerGroup: parseInt(process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_LIMIT_PER_GROUP || '25', 10),
-    },
-    s3: {
-      region: process.env.ADMIN_OBSERVABILITY_S3_REGION || process.env.S3_REGION,
-      endpoint: process.env.ADMIN_OBSERVABILITY_S3_ENDPOINT || process.env.S3_ENDPOINT,
-      accessKey: process.env.ADMIN_OBSERVABILITY_S3_ACCESS_KEY || process.env.S3_ACCESS_KEY,
-      secretKey: process.env.ADMIN_OBSERVABILITY_S3_SECRET_KEY || process.env.S3_SECRET_KEY,
-      buckets: csvEnv(process.env.ADMIN_OBSERVABILITY_S3_BUCKETS || process.env.S3_DEFAULT_BUCKET),
-      prefixes: csvEnv(process.env.ADMIN_OBSERVABILITY_S3_PREFIXES),
-      maxObjects: parseInt(process.env.ADMIN_OBSERVABILITY_S3_MAX_OBJECTS || '25', 10),
-    },
-  },
-  observability: {
-    clickstackBaseUrl: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_URL,
-    clickstackDashboardUrl: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_DASHBOARD_URL,
-    clickstackLogSourceId: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_LOG_SOURCE_ID,
-    clickstackTraceSourceId: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_TRACE_SOURCE_ID,
-    clickstackMetricSourceId: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_METRIC_SOURCE_ID,
-  },
   boxActivity: {
     throttleTtlSeconds: parseInt(process.env.BOX_ACTIVITY_THROTTLE_TTL_SECONDS || '5', 10),
     flushBatchSize: parseInt(process.env.BOX_ACTIVITY_FLUSH_BATCH_SIZE || '1000', 10),
+  },
+  boxMigration: boxMigrationConfig(),
+  boxSync: {
+    // How long a claimed startup job may sit without completing before a
+    // runner reporting the box as started is allowed to close it out. This is
+    // a backstop for a lost job-completion callback, not a fast path: raise it
+    // if legitimate startups ever get closed out ahead of their own callback.
+    startConfirmationStallSeconds: parseInt(
+      process.env.BOX_SYNC_START_CONFIRMATION_STALL_SECONDS || '60',
+      10,
+    ),
   },
   encryption: {
     key: process.env.ENCRYPTION_KEY,

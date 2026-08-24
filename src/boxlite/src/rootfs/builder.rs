@@ -209,12 +209,6 @@ pub struct PreparedRootfs {
     pub path: PathBuf,
 }
 
-/// Circular symlink info for deferred handling
-struct LoopSymlink {
-    rel_path: PathBuf,
-    target: PathBuf,
-}
-
 /// Check if a symlink is circular (points to itself)
 fn is_symlink_loop(path: &Path) -> bool {
     let link_name = match path.file_name() {
@@ -333,7 +327,8 @@ fn execute_copy_with_metadata(src: &Path, dst: &Path) -> BoxliteResult<()> {
 /// - Whiteouts processed before copy:
 ///   - `.wh.filename` → delete `filename` from dst
 ///   - `.wh..wh..opq` → opaque directory, remove entire dst dir
-/// - Circular symlinks in dst are handled specially to avoid ELOOP errors
+/// - Circular symlinks in dst are removed where src replaces them (else `cp -a`
+///   fails with ELOOP); ones src never writes to are left untouched
 fn copy_directory_overlay(src: &Path, dst: &Path) -> BoxliteResult<()> {
     use std::collections::HashSet;
     use std::time::Instant;
@@ -341,7 +336,8 @@ fn copy_directory_overlay(src: &Path, dst: &Path) -> BoxliteResult<()> {
 
     let total_start = Instant::now();
 
-    // Step 1a: Process whiteouts in src and collect marker paths
+    // Step 1: Process whiteouts in src, clear blocking circular symlinks in dst,
+    // and collect marker paths
     let step1_start = Instant::now();
     let mut markers: HashSet<PathBuf> = HashSet::new();
 
@@ -351,6 +347,35 @@ fn copy_directory_overlay(src: &Path, dst: &Path) -> BoxliteResult<()> {
         })?;
 
         let src_path = entry.path();
+
+        // A self-referential symlink in dst makes `cp -a` fail with ELOOP when it
+        // writes onto that path. Only paths present in src are written, so the
+        // check belongs here — on the src entry — rather than in a separate walk
+        // of the whole accumulated dst tree. Loops dst holds at paths src never
+        // touches are left alone; nothing will write to them.
+        if let Ok(rel_path) = src_path.strip_prefix(src)
+            && !rel_path.as_os_str().is_empty()
+        {
+            let dst_path = dst.join(rel_path);
+            if let Ok(meta) = std::fs::symlink_metadata(&dst_path)
+                && meta.is_symlink()
+                && is_symlink_loop(&dst_path)
+            {
+                if let Err(e) = std::fs::remove_file(&dst_path) {
+                    tracing::warn!(
+                        "Failed to remove circular symlink {}: {}",
+                        dst_path.display(),
+                        e
+                    );
+                } else {
+                    tracing::debug!(
+                        "Removed circular symlink: {} (src has replacement)",
+                        dst_path.display()
+                    );
+                }
+            }
+        }
+
         if let Some(filename) = src_path.file_name() {
             let filename_str = filename.to_string_lossy();
 
@@ -398,108 +423,16 @@ fn copy_directory_overlay(src: &Path, dst: &Path) -> BoxliteResult<()> {
         }
     }
 
-    // Step 1b: Find circular symlinks in dst (these block cp -a with ELOOP)
-    let mut loop_symlinks: Vec<LoopSymlink> = Vec::new();
-
-    if dst.exists() {
-        for entry in WalkDir::new(dst).follow_links(false) {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            let dst_path = entry.path();
-            if let Ok(meta) = std::fs::symlink_metadata(dst_path)
-                && meta.is_symlink()
-                && is_symlink_loop(dst_path)
-                && let Ok(rel_path) = dst_path.strip_prefix(dst)
-            {
-                let target = std::fs::read_link(dst_path).unwrap_or_default();
-                loop_symlinks.push(LoopSymlink {
-                    rel_path: rel_path.to_path_buf(),
-                    target,
-                });
-                tracing::debug!("Found circular symlink in dst: {}", dst_path.display());
-            }
-        }
-    }
-
     tracing::debug!(
-        "Step 1 (whiteouts + loop symlinks): {:?}, markers={}, loops={}",
+        "Step 1 (whiteouts + loop symlinks): {:?}, markers={}",
         step1_start.elapsed(),
-        markers.len(),
-        loop_symlinks.len()
+        markers.len()
     );
 
-    // Step 2a: Remove circular symlinks from dst (if src has replacement)
-    // This prevents ELOOP errors during cp -a
-    // Use symlink_metadata to detect symlinks in src (exists() returns false for circular symlinks)
-    let step2a_start = Instant::now();
-    for loop_sym in &loop_symlinks {
-        let src_file = src.join(&loop_sym.rel_path);
-        let dst_file = dst.join(&loop_sym.rel_path);
-
-        // Check if src has something at this path (file or symlink)
-        let src_has_entry = std::fs::symlink_metadata(&src_file).is_ok();
-        if src_has_entry {
-            if let Err(e) = std::fs::remove_file(&dst_file) {
-                tracing::warn!(
-                    "Failed to remove circular symlink {}: {}",
-                    dst_file.display(),
-                    e
-                );
-            } else {
-                tracing::debug!(
-                    "Removed circular symlink: {} (src has replacement)",
-                    dst_file.display()
-                );
-            }
-        }
-    }
-    if !loop_symlinks.is_empty() {
-        tracing::debug!(
-            "Step 2a (remove circular symlinks): {:?}",
-            step2a_start.elapsed()
-        );
-    }
-
-    // Step 2b: Copy with full metadata preservation using cp -a with CoW
-    let step2b_start = Instant::now();
+    // Step 2: Copy with full metadata preservation using cp -a with CoW
+    let step2_start = Instant::now();
     execute_copy_with_metadata(src, dst)?;
-    tracing::debug!("Step 2b (cp -a): {:?}", step2b_start.elapsed());
-
-    // Step 2c: Recreate circular symlinks that weren't replaced by src
-    let step2c_start = Instant::now();
-    let mut recreated = 0;
-    for loop_sym in &loop_symlinks {
-        let dst_file = dst.join(&loop_sym.rel_path);
-
-        // If dst doesn't have this file after cp -a, recreate the original symlink
-        if !dst_file.exists() && std::fs::symlink_metadata(&dst_file).is_err() {
-            if let Err(e) = std::os::unix::fs::symlink(&loop_sym.target, &dst_file) {
-                tracing::warn!(
-                    "Failed to recreate circular symlink {} -> {}: {}",
-                    dst_file.display(),
-                    loop_sym.target.display(),
-                    e
-                );
-            } else {
-                tracing::debug!(
-                    "Recreated circular symlink: {} -> {}",
-                    dst_file.display(),
-                    loop_sym.target.display()
-                );
-                recreated += 1;
-            }
-        }
-    }
-    if recreated > 0 {
-        tracing::debug!(
-            "Step 2c (recreate symlinks): {:?}, count={}",
-            step2c_start.elapsed(),
-            recreated
-        );
-    }
+    tracing::debug!("Step 2 (cp -a): {:?}", step2_start.elapsed());
 
     // Step 3: Remove whiteout markers (just cleanup, no processing)
     let step3_start = Instant::now();
@@ -541,6 +474,65 @@ mod tests {
         assert!(!dst.join("bin/.wh.sh").exists());
         assert_eq!(std::fs::read(dst.join("bin/bash")).unwrap(), b"keep");
         assert_eq!(std::fs::read(dst.join("bin/new-tool")).unwrap(), b"new");
+    }
+
+    /// A circular symlink in dst at a path the upper layer replaces must end up
+    /// as the upper layer's entry.
+    ///
+    /// `cp -a` fails with ELOOP when it has to write onto a self-referential
+    /// symlink, so the loop has to be removed before the copy.
+    #[test]
+    fn copy_directory_overlay_replaces_circular_symlink_when_src_has_entry() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+
+        std::fs::create_dir_all(src.join("bin")).unwrap();
+        std::fs::create_dir_all(dst.join("bin")).unwrap();
+        std::fs::write(src.join("bin/sh"), b"upper").unwrap();
+        symlink("sh", dst.join("bin/sh")).unwrap();
+
+        copy_directory_overlay(&src, &dst).unwrap();
+
+        let meta = std::fs::symlink_metadata(dst.join("bin/sh")).unwrap();
+        assert!(
+            meta.is_file(),
+            "upper layer's regular file must replace the circular symlink"
+        );
+        assert_eq!(std::fs::read(dst.join("bin/sh")).unwrap(), b"upper");
+    }
+
+    /// A circular symlink in dst that the upper layer does *not* touch must
+    /// survive the overlay unchanged — `cp -a` never writes to that path, so
+    /// there is nothing to work around.
+    #[test]
+    fn copy_directory_overlay_keeps_unrelated_circular_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+
+        std::fs::create_dir_all(src.join("bin")).unwrap();
+        std::fs::create_dir_all(dst.join("bin")).unwrap();
+        std::fs::write(src.join("bin/other"), b"upper").unwrap();
+        symlink("selfloop", dst.join("bin/selfloop")).unwrap();
+
+        copy_directory_overlay(&src, &dst).unwrap();
+
+        let meta = std::fs::symlink_metadata(dst.join("bin/selfloop")).unwrap();
+        assert!(
+            meta.is_symlink(),
+            "an untouched circular symlink must remain a symlink"
+        );
+        assert_eq!(
+            std::fs::read_link(dst.join("bin/selfloop")).unwrap(),
+            std::path::Path::new("selfloop"),
+            "its target must be unchanged"
+        );
+        assert_eq!(std::fs::read(dst.join("bin/other")).unwrap(), b"upper");
     }
 
     #[test]

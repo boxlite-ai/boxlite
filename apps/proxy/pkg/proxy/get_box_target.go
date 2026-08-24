@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,8 +22,8 @@ import (
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
 	"github.com/boxlite-ai/common-go/pkg/utils"
 	"github.com/gin-gonic/gin"
-
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -84,6 +85,15 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 			return nil, err
 		}
 	}
+
+	// Stamp the API's span vocabulary (boxlite.* — see the API's
+	// ObservabilityContextInterceptor) so one key filters a box across
+	// services. Only box_id is stampable here: every proxy auth path is
+	// box-scoped, so org/user identity never reaches the proxy — the API
+	// stamps boxlite.org_id / boxlite.user_id on its own spans in the trace.
+	trace.SpanFromContext(ctx.Request.Context()).SetAttributes(
+		attribute.String("boxlite.box_id", boxId),
+	)
 
 	controllerValue, exists := ctx.Get(ACTIVITY_POLL_STOP_KEY)
 	controller, ok := controllerValue.(*activityPollController)
@@ -217,7 +227,7 @@ func (p *Proxy) getBoxRunnerInfo(ctx context.Context, boxId string) (*RunnerInfo
 
 	err = p.boxRunnerCache.Set(ctx, boxId, info, 2*time.Minute)
 	if err != nil {
-		log.Errorf("Failed to set runner info in cache: %v", err)
+		slog.ErrorContext(ctx, "Failed to set runner info in cache", "box", boxId, "error", err)
 	}
 
 	return &info, nil
@@ -257,7 +267,7 @@ func (p *Proxy) getBoxPublic(ctx context.Context, boxId string) (*bool, error) {
 	}
 
 	if cacheErr := p.boxPublicCache.Set(ctx, boxId, isPublic, 3*time.Second); cacheErr != nil {
-		log.Errorf("Failed to set box public in cache: %v", cacheErr)
+		slog.ErrorContext(ctx, "Failed to set box public in cache", "error", cacheErr)
 	}
 
 	return &isPublic, nil
@@ -321,7 +331,7 @@ func (p *Proxy) validateAndCache(
 	}
 
 	if err := p.boxAuthKeyValidCache.Set(ctx, cacheKey, isValid, 2*time.Minute); err != nil {
-		log.Errorf("Failed to set box auth key valid in cache: %v", err)
+		slog.ErrorContext(ctx, "Failed to set box auth key valid in cache", "error", err)
 	}
 
 	return &isValid, nil
@@ -422,19 +432,19 @@ func (p *Proxy) updateLastActivity(ctx context.Context, boxId string, shouldPoll
 
 	cached, err := p.boxLastActivityUpdateCache.Has(updateCtx, boxId)
 	if err != nil {
-		log.Errorf("failed to check last activity cache for box %s: %v", boxId, err)
+		slog.ErrorContext(updateCtx, "failed to check last activity cache", "box", boxId, "error", err)
 		return
 	}
 
 	if !cached {
 		if _, err := p.apiclient.BoxAPI.UpdateLastActivity(updateCtx, boxId).Execute(); err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				log.Errorf("failed to update last activity for box %s: %v", boxId, err)
+				slog.ErrorContext(updateCtx, "failed to update last activity", "box", boxId, "error", err)
 			}
 			return
 		}
 		if err := p.boxLastActivityUpdateCache.Set(updateCtx, boxId, true, pollInterval-5*time.Second); err != nil {
-			log.Errorf("failed to cache last activity update for box %s: %v", boxId, err)
+			slog.ErrorContext(updateCtx, "failed to cache last activity update", "box", boxId, "error", err)
 		}
 	}
 }

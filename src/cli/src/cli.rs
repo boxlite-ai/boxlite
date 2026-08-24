@@ -6,7 +6,9 @@ use boxlite::experimental::custom_kernel::{KernelFormat, KernelOptions, configur
 use boxlite::experimental::{
     EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
 };
-use boxlite::runtime::options::{NetworkConfig, NetworkMode, PortProtocol, PortSpec, VolumeSpec};
+use boxlite::runtime::options::{
+    NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec, VolumeSpec,
+};
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime, ImageRegistry,
     NetworkSpec,
@@ -649,7 +651,7 @@ impl NetworkFlags {
             Some(value) => value.parse::<NetworkMode>()?,
             None => NetworkMode::Enabled,
         };
-        opts.network = NetworkSpec::try_from(NetworkConfig {
+        opts.network = NetworkSpec::try_from(OutboundNetworkConfig {
             mode,
             allow_net: self.allow_net.clone(),
         })?;
@@ -983,6 +985,7 @@ impl ManagementFlags {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxlite::runtime::options::NetworkSpec;
     use clap::CommandFactory;
     use std::fs;
     use std::path::PathBuf;
@@ -1411,7 +1414,7 @@ mod tests {
             .apply_to(&mut opts)
             .expect_err("unknown mode must error");
 
-        assert!(err.to_string().contains("network.mode"));
+        assert!(err.to_string().contains("network mode"));
     }
 
     fn process_flags_with_entrypoint(entrypoint: Option<&str>) -> ProcessFlags {
@@ -1706,6 +1709,39 @@ mod tests {
         let NetworkCommand::Tunnel(args) = args.command;
         assert_eq!(args.target, "mybox");
         assert_eq!(args.port, 3000);
+        assert!(args.listen.is_none());
+    }
+
+    #[test]
+    fn network_tunnel_accepts_listener_forms() {
+        for listen in [
+            "8080",
+            "0",
+            "127.0.0.1:8080",
+            "[::1]:8080",
+            "unix:/tmp/app.sock",
+        ] {
+            Cli::try_parse_from([
+                "boxlite", "network", "tunnel", "mybox", "3000", "--listen", listen,
+            ])
+            .unwrap_or_else(|error| panic!("{listen} should parse: {error}"));
+        }
+    }
+
+    #[test]
+    fn network_tunnel_rejects_ambiguous_listener_forms() {
+        for listen in [
+            "localhost:8080",
+            "::1:8080",
+            ":8080",
+            "unix:relative.sock",
+            "127.0.0.1",
+        ] {
+            let result = Cli::try_parse_from([
+                "boxlite", "network", "tunnel", "mybox", "3000", "--listen", listen,
+            ]);
+            assert!(result.is_err(), "{listen} must be rejected");
+        }
     }
 
     #[test]

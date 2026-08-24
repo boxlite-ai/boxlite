@@ -4,8 +4,9 @@ use std::time::Duration;
 use boxlite::runtime::advanced_options::{AdvancedBoxOptions, HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, NetworkConfig, NetworkMode,
-    NetworkSpec, PortProtocol, PortSpec, RegistryTransport, RootfsSpec, Secret, VolumeSpec,
+    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, NetworkMode, NetworkSpec,
+    OutboundNetworkConfig, PortProtocol, PortSpec, RegistryTransport, RootfsSpec, Secret,
+    VolumeSpec,
 };
 use napi::bindgen_prelude::Error;
 use napi_derive::napi;
@@ -199,15 +200,15 @@ pub struct JsBoxOptions {
     /// @deprecated Use autoDelete.
     pub auto_remove: Option<bool>,
 
-    /// Idle time in seconds before AutoPause; 0 disables AutoPause.
-    #[napi(js_name = "autoPause")]
-    pub auto_pause: Option<u32>,
+    /// Idle time in seconds before AutoStop; 0 disables AutoStop.
+    #[napi(js_name = "autoStop")]
+    pub auto_stop: Option<u32>,
 
     /// Time in seconds after stop before AutoDelete; 0 disables AutoDelete.
     #[napi(js_name = "autoDelete")]
     pub auto_delete: Option<u32>,
 
-    /// Whether the box automatically resumes when accessed after AutoPause.
+    /// Whether the box automatically resumes when accessed after AutoStop.
     #[napi(js_name = "autoResume")]
     pub auto_resume: Option<bool>,
 
@@ -259,8 +260,11 @@ pub struct JsEnvVar {
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsVolumeSpec {
-    /// Path on host machine
-    pub host_path: String,
+    /// Scheme-qualified source such as `volume://vol_123`.
+    pub source: Option<String>,
+
+    /// Path on host machine for local host-path mounts.
+    pub host_path: Option<String>,
 
     /// Path inside container
     pub guest_path: String,
@@ -269,13 +273,32 @@ pub struct JsVolumeSpec {
     pub read_only: Option<bool>,
 }
 
-impl From<JsVolumeSpec> for VolumeSpec {
-    fn from(v: JsVolumeSpec) -> Self {
-        VolumeSpec {
-            host_path: v.host_path,
+impl TryFrom<JsVolumeSpec> for VolumeSpec {
+    type Error = boxlite_shared::errors::BoxliteError;
+
+    fn try_from(v: JsVolumeSpec) -> Result<Self, Self::Error> {
+        let host_path = match (v.source, v.host_path) {
+            (Some(source), _) => {
+                if !source.starts_with("volume://") {
+                    return Err(Self::Error::InvalidArgument(
+                        "volume source must use the volume:// scheme".into(),
+                    ));
+                }
+                source
+            }
+            (None, Some(host_path)) => host_path,
+            (None, None) => {
+                return Err(Self::Error::InvalidArgument(
+                    "volume source or hostPath is required".into(),
+                ));
+            }
+        };
+
+        Ok(VolumeSpec {
+            host_path,
             guest_path: v.guest_path,
             read_only: v.read_only.unwrap_or(false),
-        }
+        })
     }
 }
 
@@ -370,7 +393,7 @@ impl TryFrom<JsNetworkSpec> for NetworkSpec {
 
     fn try_from(js_spec: JsNetworkSpec) -> Result<Self, Self::Error> {
         let mode = js_spec.mode.parse::<NetworkMode>()?;
-        NetworkSpec::try_from(NetworkConfig {
+        NetworkSpec::try_from(OutboundNetworkConfig {
             mode,
             allow_net: js_spec.allow_net.unwrap_or_default(),
         })
@@ -389,8 +412,8 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .volumes
             .unwrap_or_default()
             .into_iter()
-            .map(VolumeSpec::from)
-            .collect();
+            .map(VolumeSpec::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Convert network spec
         let network = match js_opts.network {
@@ -460,6 +483,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             rootfs,
             volumes,
             network,
+            inbound_network: Default::default(),
             ports,
             auto_remove,
             advanced: AdvancedBoxOptions {
@@ -468,7 +492,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
                 health_check,
                 ..Default::default()
             },
-            auto_pause: js_opts.auto_pause,
+            auto_stop: js_opts.auto_stop,
             auto_delete,
             auto_resume: js_opts.auto_resume,
             detach: js_opts.detach.unwrap_or(false),
@@ -591,6 +615,7 @@ impl From<&JsBoxliteRestOptions> for boxlite::BoxliteRestOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxlite::runtime::options::NetworkSpec;
 
     fn js_registry(host: &str) -> JsImageRegistry {
         JsImageRegistry {
@@ -697,6 +722,41 @@ mod tests {
     }
 
     #[test]
+    fn js_volume_source_requires_volume_scheme() {
+        let volume = VolumeSpec::try_from(JsVolumeSpec {
+            source: Some("volume://vol_123".into()),
+            host_path: None,
+            guest_path: "/data".into(),
+            read_only: None,
+        })
+        .unwrap();
+
+        assert_eq!(volume.host_path, "volume://vol_123");
+        assert_eq!(volume.guest_path, "/data");
+        assert!(!volume.read_only);
+
+        let err = VolumeSpec::try_from(JsVolumeSpec {
+            source: Some("vol_123".into()),
+            host_path: None,
+            guest_path: "/data".into(),
+            read_only: None,
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("volume:// scheme"));
+
+        let err = VolumeSpec::try_from(JsVolumeSpec {
+            source: None,
+            host_path: None,
+            guest_path: "/data".into(),
+            read_only: None,
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("source or hostPath is required"));
+    }
+
+    #[test]
     fn api_key_credential_get_token() {
         let cred = ApiKeyCredential::new("opaque-key".into());
         let tok = cred.get_token();
@@ -756,7 +816,7 @@ mod tests {
             }),
             ports: None,
             auto_remove: None,
-            auto_pause: None,
+            auto_stop: None,
             auto_delete: None,
             auto_resume: None,
             detach: None,
@@ -820,7 +880,7 @@ mod tests {
             network: None,
             ports: None,
             auto_remove: None,
-            auto_pause: None,
+            auto_stop: None,
             auto_delete: None,
             auto_resume: None,
             detach: None,
@@ -853,6 +913,9 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(err.to_string().contains("network.mode=\"disabled\""));
+        assert!(
+            err.to_string()
+                .contains("network.outbound.mode=\"disabled\"")
+        );
     }
 }

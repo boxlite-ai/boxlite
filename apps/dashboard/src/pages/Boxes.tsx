@@ -5,6 +5,7 @@
  */
 
 import { OrganizationSuspendedError } from '@/api/errors'
+import { StatCard } from '@/components/ascii'
 import { OnboardingGuideDialog } from '@/components/OnboardingGuideDialog'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { BoxTable } from '@/components/BoxTable'
@@ -64,6 +65,8 @@ import { toast } from 'sonner'
 
 interface BoxesLocationState {
   openCreateBox?: boolean
+  /** Volume name to pre-mount, set when arriving from the Volumes page. */
+  mountVolume?: string
 }
 
 const Boxes: React.FC = () => {
@@ -80,6 +83,7 @@ const Boxes: React.FC = () => {
   const { selectedOrganization, authenticatedUserOrganizationMember, authenticatedUserHasPermission } =
     useSelectedOrganization()
   const [createBoxOpen, setCreateBoxOpen] = useState(false)
+  const [prefillVolume, setPrefillVolume] = useState<string | undefined>(undefined)
   const [showOnboardingDialog, setShowOnboardingDialog] = useState(false)
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
 
@@ -385,7 +389,7 @@ const Boxes: React.FC = () => {
           error instanceof OrganizationSuspendedError &&
           config.billingApiUrl &&
           authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER ? (
-            <Button variant="secondary" onClick={() => navigate(RoutePath.BILLING_WALLET)}>
+            <Button variant="secondary" onClick={() => navigate(RoutePath.BILLING)}>
               Go to billing
             </Button>
           ) : undefined,
@@ -663,16 +667,30 @@ const Boxes: React.FC = () => {
     }, 220)
   }, [clearOnboardingUrlParam, userId])
 
+  // Two channels open this dialog: router state for a same-tab navigation, and
+  // query params for anything that has to survive being opened in a new tab
+  // (router state does not cross a tab boundary) — e.g. the Volumes page's
+  // "create a box with this volume".
   useEffect(() => {
     const state = location.state as BoxesLocationState | null
-    if (!state?.openCreateBox) {
+    const fromUrl = searchParams.get('createBox') === '1'
+    if (!state?.openCreateBox && !fromUrl) {
       return
     }
 
     setShowOnboardingDialog(false)
+    setPrefillVolume(state?.mountVolume ?? searchParams.get('volume') ?? undefined)
     setCreateBoxOpen(true)
+
+    if (fromUrl) {
+      const nextParams = new URLSearchParams(searchParams)
+      nextParams.delete('createBox')
+      nextParams.delete('volume')
+      setSearchParams(nextParams, { replace: true })
+      return
+    }
     navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null })
-  }, [location.pathname, location.search, location.state, navigate])
+  }, [location.pathname, location.search, location.state, navigate, searchParams, setSearchParams])
 
   // Fleet stat cards — real data, independent of the table's current filter/page.
   const orgId = selectedOrganization?.id
@@ -757,6 +775,7 @@ const Boxes: React.FC = () => {
             triggerClassName="h-11 justify-center sm:h-9"
             open={createBoxOpen}
             onOpenChange={setCreateBoxOpen}
+            prefillVolume={prefillVolume}
             onCreated={() => {
               updateOnboardingProgress({ boxCreated: true })
               setShowOnboardingDialog(false)
@@ -830,91 +849,6 @@ const Boxes: React.FC = () => {
           </AlertDialogContent>
         </AlertDialog>
       )}
-    </div>
-  )
-}
-
-// 5x7 dot-matrix LED glyphs — renders hero numbers as a dot display (telemetry/monitor vibe).
-const DM_GLYPHS: Record<string, string[]> = {
-  '0': ['01110', '10001', '10011', '10101', '11001', '10001', '01110'],
-  '1': ['00100', '01100', '00100', '00100', '00100', '00100', '01110'],
-  '2': ['01110', '10001', '00001', '00010', '00100', '01000', '11111'],
-  '3': ['11110', '00001', '00001', '01110', '00001', '00001', '11110'],
-  '4': ['00010', '00110', '01010', '10010', '11111', '00010', '00010'],
-  '5': ['11111', '10000', '11110', '00001', '00001', '10001', '01110'],
-  '6': ['00110', '01000', '10000', '11110', '10001', '10001', '01110'],
-  '7': ['11111', '00001', '00010', '00100', '01000', '01000', '01000'],
-  '8': ['01110', '10001', '10001', '01110', '10001', '10001', '01110'],
-  '9': ['01110', '10001', '10001', '01111', '00001', '00010', '01100'],
-  '.': ['00', '00', '00', '00', '00', '11', '11'],
-  ',': ['00', '00', '00', '00', '00', '11', '10'],
-}
-
-const isNumeric = (s: string) => /^[\d.,]+$/.test(s)
-
-function DotMatrix({ text, dot = 4, gap = 1 }: { text: string; dot?: number; gap?: number }) {
-  return (
-    <div className="flex items-end" style={{ gap: `${dot + gap}px` }}>
-      {[...text].map((ch, i) => {
-        const rows = DM_GLYPHS[ch]
-        if (!rows) return <span key={i} style={{ width: `${dot * 2}px` }} />
-        const cols = rows[0].length
-        return (
-          <div
-            key={i}
-            className="grid"
-            style={{ gridTemplateColumns: `repeat(${cols}, ${dot}px)`, gridAutoRows: `${dot}px`, gap: `${gap}px` }}
-          >
-            {rows.flatMap((r, y) =>
-              [...r].map((c, x) => (
-                <span
-                  key={`${y}-${x}`}
-                  style={{
-                    width: `${dot}px`,
-                    height: `${dot}px`,
-                    borderRadius: '50%',
-                    background: c === '1' ? 'currentColor' : 'transparent',
-                  }}
-                />
-              )),
-            )}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function StatCard({ label, value, sub, live }: { label: string; value: string; sub: string; live?: boolean }) {
-  return (
-    <div className="flex flex-col gap-2 border border-border bg-card px-3 py-2.5 transition-transform hover:-translate-y-0.5 sm:gap-[14px] sm:px-[22px] sm:pb-5 sm:pt-[18px]">
-      <div className="flex items-start justify-between gap-1">
-        <span className="font-mono text-[9px] uppercase leading-tight tracking-[1px] text-muted-foreground sm:whitespace-nowrap sm:text-[10px] sm:tracking-[1.5px]">
-          <span style={{ color: 'hsl(var(--brand))' }}>▸</span> {label}
-        </span>
-        {live && (
-          <span className="inline-flex shrink-0 items-center gap-[5px] font-mono text-[9px] tracking-[1px] text-muted-foreground">
-            <span
-              className="size-[6px] rounded-full"
-              style={{ background: 'hsl(var(--brand))', animation: 'live-pulse 1.6s infinite' }}
-            />
-            <span className="hidden sm:inline">LIVE</span>
-          </span>
-        )}
-      </div>
-      {/* mobile: compact numeric value (the dot-matrix is too tall for a 3-up row) */}
-      <div className="font-mono text-[20px] font-semibold leading-none tracking-[-0.5px] sm:hidden">{value}</div>
-      {/* desktop: dot-matrix value + sub label */}
-      <div className="hidden items-end gap-[10px] sm:flex">
-        {isNumeric(value) ? (
-          <span className="text-foreground">
-            <DotMatrix text={value} />
-          </span>
-        ) : (
-          <div className="font-mono text-[34px] font-semibold leading-none tracking-[-1px]">{value}</div>
-        )}
-        <span className="mb-[2px] font-mono text-[10px] uppercase tracking-[0.5px] text-muted-foreground">{sub}</span>
-      </div>
     </div>
   )
 }

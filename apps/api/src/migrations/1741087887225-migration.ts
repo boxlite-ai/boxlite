@@ -132,10 +132,7 @@ export class Migration1741087887225 implements MigrationInterface {
       `CREATE INDEX "runner_state_unschedulable_region_index" ON "runner" ("state", "unschedulable", "region")`,
     )
     await queryRunner.query(
-      `CREATE UNIQUE INDEX "IDX_UNIQUE_INCOMPLETE_BACKUP_JOB" ON "job" ("resourceType", "resourceId", "runnerId") WHERE "completedAt" IS NULL AND "type" = 'CREATE_BACKUP'`,
-    )
-    await queryRunner.query(
-      `CREATE UNIQUE INDEX "IDX_UNIQUE_INCOMPLETE_JOB" ON "job" ("resourceType", "resourceId", "runnerId") WHERE "completedAt" IS NULL AND "type" != 'CREATE_BACKUP'`,
+      `CREATE UNIQUE INDEX "IDX_UNIQUE_INCOMPLETE_JOB" ON "job" ("resourceType", "resourceId", "runnerId") WHERE "completedAt" IS NULL`,
     )
     await queryRunner.query(`CREATE INDEX "job_resourceType_resourceId_index" ON "job" ("resourceType", "resourceId")`)
     await queryRunner.query(`CREATE INDEX "job_status_createdAt_index" ON "job" ("status", "createdAt")`)

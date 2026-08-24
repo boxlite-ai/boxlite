@@ -383,8 +383,52 @@ message ContainerConfig {
   ContainerAdvancedOptions advanced = 6;
 }
 
+// linux/mount are grouped the same way OCI runtime-spec groups them —
+// process/linux/mounts are parallel top-level fields of a Spec, so
+// readonly_paths and one mount's options are nested under their own
+// submessage here too, matching where they resolve to. capabilities is the
+// exception — see the field's own comment below for why it stays flat.
 message ContainerAdvancedOptions {
+  // Flat, not nested under a ProcessOptions submessage the way linux/mount
+  // are nested below: this field predates this message (added in #1047,
+  // guest version floor 0.9.8, long since deployed) as a direct
+  // ContainerCapabilities on field 1, not wrapped. Wrapping it now would
+  // reuse field 1's tag for a different wire shape — old, already-running
+  // guests would decode the new bytes against their old field-1 layout and
+  // get garbage. linux/mount are new in this feature with no such
+  // constraint, so they get the cleaner shape capabilities can't.
   ContainerCapabilities capabilities = 1;
+  LinuxOptions linux = 2;
+  MountOptions mount = 3;
+
+  // No masked-path field: masked paths never varied with `privileged` in
+  // practice (see docs/architecture/privileged-mode-design.md, Trade-offs) —
+  // the guest keeps applying its own oci-spec default unconditionally.
+}
+
+message LinuxOptions {
+  // OCI read-only-path list, host-resolved. Empty means unconfined.
+  repeated string readonly_paths = 1;
+}
+
+message MountOptions {
+  // Mirrors OCI runtime-spec's Mount fields (source/destination/options) —
+  // the guest applies this verbatim to whichever of its own standard mounts
+  // `destination` names, no flag to reinterpret.
+
+  // What the guest's own standard mount at `destination` binds from (e.g.
+  // "/sys" today).
+  string source = 1;
+
+  // Which of the guest's own standard mounts these apply to. Carried as
+  // data, not baked into a field name, so a second overridable mount can be
+  // added without a wire-schema change.
+  string destination = 2;
+
+  // Full option list for that mount (including cgroup2 for /sys),
+  // host-resolved. E.g. ["rbind", "nosuid", "noexec", "nodev"], with "rro"
+  // appended for the hardened (non-privileged) case.
+  repeated string options = 3;
 }
 
 message ContainerCapabilities {

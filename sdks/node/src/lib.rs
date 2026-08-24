@@ -30,7 +30,9 @@ pub use info::{
     JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus, JsNetworkInfo, JsPublishedPort,
 };
 pub use metrics::{JsBoxMetrics, JsRuntimeMetrics};
-pub use network::{JsBoxConnection, JsBoxTunnel, JsNetworkHandle};
+pub use network::{
+    JsBoxConnection, JsBoxTunnel, JsNetworkHandle, JsSocketAddress, JsTunnelForwarder,
+};
 pub use options::{
     ApiKeyCredential, JsAccessToken, JsBoxOptions, JsEnvVar, JsHealthCheckOptions, JsImageRegistry,
     JsImageRegistryAuth, JsNetworkSpec, JsOptions, JsPortSpec, JsSecret, JsVolumeSpec,

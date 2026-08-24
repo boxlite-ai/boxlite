@@ -130,6 +130,8 @@ tags:
     description: Runtime and per-box metrics
   - name: Images
     description: Container image management
+  - name: Volumes
+    description: Managed persistent volumes
 
 # ===========================================================================
 # Paths
@@ -179,6 +181,82 @@ paths:
                 $ref: "#/components/schemas/Principal"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
+
+  # -------------------------------------------------------------------------
+  # Volumes
+  # -------------------------------------------------------------------------
+  /{prefix}/volumes:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+
+    post:
+      operationId: createVolume
+      summary: Create a managed persistent volume
+      description: Creates a volume and waits until its backing object storage is ready.
+      tags: [Volumes]
+      responses:
+        "201":
+          description: Volume created and ready for use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Volume"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "408":
+          $ref: "#/components/responses/RequestTimeoutError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+
+    get:
+      operationId: listVolumes
+      summary: List managed persistent volumes
+      tags: [Volumes]
+      responses:
+        "200":
+          description: List of volumes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListVolumesResponse"
+
+  /{prefix}/volumes/{volume_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/volumeId"
+
+    get:
+      operationId: getVolume
+      summary: Get managed persistent volume metadata
+      tags: [Volumes]
+      responses:
+        "200":
+          description: Volume metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Volume"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+    delete:
+      operationId: removeVolume
+      summary: Remove a managed persistent volume
+      tags: [Volumes]
+      parameters:
+        - name: force
+          in: query
+          description: Treat an already deleting or missing volume as successfully removed
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "204":
+          description: Volume removal accepted
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 
   # -------------------------------------------------------------------------
   # Boxes
@@ -1105,6 +1183,15 @@ components:
         type: string
       example: "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
 
+    volumeId:
+      name: volume_id
+      in: path
+      required: true
+      description: Server-assigned managed volume identifier
+      schema:
+        type: string
+        minLength: 1
+
     pageSize:
       name: pageSize
       in: query
@@ -1207,6 +1294,20 @@ components:
               type: ImageError
               code: image_pull_failed
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
+
+    RequestTimeoutError:
+      description: The operation did not reach its target state before the timeout
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    ServiceUnavailableError:
+      description: A required backend service is not configured or available
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
 
   # -------------------------------------------------------------------------
   # Schemas
@@ -1549,11 +1650,11 @@ components:
           additionalProperties:
             type: string
           description: User-defined key-value labels
-        auto_pause:
+        auto_stop:
           type: integer
           minimum: 0
           default: 900
-          description: Idle time in seconds before AutoPause; 0 disables AutoPause
+          description: Idle time in seconds before AutoStop; 0 disables AutoStop
         auto_delete:
           type: integer
           minimum: 0
@@ -1562,7 +1663,7 @@ components:
         auto_resume:
           type: boolean
           default: true
-          description: Whether the box automatically resumes when accessed after AutoPause
+          description: Whether the box automatically resumes when accessed after AutoStop
 
     BoxStatus:
       type: string
@@ -1670,11 +1771,11 @@ components:
           type: boolean
           description: Box survives parent process exit
           default: false
-        auto_pause:
+        auto_stop:
           type: integer
           minimum: 0
           default: 900
-          description: Idle time in seconds before AutoPause; 0 disables AutoPause
+          description: Idle time in seconds before AutoStop; 0 disables AutoStop
         auto_delete:
           type: integer
           minimum: 0
@@ -1683,7 +1784,7 @@ components:
         auto_resume:
           type: boolean
           default: true
-          description: Whether the box automatically resumes when accessed after AutoPause
+          description: Whether the box automatically resumes when accessed after AutoStop
 
     CreateBoxAdvancedOptions:
       type: object
@@ -1719,12 +1820,26 @@ components:
 
     VolumeSpec:
       type: object
-      description: Host-to-guest filesystem mount
-      required: [host_path, guest_path]
+      description: |
+        Filesystem mount attached to a box. One of `source` or the deprecated
+        `host_path` is required.
+      required: [guest_path]
       properties:
+        source:
+          type: string
+          description: |
+            Scheme-qualified mount source. Use `volume://<volume_id>` for managed
+            volumes.
+          example: volume://vol_01K2EXAMPLE
         host_path:
           type: string
-          description: Path on the host filesystem
+          deprecated: true
+          description: |
+            Deprecated alias for `source`, kept for backward compatibility with
+            existing /v1 clients built against the pre-managed-volumes schema.
+            Use `source` with the `volume://<volume_id>` scheme instead; this
+            field will be removed in a future API version.
+          example: volume://vol_01K2EXAMPLE
         guest_path:
           type: string
           description: Mount point inside the container
@@ -1732,9 +1847,104 @@ components:
           type: boolean
           default: false
 
+    VolumeState:
+      type: string
+      description: Managed volume lifecycle state
+      enum: [creating, ready, pending_create, pending_delete, deleting, deleted, error]
+
+    VolumeSummary:
+      type: object
+      description: Managed persistent volume summary, as returned by the list endpoint
+      additionalProperties: false
+      required: [id, name, state, created_at]
+      properties:
+        id:
+          type: string
+          description: Server-assigned managed volume identifier
+        name:
+          type: string
+          description: User-assigned volume name
+        state:
+          $ref: "#/components/schemas/VolumeState"
+        created_at:
+          type: string
+          format: date-time
+          description: Volume creation timestamp (UTC)
+
+    Volume:
+      type: object
+      description: Managed persistent volume detail, as returned by create/get
+      additionalProperties: false
+      required: [id, name, state, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          description: Server-assigned managed volume identifier
+        name:
+          type: string
+          description: User-assigned volume name
+        state:
+          $ref: "#/components/schemas/VolumeState"
+        created_at:
+          type: string
+          format: date-time
+          description: Volume creation timestamp (UTC)
+        updated_at:
+          type: string
+          format: date-time
+          description: Last update timestamp (UTC)
+        last_used_at:
+          type: string
+          format: date-time
+          description: Last time the volume was attached to a box, if ever
+        error_reason:
+          type: string
+          description: Failure detail when state is "error"
+
+    ListVolumesResponse:
+      type: object
+      additionalProperties: false
+      required: [volumes]
+      properties:
+        volumes:
+          type: array
+          items:
+            $ref: "#/components/schemas/VolumeSummary"
+
     NetworkSpec:
       type: object
-      description: Structured network configuration for the box
+      description: |
+        Structured network configuration for the box.
+
+        Send the nested `outbound`/`inbound` shape. The pre-split flat
+        `mode`/`allow_net` pair is still accepted for already-deployed
+        callers and normalized server side, but is deprecated and will be
+        removed; mixing it with the nested fields in one request is
+        rejected with 400.
+      additionalProperties: false
+      properties:
+        outbound:
+          $ref: "#/components/schemas/OutboundNetworkSpec"
+        inbound:
+          $ref: "#/components/schemas/InboundNetworkSpec"
+        mode:
+          deprecated: true
+          type: string
+          enum: [enabled, disabled]
+          description: |
+            Deprecated: use `outbound.mode`. Legacy flat outbound mode.
+        allow_net:
+          deprecated: true
+          type: array
+          items:
+            type: string
+          description: |
+            Deprecated: use `outbound.allow_net`. Legacy flat outbound
+            allowlist; implies `mode=enabled` when sent without `mode`.
+
+    OutboundNetworkSpec:
+      type: object
+      description: Outbound guest network policy
       additionalProperties: false
       required: [mode]
       properties:
@@ -1751,6 +1961,30 @@ components:
             Optional outbound allowlist used only when `mode=enabled`.
             Empty or omitted means full outbound access.
             Supports hostnames, wildcard hostnames, IPs, and CIDRs.
+
+    InboundNetworkSpec:
+      type: object
+      description: >
+        Inbound service access policy. Aligned field-for-field with
+        OutboundNetworkSpec.
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [enabled, disabled]
+          description: |
+            `enabled` means service endpoints exposed from the box are publicly
+            reachable through the remote proxy. `disabled` means private.
+        allow_net:
+          type: array
+          items:
+            type: string
+          description: |
+            Not supported yet: a non-empty value is rejected with 400. The
+            field exists for shape symmetry with `OutboundNetworkSpec`; no
+            layer enforces an inbound allowlist today, so inbound access is
+            controlled by `mode` alone. Omit it, or send an empty array.
 
     SecretSpec:
       type: object

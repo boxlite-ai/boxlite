@@ -46,7 +46,7 @@ from ._boxlite import SyncBoxlite
 from ._codebox import SyncCodeBox
 from ._execution import SyncExecStderr, SyncExecStdout, SyncExecution
 from ._images import SyncImageHandle
-from ._network import SyncNetworkHandle
+from ._network import SyncNetworkHandle, SyncTunnelForwarder
 from ._simplebox import SyncSimpleBox
 from ._skillbox import SyncSkillBox
 from ._sync_base import SyncBase, SyncContextManager
@@ -61,6 +61,7 @@ __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
     "SyncBox",
     "SyncImageHandle",
     "SyncNetworkHandle",
+    "SyncTunnelForwarder",
     "SyncExecution",
     "SyncExecStdout",
     "SyncExecStderr",

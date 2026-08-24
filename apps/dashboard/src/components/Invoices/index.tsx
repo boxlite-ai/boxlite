@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { useMatchMedia } from '@/hooks/useMatchMedia'
 import { cn } from '@/lib/utils'
 import { flexRender } from '@tanstack/react-table'
 import { FileText } from '@/components/ui/icon'
@@ -14,6 +15,14 @@ import { InvoicesTableHeader } from './InvoicesTableHeader'
 import { InvoicesTableProps } from './types'
 import { useInvoicesTable } from './useInvoicesTable'
 
+// A phone keeps the settlement id, charge date, cost and final state. The
+// funding split returns at sm, where both amounts fit without crowding.
+const NARROW_SCREEN_HIDDEN = new Set(['quotaCoveredCents', 'walletFundedCents'])
+
+// Matches the `sm:` boundary the classes below use, so the JS and CSS halves of
+// this layout never disagree in the 640-767px band.
+const NARROW_SCREEN = '(max-width: 639px)'
+
 export function InvoicesTable({
   data,
   pagination,
@@ -21,19 +30,13 @@ export function InvoicesTable({
   pageCount,
   onPaginationChange,
   loading,
-  onViewInvoice,
-  onVoidInvoice,
-  onRowClick,
-  onPayInvoice,
 }: InvoicesTableProps) {
+  const isNarrow = useMatchMedia(NARROW_SCREEN)
   const { table } = useInvoicesTable({
     data,
     pagination,
     pageCount,
     onPaginationChange,
-    onViewInvoice,
-    onVoidInvoice,
-    onPayInvoice,
   })
 
   return (
@@ -53,8 +56,9 @@ export function InvoicesTable({
                       header.column.getCanSort() && header.column.toggleSorting(header.column.getIsSorted() === 'asc')
                     }
                     className={cn(
-                      'sticky top-0 z-[3] border-b border-border',
+                      'sticky top-0 z-[3] border-b border-border font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground',
                       header.column.getCanSort() ? 'hover:bg-muted cursor-pointer' : '',
+                      NARROW_SCREEN_HIDDEN.has(header.column.id) && 'hidden sm:table-cell',
                     )}
                   >
                     {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
@@ -73,26 +77,25 @@ export function InvoicesTable({
             </TableRow>
           ) : table.getRowModel().rows?.length ? (
             table.getRowModel().rows.map((row) => (
-              <TableRow
-                key={row.id}
-                className={`transition-colors duration-300 ${onRowClick ? 'cursor-pointer' : ''}`}
-                onClick={() => onRowClick?.(row.original)}
-              >
+              <TableRow key={row.id} className="transition-colors duration-300">
                 {row.getVisibleCells().map((cell) => (
                   <TableCell
                     key={cell.id}
-                    onClick={(e) => {
-                      if (cell.column.id === 'actions') {
-                        e.stopPropagation()
-                      }
-                    }}
-                    className="border-b border-border"
-                    style={{
-                      width: cell.column.id === 'number' ? '20%' : 'auto',
-                      maxWidth: cell.column.getSize() + 80,
-                      minWidth: cell.column.getSize(),
-                    }}
-                    sticky={cell.column.id === 'actions' ? 'right' : undefined}
+                    className={cn(
+                      'border-b border-border font-mono text-[12px]',
+                      NARROW_SCREEN_HIDDEN.has(cell.column.id) && 'hidden sm:table-cell',
+                    )}
+                    // Below sm, let the four essential columns size to their
+                    // content instead of imposing desktop minimum widths.
+                    style={
+                      isNarrow
+                        ? undefined
+                        : {
+                            width: cell.column.id === 'number' ? '20%' : 'auto',
+                            maxWidth: cell.column.getSize() + 80,
+                            minWidth: cell.column.getSize(),
+                          }
+                    }
                   >
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </TableCell>
@@ -102,11 +105,11 @@ export function InvoicesTable({
           ) : (
             <TableEmptyState
               colSpan={table.getAllColumns().length}
-              message="No invoices yet."
+              message="No usage settlements yet."
               icon={<FileText className="w-8 h-8" />}
               description={
                 <div className="space-y-2">
-                  <p>Invoices will appear here once they are generated.</p>
+                  <p>Settlements will appear here after metered usage is funded.</p>
                 </div>
               }
             />
@@ -115,7 +118,7 @@ export function InvoicesTable({
       </Table>
 
       <div className="flex items-center justify-end">
-        <Pagination className="pb-2 pt-6" table={table} entityName="Invoices" totalItems={totalItems} />
+        <Pagination className="pb-2 pt-6" table={table} entityName="Settlements" totalItems={totalItems} />
       </div>
     </>
   )

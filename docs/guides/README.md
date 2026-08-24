@@ -2,7 +2,7 @@
 
 ## Lifecycle
 
-- [AutoPause、AutoResume 与 AutoDelete](./auto-pause-resume.md)
+- [AutoStop、AutoResume 与 AutoDelete](./auto-stop-resume.md)
 
 ## Building from Source
 
@@ -32,7 +32,7 @@ make dev:python
 | Target             | Description                              |
 |--------------------|------------------------------------------|
 | `make setup`       | Install platform-specific dependencies   |
-| `make guest`       | Cross-compile guest binary (musl static) |
+| `make guest`       | Build guest binary + filesystem tools    |
 | `make shim`        | Build boxlite-shim binary                |
 | `make runtime`     | Build complete BoxLite runtime           |
 | `make dev:python`  | Local Python SDK development             |
@@ -59,8 +59,9 @@ scripts/
 │   ├── manylinux.sh
 │   └── musllinux.sh
 ├── build/              # Build scripts
-│   ├── build-guest.sh  # Guest binary (cross-compile)
-│   ├── build-shim.sh   # Shim binary
+│   ├── build-guest.sh         # Guest binary (cross-compile)
+│   ├── build-guest-deps.sh    # Static guest e2fsprogs tools
+│   ├── build-shim.sh          # Shim binary
 │   └── build-runtime.sh
 ├── package/            # Packaging scripts
 └── common.sh           # Shared utilities
@@ -276,8 +277,8 @@ is appropriate for browsers, database clients, and other programs that expect a
 normal host address.
 
 For SDK code that must work with local and remote runtimes, use
-`box.network.tunnel(port)` and consume its byte stream with `connect()`. A tunnel
-handle represents one connection; request another handle for another connection.
+`box.network.tunnel(port)` and open byte streams with `connect()`. A tunnel
+can be consumed by `connect()` or by `forward()` to bind a local listener.
 Remote CLI users can run `boxlite network tunnel BOX PORT` to obtain the public
 service URL.
 

@@ -11,6 +11,12 @@ import { ResourceType } from '../enums/resource-type.enum'
  * Type-safe mapping between JobType and its corresponding ResourceType(s) + Payload
  * This ensures compile-time safety when creating jobs
  * resourceType is an array of allowed ResourceTypes - the user can supply any of them
+ *
+ * The resource type is also a namespace: IDX_UNIQUE_INCOMPLETE_JOB allows one
+ * incomplete job per (resourceType, resourceId, runnerId). A migration's jobs act
+ * on the archive the box travels in rather than on the box itself, and they run
+ * against a box a user may start or stop at the same time, so they are namespaced
+ * under BACKUP to keep out of the box's own lifecycle slot.
  */
 export interface JobTypeMap {
   [JobType.CREATE_BOX]: {
@@ -25,26 +31,20 @@ export interface JobTypeMap {
   [JobType.DESTROY_BOX]: {
     resourceType: [ResourceType.BOX]
   }
-  [JobType.RESIZE_BOX]: {
-    resourceType: [ResourceType.BOX]
+  [JobType.EXPORT_BOX]: {
+    resourceType: [ResourceType.BACKUP]
   }
-  [JobType.CREATE_BACKUP]: {
-    resourceType: [ResourceType.BOX]
+  [JobType.IMPORT_BOX]: {
+    resourceType: [ResourceType.BACKUP]
   }
-  [JobType.PULL_ARTIFACT]: {
-    resourceType: [ResourceType.ARTIFACT]
+  [JobType.ROLLBACK_EXPORT_BOX]: {
+    resourceType: [ResourceType.BACKUP]
   }
-  [JobType.REMOVE_ARTIFACT]: {
-    resourceType: [ResourceType.ARTIFACT]
+  [JobType.ROLLBACK_IMPORT_BOX]: {
+    resourceType: [ResourceType.BACKUP]
   }
-  [JobType.UPDATE_BOX_NETWORK_SETTINGS]: {
-    resourceType: [ResourceType.BOX]
-  }
-  [JobType.INSPECT_ARTIFACT_IN_REGISTRY]: {
-    resourceType: [ResourceType.ARTIFACT]
-  }
-  [JobType.RECOVER_BOX]: {
-    resourceType: [ResourceType.BOX]
+  [JobType.DISCARD_EXPORTED_BOX]: {
+    resourceType: [ResourceType.BACKUP]
   }
 }
 

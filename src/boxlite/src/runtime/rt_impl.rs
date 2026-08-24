@@ -145,6 +145,8 @@ pub struct RuntimeImpl {
     pub(crate) guest_rootfs_mgr: GuestRootfsManager,
     /// Guest rootfs lazy initialization (Arc<OnceCell>)
     pub(crate) guest_rootfs: Arc<OnceCell<GuestRootfs>>,
+    /// Minimal rootfs lazy initialization (Arc<OnceCell>, background single-flight).
+    pub(crate) minimal_rootfs: Arc<OnceCell<GuestRootfs>>,
     /// Runtime-wide metrics (AtomicU64 based, lock-free)
     pub(crate) runtime_metrics: RuntimeMetricsStorage,
 
@@ -194,6 +196,26 @@ pub struct SynchronizedState {
     active_boxes_by_name: HashMap<String, Weak<crate::litebox::box_impl::BoxImpl>>,
 }
 
+/// Headroom `ImageDiskManager` reserves in every image disk it builds, for
+/// the `boxlite-guest` binary `GuestRootfsManager` injects into a copy of it
+/// afterward. `ImageDiskManager` folds this into its cache key
+/// (`disk_path`), so a disk cached under a different value is never reused.
+///
+/// Fixed, not derived from the real guest binary's current size: this
+/// manager has no GC (unlike `GuestRootfsManager`'s paired `version_key` +
+/// `gc()`), so a value that changed on every guest-binary rebuild would
+/// orphan a cache entry per digest on every rebuild — a routine, frequent
+/// event for developers. Because this is instead a source-level constant, it
+/// only changes on the rare, deliberate occasions *this number itself* gets
+/// edited (e.g. if a future guest binary outgrows it), each such change
+/// creating at most one new generation of cache entries, not a continuous
+/// leak. An unstripped debug build measures ~232 MB (see
+/// `guest_binary_fits_in_image_disk_headroom` below); 512 MiB covers that
+/// with margin to grow, in both debug and (far smaller) release builds, at
+/// the cost of some unused — but sparse, so cheap on disk — space in every
+/// cached image disk.
+const IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES: u64 = 512 * 1024 * 1024;
+
 impl RuntimeImpl {
     // ========================================================================
     // CONSTRUCTION
@@ -211,7 +233,20 @@ impl RuntimeImpl {
         experimental_features: ExperimentalFeatures,
     ) -> BoxliteResult<SharedRuntimeImpl> {
         let _sys = crate::system_check::SystemCheck::run()?;
+        Self::initialize(options, experimental_features)
+    }
 
+    /// Build a runtime without host validation. Tests using this must not exercise
+    /// VM or hypervisor operations.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(options: BoxliteOptions) -> BoxliteResult<SharedRuntimeImpl> {
+        Self::initialize(options, ExperimentalFeatures::default())
+    }
+
+    fn initialize(
+        options: BoxliteOptions,
+        experimental_features: ExperimentalFeatures,
+    ) -> BoxliteResult<SharedRuntimeImpl> {
         // Validate Early: Check preconditions before expensive work
         if !options.home_dir.is_absolute() {
             return Err(BoxliteError::Internal(format!(
@@ -301,8 +336,13 @@ impl RuntimeImpl {
             "Initialized lock manager"
         );
 
-        let image_disk_mgr =
-            ImageDiskManager::new(layout.image_layout().disk_images_dir(), layout.temp_dir());
+        // See IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES for why this is a fixed
+        // budget rather than derived from the guest binary actually on disk.
+        let image_disk_mgr = ImageDiskManager::new(
+            layout.image_layout().disk_images_dir(),
+            layout.temp_dir(),
+            IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES,
+        );
         let guest_rootfs_mgr = GuestRootfsManager::new(base_disk_mgr.clone(), layout.temp_dir());
 
         let inner = Arc::new(Self {
@@ -316,6 +356,7 @@ impl RuntimeImpl {
             image_disk_mgr,
             guest_rootfs_mgr,
             guest_rootfs: Arc::new(OnceCell::new()),
+            minimal_rootfs: Arc::new(OnceCell::new()),
             runtime_metrics: RuntimeMetricsStorage::new(),
             experimental_features,
             base_disk_mgr,
@@ -378,6 +419,11 @@ impl RuntimeImpl {
         archive: BoxArchive,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot import box: runtime has been shut down".into(),
+            ));
+        }
         super::import::import_box(self, archive, name).await
     }
 
@@ -392,6 +438,18 @@ impl RuntimeImpl {
         name: Option<String>,
         reuse_existing: bool,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        // Every reachable caller is `LocalRuntime` (`RuntimeImpl` isn't
+        // re-exported), which normalizes via `sanitize_local_options` before
+        // reaching here — assert the invariant instead of re-normalizing.
+        debug_assert!(
+            !options.advanced.privileged
+                || options
+                    .advanced
+                    .capabilities
+                    .is_privileged_capability_shape(),
+            "create_inner expects options already normalized by sanitize_local_options"
+        );
+
         // Check if runtime has been shut down
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
@@ -494,10 +552,8 @@ impl RuntimeImpl {
         actual: &BoxConfig,
     ) -> BoxliteResult<()> {
         let box_name = actual.name.as_deref().unwrap_or_else(|| actual.id.as_str());
-        requested
-            .advanced
-            .capabilities
-            .check_compatibility(&actual.options.advanced.capabilities, box_name)?;
+        let mut actual_advanced = actual.options.advanced.clone();
+        actual_advanced.normalize_privileged();
 
         // One-way: a nested-capable box satisfies any request, but a plain box
         // cannot satisfy one that needs /dev/kvm. Reusing it would look like a
@@ -509,6 +565,16 @@ impl RuntimeImpl {
                 "box '{box_name}' was created without nested virtualization and cannot satisfy a required nested virtualization request; use a different name or recreate the box"
             )));
         }
+        if requested.advanced.privileged && !actual_advanced.privileged {
+            return Err(BoxliteError::Unsupported(format!(
+                "box '{box_name}' was created without privileged support and cannot satisfy a required privileged request; use a different name or recreate the box"
+            )));
+        }
+
+        requested
+            .advanced
+            .capabilities
+            .check_compatibility(&actual_advanced.capabilities, box_name)?;
 
         Ok(())
     }
@@ -1196,10 +1262,12 @@ impl RuntimeImpl {
         self: &Arc<Self>,
         staging_dir: std::path::PathBuf,
         name: Option<String>,
-        options: BoxOptions,
+        mut options: BoxOptions,
         initial_status: BoxStatus,
     ) -> BoxliteResult<LiteBox> {
         use crate::litebox::config::ContainerRuntimeConfig;
+
+        options.advanced.normalize_privileged();
 
         let box_id = BoxIDMint::mint();
         let container_id = ContainerID::new();
@@ -1390,8 +1458,7 @@ impl RuntimeImpl {
             // lifecycle, so it only matters when no shim is alive.
             match PidFileReader::at(&pid_path).process_identity() {
                 ProcessIdentity::Verified(pid) => {
-                    state.set_pid(Some(pid));
-                    state.set_status(BoxStatus::Running);
+                    state.adopt_recovered_shim(pid);
                     // Live shim wins — archive any prior-lifecycle exit
                     // file so the next crash gets the canonical slot.
                     if had_stale_exit {
@@ -1413,8 +1480,7 @@ impl RuntimeImpl {
                     // Pre-fingerprint PID file. Adopt the live PID so VMs
                     // aren't lost on upgrade; the next stop/start writes a
                     // two-line file and the fingerprint check takes over.
-                    state.set_pid(Some(pid));
-                    state.set_status(BoxStatus::Running);
+                    state.adopt_recovered_shim(pid);
                     if had_stale_exit {
                         stash_exit_file(&box_layout);
                         tracing::warn!(
@@ -1711,11 +1777,11 @@ impl std::fmt::Debug for RuntimeImpl {
 pub(crate) struct LocalRuntime(pub(crate) SharedRuntimeImpl);
 
 fn reject_local_lifecycle_policy(options: &BoxOptions) -> BoxliteResult<()> {
-    // Local runtimes support auto_delete as a remove-on-stop policy, but AutoPause
+    // Local runtimes support auto_delete as a remove-on-stop policy, but AutoStop
     // needs a sweeper that the local runtime does not have, so it stays REST-only.
-    if options.auto_pause.is_some_and(|seconds| seconds > 0) {
+    if options.auto_stop.is_some_and(|seconds| seconds > 0) {
         return Err(BoxliteError::Unsupported(
-            "AutoPause is only supported by REST runtimes".into(),
+            "AutoStop is only supported by REST runtimes".into(),
         ));
     }
     Ok(())
@@ -1723,11 +1789,12 @@ fn reject_local_lifecycle_policy(options: &BoxOptions) -> BoxliteResult<()> {
 
 async fn sanitize_local_options(
     features: &ExperimentalFeatures,
-    options: BoxOptions,
+    mut options: BoxOptions,
 ) -> BoxliteResult<BoxOptions> {
     features.require_for_options(&options)?;
     tokio::task::spawn_blocking(move || {
         options.sanitize()?;
+        options.advanced.normalize_privileged();
         Ok(options)
     })
     .await
@@ -1874,22 +1941,47 @@ mod tests {
     use crate::runtime::backend::RuntimeBackend;
     use crate::runtime::images::ImageBackend;
     use crate::runtime::options::RootfsSpec;
+    use crate::vmm::guest_binary::GuestBinary;
     use tempfile::TempDir;
+
+    /// `IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES` must stay ahead of the real
+    /// embedded `boxlite-guest` binary — silently falling behind would
+    /// reintroduce the exact "Could not allocate block in ext2 filesystem"
+    /// failure this constant exists to prevent, undetected until a real box
+    /// tried to boot. Skipped when the guest binary isn't assembled (no
+    /// `make guest`/`make runtime:debug`).
+    #[test]
+    fn guest_binary_fits_in_image_disk_headroom() {
+        let Ok(guest) = GuestBinary::get() else {
+            eprintln!("skipping: boxlite-guest not found (run `make guest`)");
+            return;
+        };
+        let guest_len = std::fs::metadata(guest.path())
+            .expect("stat resolved guest binary")
+            .len();
+        assert!(
+            guest_len < IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES,
+            "guest binary is {} MiB, headroom budget is only {} MiB -- bump \
+             IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES",
+            guest_len / (1024 * 1024),
+            IMAGE_DISK_GUEST_BINARY_HEADROOM_BYTES / (1024 * 1024)
+        );
+    }
 
     #[test]
     fn local_runtime_rejects_explicit_lifecycle_policy() {
         let mut options = BoxOptions::default();
         assert!(reject_local_lifecycle_policy(&options).is_ok());
 
-        options.auto_pause = Some(0);
+        options.auto_stop = Some(0);
         assert!(reject_local_lifecycle_policy(&options).is_ok());
 
-        options.auto_pause = Some(1);
+        options.auto_stop = Some(1);
         assert!(matches!(
             reject_local_lifecycle_policy(&options),
             Err(BoxliteError::Unsupported(_))
         ));
-        options.auto_pause = None;
+        options.auto_stop = None;
         options.auto_delete = Some(3600);
         assert!(reject_local_lifecycle_policy(&options).is_ok());
     }
@@ -1980,6 +2072,21 @@ mod tests {
         sanitize_local_options(&enabled, options).await.unwrap();
     }
 
+    #[tokio::test]
+    async fn privileged_options_do_not_require_experimental_features() {
+        let options = BoxOptions {
+            advanced: crate::runtime::advanced_options::AdvancedBoxOptions {
+                privileged: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        sanitize_local_options(&ExperimentalFeatures::default(), options)
+            .await
+            .expect("privileged mode should be available without an experimental opt-in");
+    }
+
     /// Create a RuntimeImpl with isolated temp directory.
     fn create_test_runtime() -> (SharedRuntimeImpl, TempDir) {
         let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
@@ -1988,6 +2095,17 @@ mod tests {
             image_registries: vec![],
         };
         let runtime = RuntimeImpl::new(options).expect("Failed to create runtime");
+        (runtime, temp_dir)
+    }
+
+    fn create_test_runtime_without_host_preflight() -> (SharedRuntimeImpl, TempDir) {
+        let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
+        let options = BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        };
+        let runtime = RuntimeImpl::initialize(options, ExperimentalFeatures::default())
+            .expect("Failed to create test runtime");
         (runtime, temp_dir)
     }
 
@@ -3084,6 +3202,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_or_create_rejects_privileged_upgrade() {
+        let (runtime, _dir) = create_test_runtime();
+        let name = Some("plain-box".to_string());
+
+        let (_, created) = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    ..Default::default()
+                },
+                name.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(created);
+
+        // set_privileged (not a hand-built struct literal) so this request is
+        // already in the normalized shape a real caller produces — create_inner
+        // itself no longer normalizes; it trusts sanitize_local_options did.
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.set_privileged(true);
+
+        let result = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    advanced,
+                    ..Default::default()
+                },
+                name,
+            )
+            .await;
+
+        match result {
+            Err(BoxliteError::Unsupported(message)) => {
+                assert!(message.contains("privileged"));
+                assert!(message.contains("plain-box"));
+            }
+            Err(other) => panic!("expected Unsupported error, got: {other}"),
+            Ok(_) => panic!("get_or_create must not reuse a non-privileged box"),
+        }
+    }
+
+    #[tokio::test]
     async fn get_or_create_allows_nested_box_for_default_request() {
         let (runtime, _dir) = create_test_runtime();
         let name = Some("nested-box".to_string());
@@ -3122,6 +3284,27 @@ mod tests {
     // ====================================================================
     // Post-shutdown operation rejection
     // ====================================================================
+
+    #[tokio::test]
+    async fn test_import_after_shutdown_returns_stopped_before_archive_validation() {
+        let (runtime, dir) = create_test_runtime_without_host_preflight();
+        runtime.shutdown_token.cancel();
+
+        let result = runtime
+            .import_box(
+                BoxArchive::new(dir.path().join("missing.boxlite")),
+                Some("imported".to_string()),
+            )
+            .await;
+
+        match result {
+            Err(BoxliteError::Stopped(message)) => {
+                assert!(message.contains("shut down"), "{message}");
+            }
+            Err(other) => panic!("expected Stopped before archive validation, got: {other}"),
+            Ok(_) => panic!("import should fail after shutdown"),
+        }
+    }
 
     #[tokio::test]
     async fn test_create_after_shutdown_returns_stopped() {

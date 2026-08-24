@@ -24,7 +24,9 @@ use crate::info::{
     PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus, PyNetworkInfo, PyPublishedPort,
 };
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
-use crate::network::{PyBoxConnection, PyBoxTunnel, PyNetworkHandle};
+use crate::network::{
+    PyBoxConnection, PyBoxTunnel, PyNetworkHandle, PySocketAddress, PyTunnelForwarder,
+};
 use crate::options::{
     PyAccessToken, PyApiKeyCredential, PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions,
     PyImageRegistry, PyNetworkSpec, PyOptions, PySecret,
@@ -67,6 +69,8 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNetworkHandle>()?;
     m.add_class::<PyBoxTunnel>()?;
     m.add_class::<PyBoxConnection>()?;
+    m.add_class::<PySocketAddress>()?;
+    m.add_class::<PyTunnelForwarder>()?;
     m.add_class::<PyCopyOptions>()?;
     m.add_class::<PySnapshotInfo>()?;
     m.add_class::<PySnapshotHandle>()?;

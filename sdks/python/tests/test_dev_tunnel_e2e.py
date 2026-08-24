@@ -71,9 +71,9 @@ async def _wait_for_http_server(
         tunnel = await box.network.tunnel(port)
 
 
-def _host_for_endpoint(endpoint: str | int) -> str:
-    if isinstance(endpoint, str) and endpoint.startswith(("http://", "https://")):
-        return endpoint.split("://", 1)[1].split("/", 1)[0]
+def _host_for_uri(uri: str | None) -> str:
+    if uri is not None and uri.startswith(("http://", "https://")):
+        return uri.split("://", 1)[1].split("/", 1)[0]
     return "localhost"
 
 
@@ -250,20 +250,20 @@ async def _assert_binary_tunnel(box, port: int) -> None:
         await server.kill()
 
 
-async def _assert_tunnel_endpoint_and_one_shot_connects(
+async def _assert_tunnel_uri_and_one_shot_connects(
     box,
     port: int,
     marker: bytes,
-    assert_endpoint,
+    assert_uri,
 ):
     server = await _serve_marker_http(box, port, marker)
 
     try:
         first_tunnel = await box.network.tunnel(port)
-        endpoint = first_tunnel.endpoint()
-        assert_endpoint(endpoint)
+        uri = first_tunnel.uri()
+        assert_uri(uri)
 
-        host = _host_for_endpoint(endpoint)
+        host = _host_for_uri(uri)
         first = await _wait_for_http_server(box, port, first_tunnel, host, marker)
         second_tunnel = await box.network.tunnel(port)
         second = await _http_get(second_tunnel, host, marker)
@@ -274,32 +274,33 @@ async def _assert_tunnel_endpoint_and_one_shot_connects(
         await server.kill()
 
 
-def _assert_local_endpoint(endpoint: int) -> None:
-    assert isinstance(endpoint, int)
-    assert endpoint >= 0
+def _assert_local_uri(uri: str | None) -> None:
+    # A local tunnel is already a live connection, so it has no address.
+    assert uri is None
 
 
-def _assert_cloud_endpoint(port: int):
-    def check(endpoint: str) -> None:
-        assert endpoint.startswith(("http://", "https://"))
-        assert str(port) in endpoint
+def _assert_cloud_uri(port: int):
+    def check(uri: str | None) -> None:
+        assert uri is not None
+        assert uri.startswith(("http://", "https://"))
+        assert str(port) in uri
 
     return check
 
 
 @pytest.mark.integration
-async def test_local_box_tunnel_endpoint_and_one_shot_connects(shared_runtime):
+async def test_local_box_tunnel_uri_and_one_shot_connects(shared_runtime):
     async with boxlite.SimpleBox(
         image=LOCAL_IMAGE,
         runtime=shared_runtime,
         memory_mib=512,
         cpus=1,
     ) as box:
-        await _assert_tunnel_endpoint_and_one_shot_connects(
+        await _assert_tunnel_uri_and_one_shot_connects(
             box,
             LOCAL_PORT,
             LOCAL_MARKER,
-            _assert_local_endpoint,
+            _assert_local_uri,
         )
 
 
@@ -315,7 +316,7 @@ async def test_local_box_tunnel_binary_integrity(shared_runtime):
 
 
 @pytest.mark.e2e
-async def test_dev_cloud_tunnel_endpoint_and_one_shot_connects():
+async def test_dev_cloud_tunnel_uri_and_one_shot_connects():
     from boxlite import ApiKeyCredential, Boxlite, BoxliteRestOptions
 
     api_key = _required_env("BOXLITE_API_KEY")
@@ -334,11 +335,11 @@ async def test_dev_cloud_tunnel_endpoint_and_one_shot_connects():
     box = await runtime.get(box_id)
     assert box is not None, f"dev box {box_id!r} was not found"
 
-    await _assert_tunnel_endpoint_and_one_shot_connects(
+    await _assert_tunnel_uri_and_one_shot_connects(
         box,
         port,
         CLOUD_MARKER,
-        _assert_cloud_endpoint(port),
+        _assert_cloud_uri(port),
     )
 
 

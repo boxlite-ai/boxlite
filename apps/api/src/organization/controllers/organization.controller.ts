@@ -35,6 +35,7 @@ import { SystemActionGuard } from '../../auth/system-action.guard'
 import { RequiredApiRole, RequiredSystemRole } from '../../common/decorators/required-role.decorator'
 import { SystemRole } from '../../user/enums/system-role.enum'
 import { OrganizationSuspensionDto } from '../dto/organization-suspension.dto'
+import { OrganizationUnsuspensionDto } from '../dto/organization-unsuspension.dto'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { UserService } from '../../user/user.service'
 import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
@@ -394,7 +395,7 @@ export class OrganizationController {
     type: OrganizationSuspensionDto,
     required: false,
   })
-  @RequiredSystemRole(SystemRole.ADMIN)
+  @RequiredApiRole([SystemRole.ADMIN, 'billing'])
   @UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard, SystemActionGuard)
   @Audit({
     action: AuditAction.SUSPEND,
@@ -428,20 +429,31 @@ export class OrganizationController {
     status: 204,
     description: 'Organization unsuspended successfully',
   })
+  @ApiResponse({
+    status: 409,
+    description: 'Organization is not suspended with the given ifReason',
+  })
   @ApiParam({
     name: 'organizationId',
     description: 'Organization ID',
     type: 'string',
   })
-  @RequiredSystemRole(SystemRole.ADMIN)
+  @ApiBody({
+    type: OrganizationUnsuspensionDto,
+    required: false,
+  })
+  @RequiredApiRole([SystemRole.ADMIN, 'billing'])
   @UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard, SystemActionGuard)
   @Audit({
     action: AuditAction.UNSUSPEND,
     targetType: AuditTarget.ORGANIZATION,
     targetIdFromRequest: (req) => req.params.organizationId,
   })
-  async unsuspend(@Param('organizationId') organizationId: string): Promise<void> {
-    return this.organizationService.unsuspend(organizationId)
+  async unsuspend(
+    @Param('organizationId') organizationId: string,
+    @Body() organizationUnsuspensionDto?: OrganizationUnsuspensionDto,
+  ): Promise<void> {
+    return this.organizationService.unsuspend(organizationId, organizationUnsuspensionDto?.ifReason)
   }
 
   @Get('/by-box-id/:boxId')

@@ -20,7 +20,7 @@ import {
 } from '@nestjs/common'
 import { ApiBearerAuth, ApiOAuth2, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger'
 import { AdminCreateRunnerDto } from '../dto/create-runner.dto'
-import { AdminRunnerDto } from '../dto/admin-overview.dto'
+import { AdminRunnerDto } from '../dto/admin-runner.dto'
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'

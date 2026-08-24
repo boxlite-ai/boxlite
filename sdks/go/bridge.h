@@ -12,6 +12,8 @@ extern CBoxStderrCb cbStderr(void);
 extern CBoxExitCb cbExit(void);
 
 extern CBoxCreateBoxCb cbCreateBox(void);
+extern CBoxExportCb cbBoxExport(void);
+extern CRuntimeImportCb cbRuntimeImport(void);
 extern CBoxGetOrCreateBoxCb cbGetOrCreateBox(void);
 extern CBoxGetBoxCb cbGetBox(void);
 extern CBoxStartBoxCb cbStartBox(void);
@@ -39,5 +41,7 @@ extern CExecutionWaitCb cbExecutionWait(void);
 extern CExecutionKillCb cbExecutionKill(void);
 extern CExecutionSignalCb cbExecutionSignal(void);
 extern CExecutionResizeCb cbExecutionResize(void);
+extern CTunnelForwarderWaitCb cbTunnelForwarderWait(void);
+extern CTunnelForwarderCloseCb cbTunnelForwarderClose(void);
 
 #endif // BOXLITE_GO_BRIDGE_H

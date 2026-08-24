@@ -44,6 +44,8 @@ try:
         SnapshotHandle,
         SnapshotInfo,
         SnapshotOptions,
+        SocketAddress,
+        TunnelForwarder,
         VolumeHandle,
         VolumeInfo,
     )
@@ -61,6 +63,8 @@ try:
         "Boxlite",
         "NetworkSpec",
         "NetworkHandle",
+        "SocketAddress",
+        "TunnelForwarder",
         "NetworkInfo",
         "Box",
         "Execution",
@@ -170,6 +174,7 @@ try:
         SyncNetworkHandle,
         SyncSimpleBox,
         SyncSkillBox,
+        SyncTunnelForwarder,
     )
 
     __all__.extend(
@@ -184,6 +189,7 @@ try:
             "SyncNetworkHandle",
             "SyncSimpleBox",
             "SyncSkillBox",
+            "SyncTunnelForwarder",
         ]
     )
 except ImportError:

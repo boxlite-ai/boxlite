@@ -54,6 +54,8 @@ struct InspectStatePresenter {
     /// Init exit code; 0 when unknown or still running (docker-compatible).
     #[serde(rename = "ExitCode")]
     exit_code: i32,
+    #[serde(rename = "StartedAt")]
+    started_at: Option<String>,
 }
 
 impl From<&BoxInfo> for InspectPresenter {
@@ -70,6 +72,7 @@ impl From<&BoxInfo> for InspectPresenter {
                 running: state.running,
                 pid: state.pid.unwrap_or(0),
                 exit_code: state.exit_code.unwrap_or(0),
+                started_at: info.started_at.as_ref().map(|at| at.to_rfc3339()),
             },
             cpus: info.cpus,
             memory: info.memory_mib as u64 * 1024 * 1024,
@@ -231,10 +234,9 @@ mod tests {
     use boxlite::{BoxID, BoxStatus, HealthStatus};
     use std::collections::HashMap;
 
-    #[test]
-    fn inspect_omits_advanced_capability_metadata() {
+    fn inspect_info(started_at: Option<chrono::DateTime<chrono::Utc>>) -> BoxInfo {
         let now = chrono::Utc::now();
-        let info = BoxInfo {
+        BoxInfo {
             id: BoxID::parse("inspect-capabilities").unwrap(),
             name: Some("cap-box".into()),
             status: BoxStatus::Configured,
@@ -246,14 +248,31 @@ mod tests {
             memory_mib: 512,
             network: None,
             labels: HashMap::new(),
-            auto_pause: 0,
+            auto_stop: 0,
             auto_delete: 0,
             auto_resume: true,
             health_status: HealthStatus::new(),
             exit_code: None,
-        };
+            started_at,
+        }
+    }
 
+    #[test]
+    fn inspect_omits_advanced_capability_metadata() {
+        let info = inspect_info(None);
         let value = serde_json::to_value(InspectPresenter::from(&info)).unwrap();
         assert!(value.get("Advanced").is_none());
+    }
+
+    #[test]
+    fn inspect_exposes_started_at() {
+        let started_at = chrono::DateTime::from_timestamp(1, 0).unwrap();
+        let info = inspect_info(Some(started_at));
+
+        let value = serde_json::to_value(InspectPresenter::from(&info)).unwrap();
+        assert_eq!(value["State"]["StartedAt"], started_at.to_rfc3339());
+
+        let value = serde_json::to_value(InspectPresenter::from(&inspect_info(None))).unwrap();
+        assert!(value["State"]["StartedAt"].is_null());
     }
 }

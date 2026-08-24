@@ -31,11 +31,11 @@ describe('toBoxApiCreateRequest', () => {
 
   it('maps lifecycle seconds to the Box API wire fields', () => {
     const request = toBoxApiCreateRequest({
-      autoPauseIntervalSeconds: 1800,
+      autoStopIntervalSeconds: 1800,
       autoDelete: 604800,
     })
 
-    expect(request.auto_pause).toBe(1800)
+    expect(request.auto_stop).toBe(1800)
     expect(request.auto_delete).toBe(604800)
     expect(request.auto_resume).toBe(true)
   })
@@ -52,17 +52,43 @@ describe('toBoxApiCreateRequest', () => {
     expect(toBoxApiCreateRequest({}).memory_mib).toBeUndefined()
     expect(toBoxApiCreateRequest().memory_mib).toBeUndefined()
   })
+
+  // The REST boundary takes {source, guest_path} — NOT the internal
+  // {volumeId, mountPath} pair it maps onto. `guest_path` is required and the
+  // source must carry the volume:// scheme, so sending the internal shape is a
+  // 400 (guest_path missing + "volume source must use the volume:// scheme"),
+  // not a silent no-op.
+  it('maps volume mounts to the REST volume:// source shape', () => {
+    const request = toBoxApiCreateRequest({
+      volumes: [
+        { volumeId: 'vol-a1b2c3d4', mountPath: '/models' },
+        // Names are accepted too: the API resolves id-or-name after stripping
+        // the scheme prefix.
+        { volumeId: 'customer-data', mountPath: '/data' },
+      ],
+    })
+
+    expect(request.volumes).toEqual([
+      { source: 'volume://vol-a1b2c3d4', guest_path: '/models' },
+      { source: 'volume://customer-data', guest_path: '/data' },
+    ])
+  })
+
+  it('omits volumes entirely when none are mounted', () => {
+    expect(toBoxApiCreateRequest({ volumes: [] }).volumes).toBeUndefined()
+    expect(toBoxApiCreateRequest({}).volumes).toBeUndefined()
+  })
 })
 
 describe('validateLifecyclePolicy', () => {
-  it('accepts disabled policies and a delete deadline after the pause deadline', () => {
-    expect(validateLifecyclePolicy({ autoPauseIntervalSeconds: 0, autoDelete: 0 })).toBeNull()
-    expect(validateLifecyclePolicy({ autoPauseIntervalSeconds: 900, autoDelete: 3600 })).toBeNull()
+  it('accepts disabled policies and a delete deadline after the stop deadline', () => {
+    expect(validateLifecyclePolicy({ autoStopIntervalSeconds: 0, autoDelete: 0 })).toBeNull()
+    expect(validateLifecyclePolicy({ autoStopIntervalSeconds: 900, autoDelete: 3600 })).toBeNull()
   })
 
-  it('rejects invalid sentinels and delete deadlines that do not follow pause', () => {
-    expect(validateLifecyclePolicy({ autoPauseIntervalSeconds: -1, autoDelete: 0 })).toMatch(/Auto-pause/)
-    expect(validateLifecyclePolicy({ autoPauseIntervalSeconds: 900, autoDelete: -1 })).toMatch(/Auto-delete/)
-    expect(validateLifecyclePolicy({ autoPauseIntervalSeconds: 900, autoDelete: 900 })).toMatch(/greater than/)
+  it('rejects invalid sentinels and delete deadlines that do not follow stop', () => {
+    expect(validateLifecyclePolicy({ autoStopIntervalSeconds: -1, autoDelete: 0 })).toMatch(/Auto-stop/)
+    expect(validateLifecyclePolicy({ autoStopIntervalSeconds: 900, autoDelete: -1 })).toMatch(/Auto-delete/)
+    expect(validateLifecyclePolicy({ autoStopIntervalSeconds: 900, autoDelete: 900 })).toMatch(/greater than/)
   })
 })

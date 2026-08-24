@@ -17,17 +17,6 @@ export interface InvoicesTableProps {
   pageCount: number
   onPaginationChange: (pagination: { pageIndex: number; pageSize: number }) => void
   loading: boolean
-  onViewInvoice?: (invoice: Invoice) => void
-  onVoidInvoice?: (invoice: Invoice) => void
-  onRowClick?: (invoice: Invoice) => void
-  onPayInvoice?: (invoice: Invoice) => void
-}
-
-export interface InvoicesTableActionsProps {
-  invoice: Invoice
-  onView?: (invoice: Invoice) => void
-  onVoid?: (invoice: Invoice) => void
-  onPay?: (invoice: Invoice) => void
 }
 
 export interface InvoicesTableHeaderProps {

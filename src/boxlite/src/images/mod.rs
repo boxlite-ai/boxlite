@@ -7,7 +7,7 @@ mod object;
 mod storage;
 mod store;
 
-pub use archive::LayerExtractor;
+pub use archive::{LayerExtractor, OverrideFileType, OverrideStat};
 pub use config::ContainerImageConfig;
 pub use image_disk::ImageDiskManager;
 pub use manager::ImageManager;
