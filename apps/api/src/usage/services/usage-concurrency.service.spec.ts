@@ -45,6 +45,22 @@ describe('UsageConcurrencyService', () => {
     expect(params).toEqual(['org-1', from, to, '1 day'])
   })
 
+  it('uses hourly sampling for an hourly series', async () => {
+    query.mockResolvedValue([])
+
+    await service.getSeries('org-1', from, to, UsageConcurrencyGranularity.HOUR, now)
+
+    expect(query).toHaveBeenCalledWith(expect.any(String), ['org-1', from, to, '1 hour'])
+  })
+
+  it('rejects hourly ranges longer than seven days before querying', async () => {
+    await expect(
+      service.getSeries('org-1', new Date('2026-06-25T00:00:00.000Z'), to, UsageConcurrencyGranularity.HOUR, now),
+    ).rejects.toThrow('cannot exceed 7 days')
+
+    expect(query).not.toHaveBeenCalled()
+  })
+
   it('rejects inverted, future, and over-wide ranges before querying', async () => {
     await expect(service.getSeries('org-1', to, from, UsageConcurrencyGranularity.DAY, now)).rejects.toBeInstanceOf(
       BadRequestException,

@@ -21,7 +21,7 @@ import {
 const configuration = new Configuration();
 const apiInstance = new UsageApi(configuration);
 
-let organizationId: string; //Organization ID (default to undefined)
+let organizationId: string; //Organization ID
 let from: Date; //Inclusive start of the requested timeline. Defaults to 30 days before `to`. (optional) (default to undefined)
 let to: Date; //Inclusive end of the requested timeline. Defaults to the current time. (optional) (default to undefined)
 let granularity: 'hour' | 'day'; //Spacing between concurrency snapshots. (optional) (default to 'day')
@@ -38,10 +38,10 @@ const { status, data } = await apiInstance.getOrganizationUsageConcurrency(
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **organizationId** | [**string**] | Organization ID | |
 | **from** | [**Date**] | Inclusive start of the requested timeline. Defaults to 30 days before &#x60;to&#x60;. | (optional) defaults to undefined|
 | **to** | [**Date**] | Inclusive end of the requested timeline. Defaults to the current time. | (optional) defaults to undefined|
-| **granularity** | [**&#39;hour&#39; | &#39;day&#39;**]**Array<&#39;hour&#39; &#124; &#39;day&#39; &#124; &#39;11184809&#39;>** | Spacing between concurrency snapshots. | (optional) defaults to 'day'|
+| **granularity** | [**&#39;hour&#39; &#124; &#39;day&#39;**] | Spacing between concurrency snapshots. | (optional) defaults to 'day'|
 
 
 ### Return type

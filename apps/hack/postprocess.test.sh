@@ -6,6 +6,8 @@
 #   - TS: version import inserted after the generator's "do not edit" header
 #   - TS: User-Agent inserted ahead of the baseOptions spread, at its indent
 #   - TS: an existing User-Agent is replaced, not duplicated
+#   - TS: generated API imports are pruned to the identifiers each file uses
+#   - TS: generated parameter docs keep required/default and enum cells valid
 #   - TS: missing header, or neither User-Agent nor spread -> non-zero exit
 #   - Go: UserAgent literal replaced with the ClientVersion expression
 #   - Go: version.go written with the go:embed accessor for the package
@@ -38,7 +40,7 @@ check() { # desc  condition-already-evaluated($?)
 
 ts_fixture() { # dir  [with-user-agent]
   local dir="$1" with_ua="${2:-no}" ua_line=""
-  mkdir -p "$dir"
+  mkdir -p "$dir/api" "$dir/docs"
   [[ "$with_ua" == "with-user-agent" ]] &&
     ua_line="                'User-Agent': \`stale/0.0.0\`,
 "
@@ -59,6 +61,36 @@ ${ua_line}                ...param.baseOptions?.headers,
         };
     }
 }
+EOF
+
+  cat > "$dir/api/usage-api.ts" <<'EOF'
+import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction, replaceWithSerializableTypeIfNeeded } from '../common';
+import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
+
+/** @throws {RequiredError} when a required parameter is absent. */
+export function request(): RequestArgs {
+  assertParamExists('request', 'organizationId', 'org-1')
+  void DUMMY_BASE_URL
+  void setBearerAuthToObject
+  void setSearchParams
+  void toPathString
+  void createRequestFunction
+  void BASE_PATH
+  void BaseAPI
+  void operationServerMap
+  return {} as RequestArgs
+}
+EOF
+
+  cat > "$dir/docs/UsageApi.md" <<'EOF'
+let organizationId: string; //Organization ID (default to undefined)
+let from: Date; //Inclusive start. (optional) (default to undefined)
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **organizationId** | [**string**] | Organization ID | defaults to undefined|
+| **from** | [**Date**] | Inclusive start. | (optional) defaults to undefined|
+| **granularity** | [**&#39;hour&#39; | &#39;day&#39;**]**Array<&#39;hour&#39; &#124; &#39;day&#39; &#124; &#39;11184809&#39;>** | Spacing between snapshots. | (optional) defaults to 'day'|
 EOF
 }
 
@@ -90,6 +122,22 @@ check "TS: existing User-Agent replaced, not duplicated" $?
 grep -q "my-client/\${packageJson.version}" "$ts_replace_dir/configuration.ts" &&
   ! grep -q "stale/0.0.0" "$ts_replace_dir/configuration.ts"
 check "TS: replacement carries the new client name" $?
+
+grep -q "import { DUMMY_BASE_URL, assertParamExists, setBearerAuthToObject, setSearchParams, toPathString, createRequestFunction } from '../common';" "$ts_dir/api/usage-api.ts" &&
+  ! grep -q 'setApiKeyToObject\|setBasicAuthToObject\|setOAuthToObject\|serializeDataIfNeeded\|replaceWithSerializableTypeIfNeeded' "$ts_dir/api/usage-api.ts"
+check "TS: unused common imports are pruned" $?
+
+grep -q "import { BASE_PATH, type RequestArgs, BaseAPI, operationServerMap } from '../base';" "$ts_dir/api/usage-api.ts" &&
+  ! grep -q '^import .*COLLECTION_FORMATS\|^import .*RequiredError' "$ts_dir/api/usage-api.ts"
+check "TS: unused base imports are pruned" $?
+
+! grep -q 'organizationId.*default to undefined\|organizationId.*defaults to undefined' "$ts_dir/docs/UsageApi.md" &&
+  grep -q 'from.*optional.*default to undefined' "$ts_dir/docs/UsageApi.md"
+check "TS: required docs omit undefined defaults while optional docs retain them" $?
+
+grep -q "| \*\*granularity\*\* | \[\*\*&#39;hour&#39; &#124; &#39;day&#39;\*\*\] |" "$ts_dir/docs/UsageApi.md" &&
+  ! grep -q 'granularity.*Array<\|granularity.*11184809' "$ts_dir/docs/UsageApi.md"
+check "TS: scalar enum docs render one escaped union cell" $?
 
 ts_bad_dir="$TMP_ROOT/ts-noheader"
 mkdir -p "$ts_bad_dir"
