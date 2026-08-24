@@ -2628,6 +2628,35 @@ mod tests {
         child.wait().ok();
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_force_remove_from_current_thread_runtime_saves_state_and_deletes_box() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, mut child) = spawn_dummy_process();
+        let config = test_box_config_in_layout(false, &runtime);
+        let mut state = BoxState::new();
+        state.set_status(BoxStatus::Running);
+        state.set_pid(Some(pid));
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        runtime
+            .remove_box(&config.id, true)
+            .expect("Force remove should work on a current-thread runtime");
+
+        assert!(
+            !crate::util::is_process_alive(pid),
+            "Force remove should stop the live process"
+        );
+        assert!(
+            runtime.box_manager.box_by_id(&config.id).unwrap().is_none(),
+            "Force remove should delete the box from the database"
+        );
+
+        child.wait().ok();
+    }
+
     /// Write a two-line `shim.pid` whose start-time matches the live PID
     /// so the recovery and stop fingerprint checks adopt it.
     fn write_pid_file_with_fingerprint(pid_file: &std::path::Path, pid: u32) {
