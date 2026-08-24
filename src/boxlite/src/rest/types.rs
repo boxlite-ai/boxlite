@@ -4,6 +4,7 @@
 //! to/from core types (BoxInfo, BoxOptions, etc.) at the boundary.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use boxlite_shared::errors::BoxliteError;
 use serde::{Deserialize, Serialize};
@@ -393,6 +394,10 @@ pub(crate) struct VolumeResponse {
     pub created_at: String,
     #[serde(default)]
     pub size_bytes: Option<u64>,
+    /// Host directory backing this volume — lets a client resolve a volume id
+    /// to a mount source (e.g. for volume mounts at box creation).
+    #[serde(default)]
+    pub host_path: Option<String>,
 }
 
 impl VolumeResponse {
@@ -405,6 +410,11 @@ impl VolumeResponse {
             id: self.id.clone(),
             created_at,
             size_bytes: self.size_bytes,
+            host_path: self
+                .host_path
+                .as_deref()
+                .map(PathBuf::from)
+                .unwrap_or_default(),
         }
     }
 }

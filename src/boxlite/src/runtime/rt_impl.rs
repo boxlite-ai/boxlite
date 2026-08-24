@@ -1845,32 +1845,45 @@ impl super::images::ImageBackend for LocalRuntime {
     }
 }
 
-// Named-volume operations (separate from RuntimeBackend). The concrete backend
-// is not yet implemented: the local filesystem store was removed in favor of a
-// future managed volume backend, so every operation returns `Unsupported`.
+// Named-volume operations (separate from RuntimeBackend). Each volume is
+// stored in a directory under `{home}/volumes/{id}` by `NamedVolumeStore`.
 #[async_trait::async_trait]
 impl super::volumes::VolumeBackend for LocalRuntime {
     async fn create_volume(&self) -> BoxliteResult<crate::volumes::VolumeInfo> {
-        Err(volumes_unsupported())
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot create volume: runtime has been shut down".into(),
+            ));
+        }
+        crate::volumes::NamedVolumeStore::new(self.0.layout.home_dir()).create()
     }
 
     async fn list_volumes(&self) -> BoxliteResult<Vec<crate::volumes::VolumeInfo>> {
-        Err(volumes_unsupported())
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot list volumes: runtime has been shut down".into(),
+            ));
+        }
+        crate::volumes::NamedVolumeStore::new(self.0.layout.home_dir()).list()
     }
 
     async fn get_volume(&self, _id: &str) -> BoxliteResult<crate::volumes::VolumeInfo> {
-        Err(volumes_unsupported())
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot get volume: runtime has been shut down".into(),
+            ));
+        }
+        crate::volumes::NamedVolumeStore::new(self.0.layout.home_dir()).get(_id)
     }
 
     async fn remove_volume(&self, _id: &str, _force: bool) -> BoxliteResult<()> {
-        Err(volumes_unsupported())
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot remove volume: runtime has been shut down".into(),
+            ));
+        }
+        crate::volumes::NamedVolumeStore::new(self.0.layout.home_dir()).remove(_id, _force)
     }
-}
-
-/// Error returned by every named-volume operation until a volume backend is
-/// wired up.
-fn volumes_unsupported() -> BoxliteError {
-    BoxliteError::Unsupported("named volumes are not supported yet".to_string())
 }
 
 // ============================================================================

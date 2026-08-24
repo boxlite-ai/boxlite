@@ -1,8 +1,7 @@
 //! Named-volume handlers (`/v1/volumes`).
 //!
-//! These mirror the box handlers, delegating to `runtime.volumes()`. The
-//! concrete backend returns `Unsupported` for now, so every operation currently
-//! responds `400 UnsupportedError`.
+//! These mirror the box handlers, delegating to `runtime.volumes()`, whose
+//! local backend stores each volume in a directory under `{home}/volumes/`.
 
 use std::sync::Arc;
 
