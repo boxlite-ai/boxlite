@@ -1,26 +1,10 @@
 {
   "_comment": [
-    "Universal Login theme, mapped from the console's dark tokens in",
-    "apps/dashboard/src/index.css. Applied by:",
-    "  npm run bootstrap -- --provision-auth0-branding --stage <name>",
-    "",
-    "Keys beginning with _ are stripped before this is sent (see withoutComments",
-    "in ../auth0.ts) — the Management API rejects unknown fields.",
-    "",
-    "This is the complete Free-plan branding contract. Spacing, control height,",
-    "widget width, line-height and letter-spacing have no theme fields, so they",
-    "remain Auth0 defaults unless the tenant is upgraded for page templates.",
-    "",
-    "fonts.font_url carries the IBM Plex Mono Regular face. The theme API accepts",
-    "one font URL, so Auth0 may synthesize heavier text from that face.",
-    "",
-    "Auth0 validates all three radius fields with a minimum of 1 even when the",
-    "style is sharp, so 1 is the closest API-valid representation of square.",
-    "",
-    "The logo and woff2 file ship with the dashboard from public/auth0.",
-    "Their content hashes are part of the filenames and recorded in ASSETS.md.",
-    "Bootstrap resolves __BOXLITE_STACK_DOMAIN__ from the selected stage and",
-    "refuses to apply unless every asset has the expected MIME type and CORS."
+    "Auth0 Universal Login theme mapped from apps/dashboard/src/index.css.",
+    "Apply with npm run auth0:universal-login -- apply --stage <name>.",
+    "Keys beginning with _ are stripped before the Management API call.",
+    "Asset paths are resolved only from the selected target's stackOrigin.",
+    "This is the complete Auth0 Free-plan contract: page-template geometry is paid-only."
   ],
 
   "displayName": "boxlite-console",
@@ -28,25 +12,20 @@
   "colors": {
     "widget_background": "#1A1D24",
     "widget_border": "#2A2F3A",
-
     "header": "#FFFFFF",
     "body_text": "#FFFFFF",
     "input_labels_placeholders": "#8C919C",
     "icons": "#8C919C",
-
     "input_background": "#13161B",
     "input_border": "#2A2F3A",
     "input_filled_text": "#FFFFFF",
-
     "primary_button": "#FFFFFF",
     "primary_button_label": "#13161B",
     "secondary_button_border": "#2A2F3A",
     "secondary_button_label": "#FFFFFF",
-
     "links_focused_components": "#00B0F0",
     "base_focus_color": "#00B0F0",
     "base_hover_color": "#232833",
-
     "error": "#E05548",
     "success": "#5AD67D",
     "read_only_background": "#232833",
@@ -66,7 +45,7 @@
   },
 
   "fonts": {
-    "font_url": "https://__BOXLITE_STACK_DOMAIN__/auth0/ibm-plex-mono-400-ba204497.woff2",
+    "font_url": "/auth0/ibm-plex-mono-400-ba204497.woff2",
     "reference_text_size": 13,
     "title": { "bold": false, "size": 123 },
     "subtitle": { "bold": false, "size": 92 },
@@ -87,7 +66,7 @@
     "header_text_alignment": "center",
     "logo_position": "center",
     "logo_height": 36,
-    "logo_url": "https://__BOXLITE_STACK_DOMAIN__/auth0/boxlite-light-ec0b1243.png",
+    "logo_url": "/auth0/boxlite-light-ec0b1243.png",
     "social_buttons_layout": "top"
   }
 }

@@ -18,6 +18,7 @@
   "extends": "./tsconfig.json",
   "include": [
     "artifacts/**/*.ts",
+    "auth0/**/*.ts",
     "bootstrap/**/*.ts",
     "deployment/**/*.ts",
     "policies/**/*.ts",

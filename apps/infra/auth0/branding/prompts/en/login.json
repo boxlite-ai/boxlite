@@ -1,0 +1,7 @@
+{
+  "_comment": "The login screen is for returning users; the wordmark already names BoxLite above it.",
+  "login": {
+    "title": "Welcome back",
+    "description": "Agentic cloud platform for AI Agent builder"
+  }
+}

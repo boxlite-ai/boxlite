@@ -49,15 +49,6 @@
  *                Create the Auth0 SPA app, custom API, and post-login Action
  *                (requires `npm run login` first). NOT idempotent — Auth0 has no
  *                upsert for apps or APIs, so rerunning creates duplicates.
- *   --provision-auth0-branding
- *                Apply the Free-plan Universal Login theme and custom text
- *                (requires `npm run login` first). Idempotent, so rerun it freely;
- *                that is why it is a separate flag from --provision-auth0 rather
- *                than part of it. Deploy the dashboard first so /auth0/* exists.
- *                Run it against every stage: branding is per-tenant, and dev and
- *                prod differ. Custom page templates require a paid Auth0 plan and
- *                are deliberately outside this workflow.
- *
  * Sign-in: run `npm run login` first, which walks the browser sign-in for every
  * provider this needs (AWS via `aws login`, AWS CLI 2.32.0+ — no IAM user,
  * access keys, or IAM Identity Center setup required). An existing profile or
@@ -74,13 +65,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { decideCredentialRotation, writeCloudflareCredential } from './cloudflare-credentials.js'
-import {
-  loadDeploymentEnvironment,
-  optionalPublicOidcIssuer,
-  requireOidcIssuer,
-  resolveAwsRegion,
-  resolveSstStage,
-} from '../deployment/environment.js'
+import { loadDeploymentEnvironment, resolveAwsRegion, resolveSstStage } from '../deployment/environment.js'
 import {
   GITHUB_OIDC_PROVIDER_URL,
   MINIMUM_AWS_CLI_VERSION,
@@ -106,7 +91,6 @@ import {
   enableRpLogoutDiscoveryArgs,
   spaApplicationArgs,
 } from './auth0.js'
-import { Auth0BrandingDeployer } from './auth0-branding.js'
 import {
   environmentApiPath,
   githubEnvironmentPayload,
@@ -131,8 +115,6 @@ const SST_INSTALL_TIMEOUT_MS = 240_000
 // progressing costs four minutes of silence.
 const SST_COLD_INSTALL_TIMEOUT_MS = 90_000
 const ACTION_SOURCE_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'set-custom-claims.js')
-const BRANDING_THEME_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'branding-theme.json')
-const CUSTOM_TEXT_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'custom-text.json')
 
 const CLOUDFLARE_CREDENTIALS = [
   {
@@ -705,32 +687,6 @@ function requireAuth0Session() {
 }
 
 /*
- * Idempotent, unlike provisionAuth0: the theme and prompt text are upserts.
- * Kept on its own flag so the login page's appearance can be iterated on
- * without re-creating the application and API alongside it. The paid-only page
- * template endpoint is intentionally not called, so this works on Auth0 Free.
- */
-async function provisionAuth0Branding(environment: NodeJS.ProcessEnv) {
-  requireAuth0Session()
-
-  const theme = JSON.parse(readFileSync(BRANDING_THEME_PATH, 'utf8'))
-  const customText = JSON.parse(readFileSync(CUSTOM_TEXT_PATH, 'utf8'))
-  const auth0Origin = new URL(optionalPublicOidcIssuer(environment) ?? requireOidcIssuer(environment)).origin
-  const stackDomain = environment.STACK_DOMAIN
-  if (!stackDomain) throw new Error(`STACK_DOMAIN must be set in ${ENV_PATH} before Auth0 branding can be applied`)
-  const result = await new Auth0BrandingDeployer({ read: auth0Json, write: auth0Run }).apply({
-    theme,
-    customText,
-    auth0Origin,
-    stackDomain,
-  })
-  console.log(
-    `[${SCRIPT_NAME}] Auth0 Universal Login branding ... ${result.themeCreated ? 'created' : 'updated'} theme, ` +
-      `applied ${result.customTextCount} copy prompt(s)`,
-  )
-}
-
-/*
  * Collapses the five manual Auth0 dashboard steps in README's "OIDC provider
  * setup" into API calls. The `auth0 login` device-code token already carries
  * every scope this needs, so there is no create-an-M2M-app-first step.
@@ -918,12 +874,6 @@ async function main() {
     provisionAuth0({ stackDomain })
   }
 
-  // Independent of --provision-auth0 on purpose: branding is idempotent and
-  // gets re-applied whenever the design changes, long after the application
-  // and API exist.
-  if (options['provision-auth0-branding']) {
-    await provisionAuth0Branding(stageConfigLoad.payload)
-  }
   await ensureCloudflareCredentials({ awsCliPath, region, stage, repo, force })
   // Before the first timed sst call, not inside it — see ensureSstPlatform. Both steps below are
   // `sst secret` calls, so neither can run until the platform sst needs is installed.

@@ -19,6 +19,7 @@
   "include": [
     "sst.config.ts",
     "artifacts/**/*.ts",
+    "auth0/**/*.ts",
     "bootstrap/**/*.ts",
     "deployment/**/*.ts",
     "policies/**/*.ts",
