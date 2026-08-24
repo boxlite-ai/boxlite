@@ -6,6 +6,7 @@
 //! compatibility. Direct custom-kernel boot is also grouped here because it
 //! changes the VM boot contract.
 
+use crate::runtime::options::NetworkIoRateLimit;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -727,6 +728,14 @@ pub struct AdvancedBoxOptions {
     /// Docker-style privileged OCI spec shape for DinD.
     #[serde(default)]
     pub privileged: bool,
+
+    /// Per-direction network I/O rate limit (upload/download, bytes/sec).
+    ///
+    /// Local-only: the REST/cloud wire never carries this field, so cloud boxes
+    /// always use the default (`None` = unlimited). `None`/`0` per direction
+    /// means unlimited.
+    #[serde(default)]
+    pub net_io_rate_limit: Option<NetworkIoRateLimit>,
 }
 
 impl AdvancedBoxOptions {

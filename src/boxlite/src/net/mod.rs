@@ -66,6 +66,8 @@ pub struct NetworkBackendConfig {
     /// Directory in which to mint the ephemeral MITM CA — used only when
     /// `secrets` is non-empty. The backend mints the CA in [`NetworkBackend::spec`].
     pub ca_dir: PathBuf,
+    /// Per-direction network I/O rate limit. `None` (or all-zero) = unlimited.
+    pub rate_limit: Option<crate::runtime::options::NetworkIoRateLimit>,
 }
 
 /// The wire blob a [`NetworkBackend`] produces (via [`NetworkBackend::spec`]) for
@@ -91,6 +93,9 @@ pub struct NetworkBackendSpec {
     /// PEM-encoded MITM CA private key (PKCS8, minted when secrets are configured).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca_key_pem: Option<String>,
+    /// Per-direction network I/O rate limit. `None` (or all-zero) = unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit: Option<crate::runtime::options::NetworkIoRateLimit>,
 }
 
 impl std::fmt::Debug for NetworkBackendSpec {
@@ -107,6 +112,7 @@ impl std::fmt::Debug for NetworkBackendSpec {
                 "ca_key_pem",
                 &self.ca_key_pem.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("rate_limit", &self.rate_limit)
             .finish()
     }
 }
@@ -488,6 +494,7 @@ mod tests {
             secrets: Vec::new(),
             ca_cert_pem: Some(cert_sentinel.to_string()),
             ca_key_pem: Some(key_sentinel.to_string()),
+            rate_limit: None,
         };
 
         let rendered = format!("{:?}", spec);
@@ -520,6 +527,7 @@ mod tests {
             secrets: Vec::new(),
             ca_cert_pem: Some("CERTDATA".to_string()),
             ca_key_pem: Some("KEYDATA".to_string()),
+            rate_limit: None,
         };
         let json = serde_json::to_string(&spec).unwrap();
         let back: NetworkBackendSpec = serde_json::from_str(&json).unwrap();
@@ -546,6 +554,7 @@ mod tests {
             allow_net: vec!["example.com".to_string()],
             secrets: Vec::new(),
             ca_dir: PathBuf::from("/tmp/default-factory/ca"),
+            rate_limit: None,
         };
 
         let backend = default_factory()
@@ -626,6 +635,7 @@ mod tests {
                 secrets: Vec::new(),
                 ca_cert_pem: None,
                 ca_key_pem: None,
+                rate_limit: None,
             }
         }
     }

@@ -174,6 +174,14 @@ type DNSZone struct {
 	DefaultIP string      `json:"default_ip"`        // Default IP for unmatched queries in this zone
 }
 
+// RateLimitConfig mirrors the Rust NetworkIoRateLimit (must stay in sync!).
+// Pointers distinguish "unset" (nil) from an explicit value; 0 also means
+// unlimited and is normalized to nil by newNetRateLimiter.
+type RateLimitConfig struct {
+	UploadBytesPerSec   *uint64 `json:"upload_bytes_per_sec,omitempty"`
+	DownloadBytesPerSec *uint64 `json:"download_bytes_per_sec,omitempty"`
+}
+
 // GvproxyConfig matches the Rust structure (must stay in sync!)
 type GvproxyConfig struct {
 	SocketPath       string         `json:"socket_path"`
@@ -196,6 +204,9 @@ type GvproxyConfig struct {
 	// forwarding / DNS / DHCP leases / stats / cam) to a host unix socket the
 	// boxlite core dials. Empty => the services API is not exposed.
 	ControlSocketPath string `json:"control_socket_path,omitempty"`
+	// RateLimit is the per-direction network I/O rate limit (upload/download,
+	// bytes/sec). nil => no limit.
+	RateLimit *RateLimitConfig `json:"rate_limit,omitempty"`
 }
 
 // GvproxyInstance tracks a running gvisor-tap-vsock instance
@@ -210,6 +221,7 @@ type GvproxyInstance struct {
 	vnMu          sync.RWMutex                   // Protects vn field
 	ca            *BoxCA                         // Ephemeral MITM CA (nil if no secrets)
 	secretMatcher *SecretHostMatcher             // Hostname→secrets lookup (nil if no secrets)
+	rateLimiter   *netRateLimiter                // Per-direction I/O rate limit (nil if unlimited)
 }
 
 func buildDNSZones(config GvproxyConfig) []types.Zone {
@@ -400,6 +412,10 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		logrus.WithField("num_secrets", len(config.Secrets)).Info("MITM: loaded CA from Rust config")
 	}
 
+	// Per-direction network I/O rate limit (token buckets). A nil config yields
+	// a nil limiter and the transport relay runs unthrottled.
+	instance.rateLimiter = newNetRateLimiter(config.RateLimit)
+
 	instancesMu.Lock()
 	instances[id] = instance
 	instancesMu.Unlock()
@@ -445,16 +461,17 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		}
 
 		// Override the TCP and UDP handlers with the AllowNet filter and/or
-		// MITM secret substitution
-		if len(config.AllowNet) > 0 || instance.secretMatcher != nil {
+		// MITM secret substitution and/or per-direction I/O rate limiting.
+		if len(config.AllowNet) > 0 || instance.secretMatcher != nil || instance.rateLimiter != nil {
 			var allowNetFilter *AllowNetFilter
 			if len(config.AllowNet) > 0 {
 				allowNetFilter = newAllowNetFilter(config)
 			}
 			// Fatal on purpose: the handlers left behind are upstream's
 			// unfiltered forwarders, so a box that starts anyway would carry
-			// an allow_net the caller believes in and the network ignores.
-			if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, allowNetFilter, instance.ca, instance.secretMatcher); err != nil {
+			// an allow_net / rate limit the caller believes in and the network
+			// ignores.
+			if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, allowNetFilter, instance.ca, instance.secretMatcher, instance.rateLimiter); err != nil {
 				logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("allowNet: failed to install transport handlers")
 				initErr <- fmt.Errorf("failed to install allow_net transport handlers: %w", err)
 				return

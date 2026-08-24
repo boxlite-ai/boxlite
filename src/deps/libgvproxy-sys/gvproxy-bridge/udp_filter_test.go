@@ -70,7 +70,7 @@ func startNetwork(t *testing.T, allowNet []string) *guestTap {
 
 	if len(cfg.AllowNet) > 0 {
 		filter := newAllowNetFilter(cfg)
-		if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, filter, nil, nil); err != nil {
+		if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, filter, nil, nil, nil); err != nil {
 			t.Fatalf("installAllowNetHandlers: %v", err)
 		}
 	}

@@ -757,6 +757,34 @@ mod tests {
     }
 
     #[test]
+    fn test_create_box_request_drops_net_io_rate_limit() {
+        // Local-only guarantee: the REST wire never carries net_io_rate_limit,
+        // so a cloud box always uses the default (unlimited) no matter what a
+        // local client passes. A forged `advanced` field cannot set it — the
+        // projection only ever keeps `capabilities`.
+        let opts = BoxOptions {
+            advanced: crate::AdvancedBoxOptions {
+                net_io_rate_limit: Some(crate::NetworkIoRateLimit {
+                    upload_bytes_per_sec: Some(1_000_000),
+                    download_bytes_per_sec: Some(2_000_000),
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let req = CreateBoxRequest::from_options(&opts, None);
+        let json = serde_json::to_value(&req).expect("serialize create request");
+        assert!(
+            !json.to_string().contains("net_io_rate_limit"),
+            "rate limit must not reach the REST wire: {json}"
+        );
+        // `advanced` is absent entirely when only a rate limit was set (no
+        // capabilities), so the field cannot even ride along as an empty object.
+        assert!(json.get("advanced").is_none(), "advanced should be absent: {json}");
+    }
+
+    #[test]
     fn test_create_box_request_preserves_scheme_volume_source() {
         use crate::runtime::options::{BoxOptions, VolumeSpec};
 

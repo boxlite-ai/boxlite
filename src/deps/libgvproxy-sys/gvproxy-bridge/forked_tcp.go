@@ -97,7 +97,7 @@ func resolveTCPDestination(localAddress tcpip.Address, nat map[tcpip.Address]tcp
 
 func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 	natLock *sync.Mutex, ec2MetadataAccess bool, filter *AllowNetFilter,
-	ca *BoxCA, secretMatcher *SecretHostMatcher) *tcp.Forwarder {
+	ca *BoxCA, secretMatcher *SecretHostMatcher, rl *netRateLimiter) *tcp.Forwarder {
 
 	return tcp.NewForwarder(s, 0, 10, func(r *tcp.ForwarderRequest) {
 		localAddress := r.ID().LocalAddress
@@ -115,10 +115,10 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 
 		switch decideTCPRoute(destIP, destPort, filter, secretMatcher) {
 		case tcpRouteStandardForward:
-			standardForward(r, destAddr)
+			standardForward(r, destAddr, rl)
 			return
 		case tcpRouteInspect:
-			inspectAndForward(r, destAddr, destPort, filter, ca, secretMatcher)
+			inspectAndForward(r, destAddr, destPort, filter, ca, secretMatcher, rl)
 			return
 		default:
 			// No matching rule: block
@@ -132,14 +132,13 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 }
 
 // standardForward is the upstream flow: Dial → CreateEndpoint → relay.
-func standardForward(r *tcp.ForwarderRequest, destAddr string) {
+func standardForward(r *tcp.ForwarderRequest, destAddr string, rl *netRateLimiter) {
 	outbound, err := net.Dial("tcp", destAddr)
 	if err != nil {
 		logrus.Tracef("net.Dial() = %v", err)
 		r.Complete(true)
 		return
 	}
-
 	var wq waiter.Queue
 	ep, tcpErr := r.CreateEndpoint(&wq)
 	r.Complete(false)
@@ -158,13 +157,15 @@ func standardForward(r *tcp.ForwarderRequest, destAddr string) {
 			return outbound, nil
 		},
 	}
-	remote.HandleConn(gonet.NewTCPConn(&wq, ep))
+	// Shape the guest-side conn: reads (upload) and writes (download). Nil rl =
+	// no limit. Wrapping here keeps `outbound` a bare *net.TCPConn for tcpproxy.
+	remote.HandleConn(rl.throttleInbound(gonet.NewTCPConn(&wq, ep)))
 }
 
 // inspectAndForward: Accept → Peek SNI/Host → check allowlist → Dial → relay.
 // The flow is reversed from upstream because we need to read from the guest
 // before deciding whether to connect to the upstream server.
-func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16, filter *AllowNetFilter, ca *BoxCA, secretMatcher *SecretHostMatcher) {
+func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16, filter *AllowNetFilter, ca *BoxCA, secretMatcher *SecretHostMatcher, rl *netRateLimiter) {
 	// Step 1: Accept TCP from guest first (reversed from upstream)
 	var wq waiter.Queue
 	ep, tcpErr := r.CreateEndpoint(&wq)
@@ -177,7 +178,10 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16
 		}
 		return
 	}
-	guestConn := gonet.NewTCPConn(&wq, ep)
+	// Shape the guest-side conn up front so every downstream path — allowlist
+	// relay, MITM secret substitution, and WebSocket upgrade — reads/writes the
+	// same throttled conn. Reads are upload, writes are download. Nil rl = no-op.
+	guestConn := rl.throttleInbound(gonet.NewTCPConn(&wq, ep))
 
 	// Step 2: Peek to extract hostname (non-consuming read via bufio.Reader)
 	br := bufio.NewReaderSize(guestConn, 16384)
@@ -222,7 +226,6 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16
 		guestConn.Close()
 		return
 	}
-
 	// Step 5: Relay using tcpproxy.DialProxy (same as standardForward).
 	// Wrap guestConn with the bufio.Reader so peeked bytes are replayed
 	// automatically when DialProxy copies guest→server.

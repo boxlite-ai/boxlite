@@ -341,6 +341,7 @@ impl NetworkBackend for GvproxyBackend {
             secrets: cfg.secrets.clone(),
             ca_cert_pem: None,
             ca_key_pem: None,
+            rate_limit: cfg.rate_limit.clone(),
         };
 
         // Mint the ephemeral MITM CA when secrets are configured. The cert+key
@@ -593,6 +594,7 @@ mod tests {
             allow_net: vec!["example.com".to_string()],
             secrets: Vec::new(),
             ca_dir: PathBuf::from("/tmp/bl-box/does-not-exist"),
+            rate_limit: None,
         };
         let spec = GvproxyBackend::from_config(&config).spec();
         assert_eq!(spec.socket_path, config.socket_path);
@@ -669,6 +671,7 @@ mod tests {
             allow_net: Vec::new(),
             secrets: Vec::new(),
             ca_dir: dir.path().to_path_buf(),
+            rate_limit: None,
         };
         (
             GvproxyBackend::from_config(&config),
@@ -768,6 +771,7 @@ mod tests {
             allow_net: Vec::new(),
             secrets: vec![test_secret()],
             ca_dir: ca_dir.path().to_path_buf(),
+            rate_limit: None,
         };
         let spec = GvproxyBackend::from_config(&config).spec();
         assert!(
@@ -799,6 +803,7 @@ mod tests {
             allow_net: Vec::new(),
             secrets: vec![test_secret()],
             ca_dir,
+            rate_limit: None,
         };
 
         let spec = GvproxyBackend::from_config(&config).spec();
@@ -1411,6 +1416,7 @@ mod tests {
             allow_net: Vec::new(),
             secrets: Vec::new(),
             ca_dir: dir.path().to_path_buf(),
+            rate_limit: None,
         };
         let target: SocketAddr = "192.168.127.2:8080".parse().unwrap();
         let mut tunnel = GvproxyBackend::from_config(&config)
@@ -1460,6 +1466,7 @@ mod tests {
             allow_net: Vec::new(),
             secrets: Vec::new(),
             ca_dir: dir.path().to_path_buf(),
+            rate_limit: None,
         };
         let target: SocketAddr = "192.168.127.2:8080".parse().unwrap();
         let err = GvproxyBackend::from_config(&config)
@@ -1496,6 +1503,7 @@ mod tests {
             allow_net: Vec::new(),
             secrets: Vec::new(),
             ca_dir: dir.path().to_path_buf(),
+            rate_limit: None,
         };
         let ctl = GvproxyBackend::from_config(&config);
 
@@ -1553,6 +1561,7 @@ mod tests {
             allow_net: Vec::new(),
             secrets: Vec::new(),
             ca_dir: dir.path().to_path_buf(),
+            rate_limit: None,
         };
         let backend = GvproxyBackend::from_config(&config);
 

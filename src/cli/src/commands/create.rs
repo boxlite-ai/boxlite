@@ -1,6 +1,6 @@
 use crate::cli::{
-    CapabilityFlags, GlobalFlags, KernelFlags, NetworkFlags, PublishFlags, ResourceFlags,
-    VolumeFlags,
+    CapabilityFlags, GlobalFlags, KernelFlags, NetworkFlags, NetworkRateLimitFlags, PublishFlags,
+    ResourceFlags, VolumeFlags,
 };
 use boxlite::{BoxOptions, RootfsSpec};
 use clap::Args;
@@ -52,11 +52,15 @@ pub struct CreateArgs {
     #[arg(index = 2, trailing_var_arg = true)]
     pub command: Vec<String>,
 
+    #[command(flatten, next_help_heading = "Advanced options")]
+    pub rate_limit: NetworkRateLimitFlags,
+
     #[command(flatten, next_help_heading = "Advanced boot options")]
     pub boot: KernelFlags,
 }
 
 pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
+    args.rate_limit.reject_in_rest_mode(global.is_rest_mode())?;
     let box_options = args.to_box_options(global)?;
     let rt = global.create_runtime()?;
 
@@ -79,6 +83,7 @@ impl CreateArgs {
         self.publish.apply_to(&mut options)?;
         self.volume.apply_to(&mut options, global.home.as_deref())?;
         self.network.apply_to(&mut options)?;
+        self.rate_limit.apply_to(&mut options);
 
         // A `create`d box is a background box: `create` then `start`/`exec` runs
         // its main command detached (docker's create → start), so the launching
@@ -188,5 +193,29 @@ mod tests {
             .expect("options should build");
         assert_eq!(opts.advanced.capabilities.add, vec!["SYS_ADMIN"]);
         assert_eq!(opts.advanced.capabilities.drop, vec!["CAP_NET_RAW"]);
+    }
+
+    #[test]
+    fn create_net_rate_limit_flags_reach_box_options() {
+        let cli = Cli::try_parse_from([
+            "boxlite",
+            "create",
+            "--net-upload-limit",
+            "1000000",
+            "--net-download-limit",
+            "2000000",
+            "alpine",
+        ])
+        .expect("rate-limit flags should parse");
+        let Commands::Create(args) = cli.command else {
+            panic!("expected create command");
+        };
+
+        let opts = args
+            .to_box_options(&cli.global)
+            .expect("options should build");
+        let limit = opts.advanced.net_io_rate_limit.expect("rate limit set");
+        assert_eq!(limit.upload_bytes_per_sec, Some(1_000_000));
+        assert_eq!(limit.download_bytes_per_sec, Some(2_000_000));
     }
 }

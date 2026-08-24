@@ -1,5 +1,6 @@
 //! Gvproxy configuration structures
 
+use crate::runtime::options::NetworkIoRateLimit;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -97,6 +98,11 @@ pub struct GvproxyConfig {
     /// PEM-encoded MITM CA private key (PKCS8 format, consumed by Go).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca_key_pem: Option<String>,
+
+    /// Per-direction network I/O rate limit (upload/download, bytes/sec).
+    /// `None` (or all-zero) = unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit: Option<NetworkIoRateLimit>,
 }
 
 /// Secret configuration for gvproxy MITM proxy.
@@ -139,6 +145,7 @@ impl std::fmt::Debug for GvproxyConfig {
                 "ca_key_pem",
                 &self.ca_key_pem.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("rate_limit", &self.rate_limit)
             .finish()
     }
 }
@@ -187,6 +194,7 @@ fn defaults_with_socket_path(socket_path: PathBuf) -> GvproxyConfig {
         secrets: Vec::new(),
         ca_cert_pem: None,
         ca_key_pem: None,
+        rate_limit: None,
     }
 }
 
@@ -297,6 +305,12 @@ impl GvproxyConfig {
     pub fn with_ca(mut self, cert_pem: String, key_pem: String) -> Self {
         self.ca_cert_pem = Some(cert_pem);
         self.ca_key_pem = Some(key_pem);
+        self
+    }
+
+    /// Set the per-direction network I/O rate limit (upload/download, bytes/sec).
+    pub fn with_net_io_rate_limit(mut self, rate_limit: NetworkIoRateLimit) -> Self {
+        self.rate_limit = Some(rate_limit);
         self
     }
 }
@@ -568,6 +582,32 @@ mod tests {
         assert_eq!(
             HOST_HOSTNAME,
             format!("{}.{}", record.name, zone.name.trim_end_matches('.'))
+        );
+    }
+
+    #[test]
+    fn test_rate_limit_defaults_to_none_and_serializes() {
+        let config = GvproxyConfig::new(test_socket_path());
+        assert!(config.rate_limit.is_none());
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("rate_limit"));
+
+        let limited = config.with_net_io_rate_limit(NetworkIoRateLimit {
+            upload_bytes_per_sec: Some(1_000_000),
+            download_bytes_per_sec: Some(2_000_000),
+        });
+        let json = serde_json::to_string(&limited).unwrap();
+        assert!(json.contains("\"rate_limit\""));
+        assert!(json.contains("\"upload_bytes_per_sec\":1000000"));
+        assert!(json.contains("\"download_bytes_per_sec\":2000000"));
+
+        let back: GvproxyConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.rate_limit,
+            Some(NetworkIoRateLimit {
+                upload_bytes_per_sec: Some(1_000_000),
+                download_bytes_per_sec: Some(2_000_000),
+            })
         );
     }
 }

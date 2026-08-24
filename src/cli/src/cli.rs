@@ -11,7 +11,7 @@ use boxlite::runtime::options::{
 };
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime, ImageRegistry,
-    NetworkSpec,
+    NetworkIoRateLimit, NetworkSpec,
 };
 use clap::{Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::shells::{Bash, Fish, Zsh};
@@ -314,6 +314,18 @@ impl GlobalFlags {
                 self.create_runtime_with_options(options)
             }
         }
+    }
+
+    /// True when a REST endpoint is configured (`--url` / `BOXLITE_REST_URL` /
+    /// stored profile), i.e. the CLI will talk to a remote server rather than
+    /// the local runtime. Used to reject local-only flags like the net-io rate
+    /// limits, which the REST wire silently drops.
+    pub fn is_rest_mode(&self) -> bool {
+        let stored = crate::credentials::load_named(&self.resolved_profile())
+            .ok()
+            .flatten();
+        let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
+        self.resolve_rest_options(stored, env_api_key).is_some()
     }
 
     /// Build REST connection options from the selected credential profile and
@@ -655,6 +667,52 @@ impl NetworkFlags {
             mode,
             allow_net: self.allow_net.clone(),
         })?;
+        Ok(())
+    }
+}
+
+// ============================================================================
+// NETWORK I/O RATE LIMIT FLAGS (advanced, local-only)
+// ============================================================================
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct NetworkRateLimitFlags {
+    /// Upload (guest → internet) rate limit, bytes/sec. 0 = unlimited.
+    /// Local boxes only — rejected when a REST URL is configured.
+    #[arg(long = "net-upload-limit", value_name = "BYTES_PER_SEC")]
+    pub upload: Option<u64>,
+
+    /// Download (internet → guest) rate limit, bytes/sec. 0 = unlimited.
+    /// Local boxes only — rejected when a REST URL is configured.
+    #[arg(long = "net-download-limit", value_name = "BYTES_PER_SEC")]
+    pub download: Option<u64>,
+}
+
+impl NetworkRateLimitFlags {
+    fn is_set(&self) -> bool {
+        self.upload.is_some() || self.download.is_some()
+    }
+
+    pub fn apply_to(&self, opts: &mut BoxOptions) {
+        if !self.is_set() {
+            return;
+        }
+        opts.advanced.net_io_rate_limit = Some(NetworkIoRateLimit {
+            upload_bytes_per_sec: self.upload,
+            download_bytes_per_sec: self.download,
+        });
+    }
+
+    /// Rate limits are local-only. In REST mode the field is dropped on the
+    /// wire (cloud always uses the default), so reject it loudly instead of
+    /// silently ignoring the flag.
+    pub fn reject_in_rest_mode(&self, is_rest: bool) -> anyhow::Result<()> {
+        if is_rest && self.is_set() {
+            anyhow::bail!(
+                "--net-upload-limit/--net-download-limit are only supported for local boxes, \
+                 not REST endpoints"
+            );
+        }
         Ok(())
     }
 }
