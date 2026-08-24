@@ -232,7 +232,7 @@ test\:unit\:rust:
 # nextest's process-per-test isolation is what makes the whole crate runnable:
 # several suites assert on process-global state (raw fd numbers, waitpid), so
 # they can interfere under a shared process. The cargo fallback has no such
-# isolation, so it stays on the two modules that are pure logic.
+# isolation, so it stays on the modules that are pure logic.
 test\:unit\:guest:
 	@if [ "$$(uname)" != "Linux" ]; then \
 		echo "⏭️  Guest unit tests require Linux"; \
@@ -242,7 +242,7 @@ test\:unit\:guest:
 	if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run --no-tests=fail -p boxlite-guest; \
 	else \
-		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests; \
+		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests sysctl::tests; \
 	fi
 
 # Keep ordinary ownership tests unprivileged. Only explicitly ignored tests
