@@ -15,6 +15,8 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { RefreshCcw } from '@/components/ui/icon'
 
+const ALL_PLANS_ANCHOR = 'all-plans'
+
 export function PlanSection() {
   const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
   const organizationPlanQuery = useOwnerPlanQuery()
@@ -58,19 +60,17 @@ export function PlanSection() {
       ) : (
         <div className="flex flex-col gap-8">
           {config.billingApiUrl && isOwner && wallet && (
-            <section>
-              <SectionTitle title="Active Plan" />
-              <CycleOverview
-                wallet={wallet}
-                organizationPlan={organizationPlan}
-                catalogPlan={activeCatalogPlan}
-                catalogIndex={activeCatalogIndex >= 0 ? activeCatalogIndex : undefined}
-              />
-            </section>
+            <CycleOverview
+              wallet={wallet}
+              organizationPlan={organizationPlan}
+              catalogPlan={activeCatalogPlan}
+              catalogIndex={activeCatalogIndex >= 0 ? activeCatalogIndex : undefined}
+              plansAnchorId={ALL_PLANS_ANCHOR}
+            />
           )}
 
           {config.billingApiUrl && isOwner && selectedOrganization && (
-            <section>
+            <section id={ALL_PLANS_ANCHOR} className="scroll-mt-6">
               <SectionTitle title="All Plans" count={plans ? `${plans.length + 1} tiers` : undefined} />
               {isLoading ? (
                 <PlanCardsSkeleton count={4} />

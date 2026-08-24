@@ -177,17 +177,6 @@ fn extract_and_validate(
         }
     }
 
-    let extracted_guest = temp_dir.path().join(disk_filenames::GUEST_ROOTFS_DISK);
-    if extracted_guest.exists() && !manifest.guest_disk_checksum.is_empty() {
-        let actual = sha256_file(&extracted_guest)?;
-        if actual != manifest.guest_disk_checksum {
-            return Err(BoxliteError::Storage(format!(
-                "Guest disk checksum mismatch: expected {}, got {}",
-                manifest.guest_disk_checksum, actual
-            )));
-        }
-    }
-
     Ok((manifest, temp_dir))
 }
 
@@ -198,11 +187,6 @@ fn install_disks(temp_dir: &Path, box_home: &Path) -> BoxliteResult<()> {
     // /etc/shadow or another box's disk, leaking data on first read.
     let extracted_container = temp_dir.join(disk_filenames::CONTAINER_DISK);
     validate_no_backing_references(&extracted_container)?;
-
-    let extracted_guest = temp_dir.join(disk_filenames::GUEST_ROOTFS_DISK);
-    if extracted_guest.exists() {
-        validate_no_backing_references(&extracted_guest)?;
-    }
 
     let disks_dir = box_home.join("disks");
     std::fs::create_dir_all(&disks_dir).map_err(|e| {
@@ -217,13 +201,6 @@ fn install_disks(temp_dir: &Path, box_home: &Path) -> BoxliteResult<()> {
         &extracted_container,
         &disks_dir.join(disk_filenames::CONTAINER_DISK),
     )?;
-
-    if extracted_guest.exists() {
-        move_file(
-            &extracted_guest,
-            &disks_dir.join(disk_filenames::GUEST_ROOTFS_DISK),
-        )?;
-    }
 
     Ok(())
 }

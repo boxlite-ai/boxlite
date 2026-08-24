@@ -16,7 +16,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Plus, Search, Trash } from '@/components/ui/icon'
+import { Database, Plus, Search, Trash } from '@/components/ui/icon'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateVolumeMutation } from '@/hooks/mutations/useCreateVolumeMutation'
 import { useDeleteVolumeMutation } from '@/hooks/mutations/useDeleteVolumeMutation'
@@ -436,7 +436,12 @@ const Volumes: React.FC = () => {
 function EmptyState({ canCreate, onCreate }: { canCreate: boolean; onCreate: () => void }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-[16px] px-6 text-center">
-      <span className="size-[10px]" style={{ background: 'hsl(var(--brand))' }} />
+      {/* A bordered tile with the disk glyph, matching BillingComingSoon's
+          treatment. The bare 10px brand square this replaces read as a stray
+          artifact rather than an icon, with nothing around it to give it scale. */}
+      <div className="flex size-11 items-center justify-center border border-border bg-card">
+        <Database className="size-5 text-muted-foreground" strokeWidth={1.6} />
+      </div>
       <div className="font-mono text-[17px] font-semibold">No volumes yet</div>
       <p className="max-w-[420px] font-mono text-[12.5px] leading-relaxed text-muted-foreground">
         A box loses everything on its disk when it is destroyed. A volume does not — mount one into a box and the data

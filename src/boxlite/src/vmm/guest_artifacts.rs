@@ -19,6 +19,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use sha2::{Digest, Sha256};
 
 use super::guest_binary::GuestBinary;
+use super::guest_check::validate_guest_bytes;
 use crate::util::find_binary;
 
 /// Hex characters of the content digest used as the identity.
@@ -134,6 +135,10 @@ fn content_id(path: &Path) -> BoxliteResult<String> {
     let bytes = std::fs::read(path).map_err(|e| {
         BoxliteError::Storage(format!("Cannot read guest tool {}: {}", path.display(), e))
     })?;
+    // The tools are static ELF binaries the guest will exec; validate the
+    // architecture now (mirroring GuestBinary) so a wrong-arch tool fails
+    // here with a clear error instead of at exec time with "Exec format error".
+    validate_guest_bytes(&bytes, path)?;
     Ok(hex::encode(Sha256::digest(&bytes))[..ID_LEN].to_string())
 }
 
@@ -162,8 +167,8 @@ mod tests {
 
         let mke2fs = dir.path().join("guest-mke2fs");
         let resize2fs = dir.path().join("guest-resize2fs");
-        std::fs::write(&mke2fs, vec![tool_filler; 64]).unwrap();
-        std::fs::write(&resize2fs, vec![tool_filler; 64]).unwrap();
+        std::fs::write(&mke2fs, fake_guest(tool_filler)).unwrap();
+        std::fs::write(&resize2fs, fake_guest(tool_filler)).unwrap();
 
         GuestArtifacts::resolve_at(&guest, mke2fs, resize2fs).unwrap()
     }
@@ -228,6 +233,31 @@ mod tests {
         assert!(
             error.to_string().contains("Cannot read") && error.to_string().contains("guest-mke2fs"),
             "error should name the unreadable tool: {error}"
+        );
+    }
+
+    /// A tool the guest could not run must be rejected before it is staged
+    /// into the rootfs, not hashed under a cache key that looks valid.
+    #[test]
+    fn a_non_elf_tool_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let guest_path = dir.path().join("boxlite-guest");
+        std::fs::write(&guest_path, fake_guest(0xAA)).unwrap();
+        let guest = GuestBinary::resolve_at(guest_path).unwrap();
+
+        let mke2fs = dir.path().join("guest-mke2fs");
+        let resize2fs = dir.path().join("guest-resize2fs");
+        std::fs::write(&mke2fs, vec![0u8; 128]).unwrap();
+        std::fs::write(&resize2fs, vec![0u8; 128]).unwrap();
+
+        let error = GuestArtifacts::resolve_at(&guest, mke2fs, resize2fs)
+            .err()
+            .expect("a non-ELF tool must not resolve");
+
+        assert!(
+            error.to_string().contains("ELF"),
+            "error should name the problem: {error}"
         );
     }
 }
