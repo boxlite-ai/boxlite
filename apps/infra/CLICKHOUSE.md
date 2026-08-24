@@ -94,8 +94,11 @@ Do not infer the audience, role-claim name, or provider-role values from the exa
 the exact non-secret values from Backoffice's authoritative
 `/boxlite/backoffice/<stage>/stage-auth-config` SSM parameter: use `audience`, `roleClaim`, and the
 entries under `roleMappings.operator` and `roleMappings.admin`. The issuer must name that same
-employee Auth0 tenant. A mismatch passes static configuration validation but causes authenticated
-requests to be rejected by the Gateway.
+employee Auth0 tenant. `npm run bootstrap` installs a read-only grant for that exact stage-scoped
+parameter. Every Gateway `deploy`, `diff`, and `refresh` then reads it and fails before SST builds a
+plan if the configured issuer, audience, role claim, or admitted Operator/Admin roles differ. Values
+are never printed. Rerun bootstrap from this revision before the first Gateway deployment so an
+existing deploy role receives the new read grant.
 
 Put only the non-secret values in `apps/infra/.env`, then persist the stage configuration and set the
 two application secrets through the non-echoing SST secret prompt:

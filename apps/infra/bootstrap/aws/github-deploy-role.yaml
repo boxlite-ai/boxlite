@@ -342,6 +342,16 @@ Resources:
                   - ssm:GetParameters
                 Resource:
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/sst/passphrase/boxlite/_fallback
+              # The ClickStack Gateway reuses Backoffice's employee identity contract. This parameter
+              # contains only issuer/audience/claim/role metadata; client credentials remain in each
+              # stack's secret store. A single exact read lets deploy/diff reject identity drift before
+              # creating public resources without granting access to Backoffice runtime secrets.
+              - Sid: BackofficeStageAuthRead
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/boxlite/backoffice/${GitHubEnvironment}/stage-auth-config
               # Runner binary upgrades run as SSM commands against the stage's instances
               # (runner/update.ts). SendCommand takes instance and document ARNs; the describe and
               # invocation reads are list-shaped and have no resource of their own.

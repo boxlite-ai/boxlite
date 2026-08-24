@@ -1492,6 +1492,13 @@ test('the deploy role cannot reach another stage in the SST backing store', () =
   const parameters = statements.find((statement: any) => statement.Sid === 'SstParametersForThisStage')
   assert.ok(parameters, 'the stage-scoped parameter grant is missing')
 
+  const backofficeAuth = statements.find((statement: any) => statement.Sid === 'BackofficeStageAuthRead')
+  assert.ok(backofficeAuth, 'the Backoffice stage-auth read grant is missing')
+  assert.deepEqual(asArray(backofficeAuth.Action), ['ssm:GetParameter'])
+  assert.deepEqual(asArray(backofficeAuth.Resource), [
+    'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/boxlite/backoffice/${GitHubEnvironment}/stage-auth-config',
+  ])
+
   for (const statement of statements) {
     const mutating = sharedBootstrapMutations(statement)
     assert.deepEqual(mutating, [], `${statement.Sid} may not mutate the shared ${SHARED_BOOTSTRAP_PARAMETER}`)

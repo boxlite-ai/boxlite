@@ -89,6 +89,7 @@ import { resolveSstExecutable } from './sst-executable.js'
 import { SstProcessTerminator } from './sst-process.js'
 import { removePulumiEventLogs, withPulumiEventLogCleanup } from './pulumi-logs.js'
 import { materializeAwsLoginCredentials, resolveAwsCliPath, runAwsText } from '../shared/exec.js'
+import { backofficeStageAuthParameterName, verifyClickStackAuthContract } from './clickstack-auth.js'
 
 const PULUMI_EVENT_LOG_ROOT = fileURLToPath(new URL('../.sst/pulumi', import.meta.url))
 const TERMINATION_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM']
@@ -404,6 +405,28 @@ for (const { env, param } of CLOUDFLARE_CREDS) {
 if (terminationSignal) process.exit(signalExitCode(terminationSignal))
 
 loadStageConfig(stage)
+
+if (process.env.CLICKSTACK_GATEWAY_ENABLED === 'true' && ['deploy', 'diff', 'refresh'].includes(sstArgs[0])) {
+  const parameterName = backofficeStageAuthParameterName(stage)
+  let backofficeStageAuth: string
+  try {
+    backofficeStageAuth = runAwsText(['ssm', 'get-parameter', '--name', parameterName, '--query', 'Parameter.Value'], {
+      region: REGION,
+    })
+  } catch {
+    console.error(
+      `sst-with-cloudflare: cannot read ${parameterName}; update the deploy-role bootstrap and verify the Backoffice stage exists`,
+    )
+    process.exit(1)
+  }
+  try {
+    verifyClickStackAuthContract(process.env, backofficeStageAuth)
+  } catch (error: any) {
+    console.error(`sst-with-cloudflare: ClickStack employee auth contract mismatch: ${error.message}`)
+    process.exit(1)
+  }
+  reportProgress('sst-with-cloudflare: ClickStack employee auth contract matches Backoffice')
+}
 
 async function runSstCommand() {
   if (terminationSignal) return signalExitCode(terminationSignal)
