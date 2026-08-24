@@ -84,8 +84,9 @@ in the same isolated employee Auth0 tenant used by Backoffice; do not use the Bo
 Configure that application with:
 
 - callback URL `https://clickstack.<STACK_DOMAIN>/oauth2/idpresponse`;
-- the same API audience and `boxlite-backoffice` scope used by Backoffice;
-- the same custom role claim, with only the Operator/Admin provider-role values admitted by the Gateway.
+- the same API audience used by Backoffice, whose Auth0 API defines the `boxlite-backoffice` scope;
+- an Auth0 Action that adds the configured namespaced role claim to the access token, with only the
+  Operator/Admin provider-role values admitted by the Gateway.
 
 Put only the non-secret values in `apps/infra/.env`, then persist the stage configuration and set the
 two application secrets through the non-echoing SST secret prompt:
@@ -111,14 +112,16 @@ Set `BACKOFFICE_CLICKSTACK_URL=https://clickstack.<STACK_DOMAIN>/clickstack` in 
 environment and redeploy Backoffice. Its Operator/Admin roles already carry
 `observability.clickstack.open`; other roles do not receive the link capability.
 
-Enabling or disabling the Gateway retriggers the real OTLP log smoke, and the Gateway deployment
-waits for its marker to reach `otel.otel_logs` through the Collector. At runtime, its ALB target
-check calls `/ready`, which reads from `otel.otel_logs` as `otel_reader` and validates the embedded
-ClickStack HTML shell at `/clickstack`. An unreachable ClickHouse, missing table or UI, invalid UI
-response, or invalid reader credential
-removes the target from service. A post-deploy public smoke also verifies that the unauthenticated
-HTTPS URL redirects to the configured employee Auth0 `/authorize` endpoint with the expected
-callback, audience, and `boxlite-backoffice` scope.
+Each deployed commit or release, as well as enabling or disabling the Gateway, retriggers the real
+OTLP log smoke. The Gateway deployment waits for its unique marker to reach `otel.otel_logs` through
+the Collector. At runtime, its ALB target check calls `/ready`, which reads from `otel.otel_logs` as
+`otel_reader` and validates the embedded ClickStack HTML shell at `/clickstack`. An unreachable
+ClickHouse, missing table or UI, invalid UI response, or invalid reader credential removes the target
+from service. A post-deploy public smoke also verifies that the unauthenticated HTTPS URL redirects
+to the configured employee Auth0 `/authorize` endpoint with the expected callback, audience, and
+`boxlite-backoffice` scope. Employee login, MFA, role-claim issuance, and the authenticated browser
+render remain a one-time manual rollout check because the deployment must not hold an employee
+session or bypass the identity provider.
 After signing in through Backoffice, open ClickStack and search the last 24 hours for
 `ServiceName:"boxlite-clickhouse-readiness"` to confirm the deployment marker is queryable. An active
 Auth0 SSO session usually avoids another password prompt, but Auth0 may still require MFA, consent, or
