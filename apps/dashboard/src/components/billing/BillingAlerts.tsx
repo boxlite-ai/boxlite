@@ -35,7 +35,7 @@ export function BillingAlerts() {
         user.profile.email_verified &&
         selectedOrganization?.isDefaultForAuthenticatedUser && (
           <StatusBanner tone="neutral" icon={<SparklesIcon className="size-4 shrink-0" />}>
-            Connect a credit card to enable wallet top-ups.
+            Connect a credit card to enable automatic top-ups.
           </StatusBanner>
         )}
     </>

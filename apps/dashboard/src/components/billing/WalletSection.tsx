@@ -39,20 +39,8 @@ export const MIN_TOP_UP_DOLLARS = 10
  */
 const DEFAULT_AUTO_RELOAD: AutomaticTopUp = { thresholdAmount: 20, targetAmount: 100 }
 
-/**
- * Whether Top up can run, and why not when it cannot.
- *
- * A silently disabled button was the whole problem here: the real blocker is a
- * missing card, which the control itself never said. `reason` is null only when
- * there is nothing to say yet — no amount picked — which needs no explanation.
- */
-export function topUpGate(
-  creditCardConnected: boolean,
-  amountDollars: number | undefined,
-): { enabled: boolean; reason: string | null } {
-  if (!creditCardConnected) {
-    return { enabled: false, reason: 'Connect a payment method above to add funds.' }
-  }
+/** Whether Top up can run, and why not when it cannot. */
+export function topUpGate(amountDollars: number | undefined): { enabled: boolean; reason: string | null } {
   if (!amountDollars) {
     return { enabled: false, reason: null }
   }
@@ -211,7 +199,7 @@ export function WalletSection() {
 
   const isBillingLoading = walletQuery.isLoading && billingPortalUrlQuery.isLoading
   const cardConnected = Boolean(wallet?.creditCardConnected)
-  const topUp = topUpGate(cardConnected, selectedPreset ?? oneTimeTopUpAmount)
+  const topUp = topUpGate(selectedPreset ?? oneTimeTopUpAmount)
   // Read the indicator off the saved wallet, not the form: the form is
   // pre-filled with defaults, which would otherwise read as already on.
   const autoReloadActive =

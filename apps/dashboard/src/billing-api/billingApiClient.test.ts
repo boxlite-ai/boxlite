@@ -6,9 +6,13 @@ import { BillingApiClient } from './billingApiClient'
 // locally, so the wire mapping is exercised without a server. Each test sets
 // the JSON the "server" returns and reads back what URL was requested.
 let requestedUrl = ''
+let requestedMethod = ''
+let requestedData: unknown
 function serve(data: unknown): BillingApiClient {
-  axios.defaults.adapter = (async (cfg: { url?: string; baseURL?: string }) => {
+  axios.defaults.adapter = (async (cfg: { url?: string; baseURL?: string; method?: string; data?: unknown }) => {
     requestedUrl = `${cfg.baseURL ?? ''}${cfg.url ?? ''}`
+    requestedMethod = cfg.method ?? ''
+    requestedData = cfg.data
     return { data, status: 200, statusText: 'OK', headers: {}, config: cfg }
   }) as never
   return new BillingApiClient('http://billing.test/api/billing', 'tok')
@@ -80,6 +84,18 @@ describe('upgradePlan', () => {
     const api = serve(undefined)
     const url = await api.upgradePlan('org-1', 'max')
     expect(url).toBeUndefined()
+  })
+})
+
+describe('topUpWallet', () => {
+  it('posts the amount and returns the hosted payment URL', async () => {
+    const payment = { url: 'https://checkout.stripe.com/pay/cs_top_up' }
+    const api = serve(payment)
+
+    await expect(api.topUpWallet('org-without-card', 10_000)).resolves.toEqual(payment)
+    expect(requestedMethod).toBe('post')
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-without-card/wallet/top-up')
+    expect(JSON.parse(String(requestedData))).toEqual({ amountCents: 10_000 })
   })
 })
 
