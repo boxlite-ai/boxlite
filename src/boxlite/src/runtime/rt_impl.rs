@@ -767,8 +767,13 @@ impl RuntimeImpl {
                         Err(stop_task) => {
                             // Do not detach teardown when the deadline expires. The
                             // stop task owns the persisted-state and PID cleanup.
-                            let _ = stop_task.await;
-                            Err(BoxliteError::Internal("stop timed out".into()))
+                            match stop_task.await {
+                                Ok(_) => Err(BoxliteError::Internal("stop timed out".into())),
+                                Err(e) => Err(BoxliteError::Internal(format!(
+                                    "Box stop task failed after timeout: {}",
+                                    e
+                                ))),
+                            }
                         }
                     }
                 } else {
