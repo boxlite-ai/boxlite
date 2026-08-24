@@ -115,13 +115,14 @@ environment and redeploy Backoffice. Its Operator/Admin roles already carry
 Each deployed commit or release, as well as enabling or disabling the Gateway, retriggers the real
 OTLP log smoke. The Gateway deployment waits for its unique marker to reach `otel.otel_logs` through
 the Collector. At runtime, its ALB target check calls `/ready`, which reads from `otel.otel_logs` as
-`otel_reader` and validates the embedded ClickStack HTML shell at `/clickstack`. An unreachable
-ClickHouse, missing table or UI, invalid UI response, or invalid reader credential removes the target
-from service. A post-deploy public smoke also verifies that the unauthenticated HTTPS URL redirects
-to the configured employee Auth0 `/authorize` endpoint with the expected callback, audience, and
-`boxlite-backoffice` scope. Employee login, MFA, role-claim issuance, and the authenticated browser
-render remain a one-time manual rollout check because the deployment must not hold an employee
-session or bypass the identity provider.
+`otel_reader` and validates the embedded ClickStack HTML shell plus its runtime environment script.
+The Gateway maps the shell's root `/__ENV.js` request to ClickHouse's embedded
+`/clickstack/__ENV.js` path. An unreachable ClickHouse, missing table or UI asset, invalid response,
+or invalid reader credential removes the target from service. A post-deploy public smoke also
+verifies that the unauthenticated HTTPS URL redirects to the configured employee Auth0 `/authorize`
+endpoint with the expected callback, audience, and `boxlite-backoffice` scope. Employee login, MFA,
+role-claim issuance, and the authenticated browser render remain a one-time manual rollout check
+because the deployment must not hold an employee session or bypass the identity provider.
 After signing in through Backoffice, open ClickStack and search the last 24 hours for
 `ServiceName:"boxlite-clickhouse-readiness"` to confirm the deployment marker is queryable. An active
 Auth0 SSO session usually avoids another password prompt, but Auth0 may still require MFA, consent, or

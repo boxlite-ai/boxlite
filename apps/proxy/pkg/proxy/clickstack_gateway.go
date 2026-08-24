@@ -27,6 +27,8 @@ const (
 	clickStackGatewayDefaultPort    = 4000
 	clickStackReadinessTimeout      = 3 * time.Second
 	clickStackReadinessBodyLimit    = 1 << 20
+	clickStackRuntimeEnvBodyLimit   = 64 << 10
+	clickStackRuntimeEnvPath        = "/clickstack/__ENV.js"
 	clickStackResponseHeaderTimeout = 30 * time.Second
 )
 
@@ -137,6 +139,9 @@ func newClickStackGatewayHandler(
 		Transport: transport,
 		Rewrite: func(request *httputil.ProxyRequest) {
 			request.SetURL(target)
+			if request.Out.URL.Path == "/__ENV.js" {
+				request.Out.URL.Path = clickStackRuntimeEnvPath
+			}
 			request.Out.Host = target.Host
 
 			query := request.Out.URL.Query()
@@ -209,6 +214,8 @@ func checkClickStackReadiness(
 	queryURL.RawQuery = query.Encode()
 	uiURL := *target
 	uiURL.Path = "/clickstack"
+	runtimeEnvironmentURL := *target
+	runtimeEnvironmentURL.Path = clickStackRuntimeEnvPath
 
 	probes := []struct {
 		name      string
@@ -218,6 +225,12 @@ func checkClickStackReadiness(
 	}{
 		{name: "query ClickHouse logs table", url: queryURL, bodyLimit: 1024},
 		{name: "load ClickStack UI", url: uiURL, bodyLimit: clickStackReadinessBodyLimit, validate: validateClickStackUI},
+		{
+			name:      "load ClickStack runtime environment",
+			url:       runtimeEnvironmentURL,
+			bodyLimit: clickStackRuntimeEnvBodyLimit,
+			validate:  validateClickStackRuntimeEnvironment,
+		},
 	}
 	for _, probe := range probes {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, probe.url.String(), nil)
@@ -266,6 +279,22 @@ func validateClickStackUI(response *http.Response, body []byte) error {
 	} {
 		if !bytes.Contains(body, marker) {
 			return fmt.Errorf("response is not the embedded ClickStack UI")
+		}
+	}
+	return nil
+}
+
+func validateClickStackRuntimeEnvironment(response *http.Response, body []byte) error {
+	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || (mediaType != "application/javascript" && mediaType != "text/javascript") {
+		return fmt.Errorf("expected JavaScript response")
+	}
+	for _, marker := range [][]byte{
+		[]byte("window.__ENV"),
+		[]byte("NEXT_PUBLIC_IS_LOCAL_MODE"),
+	} {
+		if !bytes.Contains(body, marker) {
+			return fmt.Errorf("response is not the ClickStack runtime environment")
 		}
 	}
 	return nil

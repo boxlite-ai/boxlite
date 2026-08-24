@@ -96,6 +96,34 @@ func TestClickStackGatewayInjectsReaderCredentials(t *testing.T) {
 	}
 }
 
+func TestClickStackGatewayLoadsRuntimeEnvironmentFromEmbeddedPath(t *testing.T) {
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/clickstack/__ENV.js" {
+			t.Fatalf("unexpected runtime environment path: %q", request.URL.Path)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/javascript; charset=utf-8"}},
+			Body:       io.NopCloser(strings.NewReader(`window.__ENV = {"NEXT_PUBLIC_IS_LOCAL_MODE":"true"}`)),
+		}, nil
+	})
+	handler, err := newClickStackGatewayHandler(testClickStackGatewayConfig(), transport, tokenVerifierFunc(func(string) error {
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/__ENV.js", nil)
+	request.Header.Set("X-Amzn-Oidc-Accesstoken", "employee-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", response.Code)
+	}
+}
+
 func TestClickStackGatewayHealthDoesNotReachClickHouse(t *testing.T) {
 	upstreamCalls := 0
 	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -137,12 +165,18 @@ func TestClickStackGatewayReadinessChecksClickHouse(t *testing.T) {
 			if got := request.URL.Query().Get("query"); got != "SELECT 1 FROM otel.otel_logs LIMIT 1" {
 				t.Fatalf("unexpected readiness query: %q", got)
 			}
-		} else {
+		} else if upstreamCalls == 2 {
 			if request.URL.Path != "/clickstack" {
 				t.Fatalf("unexpected ClickStack readiness path: %q", request.URL.Path)
 			}
 			header.Set("Content-Type", "text/html; charset=utf-8")
 			body = `<!doctype html><html><head><title data-next-head="">ClickStack</title></head><body><script id="__NEXT_DATA__" type="application/json">{"assetPrefix":"/clickstack"}</script></body></html>`
+		} else {
+			if request.URL.Path != "/clickstack/__ENV.js" {
+				t.Fatalf("unexpected ClickStack runtime environment path: %q", request.URL.Path)
+			}
+			header.Set("Content-Type", "application/javascript; charset=utf-8")
+			body = `window.__ENV = {"NEXT_PUBLIC_IS_LOCAL_MODE":"true"}`
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -164,7 +198,7 @@ func TestClickStackGatewayReadinessChecksClickHouse(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", response.Code)
 	}
-	if upstreamCalls != 2 {
+	if upstreamCalls != 3 {
 		t.Fatalf("readiness request reached ClickHouse %d times", upstreamCalls)
 	}
 }
@@ -210,6 +244,40 @@ func TestClickStackGatewayReadinessRejectsUnexpectedUIBody(t *testing.T) {
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})
+	handler, err := newClickStackGatewayHandler(testClickStackGatewayConfig(), transport, tokenVerifierFunc(func(string) error {
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unexpected status: %d", response.Code)
+	}
+}
+
+func TestClickStackGatewayReadinessRejectsMissingRuntimeEnvironment(t *testing.T) {
+	upstreamCalls := 0
+	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		upstreamCalls++
+		header := make(http.Header)
+		body := "1\n"
+		status := http.StatusOK
+		if upstreamCalls == 2 {
+			header.Set("Content-Type", "text/html; charset=utf-8")
+			body = `<!doctype html><html><head><title data-next-head="">ClickStack</title></head><body><script id="__NEXT_DATA__" type="application/json">{"assetPrefix":"/clickstack"}</script></body></html>`
+		} else if upstreamCalls == 3 {
+			status = http.StatusNotFound
+		}
+		return &http.Response{
+			StatusCode: status,
 			Header:     header,
 			Body:       io.NopCloser(strings.NewReader(body)),
 		}, nil
