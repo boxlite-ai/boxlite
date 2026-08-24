@@ -132,6 +132,8 @@ tags:
     description: Container image management
   - name: Volumes
     description: Managed persistent volumes
+  - name: API Keys
+    description: Credential issuance and revocation
 
 # ===========================================================================
 # Paths
@@ -181,6 +183,80 @@ paths:
                 $ref: "#/components/schemas/Principal"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
+
+  # -------------------------------------------------------------------------
+  # API Keys
+  # -------------------------------------------------------------------------
+  /{prefix}/api-keys:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+
+    post:
+      operationId: createApiKey
+      summary: Issue an API key
+      description: |
+        Mints a credential carrying the permissions given in the request, so a
+        deployment can provision its own keys without a browser session.
+
+        A grant is bounded by the caller. A key may pass on only the
+        permissions it already holds, so a credential issued for one resource
+        cannot mint itself access to another; requesting more answers `403`
+        and names the permissions that were refused. Interactive sessions are
+        bounded by organization membership instead.
+
+        `value` is returned once, here, and never again — the server keeps
+        only a hash.
+      tags: [API Keys]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateApiKeyRequest"
+      responses:
+        "201":
+          description: Key issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedApiKey"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+    get:
+      operationId: listApiKeys
+      summary: List issued API keys
+      description: Metadata only — key values are never returned after issuance.
+      tags: [API Keys]
+      responses:
+        "200":
+          description: List of keys
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListApiKeysResponse"
+
+  /{prefix}/api-keys/{name}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/apiKeyName"
+
+    delete:
+      operationId: revokeApiKey
+      summary: Revoke an API key
+      description: |
+        Takes effect immediately: the revoked credential is rejected on its
+        next request.
+      tags: [API Keys]
+      responses:
+        "204":
+          description: Key revoked
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 
   # -------------------------------------------------------------------------
   # Volumes
@@ -1147,6 +1223,16 @@ components:
         maxLength: 128
       example: acme-corp
 
+    apiKeyName:
+      name: name
+      in: path
+      required: true
+      description: The name the key was issued under, unique within the organization
+      schema:
+        type: string
+        maxLength: 128
+      example: session-provisioner
+
     boxId:
       name: box_id
       in: path
@@ -1254,6 +1340,19 @@ components:
               message: "invalid or missing API key"
               type: AuthError
               code: unauthenticated
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
+
+    ForbiddenError:
+      description: Credential authenticated, but not permitted to perform the action
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              message: "insufficient permissions for assigning: read:volumes"
+              type: PermissionError
+              code: permission_denied
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     NotFoundError:
@@ -1870,6 +1969,108 @@ components:
           type: string
           format: date-time
           description: Volume creation timestamp (UTC)
+
+    ResourcePermission:
+      type: string
+      description: |
+        A single permission. `read:volumes`, `write:volumes` and
+        `delete:volumes` together cover the whole managed-volume lifecycle:
+        list and inspect, create, remove.
+
+        The vocabulary below is everything the server accepts; which of it a
+        given caller may actually grant depends on the permissions that caller
+        holds. An unknown value is a `400`; a known one the caller cannot pass
+        on is a `403`.
+      enum:
+        - write:boxes
+        - delete:boxes
+        - read:volumes
+        - write:volumes
+        - delete:volumes
+        - write:registries
+        - delete:registries
+        - write:templates
+        - delete:templates
+        - write:regions
+        - delete:regions
+        - read:runners
+        - write:runners
+        - delete:runners
+        - read:audit_logs
+      example: read:volumes
+
+    CreateApiKeyRequest:
+      type: object
+      additionalProperties: false
+      required: [name, permissions]
+      properties:
+        name:
+          type: string
+          maxLength: 128
+          description: |
+            Identifies the key within the organization and addresses it for
+            revocation, so it cannot contain `/`.
+          example: session-provisioner
+        permissions:
+          type: array
+          minItems: 1
+          description: Permissions to put on the key. Must be non-empty.
+          items:
+            $ref: "#/components/schemas/ResourcePermission"
+        expires_at:
+          type: string
+          format: date-time
+          description: Optional expiry (UTC). Omit for a key that does not expire.
+
+    ApiKey:
+      type: object
+      description: Issued key metadata. Never carries the key value.
+      additionalProperties: false
+      required: [name, permissions, created_at, expires_at]
+      properties:
+        name:
+          type: string
+          description: The name the key was issued under
+        permissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResourcePermission"
+        created_at:
+          type: string
+          format: date-time
+          description: Issuance timestamp (UTC)
+        last_used_at:
+          type: string
+          format: date-time
+          description: Last time the key authenticated a request, if ever
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Expiry, or `null` for a key that does not expire
+
+    CreatedApiKey:
+      allOf:
+        - $ref: "#/components/schemas/ApiKey"
+        - type: object
+          required: [value]
+          properties:
+            value:
+              type: string
+              description: |
+                The secret. Returned only in this response — the server stores
+                a hash, so a lost value cannot be recovered, only replaced.
+              example: blk_live_01HZK4TNRPQSXYZ8WM6NCVT9R5
+
+    ListApiKeysResponse:
+      type: object
+      additionalProperties: false
+      required: [api_keys]
+      properties:
+        api_keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiKey"
 
     Volume:
       type: object
