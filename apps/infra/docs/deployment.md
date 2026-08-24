@@ -18,6 +18,7 @@ flowchart TB
     sdk(["SDK / CLI"])
     idp(["OIDC IdP<br/>Auth0 · Okta · Keycloak · Dex"])
     ghcr(["ghcr.io"])
+    publicStatus(["Backoffice PublicStatusCdn"])
 
     subgraph edge["public edge"]
         cf["CloudFront<br/>STACK_DOMAIN"]
@@ -47,6 +48,7 @@ flowchart TB
 
     browser -->|"dashboard SPA"| cf
     cf --> alb
+    cf -->|"/public-status.json"| publicStatus
     browser -->|"/api/* · WS · SSE"| alb
     sdk -->|"/api/*"| alb
     browser -->|"port preview"| nlb
@@ -87,7 +89,7 @@ only when the dispatch explicitly names it — see [scaling out](#scaling-runner
 ```bash
 cd apps/infra
 npm install
-cp .env.example .env && $EDITOR .env   # STACK_DOMAIN, OIDC_ISSUER_BASE_URL, OIDC_AUDIENCE
+cp .env.example .env && $EDITOR .env   # STACK_DOMAIN, OIDC_*, BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL
 
 npm run login                          # browser sign-in: AWS, GitHub, Auth0
 npm run bootstrap -- --stage dev       # IAM role, GitHub Environment, secrets
@@ -110,6 +112,19 @@ full flag list is in the script's header comment.
 
 A deploy takes 10–15 minutes and prints the service URLs. On a transient
 registry error, just rerun — SST resumes from the failed step.
+
+The public status route has a cross-stack dependency. For each stage, deploy in
+this order:
+
+1. Deploy the matching Backoffice stage and copy its `publicStatusSnapshotUrl`
+   output into `BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL` in BoxLite's `.env`.
+2. Wait for the Backoffice Cron to publish the first `public-status.json`.
+3. Rerun `npm run bootstrap -- --stage <stage>` so the value enters that stage's
+   configuration store, then deploy BoxLite.
+
+BoxLite validates that the configured URL is HTTPS and has the exact
+`/public-status.json` path. Its Router forwards only that same-origin path to
+the Backoffice CDN; all other paths continue to use the BoxLite API origin.
 
 **Adding a stage:** run `npm run bootstrap -- --stage <name>`, then add `<name>`
 to the `options` of whichever Environment-selecting inputs should reach it —

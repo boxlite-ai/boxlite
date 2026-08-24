@@ -17,6 +17,7 @@ export async function deployStack() {
     const {
       optionalPublicOidcIssuer,
       readWorkspaceVersion,
+      requireBackofficePublicStatusSnapshotUrl,
       requireIamPermissionsBoundaryStage,
       requireOidcIssuer,
       resolveAwsRegion,
@@ -29,6 +30,7 @@ export async function deployStack() {
     const workspaceVersion = readWorkspaceVersion()
     const deploymentConfig = resolvePublicDeploymentConfig(process.env, workspaceVersion)
     const { stackDomain, proxyDomain, proxyProtocol, proxyTemplateUrl, releaseVersion } = deploymentConfig
+    const publicStatusOrigin = requireBackofficePublicStatusSnapshotUrl()
     const runnerInventory = resolveRunnerInventory(process.env)
     const oidcIssuer = requireOidcIssuer()
     const publicOidcIssuer = optionalPublicOidcIssuer()
@@ -261,6 +263,7 @@ export async function deployStack() {
       foundation,
       api,
       router,
+      publicStatusOrigin,
       proxyDomain,
       proxyProtocol,
       cloudflareDns,

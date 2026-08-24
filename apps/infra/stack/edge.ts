@@ -11,6 +11,7 @@ export interface EdgeInputs {
   foundation: FoundationResources
   api: ApiResources['api']
   router: sst.aws.Router
+  publicStatusOrigin: string
   proxyDomain: string
   proxyProtocol: string
   cloudflareDns: ReturnType<typeof sst.cloudflare.dns>
@@ -28,6 +29,7 @@ export function buildEdge(input: EdgeInputs): void {
     foundation: { cluster },
     api,
     router,
+    publicStatusOrigin,
     proxyDomain,
     proxyProtocol,
     cloudflareDns,
@@ -157,5 +159,9 @@ new sst.aws.Service('MailDev', {
 
 // ─── 9. CDN ROUTES ───────────────────────────────────────────────────────
 // Router (declared in section 4) fronts the Api with HTTPS.
+// SST path routes match segment prefixes. A longer Api route catches descendants,
+// so only the exact snapshot path reaches Backoffice.
+router.route('/public-status.json/', api.url)
+router.route('/public-status.json', publicStatusOrigin)
 router.route('/', api.url)
 }

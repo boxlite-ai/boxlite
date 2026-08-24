@@ -341,6 +341,18 @@ test('enables Proxy OTLP logging in hosted and local deployments', () => {
   )
 })
 
+test('routes only the exact public status snapshot path to the configured Backoffice origin', () => {
+  const deploy = configSection('export async function deployStack()')
+  const edge = configSection('// ─── 9. CDN ROUTES')
+
+  assert.match(deploy, /requireBackofficePublicStatusSnapshotUrl/)
+  assert.match(deploy, /const publicStatusOrigin = requireBackofficePublicStatusSnapshotUrl\(\)/)
+  assert.match(deploy, /buildEdge\(\{[\s\S]*publicStatusOrigin,/)
+  assert.match(edge, /router\.route\('\/public-status\.json\/', api\.url\)/)
+  assert.match(edge, /router\.route\('\/public-status\.json', publicStatusOrigin\)/)
+  assert.match(edge, /router\.route\('\/', api\.url\)/)
+})
+
 test('requires the OIDC client ID through the SST secret store', () => {
   assert.match(liveConfig, /new sst\.Secret\('OIDC_CLIENT_ID'\)/)
   assert.doesNotMatch(liveConfig, /new sst\.Secret\('OIDC_CLIENT_ID',/)

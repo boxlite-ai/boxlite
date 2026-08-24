@@ -108,7 +108,13 @@ test('nothing the deploy never reads can be hydrated', () => {
 test('the configuration a stage actually needs is storable', () => {
   // The other half: an allowlist that refused real configuration would be useless. These are the keys
   // .env.example marks required.
-  for (const key of ['STACK_DOMAIN', 'OIDC_AUDIENCE', 'OIDC_ISSUER_BASE_URL', 'IAM_PERMISSIONS_BOUNDARY_STAGE']) {
+  for (const key of [
+    'BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL',
+    'STACK_DOMAIN',
+    'OIDC_AUDIENCE',
+    'OIDC_ISSUER_BASE_URL',
+    'IAM_PERMISSIONS_BOUNDARY_STAGE',
+  ]) {
     assert.equal(isStorableStageConfigKey(key), true, `${key} must be storable`)
   }
 })

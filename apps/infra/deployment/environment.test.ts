@@ -11,6 +11,7 @@ import {
   loadDeploymentEnvironment,
   optionalPublicOidcIssuer,
   readWorkspaceVersion,
+  requireBackofficePublicStatusSnapshotUrl,
   requireIamPermissionsBoundaryStage,
   requireOidcIssuer,
   resolveAwsRegion,
@@ -90,6 +91,35 @@ test('rejects non-stable or whitespace-normalized release identities', () => {
   }
   for (const version of [' 0.9.8 ', 'latest', '0.9.8+build.1', '0.9.8-rc.1', '1.02.3']) {
     assert.throws(() => resolveReleaseVersion('0.9.7', { VERSION: version }), /stable semantic version/)
+  }
+})
+
+test('requires the exact Backoffice public status snapshot URL', () => {
+  assert.equal(
+    requireBackofficePublicStatusSnapshotUrl({
+      BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL: 'https://d123.cloudfront.net/public-status.json',
+    }),
+    'https://d123.cloudfront.net',
+  )
+
+  assert.throws(() => requireBackofficePublicStatusSnapshotUrl({}), /BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL is required/)
+  for (const value of [
+    'http://d123.cloudfront.net/public-status.json',
+    ' https://d123.cloudfront.net/public-status.json',
+    'https://user@d123.cloudfront.net/public-status.json',
+    'https://d123.cloudfront.net:8443/public-status.json',
+    'https://d123.cloudfront.net/other.json',
+    'https://d123.cloudfront.net/public-status.json/',
+    'https://d123.cloudfront.net/public-status.json?cache=false',
+    'https://d123.cloudfront.net/public-status.json#latest',
+  ]) {
+    assert.throws(
+      () =>
+        requireBackofficePublicStatusSnapshotUrl({
+          BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL: value,
+        }),
+      /BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL/,
+    )
   }
 })
 

@@ -180,6 +180,42 @@ export function optionalPublicOidcIssuer(environment = process.env) {
   return validateOidcIssuer('PUBLIC_OIDC_DOMAIN', value)
 }
 
+export function requireBackofficePublicStatusSnapshotUrl(environment = process.env) {
+  const value = environment.BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL
+  if (!value) {
+    throw new Error(
+      'BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL is required (copy publicStatusSnapshotUrl from the matching Backoffice stage)',
+    )
+  }
+  if (value !== value.trim()) {
+    throw new Error('BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL must not contain leading or trailing whitespace')
+  }
+
+  let snapshotUrl
+  try {
+    snapshotUrl = new URL(value)
+  } catch {
+    throw new Error('BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL must be a valid absolute HTTPS URL')
+  }
+  if (snapshotUrl.protocol !== 'https:') {
+    throw new Error('BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL must use HTTPS')
+  }
+  if (snapshotUrl.username || snapshotUrl.password) {
+    throw new Error('BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL must not include credentials')
+  }
+  if (snapshotUrl.port) {
+    throw new Error('BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL must not include a port')
+  }
+  if (snapshotUrl.pathname !== '/public-status.json') {
+    throw new Error('BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL path must be exactly /public-status.json')
+  }
+  if (snapshotUrl.search || snapshotUrl.hash) {
+    throw new Error('BACKOFFICE_PUBLIC_STATUS_SNAPSHOT_URL must not include a query string or fragment')
+  }
+
+  return snapshotUrl.origin
+}
+
 export function resolveReleaseVersion(workspaceVersion: any, environment = process.env) {
   if (typeof workspaceVersion !== 'string' || workspaceVersion.trim() === '') {
     throw new Error('The workspace release version is missing')
