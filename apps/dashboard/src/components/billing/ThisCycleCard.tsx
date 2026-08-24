@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { OrganizationPlan } from '@/billing-api'
+import { OrganizationPlan, Plan } from '@/billing-api'
 import { Metric, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useOwnerPlanQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
@@ -18,9 +18,14 @@ import { differenceInCalendarDays, format } from 'date-fns'
  * (plan, now) so the unlimited/canceled/downgrade branching is
  * testable without a DOM.
  */
-export function cycleFacts(plan: OrganizationPlan, now: Date) {
+export function cycleFacts(plan: OrganizationPlan, now: Date, catalog: Plan[] = []) {
   const daysLeft = Math.max(0, differenceInCalendarDays(plan.cycleTo, now))
   const rollDay = format(plan.cycleTo, 'MMM d')
+  // A plan id is not user-facing copy. Fall back to it only when the public
+  // catalog cannot name the queued plan — a negotiated one never appears there.
+  const queuedName = plan.pendingPlanId
+    ? (catalog.find((entry) => entry.id === plan.pendingPlanId)?.name ?? plan.pendingPlanId)
+    : null
   return {
     unlimited: plan.includedQuotaCents === null,
     daysLeft,
@@ -28,8 +33,8 @@ export function cycleFacts(plan: OrganizationPlan, now: Date) {
     note:
       plan.status === 'canceled'
         ? `Canceled — quota stays usable until ${rollDay}, then pay-as-you-go from the wallet`
-        : plan.pendingPlanId
-          ? `Downgrades to ${plan.pendingPlanId} when the cycle rolls on ${rollDay}`
+        : queuedName
+          ? `Downgrades to ${queuedName} when the cycle rolls on ${rollDay}`
           : null,
   }
 }
@@ -69,7 +74,7 @@ export function ThisCycleCard() {
   }
   if (!plan) return null
 
-  const { unlimited, daysLeft, window, note } = cycleFacts(plan, new Date())
+  const { unlimited, daysLeft, window, note } = cycleFacts(plan, new Date(), plans ?? [])
 
   return (
     <section>

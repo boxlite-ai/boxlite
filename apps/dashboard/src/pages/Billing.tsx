@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { BILLING_PAGE_CONTAINER } from '@/components/billing/billingLayout'
 import { BillingAlerts } from '@/components/billing/BillingAlerts'
 import { PlanSection } from '@/components/billing/PlanSection'
 import { UsageSection } from '@/components/billing/UsageSection'
@@ -18,7 +19,6 @@ import { Link } from 'react-router-dom'
 // Verbatim from the design: square segments, right-divided, accent fill when active.
 const TAB_TRIGGER =
   'h-full gap-1.5 rounded-none border-0 border-r border-border px-5 text-xs text-muted-foreground transition-colors hover:text-foreground data-[state=active]:bg-accent data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:shadow-none'
-const BILLING_PAGE_CONTAINER = 'mx-auto w-full max-w-[1440px] px-4 sm:px-5 2xl:px-0'
 const TAB_PANE = 'py-6'
 const TAB_TRIGGER_LAST =
   'h-full gap-1.5 rounded-none border-0 px-5 text-xs text-muted-foreground transition-colors hover:text-foreground data-[state=active]:bg-accent data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:shadow-none'

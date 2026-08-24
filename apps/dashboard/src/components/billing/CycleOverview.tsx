@@ -4,10 +4,15 @@
  */
 
 import { OrganizationPlan, OrganizationWallet, Plan } from '@/billing-api'
-import { BRAND, Metric, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
+import { AsciiButton, BRAND, Metric, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
+import { ScheduledChange, scheduledChange } from '@/components/billing/planChange'
+import { Spinner } from '@/components/ui/spinner'
+import { useKeepPlanMutation } from '@/hooks/mutations/useKeepPlanMutation'
 import { useUsagePricesQuery } from '@/hooks/queries/useUsagePricesQuery'
 import { formatPriceCents } from '@/lib/box-price'
+import { handleApiError } from '@/lib/error-handling'
 import { formatAmount, formatWholeDollars } from '@/lib/utils'
+import { toast } from 'sonner'
 
 /**
  * How this organization is being billed right now, and the figures that follow
@@ -57,16 +62,22 @@ export function CycleOverview({
   organizationPlan,
   catalogPlan,
   catalogIndex,
+  catalog = [],
+  organizationId,
   plansAnchorId,
 }: {
   wallet: OrganizationWallet
   organizationPlan?: OrganizationPlan | null
   catalogPlan?: Plan
   catalogIndex?: number
+  /** The whole catalog, so a queued plan can be named rather than shown as an id. */
+  catalog?: Plan[]
+  organizationId?: string
   plansAnchorId?: string
 }) {
   const mode = billingMode(wallet, organizationPlan)
   const tierLabel = catalogIndex === undefined ? 'Plan' : `T${catalogIndex + 1}`
+  const scheduled = scheduledChange({ plan: organizationPlan, catalog })
 
   return (
     <section>
@@ -107,8 +118,66 @@ export function CycleOverview({
         )}
 
         {mode.kind !== 'plan' && <UnsubscribedNote mode={mode} plansAnchorId={plansAnchorId} />}
+        {scheduled && organizationPlan && (
+          <ScheduledChangeNote scheduled={scheduled} organizationId={organizationId} planId={organizationPlan.planId} />
+        )}
       </Panel>
     </section>
+  )
+}
+
+/**
+ * States what is already queued against this cycle, and offers the way out.
+ *
+ * Deliberately asymmetric with the plan-change confirmation page: committing a
+ * downgrade costs capacity and gets a full page, while keeping the plan you
+ * already have restores the status quo, changes nothing today, and can be
+ * re-queued from the grid at no cost. So this one commits on a single click.
+ */
+function ScheduledChangeNote({
+  scheduled,
+  organizationId,
+  planId,
+}: {
+  scheduled: ScheduledChange
+  /** Absent while the organization is still resolving — the note still states what is queued. */
+  organizationId?: string
+  planId: string
+}) {
+  const keepPlan = useKeepPlanMutation()
+
+  const handleKeep = async () => {
+    if (!organizationId) {
+      return
+    }
+    try {
+      const checkoutUrl = await keepPlan.mutateAsync({ organizationId, planId })
+      if (checkoutUrl) {
+        // Not expected while a subscription is live, but the upgrade path can
+        // always answer with one — following it beats silently reporting done.
+        window.location.href = checkoutUrl
+        return
+      }
+      toast.success(scheduled.keptLabel)
+    } catch (error) {
+      handleApiError(error, 'Failed to cancel the scheduled plan change')
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-[22px] py-4">
+      <PanelNote>{scheduled.text}</PanelNote>
+      {organizationId && (
+        <AsciiButton
+          disabled={keepPlan.isPending}
+          onClick={handleKeep}
+          className="inline-flex shrink-0 items-center gap-2"
+        >
+          {keepPlan.isPending && <Spinner className="size-3.5" />}
+          {scheduled.keepLabel}
+        </AsciiButton>
+      )}
+    </div>
   )
 }
 
