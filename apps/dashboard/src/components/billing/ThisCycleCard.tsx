@@ -5,6 +5,7 @@
 
 import { OrganizationPlan, Plan } from '@/billing-api'
 import { Metric, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
+import { queuedChange } from '@/components/billing/planChange'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useOwnerPlanQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
 import { usePlansQuery } from '@/hooks/queries/usePlansQuery'
@@ -21,11 +22,14 @@ import { differenceInCalendarDays, format } from 'date-fns'
 export function cycleFacts(plan: OrganizationPlan, now: Date, catalog: Plan[] = []) {
   const daysLeft = Math.max(0, differenceInCalendarDays(plan.cycleTo, now))
   const rollDay = format(plan.cycleTo, 'MMM d')
+  // Shared with the Overview panel: a scheduled cancellation outranks the
+  // downgrade queued behind it, so this tab cannot promise a roll the other
+  // tab says will never come.
+  const queued = queuedChange(plan)
   // A plan id is not user-facing copy. Fall back to it only when the public
   // catalog cannot name the queued plan — a negotiated one never appears there.
-  const queuedName = plan.pendingPlanId
-    ? (catalog.find((entry) => entry.id === plan.pendingPlanId)?.name ?? plan.pendingPlanId)
-    : null
+  const queuedName =
+    queued?.kind === 'downgrade' ? (catalog.find((entry) => entry.id === queued.planId)?.name ?? queued.planId) : null
   return {
     unlimited: plan.includedQuotaCents === null,
     daysLeft,
@@ -33,9 +37,11 @@ export function cycleFacts(plan: OrganizationPlan, now: Date, catalog: Plan[] = 
     note:
       plan.status === 'canceled'
         ? `Canceled — quota stays usable until ${rollDay}, then pay-as-you-go from the wallet`
-        : queuedName
-          ? `Downgrades to ${queuedName} when the cycle rolls on ${rollDay}`
-          : null,
+        : queued?.kind === 'cancel'
+          ? `Ends ${rollDay} — quota stays usable until the roll, then pay-as-you-go from the wallet`
+          : queuedName
+            ? `Downgrades to ${queuedName} when the cycle rolls on ${rollDay}`
+            : null,
   }
 }
 

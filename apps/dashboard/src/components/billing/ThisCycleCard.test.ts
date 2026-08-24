@@ -55,6 +55,21 @@ describe('cycleFacts', () => {
     )
   })
 
+  // The Overview panel states the subscription is ending; this tab must not
+  // simultaneously promise the queued downgrade happens at the same roll.
+  it('lets a cancellation outrank the downgrade queued behind it', () => {
+    expect(cycleFacts({ ...plan, pendingPlanId: 'starter', cancelAtPeriodEnd: true }, now, catalog).note).toBe(
+      'Ends Sep 5 — quota stays usable until the roll, then pay-as-you-go from the wallet',
+    )
+  })
+
+  // New copy: this state used to produce no note at all.
+  it('states a scheduled cancellation even with no downgrade queued behind it', () => {
+    expect(cycleFacts({ ...plan, cancelAtPeriodEnd: true }, now, catalog).note).toBe(
+      'Ends Sep 5 — quota stays usable until the roll, then pay-as-you-go from the wallet',
+    )
+  })
+
   // A negotiated plan never appears in the public catalog, so there is no name
   // to resolve — but the note still has to say something.
   it('falls back to the id only when the catalog cannot name the queued plan', () => {

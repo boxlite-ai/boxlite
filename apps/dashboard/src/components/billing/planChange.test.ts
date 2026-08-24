@@ -5,7 +5,7 @@
 
 import { OrganizationPlan, Plan } from '@/billing-api'
 import { describe, expect, it } from 'vitest'
-import { isUpgradeTo, planCardCta, planChangeSummary, scheduledChange } from './planChange'
+import { isUpgradeTo, planCardCta, planChangeSummary, queuedChange, scheduledChange } from './planChange'
 
 const CATALOG: Plan[] = [
   {
@@ -58,6 +58,21 @@ const summarize = (
   plan: OrganizationPlan | null,
   wallet?: Parameters<typeof planChangeSummary>[0]['wallet'],
 ) => planChangeSummary({ planId, catalog: CATALOG, plan, wallet })
+
+const catalogEntry = (planId: string): Plan => {
+  const entry = CATALOG.find((plan) => plan.id === planId)
+  if (!entry) {
+    throw new Error(`no catalog entry for ${planId}`)
+  }
+  return entry
+}
+
+const cta = (planId: string, plan: OrganizationPlan | null) =>
+  planCardCta({
+    plan: catalogEntry(planId),
+    organizationPlan: plan,
+    currentPriceCents: plan ? (CATALOG.find((entry) => entry.id === plan.planId)?.priceMonthlyCents ?? null) : null,
+  })
 
 describe('isUpgradeTo', () => {
   it('treats an unpriced current plan as the $0 floor', () => {
@@ -245,6 +260,18 @@ describe('blocked', () => {
     expect(summarize('max', LIVE_PRO).blocked).toBeNull()
   })
 
+  // A pending cancel supersedes a queued downgrade, so the queued plan is not
+  // actually going to start. planCardCta already applies that rule and leaves
+  // the card enabled; if blockFor disagrees, that card links to a page with no
+  // action on it.
+  it('does not call a queued plan scheduled when a cancellation supersedes it', () => {
+    const canceling: OrganizationPlan = { ...LIVE_PRO, pendingPlanId: 'starter', cancelAtPeriodEnd: true }
+    const summary = summarize('starter', canceling)
+
+    expect(summary.blocked).toBeNull()
+    expect(cta('starter', canceling).disabled).toBe(false)
+  })
+
   // `blocked` already says there is nothing to confirm; a caveat saying
   // "confirming replaces it" renders right beside it and contradicts it.
   it('drops the queued-change caveat when the queued plan is the one being viewed', () => {
@@ -344,20 +371,6 @@ describe('scheduledChange', () => {
 })
 
 describe('planCardCta', () => {
-  const catalogEntry = (planId: string): Plan => {
-    const entry = CATALOG.find((plan) => plan.id === planId)
-    if (!entry) {
-      throw new Error(`no catalog entry for ${planId}`)
-    }
-    return entry
-  }
-  const cta = (planId: string, plan: OrganizationPlan | null) =>
-    planCardCta({
-      plan: catalogEntry(planId),
-      organizationPlan: plan,
-      currentPriceCents: plan ? (CATALOG.find((entry) => entry.id === plan.planId)?.priceMonthlyCents ?? null) : null,
-    })
-
   it('marks the live plan as current and offers nothing to click', () => {
     expect(cta('pro', LIVE_PRO)).toEqual({ kind: 'current', label: 'Current plan', disabled: true })
   })
@@ -386,5 +399,29 @@ describe('planCardCta', () => {
 
   it('reads every plan as an upgrade when there is no subscription', () => {
     expect(cta('starter', null).kind).toBe('upgrade')
+  })
+})
+
+describe('queuedChange', () => {
+  it('reports nothing queued against an untouched cycle', () => {
+    expect(queuedChange(LIVE_PRO)).toBeNull()
+    expect(queuedChange(null)).toBeNull()
+  })
+
+  it('names the plan a queued downgrade rolls into', () => {
+    expect(queuedChange({ ...LIVE_PRO, pendingPlanId: 'starter' })).toEqual({
+      kind: 'downgrade',
+      planId: 'starter',
+    })
+  })
+
+  // The plan id stays set behind a cancellation, but that downgrade never runs.
+  // Every surface reads this one predicate so none of them can disagree.
+  it('lets a cancellation outrank the downgrade queued behind it', () => {
+    expect(queuedChange({ ...LIVE_PRO, pendingPlanId: 'starter', cancelAtPeriodEnd: true })).toEqual({ kind: 'cancel' })
+  })
+
+  it('reports nothing queued once the cycle has already lapsed', () => {
+    expect(queuedChange({ ...LIVE_PRO, pendingPlanId: 'starter', status: 'canceled' })).toBeNull()
   })
 })

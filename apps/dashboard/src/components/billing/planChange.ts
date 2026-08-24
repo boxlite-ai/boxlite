@@ -62,6 +62,28 @@ export function isUpgradeTo(plan: Plan, currentPriceCents: number | null): boole
   return (plan.priceMonthlyCents ?? 0) > (currentPriceCents ?? 0)
 }
 
+/** What a cycle will actually roll into. */
+export type QueuedChange = { kind: 'cancel' } | { kind: 'downgrade'; planId: string }
+
+/**
+ * A scheduled cancellation outranks a queued downgrade: the plan id stays set
+ * behind it, but that change never happens. A cycle that already lapsed
+ * (`status: 'canceled'`) rolls into nothing at all.
+ *
+ * Every surface that states, offers, or blocks a queued change reads this.
+ * Four hand-written copies of the rule drifted apart once already, which left
+ * an enabled plan card pointing at a confirmation page with no button on it.
+ */
+export function queuedChange(plan: OrganizationPlan | null | undefined): QueuedChange | null {
+  if (!plan || plan.status === 'canceled') {
+    return null
+  }
+  if (plan.cancelAtPeriodEnd) {
+    return { kind: 'cancel' }
+  }
+  return plan.pendingPlanId ? { kind: 'downgrade', planId: plan.pendingPlanId } : null
+}
+
 /** `null` price means negotiated outside the catalog, not free. */
 function price(plan: Plan | undefined, fallback: string): string {
   if (!plan) {
@@ -152,7 +174,7 @@ export function planChangeSummary({
     walletNote: wallet
       ? `Usage beyond the included quota draws on the wallet, which holds ${formatAmount(wallet.balanceCents)}.`
       : null,
-    caveats: caveatsFor({ planId, plan, current, catalog, rollDay, ended }),
+    caveats: caveatsFor({ planId, plan, current, catalog, rollDay }),
     blocked: blockFor({ planId, target, plan, ended, rollDay }),
   }
 }
@@ -219,14 +241,12 @@ function caveatsFor({
   current,
   catalog,
   rollDay,
-  ended,
 }: {
   planId: string
   plan: OrganizationPlan | null
   current: Plan | undefined
   catalog: Plan[]
   rollDay: string | null
-  ended: boolean
 }): PlanChangeNote[] {
   const caveats: PlanChangeNote[] = []
   // A live plan with no catalog row is a negotiated deal: there is no public
@@ -238,19 +258,18 @@ function caveatsFor({
       text: `${plan.planName} is a negotiated plan, so there is no catalog price to compare against. Switching to a standard plan may be refused — talk to sales first.`,
     })
   }
-  if (plan?.cancelAtPeriodEnd && !ended) {
+  const queued = queuedChange(plan)
+  if (queued?.kind === 'cancel') {
     caveats.push({
       tone: 'warn',
       text: `Your subscription is set to end${rollDay ? ` on ${rollDay}` : ''}. Confirming replaces that with this change.`,
     })
-    // Two suppressions. Nothing is queued against a cycle that already lapsed,
-    // whatever id the plan still carries. And when the queued plan IS the one
-    // being viewed, `blocked` already says there is nothing to confirm — adding
-    // "confirming replaces it" beside that contradicts it.
-  } else if (plan?.pendingPlanId && !ended && plan.pendingPlanId !== planId) {
+    // When the queued plan IS the one being viewed, `blocked` already says there
+    // is nothing to confirm — "confirming replaces it" beside that contradicts it.
+  } else if (queued?.kind === 'downgrade' && queued.planId !== planId) {
     caveats.push({
       tone: 'info',
-      text: `A change to ${planName(plan.pendingPlanId, catalog)} is already queued${
+      text: `A change to ${planName(queued.planId, catalog)} is already queued${
         rollDay ? ` for ${rollDay}` : ''
       }. Confirming replaces it.`,
     })
@@ -279,10 +298,9 @@ function blockFor({
   if (plan && !ended && plan.planId === planId) {
     return { kind: 'same-plan', redirect: true }
   }
-  // A lapsed cycle can still carry the id it was going to roll into, but that
-  // change will never happen — resubscribing to it is a real action, not a
-  // no-op, and calling it "already scheduled" would contradict the effect line.
-  if (!ended && plan?.pendingPlanId === planId) {
+  // Only a downgrade that is genuinely still coming leaves nothing to confirm.
+  const queued = queuedChange(plan)
+  if (queued?.kind === 'downgrade' && queued.planId === planId) {
     return {
       kind: 'already-queued',
       redirect: false,
@@ -303,14 +321,7 @@ export interface ScheduledChange {
   keptLabel: string
 }
 
-/**
- * What is queued against this cycle, if anything. `null` once the cycle has
- * already lapsed (`status: 'canceled'`): there is no roll left to schedule
- * against, so nothing to keep.
- *
- * A cancellation outranks a queued downgrade — the same precedence
- * `cycleFacts` uses, so the two surfaces never disagree about what happens.
- */
+/** The queued change as the Active Plan panel states it, with the control that discards it. */
 export function scheduledChange({
   plan,
   catalog,
@@ -318,7 +329,8 @@ export function scheduledChange({
   plan: OrganizationPlan | null | undefined
   catalog: Plan[]
 }): ScheduledChange | null {
-  if (!plan || plan.status === 'canceled') {
+  const queued = queuedChange(plan)
+  if (!plan || !queued) {
     return null
   }
   const on = format(plan.cycleTo, 'MMM d, yyyy')
@@ -326,23 +338,20 @@ export function scheduledChange({
   const keepLabel = `Keep ${plan.planName}`
   const keptLabel = `Staying on ${plan.planName}`
 
-  if (plan.cancelAtPeriodEnd) {
+  if (queued.kind === 'cancel') {
     return { kind: 'cancel', text: `Your subscription ends ${on} — ${keeps}`, keepLabel, keptLabel }
   }
-  if (plan.pendingPlanId) {
-    // An id is not user-facing copy. A queued plan the public catalog cannot
-    // name is a negotiated one; say what happens without inventing a name.
-    const queued = catalog.find((entry) => entry.id === plan.pendingPlanId)
-    return {
-      kind: 'downgrade',
-      text: queued
-        ? `Your downgrade to ${queued.name} is scheduled for ${on} — ${keeps}`
-        : `Your plan changes on ${on} — ${keeps}`,
-      keepLabel,
-      keptLabel,
-    }
+  // An id is not user-facing copy. A queued plan the public catalog cannot
+  // name is a negotiated one; say what happens without inventing a name.
+  const named = catalog.find((entry) => entry.id === queued.planId)
+  return {
+    kind: 'downgrade',
+    text: named
+      ? `Your downgrade to ${named.name} is scheduled for ${on} — ${keeps}`
+      : `Your plan changes on ${on} — ${keeps}`,
+    keepLabel,
+    keptLabel,
   }
-  return null
 }
 
 /** What a plan's card offers. `disabled` covers both "already yours" and "already queued". */
@@ -369,9 +378,8 @@ export function planCardCta({
   if (live?.planId === plan.id) {
     return { kind: 'current', label: 'Current plan', disabled: true }
   }
-  // A pending cancel replaces any queued downgrade, so the card is only
-  // "scheduled" while that cancel is not what is actually coming.
-  if (live?.pendingPlanId === plan.id && !live.cancelAtPeriodEnd) {
+  const queued = queuedChange(organizationPlan)
+  if (live && queued?.kind === 'downgrade' && queued.planId === plan.id) {
     return { kind: 'scheduled', label: `Starts ${format(live.cycleTo, 'MMM d')}`, disabled: true }
   }
   return isUpgradeTo(plan, currentPriceCents)
