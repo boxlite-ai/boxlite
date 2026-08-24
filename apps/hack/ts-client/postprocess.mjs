@@ -59,6 +59,15 @@ function fixParameterDocumentation(source) {
         line = line.replace(/\[\*\*(.+?)\*\*\]\*\*Array<[^>\n]+>\*\*/g, (_match, scalarType) => {
           return `[**${scalarType.replaceAll(' | ', ' &#124; ')}**]`
         })
+        line = line.replace(/\*\*Array<([^>\n]+)>\*\*/g, (arrayType, members) => {
+          const fallbackMember = '&#39;11184809&#39;'
+          const memberList = members.split(' &#124; ')
+          const validMembers = memberList.filter((member) => member !== fallbackMember)
+
+          return validMembers.length === memberList.length
+            ? arrayType
+            : `**Array<${validMembers.join(' &#124; ')}>**`
+        })
 
         if (!line.includes('(optional)')) {
           line = line.replace('| defaults to undefined|', '| |')

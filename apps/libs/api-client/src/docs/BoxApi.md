@@ -749,7 +749,7 @@ const { status, data } = await apiInstance.listBoxesPaginated(
 | **name** | [**string**] | Filter by partial name match | (optional) defaults to undefined|
 | **labels** | [**string**] | JSON encoded labels to filter by | (optional) defaults to undefined|
 | **includeErroredDeleted** | [**boolean**] | Include results with errored state and deleted desired state | (optional) defaults to false|
-| **states** | **Array<&#39;creating&#39; &#124; &#39;restoring&#39; &#124; &#39;destroying&#39; &#124; &#39;started&#39; &#124; &#39;stopped&#39; &#124; &#39;starting&#39; &#124; &#39;stopping&#39; &#124; &#39;error&#39; &#124; &#39;unknown&#39; &#124; &#39;archived&#39; &#124; &#39;archiving&#39; &#124; &#39;resizing&#39; &#124; &#39;11184809&#39;>** | List of states to filter by | (optional) defaults to undefined|
+| **states** | **Array<&#39;creating&#39; &#124; &#39;restoring&#39; &#124; &#39;destroying&#39; &#124; &#39;started&#39; &#124; &#39;stopped&#39; &#124; &#39;starting&#39; &#124; &#39;stopping&#39; &#124; &#39;error&#39; &#124; &#39;unknown&#39; &#124; &#39;archived&#39; &#124; &#39;archiving&#39; &#124; &#39;resizing&#39;>** | List of states to filter by | (optional) defaults to undefined|
 | **regions** | **Array&lt;string&gt;** | List of regions to filter by | (optional) defaults to undefined|
 | **minCpu** | [**number**] | Minimum CPU | (optional) defaults to undefined|
 | **maxCpu** | [**number**] | Maximum CPU | (optional) defaults to undefined|

@@ -91,6 +91,7 @@ let from: Date; //Inclusive start. (optional) (default to undefined)
 | **organizationId** | [**string**] | Organization ID | defaults to undefined|
 | **from** | [**Date**] | Inclusive start. | (optional) defaults to undefined|
 | **granularity** | [**&#39;hour&#39; | &#39;day&#39;**]**Array<&#39;hour&#39; &#124; &#39;day&#39; &#124; &#39;11184809&#39;>** | Spacing between snapshots. | (optional) defaults to 'day'|
+| **states** | **Array<&#39;creating&#39; &#124; &#39;started&#39; &#124; &#39;archived&#39; &#124; &#39;11184809&#39;>** | States to include. | (optional) defaults to undefined|
 EOF
 }
 
@@ -138,6 +139,10 @@ check "TS: required docs omit undefined defaults while optional docs retain them
 grep -q "| \*\*granularity\*\* | \[\*\*&#39;hour&#39; &#124; &#39;day&#39;\*\*\] |" "$ts_dir/docs/UsageApi.md" &&
   ! grep -q 'granularity.*Array<\|granularity.*11184809' "$ts_dir/docs/UsageApi.md"
 check "TS: scalar enum docs render one escaped union cell" $?
+
+grep -q "| \*\*states\*\* | \*\*Array<&#39;creating&#39; &#124; &#39;started&#39; &#124; &#39;archived&#39;>\*\* |" "$ts_dir/docs/UsageApi.md" &&
+  ! grep -q 'states.*11184809' "$ts_dir/docs/UsageApi.md"
+check "TS: array enum docs omit the generator fallback member" $?
 
 ts_bad_dir="$TMP_ROOT/ts-noheader"
 mkdir -p "$ts_bad_dir"
