@@ -131,7 +131,7 @@ impl RuntimeBackend for RestRuntime {
             self.client.require_linux_capabilities_enabled().await?;
         }
 
-        let req = CreateBoxRequest::from_options(&options, name);
+        let req = CreateBoxRequest::from_options(&options, name)?;
         let resp: BoxResponse = self.client.post("/boxes", &req).await?;
         let info = resp.to_box_info()?;
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));

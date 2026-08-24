@@ -141,7 +141,7 @@ impl CreateBoxRequest {
     pub fn from_options(
         options: &crate::runtime::options::BoxOptions,
         name: Option<String>,
-    ) -> Self {
+    ) -> Result<Self, BoxliteError> {
         use crate::runtime::options::RootfsSpec;
 
         let (image, rootfs_path) = match &options.rootfs {
@@ -167,8 +167,8 @@ impl CreateBoxRequest {
                 options
                     .volumes
                     .iter()
-                    .map(CreateBoxVolumeSpec::from)
-                    .collect(),
+                    .map(CreateBoxVolumeSpec::try_from)
+                    .collect::<Result<Vec<_>, _>>()?,
             )
         };
 
@@ -180,7 +180,7 @@ impl CreateBoxRequest {
         // `BoxOptions.advanced.security` because those run under the
         // caller's own trust boundary.
 
-        Self {
+        Ok(Self {
             name,
             image,
             rootfs_path,
@@ -208,7 +208,7 @@ impl CreateBoxRequest {
             auto_stop: options.auto_stop,
             auto_delete: options.auto_delete,
             auto_resume: options.auto_resume,
-        }
+        })
     }
 }
 
@@ -224,17 +224,36 @@ pub(crate) struct CreateBoxVolumeSpec {
     pub read_only: bool,
 }
 
-impl From<&crate::runtime::options::VolumeSpec> for CreateBoxVolumeSpec {
-    fn from(volume: &crate::runtime::options::VolumeSpec) -> Self {
-        Self {
-            volume: volume
-                .host_path
-                .strip_prefix("volume://")
-                .unwrap_or(&volume.host_path)
-                .to_string(),
+impl TryFrom<&crate::runtime::options::VolumeSpec> for CreateBoxVolumeSpec {
+    type Error = BoxliteError;
+
+    /// The wire field names a volume the server resolves; a host path is not
+    /// one.
+    ///
+    /// `VolumeSpec.host_path` is a union: SDKs put `volume://<id>` there,
+    /// callers already holding an id put the bare id, and a local
+    /// `-v /host:/guest` mount puts a real path. Serializing that third case
+    /// as `volume` asks the server for a volume whose id is a path — it 404s,
+    /// or matches something that is not what the caller asked for. Reject it
+    /// where the union is read rather than putting it on the wire. `/` and
+    /// `\` are the characters `NamedVolumeStore` already refuses in an id, so
+    /// both ends of the wire agree on what an id is.
+    fn try_from(volume: &crate::runtime::options::VolumeSpec) -> Result<Self, Self::Error> {
+        let id = volume
+            .host_path
+            .strip_prefix("volume://")
+            .unwrap_or(&volume.host_path);
+        if id.is_empty() || id.contains('/') || id.contains('\\') {
+            return Err(BoxliteError::InvalidArgument(format!(
+                "REST runtimes mount named volumes only: expected a volume id or volume://<id> for guest path {}, got {:?}",
+                volume.guest_path, volume.host_path
+            )));
+        }
+        Ok(Self {
+            volume: id.to_string(),
             guest_path: volume.guest_path.clone(),
             read_only: volume.read_only,
-        }
+        })
     }
 }
 
@@ -694,7 +713,7 @@ mod tests {
             auto_delete: Some(604800),
             ..Default::default()
         };
-        let req = CreateBoxRequest::from_options(&opts, Some("test-box".into()));
+        let req = CreateBoxRequest::from_options(&opts, Some("test-box".into())).unwrap();
         assert_eq!(req.name.as_deref(), Some("test-box"));
         assert_eq!(req.image.as_deref(), Some("alpine:latest"));
         assert!(req.rootfs_path.is_none());
@@ -743,7 +762,7 @@ mod tests {
             ..Default::default()
         };
 
-        let req = CreateBoxRequest::from_options(&opts, None);
+        let req = CreateBoxRequest::from_options(&opts, None).unwrap();
         let advanced = req.advanced.as_ref().expect("custom policy is serialized");
         assert_eq!(advanced.capabilities.add, ["SYS_ADMIN"]);
         assert_eq!(advanced.capabilities.drop, ["CAP_NET_RAW"]);
@@ -754,7 +773,7 @@ mod tests {
             serde_json::json!({"add": ["SYS_ADMIN"], "drop": ["CAP_NET_RAW"]})
         );
 
-        let defaults = CreateBoxRequest::from_options(&BoxOptions::default(), None);
+        let defaults = CreateBoxRequest::from_options(&BoxOptions::default(), None).unwrap();
         let defaults_json = serde_json::to_value(defaults).expect("serialize defaults");
         assert!(defaults_json.get("advanced").is_none());
     }
@@ -777,9 +796,34 @@ mod tests {
             ..Default::default()
         };
 
-        let req = CreateBoxRequest::from_options(&opts, None);
+        let req = CreateBoxRequest::from_options(&opts, None).unwrap();
         let volume = &req.volumes.as_ref().unwrap()[0];
         assert_eq!(volume.volume, "volume-123");
+    }
+
+    /// A REST runtime can only mount volumes the server knows by id. A host
+    /// path in `VolumeSpec.host_path` used to be sent verbatim as the `volume`
+    /// field, so `-v /etc:/data` asked the server for a volume named `/etc`.
+    #[test]
+    fn host_path_mounts_are_rejected_instead_of_sent_as_volume_ids() {
+        use crate::runtime::options::{BoxOptions, VolumeSpec};
+
+        for host_path in ["/etc", "./data", "volume:///etc", "C:\\data", ""] {
+            let opts = BoxOptions {
+                volumes: vec![VolumeSpec {
+                    host_path: host_path.into(),
+                    guest_path: "/data".into(),
+                    read_only: false,
+                }],
+                ..Default::default()
+            };
+
+            let err = CreateBoxRequest::from_options(&opts, None).unwrap_err();
+            assert!(
+                matches!(err, BoxliteError::InvalidArgument(_)),
+                "{host_path:?} must not reach the wire as a volume id, got {err:?}"
+            );
+        }
     }
 
     #[test]
@@ -791,7 +835,7 @@ mod tests {
                 auto_delete: None,
                 ..Default::default()
             };
-            let req = CreateBoxRequest::from_options(&opts, None);
+            let req = CreateBoxRequest::from_options(&opts, None).unwrap();
             assert_eq!(req.auto_stop, None);
             assert_eq!(req.auto_delete, None);
         }
@@ -802,7 +846,7 @@ mod tests {
             auto_delete: Some(3600),
             ..Default::default()
         };
-        let req = CreateBoxRequest::from_options(&modern, None);
+        let req = CreateBoxRequest::from_options(&modern, None).unwrap();
         assert_eq!(req.auto_stop, Some(900));
         assert_eq!(req.auto_delete, Some(3600));
     }
@@ -817,7 +861,7 @@ mod tests {
             ..Default::default()
         };
 
-        let req = CreateBoxRequest::from_options(&opts, None);
+        let req = CreateBoxRequest::from_options(&opts, None).unwrap();
         assert_eq!(
             req.network.as_ref().map(|n| n.mode.as_str()),
             Some("disabled")
@@ -848,7 +892,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let req = CreateBoxRequest::from_options(&opts, None);
+        let req = CreateBoxRequest::from_options(&opts, None).unwrap();
         let json = serde_json::to_string(&req).unwrap();
         assert!(
             !json.contains("security"),
