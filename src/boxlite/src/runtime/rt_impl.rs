@@ -764,7 +764,12 @@ impl RuntimeImpl {
                         Ok(result) => result.map_err(|e| {
                             BoxliteError::Internal(format!("Box stop task failed: {}", e))
                         }),
-                        Err(_) => Err(BoxliteError::Internal("stop timed out".into())),
+                        Err(stop_task) => {
+                            // Do not detach teardown when the deadline expires. The
+                            // stop task owns the persisted-state and PID cleanup.
+                            let _ = stop_task.await;
+                            Err(BoxliteError::Internal("stop timed out".into()))
+                        }
                     }
                 } else {
                     // Infinite timeout
@@ -954,7 +959,7 @@ impl RuntimeImpl {
                     if let Some(pid) = state.pid {
                         tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
                         let mut handler = ShimHandler::from_pid(pid, config.id.clone());
-                        let stop = || handler.stop();
+                        let mut stop = || handler.stop();
                         // `remove_box` is also used by async runtime paths. Keep
                         // the synchronous VMM grace-period poll off their Tokio
                         // worker, while retaining direct-call support for the
@@ -966,10 +971,10 @@ impl RuntimeImpl {
                                     tokio::runtime::RuntimeFlavor::MultiThread
                                 ) =>
                             {
-                                let _ = tokio::task::block_in_place(stop);
+                                tokio::task::block_in_place(stop)?;
                             }
                             _ => {
-                                let _ = stop();
+                                stop()?;
                             }
                         }
                     }
@@ -2631,7 +2636,8 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn test_force_remove_from_current_thread_runtime_saves_state_and_deletes_box() {
         let (runtime, _dir) = create_test_runtime();
-        let (pid, mut child) = spawn_dummy_process();
+        let (pid, child) = spawn_dummy_process();
+        let _child = ChildGuard(child);
         let config = test_box_config_in_layout(false, &runtime);
         let mut state = BoxState::new();
         state.set_status(BoxStatus::Running);
@@ -2653,8 +2659,6 @@ mod tests {
             runtime.box_manager.box_by_id(&config.id).unwrap().is_none(),
             "Force remove should delete the box from the database"
         );
-
-        child.wait().ok();
     }
 
     /// Write a two-line `shim.pid` whose start-time matches the live PID
