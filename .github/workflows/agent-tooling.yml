@@ -8,6 +8,8 @@ on:
       - ".claude/settings.json"
       - ".github/copilot/settings.json"
       - ".github/workflows/agent-tooling.yml"
+      - "AGENTS.md"
+      - "CLAUDE.md"
   push:
     branches: [main]
     paths:
@@ -16,6 +18,8 @@ on:
       - ".claude/settings.json"
       - ".github/copilot/settings.json"
       - ".github/workflows/agent-tooling.yml"
+      - "AGENTS.md"
+      - "CLAUDE.md"
   workflow_dispatch:
 
 permissions:
@@ -26,5 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve and validate the pinned tooling profile
+      - name: Resolve tooling.ref, validate the profile, adopt the tip
         run: ./.agent-tooling/install.sh
+      - name: Guidance block is current (an explicit install splices; drift becomes a diff)
+        run: git diff --exit-code -- AGENTS.md CLAUDE.md
