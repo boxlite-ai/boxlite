@@ -226,7 +226,7 @@ export async function deployStack() {
       resources: clickHouseResources,
       otelCollector,
       otelCollectorOtlpHttpUrl,
-      verificationTrigger: `clickstack-gateway:${clickStackGatewayFlag}:v1`,
+      verificationTrigger: `clickstack-gateway:${clickStackGatewayFlag}:${process.env.BOXLITE_ARTIFACT_REF ?? releaseVersion}:v2`,
     })
 
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────

@@ -189,7 +189,10 @@ test('waits for the active ClickHouse collector rollout before probing the write
   assert.match(writerReadiness, /dependsOn:\s*\[otelCollector\]/)
   assert.match(writerReadiness, /CLICKHOUSE_READER_SECRET_ARN: resources\.readerSecretArn/)
   assert.match(writerReadiness, /triggers:\s*\[[\s\S]*input\.verificationTrigger/)
-  assert.match(deploy, /verificationTrigger: `clickstack-gateway:\$\{clickStackGatewayFlag\}:v1`/)
+  assert.match(
+    deploy,
+    /verificationTrigger: `clickstack-gateway:\$\{clickStackGatewayFlag\}:\$\{process\.env\.BOXLITE_ARTIFACT_REF \?\? releaseVersion\}:v2`/,
+  )
   assert.doesNotMatch(writerReadiness, /return resources\.ready/)
 })
 
