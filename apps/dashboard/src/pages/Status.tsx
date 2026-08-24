@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 
+import { ChevronDown } from '@/components/ui/icon'
 import { fetchStatusSnapshot, type ServiceStatus } from '@/lib/status-snapshot'
 import { cn } from '@/lib/utils'
 
@@ -45,6 +47,59 @@ function StatusUnavailable() {
   )
 }
 
+function RegionStatus({
+  region,
+}: {
+  region: {
+    id: string
+    name: string
+    status: ServiceStatus
+    services: Array<{ id: string; name: string; status: ServiceStatus }>
+  }
+}) {
+  const [isExpanded, setIsExpanded] = useState(true)
+  const serviceListId = `region-services-${region.id}`
+
+  return (
+    <section className="border border-border bg-card">
+      <header>
+        <h2>
+          <button
+            type="button"
+            aria-controls={serviceListId}
+            aria-expanded={isExpanded}
+            onClick={() => setIsExpanded((expanded) => !expanded)}
+            className="flex w-full items-center justify-between gap-4 border-b border-border px-5 py-4 text-left transition-colors hover:bg-accent/40"
+          >
+            <span className="flex min-w-0 items-center gap-3">
+              <ChevronDown
+                className={cn(
+                  'size-4 shrink-0 text-muted-foreground transition-transform',
+                  !isExpanded && '-rotate-90',
+                )}
+                aria-hidden="true"
+              />
+              <span className="min-w-0">
+                <span className="block truncate font-mono text-base font-medium">{region.id}</span>
+                <span className="mt-1 block truncate text-xs font-normal text-muted-foreground">{region.name}</span>
+              </span>
+            </span>
+            <StatusLabel status={region.status} />
+          </button>
+        </h2>
+      </header>
+      <ul id={serviceListId} hidden={!isExpanded} className="ml-8 divide-y divide-border border-l border-border">
+        {region.services.map((service) => (
+          <li key={service.id} className="flex items-center justify-between gap-4 px-5 py-4 pl-7">
+            <span className="text-sm font-medium">{service.name}</span>
+            <StatusLabel status={service.status} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 export default function Status() {
   const statusQuery = useQuery({
     queryKey: ['public-status-snapshot'],
@@ -87,23 +142,7 @@ export default function Status() {
           </div>
 
           {snapshot.regions.map((region) => (
-            <section key={region.id} className="border border-border bg-card">
-              <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
-                <div>
-                  <h2 className="font-mono text-base font-medium">{region.id}</h2>
-                  <p className="mt-1 text-xs text-muted-foreground">{region.name}</p>
-                </div>
-                <StatusLabel status={region.status} />
-              </header>
-              <ul className="divide-y divide-border">
-                {region.services.map((service) => (
-                  <li key={service.id} className="flex items-center justify-between gap-4 px-5 py-4">
-                    <span className="text-sm font-medium">{service.name}</span>
-                    <StatusLabel status={service.status} />
-                  </li>
-                ))}
-              </ul>
-            </section>
+            <RegionStatus key={region.id} region={region} />
           ))}
         </div>
       )}

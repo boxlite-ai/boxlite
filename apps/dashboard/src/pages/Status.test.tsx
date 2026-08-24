@@ -70,4 +70,40 @@ describe('Status', () => {
     expect(document.body.textContent).toContain('Status unavailable')
     expect(document.body.textContent).not.toContain('Operational')
   })
+
+  it('expands and collapses the services within a region', () => {
+    queryState.data = {
+      schemaVersion: 1,
+      generatedAt: '2026-08-24T04:00:00.000Z',
+      regions: [
+        {
+          id: 'ap-southeast-1',
+          name: 'Asia Pacific (Singapore)',
+          status: 'operational',
+          services: [{ id: 'api', name: 'Api', status: 'operational' }],
+        },
+      ],
+    }
+
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+    act(() => root?.render(<Status />))
+
+    const regionToggle = document.querySelector<HTMLButtonElement>(
+      'button[aria-controls="region-services-ap-southeast-1"]',
+    )
+    const serviceList = document.getElementById('region-services-ap-southeast-1') as HTMLUListElement
+
+    expect(regionToggle?.getAttribute('aria-expanded')).toBe('true')
+    expect(serviceList.hidden).toBe(false)
+
+    act(() => regionToggle?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(regionToggle?.getAttribute('aria-expanded')).toBe('false')
+    expect(serviceList.hidden).toBe(true)
+
+    act(() => regionToggle?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(regionToggle?.getAttribute('aria-expanded')).toBe('true')
+    expect(serviceList.hidden).toBe(false)
+  })
 })
