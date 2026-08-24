@@ -236,6 +236,17 @@ fn signal_live(procs: &[Proc], signal: i32) {
 /// is in its own session, so the launcher's shutdown never reaches it — this is
 /// its only chance to catch a signal and flush libkrun's virtio-blk buffers
 /// before the hard kill. Reaping the VM mid-flush risks qcow2 corruption.
+///
+/// Do not "fix" this to signal leaf-first. For a jailed box the captured tree
+/// is rooted at the box's PID-namespace init — bwrap's `do_init` (vendored
+/// `bubblewrap.c:598`), which installs no signal handler at all. A namespace
+/// init receives only those signals it has installed a handler for; an
+/// ancestor namespace's signals are otherwise discarded by the kernel,
+/// SIGKILL and SIGSTOP excepted (`man 7 pid_namespaces`). So this SIGTERM is
+/// a no-op against it: the init cannot exit here and take the still-flushing
+/// shim down with it, whichever order it is signalled in. That same immunity
+/// is why [`reap_pids`] escalates to SIGKILL. Without the jailer there is no
+/// namespace and no init, and the ordinary signal semantics apply.
 #[cfg(target_os = "linux")]
 pub(crate) fn terminate_and_wait(procs: &[Proc], timeout: std::time::Duration) {
     signal_live(procs, libc::SIGTERM);
