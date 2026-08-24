@@ -1266,6 +1266,67 @@ paths:
       summary: Regenerate proxy API key for a region
       tags:
       - organizations
+  /organizations/{organizationId}/concurrency:
+    get:
+      operationId: getOrganizationUsageConcurrency
+      parameters:
+      - description: Organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Inclusive start of the requested timeline. Defaults to 30 days
+          before `to`.
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Inclusive end of the requested timeline. Defaults to the current
+          time.
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: Spacing between concurrency snapshots.
+        explode: true
+        in: query
+        name: granularity
+        required: false
+        schema:
+          default: day
+          enum:
+          - hour
+          - day
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageConcurrencySeriesDto"
+          description: Compute-bearing box usage periods sampled as a bounded concurrency
+            series.
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get organization concurrency timeline
+      tags:
+      - usage
   /users/me:
     get:
       operationId: getAuthenticatedUser
@@ -5024,6 +5085,58 @@ components:
           example: https://proxy.example.com
           nullable: true
           type: string
+      type: object
+    UsageConcurrencyPointDto:
+      example:
+        observedAt: 2000-01-23T04:56:07.000+00:00
+        runningBoxes: 0
+      properties:
+        observedAt:
+          format: date-time
+          type: string
+        runningBoxes:
+          minimum: 0
+          type: integer
+      required:
+      - observedAt
+      - runningBoxes
+      type: object
+    UsageConcurrencySeriesDto:
+      example:
+        from: 2000-01-23T04:56:07.000+00:00
+        to: 2000-01-23T04:56:07.000+00:00
+        granularity: hour
+        current: 0
+        points:
+        - observedAt: 2000-01-23T04:56:07.000+00:00
+          runningBoxes: 0
+        - observedAt: 2000-01-23T04:56:07.000+00:00
+          runningBoxes: 0
+      properties:
+        from:
+          format: date-time
+          type: string
+        to:
+          format: date-time
+          type: string
+        granularity:
+          enum:
+          - hour
+          - day
+          type: string
+        current:
+          minimum: 0
+          type: integer
+        points:
+          items:
+            $ref: "#/components/schemas/UsageConcurrencyPointDto"
+          type: array
+      required:
+      - current
+      - from
+      - granularity
+      - points
+      - to
       type: object
     UserPublicKey:
       example:

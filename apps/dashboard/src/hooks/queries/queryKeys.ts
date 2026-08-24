@@ -32,6 +32,8 @@ export const queryKeys = {
         [...queryKeys.organization.all, organizationId, 'usage', 'overview'] as const,
       series: (organizationId: string, params: object) =>
         [...queryKeys.organization.all, organizationId, 'usage', 'series', params] as const,
+      concurrency: (organizationId: string, params: object) =>
+        [...queryKeys.organization.all, organizationId, 'usage', 'concurrency', params] as const,
     },
 
     plan: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'plan'] as const,

@@ -17,6 +17,7 @@ import { Migration1741087887225 } from '../../migrations/1741087887225-migration
 import { AddBoxLifecycleSeconds1784250000000 } from '../../migrations/pre-deploy/1784250000000-add-box-lifecycle-seconds-migration'
 import { AddBoxUsagePeriods1785250000000 } from '../../migrations/pre-deploy/1785250000000-add-box-usage-periods-migration'
 import { AddBoxUsageExportOutbox1786100000000 } from '../../migrations/pre-deploy/1786100000000-add-box-usage-export-outbox-migration'
+import { AddUsageConcurrencyIndexes1786340000000 } from '../../migrations/pre-deploy/1786340000000-add-usage-concurrency-indexes-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
@@ -24,6 +25,8 @@ import { UsageExportOutboxService } from './usage-export-outbox.service'
 import { UsageExportPublisherService } from './usage-export-publisher.service'
 import { UsageService } from './usage.service'
 import { expectedOpenPeriod } from './expected-usage-period'
+import { UsageConcurrencyService } from './usage-concurrency.service'
+import { UsageConcurrencyGranularity } from '../dto/usage-concurrency.dto'
 
 // The three cron jobs are a destructive archive transaction, a roll-over that
 // rewrites resources, and a reconcile pass built on a left join from box to the
@@ -157,11 +160,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     await service.reconcileUsagePeriods()
   }
 
-  const serviceForBoxState = (
-    state: BoxState,
-    exportEnabled = false,
-    boxOverrides: Partial<typeof box> = {},
-  ) =>
+  const serviceForBoxState = (state: BoxState, exportEnabled = false, boxOverrides: Partial<typeof box> = {}) =>
     new UsageService(
       periods,
       new RedisLockProvider(redis),
@@ -219,6 +218,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       await new AddBoxLifecycleSeconds1784250000000().up(queryRunner)
       await new AddBoxUsagePeriods1785250000000().up(queryRunner)
       await new AddBoxUsageExportOutbox1786100000000().up(queryRunner)
+      await new AddUsageConcurrencyIndexes1786340000000().up(queryRunner)
       ownsTables = true
     } finally {
       await queryRunner.release()
@@ -265,6 +265,73 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     expect(await periods.find()).toEqual([expect.objectContaining({ id: stillOpen.id })])
     expect(await archives.find()).toEqual([
       expect.objectContaining({ boxId: box.id, organizationId: box.organizationId, cpu: box.cpu }),
+    ])
+  })
+
+  it('builds concurrency across hot and archived half-open compute periods', async () => {
+    const from = new Date('2026-07-01T00:00:00.000Z')
+    const to = new Date('2026-07-03T00:00:00.000Z')
+    const base = {
+      organizationId: box.organizationId,
+      region: box.region,
+      cpu: box.cpu,
+      gpu: box.gpu,
+      mem: box.mem,
+      disk: box.disk,
+    }
+
+    await archives.save([
+      archives.create({
+        ...base,
+        boxId: 'archived-ending-at-sample',
+        startAt: new Date('2026-06-30T12:00:00.000Z'),
+        endAt: new Date('2026-07-02T00:00:00.000Z'),
+      }),
+      archives.create({
+        ...base,
+        boxId: 'archived-starting-at-sample',
+        startAt: new Date('2026-07-02T00:00:00.000Z'),
+        endAt: to,
+      }),
+      archives.create({
+        ...base,
+        organizationId: '7f33c512-a431-4a21-9efc-ff6924f9724c',
+        boxId: 'other-organization',
+        startAt: from,
+        endAt: to,
+      }),
+    ])
+    await periods.save([
+      periods.create({
+        ...base,
+        boxId: 'hot-running',
+        startAt: new Date('2026-07-01T12:00:00.000Z'),
+        endAt: null,
+      }),
+      periods.create({
+        ...base,
+        boxId: 'hot-disk-only',
+        startAt: from,
+        endAt: null,
+        cpu: 0,
+        gpu: 0,
+        mem: 0,
+      }),
+    ])
+
+    const result = await new UsageConcurrencyService(dataSource).getSeries(
+      box.organizationId,
+      from,
+      to,
+      UsageConcurrencyGranularity.DAY,
+      new Date('2026-07-04T00:00:00.000Z'),
+    )
+
+    expect(result.current).toBe(1)
+    expect(result.points).toEqual([
+      { observedAt: from, runningBoxes: 1 },
+      { observedAt: new Date('2026-07-02T00:00:00.000Z'), runningBoxes: 2 },
+      { observedAt: to, runningBoxes: 1 },
     ])
   })
 

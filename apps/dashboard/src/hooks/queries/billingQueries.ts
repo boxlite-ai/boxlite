@@ -18,6 +18,8 @@ import { useOrganizationInvoicesQuery } from './useOrganizationInvoicesQuery'
 import { useOrganizationPlanQuery } from './useOrganizationPlanQuery'
 import { useOrganizationWalletQuery } from './useOrganizationWalletQuery'
 import { useUsageFundingSeriesQuery } from './useUsageFundingSeriesQuery'
+import { useOrganizationConcurrencyQuery } from './useOrganizationConcurrencyQuery'
+import { GetOrganizationUsageConcurrencyGranularityEnum } from '@boxlite-ai/api-client'
 
 function useSelectedOrgBillingScope() {
   const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
@@ -72,6 +74,22 @@ export function useOwnerInvoicesQuery(page?: number, perPage?: number) {
 export function useOwnerUsageSeriesQuery(granularity: SeriesGranularity, from: Date, to: Date, enabled = true) {
   const scope = useSelectedOrgBillingScope()
   return useUsageFundingSeriesQuery({
+    organizationId: scope.organizationId,
+    granularity,
+    from,
+    to,
+    enabled: scope.enabled && enabled,
+  })
+}
+
+export function useOwnerConcurrencyQuery(
+  granularity: GetOrganizationUsageConcurrencyGranularityEnum,
+  from: Date,
+  to: Date,
+  enabled = true,
+) {
+  const scope = useSelectedOrgBillingScope()
+  return useOrganizationConcurrencyQuery({
     organizationId: scope.organizationId,
     granularity,
     from,

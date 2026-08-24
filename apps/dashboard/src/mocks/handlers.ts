@@ -8,6 +8,7 @@ import { OrganizationEmail, OrganizationPlan, OrganizationWallet, UsagePrices } 
 import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
 import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
 import { Plan } from '@/billing-api/types/Plan'
+import type { UsageConcurrencySeriesDto } from '@boxlite-ai/api-client'
 import { http, HttpResponse } from 'msw'
 import {
   MOCK_BOXES,
@@ -27,13 +28,41 @@ export const handlers = [
   // backend and no login (see MockAuthProvider for the fake session).
   http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),
   http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
+  http.get(`${API_URL}/organizations/:organizationId/concurrency`, ({ request }) => {
+    const url = new URL(request.url)
+    const to = new Date(url.searchParams.get('to') ?? Date.now())
+    const from = new Date(url.searchParams.get('from') ?? to.getTime() - 30 * 86_400_000)
+    const dayMs = 86_400_000
+    const pointCount = Math.max(2, Math.floor((to.getTime() - from.getTime()) / dayMs) + 1)
+    const points = Array.from({ length: pointCount }, (_, index) => {
+      const progress = index / (pointCount - 1)
+      const wave = Math.sin(progress * Math.PI * 2) * 18
+      const capacityRun = Math.max(0, 1 - Math.abs(progress - 0.78) / 0.12) * 55
+      return {
+        observedAt: new Date(from.getTime() + index * dayMs),
+        runningBoxes: Math.max(0, Math.round(48 + wave + capacityRun)),
+      }
+    })
+    points[points.length - 1] = { observedAt: to, runningBoxes: 62 }
+
+    return HttpResponse.json<UsageConcurrencySeriesDto>({
+      from,
+      to,
+      granularity: 'day',
+      current: points.at(-1)?.runningBoxes ?? 0,
+      points,
+    })
+  }),
   http.get(`${API_URL}/organizations/:organizationId/users`, () => HttpResponse.json([MOCK_ORGANIZATION_MEMBER])),
   http.get(`${API_URL}/box/paginated`, ({ request }) => {
     // Respect the ?states=… filter so the fleet count cards (running / stopped)
     // show real per-state counts in mock, not just the unfiltered total.
-    const states = new URL(request.url).searchParams.getAll('states').flatMap((s) => s.split(','))
+    const searchParams = new URL(request.url).searchParams
+    const states = searchParams.getAll('states').flatMap((s) => s.split(','))
     if (states.length === 0) return HttpResponse.json(MOCK_PAGINATED_BOXES)
     const items = MOCK_BOXES.filter((b) => b.state != null && states.includes(b.state))
+    const isRunningCount = states.length === 1 && states[0] === 'started' && searchParams.get('limit') === '1'
+    if (isRunningCount) return HttpResponse.json({ items: items.slice(0, 1), total: 62, page: 1, totalPages: 62 })
     return HttpResponse.json({ items, total: items.length, page: 1, totalPages: 1 })
   }),
   http.get(`${API_URL}/box/:boxIdOrName`, ({ params }) => {

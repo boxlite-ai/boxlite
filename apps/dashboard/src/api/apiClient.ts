@@ -22,6 +22,7 @@ import {
   UsersApi,
   VolumesApi,
   WebhooksApi,
+  UsageApi as CoreUsageApi,
 } from '@boxlite-ai/api-client'
 import axios, { AxiosError } from 'axios'
 import { BoxliteError } from './errors'
@@ -78,6 +79,7 @@ export class ApiClient {
   private _regionsApi: RegionsApi
   private _runnersApi: RunnersApi
   private _webhooksApi: WebhooksApi
+  private _usageApi: CoreUsageApi
   private _analyticsUsageApi: AnalyticsUsageApi | null
   private _analyticsTelemetryApi: AnalyticsTelemetryApi | null
 
@@ -137,6 +139,7 @@ export class ApiClient {
     this._regionsApi = new RegionsApi(this.config, undefined, axiosInstance)
     this._runnersApi = new RunnersApi(this.config, undefined, axiosInstance)
     this._webhooksApi = new WebhooksApi(this.config, undefined, axiosInstance)
+    this._usageApi = new CoreUsageApi(this.config, undefined, axiosInstance)
 
     if (config.analyticsApiUrl) {
       const analyticsConfig = new AnalyticsConfiguration({
@@ -241,6 +244,10 @@ export class ApiClient {
 
   public get webhooksApi() {
     return this._webhooksApi
+  }
+
+  public get usageApi() {
+    return this._usageApi
   }
 
   public get analyticsUsageApi() {

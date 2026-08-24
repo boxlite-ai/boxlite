@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useOwnerPlanQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
 import { usePlansQuery } from '@/hooks/queries/usePlansQuery'
 import { useRunningBoxCountQuery } from '@/hooks/queries/useRunningBoxCountQuery'
+import { planConcurrencyLimit } from '@/lib/plan-concurrency'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { formatAmount } from '@/lib/utils'
 import { differenceInCalendarDays, format } from 'date-fns'
@@ -51,7 +52,7 @@ export function ThisCycleCard() {
   // The ceiling is the catalog's, matched by plan id: a negotiated deal sits
   // on no public catalog entry at all. `null` means a deal with no stated
   // ceiling, which is not a ceiling of zero.
-  const concurrencyLimit = plans?.find((catalogPlan) => catalogPlan.id === plan?.planId)?.concurrencyLimit ?? null
+  const concurrencyLimit = planConcurrencyLimit(plan, plans)
   const { data: runningBoxes } = useRunningBoxCountQuery({
     organizationId: selectedOrganization?.id,
     enabled: Boolean(plan && concurrencyLimit != null),
