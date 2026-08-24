@@ -72,23 +72,32 @@ async fn run_guest_rootfs(
 
     // The guest rootfs is now read-only (attached directly, no per-box COW
     // overlay). Remove any overlay left over from an older release.
-    let legacy_overlay = layout.guest_rootfs_disk_path();
-    if legacy_overlay.exists() {
-        tracing::info!(
-            disk_path = %legacy_overlay.display(),
-            "Removing legacy guest rootfs overlay (guest rootfs is now read-only)"
-        );
-        std::fs::remove_file(&legacy_overlay).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to remove legacy guest rootfs overlay {}: {}",
-                legacy_overlay.display(),
-                e
-            ))
-        })?;
-    }
+    remove_legacy_guest_rootfs_overlay(layout)?;
 
     // No per-box COW disk anymore.
     Ok(None)
+}
+
+/// Remove a per-box guest-rootfs overlay left over from a release that still
+/// created one. The minimal rootfs is shared and read-only, so the overlay is
+/// obsolete; a re-created box boots from the shared base regardless.
+fn remove_legacy_guest_rootfs_overlay(layout: &BoxFilesystemLayout) -> BoxliteResult<()> {
+    let legacy_overlay = layout.guest_rootfs_disk_path();
+    if !legacy_overlay.exists() {
+        return Ok(());
+    }
+
+    tracing::info!(
+        disk_path = %legacy_overlay.display(),
+        "Removing legacy guest rootfs overlay (guest rootfs is now read-only)"
+    );
+    std::fs::remove_file(&legacy_overlay).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to remove legacy guest rootfs overlay {}: {}",
+            legacy_overlay.display(),
+            e
+        ))
+    })
 }
 
 /// Prepare guest rootfs as a versioned disk image.
@@ -142,4 +151,40 @@ async fn extract_env_from_image(
     };
 
     Ok(env)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::layout::FsLayoutConfig;
+
+    fn test_layout(box_dir: &std::path::Path) -> BoxFilesystemLayout {
+        BoxFilesystemLayout::new(
+            box_dir.to_path_buf(),
+            FsLayoutConfig::without_bind_mount(),
+            false,
+        )
+    }
+
+    #[test]
+    fn removes_existing_legacy_overlay() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = test_layout(dir.path());
+        let overlay = layout.guest_rootfs_disk_path();
+        std::fs::create_dir_all(overlay.parent().unwrap()).unwrap();
+        std::fs::write(&overlay, b"legacy overlay").unwrap();
+        assert!(overlay.exists());
+
+        remove_legacy_guest_rootfs_overlay(&layout).unwrap();
+
+        assert!(!overlay.exists());
+    }
+
+    #[test]
+    fn noop_when_no_legacy_overlay() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = test_layout(dir.path());
+
+        remove_legacy_guest_rootfs_overlay(&layout).unwrap();
+    }
 }

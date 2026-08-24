@@ -166,6 +166,29 @@ build_guest() {
 # These are required by GuestArtifacts::get() on the default boot path, so they
 # must always be produced here rather than treated as optional — a runtime
 # missing them builds fine but fails on the first Box start.
+
+# Validate a pre-built guest tool with the same checks build-guest-deps.sh
+# applies to freshly built tools (verify_tool): a regular file (not a symlink),
+# non-empty, mode 0755, and a statically-linked ELF for the guest target.
+# SKIP_GUEST_BUILD must not trust a bad cache that would only fail at Box start.
+verify_guest_tool() {
+    local path="$1"
+    local mode
+    if [ ! -f "$path" ] || [ -L "$path" ] || [ ! -s "$path" ]; then
+        print_error "Invalid cached guest tool (must be a regular, non-empty file): $path"
+        exit 1
+    fi
+    mode="$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path")"
+    if [ "$mode" != "755" ]; then
+        print_error "Guest tool must have mode 0755: $path (found $mode)"
+        exit 1
+    fi
+    bash "$SCRIPT_DIR/util.sh" --verify-guest-elf "$GUEST_TARGET" "$path" || {
+        print_error "Guest tool is not a valid static ELF for $GUEST_TARGET: $path"
+        exit 1
+    }
+}
+
 build_guest_deps() {
     echo ""
     print_section "Building guest e2fsprogs tools (mke2fs, resize2fs)..."
@@ -178,6 +201,8 @@ build_guest_deps() {
     # Used in CI when `make guest` (the build-guest action) pre-built and staged
     # them to .cache/, restored into target/ before this script runs.
     if [ "${SKIP_GUEST_BUILD:-0}" = "1" ] && [ -f "$mke2fs_path" ] && [ -f "$resize2fs_path" ]; then
+        verify_guest_tool "$mke2fs_path"
+        verify_guest_tool "$resize2fs_path"
         print_success "Using pre-built guest e2fsprogs tools (SKIP_GUEST_BUILD=1)"
         return 0
     fi

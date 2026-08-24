@@ -744,7 +744,9 @@ mod tests {
 
         // bases/ is granted by its canonical path; compare canonical forms so the
         // assertion holds even when $TMPDIR itself contains a symlink.
-        let expected = bases_dir.canonicalize().unwrap_or_else(|_| bases_dir.clone());
+        let expected = bases_dir
+            .canonicalize()
+            .unwrap_or_else(|_| bases_dir.clone());
         let bases_paths: Vec<_> = paths
             .iter()
             .filter(|p| p.path.canonicalize().unwrap_or_else(|_| p.path.clone()) == expected)
@@ -778,9 +780,7 @@ mod tests {
 
         let expected = real_bases.canonicalize().unwrap();
         assert!(
-            paths
-                .iter()
-                .any(|p| p.path == expected && !p.writable),
+            paths.iter().any(|p| p.path == expected && !p.writable),
             "bases/ must be granted by its canonical path ({}), not the logical symlink path",
             expected.display()
         );

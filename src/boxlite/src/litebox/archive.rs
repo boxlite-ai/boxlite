@@ -460,5 +460,14 @@ mod tests {
             std::fs::read_to_string(extract_dir.join(MANIFEST_FILENAME)).unwrap(),
             r#"{"version":2}"#
         );
+        assert_eq!(
+            std::fs::read_to_string(extract_dir.join(disk_filenames::CONTAINER_DISK)).unwrap(),
+            "fake-container-disk",
+            "the container disk must be extracted"
+        );
+        assert!(
+            !extract_dir.join(disk_filenames::GUEST_ROOTFS_DISK).exists(),
+            "the archive must not contain a guest rootfs member"
+        );
     }
 }

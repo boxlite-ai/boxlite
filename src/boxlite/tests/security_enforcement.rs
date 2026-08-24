@@ -149,8 +149,8 @@ async fn readonly_volume_blocks_remount(bx: &LiteBox) {
     );
 }
 
-/// The seal covers the guest's root superblock only. Container rootfs writes
-/// outside the tmpfs mounts must keep working.
+/// The guest rootfs is read-only by construction; the container rootfs
+/// (writes outside the tmpfs mounts) must stay writable.
 async fn sealed_root_leaves_container_rootfs_writable(bx: &LiteBox) {
     let exit = exec_exit_code(
         bx,

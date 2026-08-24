@@ -18,6 +18,9 @@ const EM_AARCH64: u16 = 0xB7;
 /// ELF program header type for interpreter (PT_INTERP).
 const PT_INTERP: u32 = 3;
 
+/// Size of a single ELF64 program header entry (sizeof(Elf64_Phdr)).
+const ELF64_PHDR_SIZE: usize = 56;
+
 /// Validate that guest artifact contents are a runnable ELF for this host.
 ///
 /// Checks:
@@ -85,20 +88,24 @@ pub fn validate_guest_bytes(data: &[u8], path: &Path) -> BoxliteResult<()> {
         )));
     }
 
-    if has_pt_interp(data) {
-        tracing::warn!(
-            path = %path.display(),
-            "Guest artifact is dynamically linked — it may fail inside the VM"
-        );
+    if has_pt_interp(data)? {
+        return Err(BoxliteError::Internal(format!(
+            "Guest artifact {} is dynamically linked (has a PT_INTERP program header) — \
+             the minimal rootfs has no dynamic loader; rebuild the artifact statically",
+            path.display()
+        )));
     }
 
     Ok(())
 }
 
 /// Check if an ELF binary has a PT_INTERP program header (dynamically linked).
-fn has_pt_interp(data: &[u8]) -> bool {
+///
+/// Returns `Err` on a malformed program-header table (offset arithmetic that
+/// overflows or runs past the end of `data`) rather than panicking.
+fn has_pt_interp(data: &[u8]) -> BoxliteResult<bool> {
     if data.len() < 64 {
-        return false;
+        return Ok(false);
     }
 
     // 64-bit ELF header (LE): e_phoff at 32, e_phentsize at 54, e_phnum at 56
@@ -106,18 +113,41 @@ fn has_pt_interp(data: &[u8]) -> bool {
     let e_phentsize = u16::from_le_bytes(data[54..56].try_into().unwrap()) as usize;
     let e_phnum = u16::from_le_bytes(data[56..58].try_into().unwrap()) as usize;
 
+    // A program header table with a zero or otherwise wrong entry size is
+    // malformed; the kernel rejects such an ELF at exec time. Reject it here
+    // rather than silently scanning with a bogus stride.
+    if e_phnum != 0 && e_phentsize != ELF64_PHDR_SIZE {
+        return Err(BoxliteError::Internal(format!(
+            "guest ELF program header entry size {e_phentsize} is invalid (expected {ELF64_PHDR_SIZE})"
+        )));
+    }
+
     for i in 0..e_phnum {
-        let ph_offset = e_phoff + i * e_phentsize;
-        if ph_offset + 4 > data.len() {
-            break;
+        let ph_offset = i
+            .checked_mul(e_phentsize)
+            .and_then(|offset| e_phoff.checked_add(offset))
+            .ok_or_else(|| {
+                BoxliteError::Internal("guest ELF program header offset overflow".into())
+            })?;
+        // The kernel reads the whole e_phentsize-byte entry, so bounds-check
+        // the full entry rather than only the leading p_type field.
+        let ph_end = ph_offset.checked_add(e_phentsize).ok_or_else(|| {
+            BoxliteError::Internal("guest ELF program header offset overflow".into())
+        })?;
+        if ph_end > data.len() {
+            return Err(BoxliteError::Internal(
+                "guest ELF program header table runs past end of file".into(),
+            ));
         }
+        // p_type is the entry's first 4 bytes; the full entry already fits, so
+        // this slice is within bounds.
         let p_type = u32::from_le_bytes(data[ph_offset..ph_offset + 4].try_into().unwrap());
         if p_type == PT_INTERP {
-            return true;
+            return Ok(true);
         }
     }
 
-    false
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -206,19 +236,61 @@ mod tests {
 
     #[test]
     fn test_has_pt_interp_detection() {
-        assert!(has_pt_interp(&make_elf_header(EM_X86_64, true)));
-        assert!(!has_pt_interp(&make_elf_header(EM_X86_64, false)));
+        assert!(has_pt_interp(&make_elf_header(EM_X86_64, true)).unwrap());
+        assert!(!has_pt_interp(&make_elf_header(EM_X86_64, false)).unwrap());
     }
 
     #[test]
-    fn test_dynamically_linked_binary_warns() {
+    fn test_dynamically_linked_binary_rejected() {
         let machine = match std::env::consts::ARCH {
             "x86_64" => EM_X86_64,
             "aarch64" => EM_AARCH64,
             _ => return,
         };
 
-        // Should still pass (warning only, not error)
-        assert!(validate_guest_bytes(&make_elf_header(machine, true), guest_path()).is_ok());
+        let err = validate_guest_bytes(&make_elf_header(machine, true), guest_path()).unwrap_err();
+        assert!(err.to_string().contains("dynamically linked"));
+    }
+
+    #[test]
+    fn test_malformed_phoff_returns_error_not_panic() {
+        // e_phoff = usize::MAX overflows the offset arithmetic; parsing must
+        // return an error instead of panicking.
+        let mut data = make_elf_header(EM_X86_64, true);
+        data[32..40].copy_from_slice(&u64::MAX.to_le_bytes());
+
+        let err = has_pt_interp(&data).unwrap_err();
+        assert!(err.to_string().contains("program header"));
+    }
+
+    #[test]
+    fn test_zero_phentsize_with_phnum_rejected() {
+        // e_phnum=1 with e_phentsize=0 is a malformed ELF64 header: the kernel
+        // rejects it at exec time, so `has_pt_interp` must reject it up front
+        // rather than silently scanning with a zero-sized program-header entry.
+        let mut data = make_elf_header(EM_X86_64, false);
+        data[32..40].copy_from_slice(&64u64.to_le_bytes()); // e_phoff = 64
+        data[54..56].copy_from_slice(&0u16.to_le_bytes()); // e_phentsize = 0
+        data[56..58].copy_from_slice(&1u16.to_le_bytes()); // e_phnum = 1
+
+        let err = has_pt_interp(&data).unwrap_err();
+        assert!(err.to_string().contains("program header entry size"));
+    }
+
+    #[test]
+    fn test_truncated_program_header_rejected() {
+        // e_phoff=64, e_phentsize=56, e_phnum=1 but the file is only 68 bytes:
+        // the 56-byte program-header entry (64..120) is truncated. The kernel
+        // needs the full entry, so `has_pt_interp` must reject it up front
+        // rather than accepting a non-PT_INTERP p_type in the first 4 bytes.
+        let mut data = make_elf_header(EM_X86_64, false);
+        data[32..40].copy_from_slice(&64u64.to_le_bytes()); // e_phoff = 64
+        data[54..56].copy_from_slice(&56u16.to_le_bytes()); // e_phentsize = 56
+        data[56..58].copy_from_slice(&1u16.to_le_bytes()); // e_phnum = 1
+        // p_type at offset 64 stays zero (non-PT_INTERP).
+        data.truncate(68);
+
+        let err = has_pt_interp(&data).unwrap_err();
+        assert!(err.to_string().contains("runs past end of file"));
     }
 }

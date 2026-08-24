@@ -96,15 +96,16 @@ async fn test_cow_child_disks_exist_after_snapshot_create() {
     let litebox = create_stopped_box(&runtime).await;
     let box_id = litebox.id().to_string();
 
-    // Precondition: disks exist before snapshot.
+    // Precondition: the container disk exists. The guest rootfs is a shared
+    // read-only image, so there is no per-box guest-rootfs.qcow2 overlay.
     let ddir = disks_dir(&home.path, &box_id);
     assert!(
         ddir.join(CONTAINER_DISK).exists(),
         "container disk missing before snapshot"
     );
     assert!(
-        ddir.join(GUEST_ROOTFS_DISK).exists(),
-        "guest disk missing before snapshot"
+        !ddir.join(GUEST_ROOTFS_DISK).exists(),
+        "guest-rootfs.qcow2 should not exist (shared read-only rootfs)"
     );
 
     let info = litebox

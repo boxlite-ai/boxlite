@@ -564,9 +564,12 @@ impl GuestRootfsManager {
     pub fn gc(&self, boxes_dir: &Path) -> BoxliteResult<usize> {
         let gc_start = std::time::Instant::now();
 
-        let current_minimal_key = GuestArtifacts::get().ok().map(|a| a.id().to_string());
+        // Propagate resolution failure: a transient error must not turn the
+        // current key into `None`, which would make gc_inner delete every cached
+        // rootfs as non-current.
+        let current_minimal_key = GuestArtifacts::get()?.id().to_string();
 
-        let result = self.gc_inner(boxes_dir, current_minimal_key.as_deref());
+        let result = self.gc_inner(boxes_dir, Some(&current_minimal_key));
 
         tracing::info!(
             elapsed_ms = gc_start.elapsed().as_millis() as u64,
@@ -1186,6 +1189,12 @@ mod tests {
             std::fs::read(bin.join("mke2fs")).unwrap(),
             "mkfs.ext4 must be a byte-copy of mke2fs"
         );
+
+        // The rootfs is attached read-only, so every mount point the guest
+        // creates at boot must already exist in the staged tree.
+        for dir in ["tmp", "var/tmp", "run", "dev", "proc", "sys"] {
+            assert!(tree.join(dir).is_dir(), "{dir} mount point must be staged");
+        }
     }
 
     /// The full build must land the artifacts inside a real ext4 image, tracked
