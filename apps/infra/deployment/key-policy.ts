@@ -37,6 +37,7 @@ import { CLICKHOUSE_STAGE_CONFIG_KEYS } from './clickhouse.js'
 export const STORABLE_STAGE_CONFIG_KEYS: readonly string[] = [
   'ADMIN_API_KEY',
   'APP_URL',
+  'BACKOFFICE_INTERNAL_API_ENABLED',
   'BILLING_API_URL',
   'BOXLITE_API_KEY',
   'BOXLITE_API_URL',
@@ -232,6 +233,8 @@ const STORE_EXCLUDED_KEYS = new Set([
  * it here fails rather than quietly becoming clobberable.
  */
 export const APP_SECRET_NAMES = [
+  'BACKOFFICE_READ_TOKEN_DIGEST_CURRENT',
+  'BACKOFFICE_READ_TOKEN_DIGEST_NEXT',
   'OIDC_CLIENT_ID',
   'OIDC_MANAGEMENT_API_CLIENT_ID',
   'OIDC_MANAGEMENT_API_CLIENT_SECRET',

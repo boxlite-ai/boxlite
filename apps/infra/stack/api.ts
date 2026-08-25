@@ -36,6 +36,8 @@ export interface ApiInputs {
   oidcMgmtClientSecret: sst.Secret
   posthogApiKey: sst.Secret
   svixAuthToken: sst.Secret
+  backofficeReadTokenDigestCurrent: sst.Secret
+  backofficeReadTokenDigestNext: sst.Secret
   usageExportToken: sst.Secret
   oidcIssuer: string
   publicOidcIssuer: string | undefined
@@ -70,6 +72,8 @@ export function buildApi(input: ApiInputs) {
     oidcMgmtClientSecret,
     posthogApiKey,
     svixAuthToken,
+    backofficeReadTokenDigestCurrent,
+    backofficeReadTokenDigestNext,
     usageExportToken,
     oidcIssuer,
     publicOidcIssuer,
@@ -276,6 +280,12 @@ const api = new sst.aws.Service('Api', {
 
     // Admin
     ADMIN_API_KEY: envOr('ADMIN_API_KEY', adminApiKey.result),
+
+    // Backoffice workload access is opt-in. Only SHA-256 digests reach the
+    // task; current/next provide a bounded credential-rotation overlap.
+    BACKOFFICE_INTERNAL_API_ENABLED: envOr('BACKOFFICE_INTERNAL_API_ENABLED', 'false'),
+    BACKOFFICE_READ_TOKEN_DIGEST_CURRENT: backofficeReadTokenDigestCurrent.value,
+    BACKOFFICE_READ_TOKEN_DIGEST_NEXT: backofficeReadTokenDigestNext.value,
 
     // Observability read/write path. These stay server-side; never expose
     // ClickHouse credentials to the dashboard bundle.

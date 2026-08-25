@@ -7,6 +7,11 @@
 import pino, { TransportSingleOptions } from 'pino'
 import { TypedConfigService } from '../../config/typed-config.service'
 
+export const PINO_HTTP_REDACT = {
+  paths: ['req.headers.authorization'],
+  censor: '[REDACTED]',
+}
+
 /*
  * This is a workaround to swap the message and object in the arguments array.
  * It is needed because the logger in nestjs-pino is not compatible with nestjs console logger.

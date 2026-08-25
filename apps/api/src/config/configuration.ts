@@ -199,6 +199,36 @@ export function boxMigrationConfig(env: NodeJS.ProcessEnv = process.env) {
   return { archivePrefix: `${scheme}${segments.join('/')}/` }
 }
 
+const SHA256_HEX_DIGEST = /^[a-fA-F0-9]{64}$/
+
+function optionalSha256Digest(value: string | undefined, name: string): string | undefined {
+  const digest = value?.trim()
+  if (!digest) {
+    return undefined
+  }
+  if (!SHA256_HEX_DIGEST.test(digest)) {
+    // A malformed value may still be derived from a credential. Name the
+    // setting, never the value, so boot failures remain safe to log.
+    throw new Error(`${name} must be a SHA-256 hex digest`)
+  }
+  return digest.toLowerCase()
+}
+
+export function backofficeInternalConfig(env: NodeJS.ProcessEnv = process.env) {
+  const enabled = env.BACKOFFICE_INTERNAL_API_ENABLED === 'true'
+  const current = optionalSha256Digest(env.BACKOFFICE_READ_TOKEN_DIGEST_CURRENT, 'BACKOFFICE_READ_TOKEN_DIGEST_CURRENT')
+  const next = optionalSha256Digest(env.BACKOFFICE_READ_TOKEN_DIGEST_NEXT, 'BACKOFFICE_READ_TOKEN_DIGEST_NEXT')
+
+  if (enabled && !current) {
+    throw new Error('BACKOFFICE_READ_TOKEN_DIGEST_CURRENT is required when BACKOFFICE_INTERNAL_API_ENABLED is true')
+  }
+
+  return {
+    enabled,
+    readTokenDigests: { current, next },
+  }
+}
+
 const configuration = {
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
@@ -466,6 +496,7 @@ const configuration = {
   admin: {
     apiKey: process.env.ADMIN_API_KEY,
   },
+  backofficeInternal: backofficeInternalConfig(),
   skipUserEmailVerification: process.env.SKIP_USER_EMAIL_VERIFICATION === 'true',
   // Whether a newly created non-default organization starts suspended until a
   // payment method exists. Separate from billingApiUrl on purpose: pointing the

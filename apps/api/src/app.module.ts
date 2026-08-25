@@ -36,7 +36,7 @@ import { HealthModule } from './health/health.module'
 import { OpenFeatureModule } from '@openfeature/nestjs-sdk'
 import { OpenFeaturePostHogProvider } from './common/providers/openfeature-posthog.provider'
 import { LoggerModule } from 'nestjs-pino'
-import { getPinoTransport, swapMessageAndObject } from './common/utils/pino.util'
+import { getPinoTransport, PINO_HTTP_REDACT, swapMessageAndObject } from './common/utils/pino.util'
 import { Redis } from 'ioredis'
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis'
 import { RegionModule } from './region/region.module'
@@ -45,6 +45,7 @@ import { AdminModule } from './admin/admin.module'
 import { ClickHouseModule } from './clickhouse/clickhouse.module'
 import { BoxTelemetryModule } from './box-telemetry/box-telemetry.module'
 import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
+import { BackofficeInternalModule } from './backoffice-internal/backoffice-internal.module'
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
           pinoHttp: {
             autoLogging: logConfig.requests.enabled,
             level: logConfig.level,
+            redact: PINO_HTTP_REDACT,
             hooks: {
               logMethod: swapMessageAndObject,
             },
@@ -201,6 +203,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     ClickHouseModule,
     BoxTelemetryModule,
     BoxliteRestModule,
+    BackofficeInternalModule,
     OpenFeatureModule.forRoot({
       contextFactory: (request: ExecutionContext) => {
         const req = request.switchToHttp().getRequest()

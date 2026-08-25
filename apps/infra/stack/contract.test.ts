@@ -475,6 +475,24 @@ test('passes explicit management API endpoints into the API service', () => {
   assert.match(apiService, /OIDC_MANAGEMENT_API_TOKEN_URL: process\.env\.OIDC_MANAGEMENT_API_TOKEN_URL/)
 })
 
+test('keeps Backoffice workload credentials digest-only and disabled by default', () => {
+  const apiService = configSection("const api = new sst.aws.Service('Api'", '// Assumed by the Api task role')
+
+  assert.match(liveConfig, /new sst\.Secret\('BACKOFFICE_READ_TOKEN_DIGEST_CURRENT', ''\)/)
+  assert.match(liveConfig, /new sst\.Secret\('BACKOFFICE_READ_TOKEN_DIGEST_NEXT', ''\)/)
+  assert.match(
+    apiService,
+    /BACKOFFICE_INTERNAL_API_ENABLED: envOr\('BACKOFFICE_INTERNAL_API_ENABLED', 'false'\)/,
+  )
+  assert.match(
+    apiService,
+    /BACKOFFICE_READ_TOKEN_DIGEST_CURRENT: backofficeReadTokenDigestCurrent\.value/,
+  )
+  assert.match(apiService, /BACKOFFICE_READ_TOKEN_DIGEST_NEXT: backofficeReadTokenDigestNext\.value/)
+  assert.doesNotMatch(liveConfig, /BACKOFFICE_READ_TOKEN(?:[^_]|$)/)
+  assert.doesNotMatch(environmentExample, /^BACKOFFICE_READ_TOKEN=/m)
+})
+
 test('reports the canonical workspace release unless VERSION overrides it', () => {
   assert.match(liveConfig, /const workspaceVersion = readWorkspaceVersion\(\)/)
   assert.match(liveConfig, /resolvePublicDeploymentConfig\(process\.env, workspaceVersion\)/)

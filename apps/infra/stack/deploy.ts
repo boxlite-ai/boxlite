@@ -85,6 +85,11 @@ export async function deployStack() {
     const oidcMgmtClientSecret = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_SECRET')
     const posthogApiKey = new sst.Secret('POSTHOG_API_KEY', '')
     const svixAuthToken = new sst.Secret('SVIX_AUTH_TOKEN', '')
+    // BoxLite receives only one-way token digests. The raw Backoffice
+    // credential remains in Backoffice's secret store and never enters this
+    // stack's state, task definition, logs, or environment.
+    const backofficeReadTokenDigestCurrent = new sst.Secret('BACKOFFICE_READ_TOKEN_DIGEST_CURRENT', '')
+    const backofficeReadTokenDigestNext = new sst.Secret('BACKOFFICE_READ_TOKEN_DIGEST_NEXT', '')
     // The credential the usage exporter presents to Commerce's ingest route:
     // half of a shared secret whose other half is a Secrets Manager container
     // owned by boxlite-commerce's own stack, so both ends are set out of band
@@ -264,6 +269,8 @@ export async function deployStack() {
       oidcMgmtClientSecret,
       posthogApiKey,
       svixAuthToken,
+      backofficeReadTokenDigestCurrent,
+      backofficeReadTokenDigestNext,
       usageExportToken,
       oidcIssuer,
       publicOidcIssuer,
