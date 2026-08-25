@@ -74,6 +74,13 @@ new sst.aws.Service('Proxy', {
     OTEL_EXPORTER_OTLP_ENDPOINT: envOr('OTEL_EXPORTER_OTLP_ENDPOINT', otelCollectorOtlpHttpUrl),
   },
   transform: {
+    service: (serviceArgs: any) => {
+      serviceArgs.tags = {
+        ...serviceArgs.tags,
+        'boxlite:stage': $app.stage,
+        'boxlite:status-service': 'proxy',
+      }
+    },
     loadBalancer: (lbArgs: any, opts: any) => {
       lbArgs.loadBalancerType = 'network'
       opts.protect = true

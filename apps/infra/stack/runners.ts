@@ -26,6 +26,7 @@ export interface RunnerInputs {
   defaultRunnerApiKey: random.RandomPassword
   adminApiKey: random.RandomPassword
   randomKey: (name: string, length?: number) => random.RandomPassword
+  statusHeartbeatNamespace: string
 }
 
 export async function buildRunners(input: RunnerInputs): Promise<void> {
@@ -40,6 +41,7 @@ export async function buildRunners(input: RunnerInputs): Promise<void> {
     defaultRunnerApiKey,
     adminApiKey,
     randomKey,
+    statusHeartbeatNamespace,
   } = input
 
 const artifactsBucketName = runnerArtifactsBucketName({ app: $app.name, stage: $app.stage, accountId })
@@ -68,6 +70,20 @@ const runnerRole = new aws.iam.Role('RunnerRole', {
 new aws.iam.RolePolicyAttachment('RunnerSsmPolicy', {
   role: runnerRole.name,
   policyArn: 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore',
+})
+new aws.iam.RolePolicy('RunnerStatusHeartbeatPolicy', {
+  role: runnerRole.name,
+  policy: JSON.stringify({
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Effect: 'Allow',
+        Action: ['cloudwatch:PutMetricData'],
+        Resource: '*',
+        Condition: { StringEquals: { 'cloudwatch:namespace': statusHeartbeatNamespace } },
+      },
+    ],
+  }),
 })
 new aws.iam.RolePolicy('RunnerVolumeS3Policy', {
   role: runnerRole.name,
@@ -186,7 +202,7 @@ if (ghcrSecret) {
   })
 }
 
-const runnerUserDataFor = (token: $util.Input<string>) =>
+const runnerUserDataFor = (token: $util.Input<string>, runnerName: string) =>
   $resolve([api.url, token, otelCollectorOtlpHttpUrl, ghcrSecret ? ghcrSecret.arn : '']).apply(
     ([apiUrl, resolvedToken, otelEndpoint, ghcrSecretArn]) =>
       buildRunnerUserData({
@@ -194,13 +210,16 @@ const runnerUserDataFor = (token: $util.Input<string>) =>
         token: resolvedToken,
         otelEndpoint,
         awsRegion: REGION,
+        stage: $app.stage,
+        runnerName,
+        statusHeartbeatNamespace,
         artifact: runnerArtifact,
         ghcrSecretArn: ghcrSecretArn || undefined,
         ghcrUsername,
       }),
   )
 
-const runnerUserData = runnerUserDataFor(defaultRunnerApiKey.result)
+const runnerUserData = runnerUserDataFor(defaultRunnerApiKey.result, defaultRunnerConfig.controlPlaneRunnerName)
 
 // Runners hold load-bearing box state (/var/lib/boxlite + in-memory libkrun VMs).
 // The default runner and every extra runner are identical except for resource
@@ -240,6 +259,8 @@ const makeRunner = (
       rootBlockDevice: { volumeSize: RUNNER.rootDiskGB },
       tags: {
         Name: nameTag,
+        'boxlite:stage': $app.stage,
+        'boxlite:status-service': 'runner',
         'boxlite:control-plane-runner-name': controlPlaneRunnerName,
       },
     },
@@ -286,7 +307,7 @@ const extraRunners = runnerInventory.slice(1).map((runner) => {
     runner.resourceName,
     runner.nameTag,
     runner.controlPlaneRunnerName,
-    runnerUserDataFor(apiKey.result),
+    runnerUserDataFor(apiKey.result, runner.controlPlaneRunnerName),
   )
   return { name: runner.controlPlaneRunnerName, apiKey, instance }
 })
@@ -410,6 +431,9 @@ async function buildRunnerUserData(input: {
   token: string
   otelEndpoint: string
   awsRegion: string
+  stage: string
+  runnerName: string
+  statusHeartbeatNamespace: string
   artifact: { tarballName: string; tarballUrl: string; checksumUrl: string; fetch: string }
   ghcrSecretArn?: string
   ghcrUsername?: string
@@ -530,6 +554,9 @@ Environment=API_PORT=${PORTS.RUNNER}
 Environment=RUNNER_DOMAIN=\$HOST_IP
 Environment=BOXLITE_HOME_DIR=/var/lib/boxlite
 Environment=AWS_REGION=${input.awsRegion}
+Environment=STATUS_HEARTBEAT_NAMESPACE=${input.statusHeartbeatNamespace}
+Environment=STATUS_HEARTBEAT_STAGE=${input.stage}
+Environment=STATUS_HEARTBEAT_RUNNER=${input.runnerName}
 Environment=OTEL_LOGGING_ENABLED=true
 Environment=OTEL_TRACING_ENABLED=true
 Environment=OTEL_EXPORTER_OTLP_ENDPOINT=${input.otelEndpoint}${

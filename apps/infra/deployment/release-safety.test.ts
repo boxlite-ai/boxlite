@@ -1851,6 +1851,30 @@ test('dev deploy role trusts only the repository GitHub Environment identity', (
       'arn:${AWS::Partition}:s3:::boxlite-volume-*/*',
     ],
   })
+  assert.deepEqual(findStatement(statements, 'PublicStatusHealthReads'), {
+    Sid: 'PublicStatusHealthReads',
+    Effect: 'Allow',
+    Action: [
+      'tag:GetResources',
+      'ecs:DescribeServices',
+      'elasticloadbalancing:DescribeTargetHealth',
+      'ec2:DescribeInstances',
+      'ec2:DescribeInstanceStatus',
+      'cloudwatch:GetMetricData',
+    ],
+    Resource: '*',
+  })
+  assert.deepEqual(findStatement(statements, 'PublicStatusRunnerHeartbeat'), {
+    Sid: 'PublicStatusRunnerHeartbeat',
+    Effect: 'Allow',
+    Action: 'cloudwatch:PutMetricData',
+    Resource: '*',
+    Condition: {
+      StringEquals: {
+        'cloudwatch:namespace': 'BoxLite/PublicStatus',
+      },
+    },
+  })
   /*
    * The last sibling, and the one the unscoped-grant test cannot reach: it collects the deploy role's
    * own policies, and this statement lives in the boundary ManagedPolicy, which names no role. So

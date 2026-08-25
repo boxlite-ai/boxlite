@@ -19,6 +19,7 @@ const stackSource = [
   readFileSync(new URL('./edge.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('./mail.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('./runners.ts', import.meta.url), 'utf8'),
+  readFileSync(new URL('./status.ts', import.meta.url), 'utf8'),
 ].join('\n')
 const source = `${entrypointSource}\n${stackSource}`
 const environmentExample = readFileSync(new URL('../.env.example', import.meta.url), 'utf8')
@@ -61,6 +62,7 @@ test('loads local helpers dynamically inside SST config callbacks', () => {
 test('deploys domain builders in dependency order without ComponentResource parents', () => {
   const deploySource = liveText('scriptEmittingShell', readFileSync(new URL('./deploy.ts', import.meta.url), 'utf8'))
   const calls = [
+    'buildPublicStatus({',
     'createFoundation(',
     'buildClickHouseStorage(',
     'buildObservability(',
@@ -72,6 +74,26 @@ test('deploys domain builders in dependency order without ComponentResource pare
   assert.ok(calls.every((index) => index >= 0), 'a stack domain builder is missing')
   assert.deepEqual([...calls].sort((left, right) => left - right), calls)
   assert.doesNotMatch(stackSource, /ComponentResource/)
+})
+
+test('hosts public status independently and exposes only its exact snapshot object', () => {
+  const status = configSection('export function buildPublicStatus')
+
+  assert.match(status, /const statusDomain = `status\.\$\{input\.stackDomain\}`/)
+  assert.match(status, /new sst\.aws\.StaticSite\('PublicStatusSite'/)
+  assert.match(status, /path: '\.\.\/status'/)
+  assert.match(status, /new sst\.aws\.Cron\('PublicStatusCollector'/)
+  assert.match(status, /schedule: 'rate\(1 minute\)'/)
+  assert.match(stackSource, /const STATUS_OBJECT_KEY = 'public-status\.json'/)
+  assert.match(status, /event\.request\.uri === "\/\$\{STATUS_OBJECT_KEY\}"/)
+  assert.doesNotMatch(status, /event\.request\.uri\.startsWith/)
+  assert.match(status, /STATUS_SNAPSHOT_BUCKET: snapshotBucket\.name/)
+  assert.match(status, /STATUS_RUNNERS: input\.runnerNames\.join\(','\)/)
+  assert.match(status, /actions: \['s3:PutObject'\]/)
+  assert.match(status, /cloudwatch:GetMetricData/)
+  assert.match(status, /cacheControl: 'public,max-age=31536000,immutable'/)
+  assert.match(status, /cacheControl: 'no-cache,no-store,must-revalidate'/)
+  assert.match(status, /content-security-policy/)
 })
 
 test('does not force a laptop-managed remote builder', () => {
@@ -274,8 +296,11 @@ test('keeps the AWS region in run scope and passes it into Runner user data', ()
   assert.match(runSource, /const REGION = resolveAwsRegion\(\)/)
   assert.equal(runSource.match(/awsRegion: REGION/g)?.length, 1)
   assert.match(runSource, /const runnerUserDataFor[\s\S]*awsRegion: REGION/)
-  assert.match(runSource, /runnerUserDataFor\(defaultRunnerApiKey\.result\)/)
-  assert.match(runSource, /runnerUserDataFor\(apiKey\.result\)/)
+  assert.match(
+    runSource,
+    /runnerUserDataFor\(defaultRunnerApiKey\.result, defaultRunnerConfig\.controlPlaneRunnerName\)/,
+  )
+  assert.match(runSource, /runnerUserDataFor\(apiKey\.result, runner\.controlPlaneRunnerName\)/)
   assert.match(runnerUserDataSource, /awsRegion: string/)
   assert.match(runnerUserDataSource, /Environment=AWS_REGION=\$\{input\.awsRegion\}/)
 })
@@ -290,7 +315,10 @@ test('tags Runner instances with their exact control-plane identity', () => {
     runnerResources,
     /makeRunner\([\s\S]*defaultRunnerConfig\.resourceName,[\s\S]*defaultRunnerConfig\.nameTag,[\s\S]*defaultRunnerConfig\.controlPlaneRunnerName,[\s\S]*runnerUserData/,
   )
-  assert.match(runnerResources, /runnerInventory\.slice\(1\)\.map\([\s\S]*runner\.nameTag,[\s\S]*runnerUserDataFor\(apiKey\.result\)/)
+  assert.match(
+    runnerResources,
+    /runnerInventory\.slice\(1\)\.map\([\s\S]*runner\.nameTag,[\s\S]*runnerUserDataFor\(apiKey\.result, runner\.controlPlaneRunnerName\)/,
+  )
 })
 
 test('keeps every Runner instance protected from replacement during full-stack deploys', () => {

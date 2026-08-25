@@ -13,6 +13,7 @@ import { buildEdge } from './edge.js'
 import { buildRunners } from './runners.js'
 import { buildClickHouseStorage, buildClickHouseWriterReady } from './clickhouse.js'
 import { buildMail } from './mail.js'
+import { buildPublicStatus } from './status.js'
 
 export async function deployStack() {
     const {
@@ -58,6 +59,12 @@ export async function deployStack() {
     const serviceDomain = (name: string) => ({
       name: `${name}.${stackDomain}`,
       dns: cloudflareDns,
+    })
+    const publicStatus = buildPublicStatus({
+      region: REGION,
+      runnerNames: runnerInventory.map((runner) => runner.controlPlaneRunnerName),
+      stackDomain,
+      cloudflareDns,
     })
 
     // ─── 1. SECRETS ──────────────────────────────────────────────────────────
@@ -316,5 +323,6 @@ export async function deployStack() {
       defaultRunnerApiKey,
       adminApiKey,
       randomKey,
+      statusHeartbeatNamespace: publicStatus.heartbeatNamespace,
     })
 }

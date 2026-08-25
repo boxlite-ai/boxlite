@@ -1,7 +1,8 @@
 # BoxLite Infra (SST on AWS)
 
-Deploys the BoxLite control plane: ECS Fargate services, an EC2 Runner with
-nested KVM, RDS Postgres, ElastiCache Redis, S3, and CloudFront.
+Deploys the BoxLite control plane and its independent public status site: ECS
+Fargate services, EC2 Runners with nested KVM, RDS Postgres, ElastiCache Redis,
+S3, Lambda, and CloudFront.
 
 - **Region** — `AWS_REGION`, default `ap-southeast-1`
 - **IaC** — SST v4 (Pulumi underneath)
@@ -59,6 +60,47 @@ flowchart TB
     api --> otel
     runner -->|"pull box images"| ghcr
 ```
+
+## Independent public status site
+
+Every stage owns a public, unauthenticated site at
+`https://status.<STACK_DOMAIN>/`. It is a separate static-site CloudFront
+distribution backed by a private S3 bucket, so loading the page does not depend
+on the dashboard, API ECS service, or application authentication. Production is
+therefore `https://status.boxlite.ai/`; a development stage whose
+`STACK_DOMAIN=dev.boxlite.ai` uses `https://status.dev.boxlite.ai/`.
+
+An EventBridge schedule runs the status collector Lambda once a minute. The
+collector reads AWS health directly and publishes only `region`, generated time,
+and the normalized state of three public services:
+
+- **API** and **Proxy** — discover the stage's tagged ECS services, then combine
+  ECS desired/running capacity with load-balancer target health.
+- **Runner** — compare tagged EC2 instances with the stage's declared Runner
+  inventory, require EC2 instance/system checks, and require a fresh
+  `RunnerHealthy` heartbeat emitted after the Runner's BoxLite runtime ping. One
+  missing or unhealthy Runner makes a mixed fleet a partial outage; no healthy
+  Runner makes the region an outage.
+
+The discovery contract is `boxlite:stage=<stage>` plus
+`boxlite:status-service=api|proxy|runner`. Runner instances also carry their
+bounded `boxlite:control-plane-runner-name` identity, which is the only
+per-Runner value used as a CloudWatch metric dimension. The snapshot never
+contains resource ARNs, instance ids, cluster names, counts, target details, or
+raw AWS errors.
+
+Collection is fail closed: if any AWS read fails, the collector does not replace
+the last verified snapshot. The browser rejects missing, malformed, future, or
+older-than-five-minute snapshots and shows `Status unavailable`; CloudFront's
+snapshot cache lifetime is only 30 seconds and cannot extend `generatedAt`.
+Runner heartbeat writes are non-fatal to the Runner and are limited by IAM to
+the `BoxLite/PublicStatus` namespace.
+
+The status domain and DNS record are created by the normal stage deploy. After
+the first deployment, wait for the first successful collector invocation before
+expecting the page to show a verified state. Once published, the site continues
+to load without the API being healthy; deployment still uses the same guarded
+SST stack and stage configuration.
 
 ## Prerequisites
 

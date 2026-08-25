@@ -25,6 +25,7 @@ import (
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/executor"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/healthcheck"
+	"github.com/boxlite-ai/runner/pkg/runner/v2/heartbeat"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/poller"
 	"github.com/boxlite-ai/runner/pkg/services"
 	"github.com/boxlite-ai/runner/pkg/storage"
@@ -162,6 +163,18 @@ func run() int {
 	boxBackend := backend.NewBoxliteAdapter(boxliteClient)
 
 	if cfg.ApiVersion == 2 {
+		heartbeatPublisher, err := heartbeat.NewCloudWatchPublisher(ctx, heartbeat.CloudWatchConfig{
+			Namespace: cfg.StatusHeartbeatNamespace,
+			Stage:     cfg.StatusHeartbeatStage,
+			Region:    cfg.AWSRegion,
+			Runner:    cfg.StatusHeartbeatRunner,
+			Interval:  cfg.StatusHeartbeatInterval,
+		})
+		if err != nil {
+			logger.Error("Failed to configure public status heartbeat", "error", err)
+			return 2
+		}
+
 		healthcheckService, err := healthcheck.NewService(&healthcheck.HealthcheckServiceConfig{
 			Interval:   cfg.HealthcheckInterval,
 			Timeout:    cfg.HealthcheckTimeout,
@@ -172,6 +185,7 @@ func run() int {
 			ProxyPort:  cfg.ApiPort,
 			TlsEnabled: cfg.EnableTLS,
 			Boxlite:    boxliteClient,
+			Heartbeat:  heartbeatPublisher,
 		})
 		if err != nil {
 			logger.Error("Failed to create healthcheck service", "error", err)
