@@ -169,16 +169,7 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
         paths = {route.path for route in SERVER.app.routes}
         self.assertNotIn("/v1/{prefix}/boxes/{box_id}/ports", paths)
 
-    def test_build_box_options_forwards_capability_policy(self) -> None:
-        request = SERVER.CreateBoxRequest(
-            advanced=SERVER.CreateBoxAdvancedOptions(
-                capabilities=SERVER.ContainerCapabilities(
-                    add=["SYS_ADMIN"],
-                    drop=["CAP_NET_RAW"],
-                )
-            ),
-        )
-
+    def _build_with_mocked_boxlite(self, request):
         capabilities = object()
         advanced = object()
         with (
@@ -200,16 +191,91 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
         ):
             SERVER.build_box_options(request)
 
+        return capabilities, advanced, capabilities_constructor, advanced_constructor, constructor
+
+    def test_build_box_options_forwards_capability_policy(self) -> None:
+        request = SERVER.CreateBoxRequest(
+            advanced=SERVER.CreateBoxAdvancedOptions(
+                capabilities=SERVER.ContainerCapabilities(
+                    add=["SYS_ADMIN"],
+                    drop=["CAP_NET_RAW"],
+                ),
+            ),
+        )
+
+        (
+            capabilities,
+            advanced,
+            capabilities_constructor,
+            advanced_constructor,
+            constructor,
+        ) = self._build_with_mocked_boxlite(request)
+
         capabilities_constructor.assert_called_once_with(
             add=["SYS_ADMIN"],
             drop=["CAP_NET_RAW"],
         )
-        advanced_constructor.assert_called_once_with(capabilities=capabilities)
+        advanced_constructor.assert_called_once_with(
+            capabilities=capabilities,
+            privileged=False,
+        )
         constructor.assert_called_once_with(
             image="alpine:latest",
             advanced=advanced,
             detach=False,
         )
+
+    def test_build_box_options_expands_privileged_to_the_canonical_policy(self) -> None:
+        request = SERVER.CreateBoxRequest(
+            advanced=SERVER.CreateBoxAdvancedOptions(privileged=True),
+        )
+
+        (
+            capabilities,
+            _advanced,
+            capabilities_constructor,
+            advanced_constructor,
+            _constructor,
+        ) = self._build_with_mocked_boxlite(request)
+
+        capabilities_constructor.assert_called_once_with(add=["ALL"], drop=[])
+        advanced_constructor.assert_called_once_with(
+            capabilities=capabilities,
+            privileged=True,
+        )
+
+    def test_privileged_rejects_conflicting_capability_overrides(self) -> None:
+        # Every other boundary rejects this rather than rewriting it; the
+        # reference server is what client implementations are checked against,
+        # so it has to agree.
+        with self.assertRaises(ValidationError):
+            SERVER.CreateBoxAdvancedOptions(
+                capabilities=SERVER.ContainerCapabilities(drop=["ALL"]),
+                privileged=True,
+            )
+
+    def test_privileged_accepts_the_canonical_policy_it_expands_to(self) -> None:
+        advanced = SERVER.CreateBoxAdvancedOptions(
+            capabilities=SERVER.ContainerCapabilities(add=["ALL"]),
+            privileged=True,
+        )
+
+        self.assertEqual(advanced.capabilities.add, ["ALL"])
+        self.assertEqual(advanced.capabilities.drop, [])
+
+    def test_privileged_accepts_case_insensitive_and_cap_prefixed_all(self) -> None:
+        # Capability names are documented as case-insensitive with an optional
+        # CAP_ prefix (ContainerCapabilities.validate_capabilities); the
+        # canonical-shape check for privileged mode has to agree, the same
+        # way the Rust core's canonical_capability_name does.
+        for spelling in ("all", "Cap_All", "CAP_ALL"):
+            advanced = SERVER.CreateBoxAdvancedOptions(
+                capabilities=SERVER.ContainerCapabilities(add=[spelling]),
+                privileged=True,
+            )
+
+            self.assertEqual(advanced.capabilities.add, ["ALL"], msg=spelling)
+            self.assertEqual(advanced.capabilities.drop, [], msg=spelling)
 
     def test_create_box_rejects_malformed_capability_policy(self) -> None:
         for capability in ("NET-ADMIN", "123", "ß"):

@@ -78,6 +78,7 @@ pub(crate) struct ServerConfig {
 #[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct ServerCapabilities {
     pub linux_capabilities_enabled: Option<bool>,
+    pub privileged_enabled: Option<bool>,
     pub snapshots_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
@@ -179,6 +180,9 @@ impl CreateBoxRequest {
         // `BoxOptions.advanced.security` because those run under the
         // caller's own trust boundary.
 
+        let mut advanced = options.advanced.clone();
+        advanced.normalize_privileged();
+
         Self {
             name,
             image,
@@ -196,9 +200,10 @@ impl CreateBoxRequest {
             volumes,
             detach: Some(options.detach),
             tty: options.tty.then_some(true),
-            advanced: (!options.advanced.capabilities.is_empty()).then(|| {
+            advanced: (!advanced.capabilities.is_empty() || advanced.privileged).then_some({
                 CreateBoxAdvancedOptions {
-                    capabilities: options.advanced.capabilities.clone(),
+                    capabilities: advanced.capabilities,
+                    privileged: advanced.privileged,
                 }
             }),
             // The deprecated remove-on-stop flag was never applied by the cloud
@@ -214,6 +219,8 @@ impl CreateBoxRequest {
 #[derive(Debug, Serialize)]
 pub(crate) struct CreateBoxAdvancedOptions {
     pub capabilities: ContainerCapabilities,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub privileged: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -775,6 +782,32 @@ mod tests {
     }
 
     #[test]
+    fn test_create_box_request_carries_privileged() {
+        let opts = BoxOptions {
+            advanced: crate::AdvancedBoxOptions {
+                privileged: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let req = CreateBoxRequest::from_options(&opts, None);
+        let json = serde_json::to_value(&req).expect("serialize create request");
+        assert_eq!(
+            json["advanced"]["privileged"],
+            serde_json::Value::Bool(true)
+        );
+        assert_eq!(
+            json["advanced"]["capabilities"]["add"],
+            serde_json::json!(["ALL"])
+        );
+        assert_eq!(
+            json["advanced"]["capabilities"]["drop"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
     #[allow(deprecated)]
     fn deprecated_auto_remove_does_not_change_rest_lifecycle_defaults() {
         for auto_remove in [false, true] {
@@ -1033,6 +1066,7 @@ mod tests {
             "capabilities": {
                 "snapshots_enabled": true,
                 "linux_capabilities_enabled": true,
+                "privileged_enabled": true,
                 "clone_enabled": false,
                 "export_enabled": true
             }
@@ -1040,6 +1074,7 @@ mod tests {
         let resp: ServerConfig = serde_json::from_str(json).unwrap();
         let caps = resp.capabilities.unwrap();
         assert_eq!(caps.linux_capabilities_enabled, Some(true));
+        assert_eq!(caps.privileged_enabled, Some(true));
         assert_eq!(caps.snapshots_enabled, Some(true));
         assert_eq!(caps.clone_enabled, Some(false));
         assert_eq!(caps.export_enabled, Some(true));

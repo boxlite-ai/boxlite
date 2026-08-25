@@ -1358,6 +1358,10 @@ components:
               type: boolean
               description: Whether Docker-style Linux capability add/drop policy is supported
               example: true
+            privileged_enabled:
+              type: boolean
+              description: Whether Docker-style privileged mode requests are supported. Privileged mode grants all Linux capabilities and opens the required guest sysctl path.
+              example: true
             max_cpus:
               type: integer
               description: Maximum allowed vCPUs per box
@@ -1793,6 +1797,10 @@ components:
       properties:
         capabilities:
           $ref: "#/components/schemas/CreateContainerCapabilities"
+        privileged:
+          type: boolean
+          default: false
+          description: Request Docker-style privileged mode for DinD. When true, the server grants all Linux capabilities and enables the complete guest-level privileged shape. It cannot be combined with cap_add or cap_drop; the only capability policy accepted alongside it is the canonical add=["ALL"] with an empty drop list that privileged mode itself expands to.
 
     CreateContainerCapabilities:
       type: object

@@ -507,6 +507,16 @@ impl ApiClient {
         )
     }
 
+    pub async fn require_privileged_enabled(&self) -> BoxliteResult<()> {
+        let config = self.fetch_config().await?;
+        let capabilities = config.capabilities.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "Remote server did not advertise privileged support".to_string(),
+            )
+        })?;
+        ensure_capability("privileged mode", capabilities.privileged_enabled)
+    }
+
     pub async fn require_clone_enabled(&self) -> BoxliteResult<()> {
         let config = self.get_config().await?;
         let capabilities = config.capabilities.ok_or_else(|| {

@@ -775,7 +775,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
     // server with a different default; clients cannot relax it.
 
     let auto_delete = req.auto_delete.unwrap_or(0);
-    Ok(BoxOptions {
+    let options = BoxOptions {
         rootfs,
         cpus: req.cpus,
         memory_mib: req.memory_mib,
@@ -792,6 +792,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                 add: req.advanced.capabilities.add.clone(),
                 drop: req.advanced.capabilities.drop.clone(),
             },
+            privileged: req.advanced.privileged,
             ..Default::default()
         },
         auto_stop: req.auto_stop,
@@ -801,7 +802,9 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         // boxes, but do not synthesize an invalid detached remove-on-stop box.
         detach: req.detach.unwrap_or(auto_delete == 0),
         ..Default::default()
-    })
+    };
+    options.sanitize()?;
+    Ok(options)
 }
 
 fn build_box_command(req: &ExecRequest) -> Result<BoxCommand, boxlite::BoxliteError> {
@@ -1368,6 +1371,18 @@ mod tests {
         let opts = build_box_options(&req).expect("build capability options");
         assert_eq!(opts.advanced.capabilities.add, vec!["SYS_ADMIN"]);
         assert_eq!(opts.advanced.capabilities.drop, vec!["CAP_NET_RAW"]);
+    }
+
+    #[test]
+    fn build_box_options_carries_privileged_from_the_wire() {
+        let req: super::types::CreateBoxRequest =
+            serde_json::from_str(r#"{"image":"alpine:latest","advanced":{"privileged":true}}"#)
+                .expect("privileged request must deserialize");
+
+        let opts = build_box_options(&req).expect("build privileged options");
+        assert!(opts.advanced.privileged);
+        assert_eq!(opts.advanced.capabilities.add, ["ALL"]);
+        assert!(opts.advanced.capabilities.drop.is_empty());
     }
 
     #[test]

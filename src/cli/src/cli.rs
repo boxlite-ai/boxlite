@@ -474,6 +474,12 @@ impl ProcessFlags {
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct CapabilityFlags {
+    /// Request Docker-style privileged mode for the container (available on
+    /// `create` and `run`). This enables the complete guest-level privileged
+    /// shape required by DinD; it is not equivalent to `--cap-add ALL`.
+    #[arg(long)]
+    pub privileged: bool,
+
     /// Add a Linux capability to the container (repeatable; `ALL` is supported)
     #[arg(long = "cap-add", value_name = "CAPABILITY")]
     pub cap_add: Vec<String>,
@@ -484,9 +490,15 @@ pub struct CapabilityFlags {
 }
 
 impl CapabilityFlags {
-    pub fn apply_to(&self, opts: &mut BoxOptions) {
+    pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
+        if self.privileged && (!self.cap_add.is_empty() || !self.cap_drop.is_empty()) {
+            anyhow::bail!("--privileged cannot be combined with --cap-add or --cap-drop");
+        }
+
+        opts.advanced.privileged = self.privileged;
         opts.advanced.capabilities.add.clone_from(&self.cap_add);
         opts.advanced.capabilities.drop.clone_from(&self.cap_drop);
+        Ok(())
     }
 }
 
