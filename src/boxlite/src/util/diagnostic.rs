@@ -23,7 +23,11 @@
 /// [`into_client`]: HostDiagnostic::into_client
 #[derive(Debug)]
 pub(crate) struct HostDiagnostic {
-    client: String,
+    /// The only half allowed to cross the API boundary. `pub(crate)` so tests
+    /// can assert it is safe without a test-only accessor (which would be dead
+    /// code on macOS `--all-targets` builds, where the linux-gated tests that
+    /// read it are not compiled).
+    pub(crate) client: String,
     operator: String,
 }
 
@@ -46,12 +50,6 @@ impl HostDiagnostic {
     /// The only half allowed to cross the API boundary.
     pub(crate) fn into_client(self) -> String {
         self.client
-    }
-
-    /// Read-only view of the client half, for tests asserting it is safe.
-    #[cfg(test)]
-    pub(crate) fn client(&self) -> &str {
-        &self.client
     }
 }
 

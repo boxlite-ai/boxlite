@@ -762,7 +762,7 @@ mod tests {
                     diag.operator()
                 );
                 // ...and the client half must not.
-                crate::util::assert_client_safe(diag.client(), "test-box");
+                crate::util::assert_client_safe(&diag.client, "test-box");
             }
         }
     }

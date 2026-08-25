@@ -454,7 +454,7 @@ mod tests {
             (kvm_open_failed("EACCES".into()), "vIsLhQP34dQF"),
             (kvm_smoke_failed(7, 5, "6.8.0"), "vIsLhQP34dQF"),
         ] {
-            crate::util::assert_client_safe(diag.client(), box_id);
+            crate::util::assert_client_safe(&diag.client, box_id);
             // The detail is routed, not dropped.
             assert!(
                 diag.operator().contains("/dev/kvm"),
@@ -475,7 +475,7 @@ mod tests {
             (kvm_smoke_failed(3, 5, "6.8.0"), "smoke failed"),
         ];
         for (diag, label) in cases {
-            crate::util::assert_client_safe(diag.client(), "test-box");
+            crate::util::assert_client_safe(&diag.client, "test-box");
             // The operator half is where the guidance belongs.
             assert!(
                 diag.operator().contains("modprobe")
