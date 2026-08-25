@@ -7,6 +7,7 @@
 //! The `HypervisorProbe` trait provides platform-abstracted hypervisor
 //! diagnostics for both startup validation and post-failure error refinement.
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::util::HostDiagnostic;
 use boxlite_shared::{BoxliteError, BoxliteResult};
 
@@ -369,7 +370,7 @@ fn check_hypervisor_framework() -> BoxliteResult<()> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
 fn hvf_unsupported_arch(arch: &str) -> HostDiagnostic {
     HostDiagnostic::new(
         "BoxLite on macOS requires Apple Silicon (ARM64).",
@@ -381,7 +382,7 @@ fn hvf_unsupported_arch(arch: &str) -> HostDiagnostic {
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn hvf_sysctl_failed(error: String) -> HostDiagnostic {
     HostDiagnostic::new(
         "Hypervisor.framework could not be checked.",
@@ -392,7 +393,7 @@ fn hvf_sysctl_failed(error: String) -> HostDiagnostic {
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn hvf_unavailable() -> HostDiagnostic {
     HostDiagnostic::new(
         "Hypervisor.framework is not available on this host.",
