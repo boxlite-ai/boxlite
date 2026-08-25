@@ -32,6 +32,11 @@ function syntheticSecretList(manifest: readonly string[], values: Record<string,
 }
 
 const SYNTHETIC_PROVIDER_TOKEN = 'synthetic-provider-token-for-regression-only'
+const SYNTHETIC_AWS_CREDENTIALS = {
+  AWS_ACCESS_KEY_ID: 'SYNTHETIC_ACCESS_KEY_FOR_REGRESSION_ONLY',
+  AWS_SECRET_ACCESS_KEY: 'SYNTHETIC_SECRET_KEY_FOR_REGRESSION_ONLY',
+  AWS_SESSION_TOKEN: 'SYNTHETIC_SESSION_TOKEN_FOR_REGRESSION_ONLY',
+}
 const INFRA_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 function spawnWrapper(args: any, options: any) {
@@ -78,8 +83,13 @@ const ARTIFACT_SELECTOR_KEYS = [
   'RUNNER_ARTIFACT_REF',
 ]
 
-function inheritedEnvironment() {
-  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !ARTIFACT_SELECTOR_KEYS.includes(key)))
+function inheritedEnvironment(): NodeJS.ProcessEnv {
+  return {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !ARTIFACT_SELECTOR_KEYS.includes(key))),
+    // Keep wrapper fixtures independent of the host AWS profile. The login-session test below
+    // removes these values explicitly so it still crosses the real credential bridge.
+    ...SYNTHETIC_AWS_CREDENTIALS,
+  }
 }
 
 async function waitFor(predicate: any, description: any, timeoutMs = 5_000) {
