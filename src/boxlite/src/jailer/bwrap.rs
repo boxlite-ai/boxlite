@@ -30,7 +30,7 @@
 
 use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::layout::FilesystemLayout;
-use crate::util::find_binary;
+use crate::util::{HostDiagnostic, find_binary};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -104,10 +104,15 @@ pub fn is_available() -> bool {
 /// guidance combining Chrome errno + sysctl detection.
 ///
 /// Returns `Ok(())` if working, `Err` with diagnostic guidance.
-pub fn can_create_user_namespace() -> Result<(), String> {
+pub(crate) fn can_create_user_namespace() -> Result<(), HostDiagnostic> {
     let bwrap_path = match get_bwrap_path() {
         Some(p) => p,
-        None => return Err("bwrap binary not found (neither system nor bundled)".to_string()),
+        None => {
+            return Err(HostDiagnostic::new(
+                "The sandbox could not be initialized on this host.",
+                "bwrap binary not found (neither system nor bundled)",
+            ));
+        }
     };
 
     // Chrome-style raw probe for kernel-level diagnosis.
@@ -145,7 +150,10 @@ pub fn can_create_user_namespace() -> Result<(), String> {
                 &stderr,
             ))
         }
-        Err(e) => Err(format!("failed to run bwrap: {}", e)),
+        Err(e) => Err(HostDiagnostic::new(
+            "The sandbox could not be initialized on this host.",
+            format!("failed to run bwrap: {}", e),
+        )),
     }
 }
 
@@ -163,7 +171,7 @@ fn build_diagnostic(
     bwrap_source: &str,
     bwrap_path: &Path,
     bwrap_stderr: &str,
-) -> String {
+) -> HostDiagnostic {
     let mut msg = format!(
         "bwrap --unshare-user failed ({} bwrap at {})",
         bwrap_source,
@@ -247,7 +255,7 @@ fn build_diagnostic(
         msg.push_str("\n  See: https://boxlite.dev/docs/faq#sandbox-userns");
     }
 
-    msg
+    HostDiagnostic::new("The sandbox could not be initialized on this host.", msg)
 }
 
 /// Compute the AppArmor profile directory (`~/.boxlite/apparmor/`).
@@ -746,15 +754,15 @@ mod tests {
             Ok(()) => {
                 // bwrap user namespaces are available
             }
-            Err(e) => {
-                // Should contain diagnostic info
-                assert!(!e.is_empty(), "Error message should not be empty");
-                // Diagnostic should mention bwrap
+            Err(diag) => {
+                // The operator half must carry the diagnostic info...
                 assert!(
-                    e.contains("bwrap"),
-                    "Diagnostic should mention bwrap: {}",
-                    e
+                    diag.operator().contains("bwrap"),
+                    "operator report should mention bwrap: {}",
+                    diag.operator()
                 );
+                // ...and the client half must not.
+                crate::util::assert_client_safe(diag.client(), "test-box");
             }
         }
     }

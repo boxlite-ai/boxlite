@@ -11,7 +11,7 @@ use crate::litebox::CrashReport;
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
 use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
-use crate::util::{ProcessExit, ProcessMonitor};
+use crate::util::{HostDiagnostic, ProcessExit, ProcessMonitor};
 use crate::vmm::exit_info::ExitErrorKind;
 use async_trait::async_trait;
 use boxlite_shared::BoxTransport;
@@ -190,7 +190,12 @@ async fn wait_for_guest_ready(
                         (true, true) => "guest booted but agent did not connect to vsock READY port",
                         (false, _) => "shim died silently (see stderr / exit file)",
                     };
-                    Err(BoxliteError::Engine(format!(
+                    let diagnostic = HostDiagnostic::new(
+                        format!(
+                            "The VM failed to start: timed out after {}s waiting for it to become ready.",
+                            timeout.as_secs()
+                        ),
+                        format!(
                         "Box {box_id} failed to start: timeout after {}s\n\n\
                          Evidence at T+{}s:\n\
                          • shim_alive          = {}\n\
@@ -217,7 +222,10 @@ async fn wait_for_guest_ready(
                         } else {
                             format!("\nConsole tail (last {} bytes):\n{}\n", console_tail.len(), console_tail)
                         }
-                    )))
+                        ),
+                    );
+                    tracing::error!("{}", diagnostic.operator());
+                    Err(BoxliteError::Engine(diagnostic.into_client()))
                 }
             }
         }
@@ -231,17 +239,13 @@ async fn wait_for_guest_ready(
                 exit_code,
             );
 
-            // Log raw debug info for troubleshooting
-            if !report.debug_info.is_empty() {
-                tracing::error!(
-                    "Box crash details (raw stderr):\n{}",
-                    report.debug_info
-                );
-            }
+            // The full report — paths, shim stderr, exit code — goes to the
+            // host log. Only the terse sentence reaches the caller.
+            tracing::error!("Box crash details:\n{}", report.operator_report);
 
             Err(match report.error_kind {
-                ExitErrorKind::Unsupported => BoxliteError::Unsupported(report.user_message),
-                ExitErrorKind::Engine => BoxliteError::Engine(report.user_message),
+                ExitErrorKind::Unsupported => BoxliteError::Unsupported(report.client_message),
+                ExitErrorKind::Engine => BoxliteError::Engine(report.client_message),
             })
         }
     }
@@ -436,10 +440,11 @@ mod tests {
         );
         let err = err.to_string();
         assert!(
-            err.contains("test-box failed to start"),
-            "Expected user-friendly error with box_id, got: {}",
+            err.contains("The VM failed to start."),
+            "Expected terse client message, got: {}",
             err
         );
+        crate::util::assert_client_safe(&err, "test-box");
 
         // Should complete in ~500ms (one poll interval), not 30s
         assert!(
@@ -597,16 +602,13 @@ mod tests {
         .await;
 
         let err = result.expect_err("timeout branch must fire").to_string();
-        // Substrings come from production code, not the test body.
-        assert!(err.contains("test-box failed to start"), "got: {err}");
-        assert!(err.contains("Evidence at T+"), "got: {err}");
-        assert!(err.contains("shim_alive          = false"), "got: {err}");
-        assert!(err.contains("console_bytes       = 21"), "got: {err}");
-        assert!(err.contains("ready_socket_exists = true"), "got: {err}");
-        assert!(
-            err.contains("Console tail"),
-            "tail block missing when console has bytes: {err}"
-        );
+        // The client message is terse and must not carry host internals. The
+        // evidence block (shim_alive, console bytes, tail) is operator-only.
+        assert!(err.contains("timed out"), "got: {err}");
+        crate::util::assert_client_safe(&err, "test-box");
+        assert!(!err.contains("Evidence at T+"), "got: {err}");
+        assert!(!err.contains("shim_alive"), "got: {err}");
+        assert!(!err.contains("Console tail"), "got: {err}");
     }
 
     // ─────────────────────────────────────────────────────────────────────

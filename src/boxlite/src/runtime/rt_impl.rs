@@ -1470,7 +1470,12 @@ impl RuntimeImpl {
                             box_id.as_str(),
                             None,
                         );
-                        state.mark_failed(&report.user_message);
+                        state.mark_failed(&report.client_message);
+                        tracing::error!(
+                            box_id = %box_id,
+                            "Box crashed in a prior lifecycle:\n{}",
+                            report.operator_report
+                        );
                         tracing::warn!(
                             box_id = %box_id,
                             "Box crashed; marked Failed with crash report"
