@@ -8,7 +8,7 @@
 
 mod common;
 
-use boxlite::{BoxCommand, BoxOptions, LiteBox, RootfsSpec};
+use boxlite::{AttachOptions, BoxCommand, BoxOptions, LiteBox, RootfsSpec};
 use tokio_stream::StreamExt;
 
 /// Create a box whose main command is `cmd`, optionally on a PTY.
@@ -39,7 +39,7 @@ async fn attached_stdout(opts: BoxOptions) -> String {
     handle.start().await.expect("start box");
 
     let mut execution = handle
-        .attach(None)
+        .attach(AttachOptions::main())
         .await
         .expect("attach to the main command");
 
@@ -153,7 +153,7 @@ async fn late_attach_reports_output_gap() {
     wait_for_file(&handle, "/tmp/main-output-ready").await;
 
     let mut execution = handle
-        .attach(None)
+        .attach(AttachOptions::main())
         .await
         .expect("attach to the main command");
     let mut stdout = execution.stdout().expect("stdout stream");
@@ -408,7 +408,7 @@ async fn a_failed_attach_does_not_poison_the_next_start() {
     }
     std::fs::write(&boxes_dir, b"").expect("plant file where the boxes dir belongs");
 
-    let failed = handle.attach(None).await;
+    let failed = handle.attach(AttachOptions::main()).await;
 
     std::fs::remove_file(&boxes_dir).expect("remove planted file");
     std::fs::create_dir_all(&boxes_dir).expect("restore boxes dir");
@@ -668,7 +668,7 @@ async fn attach_refuses_a_stopped_box() {
     );
 
     // `Execution` is not `Debug`, so match rather than `expect_err`.
-    let msg = match stopped.attach(None).await {
+    let msg = match stopped.attach(AttachOptions::main()).await {
         Ok(_) => panic!("attaching to a stopped box must fail, not reboot it"),
         Err(e) => e.to_string(),
     };
@@ -707,7 +707,10 @@ async fn attach_by_exec_id_is_unsupported_on_the_local_backend() {
         .await
         .expect("create box");
 
-    let msg = match handle.attach(Some("some-exec-id")).await {
+    let msg = match handle
+        .attach(AttachOptions::execution("some-exec-id"))
+        .await
+    {
         Ok(_) => panic!("local attach(Some(id)) must be Unsupported, not succeed"),
         Err(e) => e.to_string(),
     };

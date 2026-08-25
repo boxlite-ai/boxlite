@@ -46,8 +46,8 @@ pub use litebox::SnapshotHandle;
 pub use litebox::archive::ArchiveManifest;
 pub use litebox::snapshot_mgr::SnapshotInfo;
 pub use litebox::{
-    BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
-    HealthState, HealthStatus,
+    AttachOptions, BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout,
+    Execution, ExecutionId, HealthState, HealthStatus,
 };
 pub use metrics::{BoxMetrics, RuntimeMetrics};
 pub use runtime::advanced_options::{

@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+use super::attach::AttachOptions;
 use super::config::BoxConfig;
 use super::exec::{BoxCommand, ExecStderr, ExecStdin, ExecStdout, Execution};
 use super::state::BoxState;
@@ -594,8 +595,8 @@ impl BoxImpl {
     /// then `start()`, so a command that finishes instantly cannot outrun the
     /// stream. Because attaching never runs the user's command, it needs no
     /// re-run guard (unlike `exec`/`cp`, which do start it).
-    pub(crate) async fn attach(&self, execution_id: Option<&str>) -> BoxliteResult<Execution> {
-        if execution_id.is_some() {
+    pub(crate) async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
+        if options.execution_id().is_some() {
             return Err(BoxliteError::Unsupported(
                 "the local backend does not support reattaching to executions by id".into(),
             ));
@@ -1431,8 +1432,8 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self.exec(command).await
     }
 
-    async fn attach(&self, execution_id: Option<&str>) -> BoxliteResult<Execution> {
-        self.attach(execution_id).await
+    async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
+        self.attach(options).await
     }
 
     async fn metrics(&self) -> BoxliteResult<BoxMetrics> {

@@ -5,8 +5,8 @@
 
 mod common;
 
-use boxlite::BoxliteRuntime;
 use boxlite::runtime::options::BoxliteOptions;
+use boxlite::{AttachOptions, BoxliteRuntime};
 
 #[tokio::test]
 async fn started_at_tracks_the_running_lifecycle() {
@@ -37,7 +37,7 @@ async fn started_at_tracks_the_running_lifecycle() {
     // task. Publishing the shim and lifecycle timestamp is one state transition.
     let before_start = chrono::Utc::now();
     let attached = handle
-        .attach(None)
+        .attach(AttachOptions::main())
         .await
         .expect("attach to initialized box");
     let running = handle.info().await.expect("inspect running box");

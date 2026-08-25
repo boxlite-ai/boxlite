@@ -115,7 +115,10 @@ impl PyBox {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let execution = handle
-                .attach(execution_id.as_deref())
+                .attach(match execution_id {
+                    Some(id) => boxlite::AttachOptions::execution(id),
+                    None => boxlite::AttachOptions::main(),
+                })
                 .await
                 .map_err(map_err)?;
             Ok(PyExecution {

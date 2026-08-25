@@ -14,7 +14,7 @@ use crate::BoxInfo;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{
-    BoxCommand, BoxTunnel, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution,
+    AttachOptions, BoxCommand, BoxTunnel, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution,
 };
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
@@ -197,13 +197,13 @@ impl BoxBackend for RestBox {
     /// Either way the returned `Execution` is a fully ordinary one — signal,
     /// resize and kill go out over the same `/executions/{id}/…` routes, and the
     /// pump reconnects through them too.
-    async fn attach(&self, execution_id: Option<&str>) -> BoxliteResult<Execution> {
+    async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
         let box_id = self.box_id_str();
 
         // Open the WebSocket synchronously so a rejection (404 no-such-box /
         // reaped, 409 another client already attached) surfaces here, at the
         // caller's `await box.attach(..)`, not in a later ExecResult from `wait()`.
-        match execution_id {
+        match options.execution_id() {
             None => {
                 let path = format!("/boxes/{}/attach", box_id);
                 let (stream, handshake) = self
@@ -1758,10 +1758,13 @@ mod tests {
         });
 
         let rest_box = rest_box_for(port, "box1");
-        let mut execution = tokio::time::timeout(Duration::from_secs(3), rest_box.attach(None))
-            .await
-            .expect("attach timed out")
-            .expect("the REST backend must support attaching to the main command session");
+        let mut execution = tokio::time::timeout(
+            Duration::from_secs(3),
+            rest_box.attach(AttachOptions::main()),
+        )
+        .await
+        .expect("attach timed out")
+        .expect("the REST backend must support attaching to the main command session");
 
         assert_eq!(
             execution.id(),
@@ -1823,11 +1826,13 @@ mod tests {
         });
 
         let rest_box = rest_box_for(port, "box1");
-        let mut execution =
-            tokio::time::timeout(Duration::from_secs(3), rest_box.attach(Some("exec-9")))
-                .await
-                .expect("attach timed out")
-                .expect("the REST backend must support reattaching to an exec by id");
+        let mut execution = tokio::time::timeout(
+            Duration::from_secs(3),
+            rest_box.attach(AttachOptions::execution("exec-9")),
+        )
+        .await
+        .expect("attach timed out")
+        .expect("the REST backend must support reattaching to an exec by id");
 
         assert_eq!(
             execution.id(),
@@ -1880,7 +1885,12 @@ mod tests {
         });
 
         let rest_box = rest_box_for(port, "box1");
-        let err = match tokio::time::timeout(Duration::from_secs(3), rest_box.attach(None)).await {
+        let err = match tokio::time::timeout(
+            Duration::from_secs(3),
+            rest_box.attach(AttachOptions::main()),
+        )
+        .await
+        {
             Ok(Ok(_)) => {
                 panic!("attach(None) must fail when the server names no main session id")
             }
@@ -1918,16 +1928,18 @@ mod tests {
             });
 
             let rest_box = rest_box_for(port, "box1");
-            let err =
-                match tokio::time::timeout(Duration::from_secs(3), rest_box.attach(Some("exec-x")))
-                    .await
-                {
-                    Ok(Ok(_)) => {
-                        panic!("a rejected upgrade ({status}) must not yield an Execution")
-                    }
-                    Ok(Err(e)) => e,
-                    Err(_) => panic!("attach timed out"),
-                };
+            let err = match tokio::time::timeout(
+                Duration::from_secs(3),
+                rest_box.attach(AttachOptions::execution("exec-x")),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {
+                    panic!("a rejected upgrade ({status}) must not yield an Execution")
+                }
+                Ok(Err(e)) => e,
+                Err(_) => panic!("attach timed out"),
+            };
 
             if expect_reaped {
                 assert!(

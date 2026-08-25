@@ -4,7 +4,7 @@ use crate::cli::{
 };
 use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
-use boxlite::{BoxOptions, BoxliteRuntime, LiteBox, RootfsSpec};
+use boxlite::{AttachOptions, BoxOptions, BoxliteRuntime, LiteBox, RootfsSpec};
 use clap::Args;
 use std::io::{self, IsTerminal};
 
@@ -96,7 +96,7 @@ impl BoxRunner {
         // first races it — `run alpine echo hi` can finish before the attach
         // lands, and its output and exit code die with the VM. Attaching only
         // creates the container; `start()` runs its init.
-        let mut execution = litebox.attach(None).await?;
+        let mut execution = litebox.attach(AttachOptions::main()).await?;
         litebox.start().await?;
 
         // --tty implies --interactive when stdin is a terminal
