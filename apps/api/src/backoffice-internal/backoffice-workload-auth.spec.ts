@@ -60,7 +60,7 @@ describe('Backoffice workload authentication', () => {
     expect(authenticator.authenticate(`Bearer ${token}`)).toEqual({
       role: 'backoffice-workload',
       credential: 'read',
-      routeScopes: [BackofficeWorkloadRouteScope.READINESS],
+      routeScopes: Object.values(BackofficeWorkloadRouteScope),
     })
   })
 
@@ -108,7 +108,7 @@ describe('Backoffice workload authentication', () => {
     expect(request.user).toEqual({
       role: 'backoffice-workload',
       credential: 'read',
-      routeScopes: [BackofficeWorkloadRouteScope.READINESS],
+      routeScopes: Object.values(BackofficeWorkloadRouteScope),
     })
   })
 
@@ -128,6 +128,25 @@ describe('Backoffice workload authentication', () => {
     const { context, request } = executionContext(ScopedHandler.prototype.readiness, `Bearer ${CURRENT_TOKEN}`)
     request.originalUrl = '/api/internal/backoffice/v1/boxes'
 
+    expect(() => guard.canActivate(context)).toThrow(ForbiddenException)
+  })
+
+  it.each([
+    [BackofficeWorkloadRouteScope.BOXES, '/api/internal/backoffice/v1/boxes'],
+    [BackofficeWorkloadRouteScope.BOX, '/api/internal/backoffice/v1/boxes/AbCdEf123456'],
+    [BackofficeWorkloadRouteScope.RUNNERS, '/api/internal/backoffice/v1/runners'],
+    [BackofficeWorkloadRouteScope.RUNNER, '/api/internal/backoffice/v1/runners/22222222-2222-4222-8222-222222222222'],
+  ])('matches the protected inventory scope %s without widening it', (scope, originalUrl) => {
+    class InventoryHandler {
+      @RequireBackofficeWorkloadRoute(scope)
+      read() {}
+    }
+    const guard = new BackofficeWorkloadAuthGuard(new BackofficeWorkloadAuthenticator(config()), new Reflector())
+    const { context, request } = executionContext(InventoryHandler.prototype.read, `Bearer ${CURRENT_TOKEN}`)
+    request.originalUrl = originalUrl
+
+    expect(guard.canActivate(context)).toBe(true)
+    request.originalUrl = `${originalUrl}/unexpected`
     expect(() => guard.canActivate(context)).toThrow(ForbiddenException)
   })
 })

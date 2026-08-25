@@ -19,6 +19,10 @@ import { TypedConfigService } from '../config/typed-config.service'
 
 export const BackofficeWorkloadRouteScope = {
   READINESS: 'GET /api/internal/backoffice/v1/readiness',
+  BOXES: 'GET /api/internal/backoffice/v1/boxes',
+  BOX: 'GET /api/internal/backoffice/v1/boxes/:boxId',
+  RUNNERS: 'GET /api/internal/backoffice/v1/runners',
+  RUNNER: 'GET /api/internal/backoffice/v1/runners/:runnerId',
 } as const
 
 export type BackofficeWorkloadRouteScope =
@@ -32,6 +36,13 @@ export interface BackofficeWorkloadPrincipal {
 
 const BACKOFFICE_WORKLOAD_ROUTE_SCOPE = 'backoffice-workload-route-scope'
 const BEARER_AUTHORIZATION = /^Bearer ([A-Za-z0-9\-._~+/]+=*)$/i
+const ROUTE_SCOPE_PATTERNS: Record<BackofficeWorkloadRouteScope, RegExp> = {
+  [BackofficeWorkloadRouteScope.READINESS]: /^GET \/api\/internal\/backoffice\/v1\/readiness$/,
+  [BackofficeWorkloadRouteScope.BOXES]: /^GET \/api\/internal\/backoffice\/v1\/boxes$/,
+  [BackofficeWorkloadRouteScope.BOX]: /^GET \/api\/internal\/backoffice\/v1\/boxes\/[^/]+$/,
+  [BackofficeWorkloadRouteScope.RUNNERS]: /^GET \/api\/internal\/backoffice\/v1\/runners$/,
+  [BackofficeWorkloadRouteScope.RUNNER]: /^GET \/api\/internal\/backoffice\/v1\/runners\/[^/]+$/,
+}
 
 export const RequireBackofficeWorkloadRoute = (scope: BackofficeWorkloadRouteScope) =>
   SetMetadata(BACKOFFICE_WORKLOAD_ROUTE_SCOPE, scope)
@@ -73,7 +84,7 @@ export class BackofficeWorkloadAuthenticator {
     return {
       role: 'backoffice-workload',
       credential: 'read',
-      routeScopes: [BackofficeWorkloadRouteScope.READINESS],
+      routeScopes: Object.values(BackofficeWorkloadRouteScope),
     }
   }
 }
@@ -102,7 +113,7 @@ export class BackofficeWorkloadAuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<BackofficeRequest>()
     const requestedScope = `${request.method} ${request.originalUrl?.split('?', 1)[0]}`
-    if (requestedScope !== requiredScope) {
+    if (!ROUTE_SCOPE_PATTERNS[requiredScope].test(requestedScope)) {
       throw new ForbiddenException('Backoffice workload route scope does not match the request')
     }
 
