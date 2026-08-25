@@ -4,7 +4,6 @@
 //! to/from core types (BoxInfo, BoxOptions, etc.) at the boundary.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use boxlite_shared::errors::BoxliteError;
 use serde::{Deserialize, Serialize};
@@ -425,9 +424,6 @@ impl VolumeResponse {
             id: self.id.clone(),
             created_at,
             size_bytes: self.size_bytes,
-            // The REST surface keeps the backing host directory private: a
-            // client identifies a volume by id, never by host path.
-            host_path: PathBuf::new(),
         }
     }
 }

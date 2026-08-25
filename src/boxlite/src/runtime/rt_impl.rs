@@ -1720,9 +1720,9 @@ fn resolve_volume_mounts(
     for v in volumes {
         validate_guest_path(&v.guest_path)?;
         if let Some(id) = v.host_path.strip_prefix("volume://") {
-            let info = store.get(id)?;
+            let dir = store.payload_dir(id)?;
             resolved.push(crate::runtime::options::VolumeSpec {
-                host_path: info.host_path.to_string_lossy().into_owned(),
+                host_path: dir.to_string_lossy().into_owned(),
                 ..v
             });
         } else {
@@ -2002,7 +2002,11 @@ mod tests {
         assert_eq!(specs.len(), 1);
         assert_eq!(
             specs[0].host_path,
-            volume.host_path.to_string_lossy().into_owned()
+            store
+                .payload_dir(&volume.id)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
         );
         assert_eq!(specs[0].guest_path, "/data");
         assert!(specs[0].read_only);
@@ -2188,10 +2192,10 @@ mod tests {
         let local = LocalRuntime(runtime);
 
         let created = local.create_volume().await.unwrap();
-        assert!(created.host_path.is_dir());
 
         let got = local.get_volume(&created.id).await.unwrap();
-        assert_eq!(created.host_path, got.host_path);
+        assert_eq!(created.id, got.id);
+        assert_eq!(created.created_at, got.created_at);
 
         let ids: Vec<String> = local
             .list_volumes()
@@ -2203,7 +2207,13 @@ mod tests {
         assert_eq!(vec![created.id.clone()], ids);
 
         local.remove_volume(&created.id, false).await.unwrap();
-        assert!(!created.host_path.exists());
+        assert!(
+            matches!(
+                local.get_volume(&created.id).await,
+                Err(BoxliteError::NotFound(_))
+            ),
+            "a removed volume must no longer resolve"
+        );
     }
 
     /// Create a minimal BoxConfig for testing.

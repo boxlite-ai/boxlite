@@ -30,8 +30,6 @@ pub struct VolumeInfo {
     /// Server-assigned volume id — the addressing key for get/remove.
     pub id: String,
 
-    pub host_path: PathBuf,
-
     /// When the volume was created.
     pub created_at: DateTime<Utc>,
 
@@ -113,14 +111,30 @@ impl NamedVolumeStore {
         Ok(infos)
     }
 
+    /// The directory holding a volume's payload.
+    ///
+    /// Deliberately not a field of [`VolumeInfo`]: an end user names a volume
+    /// by id, and a path on the server's disk is not something a REST client
+    /// can act on — docker does return a `Mountpoint`, so this is a choice,
+    /// not an impossibility. The answer is also local-only: a REST runtime
+    /// has none to give, which is why this is a method on the local store
+    /// rather than on the metadata or the `VolumeBackend` trait.
+    ///
+    /// `pub(crate)` approximates the intended boundary rather than enforcing
+    /// it — the caller that needs it is the runtime turning a `volume://<id>`
+    /// mount into a share. Nothing else in the crate should be asking where a
+    /// volume lives.
+    pub(crate) fn payload_dir(&self, id: &str) -> BoxliteResult<PathBuf> {
+        self.locate(id)?
+            .ok_or_else(|| BoxliteError::NotFound(format!("volume not found: {id}")))
+    }
+
     /// Get metadata for a single volume by id.
     ///
     /// Returns `BoxliteError::NotFound` when no such volume exists.
     pub fn get(&self, id: &str) -> BoxliteResult<VolumeInfo> {
-        match self.locate(id)? {
-            Some(dir) => self.volume_info(id.to_string(), &dir),
-            None => Err(BoxliteError::NotFound(format!("volume not found: {id}"))),
-        }
+        let dir = self.payload_dir(id)?;
+        self.volume_info(id.to_string(), &dir)
     }
 
     /// Remove a volume by id. With `force`, a missing volume is a no-op.
@@ -207,7 +221,6 @@ impl NamedVolumeStore {
         };
         Ok(VolumeInfo {
             id,
-            host_path: dir.to_path_buf(),
             created_at: DateTime::<Utc>::from(created_at),
             size_bytes: None,
         })
@@ -241,7 +254,8 @@ mod tests {
         // It has to move *forward* — macOS drags a file's birth time back to an
         // mtime set before it, which would hide the very drift under test.
         let later = FileTime::from_unix_time(2_000_000_000, 0); // 2033-05-18
-        filetime::set_file_mtime(&created.host_path, later).unwrap();
+        let dir = store.payload_dir(&created.id).unwrap();
+        filetime::set_file_mtime(&dir, later).unwrap();
 
         let got = store.get(&created.id).unwrap();
         assert_ne!(
@@ -277,15 +291,13 @@ mod tests {
         let store = NamedVolumeStore::new(tmp.path());
         let created = store.create().unwrap();
 
-        assert!(created.host_path.is_dir());
-        assert_eq!(
-            created.host_path,
-            tmp.path().join("volumes").join(&created.id)
-        );
+        let dir = store.payload_dir(&created.id).unwrap();
+        assert!(dir.is_dir());
+        assert_eq!(tmp.path().join("volumes").join(&created.id), dir);
 
         let got = store.get(&created.id).unwrap();
         assert_eq!(got.id, created.id);
-        assert_eq!(got.host_path, created.host_path);
+        assert_eq!(created.created_at, got.created_at);
     }
 
     /// Every anonymous volume has its own directory, so each one is a volume in
@@ -332,7 +344,8 @@ mod tests {
         fs::create_dir_all(&someone_elses).unwrap();
 
         let got = store.get(ANONYMOUS_ULID).unwrap();
-        assert_eq!(mine, got.host_path);
+        assert_eq!(ANONYMOUS_ULID, got.id);
+        assert_eq!(mine, store.payload_dir(ANONYMOUS_ULID).unwrap());
 
         store.remove(ANONYMOUS_ULID, false).unwrap();
         assert!(!mine.exists());
@@ -342,6 +355,30 @@ mod tests {
         );
     }
 
+    /// The metadata every surface renders from — CLI table, REST body, SDK
+    /// object — must not carry the backing directory. See
+    /// [`NamedVolumeStore::payload_dir`] for why the runtime asks separately.
+    #[test]
+    fn volume_info_does_not_carry_the_backing_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = NamedVolumeStore::new(tmp.path());
+        let created = store.create().unwrap();
+
+        let rendered = serde_json::to_value(&created).unwrap();
+        assert!(
+            !rendered.as_object().unwrap().contains_key("host_path"),
+            "volume metadata must not expose the backing directory: {rendered}"
+        );
+
+        // Destructuring fails to compile if a field is added, so a path that
+        // comes back as a Rust field cannot slip in behind `#[serde(skip)]`.
+        let VolumeInfo {
+            id: _,
+            created_at: _,
+            size_bytes: _,
+        } = created;
+    }
+
     #[test]
     fn remove_deletes_and_force_tolerates_missing() {
         let tmp = tempfile::tempdir().unwrap();
@@ -349,7 +386,6 @@ mod tests {
         let created = store.create().unwrap();
 
         store.remove(&created.id, false).unwrap();
-        assert!(!created.host_path.exists());
         assert!(!tmp.path().join("volumes").join(&created.id).exists());
 
         let err = store.remove(&created.id, false).unwrap_err();
