@@ -518,10 +518,15 @@ the dashboard's.
 at startup. Fix connectivity; the next `/api/config` self-heals.
 
 **`Email verification required`** — an Auth0 database token lacks a strict
-`email_verified: true` claim. For dashboard/desktop use browser login to finish
-the hosted verification Form. On SSH, finish verification through the dashboard
-in another browser, then retry device login. Verify the `boxlite-login-policy`
-Action is deployed and bound using the login-policy preview command above.
+`email_verified: true` claim. The API answers `403` with
+`code: email_verification_required`; the token itself is valid, so signing in
+again cannot clear it and the dashboard shows a "Verify your email address"
+screen rather than bouncing through login. For dashboard/desktop use browser
+login to finish the hosted verification Form. On SSH, finish verification
+through the dashboard in another browser, then retry device login. Verify the
+`boxlite-login-policy` Action is deployed and bound using the login-policy
+preview command above — without it an existing unverified account has no way to
+reach the Form, and the 403 never clears.
 
 **Runner never reaches `READY`** — its `BOXLITE_RUNNER_TOKEN` must equal the DB
 row's `apiKey`. Check `journalctl -u boxlite-runner` via `aws ssm start-session`.

@@ -5,11 +5,15 @@
  */
 
 import { Request } from 'express'
-import { UnauthorizedException } from '@nestjs/common'
+import { HttpStatus } from '@nestjs/common'
 import * as jose from 'jose'
 import { JwtStrategy, requireVerifiedAuth0DatabaseEmail } from './jwt.strategy'
 import { UserService } from '../user/user.service'
 import { TypedConfigService } from '../config/typed-config.service'
+import {
+  EMAIL_VERIFICATION_REQUIRED_CODE,
+  EmailVerificationRequiredException,
+} from '../exceptions/email-verification-required.exception'
 
 const DEFAULT_REGION_ID = 'region-default-id'
 
@@ -61,7 +65,7 @@ describe('JwtStrategy.validate — auto-created user', () => {
 
     await expect(
       strategy.validate(request, { sub: 'auth0|user-1', email: 'new@boxlite.dev', email_verified: false }),
-    ).rejects.toThrow(UnauthorizedException)
+    ).rejects.toThrow(EmailVerificationRequiredException)
     expect(userService.findOne).not.toHaveBeenCalled()
     expect(userService.create).not.toHaveBeenCalled()
   })
@@ -79,9 +83,32 @@ describe('JwtStrategy.validate — auto-created user', () => {
 describe('requireVerifiedAuth0DatabaseEmail', () => {
   it('rejects false or missing verification on Auth0 database identities', () => {
     expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123', email_verified: false })).toThrow(
-      UnauthorizedException,
+      EmailVerificationRequiredException,
     )
-    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123' })).toThrow(UnauthorizedException)
+    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123' })).toThrow(EmailVerificationRequiredException)
+  })
+
+  // 401 would tell the dashboard the token is stale, which re-arms a re-login
+  // loop that cannot clear an unverified address. 403 says the token is fine
+  // and the bearer is not yet allowed — the client can then show a real screen.
+  it('rejects with 403 and a machine-readable code, never 401', () => {
+    let thrown: unknown
+    try {
+      requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123', email_verified: false })
+    } catch (error) {
+      thrown = error
+    }
+
+    const exception = thrown as EmailVerificationRequiredException
+    expect(exception).toBeInstanceOf(EmailVerificationRequiredException)
+    expect(exception.getStatus()).toBe(HttpStatus.FORBIDDEN)
+    expect(exception.getResponse()).toMatchObject({ code: 'email_verification_required' })
+
+    // Pinned to the literal, not the constant: asserting the constant against
+    // itself proves nothing, and the dashboard keeps its own copy of this string
+    // (apps/dashboard/src/api/errors.ts). A rename on either side must break a
+    // test rather than silently desync the wire contract.
+    expect(EMAIL_VERIFICATION_REQUIRED_CODE).toBe('email_verification_required')
   })
 
   it('accepts verified Auth0 database and non-Auth0 identities', () => {
@@ -100,7 +127,7 @@ describe('JwtStrategy.verifyToken', () => {
       protectedHeader: { alg: 'RS256' },
     } as any)
 
-    await expect(strategy.verifyToken('already-issued-token')).rejects.toThrow(UnauthorizedException)
+    await expect(strategy.verifyToken('already-issued-token')).rejects.toThrow(EmailVerificationRequiredException)
   })
 
   it('returns a verified Auth0 database payload', async () => {

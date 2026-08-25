@@ -124,7 +124,15 @@ export class ApiClient {
           errorMessage = error.response?.data?.message || error.response?.data || error.message || String(error)
         }
 
-        throw BoxliteError.fromString(String(errorMessage), { cause: error instanceof Error ? error : undefined })
+        // The envelope's machine-readable `code` is what the UI branches on; the
+        // message is only for display. A rejection the API describes (say, an
+        // unverified email) must not be flattened into an anonymous error here.
+        const responseCode = error?.response?.data?.code
+
+        throw BoxliteError.fromString(String(errorMessage), {
+          cause: error instanceof Error ? error : undefined,
+          code: typeof responseCode === 'string' ? responseCode : undefined,
+        })
       },
     )
 

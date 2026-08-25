@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
+import { Injectable, Logger } from '@nestjs/common'
 import { PassportStrategy } from '@nestjs/passport'
 import { ExtractJwt, Strategy } from 'passport-jwt'
 import { passportJwtSecret } from 'jwks-rsa'
@@ -14,6 +14,7 @@ import { AuthContext } from '../common/interfaces/auth-context.interface'
 import { Request } from 'express'
 import { CustomHeaders } from '../common/constants/header.constants'
 import { TypedConfigService } from '../config/typed-config.service'
+import { EmailVerificationRequiredException } from '../exceptions/email-verification-required.exception'
 
 interface JwtStrategyConfig {
   jwksUri: string
@@ -25,6 +26,10 @@ interface JwtStrategyConfig {
  * Auth0 database identities use the `auth0|` subject prefix. Social and
  * enterprise identities have provider-specific prefixes and stay outside this
  * database-account policy.
+ *
+ * Rejects with 403, not 401: the token itself is valid, so a client that
+ * recovers from 401 by re-authenticating would loop forever against a state
+ * only the user can clear. See EmailVerificationRequiredException.
  */
 export function requireVerifiedAuth0DatabaseEmail(
   payload: Pick<JWTPayload, 'sub'> & {
@@ -32,7 +37,7 @@ export function requireVerifiedAuth0DatabaseEmail(
   },
 ): void {
   if (payload.sub?.startsWith('auth0|') && payload.email_verified !== true) {
-    throw new UnauthorizedException('Email verification required')
+    throw new EmailVerificationRequiredException()
   }
 }
 
