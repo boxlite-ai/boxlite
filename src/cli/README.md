@@ -192,6 +192,17 @@ Log in to a BoxLite REST server. Supports three flows that all save to
   code + URL to enter on any browser on another device. Same token type
   and refresh behavior as the browser flow.
 
+On a BoxLite Auth0 deployment, an existing unverified database account must
+complete the hosted verification Form through browser login:
+
+```bash
+boxlite --profile cloud auth login --url https://<your-control-plane>/api --method browser
+```
+
+Auth0 Forms cannot run inside refresh-token, device-code, or other
+non-interactive exchanges. An SSH user should finish verification through the
+BoxLite dashboard in a separate browser, then retry the device login.
+
 When `--method` is unset, the CLI infers it: piped stdin → `api-key` (CI-safe),
 TTY → interactive picker, `$SSH_CONNECTION` set → silent fallback to `device`.
 

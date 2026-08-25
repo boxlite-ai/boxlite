@@ -51,6 +51,7 @@ import { BoxRepository } from '../../box/repositories/box.repository'
 @Injectable()
 export class OrganizationService implements OnModuleInit, TrackableJobExecutions, OnApplicationShutdown {
   private static readonly DEFAULT_ORGANIZATION_NAME = 'Default Organization'
+  private static readonly EMAIL_VERIFICATION_SUSPENSION_REASON = 'Please verify your email address'
 
   activeJobs = new Set<string>()
   private readonly logger = new Logger(OrganizationService.name)
@@ -454,7 +455,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     if (!creatorEmailVerified && !this.configService.get('skipUserEmailVerification')) {
       organization.suspended = true
       organization.suspendedAt = new Date()
-      organization.suspensionReason = 'Please verify your email address'
+      organization.suspensionReason = OrganizationService.EMAIL_VERIFICATION_SUSPENSION_REASON
     } else if (this.configService.get('requirePaymentMethod') && !defaultForCreator) {
       // Gated on requirePaymentMethod, not on billingApiUrl: a stage can point the
       // dashboard at a billing service without also demanding a card up front.
@@ -508,6 +509,16 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
 
   private async unsuspendDefaultForUserWithEntityManager(entityManager: EntityManager, userId: string): Promise<void> {
     const organization = await this.findDefaultForUserWithEntityManager(entityManager, userId)
+
+    // Email verification owns only the suspension it created. Billing, abuse,
+    // and administrator holds may have replaced that reason while the user was
+    // unverified and must survive this event.
+    if (
+      !organization.suspended ||
+      organization.suspensionReason !== OrganizationService.EMAIL_VERIFICATION_SUSPENSION_REASON
+    ) {
+      return
+    }
 
     organization.suspended = false
     organization.suspendedAt = null

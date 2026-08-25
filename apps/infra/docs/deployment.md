@@ -76,7 +76,7 @@ and the stack itself:
 | An AWS account | `npm run login` runs `aws login` — no IAM user, no access keys |
 | A GitHub repo | `npm run login` runs `gh auth login` |
 | A Cloudflare domain + API token | One manual step — see [Cloudflare API token](#cloudflare-api-token) |
-| An OIDC tenant | Signup is always manual. `--provision-auth0` creates the app, API, and post-login Action **only on Auth0**; any other compliant IdP needs those created by hand |
+| An OIDC tenant | Signup is always manual. `--provision-auth0` creates the SPA app and API **only on Auth0**, then prints the login-policy preview command; any other compliant IdP needs equivalent configuration by hand |
 | An existing stack that already has its first Runner | First-Runner provisioning is not implemented here; a *further* one is [scaling out](#scaling-runners-out) |
 
 ## Deploy an existing stack
@@ -92,7 +92,7 @@ cp .env.example .env && $EDITOR .env   # STACK_DOMAIN, OIDC_ISSUER_BASE_URL, OID
 npm run login                          # browser sign-in: AWS, GitHub, Auth0
 npm run bootstrap -- --stage dev       # IAM role, GitHub Environment, secrets
 
-# Optional, and NOT idempotent — Auth0 has no upsert, so this duplicates apps:
+# Optional, and NOT idempotent — this creates the Auth0 SPA and API identities:
 npm run bootstrap -- --stage dev --provision-auth0
 
 gh workflow run deploy-infra.yml --ref main -f stage=dev -f apply=false  # preview
@@ -125,6 +125,67 @@ Auth0-managed because custom Universal Login page templates require a paid plan.
 
 A deploy takes 10–15 minutes and prints the service URLs. On a transient
 registry error, just rerun — SST resumes from the failed step.
+
+## Auth0 email-first login policy
+
+Run this only for a dedicated BoxLite Auth0 tenant. Identifier First is a
+tenant-wide setting. The selected database connection gets this behavior:
+
+```text
+new account       email -> 6-digit email OTP -> create password -> token
+returning account email -> password -> token
+password reset    email -> email OTP -> create password
+```
+
+Existing unverified database users receive a hosted Auth0 verification Form on
+their next browser login. Social and enterprise connections, other Auth0
+applications, and non-`auth0` subjects are outside this policy.
+
+First configure an external Auth0 email provider and enable the
+`verify_email_by_code` and `reset_email_by_code` templates. Auth0's built-in
+provider is testing-only. Then run the reconciler from this directory; preview
+is the default and performs no writes:
+
+```bash
+# Request the Management API scopes used by preview, apply, and rollback.
+npm run auth0:login-policy-login
+
+npm run auth0:configure-login -- \
+  --tenant <tenant.auth0.com> \
+  --client-id <boxlite-spa-client-id> \
+  --connection boxlite-users
+
+# Inspect the exact tenant/client/connection/resource plan, then apply it:
+npm run auth0:configure-login -- \
+  --tenant <tenant.auth0.com> \
+  --client-id <boxlite-spa-client-id> \
+  --connection boxlite-users \
+  --apply
+```
+
+For a non-production canary tenant only, add
+`--allow-test-email-provider`. Apply writes a mode-`0600` rollback journal under
+`.sst/auth0-backups/` without client secrets. If apply stops partway, use the
+exact rollback command printed in the error. The reconciler preserves unrelated
+connection options and post-login Actions; it unbinds the superseded
+`boxlite-custom-claims` Action. Retain successful journals: their created-resource
+receipts are the proof required to reuse the otherwise opaque Auth0 Vault connection.
+If a same-named Form or Flow differs from the checked-in graph, apply fails before
+writing instead of backing up arbitrary remote payloads.
+
+Before deploying the BoxLite API JWT guard, run all five live canaries against
+the Auth0 tenant:
+
+1. New database signup: email OTP, then password creation.
+2. Returning database login with password.
+3. Password reset with email OTP.
+4. Existing unverified database login: Form, invalid-code error, resend, then success.
+5. Social login remains unchanged.
+
+The deployment order is intentional: Auth0 apply -> live canaries -> BoxLite
+API deploy. The API then rejects old unverified `auth0|...` access tokens across
+HTTP, Socket.IO, and the WebSocket proxy. It does not revoke refresh tokens or
+retroactively gate independently validating Commerce/Analytics services.
 
 **Adding a stage:** run `npm run bootstrap -- --stage <name>`, then add `<name>`
 to the `options` of whichever Environment-selecting inputs should reach it —
@@ -456,9 +517,11 @@ the dashboard's.
 **`No end session endpoint` on logout** — the API's IdP discovery probe failed
 at startup. Fix connectivity; the next `/api/config` self-heals.
 
-**"Organization is suspended: Please verify your email address"** — the access
-token lacks `email_verified`. Deploy the post-login Action
-(`npm run bootstrap -- --provision-auth0`).
+**`Email verification required`** — an Auth0 database token lacks a strict
+`email_verified: true` claim. For dashboard/desktop use browser login to finish
+the hosted verification Form. On SSH, finish verification through the dashboard
+in another browser, then retry device login. Verify the `boxlite-login-policy`
+Action is deployed and bound using the login-policy preview command above.
 
 **Runner never reaches `READY`** — its `BOXLITE_RUNNER_TOKEN` must equal the DB
 row's `apiKey`. Check `journalctl -u boxlite-runner` via `aws ssm start-session`.

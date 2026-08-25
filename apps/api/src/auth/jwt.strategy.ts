@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger } from '@nestjs/common'
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import { PassportStrategy } from '@nestjs/passport'
 import { ExtractJwt, Strategy } from 'passport-jwt'
 import { passportJwtSecret } from 'jwks-rsa'
@@ -19,6 +19,21 @@ interface JwtStrategyConfig {
   jwksUri: string
   audience: string
   issuer: string
+}
+
+/**
+ * Auth0 database identities use the `auth0|` subject prefix. Social and
+ * enterprise identities have provider-specific prefixes and stay outside this
+ * database-account policy.
+ */
+export function requireVerifiedAuth0DatabaseEmail(
+  payload: Pick<JWTPayload, 'sub'> & {
+    email_verified?: unknown
+  },
+): void {
+  if (payload.sub?.startsWith('auth0|') && payload.email_verified !== true) {
+    throw new UnauthorizedException('Email verification required')
+  }
 }
 
 @Injectable()
@@ -49,6 +64,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(request: Request, payload: any): Promise<AuthContext> {
+    // Keep this before JIT user creation: an already-issued unverified Auth0
+    // database token must not create local state while the Auth0 Action rollout
+    // is converging.
+    requireVerifiedAuth0DatabaseEmail(payload)
+
     // OKTA does not return the userId in access_token sub claim
     // real userId is in the uid claim and email is in the sub claim
     let userId = payload.sub
@@ -108,6 +128,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       issuer: this.options.issuer,
       algorithms: ['RS256'],
     })
+    // Gate direct verification consumers (Socket.IO and the WebSocket proxy),
+    // which do not enter Passport's validate callback.
+    requireVerifiedAuth0DatabaseEmail(payload)
     return payload
   }
 }

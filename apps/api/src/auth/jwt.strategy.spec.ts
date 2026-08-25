@@ -5,7 +5,9 @@
  */
 
 import { Request } from 'express'
-import { JwtStrategy } from './jwt.strategy'
+import { UnauthorizedException } from '@nestjs/common'
+import * as jose from 'jose'
+import { JwtStrategy, requireVerifiedAuth0DatabaseEmail } from './jwt.strategy'
 import { UserService } from '../user/user.service'
 import { TypedConfigService } from '../config/typed-config.service'
 
@@ -51,5 +53,64 @@ describe('JwtStrategy.validate — auto-created user', () => {
     expect(userService.create).toHaveBeenCalledWith(
       expect.objectContaining({ defaultOrganizationDefaultRegionId: DEFAULT_REGION_ID }),
     )
+  })
+
+  it('rejects an unverified Auth0 database identity before local user creation', async () => {
+    const { strategy, userService } = buildStrategy()
+    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
+
+    await expect(
+      strategy.validate(request, { sub: 'auth0|user-1', email: 'new@boxlite.dev', email_verified: false }),
+    ).rejects.toThrow(UnauthorizedException)
+    expect(userService.findOne).not.toHaveBeenCalled()
+    expect(userService.create).not.toHaveBeenCalled()
+  })
+
+  it('allows social identities through even when their provider claim is false', async () => {
+    const { strategy, userService } = buildStrategy()
+    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
+
+    await strategy.validate(request, { sub: 'google-oauth2|user-1', email: 'new@boxlite.dev', email_verified: false })
+
+    expect(userService.create).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('requireVerifiedAuth0DatabaseEmail', () => {
+  it('rejects false or missing verification on Auth0 database identities', () => {
+    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123', email_verified: false })).toThrow(
+      UnauthorizedException,
+    )
+    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123' })).toThrow(UnauthorizedException)
+  })
+
+  it('accepts verified Auth0 database and non-Auth0 identities', () => {
+    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123', email_verified: true })).not.toThrow()
+    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'google-oauth2|123', email_verified: false })).not.toThrow()
+  })
+})
+
+describe('JwtStrategy.verifyToken', () => {
+  afterEach(() => jest.restoreAllMocks())
+
+  it('applies the same email-verification gate to direct JWT consumers', async () => {
+    const { strategy } = buildStrategy()
+    jest.spyOn(jose, 'jwtVerify').mockResolvedValue({
+      payload: { sub: 'auth0|123', email_verified: false },
+      protectedHeader: { alg: 'RS256' },
+    } as any)
+
+    await expect(strategy.verifyToken('already-issued-token')).rejects.toThrow(UnauthorizedException)
+  })
+
+  it('returns a verified Auth0 database payload', async () => {
+    const { strategy } = buildStrategy()
+    const payload = { sub: 'auth0|123', email_verified: true }
+    jest.spyOn(jose, 'jwtVerify').mockResolvedValue({
+      payload,
+      protectedHeader: { alg: 'RS256' },
+    } as any)
+
+    await expect(strategy.verifyToken('verified-token')).resolves.toMatchObject(payload)
   })
 })

@@ -46,9 +46,9 @@
  *   --force      re-prompt for a Cloudflare credential that is already seeded
  *                (decideCredentialRotation() in bootstrap/cloudflare-credentials.ts)
  *   --provision-auth0
- *                Create the Auth0 SPA app, custom API, and post-login Action
- *                (requires `npm run login` first). NOT idempotent — Auth0 has no
- *                upsert for apps or APIs, so rerunning creates duplicates.
+ *                Create the Auth0 SPA app and custom API (requires `npm run
+ *                login` first), then print the exact login-policy preview.
+ *                NOT idempotent — rerunning creates duplicate apps and APIs.
  * Sign-in: run `npm run login` first, which walks the browser sign-in for every
  * provider this needs (AWS via `aws login`, AWS CLI 2.32.0+ — no IAM user,
  * access keys, or IAM Identity Center setup required). An existing profile or
@@ -84,10 +84,7 @@ import {
 } from './environment.js'
 import { validateDotenvSyntax } from '../deployment/key-policy.js'
 import {
-  bindActionArgs,
-  createActionArgs,
   customApiArgs,
-  deployActionArgs,
   enableRpLogoutDiscoveryArgs,
   spaApplicationArgs,
 } from './auth0.js'
@@ -114,8 +111,6 @@ const SST_INSTALL_TIMEOUT_MS = 240_000
 // been needed, while waiting the full budget on an install that is not
 // progressing costs four minutes of silence.
 const SST_COLD_INSTALL_TIMEOUT_MS = 90_000
-const ACTION_SOURCE_PATH = join(INFRA_ROOT, 'bootstrap', 'auth0', 'set-custom-claims.js')
-
 const CLOUDFLARE_CREDENTIALS = [
   {
     envVar: 'CLOUDFLARE_API_TOKEN',
@@ -687,9 +682,10 @@ function requireAuth0Session() {
 }
 
 /*
- * Collapses the five manual Auth0 dashboard steps in README's "OIDC provider
- * setup" into API calls. The `auth0 login` device-code token already carries
- * every scope this needs, so there is no create-an-M2M-app-first step.
+ * Creates the application and API identities that are safe to bootstrap before
+ * the tenant's production email provider and code templates are configured.
+ * The login-policy configurator owns the database connection, Form/Flows,
+ * Action, and binding as one previewable and rollback-journaled reconciliation.
  *
  * Not idempotent the way the AWS/GitHub steps are: Auth0 has no upsert for
  * applications or APIs, so rerunning creates duplicates. Gated behind an
@@ -706,20 +702,18 @@ function provisionAuth0({ stackDomain }: any) {
   const api = auth0Json(customApiArgs({ stackDomain }))
   console.log(`[${SCRIPT_NAME}] Auth0 custom API ... created (audience ${api.identifier})`)
 
-  const actionCode = readFileSync(ACTION_SOURCE_PATH, 'utf8')
-  const action = auth0Json(createActionArgs({ code: actionCode }))
-  const actionId = action.id
-  if (!actionId) throw new Error('auth0 actions create returned no id')
-
-  // deploy != bind: an Action must be deployed before it can be bound, and
-  // the CLI has no bind verb, so the binding goes through the raw API.
-  auth0Run(deployActionArgs(actionId))
-  const existingBindings = auth0Json(['api', 'get', 'actions/triggers/post-login/bindings']).bindings ?? []
-  auth0Run(bindActionArgs({ actionId, existingBindings }))
-  console.log(`[${SCRIPT_NAME}] Auth0 post-login Action ... created, deployed, and bound`)
-
   auth0Run(enableRpLogoutDiscoveryArgs())
   console.log(`[${SCRIPT_NAME}] Auth0 RP-initiated logout discovery ... enabled`)
+
+  const tenants = auth0Json(['tenants', 'list', '--json'])
+  const activeTenants = tenants.filter((tenant: any) => tenant.active)
+  if (activeTenants.length !== 1 || !activeTenants[0].name) {
+    throw new Error('auth0 tenants list did not return exactly one active tenant')
+  }
+  console.log(
+    `[${SCRIPT_NAME}] preview the email-first login policy from apps/infra:\n` +
+      `  npm run auth0:configure-login -- --tenant ${activeTenants[0].name} --client-id ${clientId} --connection boxlite-users`,
+  )
 
   // OIDC_CLIENT_ID is an SST secret, not a .env key — seeded below by
   // ensureOidcClientId. Only OIDC_AUDIENCE belongs in .env.
