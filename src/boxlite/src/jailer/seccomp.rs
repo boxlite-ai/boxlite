@@ -464,4 +464,70 @@ mod tests {
             "vcpu filter is empty"
         );
     }
+
+    /// The aarch64 VMM seccomp filter must cover the syscalls libkrun's
+    /// no-gvproxy (`network.mode=disabled`) boot path calls. It was once a
+    /// stale subset of the x86_64 filter (57 vs 118 names) and was missing
+    /// `clone`/`clone3` (vCPU/vsock threads), `epoll_create1` (event loop),
+    /// `bind`/`listen`/`accept` (vsock unix backend), etc., so a disabled box
+    /// SIGSYS-killed during `krun_start_enter` on ARM. Pin the boot-critical
+    /// set so the aarch64 filter can never silently drift back (POL-203).
+    #[test]
+    fn aarch64_vmm_filter_covers_network_disabled_boot_syscalls() {
+        // Boot-critical syscalls for libkrun's no-gvproxy path, derived from
+        // static analysis of src/deps/libkrun-sys/vendor/libkrun (thread
+        // creation, event loop, vsock unix backend, glibc startup) — not
+        // reverse-derived from the filter itself, so the assertion is meaningful.
+        const REQUIRED: &[&str] = &[
+            "clone",
+            "clone3",        // vCPU + vsock muxer threads
+            "epoll_create1", // event manager
+            "bind",
+            "listen",
+            "accept",   // vsock unix backend (gRPC/ready sockets)
+            "prctl",    // thread name / no_new_privs
+            "rseq",     // glibc startup
+            "mprotect", // memory protection
+            "wait4",
+            "waitid", // process wait
+            "pipe2",
+            "socketpair", // fd creation
+            "getpid",
+            "gettid", // identity
+            "set_tid_address",
+            "set_robust_list", // thread startup
+        ];
+
+        for variant in ["aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl"] {
+            let path = format!(
+                "{}/resources/seccomp/{variant}.json",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let json: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}")),
+            )
+            .unwrap_or_else(|e| panic!("parse {path}: {e}"));
+
+            let have: std::collections::HashSet<String> = json["vmm"]["filter"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{variant}: vmm.filter is not an array"))
+                .iter()
+                .filter_map(|e| {
+                    e.get("syscall")
+                        .and_then(|s| s.as_str())
+                        .map(str::to_string)
+                })
+                .collect();
+
+            let missing: Vec<&str> = REQUIRED
+                .iter()
+                .filter(|s| !have.contains(**s))
+                .copied()
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "{variant}: aarch64 VMM seccomp filter is missing boot-critical syscalls: {missing:?}"
+            );
+        }
+    }
 }

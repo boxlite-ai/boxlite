@@ -185,10 +185,13 @@ impl CrashReport {
             Some(code) if code > 128 => {
                 let signal = code - 128;
                 let signal_name = match signal {
+                    4 => "SIGILL",
                     6 => "SIGABRT",
+                    7 => "SIGBUS",
                     9 => "SIGKILL",
                     11 => "SIGSEGV",
                     15 => "SIGTERM",
+                    31 => "SIGSYS",
                     _ => "unknown signal",
                 };
                 msg.push_str(&format!("Exit code: {code} ({signal_name})\n"));
@@ -339,6 +342,27 @@ mod tests {
         );
 
         assert!(report.user_message.contains("Exit code: 134 (SIGABRT)"));
+    }
+
+    #[test]
+    fn test_no_exit_file_with_sigsys_exit_code() {
+        // A seccomp `trap` (blocked syscall) kills the shim with SIGSYS (31);
+        // decode_wait_status encodes it as 128 + 31 = 159. The fallback table
+        // must not collapse it to "unknown signal" (POL-203).
+        let dir = tempfile::tempdir().unwrap();
+        let exit_file = dir.path().join("nonexistent");
+        let console_log = dir.path().join("console.log");
+        let stderr_file = dir.path().join("stderr");
+
+        let report = CrashReport::from_exit_file(
+            &exit_file,
+            &console_log,
+            &stderr_file,
+            "test-box",
+            Some(159), // 128 + 31 (SIGSYS)
+        );
+
+        assert!(report.user_message.contains("Exit code: 159 (SIGSYS)"));
     }
 
     #[test]
