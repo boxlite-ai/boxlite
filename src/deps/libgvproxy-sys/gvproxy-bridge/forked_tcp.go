@@ -118,7 +118,7 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 			standardForward(r, destAddr)
 			return
 		case tcpRouteInspect:
-			inspectAndForward(r, destAddr, destPort, filter, ca, secretMatcher)
+			inspectAndForward(r, destAddr, destIP, destPort, filter, ca, secretMatcher)
 			return
 		default:
 			// No matching rule: block
@@ -164,7 +164,7 @@ func standardForward(r *tcp.ForwarderRequest, destAddr string) {
 // inspectAndForward: Accept → Peek SNI/Host → check allowlist → Dial → relay.
 // The flow is reversed from upstream because we need to read from the guest
 // before deciding whether to connect to the upstream server.
-func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16, filter *AllowNetFilter, ca *BoxCA, secretMatcher *SecretHostMatcher) {
+func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destIP net.IP, destPort uint16, filter *AllowNetFilter, ca *BoxCA, secretMatcher *SecretHostMatcher) {
 	// Step 1: Accept TCP from guest first (reversed from upstream)
 	var wq waiter.Queue
 	ep, tcpErr := r.CreateEndpoint(&wq)
@@ -200,8 +200,10 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16
 		return
 	}
 
-	// Step 4: Check allowlist (skip if no allowlist — secrets-only mode allows all traffic)
-	if filter != nil && (hostname == "" || !filter.MatchesHostname(hostname)) {
+	// Step 4: Check allowlist (skip if no allowlist — secrets-only mode allows all traffic).
+	// The pin ties the guest-supplied hostname to the dialed IP: a hostname
+	// alone no longer authorizes a connection to an arbitrary guest-chosen IP.
+	if filter != nil && (hostname == "" || !filter.AllowHostToIP(hostname, destIP)) {
 		logrus.WithFields(logrus.Fields{
 			"dst":      destAddr,
 			"hostname": hostname,
