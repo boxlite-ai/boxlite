@@ -151,10 +151,10 @@ function ScheduledChangeNote({
       return
     }
     try {
-      const checkoutUrl = await keepPlan.mutateAsync({ organizationId, planId })
+      const checkoutUrl = await keepPlan.mutateAsync({ organizationId, planId, kind: scheduled.kind })
       if (checkoutUrl) {
-        // Not expected while a subscription is live, but the upgrade path can
-        // always answer with one — following it beats silently reporting done.
+        // A stale cancellation can cross its boundary before this click. Commerce
+        // then treats keeping the old plan as a fresh subscribe with Checkout.
         window.location.href = checkoutUrl
         return
       }

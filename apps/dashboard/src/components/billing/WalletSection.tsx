@@ -18,15 +18,17 @@ import {
   useIsOwnerCheckoutUrlFetching,
   useOwnerBillingPortalUrlQuery,
   useOwnerInvoicesQuery,
+  useOwnerPaymentMethodsQuery,
   useOwnerWalletQuery,
 } from '@/hooks/queries/billingQueries'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { formatAmount } from '@/lib/utils'
-import { ArrowUpRight, CheckCircleIcon } from '@/components/ui/icon'
+import { ArrowUpRight } from '@/components/ui/icon'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { NumericFormat } from 'react-number-format'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
+import { PaymentMethodsPanel } from './PaymentMethodsPanel'
 
 const DEFAULT_PAGE_SIZE = 10
 
@@ -70,6 +72,7 @@ export function WalletSection() {
   const walletQuery = useOwnerWalletQuery({ refetchOnMount: 'always' })
   const billingPortalUrlQuery = useOwnerBillingPortalUrlQuery()
   const invoicesQuery = useOwnerInvoicesQuery(invoicesPagination.pageIndex + 1, invoicesPagination.pageSize)
+  const paymentMethodsQuery = useOwnerPaymentMethodsQuery()
 
   const isCheckoutUrlLoading = useIsOwnerCheckoutUrlFetching()
   const fetchCheckoutUrl = useFetchOwnerCheckoutUrlQuery()
@@ -231,30 +234,15 @@ export function WalletSection() {
 
       {wallet && (
         <div className="flex flex-col gap-8">
-          {/* Wallet balance — one panel of divided rows: balance, add funds, auto-reload, coupon */}
-          <section>
-            <SectionTitle title="Payment Method" />
-            <Panel className="px-[22px] py-4">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                {!wallet.creditCardConnected ? (
-                  <span className="font-mono text-[13px] text-muted-foreground">Payment method not connected</span>
-                ) : (
-                  <span className="flex items-center gap-2 font-mono text-[13px] text-foreground">
-                    <CheckCircleIcon className="size-4 shrink-0" /> Credit card connected
-                  </span>
-                )}
-                <AsciiButton
-                  variant={wallet.creditCardConnected ? 'secondary' : 'primary'}
-                  onClick={handleUpdatePaymentMethod}
-                  disabled={isCheckoutUrlLoading}
-                  className="inline-flex items-center gap-2"
-                >
-                  {isCheckoutUrlLoading && <Spinner />} {wallet.creditCardConnected ? 'Update card' : 'Connect'}
-                </AsciiButton>
-              </div>
-              <PanelNote>Used for top-up charges · card details are held by Stripe</PanelNote>
-            </Panel>
-          </section>
+          {/* Card enumeration is its own read model; checkout remains the one action. */}
+          <PaymentMethodsPanel
+            paymentMethods={paymentMethodsQuery.data ?? []}
+            isLoading={paymentMethodsQuery.isLoading}
+            isError={paymentMethodsQuery.isError}
+            hasConnectedCard={cardConnected}
+            isActionLoading={isCheckoutUrlLoading}
+            onAction={handleUpdatePaymentMethod}
+          />
 
           <section>
             <SectionTitle title="Wallet Balance" />

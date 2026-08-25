@@ -4,7 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { OrganizationEmail, OrganizationPlan, OrganizationWallet, UsagePrices } from '@/billing-api'
+import {
+  OrganizationEmail,
+  OrganizationPlan,
+  OrganizationWallet,
+  PaginatedPaymentMethods,
+  PaymentMethod,
+  UsagePrices,
+} from '@/billing-api'
 import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
 import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
 import { Plan } from '@/billing-api/types/Plan'
@@ -185,10 +192,45 @@ export const handlers = [
       balanceCents: 1000,
       ongoingBalanceCents: 1000,
       name: 'Wallet',
-      creditCardConnected: false,
+      creditCardConnected: true,
       automaticTopUp: undefined,
       creditGrantedCents: 10_000,
       creditRemainingCents: 1_000,
+    })
+  }),
+  http.get(`${BILLING_API_URL}/organization/:organizationId/payment-methods`, async ({ request }) => {
+    const url = new URL(request.url)
+    const page = parseInt(url.searchParams.get('page') || '1', 10)
+    const perPage = Math.min(parseInt(url.searchParams.get('perPage') || '20', 10), 100)
+    const paymentMethods: PaymentMethod[] = [
+      {
+        id: '0f04d55c-7d77-4a19-af78-f4a18b2d5f91',
+        isDefault: true,
+        paymentProviderType: 'stripe',
+        providerMethodId: 'pm_mock_visa',
+        details: { brand: 'visa', last4: '4242', expMonth: 8, expYear: 2027 },
+      },
+      {
+        id: 'bce26ca7-771d-47c4-898c-b73c93fd52a7',
+        isDefault: false,
+        paymentProviderType: 'stripe',
+        providerMethodId: 'pm_mock_mastercard',
+        details: { brand: 'mastercard', last4: '4444', expMonth: 12, expYear: 2029 },
+      },
+    ]
+    const totalCount = paymentMethods.length
+    const totalPages = Math.ceil(totalCount / perPage)
+    const start = (page - 1) * perPage
+
+    return HttpResponse.json<PaginatedPaymentMethods>({
+      paymentMethods: paymentMethods.slice(start, start + perPage),
+      meta: {
+        currentPage: page,
+        totalPages,
+        totalCount,
+        nextPage: page < totalPages ? page + 1 : null,
+        prevPage: page > 1 ? page - 1 : null,
+      },
     })
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
@@ -213,6 +255,9 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
   http.post(`${BILLING_API_URL}/organization/:organizationId/plan/downgrade`, async () => {
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.delete(`${BILLING_API_URL}/organization/:organizationId/plan/pending`, async () => {
     return new HttpResponse(null, { status: 204 })
   }),
   // Deterministic funding series: quota-first against the seeded remaining
