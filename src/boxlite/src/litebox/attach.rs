@@ -41,4 +41,8 @@ impl AttachOptions {
     pub(crate) fn execution_id(&self) -> Option<&str> {
         self.execution_id.as_deref()
     }
+
+    pub(crate) fn wants_stdin(&self) -> bool {
+        self.stdin
+    }
 }

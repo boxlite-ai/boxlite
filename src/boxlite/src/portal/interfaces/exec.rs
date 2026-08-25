@@ -22,7 +22,9 @@ pub struct ExecutionInterface {
 /// Components for building an Execution.
 pub struct ExecComponents {
     pub execution_id: String,
-    pub stdin_tx: mpsc::UnboundedSender<Vec<u8>>,
+    /// `None` for a read-only attach: no stdin pump was spawned, so there is
+    /// no sender for the caller to write into.
+    pub stdin_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
     pub stdout_rx: mpsc::UnboundedReceiver<String>,
     pub stderr_rx: mpsc::UnboundedReceiver<String>,
     pub result_rx: mpsc::UnboundedReceiver<ExecResult>,
@@ -97,7 +99,7 @@ impl ExecutionInterface {
 
         Ok(ExecComponents {
             execution_id,
-            stdin_tx,
+            stdin_tx: Some(stdin_tx),
             stdout_rx,
             stderr_rx,
             result_rx,
@@ -105,29 +107,39 @@ impl ExecutionInterface {
     }
 
     /// Attach to an already-registered execution session by id, without
-    /// spawning anything — wires the same stdin/attach/wait streams as
+    /// spawning anything — wires the same attach/wait streams as
     /// [`Self::exec`] against an existing session (e.g. the container's
     /// init process, registered by the guest under execution_id =
     /// container_id).
+    ///
+    /// `wire_stdin` false is a read-only attach: no `SendInput` stream is
+    /// opened, so the session has no host-side writer at all.
     pub async fn attach_existing(
         &mut self,
         execution_id: &str,
+        wire_stdin: bool,
         shutdown_token: CancellationToken,
     ) -> BoxliteResult<ExecComponents> {
-        let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
         let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
         let (result_tx, result_rx) = mpsc::unbounded_channel();
 
         let execution_id = execution_id.to_string();
-        tracing::debug!(execution_id = %execution_id, "attaching to existing session");
+        tracing::debug!(execution_id = %execution_id, wire_stdin, "attaching to existing session");
 
-        ExecProtocol::spawn_stdin(
-            self.client.clone(),
-            execution_id.clone(),
-            stdin_rx,
-            shutdown_token.clone(),
-        );
+        let stdin_tx = if wire_stdin {
+            let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+            ExecProtocol::spawn_stdin(
+                self.client.clone(),
+                execution_id.clone(),
+                stdin_rx,
+                shutdown_token.clone(),
+            );
+            Some(stdin_tx)
+        } else {
+            None
+        };
+
         ExecProtocol::spawn_attach(
             self.client.clone(),
             execution_id.clone(),

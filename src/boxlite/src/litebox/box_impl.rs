@@ -505,7 +505,7 @@ impl BoxImpl {
             components.execution_id,
             Box::new(exec_interface),
             components.result_rx,
-            Some(ExecStdin::new(components.stdin_tx)),
+            components.stdin_tx.map(ExecStdin::new),
             Some(ExecStdout::new(components.stdout_rx)),
             Some(ExecStderr::new(components.stderr_rx)),
         ))
@@ -627,7 +627,11 @@ impl BoxImpl {
         let live = self.ensure_booted().await?;
         let mut exec_interface = live.guest_session.execution().await?;
         let components = exec_interface
-            .attach_existing(self.container_id(), self.shutdown_token.clone())
+            .attach_existing(
+                self.container_id(),
+                options.wants_stdin(),
+                self.shutdown_token.clone(),
+            )
             .await?;
 
         let result_rx = self.exit_code_from_file_when_portal_has_none(components.result_rx);
@@ -636,7 +640,7 @@ impl BoxImpl {
             components.execution_id,
             Box::new(exec_interface),
             result_rx,
-            Some(ExecStdin::new(components.stdin_tx)),
+            components.stdin_tx.map(ExecStdin::new),
             Some(ExecStdout::new(components.stdout_rx)),
             Some(ExecStderr::new(components.stderr_rx)),
         ))
