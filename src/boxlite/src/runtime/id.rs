@@ -199,8 +199,8 @@ impl BoxIDMint {
 /// REST. Like [`BoxID`], the client stores what it is given and passes it
 /// back verbatim rather than imposing a format on the server.
 ///
-/// The character rule is not cosmetic here: a local volume's id **is** its
-/// directory name under `{home}/volumes/{id}`, so anything that could steer
+/// The character rule is not cosmetic here: a local volume's id **is** the
+/// name of its directory under `{home}/volumes/`, so anything that could steer
 /// that join elsewhere must never parse. ASCII alphanumeric plus `-` and `_`
 /// leaves no `/`, no `\`, and no `.`, which rules out `..` traversal and
 /// hidden names by construction — the same reason the id is safe to embed in

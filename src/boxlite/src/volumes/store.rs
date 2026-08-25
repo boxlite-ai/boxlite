@@ -4,8 +4,10 @@
 //! [`VolumeBackend`](crate::runtime::volumes::VolumeBackend) trait and rendered
 //! by the CLI. Volumes are addressed by a server-assigned id (like boxes).
 //! [`NamedVolumeStore`] is the concrete local backend wired into
-//! `impl VolumeBackend for LocalRuntime`: each volume lives in a directory
-//! under `{home}/volumes/{id}`.
+//! `impl VolumeBackend for LocalRuntime`: each volume is a directory named by
+//! its id, either directly under `{home}/volumes/` or, for the CLI's anonymous
+//! mounts, under `{home}/volumes/anonymous/`. The id is the same either way —
+//! only [`NamedVolumeStore::locate`] knows the two places apart.
 
 use std::fs;
 use std::io;
@@ -64,39 +66,49 @@ impl NamedVolumeStore {
         self.volume_info(id, &dir)
     }
 
-    /// List all named volume.
+    /// List every volume, named and anonymous alike.
+    ///
+    /// Anonymous volumes sit one level down, under `anonymous/` (the CLI puts
+    /// them there — `cli.rs`), but each one is an ordinary volume with its own
+    /// directory and its own id. Only `anonymous/` itself is not a volume: it
+    /// is the container holding them.
     pub fn list(&self) -> BoxliteResult<Vec<VolumeInfo>> {
-        let entries = match fs::read_dir(&self.volumes_dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => {
-                return Err(BoxliteError::Storage(format!(
-                    "failed to read volume dir {}: {}",
-                    self.volumes_dir.display(),
-                    e
-                )));
-            }
-        };
-
         let mut infos = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "failed to read an entry of volume dir {}: {}",
-                    self.volumes_dir.display(),
-                    e
-                ))
-            })?;
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
+        for root in [
+            self.volumes_dir.clone(),
+            self.volumes_dir.join(ANONYMOUS_VOLUMES_DIR),
+        ] {
+            let entries = match fs::read_dir(&root) {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    return Err(BoxliteError::Storage(format!(
+                        "failed to read volume dir {}: {}",
+                        root.display(),
+                        e
+                    )));
+                }
+            };
 
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name == ANONYMOUS_VOLUMES_DIR {
-                continue;
+            for entry in entries {
+                let entry = entry.map_err(|e| {
+                    BoxliteError::Storage(format!(
+                        "failed to read an entry of volume dir {}: {}",
+                        root.display(),
+                        e
+                    ))
+                })?;
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name == ANONYMOUS_VOLUMES_DIR {
+                    continue;
+                }
+                infos.push(self.volume_info(name, &path)?);
             }
-            infos.push(self.volume_info(name, &path)?);
         }
         Ok(infos)
     }
@@ -105,28 +117,20 @@ impl NamedVolumeStore {
     ///
     /// Returns `BoxliteError::NotFound` when no such volume exists.
     pub fn get(&self, id: &str) -> BoxliteResult<VolumeInfo> {
-        let dir = self.volume_dir(id)?;
-        if !dir.is_dir() {
-            return Err(BoxliteError::NotFound(format!("volume not found: {id}")));
+        match self.locate(id)? {
+            Some(dir) => self.volume_info(id.to_string(), &dir),
+            None => Err(BoxliteError::NotFound(format!("volume not found: {id}"))),
         }
-        self.volume_info(id.to_string(), &dir)
     }
 
     /// Remove a volume by id. With `force`, a missing volume is a no-op.
     pub fn remove(&self, id: &str, force: bool) -> BoxliteResult<()> {
-        let dir = self.volume_dir(id)?;
-        if !dir.exists() {
+        let Some(dir) = self.locate(id)? else {
             if force {
                 return Ok(());
             }
             return Err(BoxliteError::NotFound(format!("volume not found: {id}")));
-        }
-        if !dir.is_dir() {
-            return Err(BoxliteError::InvalidArgument(format!(
-                "volume path is not a directory: {}",
-                dir.display(),
-            )));
-        }
+        };
         fs::remove_dir_all(&dir).map_err(|e| {
             BoxliteError::Storage(format!(
                 "failed to remove directory {}: {}",
@@ -136,10 +140,31 @@ impl NamedVolumeStore {
         })
     }
 
-    /// Resolve `{volumes_dir}/{id}` with a path-traversal guard:
-    /// the id must be a single directory name, never a path.
+    /// Find the directory holding `id`, wherever it lives.
     ///
-    /// The reserved `anonymous/` subtree (the CLI's anonymous volumes) is also rejected — this store must never touch it, neither to list nor to delete.
+    /// One flat id space, two locations: [`Self::create`] puts named volumes
+    /// directly under `volumes/`, while the CLI's `-v {guest_path}` mounts land
+    /// in `volumes/anonymous/`. The id never carries that difference — a volume
+    /// is addressed by its directory name — so callers of `get`/`remove` do not
+    /// have to know which kind they hold. Collapsing the two directories
+    /// (docker's model) would delete this probe; until then it is the only
+    /// place that knows about the split.
+    fn locate(&self, id: &str) -> BoxliteResult<Option<PathBuf>> {
+        let named = self.volume_dir(id)?;
+        if named.is_dir() {
+            return Ok(Some(named));
+        }
+        let anonymous = self.volumes_dir.join(ANONYMOUS_VOLUMES_DIR).join(id);
+        Ok(anonymous.is_dir().then_some(anonymous))
+    }
+
+    /// Resolve the named location `{volumes_dir}/{id}`, with the id checked.
+    ///
+    /// [`VolumeID`]'s character set admits no `/`, `\` or `.`, so a valid id
+    /// can only name a direct child — the traversal guard is the id format
+    /// itself. `anonymous` is rejected separately: it parses as an id but names
+    /// the subtree holding the CLI's anonymous volumes, and resolving it would
+    /// let a caller address every one of them at once.
     fn volume_dir(&self, id: &str) -> BoxliteResult<PathBuf> {
         if !VolumeID::is_valid(id) || id == ANONYMOUS_VOLUMES_DIR {
             return Err(BoxliteError::InvalidArgument(format!(
@@ -192,6 +217,9 @@ impl NamedVolumeStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A ULID, the shape the CLI mints for anonymous volumes.
+    const ANONYMOUS_ULID: &str = "01JQZ8XK9V3TBN7WPM2R5CYH4E";
 
     use filetime::FileTime;
 
@@ -260,21 +288,58 @@ mod tests {
         assert_eq!(got.host_path, created.host_path);
     }
 
+    /// Every anonymous volume has its own directory, so each one is a volume in
+    /// its own right; `anonymous/` is the container holding them, and is not.
     #[test]
-    fn list_lists_only_named_volumes() {
+    fn list_includes_anonymous_volumes_but_not_their_container() {
         let tmp = tempfile::tempdir().unwrap();
         let store = NamedVolumeStore::new(tmp.path());
         let volume1 = store.create().unwrap();
         let volume2 = store.create().unwrap();
 
-        let anon = tmp.path().join("volumes").join("anonymous").join("ulid-x");
+        let anon = tmp
+            .path()
+            .join("volumes")
+            .join("anonymous")
+            .join(ANONYMOUS_ULID);
         fs::create_dir_all(&anon).unwrap();
 
         let ids: Vec<String> = store.list().unwrap().into_iter().map(|v| v.id).collect();
 
-        assert!(ids.contains(&volume1.id));
-        assert!(ids.contains(&volume2.id));
-        assert_eq!(2, ids.len(), "anonymous volume must be excluded: {ids:?}");
+        assert!(ids.contains(&volume1.id), "{ids:?}");
+        assert!(ids.contains(&volume2.id), "{ids:?}");
+        assert!(
+            ids.contains(&ANONYMOUS_ULID.to_string()),
+            "the anonymous volume must be listed: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"anonymous".to_string()),
+            "the container directory is not a volume: {ids:?}"
+        );
+        assert_eq!(3, ids.len(), "{ids:?}");
+    }
+
+    /// An anonymous volume is addressed by the same flat id space as a named
+    /// one — the caller never spells out where it is stored.
+    #[test]
+    fn anonymous_volumes_are_addressable_by_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = NamedVolumeStore::new(tmp.path());
+        let anonymous_dir = tmp.path().join("volumes").join("anonymous");
+        let mine = anonymous_dir.join(ANONYMOUS_ULID);
+        let someone_elses = anonymous_dir.join("01JQZ8XK9V3TBN7WPM2R5CYH4F");
+        fs::create_dir_all(&mine).unwrap();
+        fs::create_dir_all(&someone_elses).unwrap();
+
+        let got = store.get(ANONYMOUS_ULID).unwrap();
+        assert_eq!(mine, got.host_path);
+
+        store.remove(ANONYMOUS_ULID, false).unwrap();
+        assert!(!mine.exists());
+        assert!(
+            someone_elses.is_dir(),
+            "removing one anonymous volume must not touch its siblings"
+        );
     }
 
     #[test]
