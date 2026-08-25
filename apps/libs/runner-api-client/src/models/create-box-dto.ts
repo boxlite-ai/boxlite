@@ -19,6 +19,9 @@ import type { DtoVolumeDTO } from './dto-volume-dto';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { RegistryDTO } from './registry-dto';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { CapabilitiesDTO } from './capabilities-dto';
 
 export interface CreateBoxDTO {
     'authToken'?: string;
@@ -32,6 +35,8 @@ export interface CreateBoxDTO {
     'metadata'?: { [key: string]: string; };
     'networkAllowList'?: string;
     'networkBlockAll'?: boolean;
+    'privileged'?: boolean;
+    'capabilities'?: CapabilitiesDTO;
     /**
      * Nullable for backward compatibility
      */
@@ -45,4 +50,3 @@ export interface CreateBoxDTO {
     'storageQuota'?: number;
     'volumes'?: Array<DtoVolumeDTO>;
 }
-

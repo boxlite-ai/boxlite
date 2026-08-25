@@ -304,6 +304,117 @@ func TestAdvancedOptionsSetCapabilitiesDeepCopies(t *testing.T) {
 	}
 }
 
+func TestAdvancedOptionsSetPrivilegedNormalizesCapabilities(t *testing.T) {
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatalf("NewAdvancedBoxOptions: %v", err)
+	}
+	defer advanced.Close()
+
+	if err := advanced.SetPrivileged(true); err != nil {
+		t.Fatalf("SetPrivileged(true): %v", err)
+	}
+	if !advanced.privileged {
+		t.Fatal("privileged should be enabled")
+	}
+	if !reflect.DeepEqual(advanced.capabilities.Add, []string{"ALL"}) {
+		t.Fatalf("advanced.capabilities.add: got %v, want [ALL]", advanced.capabilities.Add)
+	}
+	if len(advanced.capabilities.Drop) != 0 {
+		t.Fatalf("advanced.capabilities.drop: got %v, want empty", advanced.capabilities.Drop)
+	}
+
+	cfg := &boxConfig{}
+	WithAdvancedOptions(advanced)(cfg)
+	if err := buildAndFreeCOptions("docker:dind", cfg); err != nil {
+		t.Fatalf("privileged advanced options must apply cleanly: %v", err)
+	}
+}
+
+func TestAdvancedOptionsRejectsPrivilegedCapabilityOverrides(t *testing.T) {
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatalf("NewAdvancedBoxOptions: %v", err)
+	}
+	defer advanced.Close()
+
+	if err := advanced.SetPrivileged(true); err != nil {
+		t.Fatalf("SetPrivileged(true): %v", err)
+	}
+	if err := advanced.SetCapabilities(ContainerCapabilities{Drop: []string{"ALL"}}); err == nil {
+		t.Fatal("privileged mode must reject cap-drop overrides")
+	}
+}
+
+// The same conflict SetCapabilities rejects when privileged is already set
+// must also be rejected in the opposite order — a caller who sets an explicit
+// capability override first and then enables privileged mode must not have
+// their override silently kept alongside a privileged flag that contradicts it.
+func TestAdvancedOptionsSetPrivilegedRejectsExistingCapabilityOverride(t *testing.T) {
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatalf("NewAdvancedBoxOptions: %v", err)
+	}
+	defer advanced.Close()
+
+	if err := advanced.SetCapabilities(ContainerCapabilities{Add: []string{"NET_ADMIN"}}); err != nil {
+		t.Fatalf("SetCapabilities: %v", err)
+	}
+	if err := advanced.SetPrivileged(true); err == nil {
+		t.Fatal("enabling privileged mode over an explicit capability override must be rejected")
+	}
+	if advanced.privileged {
+		t.Fatal("privileged must not be recorded as enabled after a rejected SetPrivileged call")
+	}
+}
+
+// The canonical add=["ALL"] shape is not a conflict in either order: it is
+// exactly what SetPrivileged(true) itself installs.
+func TestAdvancedOptionsSetPrivilegedAllowsCanonicalShapeInEitherOrder(t *testing.T) {
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatalf("NewAdvancedBoxOptions: %v", err)
+	}
+	defer advanced.Close()
+
+	if err := advanced.SetCapabilities(ContainerCapabilities{Add: []string{"ALL"}}); err != nil {
+		t.Fatalf("SetCapabilities(ALL): %v", err)
+	}
+	if err := advanced.SetPrivileged(true); err != nil {
+		t.Fatalf("SetPrivileged(true) over an already-canonical shape: %v", err)
+	}
+	if err := advanced.SetCapabilities(ContainerCapabilities{Add: []string{"ALL"}}); err != nil {
+		t.Fatalf("re-affirming the canonical shape while privileged: %v", err)
+	}
+}
+
+// Disabling must withdraw what enabling installed, or the Go view keeps
+// reporting ALL for a box that is no longer privileged.
+func TestAdvancedOptionsSetPrivilegedFalseWithdrawsCapabilities(t *testing.T) {
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatalf("NewAdvancedBoxOptions: %v", err)
+	}
+	defer advanced.Close()
+
+	if err := advanced.SetPrivileged(true); err != nil {
+		t.Fatalf("SetPrivileged(true): %v", err)
+	}
+	if err := advanced.SetPrivileged(false); err != nil {
+		t.Fatalf("SetPrivileged(false): %v", err)
+	}
+
+	if advanced.privileged {
+		t.Fatal("privileged should be disabled")
+	}
+	if len(advanced.capabilities.Add) != 0 {
+		t.Fatalf("cap_add must not survive disabling privileged mode: got %v", advanced.capabilities.Add)
+	}
+	if len(advanced.capabilities.Drop) != 0 {
+		t.Fatalf("advanced.capabilities.drop: got %v, want empty", advanced.capabilities.Drop)
+	}
+}
+
 func TestSetCapabilitiesRejectsEmbeddedNUL(t *testing.T) {
 	advanced, err := NewAdvancedBoxOptions()
 	if err != nil {

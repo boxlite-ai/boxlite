@@ -61,6 +61,14 @@ export interface Box {
      */
     'networkAllowList'?: string;
     /**
+     * Whether Docker-style privileged mode is enabled for the box
+     */
+    'privileged': boolean;
+    /**
+     * Linux capabilities added to or removed from the box processes
+     */
+    'capabilities': object;
+    /**
      * The target environment for the box
      */
     'target': string;

@@ -8,7 +8,7 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, OneToOne, Uniqu
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
-import { BoxVolume } from '../dto/box.dto'
+import { BoxCapabilities, BoxVolume } from '../dto/box.dto'
 import { nanoid } from 'nanoid'
 import { BoxLastActivity } from './box-last-activity.entity'
 import { BOX_ID_LENGTH, BOX_ID_REGEX, generateBoxId } from '../utils/box-id.util'
@@ -116,6 +116,12 @@ export class Box {
 
   @Column({ nullable: true })
   networkAllowList?: string
+
+  @Column({ default: false, type: 'boolean' })
+  privileged = false
+
+  @Column({ type: 'jsonb', default: { add: [], drop: [] } })
+  capabilities: BoxCapabilities = { add: [], drop: [] }
 
   @Column('jsonb', { nullable: true })
   labels: { [key: string]: string }

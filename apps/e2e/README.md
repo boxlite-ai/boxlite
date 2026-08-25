@@ -184,6 +184,7 @@ apps/e2e/
     ├── test_path_verification.py    # Meta-test: prove SDK→API→Runner path
     ├── test_lifecycle.py            # Box create / get_info / remove
     ├── test_exec_*.py               # Exec stdout, attach, timeout
+    ├── test_privileged_options.py   # REST capability and privileged shape
     ├── test_copy_roundtrip.py       # Copy in/out
     ├── test_cli_entry.py            # CLI smoke (run, exec, whoami)
     ├── test_cli_detach_recovery.py  # CLI detach + reattach

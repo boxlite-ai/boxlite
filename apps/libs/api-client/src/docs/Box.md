@@ -14,6 +14,8 @@ Name | Type | Description | Notes
 **_public** | **boolean** | Whether the box http preview is public | [default to undefined]
 **networkBlockAll** | **boolean** | Whether to block all network access for the box | [default to undefined]
 **networkAllowList** | **string** | Comma-separated list of allowed CIDR network addresses for the box | [optional] [default to undefined]
+**privileged** | **boolean** | Whether Docker-style privileged mode is enabled for the box | [default to undefined]
+**capabilities** | **object** | Linux capabilities added to or removed from the box processes | [default to undefined]
 **target** | **string** | The target environment for the box | [default to undefined]
 **image** | **string** | The image used for the box | [optional] [default to undefined]
 **cpu** | **number** | The CPU quota for the box | [default to undefined]
@@ -50,6 +52,8 @@ const instance: Box = {
     _public,
     networkBlockAll,
     networkAllowList,
+    privileged,
+    capabilities,
     target,
     image,
     cpu,

@@ -310,21 +310,27 @@ pub struct PyAdvancedBoxOptions {
     /// Linux capability policy for the container process.
     #[pyo3(get, set)]
     pub capabilities: PyContainerCapabilities,
+
+    /// Request Docker-style privileged mode for DinD.
+    #[pyo3(get, set)]
+    pub privileged: bool,
 }
 
 #[pymethods]
 impl PyAdvancedBoxOptions {
     #[new]
-    #[pyo3(signature = (security=None, health_check=None, capabilities=None))]
+    #[pyo3(signature = (security=None, health_check=None, capabilities=None, privileged=false))]
     fn new(
         security: Option<PySecurityOptions>,
         health_check: Option<PyHealthCheckOptions>,
         capabilities: Option<PyContainerCapabilities>,
+        privileged: bool,
     ) -> Self {
         Self {
             security,
             health_check,
             capabilities: capabilities.unwrap_or_default(),
+            privileged,
         }
     }
 }

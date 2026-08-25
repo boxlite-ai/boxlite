@@ -15,6 +15,7 @@ import {
 import { BoxResponseDto } from '../dto/box-response.dto'
 import { CreateBoxDto as RestCreateBoxDto } from '../dto/create-box.dto'
 import { CreateBoxDto } from '../../box/dto/create-box.dto'
+import { normalizeBoxAdvancedOptions } from '../../box/utils/advanced-options.util'
 
 export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
   return {
@@ -50,6 +51,9 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     volumeId: resolveVolumeId(volume),
     mountPath: volume.guest_path,
   }))
+  const advanced = normalizeBoxAdvancedOptions(dto.advanced)
+  createDto.privileged = advanced.privileged
+  createDto.capabilities = advanced.capabilities
   if (dto.network) {
     const allowNet = dto.network.outbound?.allow_net?.map((entry) => entry.trim()).filter(Boolean)
     createDto.networkBlockAll = dto.network.outbound?.mode === 'disabled'

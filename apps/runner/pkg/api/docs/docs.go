@@ -1156,6 +1156,23 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "CapabilitiesDTO": {
+            "type": "object",
+            "properties": {
+                "add": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "drop": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "BoxInfoResponse": {
             "type": "object",
             "properties": {
@@ -1239,6 +1256,9 @@ const docTemplate = `{
                 "authToken": {
                     "type": "string"
                 },
+                "capabilities": {
+                    "$ref": "#/definitions/CapabilitiesDTO"
+                },
                 "cpuQuota": {
                     "type": "integer",
                     "minimum": 1
@@ -1279,6 +1299,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "networkBlockAll": {
+                    "type": "boolean"
+                },
+                "privileged": {
                     "type": "boolean"
                 },
                 "organizationId": {
@@ -1418,6 +1441,9 @@ const docTemplate = `{
                 "backupErrorReason": {
                     "type": "string"
                 },
+                "capabilities": {
+                    "$ref": "#/definitions/CapabilitiesDTO"
+                },
                 "cpuQuota": {
                     "type": "integer",
                     "minimum": 1
@@ -1446,6 +1472,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "networkBlockAll": {
+                    "type": "boolean"
+                },
+                "privileged": {
                     "type": "boolean"
                 },
                 "osUser": {

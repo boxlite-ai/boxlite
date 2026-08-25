@@ -115,6 +115,9 @@ impl From<JsContainerCapabilities> for ContainerCapabilities {
 #[derive(Clone, Debug)]
 pub struct JsAdvancedBoxOptions {
     pub capabilities: Option<JsContainerCapabilities>,
+
+    /// Request Docker-style privileged mode for DinD.
+    pub privileged: Option<bool>,
 }
 
 #[cfg(test)]

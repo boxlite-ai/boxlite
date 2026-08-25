@@ -565,7 +565,11 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
                 opts.advanced.health_check = Some(HealthCheckOptions::from(health_check));
             }
             opts.advanced.capabilities = advanced.capabilities.into();
+            opts.advanced.privileged = advanced.privileged;
         }
+
+        opts.advanced.validate_privileged_capability_conflict()?;
+        opts.advanced.normalize_privileged();
 
         // Convert Python secrets to Rust secrets
         opts.secrets = py_opts

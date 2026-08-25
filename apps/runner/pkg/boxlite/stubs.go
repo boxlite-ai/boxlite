@@ -31,6 +31,8 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 		NetworkBlockAll:  recoverDto.NetworkBlockAll,
 		NetworkAllowList: recoverDto.NetworkAllowList,
 		FromVolumeId:     recoverDto.FromVolumeId,
+		Privileged:       recoverDto.Privileged,
+		Capabilities:     recoverDto.Capabilities,
 	}
 
 	_, _, err := c.Create(ctx, createDto)

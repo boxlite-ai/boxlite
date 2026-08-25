@@ -39,6 +39,10 @@ type Box struct {
 	NetworkBlockAll bool `json:"networkBlockAll"`
 	// Comma-separated list of allowed CIDR network addresses for the box
 	NetworkAllowList *string `json:"networkAllowList,omitempty"`
+	// Whether Docker-style privileged mode is enabled for the box
+	Privileged bool `json:"privileged"`
+	// Linux capabilities added to or removed from the box processes
+	Capabilities map[string]interface{} `json:"capabilities"`
 	// The target environment for the box
 	Target string `json:"target"`
 	// The image used for the box
@@ -89,7 +93,7 @@ type _Box Box
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewBox(id string, organizationId string, name string, user string, env map[string]string, labels map[string]string, public bool, networkBlockAll bool, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Box {
+func NewBox(id string, organizationId string, name string, user string, env map[string]string, labels map[string]string, public bool, networkBlockAll bool, privileged bool, capabilities map[string]interface{}, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Box {
 	this := Box{}
 	this.Id = id
 	this.OrganizationId = organizationId
@@ -99,6 +103,8 @@ func NewBox(id string, organizationId string, name string, user string, env map[
 	this.Labels = labels
 	this.Public = public
 	this.NetworkBlockAll = networkBlockAll
+	this.Privileged = privileged
+	this.Capabilities = capabilities
 	this.Target = target
 	this.Cpu = cpu
 	this.Gpu = gpu
@@ -338,6 +344,54 @@ func (o *Box) HasNetworkAllowList() bool {
 // SetNetworkAllowList gets a reference to the given string and assigns it to the NetworkAllowList field.
 func (o *Box) SetNetworkAllowList(v string) {
 	o.NetworkAllowList = &v
+}
+
+// GetPrivileged returns the Privileged field value
+func (o *Box) GetPrivileged() bool {
+	if o == nil {
+		var ret bool
+		return ret
+	}
+
+	return o.Privileged
+}
+
+// GetPrivilegedOk returns a tuple with the Privileged field value
+// and a boolean to check if the value has been set.
+func (o *Box) GetPrivilegedOk() (*bool, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.Privileged, true
+}
+
+// SetPrivileged sets field value
+func (o *Box) SetPrivileged(v bool) {
+	o.Privileged = v
+}
+
+// GetCapabilities returns the Capabilities field value
+func (o *Box) GetCapabilities() map[string]interface{} {
+	if o == nil {
+		var ret map[string]interface{}
+		return ret
+	}
+
+	return o.Capabilities
+}
+
+// GetCapabilitiesOk returns a tuple with the Capabilities field value
+// and a boolean to check if the value has been set.
+func (o *Box) GetCapabilitiesOk() (map[string]interface{}, bool) {
+	if o == nil {
+		return map[string]interface{}{}, false
+	}
+	return o.Capabilities, true
+}
+
+// SetCapabilities sets field value
+func (o *Box) SetCapabilities(v map[string]interface{}) {
+	o.Capabilities = v
 }
 
 // GetTarget returns the Target field value
@@ -956,6 +1010,8 @@ func (o Box) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.NetworkAllowList) {
 		toSerialize["networkAllowList"] = o.NetworkAllowList
 	}
+	toSerialize["privileged"] = o.Privileged
+	toSerialize["capabilities"] = o.Capabilities
 	toSerialize["target"] = o.Target
 	if !IsNil(o.Image) {
 		toSerialize["image"] = o.Image
@@ -1025,6 +1081,8 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		"labels",
 		"public",
 		"networkBlockAll",
+		"privileged",
+		"capabilities",
 		"target",
 		"cpu",
 		"gpu",
@@ -1069,6 +1127,8 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "public")
 		delete(additionalProperties, "networkBlockAll")
 		delete(additionalProperties, "networkAllowList")
+		delete(additionalProperties, "privileged")
+		delete(additionalProperties, "capabilities")
 		delete(additionalProperties, "target")
 		delete(additionalProperties, "image")
 		delete(additionalProperties, "cpu")

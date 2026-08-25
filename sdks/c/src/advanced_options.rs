@@ -1,7 +1,8 @@
 //! C ABI for `boxlite::runtime::advanced_options::AdvancedBoxOptions`.
 //!
 //! Mirrors the core model: advanced knobs (capabilities, security, mount
-//! isolation, health check) live under `BoxOptions.advanced`, never directly on the box. Build a
+//! privileged mode, capabilities, security, mount isolation, health check) live under
+//! `BoxOptions.advanced`, never directly on the box. Build a
 //! `CAdvancedBoxOptions` handle via `boxlite_advanced_options_new`, toggle the
 //! sandbox with `boxlite_advanced_options_set_security_enabled`, then apply it
 //! to a `CBoxliteOptions` via `boxlite_options_set_advanced`.
@@ -79,6 +80,38 @@ pub unsafe extern "C" fn boxlite_advanced_options_set_security_enabled(
     }
 }
 
+/// Toggle Docker-style privileged mode. Enabling it also normalizes the
+/// capability policy to `ALL` with no drops; the guest still receives the
+/// privileged shape and capabilities as separate fields.
+///
+/// Enabling over an explicit, non-canonical capability override already set
+/// via `boxlite_advanced_options_set_capabilities_add`/`_drop` fails closed
+/// with `InvalidArgument` instead of silently keeping the override — the same
+/// conflict those two functions themselves reject when called in the other
+/// order (privileged first, then a conflicting override).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_advanced_options_set_privileged(
+    opts: *mut CAdvancedBoxOptions,
+    enabled: c_int,
+) -> BoxliteErrorCode {
+    let Some(handle) = (unsafe { opts.as_mut() }) else {
+        return BoxliteErrorCode::InvalidArgument;
+    };
+    let enabled = enabled != 0;
+    if enabled {
+        // Probe on a clone rather than flipping the real flag first: cheap
+        // (a couple of string vecs), and the handle never passes through a
+        // transiently-inconsistent state a concurrent reader could observe.
+        let mut probe = handle.options.clone();
+        probe.privileged = true;
+        if probe.validate_privileged_capability_conflict().is_err() {
+            return BoxliteErrorCode::InvalidArgument;
+        }
+    }
+    handle.options.set_privileged(enabled);
+    BoxliteErrorCode::Ok
+}
+
 /// Replace the capabilities added to BoxLite's Docker-compatible baseline.
 ///
 /// A zero count clears the list. Negative counts, null handles, null arrays
@@ -115,7 +148,7 @@ fn set_capability_list(
     handle: *mut CAdvancedBoxOptions,
     capabilities: *const *const c_char,
     count: c_int,
-    assign: impl FnOnce(&mut AdvancedBoxOptions, Vec<String>),
+    assign: impl Fn(&mut AdvancedBoxOptions, Vec<String>),
 ) -> BoxliteErrorCode {
     let Some(handle) = (unsafe { handle.as_mut() }) else {
         return BoxliteErrorCode::InvalidArgument;
@@ -123,6 +156,27 @@ fn set_capability_list(
 
     match parse_capability_array(capabilities, count) {
         Ok(values) => {
+            if handle.options.privileged {
+                // Probe on a clone: whether this conflicts with privileged
+                // mode depends on the *resulting* shape (add=["ALL"], empty
+                // drop is not a conflict — it is what privileged mode itself
+                // installs), not on whether this one field is merely
+                // non-empty, so it can't be decided without applying it
+                // first. `validate_privileged_capability_conflict` is the
+                // core's own rule for that shape; reuse it instead of a
+                // second copy of the condition.
+                let mut probe = handle.options.clone();
+                assign(&mut probe, values.clone());
+                if probe.validate_privileged_capability_conflict().is_err() {
+                    // Preserve a fail-closed marker if the caller ignores the
+                    // return code.
+                    assign(
+                        &mut handle.options,
+                        vec![INVALID_CAPABILITY_INPUT.to_string()],
+                    );
+                    return BoxliteErrorCode::InvalidArgument;
+                }
+            }
             assign(&mut handle.options, values);
             BoxliteErrorCode::Ok
         }

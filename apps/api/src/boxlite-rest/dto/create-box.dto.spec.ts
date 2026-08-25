@@ -70,6 +70,38 @@ describe('CreateBoxDto lifecycle policy', () => {
   })
 })
 
+describe('CreateBoxDto advanced options', () => {
+  it('accepts privileged and capability options', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        advanced: { privileged: true },
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('rejects a non-boolean privileged option', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { advanced: { privileged: 'true' } }))
+
+    expect(JSON.stringify(errors)).toContain('isBoolean')
+  })
+
+  it('accepts a well-formed capability name for guest-side support validation', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, { advanced: { capabilities: { add: ['FUTURE_KERNEL_CAPABILITY'] } } }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('rejects a malformed Linux capability name', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { advanced: { capabilities: { add: ['NET-ADMIN'] } } }))
+
+    expect(JSON.stringify(errors)).toContain('well-formed Linux capability')
+  })
+})
+
 describe('CreateBoxDto network validation', () => {
   it('accepts supported allow_net entry types', async () => {
     const errors = await validate(

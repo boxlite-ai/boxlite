@@ -107,7 +107,7 @@ Configuration options for creating a box.
 | `network` | `NetworkSpec` | `{ mode: "enabled" }` | Structured network configuration |
 | `ports` | `JsPortSpec[]` | `[]` | Local TCP port mappings; omit `hostPort` for automatic allocation |
 | `secrets` | `Secret[]` | `[]` | Outbound HTTP(S) secret substitution rules |
-| `advanced` | `AdvancedBoxOptions` | `{}` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
+| `advanced` | `AdvancedBoxOptions` | `{}` | Expert-only options, including capability policy and `privileged` |
 | `autoRemove` | `boolean` | `false` | Auto cleanup when stopped |
 | `detach` | `boolean` | `false` | Survive parent process exit |
 
@@ -124,6 +124,13 @@ const options = {
   },
 };
 ```
+
+Set `advanced.privileged: true` for Docker-style DinD behavior. This
+normalizes the capability policy to `add: ["ALL"]`, clears drops, and enables
+the complete guest-level privileged shape: writable guest `/sys`, guest
+cgroups, and guest devices. `add: ["ALL"]` without `privileged: true` keeps the
+ordinary guest shape. Do not combine `privileged: true` with capability
+overrides; the request is rejected.
 
 #### `NetworkSpec`
 
@@ -396,6 +403,7 @@ interface SimpleBoxOptions {
       add?: string[];     // Add Linux capabilities
       drop?: string[];    // Remove Linux capabilities
     };
+    privileged?: boolean; // Enable the complete guest-level privileged shape
   };
 }
 ```

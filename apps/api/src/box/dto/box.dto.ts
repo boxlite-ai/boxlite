@@ -10,6 +10,34 @@ import { IsEnum, IsOptional } from 'class-validator'
 import { Box } from '../entities/box.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
+import { resolveBoxAdvancedOptions } from '../utils/advanced-options.util'
+
+export interface BoxCapabilities {
+  add: string[]
+  drop: string[]
+}
+
+// A plain `interface` has no runtime representation for Nest's Swagger
+// plugin to introspect, so `@ApiProperty({ type: BoxCapabilities })` below
+// would fall back to an untyped object in the generated spec (and, from
+// there, an untyped map/object in every generated client). This decorated
+// class gives it one, the same way BoxVolume does for `volumes`.
+@ApiSchema({ name: 'BoxCapabilities' })
+export class BoxCapabilitiesDto implements BoxCapabilities {
+  @ApiProperty({
+    description: 'Linux capabilities added to the default container capability set',
+    type: [String],
+    example: ['SYS_ADMIN'],
+  })
+  add: string[]
+
+  @ApiProperty({
+    description: 'Linux capabilities removed from the container capability set',
+    type: [String],
+    example: [],
+  })
+  drop: string[]
+}
 
 @ApiSchema({ name: 'BoxVolume' })
 export class BoxVolume {
@@ -92,6 +120,18 @@ export class BoxDto {
     example: '192.168.1.0/16,10.0.0.0/24',
   })
   networkAllowList?: string
+
+  @ApiProperty({
+    description: 'Whether Docker-style privileged mode is enabled for the box',
+    example: false,
+  })
+  privileged: boolean
+
+  @ApiProperty({
+    description: 'Linux capabilities added to or removed from the box processes',
+    type: BoxCapabilitiesDto,
+  })
+  capabilities: BoxCapabilities
 
   @ApiProperty({
     description: 'The target environment for the box',
@@ -253,6 +293,13 @@ export class BoxDto {
   toolboxProxyUrl: string
 
   static fromBox(box: Box, toolboxProxyUrl: string): BoxDto {
+    // A stored row is not a request: it already holds the canonical shape, so
+    // resolve it instead of re-running the request-time conflict rule.
+    const advanced = resolveBoxAdvancedOptions({
+      privileged: box.privileged,
+      capabilities: box.capabilities,
+    })
+
     return {
       id: box.id,
       organizationId: box.organizationId,
@@ -268,6 +315,8 @@ export class BoxDto {
       public: box.public,
       networkBlockAll: box.networkBlockAll,
       networkAllowList: box.networkAllowList,
+      privileged: advanced.privileged,
+      capabilities: advanced.capabilities,
       labels: box.labels,
       volumes: box.volumes,
       state: this.getBoxState(box),

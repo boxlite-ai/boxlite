@@ -1078,6 +1078,23 @@
     }
   },
   "definitions": {
+    "CapabilitiesDTO": {
+      "type": "object",
+      "properties": {
+        "add": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "drop": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "BoxInfoResponse": {
       "type": "object",
       "properties": {
@@ -1151,6 +1168,9 @@
         "authToken": {
           "type": "string"
         },
+        "capabilities": {
+          "$ref": "#/definitions/CapabilitiesDTO"
+        },
         "cpuQuota": {
           "type": "integer",
           "minimum": 1
@@ -1191,6 +1211,9 @@
           "type": "string"
         },
         "networkBlockAll": {
+          "type": "boolean"
+        },
+        "privileged": {
           "type": "boolean"
         },
         "organizationId": {
@@ -1316,6 +1339,9 @@
         "backupErrorReason": {
           "type": "string"
         },
+        "capabilities": {
+          "$ref": "#/definitions/CapabilitiesDTO"
+        },
         "cpuQuota": {
           "type": "integer",
           "minimum": 1
@@ -1344,6 +1370,9 @@
           "type": "string"
         },
         "networkBlockAll": {
+          "type": "boolean"
+        },
+        "privileged": {
           "type": "boolean"
         },
         "osUser": {

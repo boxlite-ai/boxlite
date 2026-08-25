@@ -484,6 +484,18 @@ void boxlite_advanced_options_free(CAdvancedBoxOptions *opts);
 // genuinely can't sandbox). Null `opts` is a no-op.
 void boxlite_advanced_options_set_security_enabled(CAdvancedBoxOptions *opts, int enabled);
 
+// Toggle Docker-style privileged mode. Enabling it also normalizes the
+// capability policy to `ALL` with no drops; the guest still receives the
+// privileged shape and capabilities as separate fields.
+//
+// Enabling over an explicit, non-canonical capability override already set
+// via `boxlite_advanced_options_set_capabilities_add`/`_drop` fails closed
+// with `InvalidArgument` instead of silently keeping the override — the same
+// conflict those two functions themselves reject when called in the other
+// order (privileged first, then a conflicting override).
+enum BoxliteErrorCode boxlite_advanced_options_set_privileged(CAdvancedBoxOptions *opts,
+                                                              int enabled);
+
 // Replace the capabilities added to BoxLite's Docker-compatible baseline.
 //
 // A zero count clears the list. Negative counts, null handles, null arrays
@@ -849,7 +861,7 @@ void boxlite_options_set_auto_resume_enabled(CBoxliteOptions *opts, int val);
 
 void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
 
-// Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
+// Apply a `CAdvancedBoxOptions` (privileged mode, capabilities, security, mount isolation, health check) to a
 // `CBoxliteOptions`. Clones the advanced configuration into the box options —
 // the caller retains ownership of `advanced_opts` and is responsible for
 // freeing it via `boxlite_advanced_options_free`.
@@ -859,7 +871,8 @@ void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
 // build the `CAdvancedBoxOptions` handle via `boxlite_advanced_options_new`,
 // toggle the sandbox with `boxlite_advanced_options_set_security_enabled`,
 // then apply it here.
-void boxlite_options_set_advanced(CBoxliteOptions *opts, const CAdvancedBoxOptions *advanced_opts);
+void boxlite_options_set_advanced(CBoxliteOptions *opts,
+                                  const CAdvancedBoxOptions *advanced_opts);
 
 void boxlite_options_set_entrypoint(CBoxliteOptions *opts, const char *const *args, int argc);
 

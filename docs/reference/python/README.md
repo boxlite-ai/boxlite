@@ -134,7 +134,7 @@ Configuration options for creating a box.
 | `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
 | `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
 | `secrets` | `List[Secret]` | `[]` | Outbound HTTP(S) secret substitution rules |
-| `advanced` | `AdvancedBoxOptions \| None` | `None` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
+| `advanced` | `AdvancedBoxOptions \| None` | `None` | Expert-only options, including capability policy and `privileged` |
 | `auto_remove` | `bool` | `True` | Auto cleanup when stopped |
 | `detach` | `bool` | `False` | Survive parent process exit |
 
@@ -153,6 +153,14 @@ options = BoxOptions(
     ),
 )
 ```
+
+Set `AdvancedBoxOptions(privileged=True)` for Docker-style DinD behavior. This
+normalizes the capability policy to `add=["ALL"]`, clears drops, and enables
+the complete guest-level privileged shape: writable guest `/sys`, guest
+cgroups, and guest devices. `capabilities.add=["ALL"]` without
+`privileged=True` grants the capabilities but keeps the ordinary guest shape.
+Do not combine `privileged=True` with capability overrides; the request is
+rejected.
 
 #### `NetworkSpec`
 

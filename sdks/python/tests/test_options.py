@@ -57,6 +57,32 @@ class TestBoxOptionsDefaults:
         assert not hasattr(opts, "cap_add")
         assert not hasattr(opts, "cap_drop")
 
+    def test_privileged_is_carried_verbatim_by_the_python_binding(self):
+        # The Python objects are carriers: the ["ALL"] expansion and the
+        # conflict check both run in the Rust core when the options are
+        # converted at create time. Asserting the expansion here would assert
+        # something the binding never does.
+        advanced = boxlite.AdvancedBoxOptions(
+            capabilities=boxlite.ContainerCapabilities(drop=["NET_RAW"]),
+            privileged=True,
+        )
+        opts = boxlite.BoxOptions(image="docker:dind", advanced=advanced)
+
+        assert opts.advanced.privileged is True
+        assert opts.advanced.capabilities.add == []
+        assert opts.advanced.capabilities.drop == ["NET_RAW"]
+
+    async def test_privileged_rejects_capability_overrides(self, runtime):
+        advanced = boxlite.AdvancedBoxOptions(
+            capabilities=boxlite.ContainerCapabilities(drop=["ALL"]),
+            privileged=True,
+        )
+
+        with pytest.raises(Exception, match="cannot be combined"):
+            await runtime.create(
+                boxlite.BoxOptions(image="docker:dind", advanced=advanced)
+            )
+
     def test_explicit_auto_remove_true(self):
         """Test setting auto_remove=True explicitly."""
         opts = boxlite.BoxOptions(image="alpine:latest", auto_remove=True)

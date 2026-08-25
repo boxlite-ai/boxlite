@@ -17,5 +17,21 @@ describe('BoxDto public identity', () => {
 
     expect(dto.id).toBe(box.id)
     expect((dto as any).boxId).toBeUndefined()
+    expect(dto.privileged).toBe(false)
+    expect(dto.capabilities).toEqual({ add: [], drop: [] })
+  })
+
+  it('reads back a stored privileged box', () => {
+    const box = new Box('us', 'dind')
+    box.organizationId = '057963b2-60ca-4356-81fc-11503e15f249'
+    box.osUser = 'boxlite'
+    // The shape box.service.ts persists for a privileged create.
+    box.privileged = true
+    box.capabilities = { add: ['ALL'], drop: [] }
+
+    const dto = BoxDto.fromBox(box, 'https://proxy.boxlite.dev/toolbox')
+
+    expect(dto.privileged).toBe(true)
+    expect(dto.capabilities).toEqual({ add: ['ALL'], drop: [] })
   })
 })

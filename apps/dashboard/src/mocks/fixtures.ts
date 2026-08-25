@@ -111,6 +111,8 @@ function buildBox(overrides: Partial<Box> & Pick<Box, 'id' | 'name' | 'state'>):
     labels: {},
     public: false,
     networkBlockAll: false,
+    privileged: false,
+    capabilities: { add: [], drop: [] },
     target: 'mock',
     image: 'ghcr.io/boxlite-ai/boxlite-agent-base:mock',
     cpu: 1,

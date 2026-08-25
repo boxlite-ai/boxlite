@@ -77,6 +77,33 @@ func networkSpec(blockAll *bool, allowList *string) boxlite.NetworkSpec {
 	return spec
 }
 
+func advancedOptions(boxDto dto.CreateBoxDTO) (*boxlite.AdvancedBoxOptions, error) {
+	privileged := boxDto.Privileged != nil && *boxDto.Privileged
+	hasCapabilities := boxDto.Capabilities != nil &&
+		(len(boxDto.Capabilities.Add) > 0 || len(boxDto.Capabilities.Drop) > 0)
+	if !privileged && !hasCapabilities {
+		return nil, nil
+	}
+
+	advanced, err := boxlite.NewAdvancedBoxOptions()
+	if err != nil {
+		return nil, err
+	}
+	if hasCapabilities {
+		if err := advanced.SetCapabilities(boxlite.ContainerCapabilities{
+			Add:  append([]string(nil), boxDto.Capabilities.Add...),
+			Drop: append([]string(nil), boxDto.Capabilities.Drop...),
+		}); err != nil {
+			advanced.Close()
+			return nil, err
+		}
+	}
+	if privileged {
+		advanced.SetPrivileged(true)
+	}
+	return advanced, nil
+}
+
 func boxRuntimeEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]string {
 	env := map[string]string{
 		"BOXLITE_BOX_ID": boxDto.Id,
@@ -232,6 +259,14 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		boxlite.WithMemory(memoryMiB),
 		boxlite.WithAutoRemove(false),
 		boxlite.WithDetach(true),
+	}
+	advanced, err := advancedOptions(boxDto)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid advanced box options: %w", err)
+	}
+	if advanced != nil {
+		defer advanced.Close()
+		opts = append(opts, boxlite.WithAdvancedOptions(advanced))
 	}
 	if boxDto.StorageQuota > 0 {
 		opts = append(opts, boxlite.WithDiskSize(int(boxDto.StorageQuota)))

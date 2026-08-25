@@ -128,10 +128,7 @@ for _, image := range cached {
   advanced, err := boxlite.NewAdvancedBoxOptions()
   if err != nil { log.Fatal(err) }
   defer advanced.Close()
-  if err := advanced.SetCapabilities(boxlite.ContainerCapabilities{
-      Add: []string{"NET_ADMIN"},
-      Drop: []string{"NET_RAW"},
-  }); err != nil { log.Fatal(err) }
+  if err := advanced.SetPrivileged(true); err != nil { log.Fatal(err) } // DinD: complete guest-level privileged shape
   box, err := runtime.Create(ctx, "alpine:latest", boxlite.WithAdvancedOptions(advanced))
   ```
 

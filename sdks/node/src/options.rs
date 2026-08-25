@@ -455,10 +455,14 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .unwrap_or_default();
 
         let health_check = js_opts.health_check.map(HealthCheckOptions::from);
-        let capabilities = js_opts
+        let (capabilities, privileged) = js_opts
             .advanced
-            .and_then(|advanced| advanced.capabilities)
-            .map(Into::into)
+            .map(|advanced| {
+                (
+                    advanced.capabilities.map(Into::into).unwrap_or_default(),
+                    advanced.privileged.unwrap_or(false),
+                )
+            })
             .unwrap_or_default();
         let secrets = js_opts
             .secrets
@@ -474,7 +478,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             })
             .collect();
 
-        Ok(BoxOptions {
+        let mut options = BoxOptions {
             cpus: js_opts.cpus,
             memory_mib: js_opts.memory_mib,
             disk_size_gb: js_opts.disk_size_gb.map(|v| v as u64),
@@ -488,6 +492,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             auto_remove,
             advanced: AdvancedBoxOptions {
                 capabilities,
+                privileged,
                 security,
                 health_check,
                 ..Default::default()
@@ -504,7 +509,10 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             // do until they grow `attach()` (see sdk-run-semantics-api.md).
             tty: false,
             secrets,
-        })
+        };
+        options.advanced.validate_privileged_capability_conflict()?;
+        options.advanced.normalize_privileged();
+        Ok(options)
     }
 }
 
@@ -842,6 +850,7 @@ mod tests {
                 add: Some(vec!["NET_ADMIN".into(), "SYS_PTRACE".into()]),
                 drop: Some(vec!["MKNOD".into(), "NET_RAW".into()]),
             }),
+            privileged: None,
         });
         let with_capabilities = BoxOptions::try_from(with_capabilities).unwrap();
         assert_eq!(
@@ -852,6 +861,28 @@ mod tests {
             with_capabilities.advanced.capabilities.drop,
             ["MKNOD", "NET_RAW"]
         );
+
+        let mut with_privileged = js.clone();
+        with_privileged.advanced = Some(JsAdvancedBoxOptions {
+            capabilities: None,
+            privileged: Some(true),
+        });
+        let with_privileged = BoxOptions::try_from(with_privileged).unwrap();
+        assert!(with_privileged.advanced.privileged);
+        assert_eq!(with_privileged.advanced.capabilities.add, ["ALL"]);
+        assert!(with_privileged.advanced.capabilities.drop.is_empty());
+
+        let mut conflicting_privileged = js.clone();
+        conflicting_privileged.advanced = Some(JsAdvancedBoxOptions {
+            capabilities: Some(JsContainerCapabilities {
+                add: None,
+                drop: Some(vec!["ALL".into()]),
+            }),
+            privileged: Some(true),
+        });
+        let error = BoxOptions::try_from(conflicting_privileged)
+            .expect_err("privileged capability overrides must be rejected");
+        assert!(error.to_string().contains("cannot be combined"));
 
         let opts = BoxOptions::try_from(js).unwrap();
         assert!(!opts.auto_remove);

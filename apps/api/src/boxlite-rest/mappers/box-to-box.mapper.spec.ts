@@ -86,6 +86,46 @@ describe('BoxLite lifecycle policy mapper', () => {
     ).toThrow('volume source must use the volume:// scheme')
   })
 
+  it('maps advanced privileged options into the control-plane DTO', () => {
+    const mapped = createBoxToCreateBox({ advanced: { privileged: true } })
+
+    expect(mapped.privileged).toBe(true)
+    expect(mapped.capabilities).toEqual({ add: ['ALL'], drop: [] })
+  })
+
+  it('accepts the canonical privileged body the first-party clients send', () => {
+    // CreateBoxRequest::from_options always serializes capabilities next to
+    // privileged, so this is the body every SDK and the CLI put on the wire.
+    const mapped = createBoxToCreateBox({
+      advanced: { privileged: true, capabilities: { add: ['ALL'], drop: [] } },
+    })
+
+    expect(mapped.privileged).toBe(true)
+    expect(mapped.capabilities).toEqual({ add: ['ALL'], drop: [] })
+  })
+
+  it('rejects privileged capability overrides at the REST boundary', () => {
+    expect(() =>
+      createBoxToCreateBox({
+        advanced: {
+          privileged: true,
+          capabilities: { add: ['SYS_ADMIN'], drop: ['NET_RAW'] },
+        },
+      }),
+    ).toThrow('cannot be combined')
+  })
+
+  it('canonicalizes capability names when privileged mode is disabled', () => {
+    const mapped = createBoxToCreateBox({
+      advanced: {
+        capabilities: { add: ['cap_net_admin', 'NET_ADMIN'], drop: ['CAP_NET_RAW'] },
+      },
+    })
+
+    expect(mapped.privileged).toBe(false)
+    expect(mapped.capabilities).toEqual({ add: ['NET_ADMIN'], drop: ['NET_RAW'] })
+  })
+
   it('returns the effective second-based policy', () => {
     const response = boxToBoxResponse({
       id: 'box-1',

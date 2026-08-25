@@ -197,7 +197,7 @@ pub unsafe extern "C" fn boxlite_options_set_detach(opts: *mut CBoxliteOptions, 
     options_set_detach(opts, val)
 }
 
-/// Apply a `CAdvancedBoxOptions` (capabilities, security, mount isolation, health check) to a
+/// Apply a `CAdvancedBoxOptions` (privileged mode, capabilities, security, mount isolation, health check) to a
 /// `CBoxliteOptions`. Clones the advanced configuration into the box options —
 /// the caller retains ownership of `advanced_opts` and is responsible for
 /// freeing it via `boxlite_advanced_options_free`.

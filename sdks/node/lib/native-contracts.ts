@@ -150,6 +150,7 @@ export interface JsContainerCapabilities {
 
 export interface JsAdvancedBoxOptions {
   capabilities?: JsContainerCapabilities;
+  privileged?: boolean;
 }
 
 export interface JsBoxOptions {

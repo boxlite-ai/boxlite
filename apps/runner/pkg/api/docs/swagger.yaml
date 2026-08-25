@@ -12,6 +12,17 @@ definitions:
       state:
         $ref: '#/definitions/enums.BoxState'
     type: object
+  CapabilitiesDTO:
+    properties:
+      add:
+        items:
+          type: string
+        type: array
+      drop:
+        items:
+          type: string
+        type: array
+    type: object
   BuildSnapshotRequestDTO:
     properties:
       context:
@@ -51,6 +62,8 @@ definitions:
     properties:
       authToken:
         type: string
+      capabilities:
+        $ref: '#/definitions/CapabilitiesDTO'
       cpuQuota:
         minimum: 1
         type: integer
@@ -79,6 +92,8 @@ definitions:
       networkAllowList:
         type: string
       networkBlockAll:
+        type: boolean
+      privileged:
         type: boolean
       organizationId:
         description: Nullable for backward compatibility
@@ -175,6 +190,8 @@ definitions:
     properties:
       backupErrorReason:
         type: string
+      capabilities:
+        $ref: '#/definitions/CapabilitiesDTO'
       cpuQuota:
         minimum: 1
         type: integer
@@ -195,6 +212,8 @@ definitions:
       networkAllowList:
         type: string
       networkBlockAll:
+        type: boolean
+      privileged:
         type: boolean
       osUser:
         type: string

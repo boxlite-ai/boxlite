@@ -735,7 +735,12 @@ impl AdvancedBoxOptions {
     /// The canonical `add=["ALL"]` shape is allowed for persisted and FFI
     /// options that have already been normalized. Other explicit overrides
     /// must not be silently discarded by privileged mode.
-    pub(crate) fn validate_privileged_capability_conflict(
+    ///
+    /// `pub`, not `pub(crate)`: the Node/Python FFI bindings construct
+    /// `AdvancedBoxOptions` directly from a plain options object rather than
+    /// through `set_privileged`, so they call this and `normalize_privileged`
+    /// themselves to get the same guarantee that setter gives in-crate.
+    pub fn validate_privileged_capability_conflict(
         &self,
     ) -> boxlite_shared::errors::BoxliteResult<()> {
         if self.privileged
@@ -772,7 +777,10 @@ impl AdvancedBoxOptions {
     /// `validate_privileged_capability_conflict` before this method; a
     /// conflicting explicit override is deliberately left untouched so it
     /// cannot be silently discarded.
-    pub(crate) fn normalize_privileged(&mut self) {
+    ///
+    /// `pub` for the same FFI-binding reason as
+    /// `validate_privileged_capability_conflict`.
+    pub fn normalize_privileged(&mut self) {
         if self.privileged
             && (self.capabilities.is_empty() || self.capabilities.is_privileged_capability_shape())
         {
