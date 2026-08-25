@@ -593,7 +593,8 @@ a separate environment — see
 
 The local API listens on `3001` rather than the deployed `3000`, which the
 dashboard dev server uses; `BOXLITE_LOCAL_API_PORT` overrides it. This stack
-starts no mail service and sets no `SMTP_HOST`.
+points the API's `SMTP_HOST` at its own MailDev box, so the one email the API
+sends — the organization invitation — is caught rather than dropped.
 
 </details>
 
@@ -665,7 +666,7 @@ Nothing in this directory registers the analytics or billing paths.
 ## Services without a first-party API
 
 <details>
-<summary><b>Non-API services and bundled tools</b> · 10 entries</summary>
+<summary><b>Non-API services and bundled tools</b> · 7 entries</summary>
 
 | Service                     | Role                                                                                                                                                                                                                                                                                                                                                                                     |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

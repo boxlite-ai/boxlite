@@ -797,10 +797,24 @@ function provisionSesSmtpUser({ awsCliPath, region, stage, accountId, senderDoma
   ])
   console.log(`[${SCRIPT_NAME}] send-only policy ... attached (${identityArn})`)
 
-  const existingKeys = iamJson(awsCliPath, ['list-access-keys', '--user-name', userName]).AccessKeyMetadata ?? []
-  for (const key of existingKeys) {
-    iamJson(awsCliPath, ['delete-access-key', '--user-name', userName, '--access-key-id', key.AccessKeyId])
-    console.log(`[${SCRIPT_NAME}] revoked previous access key ${key.AccessKeyId}`)
+  /*
+   * Replace before revoke, never the other way round.
+   *
+   * Deleting first leaves a window where the stage's stored credential names a key
+   * that no longer exists: if create-access-key or either secret write then fails,
+   * the deploy still turns SMTP on — stack/mail.ts only checks that both halves are
+   * non-empty — and every invitation is refused by SES until someone reruns this.
+   * Creating first means the worst case is an unused key, which the next run cleans up.
+   *
+   * IAM caps a user at two keys, so a rerun makes room by dropping the oldest before
+   * asking for a new one; the steady state is one key, and that branch only fires
+   * after a run that died between create and revoke.
+   */
+  const keysBefore = iamJson(awsCliPath, ['list-access-keys', '--user-name', userName]).AccessKeyMetadata ?? []
+  if (keysBefore.length >= 2) {
+    const oldest = [...keysBefore].sort((a: any, b: any) => String(a.CreateDate).localeCompare(String(b.CreateDate)))[0]
+    iamJson(awsCliPath, ['delete-access-key', '--user-name', userName, '--access-key-id', oldest.AccessKeyId])
+    console.log(`[${SCRIPT_NAME}] dropped the oldest access key ${oldest.AccessKeyId} to make room`)
   }
 
   const created = iamJson(awsCliPath, ['create-access-key', '--user-name', userName]).AccessKey
@@ -811,6 +825,12 @@ function provisionSesSmtpUser({ awsCliPath, region, stage, accountId, senderDoma
   setStageSecret({ stage, name: 'SMTP_USER', value: created.AccessKeyId })
   setStageSecret({ stage, name: 'SMTP_PASSWORD', value: sesSmtpPasswordV4(created.SecretAccessKey, region) })
   console.log(`[${SCRIPT_NAME}] SMTP_USER / SMTP_PASSWORD ... set for ${senderDomain} in ${region}`)
+
+  // Only now is the old credential safe to revoke: the store holds a working one.
+  for (const key of keysBefore.filter((key: any) => key.AccessKeyId !== created.AccessKeyId)) {
+    iamJson(awsCliPath, ['delete-access-key', '--user-name', userName, '--access-key-id', key.AccessKeyId])
+    console.log(`[${SCRIPT_NAME}] revoked previous access key ${key.AccessKeyId}`)
+  }
 
   // Auth0's provider is per-tenant state this script does not own, and the login-policy
   // configurator is the tool that does — it refuses to apply while the built-in test
@@ -829,22 +849,42 @@ const SES_USE_CASE_DESCRIPTION =
   'who signed up for the product or were invited to an organization by a member of it. No marketing ' +
   'or bulk mail. Bounces and complaints are handled through the SES account-level suppression list.'
 
+function firstLine(error: any) {
+  return String(error?.stderr || error?.message || error).trim().split('\n')[0]
+}
+
+// The CLI reports a missing identity as a NotFoundException on stderr and exits 254.
+// Matching the name rather than the exit status keeps a future exit-code change from
+// turning every failure into "the identity does not exist yet".
+function isSesNotFound(error: any) {
+  return /NotFoundException/.test(String(error?.stderr ?? ''))
+}
+
 /*
  * Whether SES considers the sender domain verified. `NOT_STARTED` covers the case that
  * matters most on a first bootstrap: the identity does not exist yet, because the deploy
  * that creates it has not run.
  */
 function sesIdentityVerification({ awsCliPath, region, senderDomain }: any) {
+  let stdout
   try {
-    const stdout = execFileSync(
+    stdout = execFileSync(
       awsCliPath,
       ['sesv2', 'get-email-identity', '--region', region, '--email-identity', senderDomain, '--output', 'json'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000, killSignal: 'SIGTERM' },
     )
-    return JSON.parse(stdout).VerifiedForSendingStatus === true ? 'SUCCESS' : 'PENDING'
-  } catch {
-    return 'NOT_STARTED' // NotFoundException — nothing has created the identity yet
+  } catch (cause: any) {
+    // NotFoundException is the expected answer on a first bootstrap: the deploy that
+    // creates the identity has not run. Anything else — no credentials, no ses:
+    // permission, a region that rejects the call — must not read as "not created yet",
+    // which would defer the production-access request and say the domain is the reason.
+    if (isSesNotFound(cause)) return 'NOT_STARTED'
+    throw new Error(
+      `could not read the SES identity ${senderDomain} in ${region}: ${firstLine(cause)}`,
+      { cause },
+    )
   }
+  return JSON.parse(stdout).VerifiedForSendingStatus === true ? 'SUCCESS' : 'PENDING'
 }
 
 /*

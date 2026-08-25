@@ -305,7 +305,7 @@ function validateConfiguredSystemImages(rawImages: any) {
  * disagreed about the domain would mint a credential that authenticates and then
  * has every send refused.
  */
-export const DEFAULT_MAIL_DOMAIN = 'mail.boxlite.ai'
+const DEFAULT_MAIL_DOMAIN = 'mail.boxlite.ai'
 
 export function resolveMailDomain(environment = process.env) {
   return requireHostname('MAIL_DOMAIN', environment.MAIL_DOMAIN?.trim() || DEFAULT_MAIL_DOMAIN)

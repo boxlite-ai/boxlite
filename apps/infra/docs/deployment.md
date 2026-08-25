@@ -5,7 +5,7 @@ nested KVM, RDS Postgres, ElastiCache Redis, S3, and CloudFront.
 
 - **Region** — `AWS_REGION`, default `ap-southeast-1`
 - **IaC** — SST v4 (Pulumi underneath)
-- **Cost** — ~$520/month always-on; see [Cost](#cost)
+- **Cost** — ~$470/month always-on; see [Cost](#cost)
 
 **Where the "why" lives:** design rationale sits in comments next to the code it
 explains, mostly under `stack/` and `deployment/`. This file is the runbook.
@@ -138,7 +138,7 @@ applications, and non-`auth0` subjects are outside this policy.
 First configure an external Auth0 email provider and enable the
 `verify_email_by_code` and `reset_email_by_code` templates. Auth0's built-in
 provider is testing-only. The stack's own SES identity serves this: run
-`npm run bootstrap -- --provision-ses` (see [Outbound mail](#outbound-mail)) and
+`npm run bootstrap -- --stage <stage> --provision-ses` (see [Outbound mail](#outbound-mail)) and
 give Auth0's SMTP provider `email-smtp.<region>.amazonaws.com:465` with the
 `SMTP_USER` / `SMTP_PASSWORD` it stores. Then run the reconciler from this directory; preview
 is the default and performs no writes:
@@ -204,7 +204,7 @@ Two senders use that one identity: the Api's organization invitation, and Auth0'
 verification and reset codes.
 
 ```text
-bootstrap --provision-ses      IAM user boxlite-<stage>-smtp, send-only on this identity
+bootstrap --stage <s> --provision-ses   IAM user boxlite-<s>-smtp, send-only on this identity
   └─ access key                → SMTP_USER + SMTP_PASSWORD (SigV4-derived) in the secret store
        └─ deploy               stack/mail.ts → SES identity + DKIM/DMARC → Api SMTP_* env
 ```
@@ -364,7 +364,7 @@ each stage you run.
 | What | Stored in | Set by |
 | --- | --- | --- |
 | App secrets (`OIDC_CLIENT_ID`, Auth0 Management API, Svix, PostHog, `USAGE_EXPORT_TOKEN`) | SST secret store | `npm run bootstrap`; others via `npm run sst -- secret set <NAME> --stage <stage>` reading stdin |
-| SES SMTP credential (`SMTP_USER`, `SMTP_PASSWORD`) | SST secret store | `npm run bootstrap -- --provision-ses`, which mints the send-only IAM user the deploy role cannot create and derives the SMTP password from its key. Rerunning rotates it |
+| SES SMTP credential (`SMTP_USER`, `SMTP_PASSWORD`) | SST secret store | `npm run bootstrap -- --stage <stage> --provision-ses`, which mints the send-only IAM user the deploy role cannot create and derives the SMTP password from its key. Rerunning rotates it |
 | Cloudflare creds (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`) | AWS SSM SecureString for local use; GitHub Environment secrets for CI (which win) | `npm run bootstrap` |
 | Stage config (`STACK_DOMAIN`, `OIDC_*`, toggles) | SST secret store | `npm run bootstrap`, from your local `.env` |
 
@@ -581,13 +581,13 @@ ap-southeast-1 on-demand, approximate:
 | Resource | Monthly |
 | --- | --- |
 | EC2 c8i.2xlarge (Runner) | ~$325 |
-| Load balancers (3 ALB + 2 NLB) | ~$84 |
-| 5x Fargate 0.25 vCPU / 0.5 GB | ~$46 |
+| Load balancers (2 ALB + 1 NLB) | ~$51 |
+| 3x Fargate 0.25 vCPU / 0.5 GB | ~$28 |
 | CloudFront + S3 + CloudWatch Logs | ~$20 |
 | 2x NAT EC2 (`t4g.nano`) + public IPv4 | ~$16 |
 | RDS `t4g.micro` Postgres | ~$15 |
 | ElastiCache Redis | ~$15 |
-| **Total** | **~$521** |
+| **Total** | **~$470** |
 
 Only the `prod` stage retains S3 buckets and RDS snapshots on removal
 (`removal: 'retain'`); every other stage is disposable. Whole-stack teardown

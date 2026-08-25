@@ -500,8 +500,17 @@ def _seed_api_env(p: _Paths, agent_img: str | None = None) -> None:
     # and an .env seeded before it existed carries no SMTP block — which makes
     # the API drop its transporter at boot (EmailService logs "email
     # functionality will be disabled") and swallow every invitation silently.
+    #
+    # All five keys, not just the endpoint: maildev speaks neither TLS nor auth,
+    # so owning the host while leaving SMTP_SECURE or a credential to whatever
+    # the file already held would point the API at this box under settings it
+    # cannot answer. No .env this repo writes carries such a value, but the
+    # split — two keys owned, three inherited — has no reason to exist.
     _set_env_kv(api_env, "SMTP_HOST", _MAILDEV_SMTP_HOST)
     _set_env_kv(api_env, "SMTP_PORT", _MAILDEV_SMTP_PORT)
+    _set_env_kv(api_env, "SMTP_SECURE", "false")
+    _set_env_kv(api_env, "SMTP_USER", "")
+    _set_env_kv(api_env, "SMTP_PASSWORD", "")
     if agent_img:
         _set_env_kv(api_env, "BOXLITE_SYSTEM_BASE_IMAGE", agent_img)
     apps_env = p.apps / ".env"  # NestJS reads .env from cwd=apps/
