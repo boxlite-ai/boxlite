@@ -420,7 +420,7 @@ if (process.env.CLICKSTACK_GATEWAY_ENABLED === 'true' && ['deploy', 'diff', 'ref
     process.exit(1)
   }
   try {
-    verifyClickStackAuthContract(process.env, backofficeStageAuth)
+    process.env.CLICKSTACK_OIDC_CLIENT_ID = verifyClickStackAuthContract(process.env, backofficeStageAuth)
   } catch (error: any) {
     console.error(`sst-with-cloudflare: ClickStack employee auth contract mismatch: ${error.message}`)
     process.exit(1)

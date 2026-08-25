@@ -186,6 +186,10 @@ const STORE_EXCLUDED_KEYS = new Set([
   'AWS_REGION',
   // Selects *which* stage's store to read, so it cannot come from inside one.
   'SST_STAGE',
+  // Backoffice's stage-auth parameter is the authority for this non-secret ID. The deploy wrapper
+  // reads it only after stage hydration and injects it into the SST child, so a stored copy would be
+  // duplicate configuration that could disagree with the employee identity contract.
+  'CLICKSTACK_OIDC_CLIENT_ID',
   // Not consulted before the store like the others here — it is the documented local artifact knob,
   // read later by resolveReleaseVersion, and CI sets it per run from the checkout's Cargo.toml. It is
   // excluded so a stored value cannot redirect which release a deploy installs.
@@ -244,7 +248,6 @@ const STORE_EXCLUDED_KEYS = new Set([
  * it here fails rather than quietly becoming clobberable.
  */
 export const APP_SECRET_NAMES = [
-  'CLICKSTACK_OIDC_CLIENT_ID',
   'CLICKSTACK_OIDC_CLIENT_SECRET',
   'OIDC_CLIENT_ID',
   'OIDC_MANAGEMENT_API_CLIENT_ID',

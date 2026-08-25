@@ -491,6 +491,7 @@ test('publishes ClickStack only through OIDC and the read-only credential gatewa
   assert.match(gateway, /onUnauthenticatedRequest: 'authenticate'/)
   assert.match(gateway, /authenticationRequestExtraParams: \{ audience: clickStackGateway\.oidcAudience \}/)
   assert.match(gateway, /scope: 'openid profile email boxlite-backoffice'/)
+  assert.match(gateway, /clientId: clickStackGateway\.oidcClientId/)
   assert.match(gateway, /CLICKSTACK_OIDC_ROLE_CLAIM: clickStackGateway\.oidcRoleClaim/)
   assert.match(gateway, /CLICKSTACK_OIDC_ALLOWED_ROLE_VALUES: clickStackGateway\.oidcAllowedRoleValues/)
   assert.match(gateway, /ssm: \{ CLICKSTACK_PASSWORD: clickStackGateway\.clickHouse\.readerSecretArn \}/)

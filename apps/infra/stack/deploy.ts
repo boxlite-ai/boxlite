@@ -40,6 +40,7 @@ export async function deployStack() {
     const clickStackOidcConfig = clickStackGatewayEnabled
       ? {
           issuer: requireEnv('CLICKSTACK_OIDC_ISSUER_BASE_URL', 'when the ClickStack gateway is enabled'),
+          clientId: requireEnv('CLICKSTACK_OIDC_CLIENT_ID', 'from the Backoffice stage-auth contract'),
           audience: requireEnv('CLICKSTACK_OIDC_AUDIENCE', 'when the ClickStack gateway is enabled'),
           roleClaim: requireEnv('CLICKSTACK_OIDC_ROLE_CLAIM', 'when the ClickStack gateway is enabled'),
           allowedRoleValues: requireEnv('CLICKSTACK_OIDC_ALLOWED_ROLE_VALUES', 'when the ClickStack gateway is enabled'),
@@ -98,7 +99,6 @@ export async function deployStack() {
     const svixAuthToken = new sst.Secret('SVIX_AUTH_TOKEN', '')
     const clickStackOidcSecrets = clickStackGatewayEnabled
       ? {
-          clientId: new sst.Secret('CLICKSTACK_OIDC_CLIENT_ID'),
           clientSecret: new sst.Secret('CLICKSTACK_OIDC_CLIENT_SECRET'),
         }
       : undefined
@@ -304,7 +304,7 @@ export async function deployStack() {
               oidcAudience: clickStackOidcConfig.audience,
               oidcRoleClaim: clickStackOidcConfig.roleClaim,
               oidcAllowedRoleValues: clickStackOidcConfig.allowedRoleValues,
-              oidcClientId: clickStackOidcSecrets.clientId,
+              oidcClientId: clickStackOidcConfig.clientId,
               oidcClientSecret: clickStackOidcSecrets.clientSecret,
             }
           : undefined,

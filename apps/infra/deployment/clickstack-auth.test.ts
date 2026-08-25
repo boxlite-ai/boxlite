@@ -8,6 +8,7 @@ import { backofficeStageAuthParameterName, verifyClickStackAuthContract } from '
 
 const stageAuth = JSON.stringify({
   issuer: 'https://polygala-employees-dev.us.auth0.com',
+  clickStackClientId: 'clickstack-client-id',
   audience: 'https://backoffice.polygala.ai/api',
   roleClaim: 'https://backoffice.polygala.ai/roles',
   roleMappings: {
@@ -31,7 +32,13 @@ test('derives the stage-scoped Backoffice auth contract parameter', () => {
 })
 
 test('accepts the exact Backoffice employee auth contract independent of role order', () => {
-  assert.doesNotThrow(() => verifyClickStackAuthContract(gatewayEnvironment, stageAuth))
+  assert.equal(verifyClickStackAuthContract(gatewayEnvironment, stageAuth), 'clickstack-client-id')
+})
+
+test('requires the ClickStack client ID in the shared employee auth contract', () => {
+  const contract = JSON.parse(stageAuth)
+  delete contract.clickStackClientId
+  assert.throws(() => verifyClickStackAuthContract(gatewayEnvironment, JSON.stringify(contract)), /clickStackClientId/)
 })
 
 for (const [name, environment, expected] of [

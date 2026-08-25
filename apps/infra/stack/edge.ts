@@ -15,7 +15,7 @@ interface ClickStackGatewayInputs {
   writerReady: any
   domain: { name: string; dns: ReturnType<typeof sst.cloudflare.dns> }
   oidcAudience: string
-  oidcClientId: sst.Secret
+  oidcClientId: string
   oidcClientSecret: sst.Secret
   oidcIssuer: string
   oidcRoleClaim: string
@@ -158,7 +158,7 @@ if (clickStackGateway) {
               authorizationEndpoint: new URL('/authorize', issuer).toString(),
               tokenEndpoint: new URL('/oauth/token', issuer).toString(),
               userInfoEndpoint: new URL('/userinfo', issuer).toString(),
-              clientId: clickStackGateway.oidcClientId.value,
+              clientId: clickStackGateway.oidcClientId,
               clientSecret: clickStackGateway.oidcClientSecret.value,
               scope: 'openid profile email boxlite-backoffice',
               authenticationRequestExtraParams: { audience: clickStackGateway.oidcAudience },

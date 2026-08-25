@@ -5,6 +5,7 @@ type ClickStackAuthEnvironment = Record<string, string | undefined>
 
 interface BackofficeStageAuthContract {
   issuer: string
+  clickStackClientId: string
   audience: string
   roleClaim: string
   roleMappings: {
@@ -70,6 +71,7 @@ function parseBackofficeStageAuthContract(serialized: string): BackofficeStageAu
   const roles = roleMappings as Record<string, unknown>
   return {
     issuer: cleanIssuer(contract.issuer, 'issuer'),
+    clickStackClientId: requiredString(contract.clickStackClientId, 'clickStackClientId'),
     audience: requiredString(contract.audience, 'audience'),
     roleClaim: requiredString(contract.roleClaim, 'roleClaim'),
     roleMappings: {
@@ -124,4 +126,6 @@ export function verifyClickStackAuthContract(
   if (!setsEqual(configuredRoles, expectedRoles)) {
     throw new Error('CLICKSTACK_OIDC_ALLOWED_ROLE_VALUES does not match Backoffice Operator/Admin role mappings')
   }
+
+  return backoffice.clickStackClientId
 }

@@ -60,15 +60,14 @@ search and debugging; saved HyperDX state is not retained.
 The gateway is supported only with the self-hosted backend, whose ClickHouse server exposes the
 embedded `/clickstack` UI. Managed mode does not define a ClickStack UI endpoint and is rejected.
 
-Set the five `CLICKSTACK_*` stage values documented in `.env.example`, then store a dedicated
-confidential OIDC application's credentials without writing them to `.env`:
+Set the five `CLICKSTACK_*` stage values documented in `.env.example`. Backoffice's Auth0
+provisioner creates the dedicated confidential application and writes its client ID into the
+stage-auth contract. Store only that application's client secret without writing it to `.env`:
 
 ```bash
-npm run sst -- secret set CLICKSTACK_OIDC_CLIENT_ID --stage <stage>
 npm run sst -- secret set CLICKSTACK_OIDC_CLIENT_SECRET --stage <stage>
 ```
 
-Register `https://clickstack.<STACK_DOMAIN>/oauth2/idpresponse` as that application's callback URL.
 After deployment, Backoffice can set `BACKOFFICE_CLICKSTACK_URL` to
 `https://clickstack.<STACK_DOMAIN>/clickstack`; no workstation SSM tunnel is required.
 
@@ -79,9 +78,9 @@ browser never receives the database password. Keep the SSM procedure above as br
 
 ### Employee SSO deployment
 
-The Gateway and Backoffice are separate OIDC clients. Create a confidential Regular Web Application
-in the same isolated employee Auth0 tenant used by Backoffice; do not use the BoxLite customer tenant.
-Configure that application with:
+The Gateway and Backoffice are separate OIDC clients in the same isolated employee Auth0 tenant;
+do not use the BoxLite customer tenant. Run Backoffice's idempotent Auth0 provisioner first. It
+creates the Gateway's confidential Regular Web Application with:
 
 - callback URL `https://clickstack.<STACK_DOMAIN>/oauth2/idpresponse`;
 - the same API audience used by Backoffice, whose Auth0 API defines the `boxlite-backoffice` scope;
@@ -90,18 +89,18 @@ Configure that application with:
   claim to the access token, with only the Operator/Admin provider-role values admitted by the
   Gateway.
 
-Do not infer the audience, role-claim name, or provider-role values from the examples below. Copy
-the exact non-secret values from Backoffice's authoritative
-`/boxlite/backoffice/<stage>/stage-auth-config` SSM parameter: use `audience`, `roleClaim`, and the
-entries under `roleMappings.operator` and `roleMappings.admin`. The issuer must name that same
+Do not infer the audience, role-claim name, or provider-role values from the examples below. The
+exact non-secret values, including the generated ClickStack client ID, come from Backoffice's
+authoritative `/boxlite/backoffice/<stage>/stage-auth-config` SSM parameter: use `audience`,
+`roleClaim`, and the entries under `roleMappings.operator` and `roleMappings.admin`. The issuer must name that same
 employee Auth0 tenant. `npm run bootstrap` installs a read-only grant for that exact stage-scoped
 parameter. Every Gateway `deploy`, `diff`, and `refresh` then reads it and fails before SST builds a
-plan if the configured issuer, audience, role claim, or admitted Operator/Admin roles differ. Values
-are never printed. Rerun bootstrap from this revision before the first Gateway deployment so an
+plan if the contract lacks the ClickStack client ID or if the configured issuer, audience, role
+claim, or admitted Operator/Admin roles differ. Values are never printed. Rerun bootstrap from this revision before the first Gateway deployment so an
 existing deploy role receives the new read grant.
 
 Put only the non-secret values in `apps/infra/.env`, then persist the stage configuration and set the
-two application secrets through the non-echoing SST secret prompt:
+one remaining application secret through the non-echoing SST secret prompt:
 
 ```dotenv
 CLICKHOUSE_MODE=self-hosted
@@ -115,7 +114,6 @@ CLICKSTACK_OIDC_ALLOWED_ROLE_VALUES=backoffice-operator,backoffice-admin
 ```bash
 cd apps/infra
 npm run bootstrap -- --stage <stage>
-npm run sst -- secret set CLICKSTACK_OIDC_CLIENT_ID --stage <stage>
 npm run sst -- secret set CLICKSTACK_OIDC_CLIENT_SECRET --stage <stage>
 npm run deploy -- --stage <stage>
 ```

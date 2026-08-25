@@ -695,7 +695,7 @@ test('a ClickStack auth mismatch stops the plan before SST runs', async () => {
     'aws',
     `#!/bin/sh
 printf '%s\n' "$*" > "$SYNTHETIC_AWS_CALL_PATH"
-printf '%s\n' '{"issuer":"https://employees.example.test","audience":"https://backoffice.example.test/api","roleClaim":"https://backoffice.example.test/roles","roleMappings":{"operator":["backoffice-operator"],"admin":["backoffice-admin"]}}'
+printf '%s\n' '{"issuer":"https://employees.example.test","clickStackClientId":"clickstack-client-id","audience":"https://backoffice.example.test/api","roleClaim":"https://backoffice.example.test/roles","roleMappings":{"operator":["backoffice-operator"],"admin":["backoffice-admin"]}}'
 `,
   )
   const planCalled = join(fixture, 'plan-called')
@@ -774,6 +774,88 @@ writeFileSync(process.env.SYNTHETIC_PLAN_PATH, 'started')
     assert.match(stderr, /CLICKSTACK_OIDC_AUDIENCE does not match Backoffice stage-auth config/)
     assert.doesNotMatch(stderr, /wrong\.example\.test/)
     assert.equal(await fileExists(planCalled), false, 'SST must not build a plan with mismatched employee auth')
+  } finally {
+    if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL')
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
+
+test('passes the Backoffice-provisioned ClickStack client ID to the SST plan', async () => {
+  const fixture = await fixtureRoot()
+  const fakeAws = await writeFixture(
+    fixture,
+    'aws',
+    `#!/bin/sh
+printf '%s\n' '{"issuer":"https://employees.example.test","clickStackClientId":"clickstack-client-id","audience":"https://backoffice.example.test/api","roleClaim":"https://backoffice.example.test/roles","roleMappings":{"operator":["backoffice-operator"],"admin":["backoffice-admin"]}}'
+`,
+  )
+  const capturedClientId = join(fixture, 'clickstack-client-id')
+  const fakeSst = await writeFixture(
+    fixture,
+    'sst',
+    `#!/usr/bin/env node
+const { writeFileSync } = require('node:fs')
+const args = process.argv.slice(2)
+if (args[0] === 'secret' && args[1] === 'list') {
+  process.stdout.write(${JSON.stringify(
+    `${syntheticSecretList(
+      [
+        'CLICKSTACK_GATEWAY_ENABLED',
+        'CLICKSTACK_OIDC_ISSUER_BASE_URL',
+        'CLICKSTACK_OIDC_AUDIENCE',
+        'CLICKSTACK_OIDC_ROLE_CLAIM',
+        'CLICKSTACK_OIDC_ALLOWED_ROLE_VALUES',
+      ],
+      {
+        CLICKSTACK_GATEWAY_ENABLED: 'true',
+        CLICKSTACK_OIDC_ISSUER_BASE_URL: 'https://employees.example.test/',
+        CLICKSTACK_OIDC_AUDIENCE: 'https://backoffice.example.test/api',
+        CLICKSTACK_OIDC_ROLE_CLAIM: 'https://backoffice.example.test/roles',
+        CLICKSTACK_OIDC_ALLOWED_ROLE_VALUES: 'backoffice-operator,backoffice-admin',
+      },
+    ).join('\n')}\n`,
+  )})
+  process.exit(0)
+}
+if (args[0] === 'state' && args[1] === 'export') {
+  process.stdout.write(JSON.stringify({ stack: 'ci', latest: { resources: [] } }))
+  process.exit(0)
+}
+writeFileSync(process.env.SYNTHETIC_CLIENT_ID_PATH, process.env.CLICKSTACK_OIDC_CLIENT_ID || 'missing')
+`,
+  )
+  await Promise.all([chmod(fakeAws, 0o755), chmod(fakeSst, 0o755)])
+
+  const environment = inheritedEnvironment()
+  for (const key of [
+    'CLICKSTACK_GATEWAY_ENABLED',
+    'CLICKSTACK_OIDC_ISSUER_BASE_URL',
+    'CLICKSTACK_OIDC_AUDIENCE',
+    'CLICKSTACK_OIDC_ROLE_CLAIM',
+    'CLICKSTACK_OIDC_ALLOWED_ROLE_VALUES',
+    'CLICKSTACK_OIDC_CLIENT_ID',
+  ]) {
+    delete environment[key]
+  }
+  const wrapper = spawnWrapper(['diff', '--stage', 'ci'], {
+    env: {
+      ...environment,
+      AWS_ACCESS_KEY_ID: 'SYNTHETIC_ACCESS_KEY',
+      AWS_SECRET_ACCESS_KEY: 'SYNTHETIC_SECRET_KEY',
+      AWS_CLI_PATH: fakeAws,
+      SST_BIN_PATH: fakeSst,
+      CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
+      CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
+      RUNNERS: '1',
+      DEFAULT_RUNNER_NAME: 'default',
+      SYNTHETIC_CLIENT_ID_PATH: capturedClientId,
+    },
+    stdio: ['ignore', 'ignore', 'inherit'],
+  })
+
+  try {
+    assert.deepEqual(await waitForExit(wrapper), { code: 0, signal: null })
+    assert.equal(await readFile(capturedClientId, 'utf8'), 'clickstack-client-id')
   } finally {
     if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL')
     await rm(fixture, { recursive: true, force: true })
