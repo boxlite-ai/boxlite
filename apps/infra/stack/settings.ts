@@ -7,17 +7,8 @@ export const PORTS = {
   API: 3000,
   PROXY: 4000,
   RUNNER: 3003,
-  JAEGER_UI: 16686,
   OTLP_HTTP: 4318,
   OTEL_HEALTH: 13133,
-  MAILDEV_UI: 1080,
-  PGADMIN: 80,
-} as const
-
-export const IMAGES = {
-  jaeger: 'jaegertracing/all-in-one:1.67.0',
-  pgadmin: 'dpage/pgadmin4:9.2.0',
-  maildev: 'maildev/maildev:2.2.1',
 } as const
 
 export const RUNNER = {

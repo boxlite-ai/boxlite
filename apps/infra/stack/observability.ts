@@ -3,7 +3,7 @@
 
 /// <reference path="../.sst/platform/config.d.ts" />
 
-import { IMAGES, PORTS, envOr, httpHealth } from './settings.js'
+import { PORTS, envOr, httpHealth } from './settings.js'
 import type { FoundationResources } from './foundation.js'
 import {
   CLICKHOUSE_DATABASE,
@@ -17,40 +17,10 @@ export interface ObservabilityInputs {
   adminApiKey: random.RandomPassword
   clickHouseResources: ClickHouseResources
   collectorExporters: string
-  collectorTraceExporters: string
   stripTrailingSlash: (url: $util.Output<string>) => $util.Output<string>
 }
 
 export function buildObservability(input: ObservabilityInputs) {
-  if (envOr('JAEGER_PUBLIC', 'false') === 'true') {
-    throw new Error(
-      'JAEGER_PUBLIC is not supported: Jaeger has no auth and its UI is plain HTTP, so ' +
-        'it cannot be safely exposed to the internet. Reach it via VPN / bastion / ' +
-        '`aws ssm start-session`.',
-    )
-  }
-  const jaeger = new sst.aws.Service('Jaeger', {
-    cluster: input.cluster,
-    image: IMAGES.jaeger,
-    loadBalancer: {
-      public: false,
-      rules: [
-        { listen: '80/http', forward: `${PORTS.JAEGER_UI}/http` },
-        { listen: `${PORTS.OTLP_HTTP}/http`, forward: `${PORTS.OTLP_HTTP}/http` },
-      ],
-      health: {
-        [`${PORTS.OTLP_HTTP}/http`]: httpHealth('/', { successCodes: '200-499' }),
-      },
-    },
-    environment: { COLLECTOR_OTLP_ENABLED: 'true' },
-    transform: {
-      loadBalancer: (lbArgs: any) => { lbArgs.loadBalancerType = 'application' },
-    },
-  })
-  const jaegerOtlpHttpEndpoint = input
-    .stripTrailingSlash(jaeger.url)
-    .apply((url) => `${url}:${PORTS.OTLP_HTTP}`)
-
   const otelCollector = new sst.aws.Service('OtelCollector', {
     cluster: input.cluster,
     wait: input.clickHouseResources.active,
@@ -59,7 +29,7 @@ export function buildObservability(input: ObservabilityInputs) {
       '--config',
       '/otelcol/collector-config.yaml',
       '--set',
-      `service::pipelines::traces::exporters=${input.collectorTraceExporters}`,
+      `service::pipelines::traces::exporters=${input.collectorExporters}`,
       '--set',
       `service::pipelines::metrics::exporters=${input.collectorExporters}`,
       '--set',
@@ -98,7 +68,6 @@ export function buildObservability(input: ObservabilityInputs) {
         'BOXLITE_API_KEY',
         envOr('OTEL_COLLECTOR_API_KEY', envOr('ADMIN_API_KEY', input.adminApiKey.result)),
       ),
-      JAEGER_OTLP_HTTP_ENDPOINT: jaegerOtlpHttpEndpoint,
     },
     transform: {
       loadBalancer: (lbArgs: any) => { lbArgs.loadBalancerType = 'application' },

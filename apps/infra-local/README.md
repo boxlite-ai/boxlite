@@ -3,8 +3,8 @@
 Brings up the full cloud-MVP control plane on one Apple Silicon Mac, dogfooding
 BoxLite. One Python orchestrator (`compose`) drives both layers:
 
-- **L1 — 11 BoxLite microVM boxes**: postgres, redis, minio (+ a one-shot bucket
-  init), registry, dex, jaeger, pgadmin, registry-ui, otel-collector, caddy —
+- **L1 — 12 BoxLite microVM boxes**: postgres, redis, minio (+ a one-shot bucket
+  init), registry, dex, jaeger, pgadmin, registry-ui, maildev, otel-collector, caddy —
   via the BoxLite SDK (`orchestrator.py` / `services.py`).
 - **L2 — 4 native macOS processes**: API (NestJS, `:3001`), Runner (Go, `:3003`),
   Proxy (Go, `:4000`), Dashboard (Vite, `:3000`) — via `subprocess` supervision
@@ -26,7 +26,7 @@ make status    # one-screen health across L1 + L2
 make down      # stop L2 (add ARGS=--all to also stop L1)
 ```
 
-First run pulls 11 images (~5–7 min); later runs reuse the cache (~30–60 s). Log
+First run pulls 12 images (~5–7 min); later runs reuse the cache (~30–60 s). Log
 in at <http://localhost:3000> through Dex (`admin@boxlite.dev` / `password`).
 
 ## Commands
@@ -56,6 +56,7 @@ source of truth — `python -m compose --help`):
 | jaeger | `http://127.0.0.1:26686/` | — |
 | pgadmin | `http://127.0.0.1:25051/` | `admin@boxlite.dev` / `boxlite` |
 | registry-ui | `http://127.0.0.1:25052/` | — |
+| maildev (caught mail) | `http://127.0.0.1:25053/` (UI) / SMTP `:25054` | none — accepts any sender |
 | otel (OTLP HTTP) | `http://127.0.0.1:24318/v1/traces` | — |
 | caddy (unified entry) | `http://127.0.0.1:28080/` | reverse-proxies all of the above |
 | Dashboard / API | `http://localhost:3000` / `:3001/api` | login via Dex |

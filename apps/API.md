@@ -522,7 +522,7 @@ bound on the developer's machine; the host ports are fixed literals in
 inside a box the same listeners are reachable as `host.boxlite.internal:<port>`.
 
 <details>
-<summary><b>Unified entry point</b> · 9 routes</summary>
+<summary><b>Unified entry point</b> · 10 routes</summary>
 
 | Method | Host and path                                | What it does                                                       |
 | ------ | -------------------------------------------- | ------------------------------------------------------------------ |
@@ -534,6 +534,7 @@ inside a box the same listeners are reachable as `host.boxlite.internal:<port>`.
 | `ANY`  | `localhost:28080/minio-console/*`            | Reverse-proxies the MinIO console UI.                              |
 | `ANY`  | `localhost:28080/registry/*`                 | Reverse-proxies the Docker registry v2 API.                        |
 | `ANY`  | `localhost:28080/registry-ui/*`              | Reverse-proxies the registry browser UI.                           |
+| `ANY`  | `localhost:28080/maildev/*`                  | Reverse-proxies the MailDev caught-mail UI.                        |
 | `ANY`  | `localhost:28080/`                           | Responds with a plain-text index of the routes above.              |
 
 Caddy serves these over plain HTTP with `auto_https off`; host `28443` is
@@ -544,7 +545,7 @@ each of the other services below carries one of its own.
 </details>
 
 <details>
-<summary><b>Dependency services</b> · 10 services</summary>
+<summary><b>Dependency services</b> · 11 services</summary>
 
 | Service       | Host port to container port                           | Interface                                                                         |
 | ------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------- |
@@ -557,6 +558,7 @@ each of the other services below carries one of its own.
 | `dex`         | `25556` → `5556`                                      | OIDC provider served under the `/dex` issuer path.                                |
 | `jaeger`      | `26686` → `16686`, `26687` → `4317`                   | Trace UI, plus an OTLP/gRPC receiver fed by the local collector.                  |
 | `pgadmin`     | `25051` → `80`                                        | Postgres administration UI; probed at `/misc/ping`.                               |
+| `maildev`     | `25053` → `1080`, `25054` → `1025`                    | Caught-mail UI and the SMTP sink the API sends to; probed at `/healthz`.          |
 | `otel`        | `24317` → `4317`, `24318` → `4318`, `23133` → `13133` | OTLP gRPC and HTTP receivers, plus a `health_check` extension at `/`.             |
 
 The local collector is the upstream `otel/opentelemetry-collector` image with an
@@ -674,13 +676,10 @@ Nothing in this directory registers the analytics or billing paths.
 | `apps/e2e`                  | End-to-end test client; it calls deployed APIs but does not expose one.                                                                                                                                                                                                                                                                                                                  |
 | `apps/box-images`           | Image build inputs; they produce box images and do not run a service.                                                                                                                                                                                                                                                                                                                    |
 | `apps/hack`, `apps/scripts` | Development and code-generation utilities; they register no API of their own, though `apps/scripts` starts the [container-based local environment](#container-based-local-environment).                                                                                                                                                                                                  |
-| Jaeger                      | Bundled third-party trace ingestion and UI, not a BoxLite-owned API; deployed behind an internal load balancer on `80` for the UI (`16686`) and `4318` for OTLP/HTTP.                                                                                                                                                                                                                    |
-| PgAdmin                     | Bundled third-party database administration UI; deployed behind an internal load balancer on `80`, reachable only from inside the VPC.                                                                                                                                                                                                                                                   |
-| MailDev                     | Bundled third-party SMTP test service and UI in deployed environments, behind an internal load balancer on `80` (UI `1080`); not part of the local stack.                                                                                                                                                                                                                                |
 
-MinIO, the registry UI, and Caddy are bundled only in the local development
-stack, and a Docker registry appears in both local environments, so all of their
-interfaces are listed under
+MinIO, the registry UI, MailDev, Jaeger, pgAdmin and Caddy are bundled only in
+the local development stack, and a Docker registry appears in both local
+environments, so all of their interfaces are listed under
 [Local development stack](#local-development-stack) and
 [Container-based local environment](#container-based-local-environment) rather
 than here.

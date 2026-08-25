@@ -30,8 +30,8 @@ patterns. Defined in [`stack/foundation.ts`](../stack/foundation.ts) and
 ```
 
 - **Public subnets:** internet-facing ALBs, the per-AZ NAT, and the EC2 runner.
-- **Private subnets:** Fargate service tasks (Api, Proxy, Otel, Jaeger,
-  MailDev, PgAdmin), Postgres, Redis. No public IPs.
+- **Private subnets:** Fargate service tasks (Api, Proxy, Otel), Postgres,
+  Redis. No public IPs.
 
 ## Traffic flows
 

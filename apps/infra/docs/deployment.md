@@ -5,7 +5,7 @@ nested KVM, RDS Postgres, ElastiCache Redis, S3, and CloudFront.
 
 - **Region** — `AWS_REGION`, default `ap-southeast-1`
 - **IaC** — SST v4 (Pulumi underneath)
-- **Cost** — ~$600/month always-on; see [Cost](#cost)
+- **Cost** — ~$520/month always-on; see [Cost](#cost)
 
 **Where the "why" lives:** design rationale sits in comments next to the code it
 explains, mostly under `stack/` and `deployment/`. This file is the runbook.
@@ -37,12 +37,7 @@ flowchart TB
             s3[("S3")]
         end
 
-        subgraph obs["internal ALBs by default"]
-            otel["OtelCollector<br/>:4318"]
-            jaeger["Jaeger<br/>:16686"]
-            pgadmin["PgAdmin<br/>:80"]
-            maildev["MailDev<br/>:1080"]
-        end
+        otel["OtelCollector<br/>:4318<br/>internal ALB"]
     end
 
     browser -->|"dashboard SPA"| cf
@@ -62,7 +57,6 @@ flowchart TB
     api -->|"schedule boxes"| runner
     api -.->|"validate JWT via JWKS"| idp
     api --> otel
-    otel --> jaeger
     runner -->|"pull box images"| ghcr
 ```
 
@@ -143,7 +137,10 @@ applications, and non-`auth0` subjects are outside this policy.
 
 First configure an external Auth0 email provider and enable the
 `verify_email_by_code` and `reset_email_by_code` templates. Auth0's built-in
-provider is testing-only. Then run the reconciler from this directory; preview
+provider is testing-only. The stack's own SES identity serves this: run
+`npm run bootstrap -- --provision-ses` (see [Outbound mail](#outbound-mail)) and
+give Auth0's SMTP provider `email-smtp.<region>.amazonaws.com:465` with the
+`SMTP_USER` / `SMTP_PASSWORD` it stores. Then run the reconciler from this directory; preview
 is the default and performs no writes:
 
 ```bash
@@ -195,6 +192,48 @@ both `stage` and `source_stage` in `build-apps-api-image.yml` (a stage absent fr
 typo cannot target a protected Environment, and they are deliberately
 independent: see [.github/workflows/README.md](../../.github/workflows/README.md)
 for which path currently reaches which stage.
+
+## Outbound mail
+
+The stack verifies one Amazon SES domain identity (`MAIL_DOMAIN`, default
+`mail.boxlite.ai`) and publishes its DKIM and DMARC records through the same
+Cloudflare adapter the rest of the stack uses. The Api reaches SES over the SMTP
+interface on port 465, so `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASSWORD`
+stay a vendor-neutral contract — only `stack/mail.ts` knows the backend is SES.
+Two senders use that one identity: the Api's organization invitation, and Auth0's
+verification and reset codes.
+
+```text
+bootstrap --provision-ses      IAM user boxlite-<stage>-smtp, send-only on this identity
+  └─ access key                → SMTP_USER + SMTP_PASSWORD (SigV4-derived) in the secret store
+       └─ deploy               stack/mail.ts → SES identity + DKIM/DMARC → Api SMTP_* env
+```
+
+- **The credential is bootstrap's, not the deploy's.** The deploy role holds IAM
+  on roles only, so it cannot create the user or its access key; `--provision-ses`
+  does that with the operator's credentials. Rerunning rotates the key and revokes
+  the previous one.
+- **The sandbox exit rides along, once the domain is verified.** A new SES account
+  sends 200 messages/day to verified recipients only, and `--provision-ses` asks
+  AWS to lift that — but only when `sesv2 get-email-identity` reports the sender
+  domain verified. On a first bootstrap it is not (the deploy creates the
+  identity), so the request is deferred with a message saying to deploy and rerun.
+  A request made with no identity behind it is the shape AWS denies, and there is
+  only one submission to spend: it reads `sesv2 get-account` and does nothing once
+  access is granted, nothing while a review is open, and reports the case id when a
+  review has closed DENIED or FAILED rather than resubmitting — AWS answers a
+  second submission with ConflictException, so a denial is worked through that
+  support case. Account-and-region wide, so the first stage bootstrapped in a
+  region covers the rest, and a failure here never fails the bootstrap.
+- **No credential, no mail.** `SMTP_HOST` resolves to empty unless both
+  `SMTP_USER` and `SMTP_PASSWORD` are set — nodemailer authenticates only with
+  both, so half a credential would send unauthenticated and be refused on every
+  message. The Api reports the empty host once at boot as email disabled;
+  invitations are still created, just not delivered.
+- **One stage per domain.** An SES identity is unique per account and region.
+  A second stage needs its own subdomain, or adopts the existing identity with
+  `sst.aws.Email.get`.
+- Sending costs $0.10 per 1,000 messages, which is why it has no line in [Cost](#cost).
 
 ## Symmetric artifact deployment
 
@@ -325,6 +364,7 @@ each stage you run.
 | What | Stored in | Set by |
 | --- | --- | --- |
 | App secrets (`OIDC_CLIENT_ID`, Auth0 Management API, Svix, PostHog, `USAGE_EXPORT_TOKEN`) | SST secret store | `npm run bootstrap`; others via `npm run sst -- secret set <NAME> --stage <stage>` reading stdin |
+| SES SMTP credential (`SMTP_USER`, `SMTP_PASSWORD`) | SST secret store | `npm run bootstrap -- --provision-ses`, which mints the send-only IAM user the deploy role cannot create and derives the SMTP password from its key. Rerunning rotates it |
 | Cloudflare creds (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID`) | AWS SSM SecureString for local use; GitHub Environment secrets for CI (which win) | `npm run bootstrap` |
 | Stage config (`STACK_DOMAIN`, `OIDC_*`, toggles) | SST secret store | `npm run bootstrap`, from your local `.env` |
 
@@ -541,13 +581,13 @@ ap-southeast-1 on-demand, approximate:
 | Resource | Monthly |
 | --- | --- |
 | EC2 c8i.2xlarge (Runner) | ~$325 |
-| Load balancers (6 ALB + 2 NLB) | ~$135 |
-| 8x Fargate 0.25 vCPU / 0.5 GB | ~$74 |
+| Load balancers (3 ALB + 2 NLB) | ~$84 |
+| 5x Fargate 0.25 vCPU / 0.5 GB | ~$46 |
 | CloudFront + S3 + CloudWatch Logs | ~$20 |
 | 2x NAT EC2 (`t4g.nano`) + public IPv4 | ~$16 |
 | RDS `t4g.micro` Postgres | ~$15 |
 | ElastiCache Redis | ~$15 |
-| **Total** | **~$600** |
+| **Total** | **~$521** |
 
 Only the `prod` stage retains S3 buckets and RDS snapshots on removal
 (`removal: 'retain'`); every other stage is disposable. Whole-stack teardown

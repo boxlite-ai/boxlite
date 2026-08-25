@@ -38,12 +38,9 @@ exporters:
       port: '${env:REDIS_PORT:-6379}'
       password: '${env:REDIS_PASSWORD:-}'
 
-  # Referenced only when the deploy adds it to the traces pipeline via --set
-  # (clickhouse below works the same way); unreferenced exporters are never
-  # instantiated, so the .invalid default never dials.
-  otlphttp/jaeger:
-    endpoint: ${env:JAEGER_OTLP_HTTP_ENDPOINT:-http://jaeger-disabled.invalid:4318}
-
+  # Referenced only when the deploy adds it to a pipeline via --set; an
+  # unreferenced exporter is never instantiated, so the .invalid default below
+  # never dials.
   clickhouse:
     endpoint: ${env:CLICKHOUSE_ENDPOINT:-https://clickhouse-disabled.invalid:443}
     database: ${env:CLICKHOUSE_DATABASE:-otel}

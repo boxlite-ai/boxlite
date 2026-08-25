@@ -40,6 +40,8 @@ export interface ApiInputs {
   oidcIssuer: string
   publicOidcIssuer: string | undefined
   otelCollectorOtlpHttpUrl: $util.Output<string>
+  /** SMTP_* pairs from stack/mail.ts — the SES identity the Api sends invitations through. */
+  smtpEnvironment: Record<string, string | $util.Output<string>>
   clickHouseResources: ClickHouseResources
   clickHouseReadyDependency?: any
 }
@@ -72,6 +74,7 @@ export function buildApi(input: ApiInputs) {
     oidcIssuer,
     publicOidcIssuer,
     otelCollectorOtlpHttpUrl,
+    smtpEnvironment,
     clickHouseResources,
     clickHouseReadyDependency,
   } = input
@@ -311,6 +314,12 @@ const api = new sst.aws.Service('Api', {
     DEFAULT_RUNNER_DOMAIN: runnerEndpoint('DEFAULT_RUNNER_DOMAIN', PORTS.RUNNER, ''),
     DEFAULT_RUNNER_API_URL: runnerEndpoint('DEFAULT_RUNNER_API_URL', PORTS.RUNNER, 'http://'),
     DEFAULT_RUNNER_PROXY_URL: runnerEndpoint('DEFAULT_RUNNER_PROXY_URL', PORTS.PROXY, 'http://'),
+
+    // Outbound mail (stack/mail.ts): SES over SMTP, for the one email the Api
+    // sends — the organization invitation. An unset SMTP credential leaves
+    // SMTP_HOST empty, which apps/api reads as "email disabled" rather than
+    // building a transport that fails on every send.
+    ...smtpEnvironment,
 
     // PostHog (enables the dashboard's "Create Box" feature flag). Token is a
     // secret (empty = off); host stays plain config.

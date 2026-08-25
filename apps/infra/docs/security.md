@@ -34,7 +34,7 @@ Three things in the SST store are shared by construction, and none of them is a 
 - `/sst/bootstrap` names the buckets every stage shares and is read before SST knows which stage it
   is running, so it is read-only for the same reason.
 
-Three shared writes remain, and none is narrowed by this change:
+Four shared writes remain, and none is narrowed by this change:
 
 - Deployment assets share a single `sst-asset-*` bucket with no stage in the key, so every stage has
   `PutObject`, `DeleteObject` and `DeleteObjectVersion` over all of it. SST derives each key from the
@@ -49,10 +49,18 @@ Three shared writes remain, and none is narrowed by this change:
   carries no stage, so a job bound to one stage can run a shell command on any instance in the
   account. Narrowing it needs a Condition on an instance tag the Runner launch template sets, which
   can only be verified against real instances.
+- SES identity management reaches `identity/*`: an identity ARN carries the sender domain and no
+  stage, so a job bound to one stage can create or delete another stage's mail identity — deleting
+  one silently stops that stage's mail until it is verified again. It does not include sending:
+  `ses:SendRawEmail` is deliberately absent here and belongs to the send-only IAM user bootstrap
+  provisions. Scoping this means passing the stage's `MAIL_DOMAIN` into the role template, which ties
+  the role's shape to a value the stack reads at deploy time and re-runs bootstrap whenever it
+  changes. The stage's SES *configuration set* is scoped, because `stack/mail.ts` names it
+  `boxlite-<stage>-mail` instead of letting Pulumi autoname it.
 
-The first two predate this change and the third is how Runner upgrades have always been delivered;
-they are listed because the paragraph above would otherwise read as a stronger guarantee than the
-policy gives.
+The first two predate this change, the third is how Runner upgrades have always been delivered,
+and the fourth arrives with outbound mail; they are listed because the paragraph above would
+otherwise read as a stronger guarantee than the policy gives.
 
 The three grants that used to reach other stages are now scoped by `${GitHubEnvironment}` (#1255).
 `secretsmanager:ListSecrets` is the residue: it takes no resource, so a stage can still enumerate

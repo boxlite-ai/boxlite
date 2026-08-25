@@ -297,6 +297,31 @@ function validateConfiguredSystemImages(rawImages: any) {
   }
 }
 
+/*
+ * The domain SES sends as, and therefore the identity the stack verifies.
+ *
+ * Shared with bootstrap rather than read twice: `--provision-ses` pins the SMTP
+ * user's IAM policy to this identity's ARN, so a stage whose bootstrap and deploy
+ * disagreed about the domain would mint a credential that authenticates and then
+ * has every send refused.
+ */
+export const DEFAULT_MAIL_DOMAIN = 'mail.boxlite.ai'
+
+export function resolveMailDomain(environment = process.env) {
+  return requireHostname('MAIL_DOMAIN', environment.MAIL_DOMAIN?.trim() || DEFAULT_MAIL_DOMAIN)
+}
+
+/*
+ * The regional SES SMTP endpoint, which is both what the Api authenticates against
+ * and what an operator types into Auth0's provider. One derivation for the deploy
+ * and for bootstrap: the SMTP password is derived per region, so a host and a
+ * credential from different regions authenticate nowhere.
+ */
+export function sesSmtpEndpoint(region: string) {
+  if (!region) throw new Error('an SES SMTP endpoint needs a region')
+  return `email-smtp.${region}.amazonaws.com`
+}
+
 export function resolvePublicDeploymentConfig(environment = process.env, workspaceVersion = readWorkspaceVersion()) {
   const stackDomain = requireHostname('STACK_DOMAIN', environment.STACK_DOMAIN)
 

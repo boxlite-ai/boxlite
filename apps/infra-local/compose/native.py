@@ -41,6 +41,9 @@ _RUNNER_TOKEN = "local-shared-runner-token-aaaa1111"
 # The otel box's host-mapped OTLP HTTP port (the port literal lives in
 # services.py SPEC_OTEL.ports); traces fan out from there to the jaeger box.
 _OTEL_OTLP_HTTP_URL = "http://127.0.0.1:24318"
+# The maildev box's host-mapped SMTP port (literal in SPEC_MAILDEV.ports).
+_MAILDEV_SMTP_HOST = "127.0.0.1"
+_MAILDEV_SMTP_PORT = "25054"
 
 
 # ── colored logging (TTY only) ─────────────────────────────────────────────
@@ -493,6 +496,12 @@ def _seed_api_env(p: _Paths, agent_img: str | None = None) -> None:
     # OTEL_ENABLED=false (or no OTEL block at all) and would leave Jaeger empty.
     _set_env_kv(api_env, "OTEL_ENABLED", "true")
     _set_env_kv(api_env, "OTEL_EXPORTER_OTLP_ENDPOINT", _OTEL_OTLP_HTTP_URL)
+    # Mail is infra-owned for the same reason: the maildev box is always up,
+    # and an .env seeded before it existed carries no SMTP block — which makes
+    # the API drop its transporter at boot (EmailService logs "email
+    # functionality will be disabled") and swallow every invitation silently.
+    _set_env_kv(api_env, "SMTP_HOST", _MAILDEV_SMTP_HOST)
+    _set_env_kv(api_env, "SMTP_PORT", _MAILDEV_SMTP_PORT)
     if agent_img:
         _set_env_kv(api_env, "BOXLITE_SYSTEM_BASE_IMAGE", agent_img)
     apps_env = p.apps / ".env"  # NestJS reads .env from cwd=apps/

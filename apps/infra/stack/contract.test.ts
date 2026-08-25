@@ -17,6 +17,7 @@ const stackSource = [
   readFileSync(new URL('./observability.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('./api.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('./edge.ts', import.meta.url), 'utf8'),
+  readFileSync(new URL('./mail.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('./runners.ts', import.meta.url), 'utf8'),
 ].join('\n')
 const source = `${entrypointSource}\n${stackSource}`
@@ -88,11 +89,6 @@ test('pins the AWS provider used by the deployed stack', () => {
 test('pins every Service load balancer type at the provider boundary', () => {
   const services = [
     {
-      name: 'Jaeger',
-      type: 'application',
-      section: configSection("const jaeger = new sst.aws.Service('Jaeger'", 'const jaegerOtlpHttpEndpoint'),
-    },
-    {
       name: 'OtelCollector',
       type: 'application',
       section: configSection("const otelCollector = new sst.aws.Service('OtelCollector'", 'const otelCollectorOtlpHttpUrl'),
@@ -105,17 +101,7 @@ test('pins every Service load balancer type at the provider boundary', () => {
     {
       name: 'Proxy',
       type: 'network',
-      section: configSection("new sst.aws.Service('Proxy'", '// ─── 8.'),
-    },
-    {
-      name: 'PgAdmin',
-      type: 'application',
-      section: configSection("new sst.aws.Service('PgAdmin'", '// MailDev is an unauthenticated mail catcher'),
-    },
-    {
-      name: 'MailDev',
-      type: 'application',
-      section: configSection("new sst.aws.Service('MailDev'", '// ─── 9.'),
+      section: configSection("new sst.aws.Service('Proxy'", '// ─── 9.'),
     },
   ]
 
@@ -324,14 +310,14 @@ test('keeps every Runner instance protected from replacement during full-stack d
 })
 
 test('passes both the internal and public OIDC issuers to Proxy', () => {
-  const proxyService = configSection("new sst.aws.Service('Proxy'", '// ─── 8.')
+  const proxyService = configSection("new sst.aws.Service('Proxy'", '// ─── 9.')
 
   assert.match(proxyService, /OIDC_DOMAIN: oidcIssuer,/)
   assert.match(proxyService, /publicOidcIssuer[\s\S]*OIDC_PUBLIC_DOMAIN: publicOidcIssuer/)
 })
 
 test('enables Proxy OTLP logging in hosted and local deployments', () => {
-  const proxyService = configSection("new sst.aws.Service('Proxy'", '// ─── 8.')
+  const proxyService = configSection("new sst.aws.Service('Proxy'", '// ─── 9.')
 
   assert.match(proxyService, /OTEL_LOGGING_ENABLED: envOr\('OTEL_LOGGING_ENABLED', 'true'\)/)
   assert.match(proxyService, /OTEL_EXPORTER_OTLP_ENDPOINT: envOr\('OTEL_EXPORTER_OTLP_ENDPOINT'/)
@@ -462,13 +448,24 @@ test('does not restore the removed SSH gateway deployment', () => {
   assert.doesNotMatch(readme, /SshGateway|SSH_GATEWAY|SSH_PRIVATE_KEY_B64|SSH_HOST_KEY_B64/)
 })
 
-test('refuses to expose pgAdmin over its plain-HTTP listener', () => {
-  const pgAdmin = configSection('// pgAdmin security gate', '// MailDev is an unauthenticated mail catcher')
-
-  assert.match(pgAdmin, /envOr\('PGADMIN_PUBLIC', 'false'\) === 'true'/)
-  assert.match(pgAdmin, /PGADMIN_PUBLIC is not supported/)
-  assert.match(pgAdmin, /public: false/)
-  assert.doesNotMatch(pgAdmin, /public: pgAdminPublic/)
+test('deploys no internal admin UI, so no stage can expose one', () => {
+  /*
+   * pgAdmin and Jaeger were the two services that could only ever be reached
+   * through a VPN, a bastion or an SSM tunnel, and each carried a fail-loud gate
+   * because its listener was plain HTTP one hop from RDS or from every span the
+   * platform emits. Both are gone: Postgres is reached with a local client over
+   * an SSM tunnel, and traces are read from ClickHouse, which already held every
+   * span Jaeger did.
+   *
+   * Pinned as an absence because that is the only form this can take — restoring
+   * either service would restore an unauthenticated console to the VPC, and the
+   * gates that used to argue about how to expose them safely would come back with
+   * it. The env knobs are checked too: a key nothing reads is a key the deploy
+   * silently ignores.
+   */
+  assert.doesNotMatch(liveConfig, /sst\.aws\.Service\('(PgAdmin|Jaeger|MailDev)'/)
+  assert.doesNotMatch(liveConfig, /PGADMIN_|JAEGER_|MAILDEV_/)
+  assert.doesNotMatch(environmentExample, /^\s*#?\s*(PGADMIN_|JAEGER_|MAILDEV_)/m)
 })
 
 test('passes explicit management API endpoints into the API service', () => {
@@ -716,4 +713,59 @@ test('usage is exported to the ingest origin, never to the dashboard billing URL
   assert.match(environmentExample, /^# USAGE_EXPORT_URL=/m)
   assert.match(environmentExample, /boxlite-commerce\/<stage>\/usage-ingest-token/)
   assert.doesNotMatch(environmentExample, /^USAGE_EXPORT_TOKEN=/m)
+})
+
+test('the Api sends through the SES identity this stack verifies', () => {
+  // Three files have to agree before one invitation can leave the account, and each
+  // pair of them can drift in silence: mail.ts derives the settings, api.ts consumes
+  // them, deploy.ts supplies the domain both were built for.
+  assert.match(liveConfig, /new sst\.aws\.Email\('Mail', \{\s*sender: senderDomain,\s*dns: input\.dns,/)
+  // One derivation for the deploy and for bootstrap: the SMTP password is derived
+  // per region, so a host from one region and a credential from another
+  // authenticate nowhere. The stack takes the endpoint rather than rebuilding it.
+  assert.match(liveConfig, /smtpHost: sesSmtpEndpoint\(REGION\)/)
+  assert.match(liveConfig, /senderDomain: resolveMailDomain\(\)/)
+  // Spread rather than restated: an api.ts listing the SMTP_* keys itself would keep
+  // deploying whatever it listed after mail.ts changed what it derives.
+  assert.match(liveConfig, /\.\.\.smtpEnvironment,/)
+
+  // SES refuses a From outside the verified identity, so the address has to stay
+  // derived from the same value the identity is created for.
+  assert.match(liveConfig, /SMTP_EMAIL_FROM: `BoxLite <no-reply@\$\{senderDomain\}>`/)
+  assert.doesNotMatch(liveConfig, /SMTP_EMAIL_FROM: envOr\(/)
+})
+
+test('a stage with no SMTP credential sends nothing rather than failing every send', () => {
+  // apps/api disables its transporter when SMTP_HOST is empty, and says so once at
+  // boot. A host with no password instead builds a transport that authenticates
+  // against SES and is refused on every invitation — visible only in the Api's logs.
+  // Both halves gate it: nodemailer only authenticates when it has user AND password,
+  // so a stage holding one of the two would otherwise send unauthenticated to a live
+  // SES endpoint and be refused every time.
+  assert.match(
+    liveConfig,
+    /const hostWhenCredentialed = input\.smtpUser\.value\.apply\(\(user(?:: string)?\) =>\s*input\.smtpPassword\.value\.apply\(\(password(?:: string)?\) => \(user && password \? smtpHost : ''\)\),?\s*\)/,
+  )
+  assert.match(liveConfig, /SMTP_HOST: hostWhenCredentialed,/)
+  assert.match(liveConfig, /const smtpUser = new sst\.Secret\('SMTP_USER', ''\)/)
+  assert.match(liveConfig, /const smtpPassword = new sst\.Secret\('SMTP_PASSWORD', ''\)/)
+})
+
+test("the mail configuration set falls inside the deploy role's stage-scoped SES grant", () => {
+  // The same two-file contract the Secrets Manager check pins: a configuration set
+  // whose name falls outside the grant fails with AccessDenied the first time a stage
+  // creates one — by which point the identity already exists. Here the name is set
+  // explicitly, so this pins the two ends against each other rather than trusting
+  // SST's prefix to keep matching a pattern written in another file.
+  const configuredName = liveConfig.match(/args\.configurationSetName = `([^`]+)`/)?.[1]
+  assert.ok(configuredName, 'stack/mail.ts must name the SES configuration set explicitly')
+  const composed = configuredName.replace('${$app.name}', 'boxlite').replace('${$app.stage}', 'dev')
+
+  const deployRole = readFileSync(new URL('../bootstrap/aws/github-deploy-role.yaml', import.meta.url), 'utf8')
+  const grant = deployRole.match(/:configuration-set\/(\S+)/)?.[1]
+  assert.equal(grant, 'boxlite-${GitHubEnvironment}-*')
+  assert.ok(
+    composed.startsWith('boxlite-dev-'),
+    `the configuration set '${composed}' falls outside the deploy role's configuration-set/boxlite-<stage>-* grant`,
+  )
 })
