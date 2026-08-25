@@ -9,7 +9,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { remainingTimeoutMs, runAwsJson, runAwsText, signalProcessGroup } from './exec.js'
+import {
+  materializeAwsLoginCredentials,
+  remainingTimeoutMs,
+  runAwsJson,
+  runAwsText,
+  signalProcessGroup,
+} from './exec.js'
 
 function withStubbedAwsCli(script: string, run: (awsCliPath: string) => void) {
   const directory = mkdtempSync(join(tmpdir(), 'boxlite-infra-aws-cli-'))
@@ -61,7 +67,7 @@ test('reports which AWS call failed rather than the raw exit status', () => {
 })
 
 test('refuses output that is not the JSON it asked for', () => {
-  withStubbedAwsCli('#!/bin/sh\nprintf \'%s\\n\' \'<html>proxy error</html>\'\n', () => {
+  withStubbedAwsCli("#!/bin/sh\nprintf '%s\\n' '<html>proxy error</html>'\n", () => {
     assert.throws(() => runAwsJson(['ecs', 'describe-services'], { region: 'ap-southeast-1' }), {
       message: /AWS ecs describe-services returned invalid JSON/,
     })
@@ -78,6 +84,83 @@ test('a missing AWS CLI stays an ENOENT so callers can degrade instead of failin
     if (previousAwsCliPath === undefined) delete process.env.AWS_CLI_PATH
     else process.env.AWS_CLI_PATH = previousAwsCliPath
   }
+})
+
+test('materializes an AWS CLI login session without retaining its profile', () => {
+  withStubbedAwsCli(
+    `#!/bin/sh
+if [ "$1 $2 $3" = "configure get login_session" ]; then
+  printf '%s\n' 'arn:aws:iam::123456789012:user/synthetic-login'
+  exit 0
+fi
+printf '%s\n' '{"Version":1,"AccessKeyId":"SYNTHETIC_ACCESS_KEY","SecretAccessKey":"SYNTHETIC_SECRET_KEY","SessionToken":"SYNTHETIC_SESSION_TOKEN"}'
+`,
+    (awsCliPath) => {
+      const environment: NodeJS.ProcessEnv = {
+        AWS_CLI_PATH: awsCliPath,
+        AWS_PROFILE: 'console-session',
+        PATH: process.env.PATH,
+      }
+
+      assert.equal(materializeAwsLoginCredentials(environment), true)
+      assert.equal(environment.AWS_ACCESS_KEY_ID, 'SYNTHETIC_ACCESS_KEY')
+      assert.equal(environment.AWS_SECRET_ACCESS_KEY, 'SYNTHETIC_SECRET_KEY')
+      assert.equal(environment.AWS_SESSION_TOKEN, 'SYNTHETIC_SESSION_TOKEN')
+      assert.equal(environment.AWS_PROFILE, undefined)
+    },
+  )
+})
+
+test('leaves SDK-compatible profiles unchanged when they have no login session', () => {
+  withStubbedAwsCli('#!/bin/sh\nexit 1\n', (awsCliPath) => {
+    const environment: NodeJS.ProcessEnv = {
+      AWS_CLI_PATH: awsCliPath,
+      AWS_PROFILE: 'shared-config-profile',
+      PATH: process.env.PATH,
+    }
+
+    assert.equal(materializeAwsLoginCredentials(environment), false)
+    assert.equal(environment.AWS_PROFILE, 'shared-config-profile')
+    assert.equal(environment.AWS_ACCESS_KEY_ID, undefined)
+  })
+})
+
+test('prefers complete environment credentials and rejects a partial pair', () => {
+  const complete: NodeJS.ProcessEnv = {
+    AWS_ACCESS_KEY_ID: 'SYNTHETIC_ACCESS_KEY',
+    AWS_SECRET_ACCESS_KEY: 'SYNTHETIC_SECRET_KEY',
+    AWS_PROFILE: 'ignored-profile',
+  }
+  assert.equal(materializeAwsLoginCredentials(complete), false)
+  assert.equal(complete.AWS_PROFILE, undefined)
+
+  assert.throws(
+    () => materializeAwsLoginCredentials({ AWS_ACCESS_KEY_ID: 'SYNTHETIC_ACCESS_KEY' }),
+    /AWS environment credentials are incomplete/,
+  )
+})
+
+test('rejects malformed exported credentials without repeating their contents', () => {
+  withStubbedAwsCli(
+    `#!/bin/sh
+if [ "$1 $2 $3" = "configure get login_session" ]; then
+  printf '%s\n' 'arn:aws:iam::123456789012:user/synthetic-login'
+  exit 0
+fi
+printf '%s\n' '{"Version":1,"AccessKeyId":"SENSITIVE_VALUE"}'
+`,
+    (awsCliPath) => {
+      const environment = { AWS_CLI_PATH: awsCliPath, PATH: process.env.PATH }
+      assert.throws(
+        () => materializeAwsLoginCredentials(environment),
+        (error: any) => {
+          assert.match(error.message, /invalid credential shape/)
+          assert.equal(error.message.includes('SENSITIVE_VALUE'), false)
+          return true
+        },
+      )
+    },
+  )
 })
 
 test('spends one deadline across a multi-call preflight', () => {
