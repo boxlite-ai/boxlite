@@ -109,11 +109,7 @@ export function ConcurrencyTimeline() {
                   tick={{ fontSize: 10 }}
                 />
                 {isLimitInChartRange && (
-                  <ReferenceLine
-                    y={limit}
-                    stroke="hsl(var(--muted-foreground))"
-                    strokeDasharray="6 4"
-                  />
+                  <ReferenceLine y={limit} stroke="hsl(var(--muted-foreground))" strokeDasharray="6 4" />
                 )}
                 <ChartTooltip
                   cursor={{ stroke: 'hsl(var(--border))', strokeDasharray: '3 3' }}
