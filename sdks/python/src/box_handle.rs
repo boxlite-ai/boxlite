@@ -106,21 +106,26 @@ impl PyBox {
     ///   WebSocket; the caller discards any previous handle for the same
     ///   id. Raises if the server reports the session is no longer
     ///   attachable.
-    #[pyo3(signature = (execution_id=None))]
+    /// - `stdin=False` → read-only attach (docker's `--no-stdin`). The
+    ///   returned execution has no stdin, and the server refuses writes on
+    ///   the socket rather than trusting the client.
+    #[pyo3(signature = (execution_id=None, stdin=true))]
     fn attach<'a>(
         &self,
         py: Python<'a>,
         execution_id: Option<String>,
+        stdin: bool,
     ) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let execution = handle
-                .attach(match execution_id {
-                    Some(id) => boxlite::AttachOptions::execution(id),
-                    None => boxlite::AttachOptions::main(),
-                })
-                .await
-                .map_err(map_err)?;
+            let mut options = match execution_id {
+                Some(id) => boxlite::AttachOptions::execution(id),
+                None => boxlite::AttachOptions::main(),
+            };
+            if !stdin {
+                options = options.read_only();
+            }
+            let execution = handle.attach(options).await.map_err(map_err)?;
             Ok(PyExecution {
                 execution: Arc::new(execution),
             })

@@ -245,10 +245,20 @@ Handle to a running or stopped box.
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `exec()` | `(cmd, args, env, tty) -> Execution` | Execute command (async) |
+| `attach()` | `(execution_id=None, stdin=True) -> Execution` | Follow a running session (async) |
 | `stop()` | `() -> None` | Stop the box gracefully (async) |
 | `remove()` | `() -> None` | Delete box and its data (async) |
 | `info()` | `async () -> BoxInfo` | Get box metadata |
 | `metrics()` | `() -> BoxMetrics` | Get resource usage metrics (async) |
+
+`attach()` with no argument follows the box's main command — the container
+init, which is what `run IMAGE COMMAND` starts. Pass `execution_id` to
+reattach to an `exec()` session instead.
+
+`attach(stdin=False)` attaches read-only — docker's `--no-stdin`. The returned
+execution exposes no stdin, and against a remote runtime the server refuses
+stdin, `signal` and `resize` on that socket. Use it to watch a box with no way
+to write into it.
 
 ---
 
