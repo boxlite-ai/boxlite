@@ -71,7 +71,13 @@ impl RestBox {
     /// Callers open the socket themselves, and do it synchronously, so a
     /// 404/409 surfaces at *their* await point rather than arriving later
     /// as a synthesized `ExecResult`.
-    fn wire_attach(&self, box_id: String, execution_id: String, stream: WsStream) -> Execution {
+    fn wire_attach(
+        &self,
+        box_id: String,
+        execution_id: String,
+        stream: WsStream,
+        wire_stdin: bool,
+    ) -> Execution {
         let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
         let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
         let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -99,7 +105,9 @@ impl RestBox {
             execution_id,
             Box::new(control),
             result_rx,
-            Some(ExecStdin::new(stdin_tx)),
+            // The pump keeps its receiver either way; with no ExecStdin handed
+            // out, nothing can send into it.
+            wire_stdin.then(|| ExecStdin::new(stdin_tx)),
             Some(ExecStdout::new(stdout_rx)),
             Some(ExecStderr::new(stderr_rx)),
         )
@@ -203,9 +211,18 @@ impl BoxBackend for RestBox {
         // Open the WebSocket synchronously so a rejection (404 no-such-box /
         // reaped, 409 another client already attached) surfaces here, at the
         // caller's `await box.attach(..)`, not in a later ExecResult from `wait()`.
+        // Read-only is asked for on the wire, not just honored locally: the
+        // socket is bidirectional, so the server has to be the one refusing
+        // writes.
+        let query = if options.wants_stdin() {
+            ""
+        } else {
+            "?stdin=0"
+        };
+
         match options.execution_id() {
             None => {
-                let path = format!("/boxes/{}/attach", box_id);
+                let path = format!("/boxes/{}/attach{}", box_id, query);
                 let (stream, handshake) = self
                     .client
                     .connect_ws_with_response(&path)
@@ -232,10 +249,13 @@ impl BoxBackend for RestBox {
                     })?
                     .to_string();
 
-                Ok(self.wire_attach(box_id, execution_id, stream))
+                Ok(self.wire_attach(box_id, execution_id, stream, options.wants_stdin()))
             }
             Some(execution_id) => {
-                let path = format!("/boxes/{}/executions/{}/attach", box_id, execution_id);
+                let path = format!(
+                    "/boxes/{}/executions/{}/attach{}",
+                    box_id, execution_id, query
+                );
                 let stream = self.client.connect_ws(&path).await.map_err(|e| match e {
                     BoxliteError::NotFound(msg) => BoxliteError::SessionReaped(format!(
                         "session {} not found — likely reaped after disconnect timeout: {}",
@@ -248,7 +268,12 @@ impl BoxBackend for RestBox {
                     other => other,
                 })?;
 
-                Ok(self.wire_attach(box_id, execution_id.to_string(), stream))
+                Ok(self.wire_attach(
+                    box_id,
+                    execution_id.to_string(),
+                    stream,
+                    options.wants_stdin(),
+                ))
             }
         }
     }
