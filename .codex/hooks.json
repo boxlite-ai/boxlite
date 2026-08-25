@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "^(startup|resume)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/env bash \"$(git rev-parse --show-toplevel)/.agent-tooling/codex-plugin-bootstrap.sh\"",
+            "statusMessage": "Configuring BoxLite agent tooling",
+            "timeout": 180
+          }
+        ]
+      }
+    ]
+  }
+}
