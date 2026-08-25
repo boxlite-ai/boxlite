@@ -192,10 +192,12 @@ fn extract_and_validate(
 
 /// Validate disk security and move disks into box_home/disks/.
 fn install_disks(temp_dir: &Path, box_home: &Path) -> BoxliteResult<()> {
-    // Security: Reject imported disks that reference backing files.
-    // A crafted archive could include a qcow2 with a backing reference to
-    // /etc/shadow or another box's disk, leaking data on first read.
+    // Security: the disk about to become a box's own must be a file this
+    // extraction produced, and must not reach any further on its own. A
+    // crafted archive would otherwise point it at /etc/shadow or another
+    // box's disk, leaking data on first read.
     let extracted_container = temp_dir.join(disk_filenames::CONTAINER_DISK);
+    ensure_within_extraction_dir(&extracted_container, temp_dir)?;
     validate_no_backing_references(&extracted_container)?;
 
     let disks_dir = box_home.join("disks");
@@ -215,17 +217,54 @@ fn install_disks(temp_dir: &Path, box_home: &Path) -> BoxliteResult<()> {
     Ok(())
 }
 
+/// Reject an imported disk that resolves outside the extraction directory.
+///
+/// Extraction already refuses link members, so this is the assertion rather
+/// than the control — but it is the last look before the rename turns this
+/// path into a box's own disk, and a path that escaped would hand the new box
+/// someone else's.
+fn ensure_within_extraction_dir(disk_path: &Path, extraction_dir: &Path) -> BoxliteResult<()> {
+    let resolve = |path: &Path| -> BoxliteResult<std::path::PathBuf> {
+        path.canonicalize().map_err(|e| {
+            BoxliteError::Storage(format!("Failed to resolve {}: {}", path.display(), e))
+        })
+    };
+
+    // Both sides are resolved: the extraction directory itself can sit under a
+    // symlinked home, and comparing a resolved disk against an unresolved root
+    // would reject every such install.
+    let resolved_disk = resolve(disk_path)?;
+    let resolved_root = resolve(extraction_dir)?;
+
+    if !resolved_disk.starts_with(&resolved_root) {
+        return Err(BoxliteError::InvalidState(format!(
+            "Imported disk '{}' resolves outside the extraction directory. \
+             This is not allowed for security reasons.",
+            disk_path.display()
+        )));
+    }
+
+    Ok(())
+}
+
 /// Reject qcow2 disks with backing file references (security check).
 pub(crate) fn validate_no_backing_references(disk_path: &Path) -> BoxliteResult<()> {
-    if let Ok(Some(backing)) = crate::disk::read_backing_file_path(disk_path) {
-        return Err(BoxliteError::InvalidState(format!(
+    match crate::disk::read_backing_file_path(disk_path) {
+        Ok(None) => Ok(()),
+        Ok(Some(backing)) => Err(BoxliteError::InvalidState(format!(
             "Imported disk '{}' has backing file reference '{}'. \
              This is not allowed for security reasons.",
             disk_path.display(),
             backing
-        )));
+        ))),
+        // A disk the parser cannot read is a disk this check cannot clear.
+        // Reading the error as "no backing reference" hands the verdict to
+        // whatever the file happens to be.
+        Err(error) => Err(BoxliteError::InvalidState(format!(
+            "Imported disk '{}' is not a readable qcow2 image: {error}",
+            disk_path.display()
+        ))),
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -512,5 +551,23 @@ mod tests {
 
         let result = validate_no_backing_references(&disk);
         assert!(result.is_ok());
+    }
+
+    /// The backing-file scan is the import path's only disk-level security
+    /// decision, so it has to fail closed. A disk it cannot parse is a disk it
+    /// cannot clear — treating the parse error as "no backing reference" hands
+    /// the verdict to whatever the file happens to be.
+    #[test]
+    fn test_validate_no_backing_references_rejects_unparsable_disk() {
+        let dir = TempDir::new_in("/tmp").unwrap();
+        let disk = dir.path().join("not-a-qcow2.qcow2");
+        std::fs::write(&disk, b"this is not a qcow2 header at all").unwrap();
+
+        let error = validate_no_backing_references(&disk)
+            .expect_err("an unparsable disk must not be treated as safe");
+        assert!(
+            error.to_string().contains("qcow2"),
+            "the error must say the disk is not a usable qcow2, got: {error}"
+        );
     }
 }
