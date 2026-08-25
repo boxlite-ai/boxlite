@@ -145,6 +145,9 @@ test('every credential-context and artifact-selector key is refused', () => {
     'RUNNER_ARTIFACT_BUCKET',
     'RUNNER_ARTIFACT_REF',
     'RUNNER_ARTIFACT_SOURCE',
+    'STATUS_HEARTBEAT_NAMESPACE',
+    'STATUS_HEARTBEAT_RUNNER',
+    'STATUS_HEARTBEAT_STAGE',
     'SST_BIN_PATH',
   ]
   for (const key of forbidden) {
@@ -333,11 +336,14 @@ test('a value quoted across lines is refused, and the message says why it might 
   assert.deepEqual(parseDotenv(multiline), { STACK_DOMAIN: 'first\nsecond', RUNNERS: '1' }, 'dotenv does read it')
   assert.notDeepEqual(parseDotenv('KEY="first'), {}, 'an unterminated quote yields a key, which is why')
 
-  assert.throws(() => validateDotenvSyntax(multiline), (error: any) => {
-    assert.match(error.message, /line 2 is not an assignment/)
-    assert.match(error.message, /cannot contain a newline/)
-    return true
-  })
+  assert.throws(
+    () => validateDotenvSyntax(multiline),
+    (error: any) => {
+      assert.match(error.message, /line 2 is not an assignment/)
+      assert.match(error.message, /cannot contain a newline/)
+      return true
+    },
+  )
   assert.throws(() => serializeStageConfig({ STACK_DOMAIN: 'first\nsecond' }), /contains a newline/)
 })
 

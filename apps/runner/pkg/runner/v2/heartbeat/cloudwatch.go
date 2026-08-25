@@ -15,7 +15,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 )
 
-const runnerHealthyMetric = "RunnerHealthy"
+const (
+	runnerHealthyMetric    = "RunnerHealthy"
+	minimumPublishInterval = 30 * time.Second
+	maximumPublishInterval = 2 * time.Minute
+)
 
 type Publisher interface {
 	Publish(ctx context.Context, healthy bool) error
@@ -60,8 +64,8 @@ func NewCloudWatchPublisher(ctx context.Context, cfg CloudWatchConfig) (Publishe
 	if cfg.Namespace == "" || cfg.Stage == "" || cfg.Region == "" || cfg.Runner == "" {
 		return nil, fmt.Errorf("status heartbeat namespace, stage, region, and runner are required together")
 	}
-	if cfg.Interval < 30*time.Second {
-		return nil, fmt.Errorf("status heartbeat interval must be at least 30 seconds")
+	if cfg.Interval < minimumPublishInterval || cfg.Interval >= maximumPublishInterval {
+		return nil, fmt.Errorf("status heartbeat interval must be at least 30 seconds and less than 2 minutes")
 	}
 
 	client := cfg.Client

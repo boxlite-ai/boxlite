@@ -19,6 +19,12 @@ const STATUS_LABELS: Record<ServiceStatus, string> = {
   outage: 'Outage',
 }
 
+function statusRefreshErrorCategory(error: unknown): 'network' | 'invalid_snapshot' | 'unavailable' {
+  if (error instanceof TypeError) return 'network'
+  if (error instanceof SyntaxError || (error instanceof Error && error.name === 'ZodError')) return 'invalid_snapshot'
+  return 'unavailable'
+}
+
 function StatusMark({ status }: { status: ServiceStatus }) {
   return (
     <span className={`status-mark status-mark--${status}`}>
@@ -90,8 +96,12 @@ export default function App() {
       setSnapshot(nextSnapshot)
       setFreshnessNow(Date.now())
       setHasError(false)
-    } catch {
+    } catch (error) {
       if (!signal?.aborted) {
+        console.error('Failed to refresh public status snapshot', {
+          path: PUBLIC_STATUS_PATH,
+          category: statusRefreshErrorCategory(error),
+        })
         setHasError(true)
       }
     } finally {

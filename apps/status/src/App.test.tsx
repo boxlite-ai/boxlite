@@ -68,7 +68,9 @@ describe('standalone status page', () => {
 
   it('does not retain an operational claim after a refresh error', async () => {
     vi.useFakeTimers()
-    const fetchMock = vi.fn().mockResolvedValueOnce(response()).mockRejectedValueOnce(new Error('unavailable'))
+    const refreshError = new Error('private upstream response body')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fetchMock = vi.fn().mockResolvedValueOnce(response()).mockRejectedValueOnce(refreshError)
     vi.stubGlobal('fetch', fetchMock)
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -84,6 +86,11 @@ describe('standalone status page', () => {
     })
     expect(host.textContent).toContain('Status unavailable')
     expect(host.textContent).not.toContain('Operational')
+    expect(errorSpy).toHaveBeenCalledWith('Failed to refresh public status snapshot', {
+      path: '/public-status.json',
+      category: 'unavailable',
+    })
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(refreshError.message)
   })
 
   it('expires a cached snapshot even when no refresh completes', async () => {

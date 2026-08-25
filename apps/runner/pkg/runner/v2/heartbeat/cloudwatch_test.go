@@ -101,3 +101,29 @@ func TestCloudWatchPublisherIsOptionalButRejectsPartialConfiguration(t *testing.
 		t.Fatal("partial heartbeat configuration must fail")
 	}
 }
+
+func TestCloudWatchPublisherRejectsIntervalsOutsideFreshnessWindow(t *testing.T) {
+	base := CloudWatchConfig{
+		Namespace: "BoxLite/PublicStatus",
+		Stage:     "prod",
+		Region:    "ap-southeast-1",
+		Runner:    "runner-1",
+		Client:    &fakeCloudWatch{},
+	}
+
+	for _, interval := range []time.Duration{30 * time.Second, 119 * time.Second} {
+		config := base
+		config.Interval = interval
+		if _, err := NewCloudWatchPublisher(context.Background(), config); err != nil {
+			t.Fatalf("interval %s should be accepted: %v", interval, err)
+		}
+	}
+
+	for _, interval := range []time.Duration{29 * time.Second, 2 * time.Minute, 121 * time.Second} {
+		config := base
+		config.Interval = interval
+		if _, err := NewCloudWatchPublisher(context.Background(), config); err == nil {
+			t.Fatalf("interval %s must be rejected", interval)
+		}
+	}
+}

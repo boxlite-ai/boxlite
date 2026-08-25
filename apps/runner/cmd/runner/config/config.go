@@ -39,7 +39,7 @@ type Config struct {
 	StatusHeartbeatNamespace           string        `envconfig:"STATUS_HEARTBEAT_NAMESPACE"`
 	StatusHeartbeatStage               string        `envconfig:"STATUS_HEARTBEAT_STAGE"`
 	StatusHeartbeatRunner              string        `envconfig:"STATUS_HEARTBEAT_RUNNER"`
-	StatusHeartbeatInterval            time.Duration `envconfig:"STATUS_HEARTBEAT_INTERVAL" default:"60s" validate:"min=30s"`
+	StatusHeartbeatInterval            time.Duration `envconfig:"STATUS_HEARTBEAT_INTERVAL" default:"60s" validate:"min=30s,lt=2m"`
 	ResourceLimitsDisabled             bool          `envconfig:"RESOURCE_LIMITS_DISABLED"`
 	BoxStartTimeoutSec                 int           `envconfig:"BOX_START_TIMEOUT_SEC"`
 	UseSnapshotEntrypoint              bool          `envconfig:"USE_SNAPSHOT_ENTRYPOINT"`

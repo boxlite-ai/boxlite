@@ -603,8 +603,14 @@ test('upgrades every Runner through a dependsOn chain, one host per command', ()
 
   // Every Runner gets a command: the default (captured for exactly this) plus each extra.
   assert.match(liveConfig, /const defaultRunner = makeRunner\(/)
-  assert.match(upgrades, /\{ label: 'default', instance: defaultRunner \}/)
-  assert.match(upgrades, /\.\.\.extraRunners\.map\(\(r\) => \(\{ label: r\.name, instance: r\.instance \}\)\)/)
+  assert.match(
+    upgrades,
+    /\{ label: 'default', runnerName: defaultRunnerConfig\.controlPlaneRunnerName, instance: defaultRunner \}/,
+  )
+  assert.match(
+    upgrades,
+    /\.\.\.extraRunners\.map\(\(r\) => \(\{ label: r\.name, runnerName: r\.name, instance: r\.instance \}\)\)/,
+  )
   assert.match(upgrades, /new command\.local\.Command\(\s*`UpgradeRunnerBinary-\$\{label\}`/)
 
   // Each command waits on the previous one, so two Runners never restart at once.
@@ -623,12 +629,21 @@ test('upgrades every Runner through a dependsOn chain, one host per command', ()
   assert.match(upgrades, /`build:\$\{runnerArtifactSource\.version\}:\$\{runnerArtifactSource\.ref\}`/)
   assert.match(upgrades, /`release:\$\{runnerArtifactSource\.version\}`/)
   assert.match(upgrades, /RUNNER_VERSION: runnerTargetVersion/)
-  assert.match(upgrades, /triggers: \[runnerArtifactTrigger, instance\.id\]/)
+  assert.match(upgrades, /triggers: \[\s*runnerArtifactTrigger,\s*instance\.id,\s*'status-heartbeat-v1'/)
   // `triggers` replaces the resource, so `create` must carry the same body as `update`.
   assert.match(
     upgrades,
     /create: 'node scripts\/runner-update-binary\.mjs',\s*update: 'node scripts\/runner-update-binary\.mjs',/,
   )
+})
+
+test('migrates public status heartbeat settings onto existing runners', () => {
+  const upgrades = configSection('── Rolling runner binary upgrade')
+
+  assert.match(upgrades, /STATUS_HEARTBEAT_NAMESPACE: statusHeartbeatNamespace/)
+  assert.match(upgrades, /STATUS_HEARTBEAT_STAGE: \$app\.stage/)
+  assert.match(upgrades, /STATUS_HEARTBEAT_RUNNER: runnerName/)
+  assert.match(upgrades, /status-heartbeat-v1/)
 })
 
 test('no longer points operators at the deleted shell updater', () => {

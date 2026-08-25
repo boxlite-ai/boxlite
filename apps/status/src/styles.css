@@ -6,7 +6,7 @@
   background: #f7f8fa;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   font-synthesis: none;
-  text-rendering: optimizeLegibility;
+  text-rendering: optimizelegibility;
 }
 
 * {
@@ -262,19 +262,19 @@ a {
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: currentColor;
+  background: currentcolor;
 }
 
 .status-mark--operational {
-  color: #31945b;
+  color: #257a48;
 }
 
 .status-mark--partial_outage {
-  color: #ca7a12;
+  color: #8a5000;
 }
 
 .status-mark--outage {
-  color: #d64545;
+  color: #b83232;
 }
 
 .site-footer {

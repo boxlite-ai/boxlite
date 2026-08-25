@@ -37,6 +37,9 @@
  *   INSTANCE_IDS     comma-separated EC2 ids; unset = discover by tag:Name=boxlite-runner-*
  *   AWS_REGION       default ap-southeast-1
  *   RUNNER_PORT      port the runner's health route listens on (default 3003)
+ *   STATUS_HEARTBEAT_NAMESPACE  CloudWatch namespace for the public status heartbeat
+ *   STATUS_HEARTBEAT_STAGE      stage dimension for the public status heartbeat
+ *   STATUS_HEARTBEAT_RUNNER     runner dimension for the public status heartbeat
  *   ALLOW_DOWNGRADE  set to 1 to permit replacing a runner with an OLDER version
  */
 
@@ -60,6 +63,12 @@ const SSM_REGISTRATION_ATTEMPTS = 30
 // crosses this line fails a test instead of stranding a fleet.
 const SSM_POLL_INTERVAL_SECONDS = 5
 const SSM_COMPLETION_ATTEMPTS = 360
+
+export interface StatusHeartbeatConfig {
+  namespace: string
+  stage: string
+  runner: string
+}
 
 // The payload's bounded steps, in seconds, taken from the timeouts it is actually emitted with.
 // Exported so the supervision budget above is checked against them rather than assumed.
@@ -85,7 +94,8 @@ export const payloadWorstCaseSeconds = () =>
 function runAws(args: any) {
   const result = spawnSync('aws', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
   if (result.error) {
-    if ((result.error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('the `aws` CLI is required but was not found on PATH')
+    if ((result.error as NodeJS.ErrnoException).code === 'ENOENT')
+      throw new Error('the `aws` CLI is required but was not found on PATH')
     throw new Error(`could not launch aws: ${result.error.message}`)
   }
   return { ok: result.status === 0, stdout: (result.stdout || '').trim(), stderr: (result.stderr || '').trim() }
@@ -175,7 +185,47 @@ export function resolveUpgrade(
 
 // ── remote upgrade script ────────────────────────────────────────────────────
 
-export function buildRemoteScript(upgrade: any, { runnerPort = RUNNER_PORT, allowDowngrade = false, region = REGION } = {}) {
+function validateStatusHeartbeat(statusHeartbeat: StatusHeartbeatConfig) {
+  const values = [
+    ['namespace', statusHeartbeat.namespace, /^[A-Za-z0-9_./-]+$/],
+    ['stage', statusHeartbeat.stage, /^[A-Za-z0-9_.-]+$/],
+    ['runner', statusHeartbeat.runner, /^[A-Za-z0-9_.-]+$/],
+  ] as const
+  for (const [name, value, pattern] of values) {
+    if (value.length > 255 || !pattern.test(value)) {
+      throw new Error(`STATUS_HEARTBEAT_${name.toUpperCase()} contains unsupported characters or length`)
+    }
+  }
+  return statusHeartbeat
+}
+
+function statusHeartbeatFromEnvironment(environment = process.env): StatusHeartbeatConfig | undefined {
+  const namespace = environment.STATUS_HEARTBEAT_NAMESPACE
+  const stage = environment.STATUS_HEARTBEAT_STAGE
+  const runner = environment.STATUS_HEARTBEAT_RUNNER
+  if (!namespace && !stage && !runner) return undefined
+  if (!namespace || !stage || !runner) {
+    throw new Error(
+      'STATUS_HEARTBEAT_NAMESPACE, STATUS_HEARTBEAT_STAGE, and STATUS_HEARTBEAT_RUNNER are required together',
+    )
+  }
+  return validateStatusHeartbeat({ namespace, stage, runner })
+}
+
+export function buildRemoteScript(
+  upgrade: any,
+  {
+    runnerPort = RUNNER_PORT,
+    allowDowngrade = false,
+    region = REGION,
+    statusHeartbeat,
+  }: {
+    runnerPort?: string
+    allowDowngrade?: boolean
+    region?: string
+    statusHeartbeat?: StatusHeartbeatConfig
+  } = {},
+) {
   const { artifact, expectedVersion } = upgrade
   const { tarballUrl, checksumUrl, tarballName } = artifact
   // The port reaches the remote script body verbatim, so reject a malformed one here
@@ -189,6 +239,39 @@ export function buildRemoteScript(upgrade: any, { runnerPort = RUNNER_PORT, allo
   const tarballPattern = tarballName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const fetchTarball = artifactFetchCommand(artifact, tarballUrl, '$WORK/runner.tar.gz', region)
   const fetchChecksum = artifactFetchCommand(artifact, checksumUrl, '$WORK/runner.sha256', region)
+  const heartbeatMigration = statusHeartbeat
+    ? (() => {
+        const heartbeat = validateStatusHeartbeat(statusHeartbeat)
+        return `STATUS_HEARTBEAT_CONFIG_CHANGED=false
+STATUS_HEARTBEAT_FILE=/etc/systemd/system/boxlite-runner.service.d/status-heartbeat.conf
+STATUS_HEARTBEAT_TMP=$(mktemp)
+trap 'rm -f "$STATUS_HEARTBEAT_TMP"' EXIT
+cat > "$STATUS_HEARTBEAT_TMP" <<'BOXLITE_STATUS_HEARTBEAT'
+[Service]
+Environment=STATUS_HEARTBEAT_NAMESPACE=${heartbeat.namespace}
+Environment=STATUS_HEARTBEAT_STAGE=${heartbeat.stage}
+Environment=STATUS_HEARTBEAT_RUNNER=${heartbeat.runner}
+BOXLITE_STATUS_HEARTBEAT
+
+heartbeat_runtime_matches() {
+  STATUS_HEARTBEAT_PID=$(systemctl show boxlite-runner --property MainPID --value 2>/dev/null || true)
+  [ "\${STATUS_HEARTBEAT_PID:-0}" != "0" ] || return 1
+  tr '\\0' '\\n' < "/proc/$STATUS_HEARTBEAT_PID/environ" | grep -Fqx -- 'STATUS_HEARTBEAT_NAMESPACE=${heartbeat.namespace}' \
+    && tr '\\0' '\\n' < "/proc/$STATUS_HEARTBEAT_PID/environ" | grep -Fqx -- 'STATUS_HEARTBEAT_STAGE=${heartbeat.stage}' \
+    && tr '\\0' '\\n' < "/proc/$STATUS_HEARTBEAT_PID/environ" | grep -Fqx -- 'STATUS_HEARTBEAT_RUNNER=${heartbeat.runner}'
+}
+
+if [ ! -f "$STATUS_HEARTBEAT_FILE" ] || ! cmp -s "$STATUS_HEARTBEAT_TMP" "$STATUS_HEARTBEAT_FILE"; then
+  install -D -m 0644 "$STATUS_HEARTBEAT_TMP" "$STATUS_HEARTBEAT_FILE"
+  STATUS_HEARTBEAT_CONFIG_CHANGED=true
+elif ! heartbeat_runtime_matches; then
+  STATUS_HEARTBEAT_CONFIG_CHANGED=true
+fi
+rm -f "$STATUS_HEARTBEAT_TMP"
+trap - EXIT
+`
+      })()
+    : 'STATUS_HEARTBEAT_CONFIG_CHANGED=false\n'
 
   // SSM is the only channel that reaches a long-lived Runner: its user-data carries
   // ignoreChanges, so a host created before the AWS CLI became an unconditional part of the
@@ -248,6 +331,7 @@ live_is_newer() {
 # version is usually a deliberate hand-install, and silently reverting it during an
 # unrelated deploy is a nasty surprise; a real rollback sets ALLOW_DOWNGRADE=1.
 if [ "\${ALLOW_DOWNGRADE:-}" != "1" ] && live_is_newer; then
+  load_status_heartbeat_configuration "$CURRENT"
   echo "WARNING: live $CURRENT is newer than target $TARGET; refusing to downgrade (set ALLOW_DOWNGRADE=1 to force)"
   exit 0
 fi
@@ -269,6 +353,19 @@ probe_version() {
   curl -fsS --max-time 3 "$HEALTH" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p'
 }
 
+wait_for_version() {
+  local expected_version="$1"
+  for _ in $(seq 1 30); do
+    [ "$(probe_version || true)" = "$expected_version" ] && return 0
+    sleep 2
+  done
+  return 1
+}
+
+wait_for_target() {
+  wait_for_version "$TARGET"
+}
+
 # A just-created EC2 reports "running" — all Pulumi waits for — long before cloud-init has
 # installed the binary and written the unit. Nothing to do on such a host: its user-data
 # installs this very version. Bail out BEFORE the probe, because "not serving" here means
@@ -286,14 +383,31 @@ if [ ! -x /usr/local/bin/boxlite-runner ] ||
   exit 0
 fi
 
+${heartbeatMigration}
+load_status_heartbeat_configuration() {
+  [ "$STATUS_HEARTBEAT_CONFIG_CHANGED" = true ] || return 0
+
+  echo "restarting once to load the public status heartbeat configuration"
+  if systemctl daemon-reload \
+    && systemctl restart boxlite-runner \
+    && systemctl is-active --quiet boxlite-runner \
+    && wait_for_version "$1"; then
+    echo "heartbeat configuration loaded"
+  else
+    journalctl -u boxlite-runner --no-pager -n 50 || true
+    exit 1
+  fi
+}
+
 # Converge, don't reinstall: a runner already on the target version is left completely
-# alone, which is what makes running this on every deploy free of gratuitous restarts.
+# alone unless its runtime heartbeat configuration changed.
 # Past the guard above, an unreachable probe means installed-but-unhealthy — do NOT skip
 # that, a binary swap is exactly what might repair it.
 CURRENT=$(probe_version || true)
 echo "current version: \${CURRENT:-<not serving>}"
 if [ "$CURRENT" = "$TARGET" ]; then
-  echo "already at $TARGET; leaving the unit untouched"
+  load_status_heartbeat_configuration "$CURRENT"
+  echo "already at $TARGET; leaving the binary untouched"
   exit 0
 fi
 
@@ -320,16 +434,6 @@ if [ -x /usr/local/bin/boxlite-runner ]; then
   HAD_PREVIOUS=true
 fi
 systemctl stop boxlite-runner || true
-
-# The rolling-step boundary: the caller must not move to the next host until this one is
-# actually serving the new version, so process-alive is not a sufficient signal.
-wait_for_target() {
-  for _ in $(seq 1 30); do
-    [ "$(probe_version || true)" = "$TARGET" ] && return 0
-    sleep 2
-  done
-  return 1
-}
 
 # Swap + start + readiness as one guarded condition: any failing step routes to the
 # rollback branch instead of aborting under set -e (if-conditions are exempt).
@@ -375,7 +479,12 @@ const sleepSeconds = (seconds: any) => spawnSync('sleep', [String(seconds)])
 // would strand the fleet half-upgraded. A bad id, a denied permission, anything else,
 // fails immediately.
 const RETRYABLE_SEND_ERRORS = /InvalidInstanceId|ThrottlingException|TooManyUpdates|RequestLimitExceeded/
-export function sendCommand(instanceId: any, version: any, payload: any, { run = runAws, sleep = sleepSeconds }: any = {}) {
+export function sendCommand(
+  instanceId: any,
+  version: any,
+  payload: any,
+  { run = runAws, sleep = sleepSeconds }: any = {},
+) {
   const args = [
     'ssm',
     'send-command',
@@ -414,7 +523,11 @@ export function sendCommand(instanceId: any, version: any, payload: any, { run =
 // upgrading fine, so poll to a terminal status instead of using the waiter at all.
 export const TERMINAL_SSM_STATUSES = new Set(['Success', 'Failed', 'Cancelled', 'TimedOut'])
 
-export function waitForTerminalStatus(invocation: any, instanceId: any, { run = runAws, sleep = sleepSeconds }: any = {}) {
+export function waitForTerminalStatus(
+  invocation: any,
+  instanceId: any,
+  { run = runAws, sleep = sleepSeconds }: any = {},
+) {
   // A poll can legitimately fail for a moment — InvocationDoesNotExist is normal right
   // after send-command — so a single failure is not fatal. But the cause must survive:
   // a persistent AccessDeniedException otherwise looks identical to a slow upgrade and
@@ -446,7 +559,10 @@ function upgradeOne(instanceId: any, upgrade: any) {
   // Hand the payload to SSM base64-encoded rather than quote-escaped: it becomes a
   // single token with no shell metacharacters, sidestepping the brittle escaping of a
   // multi-line script inside the commands=[...] shorthand.
-  const script = buildRemoteScript(upgrade, { allowDowngrade: process.env.ALLOW_DOWNGRADE === '1' })
+  const script = buildRemoteScript(upgrade, {
+    allowDowngrade: process.env.ALLOW_DOWNGRADE === '1',
+    statusHeartbeat: statusHeartbeatFromEnvironment(),
+  })
   const commandId = sendCommand(instanceId, upgrade.expectedVersion, Buffer.from(script).toString('base64'))
   console.log(`    command:  ${commandId}`)
 

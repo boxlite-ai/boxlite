@@ -387,11 +387,11 @@ const runnerArtifactTrigger =
 // full deploy recreates it — `create:` re-runs the same convergence-guarded script, a no-op
 // when the host already serves the target identity.
 let previousUpgrade: $util.Resource | undefined
-for (const { label, instance } of !deploysRunner
+for (const { label, runnerName, instance } of !deploysRunner
   ? []
   : [
-      { label: 'default', instance: defaultRunner },
-      ...extraRunners.map((r) => ({ label: r.name, instance: r.instance })),
+      { label: 'default', runnerName: defaultRunnerConfig.controlPlaneRunnerName, instance: defaultRunner },
+      ...extraRunners.map((r) => ({ label: r.name, runnerName: r.name, instance: r.instance })),
     ]) {
   previousUpgrade = new command.local.Command(
     `UpgradeRunnerBinary-${label}`,
@@ -404,13 +404,23 @@ for (const { label, instance } of !deploysRunner
         INSTANCE_IDS: instance.id,
         RUNNER_VERSION: runnerTargetVersion,
         RUNNER_PORT: String(PORTS.RUNNER),
+        STATUS_HEARTBEAT_NAMESPACE: statusHeartbeatNamespace,
+        STATUS_HEARTBEAT_STAGE: $app.stage,
+        STATUS_HEARTBEAT_RUNNER: runnerName,
         // The source selection, not the resolved URLs: the script runs the same resolver, so
         // `npm run runner:update` out of band lands the identical artifact.
         RUNNER_ARTIFACT_SOURCE: runnerArtifactSource.kind,
         RUNNER_ARTIFACT_BUCKET: artifactsBucketName,
         BOXLITE_ARTIFACT_REF: runnerArtifactSource.kind === 'build' ? (runnerArtifactSource.ref ?? '') : '',
       },
-      triggers: [runnerArtifactTrigger, instance.id],
+      triggers: [
+        runnerArtifactTrigger,
+        instance.id,
+        'status-heartbeat-v1',
+        statusHeartbeatNamespace,
+        $app.stage,
+        runnerName,
+      ],
     },
     {
       // The artifact policy is a hard prerequisite, not a sibling: in build mode the payload
