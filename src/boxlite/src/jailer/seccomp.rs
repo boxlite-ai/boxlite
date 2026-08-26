@@ -483,14 +483,28 @@ mod tests {
             if apply_filter(vmm_filter).is_err() {
                 unsafe { libc::_exit(2) };
             }
-            unsafe {
-                libc::syscall(libc::SYS_time, std::ptr::null_mut::<libc::time_t>());
-                libc::_exit(0);
-            }
+            let ret = unsafe { libc::syscall(libc::SYS_time, std::ptr::null_mut::<libc::time_t>()) };
+            // `time` is allowlisted: the raw syscall returns the current time
+            // (>= 0), not -1. `trap` would SIGSYS-kill the child before this
+            // point; guard the errno-returning case so a future default-action
+            // change can't let a blocked call exit 0 and pass.
+            unsafe { libc::_exit(i32::from(ret == -1)) };
         }
 
         let mut status = 0;
-        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        loop {
+            let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
+            if waited == pid {
+                break;
+            }
+            // waitpid returns -1/EINTR if a signal lands in the parent test
+            // thread; retry, but surface any other failure.
+            assert!(
+                waited == -1 && unsafe { *libc::__errno_location() } == libc::EINTR,
+                "waitpid failed: {}",
+                std::io::Error::last_os_error()
+            );
+        }
         assert!(
             libc::WIFEXITED(status),
             "child killed by signal {} (SIGSYS=31)",
