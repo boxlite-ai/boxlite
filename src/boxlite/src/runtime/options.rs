@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
+use crate::disk::constants::qcow2::{DEFAULT_DISK_SIZE_GB, FSIZE_DISK_MULTIPLIER};
 use crate::runtime::advanced_options::AdvancedBoxOptions;
+use crate::runtime::types::Bytes;
 use std::fmt;
 
 // ============================================================================
@@ -631,12 +633,34 @@ impl BoxOptions {
         Ok(())
     }
 
-    pub fn sanitize(&self) -> BoxliteResult<()> {
+    pub fn sanitize(&mut self) -> BoxliteResult<()> {
         self.sanitize_common()?;
 
         if let Some(kernel) = &self.advanced.kernel {
             kernel.sanitize()?;
         }
+
+        // The jailed shim is the sole writer of this box's qcow2 disks, so its
+        // per-file RLIMIT_FSIZE caps their growth: a write past it fails with
+        // `EFBIG` and takes the guest down. `SecurityOptions::default()` cannot
+        // pick that number — it runs for a box that does not exist yet and
+        // cannot see `disk_size_gb` — which is how a fixed 1 GiB ceiling ended
+        // up contradicting every larger disk (#1152). Derive it here, next to
+        // the size it comes from.
+        //
+        // `FSIZE_DISK_MULTIPLIER` is deliberately loose: this is a
+        // runaway-write backstop, not a capacity policy. Capacity is the qcow2
+        // virtual size, where a guest that fills its disk gets a clean `ENOSPC`
+        // inside the box rather than a host-side `SIGXFSZ` that kills the VM.
+        self.advanced.security.resource_limits.max_file_size = Some(
+            Bytes::from_gib(
+                self.disk_size_gb
+                    .unwrap_or(DEFAULT_DISK_SIZE_GB)
+                    .saturating_mul(FSIZE_DISK_MULTIPLIER),
+            )
+            .as_bytes(),
+        );
+
         Ok(())
     }
 }
@@ -1083,6 +1107,7 @@ mod tests {
     use crate::runtime::advanced_options::{
         ContainerCapabilities, SecurityOptions, SecurityOptionsBuilder,
     };
+    use crate::runtime::types::Bytes;
 
     #[test]
     fn legacy_ports_keep_old_same_port_and_last_write_wins_semantics() {
@@ -1218,7 +1243,7 @@ mod tests {
                 drop: vec!["NET_RAW".into()],
             }))
             .unwrap();
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             advanced,
             ..Default::default()
         };
@@ -1236,7 +1261,7 @@ mod tests {
                 ..Default::default()
             }))
             .unwrap();
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             advanced,
             ..Default::default()
         };
@@ -1269,7 +1294,7 @@ mod tests {
         for capabilities in malformed {
             let mut advanced = AdvancedBoxOptions::default();
             advanced.set_capabilities(Some(capabilities)).unwrap();
-            let opts = BoxOptions {
+            let mut opts = BoxOptions {
                 advanced,
                 ..Default::default()
             };
@@ -1313,7 +1338,7 @@ mod tests {
                 .with_initramfs(&initramfs)
                 .with_command_line("console=ttyS0 panic=-1"),
         );
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             advanced,
             ..Default::default()
         };
@@ -1331,7 +1356,7 @@ mod tests {
     fn custom_kernel_must_be_a_file() {
         let mut advanced = AdvancedBoxOptions::default();
         advanced.kernel = Some(KernelOptions::new("/definitely/missing/vmlinux"));
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             advanced,
             ..Default::default()
         };
@@ -1354,7 +1379,7 @@ mod tests {
                 .with_format(format)
                 .with_command_line("console=ttyS0"),
         );
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             advanced,
             ..Default::default()
         };
@@ -1374,7 +1399,7 @@ mod tests {
                 .with_format(KernelFormat::Elf)
                 .with_initramfs(temp.path().join("missing-initramfs")),
         );
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             advanced,
             ..Default::default()
         };
@@ -1603,7 +1628,7 @@ mod tests {
     fn test_sanitize_rejects_unsupported_inbound_allow_net() {
         // FFI callers (C/Go) set the spec directly, bypassing try_from —
         // sanitize() is the create-time backstop for those paths.
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             inbound_network: NetworkSpec::Enabled {
                 allow_net: vec!["10.0.0.0/8".to_string()],
             },
@@ -1618,7 +1643,7 @@ mod tests {
     /// can, so sanitize() is the create-time backstop for those paths.
     #[test]
     fn test_sanitize_rejects_ambiguous_volume_origin() {
-        let both = BoxOptions {
+        let mut both = BoxOptions {
             volumes: vec![VolumeSpec {
                 managed_volume: Some("my-data".into()),
                 host_path: "/tmp/data".into(),
@@ -1630,7 +1655,7 @@ mod tests {
         let err = both.sanitize().unwrap_err().to_string();
         assert!(err.contains("exactly one"), "{err}");
 
-        let neither = BoxOptions {
+        let mut neither = BoxOptions {
             volumes: vec![VolumeSpec {
                 guest_path: "/data".into(),
                 ..Default::default()
@@ -1640,7 +1665,7 @@ mod tests {
         let err = neither.sanitize().unwrap_err().to_string();
         assert!(err.contains("volume id or name"), "{err}");
 
-        let empty_reference = BoxOptions {
+        let mut empty_reference = BoxOptions {
             volumes: vec![VolumeSpec::managed_volume("   ", "/data")],
             ..Default::default()
         };
@@ -1652,7 +1677,7 @@ mod tests {
     /// `host_path`; it must still load, as a host bind, without a migration.
     #[test]
     fn legacy_volume_json_without_managed_volume_still_loads() {
-        let opts: BoxOptions = serde_json::from_str(
+        let mut opts: BoxOptions = serde_json::from_str(
             r#"{"volumes":[{"host_path":"/tmp/data","guest_path":"/data","read_only":true}]}"#,
         )
         .expect("pre-managed_volume box config must still deserialize");
@@ -1711,7 +1736,7 @@ mod tests {
 
     #[test]
     fn test_sanitize_remove_on_stop_detach_incompatible() {
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             auto_delete: Some(1),
             detach: true,
             ..Default::default()
@@ -1722,20 +1747,20 @@ mod tests {
 
     #[test]
     fn test_sanitize_valid_combinations() {
-        let remove = BoxOptions {
+        let mut remove = BoxOptions {
             auto_delete: Some(1),
             ..Default::default()
         };
         assert!(remove.sanitize().is_ok());
 
-        let keep_detached = BoxOptions {
+        let mut keep_detached = BoxOptions {
             auto_delete: Some(0),
             detach: true,
             ..Default::default()
         };
         assert!(keep_detached.sanitize().is_ok());
 
-        let keep_attached = BoxOptions {
+        let mut keep_attached = BoxOptions {
             auto_delete: Some(0),
             ..Default::default()
         };
@@ -1750,7 +1775,7 @@ mod tests {
             protocol: PortProtocol::Tcp,
             host_ip: None,
         };
-        let opts = BoxOptions {
+        let mut opts = BoxOptions {
             ports: vec![
                 duplicate.clone(),
                 PortSpec {
@@ -2263,5 +2288,36 @@ mod tests {
         // Only opts2 should have max_processes
         assert!(opts1.resource_limits.max_processes.is_none());
         assert_eq!(opts2.resource_limits.max_processes, Some(50));
+    }
+
+    /// The whole point of #1152: the ceiling has to follow the box's own
+    /// `--disk-size`, not a constant picked before the box existed.
+    #[test]
+    fn sanitize_scales_fsize_with_the_requested_disk() {
+        let mut options = BoxOptions {
+            disk_size_gb: Some(20),
+            ..BoxOptions::default()
+        };
+        options.sanitize().unwrap();
+
+        assert_eq!(
+            options.advanced.security.resource_limits.max_file_size,
+            Some(Bytes::from_gib(40).as_bytes()),
+            "a 20 GiB box gets a 40 GiB ceiling"
+        );
+    }
+
+    /// No explicit size: the disk is created at `DEFAULT_DISK_SIZE_GB`, so the
+    /// ceiling tracks that.
+    #[test]
+    fn sanitize_falls_back_to_the_default_disk_size() {
+        let mut options = BoxOptions::default();
+        options.sanitize().unwrap();
+
+        assert_eq!(
+            options.advanced.security.resource_limits.max_file_size,
+            Some(Bytes::from_gib(20).as_bytes()),
+            "the default 10 GiB disk gets a 20 GiB ceiling"
+        );
     }
 }

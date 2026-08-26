@@ -122,6 +122,14 @@ fn options_from_manifest(
         return Err(rejected_upload("volume mounts"));
     }
     options.advanced.security = SecurityOptions::default();
+    // That reset also restores the default's hardcoded 1 GiB RLIMIT_FSIZE —
+    // the ceiling #1152 is about — because it replaces the whole struct rather
+    // than just the isolation fields it means to. The box still boots on a
+    // disk sized from its own `disk_size_gb`, so re-derive the limit.
+    // `sanitize` assigns it outright, so running it twice is idempotent.
+    options.sanitize().map_err(|error| {
+        BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
+    })?;
 
     Ok(options)
 }
@@ -223,6 +231,7 @@ pub(crate) fn validate_no_backing_references(disk_path: &Path) -> BoxliteResult<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::types::Bytes;
     use tempfile::TempDir;
 
     fn v3_manifest(options: BoxOptions) -> ArchiveManifest {
@@ -389,7 +398,32 @@ mod tests {
             options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
                 .unwrap();
 
-        assert_eq!(resolved.advanced.security, SecurityOptions::default());
+        // Everything but the file-size ceiling is the server default; that one
+        // is derived from the box's own disk (#1152), so it is the default's
+        // stale 1 GiB that must NOT come back.
+        let mut expected = SecurityOptions::default();
+        expected.resource_limits.max_file_size = Some(Bytes::from_gib(20).as_bytes());
+        assert_eq!(resolved.advanced.security, expected);
+    }
+
+    /// The server-default reset must not put the 1 GiB ceiling back: an
+    /// uploaded archive's box boots on a disk sized from its own
+    /// `disk_size_gb` and needs a limit that covers it.
+    #[test]
+    fn untrusted_import_derives_the_fsize_limit_from_the_disk() {
+        let options = BoxOptions {
+            disk_size_gb: Some(20),
+            ..BoxOptions::default()
+        };
+
+        let resolved =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .unwrap();
+
+        assert_eq!(
+            resolved.advanced.security.resource_limits.max_file_size,
+            Some(Bytes::from_gib(40).as_bytes())
+        );
     }
 
     #[test]
@@ -408,7 +442,13 @@ mod tests {
 
         assert!(resolved.advanced.nested_virtualization);
         assert!(resolved.advanced.privileged);
-        assert_eq!(resolved.advanced.security, SecurityOptions::disabled());
+
+        // `sanitize` derives RLIMIT_FSIZE from `disk_size_gb` (#1152), so the
+        // one security field a trusted import does not carry over verbatim is
+        // the file-size ceiling. Everything else is preserved.
+        let mut expected = SecurityOptions::disabled();
+        expected.resource_limits.max_file_size = Some(Bytes::from_gib(20).as_bytes());
+        assert_eq!(resolved.advanced.security, expected);
     }
 
     #[test]

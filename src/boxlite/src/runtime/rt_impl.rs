@@ -1773,6 +1773,7 @@ async fn sanitize_local_options(
     reject_local_unsupported_options(&options)?;
     features.require_for_options(&options)?;
     tokio::task::spawn_blocking(move || {
+        let mut options = options;
         options.sanitize()?;
         Ok(options)
     })
