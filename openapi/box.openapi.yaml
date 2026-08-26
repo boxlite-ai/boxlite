@@ -777,10 +777,11 @@ paths:
           description: |
             `0` or `false` opens a **read-only attach** — docker's
             `--no-stdin`. The server then refuses stdin data frames,
-            `stdin_eof`, `signal` and `resize` on this socket, answering each
-            with an `{"type":"error","code":"read_only_attach",...}` text
-            frame; a stdin data frame additionally closes the connection with
-            WebSocket status 1008.
+            `stdin_eof`, `signal` and `resize` on this socket, answering the
+            first of each kind with an
+            `{"type":"error","code":"read_only_attach",...}` text frame and
+            ignoring repeats of a kind already refused; a stdin data frame
+            additionally closes the connection with WebSocket status 1008.
 
             Read-only is a property of the individual WebSocket, not of the
             session: other clients attaching to the same session are

@@ -131,9 +131,13 @@ async fn attach_and_send_controls(port: u16, box_id: &str) -> Vec<String> {
         .await
         .expect("attach upgrade");
 
+    // resize is sent twice on purpose: one rejection per kind is what bounds the
+    // control channel, and a test that sends each kind once passes whether or
+    // not that bound exists.
     for frame in [
         r#"{"type":"signal","sig":15}"#,
         r#"{"type":"resize","rows":10,"cols":40}"#,
+        r#"{"type":"resize","rows":20,"cols":80}"#,
         r#"{"type":"stdin_eof"}"#,
     ] {
         ws.send(Message::Text(frame.to_string()))
@@ -141,10 +145,12 @@ async fn attach_and_send_controls(port: u16, box_id: &str) -> Vec<String> {
             .expect("send control frame");
     }
 
+    // Drain until the server goes quiet rather than stopping at the expected
+    // count, so a fourth rejection would be observed instead of left unread.
     let mut controls = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    while controls.len() < 3 && tokio::time::Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_secs(3), ws.next()).await {
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_secs(2), ws.next()).await {
             Ok(Some(Ok(Message::Text(text)))) => controls.push(text.to_string()),
             Ok(Some(Ok(_))) => {}
             Ok(Some(Err(_))) | Ok(None) => break,
@@ -174,7 +180,8 @@ async fn read_only_attach_refuses_signal_resize_and_stdin_eof() {
             .filter(|c| c.contains("read_only_attach"))
             .count(),
         3,
-        "signal, resize and stdin_eof must all be refused, got {controls:?}"
+        "signal, resize and stdin_eof must each be refused exactly once — four \
+         rejections means the repeated resize was not bounded. got {controls:?}"
     );
     assert!(
         stdout.contains("ECHO:hello"),

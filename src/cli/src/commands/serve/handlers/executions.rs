@@ -420,17 +420,20 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, std
 
     let reader_active = Arc::clone(&active);
     let mut reader = tokio::spawn(async move {
-        // One rejection per socket: the reader keeps draining so the writer can
-        // flush and close (whichever task ends first aborts the other), and a
-        // peer that never reads must not queue a control frame per frame sent.
-        let mut stdin_rejected = false;
+        // One rejection per kind: the reader keeps draining so the writer can
+        // flush and close, and a peer that never reads must not be able to
+        // queue a control frame for every frame it sends.
+        let mut refused_stdin = false;
+        let mut refused_eof = false;
+        let mut refused_resize = false;
+        let mut refused_signal = false;
 
         while let Some(msg) = stream.next().await {
             match msg {
                 Ok(Message::Binary(bytes)) => {
                     if stdin == StdinPolicy::Refuse {
-                        if !stdin_rejected {
-                            stdin_rejected = true;
+                        if !refused_stdin {
+                            refused_stdin = true;
                             let _ = ctrl_tx
                                 .send(CtrlOut::ClosePolicyViolation(read_only_rejection("stdin")));
                         }
@@ -466,7 +469,11 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, std
                     match v.get("type").and_then(|t| t.as_str()) {
                         Some("resize") => {
                             if stdin == StdinPolicy::Refuse {
-                                let _ = ctrl_tx.send(CtrlOut::Text(read_only_rejection("resize")));
+                                if !refused_resize {
+                                    refused_resize = true;
+                                    let _ =
+                                        ctrl_tx.send(CtrlOut::Text(read_only_rejection("resize")));
+                                }
                                 continue;
                             }
                             let rows = match v.get("rows").and_then(|n| n.as_u64()) {
@@ -509,7 +516,11 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, std
                         }
                         Some("signal") => {
                             if stdin == StdinPolicy::Refuse {
-                                let _ = ctrl_tx.send(CtrlOut::Text(read_only_rejection("signal")));
+                                if !refused_signal {
+                                    refused_signal = true;
+                                    let _ =
+                                        ctrl_tx.send(CtrlOut::Text(read_only_rejection("signal")));
+                                }
                                 continue;
                             }
                             let sig = match v.get("sig").and_then(|n| n.as_i64()) {
@@ -549,8 +560,11 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, std
                         }
                         Some("stdin_eof") => {
                             if stdin == StdinPolicy::Refuse {
-                                let _ =
-                                    ctrl_tx.send(CtrlOut::Text(read_only_rejection("stdin_eof")));
+                                if !refused_eof {
+                                    refused_eof = true;
+                                    let _ = ctrl_tx
+                                        .send(CtrlOut::Text(read_only_rejection("stdin_eof")));
+                                }
                                 continue;
                             }
                             let mut guard = reader_active.stdin().lock().await;
