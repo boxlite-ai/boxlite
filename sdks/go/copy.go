@@ -122,14 +122,25 @@ func (s *copyStreamState) deliverData(data []byte) {
 	s.mu.Lock()
 	w := s.w
 	s.mu.Unlock()
-	if w != nil {
-		_, _ = w.Write(data)
+	if w == nil {
+		return
+	}
+	if _, err := w.Write(data); err != nil {
+		s.fail(err)
 	}
 }
 
-func (s *copyStreamState) deliverDone(err error) {
-	s.released.Store(true)
+// fail signals completion exactly once; the first error wins. A destination
+// write failure surfaces through here before Rust's final copy callback.
+func (s *copyStreamState) fail(err error) {
+	if s.released.Swap(true) {
+		return
+	}
 	s.done <- err
+}
+
+func (s *copyStreamState) deliverDone(err error) {
+	s.fail(err)
 }
 
 // CopyOutStream streams a tar of guestSrc to w without staging to disk.

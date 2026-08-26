@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use crate::box_handle::BoxHandle;
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
 use crate::event_queue::{
-    push_event, CBoxCopyCb, CBoxCopyDataCb, CBoxCopyMetaCb, CBoxCopyMetaFn, RuntimeEvent,
+    CBoxCopyCb, CBoxCopyDataCb, CBoxCopyMetaCb, CBoxCopyMetaFn, RuntimeEvent, push_event,
 };
 use crate::util::c_str_to_string;
 use crate::{CBoxHandle, CBoxliteError};
@@ -201,7 +201,10 @@ pub unsafe extern "C" fn boxlite_copy_out_stream(
         let user_data_addr = user_data as usize;
 
         handle_ref.tokio_rt.spawn(async move {
-            match lite.copy_out_tar(src.as_str(), default_copy_options()).await {
+            match lite
+                .copy_out_tar(src.as_str(), default_copy_options())
+                .await
+            {
                 Ok((mut tar, source_is_dir)) => {
                     if let (Some(mcb), Some(is_dir)) = (meta_cb, source_is_dir) {
                         push_event(

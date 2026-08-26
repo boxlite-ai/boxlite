@@ -467,11 +467,11 @@ pub async fn unpack_stream(
         };
         extract_from_reader(reader, &dest, &opts, mode)
     });
-    let result = unpack
-        .await
-        .map_err(|e| BoxliteError::Storage(format!("unpack task join error: {}", e)))?;
+    let result = unpack.await;
+    // Abort the forwarder before mapping the join result, so a panicked
+    // unpack task can't leak a forwarder that keeps draining the stream.
     forward.abort();
-    result
+    result.map_err(|e| BoxliteError::Storage(format!("unpack task join error: {}", e)))?
 }
 
 // ── Private ───────────────────────────────────────────────────────

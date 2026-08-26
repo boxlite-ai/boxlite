@@ -227,10 +227,8 @@ impl FilesInterface {
         let mut first_data = first.map(|c| c.data);
 
         let out = async_stream::stream! {
-            if let Some(data) = first_data.take() {
-                if !data.is_empty() {
-                    yield Ok(data);
-                }
+            if let Some(data) = first_data.take().filter(|d| !d.is_empty()) {
+                yield Ok(data);
             }
             loop {
                 match stream.message().await {

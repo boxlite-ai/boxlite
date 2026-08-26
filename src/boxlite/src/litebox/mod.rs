@@ -199,8 +199,10 @@ impl LiteBox {
         &self,
         container_src: &str,
         opts: copy::CopyOptions,
-    ) -> futures::future::BoxFuture<'static, BoxliteResult<(boxlite_shared::BoxTarStream, Option<bool>)>>
-    {
+    ) -> futures::future::BoxFuture<
+        'static,
+        BoxliteResult<(boxlite_shared::BoxTarStream, Option<bool>)>,
+    > {
         let backend = self
             .box_backend
             .clone()

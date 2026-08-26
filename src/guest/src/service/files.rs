@@ -540,9 +540,9 @@ impl Files for GuestServer {
                     })?;
                 }
 
-                file.flush().await.map_err(|e| {
-                    Status::internal(format!("failed to flush temp file: {}", e))
-                })?;
+                file.flush()
+                    .await
+                    .map_err(|e| Status::internal(format!("failed to flush temp file: {}", e)))?;
 
                 // Names the archive carries, read once: the mount check below
                 // and the ownership hand-off afterwards must agree on what
