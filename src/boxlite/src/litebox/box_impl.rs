@@ -986,6 +986,79 @@ impl BoxImpl {
         Ok(())
     }
 
+    /// Stream a tar byte stream into the guest at `container_dst`.
+    ///
+    /// `source_is_dir` is the authoritative archive shape. This is the
+    /// streaming counterpart to [`Self::copy_into`] — no temp tar file.
+    pub(crate) async fn copy_in_tar_stream<S>(
+        self: std::sync::Arc<Self>,
+        tar: S,
+        container_dst: String,
+        source_is_dir: bool,
+        opts: CopyOptions,
+    ) -> BoxliteResult<()>
+    where
+        S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
+    {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+        self.ensure_usable_without_rerunning_main("copy into")?;
+        if container_dst.is_empty() {
+            return Err(BoxliteError::Config(
+                "destination path cannot be empty".into(),
+            ));
+        }
+        // Materialise borrowed strings before the first await so the future
+        // never holds `&BoxImpl` across an await point (avoids an HRTB `Send`
+        // bound that trips tokio::spawn).
+        let cid = self.container_id().to_string();
+        let live = self.live_state().await?;
+        let mut files_iface = live.guest_session.files().await?;
+        files_iface
+            .upload_tar_stream(
+                tar,
+                &container_dst,
+                Some(&cid),
+                true,
+                opts.overwrite,
+                source_is_dir,
+            )
+            .await
+    }
+
+    /// Download `container_src` as a tar byte stream plus the archive-shape
+    /// hint. This is the streaming counterpart to [`Self::copy_out`] — no temp
+    /// tar file.
+    pub(crate) async fn copy_out_tar(
+        self: std::sync::Arc<Self>,
+        container_src: String,
+        opts: CopyOptions,
+    ) -> BoxliteResult<(boxlite_shared::BoxTarStream, Option<bool>)> {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+        self.ensure_usable_without_rerunning_main("copy out")?;
+        if container_src.is_empty() {
+            return Err(BoxliteError::Config("source path cannot be empty".into()));
+        }
+        let cid = self.container_id().to_string();
+        let live = self.live_state().await?;
+        let mut files_iface = live.guest_session.files().await?;
+        files_iface
+            .download_tar_stream(
+                &container_src,
+                Some(&cid),
+                opts.include_parent,
+                opts.follow_symlinks,
+            )
+            .await
+    }
+
     // ========================================================================
     // LIVE STATE INITIALIZATION (internal)
     // ========================================================================
@@ -1429,6 +1502,10 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
     fn name(&self) -> Option<&str> {
         self.config.name.as_deref()
+    }
+
+    fn as_any_arc(self: std::sync::Arc<Self>) -> std::sync::Arc<dyn std::any::Any + Send + Sync> {
+        self
     }
 
     async fn info(&self) -> BoxliteResult<BoxInfo> {

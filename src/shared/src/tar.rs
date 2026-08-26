@@ -3,9 +3,18 @@
 //! Both host (boxlite) and guest agent share this module to avoid
 //! duplicating tar building/extraction logic.
 
+use crate::constants::files::{PIPE_CHUNKS, PIPE_CHUNK_SIZE};
 use crate::{BoxliteError, BoxliteResult};
+use futures::{Stream, StreamExt};
 use std::collections::HashSet;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+
+/// A stream of raw tar bytes carrying a terminal `Err` item on pack failure.
+pub type BoxTarStream = Pin<Box<dyn Stream<Item = io::Result<Vec<u8>>> + Send + 'static>>;
 
 // ── Pack ──────────────────────────────────────────────────────────
 
@@ -22,20 +31,23 @@ pub struct PackContext {
 ///
 /// Runs blocking I/O on a dedicated thread via `spawn_blocking`.
 pub async fn pack(src: PathBuf, tar_path: PathBuf, opts: PackContext) -> BoxliteResult<()> {
-    tokio::task::spawn_blocking(move || pack_blocking(&src, &tar_path, &opts))
-        .await
-        .map_err(|e| BoxliteError::Storage(format!("pack task join error: {}", e)))?
+    tokio::task::spawn_blocking(move || {
+        let tar_file = std::fs::File::create(&tar_path).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "failed to create tar {}: {}",
+                tar_path.display(),
+                e
+            ))
+        })?;
+        pack_blocking(&src, tar_file, &opts)
+    })
+    .await
+    .map_err(|e| BoxliteError::Storage(format!("pack task join error: {}", e)))?
 }
 
-fn pack_blocking(src: &Path, tar_path: &Path, opts: &PackContext) -> BoxliteResult<()> {
-    let tar_file = std::fs::File::create(tar_path).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "failed to create tar {}: {}",
-            tar_path.display(),
-            e
-        ))
-    })?;
-    let mut builder = tar::Builder::new(tar_file);
+/// Pack `src` into `writer` (generic over `std::io::Write`).
+fn pack_blocking<W: Write>(src: &Path, writer: W, opts: &PackContext) -> BoxliteResult<()> {
+    let mut builder = tar::Builder::new(writer);
     builder.follow_symlinks(opts.follow_symlinks);
 
     if src.is_dir() {
@@ -81,6 +93,84 @@ fn pack_blocking(src: &Path, tar_path: &Path, opts: &PackContext) -> BoxliteResu
     builder
         .finish()
         .map_err(|e| BoxliteError::Storage(format!("failed to finish tar: {}", e)))
+}
+
+// ── Stream pack ──────────────────────────────────────────────────
+
+/// Blocking `Write` adapter feeding a bounded channel. Coalesces small writes
+/// into full `PIPE_CHUNK_SIZE` messages; `blocking_send` provides backpressure
+/// (a slow consumer throttles the pack thread) and surfaces `BrokenPipe` when
+/// the consumer drops the stream.
+struct PipeWriter {
+    tx: mpsc::Sender<io::Result<Vec<u8>>>,
+    pending: Vec<u8>,
+}
+
+impl PipeWriter {
+    fn flush_pending(&mut self) -> io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let chunk = std::mem::take(&mut self.pending);
+        self.tx
+            .blocking_send(Ok(chunk))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "tar stream consumer dropped"))
+    }
+}
+
+impl Write for PipeWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.pending.extend_from_slice(buf);
+        while self.pending.len() >= PIPE_CHUNK_SIZE {
+            let rest = self.pending.split_off(PIPE_CHUNK_SIZE);
+            let chunk = std::mem::replace(&mut self.pending, rest);
+            self.tx.blocking_send(Ok(chunk)).map_err(|_| {
+                io::Error::new(io::ErrorKind::BrokenPipe, "tar stream consumer dropped")
+            })?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_pending()
+    }
+}
+
+impl Drop for PipeWriter {
+    fn drop(&mut self) {
+        let _ = self.flush_pending();
+    }
+}
+
+/// Stream `src` into a tar byte stream.
+///
+/// Returns the source shape (`source_is_dir = src.is_dir()`) alongside the
+/// stream. The pack runs on a `spawn_blocking` thread; a pack failure surfaces
+/// as a terminal `Err` item on the stream.
+pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<(bool, BoxTarStream)> {
+    let source_is_dir = src.is_dir();
+    if !src.exists() {
+        return Err(BoxliteError::NotFound(format!(
+            "source path {} does not exist",
+            src.display()
+        )));
+    }
+    let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(PIPE_CHUNKS);
+    let writer = PipeWriter {
+        tx: tx.clone(),
+        pending: Vec::with_capacity(PIPE_CHUNK_SIZE),
+    };
+    let task_tx = tx;
+    tokio::task::spawn_blocking(move || {
+        let result = pack_blocking(&src, writer, &opts);
+        // `writer` is consumed (and its pending bytes flushed on drop) inside
+        // `pack_blocking`. Report a failure as a terminal stream error through
+        // the original sender, then drop it to signal EOF.
+        if let Err(e) = result {
+            let _ = task_tx.blocking_send(Err(io::Error::other(e)));
+        }
+    });
+    Ok((source_is_dir, Box::pin(ReceiverStream::new(rx))))
 }
 
 // ── Unpack ────────────────────────────────────────────────────────
@@ -132,7 +222,19 @@ fn unpack_blocking(tar_path: &Path, dest: &Path, opts: &UnpackContext) -> Boxlit
     } else {
         detect_extraction_mode(dest, tar_path)?
     };
+    let tar_file = std::fs::File::open(tar_path).map_err(|e| {
+        BoxliteError::Storage(format!("failed to open tar {}: {}", tar_path.display(), e))
+    })?;
+    extract_from_reader(tar_file, dest, opts, mode)
+}
 
+/// Extract a tar archive read from `reader` to `dest` using the given `mode`.
+fn extract_from_reader<R: Read>(
+    reader: R,
+    dest: &Path,
+    opts: &UnpackContext,
+    mode: ExtractionMode,
+) -> BoxliteResult<()> {
     match mode {
         ExtractionMode::FileToFile => {
             if let Some(parent) = dest.parent() {
@@ -157,10 +259,7 @@ fn unpack_blocking(tar_path: &Path, dest: &Path, opts: &UnpackContext) -> Boxlit
                     dest.display()
                 )));
             }
-            let tar_file = std::fs::File::open(tar_path).map_err(|e| {
-                BoxliteError::Storage(format!("failed to open tar {}: {}", tar_path.display(), e))
-            })?;
-            let mut archive = tar::Archive::new(tar_file);
+            let mut archive = tar::Archive::new(reader);
             let mut entries = archive
                 .entries()
                 .map_err(|e| BoxliteError::Storage(format!("failed to read tar entries: {}", e)))?;
@@ -201,10 +300,7 @@ fn unpack_blocking(tar_path: &Path, dest: &Path, opts: &UnpackContext) -> Boxlit
                     dest.display()
                 )));
             }
-            let tar_file = std::fs::File::open(tar_path).map_err(|e| {
-                BoxliteError::Storage(format!("failed to open tar {}: {}", tar_path.display(), e))
-            })?;
-            let mut archive = tar::Archive::new(tar_file);
+            let mut archive = tar::Archive::new(reader);
             archive.unpack(dest).map_err(|e| {
                 BoxliteError::Storage(format!("failed to extract archive: {}", with_causes(&e)))
             })
@@ -306,6 +402,76 @@ fn sanitize_entry_path(path: &Path) -> Option<PathBuf> {
         }
     }
     (!out.as_os_str().is_empty()).then_some(out)
+// ── Stream unpack ────────────────────────────────────────────────
+
+/// Blocking `Read` adapter draining a bounded channel, used to feed a
+/// `tar::Archive` from an async byte stream.
+struct PipeReader {
+    rx: mpsc::Receiver<io::Result<Vec<u8>>>,
+    pending: Option<(Vec<u8>, usize)>,
+}
+
+impl Read for PipeReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        loop {
+            if let Some((data, pos)) = &mut self.pending {
+                let remaining = &data[*pos..];
+                let n = remaining.len().min(buf.len());
+                buf[..n].copy_from_slice(&remaining[..n]);
+                *pos += n;
+                if *pos == data.len() {
+                    self.pending = None;
+                }
+                return Ok(n);
+            }
+            match self.rx.blocking_recv() {
+                Some(Ok(data)) => {
+                    if data.is_empty() {
+                        continue;
+                    }
+                    self.pending = Some((data, 0));
+                }
+                Some(Err(e)) => return Err(e),
+                None => return Ok(0),
+            }
+        }
+    }
+}
+
+/// Unpack a tar byte stream to `dest`.
+///
+/// Unlike the file-based [`unpack`], there is no archive peek — the extraction
+/// shape is taken authoritatively from `opts.force_directory` (`true` →
+/// directory, `false` → single file). Callers must resolve that from the peer's
+/// `source_is_dir` hint; a missing hint must fall back to the file-based
+/// [`unpack`] path, never call here with a guessed bool.
+pub async fn unpack_stream(
+    mut stream: BoxTarStream,
+    dest: PathBuf,
+    opts: UnpackContext,
+) -> BoxliteResult<()> {
+    let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(PIPE_CHUNKS);
+    let forward = tokio::spawn(async move {
+        while let Some(item) = stream.next().await {
+            if tx.send(item).await.is_err() {
+                break;
+            }
+        }
+    });
+    let reader = PipeReader { rx, pending: None };
+    let unpack = tokio::task::spawn_blocking(move || {
+        let mode = if opts.force_directory {
+            ExtractionMode::IntoDirectory
+        } else {
+            ExtractionMode::FileToFile
+        };
+        extract_from_reader(reader, &dest, &opts, mode)
+    });
+    let result = unpack
+        .await
+        .map_err(|e| BoxliteError::Storage(format!("unpack task join error: {}", e)))?;
+    forward.abort();
+    result
 }
 
 // ── Private ───────────────────────────────────────────────────────
@@ -1293,5 +1459,87 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "spaces\n");
+    }
+
+    // ── streaming pack/unpack round-trips ────────────────────────
+
+    #[tokio::test]
+    async fn stream_pack_reports_source_is_dir() {
+        let tmp = TempDir::new().unwrap();
+
+        let file = tmp.path().join("f.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let (is_dir, _stream) = pack_stream(file, default_pack()).await.unwrap();
+        assert!(!is_dir);
+
+        let dir = tmp.path().join("d");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("f.txt"), b"x").unwrap();
+        let (is_dir, _stream) = pack_stream(dir, default_pack()).await.unwrap();
+        assert!(is_dir);
+    }
+
+    #[tokio::test]
+    async fn stream_pack_nonexistent_source_errors() {
+        let tmp = TempDir::new().unwrap();
+        let result = pack_stream(tmp.path().join("does-not-exist"), default_pack()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn stream_roundtrip_single_file() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("hello.txt");
+        std::fs::write(&src, b"streaming hello").unwrap();
+
+        let (source_is_dir, stream) = pack_stream(
+            src,
+            PackContext {
+                follow_symlinks: true,
+                include_parent: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!source_is_dir);
+
+        let dest = tmp.path().join("dest.txt");
+        unpack_stream(stream, dest.clone(), uc(true, true, false))
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "streaming hello");
+    }
+
+    #[tokio::test]
+    async fn stream_roundtrip_dir_tree() {
+        let tmp = TempDir::new().unwrap();
+        let src_dir = tmp.path().join("s");
+        std::fs::create_dir_all(src_dir.join("sub")).unwrap();
+        std::fs::write(src_dir.join("a.txt"), "aaa").unwrap();
+        std::fs::write(src_dir.join("sub").join("b.txt"), "bbb").unwrap();
+
+        let (source_is_dir, stream) = pack_stream(
+            src_dir,
+            PackContext {
+                follow_symlinks: true,
+                include_parent: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(source_is_dir);
+
+        let dest = tmp.path().join("out");
+        unpack_stream(stream, dest.clone(), uc(true, true, true))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join("s").join("a.txt")).unwrap(),
+            "aaa"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("s").join("sub").join("b.txt")).unwrap(),
+            "bbb"
+        );
     }
 }

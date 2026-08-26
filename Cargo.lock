@@ -719,6 +719,7 @@ dependencies = [
 name = "boxlite-shared"
 version = "0.10.0"
 dependencies = [
+ "futures",
  "proptest",
  "prost",
  "serde",
@@ -727,6 +728,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-build",
 ]

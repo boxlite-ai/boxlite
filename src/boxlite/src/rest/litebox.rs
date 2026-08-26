@@ -8,7 +8,10 @@ use async_trait::async_trait;
 use reqwest::Method;
 use tokio::sync::mpsc;
 
+use boxlite_shared::constants::files::FALLBACK_CAP_BYTES;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use futures::StreamExt;
+use std::io;
 
 use crate::BoxInfo;
 use crate::litebox::copy::CopyOptions;
@@ -115,6 +118,10 @@ impl BoxBackend for RestBox {
 
     fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    fn as_any_arc(self: std::sync::Arc<Self>) -> std::sync::Arc<dyn std::any::Any + Send + Sync> {
+        self
     }
 
     async fn info(&self) -> BoxliteResult<BoxInfo> {
@@ -296,18 +303,30 @@ impl BoxBackend for RestBox {
             ));
         }
 
-        // Create tar archive from host path
-        let tar_bytes = create_tar_from_path(host_src)?;
+        // Stream a tar of the host source straight into the request body.
+        let (source_is_dir, tar) = boxlite_shared::tar::pack_stream(
+            host_src.to_path_buf(),
+            boxlite_shared::tar::PackContext {
+                follow_symlinks: opts.follow_symlinks,
+                include_parent: opts.include_parent,
+            },
+        )
+        .await?;
 
-        // Upload tar to server
+        let body = reqwest::Body::wrap_stream(tar.map(|r| r.map(bytes::Bytes::from)));
+
+        // Upload tar to server, carrying the archive-shape hint.
         let encoded_dst = urlencoding::encode(container_dst);
-        let path = format!("/boxes/{}/files?path={}", box_id, encoded_dst);
+        let path = format!(
+            "/boxes/{}/files?path={}&source_is_dir={}",
+            box_id, encoded_dst, source_is_dir
+        );
         let builder = self
             .client
             .authorized_request(Method::PUT, &path)
             .await?
             .header("Content-Type", "application/x-tar")
-            .body(tar_bytes);
+            .body(body);
 
         let resp = builder.send().await.map_err(transport_error)?;
 
@@ -344,10 +363,35 @@ impl BoxBackend for RestBox {
             return Err(map_http_body(status, &text));
         }
 
-        let tar_bytes = resp.bytes().await.map_err(transport_error)?;
+        // The archive shape is carried on the response header (newer servers);
+        // absence means the peer predates it → capped buffered fallback.
+        let source_is_dir = resp
+            .headers()
+            .get("x-boxlite-source-is-dir")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<bool>().ok());
 
-        // Extract tar to host path
-        extract_tar_to_path(&tar_bytes, host_dst)
+        let stream: boxlite_shared::BoxTarStream = Box::pin(
+            resp.bytes_stream()
+                .map(|r| r.map(|b| b.to_vec()).map_err(io::Error::other)),
+        );
+
+        match source_is_dir {
+            Some(d) => boxlite_shared::tar::unpack_stream(
+                stream,
+                host_dst.to_path_buf(),
+                boxlite_shared::tar::UnpackContext {
+                    overwrite: true,
+                    mkdir_parents: true,
+                    force_directory: d,
+                },
+            )
+            .await,
+            None => {
+                let bytes = read_capped(stream, FALLBACK_CAP_BYTES).await?;
+                extract_tar_to_path(&bytes, host_dst)
+            }
+        }
     }
 
     async fn clone_box(
@@ -1019,38 +1063,29 @@ async fn emit_or_fallback(
 // Tar Helpers
 // ============================================================================
 
-/// Create a tar archive from a host file or directory.
-fn create_tar_from_path(host_src: &Path) -> BoxliteResult<Vec<u8>> {
-    let mut archive = tar::Builder::new(Vec::new());
-
-    if host_src.is_dir() {
-        archive.append_dir_all(".", host_src).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to create tar from {}: {}",
-                host_src.display(),
-                e
-            ))
+/// Read a tar byte stream into memory, enforcing a size cap.
+///
+/// Used only as a fallback when the server predates the `source_is_dir`
+/// hint and therefore cannot stream end-to-end; past the cap we error
+/// instead of buffering unboundedly.
+async fn read_capped(
+    mut stream: boxlite_shared::BoxTarStream,
+    cap: u64,
+) -> BoxliteResult<Vec<u8>> {
+    let mut out: Vec<u8> = Vec::new();
+    while let Some(item) = stream.next().await {
+        let chunk = item.map_err(|e| {
+            BoxliteError::Internal(format!("copy_out read body failed: {}", e))
         })?;
-    } else {
-        let file_name = host_src
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "file".to_string());
-        let mut file = std::fs::File::open(host_src).map_err(|e| {
-            BoxliteError::Internal(format!("failed to open {}: {}", host_src.display(), e))
-        })?;
-        archive.append_file(&file_name, &mut file).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to add {} to tar: {}",
-                host_src.display(),
-                e
-            ))
-        })?;
+        if out.len() as u64 + chunk.len() as u64 > cap {
+            return Err(BoxliteError::Unsupported(format!(
+                "copy_out exceeds {} MiB fallback cap; upgrade the server to stream end-to-end",
+                cap / (1024 * 1024)
+            )));
+        }
+        out.extend_from_slice(&chunk);
     }
-
-    archive
-        .into_inner()
-        .map_err(|e| BoxliteError::Internal(format!("failed to finalize tar archive: {}", e)))
+    Ok(out)
 }
 
 /// Extract a tar archive to a host path.

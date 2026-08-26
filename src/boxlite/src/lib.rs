@@ -40,6 +40,7 @@ pub use portal::GuestSession;
 pub use runtime::{AuthHandle, BoxliteRuntime, ImageHandle, Principal};
 
 pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+pub use boxlite_shared::BoxTarStream;
 pub use disk::DiskInfo;
 pub use event_listener::{AuditEvent, AuditEventKind, AuditEventListener, EventListener};
 pub use litebox::SnapshotHandle;

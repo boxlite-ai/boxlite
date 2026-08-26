@@ -100,6 +100,9 @@ typedef struct BoxRunner BoxRunner;
 // Opaque handle for a one-shot prepared tunnel.
 typedef struct BoxTunnelHandle BoxTunnelHandle;
 
+// Opaque handle for a streaming copy-in (push raw tar bytes into the guest).
+typedef struct CBoxCopyInStream CBoxCopyInStream;
+
 // Opaque credential handle. Wraps a core `Arc<dyn Credential>` so the
 // concrete credential kind (today only `ApiKeyCredential`) is hidden
 // behind one C type, matching the trait/interface surface in the other
@@ -181,6 +184,12 @@ typedef void (*CBoxStartBoxCb)(CBoxliteError*, void*);
 
 // Copy (into / out of) completion.
 typedef void (*CBoxCopyCb)(CBoxliteError*, void*);
+
+// Streaming copy-out shape-hint callback (fires once, before any data).
+typedef void (*CBoxCopyMetaCb)(bool, void*);
+
+// Streaming copy-out data callback (raw tar bytes pushed to the caller).
+typedef void (*CBoxCopyDataCb)(const uint8_t*, size_t, void*);
 
 // C-compatible command descriptor with all BoxCommand options.
 //
@@ -601,6 +610,42 @@ enum BoxliteErrorCode boxlite_copy_out(CBoxHandle *handle,
                                        CBoxCopyCb cb,
                                        void *user_data,
                                        CBoxliteError *out_error);
+
+// Download `guest_src` as a tar byte stream.
+//
+// The `data_cb` receives raw tar chunks; `meta_cb` (optional) fires exactly
+// once — before the first `data_cb` — with the archive-shape hint
+// (`source_is_dir`), and `copy_cb` fires strictly last with the completion
+// result. All callbacks share `user_data`.
+enum BoxliteErrorCode boxlite_copy_out_stream(CBoxHandle *handle,
+                                              const char *guest_src,
+                                              CBoxCopyMetaCb meta_cb,
+                                              CBoxCopyDataCb data_cb,
+                                              CBoxCopyCb copy_cb,
+                                              void *user_data,
+                                              CBoxliteError *out_error);
+
+// Begin a streaming copy-in, returning an opaque transfer handle.
+struct CBoxCopyInStream *boxlite_copy_in_start(CBoxHandle *handle,
+                                               const char *guest_dst,
+                                               bool source_is_dir,
+                                               CBoxCopyCb copy_cb,
+                                               void *user_data,
+                                               CBoxliteError *out_error);
+
+// Push a chunk of raw tar bytes into the guest. Blocks when the guest is slow
+// (bounded-channel backpressure).
+enum BoxliteErrorCode boxlite_copy_in_write(struct CBoxCopyInStream *stream,
+                                            const uint8_t *data,
+                                            size_t len,
+                                            CBoxliteError *out_error);
+
+// Close the copy-in stream, signalling EOF to the guest. Idempotent.
+enum BoxliteErrorCode boxlite_copy_in_close(struct CBoxCopyInStream *stream,
+                                            CBoxliteError *out_error);
+
+// Reclaim a copy-in stream handle.
+void boxlite_copy_in_free(struct CBoxCopyInStream *stream);
 
 void boxlite_error_free(CBoxliteError *error);
 

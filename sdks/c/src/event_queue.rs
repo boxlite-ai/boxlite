@@ -162,6 +162,14 @@ pub(crate) type CBoxVolumeRemoveFn = extern "C" fn(*mut crate::CBoxliteError, *m
 pub type CBoxCopyCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxCopyFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
+/// Streaming copy-out data callback (raw tar bytes pushed to the caller).
+pub type CBoxCopyDataCb = Option<extern "C" fn(*const u8, usize, *mut c_void)>;
+pub(crate) type CBoxCopyDataFn = extern "C" fn(*const u8, usize, *mut c_void);
+
+/// Streaming copy-out shape-hint callback (fires once, before any data).
+pub type CBoxCopyMetaCb = Option<extern "C" fn(bool, *mut c_void)>;
+pub(crate) type CBoxCopyMetaFn = extern "C" fn(bool, *mut c_void);
+
 /// Box info completion. On success the callback owns the non-null metadata and
 /// must release it with `boxlite_free_box_info`. The error pointer is borrowed
 /// for callback dispatch only; on failure the metadata pointer is null.
@@ -398,6 +406,16 @@ pub enum RuntimeEvent {
         cb: CBoxVolumeRemoveFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
+    },
+    CopyMeta {
+        cb: CBoxCopyMetaFn,
+        user_data: usize,
+        source_is_dir: bool,
+    },
+    CopyData {
+        cb: CBoxCopyDataFn,
+        user_data: usize,
+        data: Vec<u8>,
     },
     Copy {
         cb: CBoxCopyFn,

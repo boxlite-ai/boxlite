@@ -2,7 +2,10 @@
 //!
 //! Provides tar-based upload/download to the guest container rootfs.
 
-use boxlite_shared::{BoxliteError, BoxliteResult, DownloadRequest, FilesClient, UploadChunk};
+use boxlite_shared::{
+    BoxTarStream, BoxliteError, BoxliteResult, DownloadRequest, FilesClient, UploadChunk,
+};
+use futures::StreamExt;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tonic::transport::Channel;
@@ -54,6 +57,7 @@ impl FilesInterface {
                         data: buf[..n].to_vec(),
                         mkdir_parents,
                         overwrite,
+                        source_is_dir: None,
                     };
                     first = false;
                     chunks.push(chunk);
@@ -131,6 +135,120 @@ impl FilesInterface {
             .map_err(|e| BoxliteError::Storage(format!("Failed to flush tar file: {}", e)))?;
 
         Ok(())
+    }
+
+    /// Upload a tar byte stream to the guest and extract at `dest_path`.
+    ///
+    /// `source_is_dir` is the authoritative archive shape (dir tree vs single
+    /// file); it is attached to the first chunk so the guest never has to peek
+    /// the tar to decide extraction mode.
+    pub async fn upload_tar_stream<S>(
+        &mut self,
+        tar: S,
+        dest_path: &str,
+        container_id: Option<&str>,
+        mkdir_parents: bool,
+        overwrite: bool,
+        source_is_dir: bool,
+    ) -> BoxliteResult<()>
+    where
+        S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
+    {
+        let dest = dest_path.to_string();
+        let cid = container_id.unwrap_or_default().to_string();
+
+        // tonic client-streaming yields the message directly (no per-item
+        // `Result`); a mid-stream error is signalled by ending the stream, and
+        // the guest reports the failure in `UploadResponse`.
+        let stream = async_stream::stream! {
+            futures::pin_mut!(tar);
+            let mut first = true;
+            while let Some(item) = tar.next().await {
+                match item {
+                    Ok(data) => {
+                        yield UploadChunk {
+                            dest_path: if first { dest.clone() } else { String::new() },
+                            container_id: cid.clone(),
+                            data,
+                            mkdir_parents,
+                            overwrite,
+                            source_is_dir: if first { Some(source_is_dir) } else { None },
+                        };
+                        first = false;
+                    }
+                    Err(_) => break,
+                }
+            }
+        };
+
+        let response = self
+            .client
+            .upload(stream)
+            .await
+            .map_err(map_tonic_err)?
+            .into_inner();
+
+        if response.success {
+            Ok(())
+        } else {
+            Err(BoxliteError::Internal(
+                response.error.unwrap_or_else(|| "Upload failed".into()),
+            ))
+        }
+    }
+
+    /// Download a path from the guest as a tar byte stream.
+    ///
+    /// Returns the stream plus the archive-shape hint read from the guest's
+    /// first chunk. `None` means the guest predates the hint (older peer).
+    pub async fn download_tar_stream(
+        &mut self,
+        container_src: &str,
+        container_id: Option<&str>,
+        include_parent: bool,
+        follow_symlinks: bool,
+    ) -> BoxliteResult<(BoxTarStream, Option<bool>)> {
+        let request = DownloadRequest {
+            src_path: container_src.to_string(),
+            container_id: container_id.unwrap_or_default().to_string(),
+            include_parent,
+            follow_symlinks,
+        };
+
+        let mut stream = self
+            .client
+            .download(request)
+            .await
+            .map_err(map_tonic_err)?
+            .into_inner();
+
+        let first = stream.message().await.map_err(map_tonic_err)?;
+        let source_is_dir = first.as_ref().and_then(|c| c.source_is_dir);
+        let mut first_data = first.map(|c| c.data);
+
+        let out = async_stream::stream! {
+            if let Some(data) = first_data.take() {
+                if !data.is_empty() {
+                    yield Ok(data);
+                }
+            }
+            loop {
+                match stream.message().await {
+                    Ok(Some(chunk)) => {
+                        if !chunk.data.is_empty() {
+                            yield Ok(chunk.data);
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        yield Err(std::io::Error::other(e));
+                        break;
+                    }
+                }
+            }
+        };
+
+        Ok((Box::pin(out), source_is_dir))
     }
 }
 

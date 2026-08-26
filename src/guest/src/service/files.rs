@@ -6,21 +6,21 @@
 
 use crate::service::server::GuestServer;
 use boxlite_shared::{
-    files_server::Files, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
+    files_server::Files, BoxTarStream, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
 };
+use futures::StreamExt;
 use nix::fcntl::OFlag;
 use std::collections::HashSet;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::info;
 
-const CHUNK_SIZE: usize = 1 << 20; // 1 MiB
 const MAX_UPLOAD_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB safety cap
 
 /// A staged upload, deleted whenever it goes out of scope.
@@ -458,90 +458,134 @@ impl Files for GuestServer {
         // Overwrite / mkdir flags
         let mkdir_parents = first.mkdir_parents;
         let overwrite = first.overwrite;
+        let source_is_dir = first.source_is_dir;
+        let first_data = first.data;
 
         // Temp file to hold tar stream. `StagedTar` owns the deletion, because
-        // every step from here to the end can leave through a `?`.
+        // every step from here to the end can leave through a `?`. Created
+        // only on the hintless path — the hinted path streams straight into
+        // extraction and never stages.
         let staged = StagedTar::new(
             std::env::temp_dir().join(format!("boxlite-upload-{}.tar", uuid::Uuid::new_v4())),
         );
-        let mut file = File::create(staged.path())
-            .await
-            .map_err(|e| Status::internal(format!("failed to create temp file: {}", e)))?;
 
-        // write first data chunk if present
-        let mut total: u64 = 0;
-        if !first.data.is_empty() {
-            total += first.data.len() as u64;
-            if total > MAX_UPLOAD_BYTES {
-                return Err(Status::resource_exhausted("upload too large"));
-            }
-            file.write_all(&first.data)
+        match source_is_dir {
+            // Streaming path: unpack directly from the byte stream. The hint
+            // makes the file-vs-directory shape authoritative (no tar peek).
+            Some(force_directory) => {
+                let tar_stream: BoxTarStream = Box::pin(async_stream::stream! {
+                    if !first_data.is_empty() {
+                        yield Ok(first_data);
+                    }
+                    loop {
+                        match stream.message().await {
+                            Ok(Some(chunk)) => {
+                                if !chunk.data.is_empty() {
+                                    yield Ok(chunk.data);
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(e) => {
+                                yield Err(std::io::Error::other(e));
+                                break;
+                            }
+                        }
+                    }
+                });
+
+                boxlite_shared::tar::unpack_stream(
+                    tar_stream,
+                    dest_root.clone(),
+                    boxlite_shared::tar::UnpackContext {
+                        overwrite,
+                        mkdir_parents,
+                        force_directory,
+                    },
+                )
                 .await
-                .map_err(|e| Status::internal(format!("failed to write temp file: {}", e)))?;
+                .map_err(|e| Status::internal(e.to_string()))?;
+            }
+            // Legacy fallback for older hosts/runners that omit the hint:
+            // buffer to a size-capped temp file and detect the shape by peeking.
+            None => {
+                let mut file = File::create(staged.path())
+                    .await
+                    .map_err(|e| Status::internal(format!("failed to create temp file: {}", e)))?;
+
+                let mut total: u64 = 0;
+                if !first_data.is_empty() {
+                    total += first_data.len() as u64;
+                    if total > MAX_UPLOAD_BYTES {
+                        return Err(Status::resource_exhausted("upload too large"));
+                    }
+                    file.write_all(&first_data).await.map_err(|e| {
+                        Status::internal(format!("failed to write temp file: {}", e))
+                    })?;
+                }
+
+                while let Some(chunk) = stream.message().await? {
+                    let len = chunk.data.len() as u64;
+                    total += len;
+                    if total > MAX_UPLOAD_BYTES {
+                        return Err(Status::resource_exhausted("upload too large"));
+                    }
+                    file.write_all(&chunk.data).await.map_err(|e| {
+                        Status::internal(format!("failed to write temp file: {}", e))
+                    })?;
+                }
+
+                file.flush().await.map_err(|e| {
+                    Status::internal(format!("failed to flush temp file: {}", e))
+                })?;
+
+                // Names the archive carries, read once: the mount check below
+                // and the ownership hand-off afterwards must agree on what
+                // this copy wrote. Shared rather than cloned — an archive may
+                // carry a great many names.
+                let entry_paths: Arc<[PathBuf]> =
+                    boxlite_shared::tar::entry_paths(staged.path().to_path_buf())
+                        .await
+                        .map_err(|e| Status::internal(e.to_string()))?
+                        .into();
+
+                // The root cleared the mount check, but individual entries may
+                // still land under one. Refuse before touching the rootfs — a
+                // partially applied copy is worse than a refused one.
+                dest.refuse_shadowed_payload(&entry_paths)?;
+
+                // What is not there yet — unpack is about to create it, and it
+                // needs the same owner as the payload. Must be sampled *before*
+                // extraction, since afterwards there is no way to tell what we
+                // made from what the image already shipped.
+                let before =
+                    DestBefore::sample(dest_root.clone(), Arc::clone(&entry_paths)).await?;
+
+                // dest_path may have a trailing '/' indicating directory mode.
+                let force_directory = dest_path.ends_with('/');
+                boxlite_shared::tar::unpack(
+                    staged.path().to_path_buf(),
+                    dest_root.clone(),
+                    boxlite_shared::tar::UnpackContext {
+                        overwrite,
+                        mkdir_parents,
+                        force_directory,
+                    },
+                )
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+
+                // Hand the payload to the user the box actually runs as. tar
+                // preserves neither owner (it extracts as this process, root)
+                // nor any notion of who will read the file, so without this
+                // every copy_in lands root-owned and a non-root workload
+                // cannot open it.
+                self.chown_to_container_user(&container_id, dest_root.clone(), entry_paths, before)
+                    .await;
+            }
         }
 
-        // stream remaining chunks
-        while let Some(chunk) = stream.message().await? {
-            let len = chunk.data.len() as u64;
-            total += len;
-            if total > MAX_UPLOAD_BYTES {
-                return Err(Status::resource_exhausted("upload too large"));
-            }
-            file.write_all(&chunk.data)
-                .await
-                .map_err(|e| Status::internal(format!("failed to write temp file: {}", e)))?;
-        }
 
-        file.flush()
-            .await
-            .map_err(|e| Status::internal(format!("failed to flush temp file: {}", e)))?;
-
-        // Names the archive carries, read once: the mount check below and the
-        // ownership hand-off afterwards must agree on what this copy wrote.
-        // Shared rather than cloned — an archive may carry a great many names.
-        let entry_paths: Arc<[PathBuf]> =
-            boxlite_shared::tar::entry_paths(staged.path().to_path_buf())
-                .await
-                .map_err(|e| Status::internal(e.to_string()))?
-                .into();
-
-        // The root cleared the mount check, but individual entries may still
-        // land under one. Refuse before touching the rootfs — a partially
-        // applied copy is worse than a refused one.
-        dest.refuse_shadowed_payload(&entry_paths)?;
-
-        // What is not there yet — unpack is about to create it, and it needs
-        // the same owner as the payload. Must be sampled *before* extraction,
-        // since afterwards there is no way to tell what we made from what the
-        // image already shipped.
-        let before = DestBefore::sample(dest_root.clone(), Arc::clone(&entry_paths)).await?;
-
-        // Extract tar using shared logic
-        // The original dest_path may have trailing '/' indicating directory mode,
-        // but the resolved rootfs path won't. Use force_directory in that case.
-        let force_directory = dest_path.ends_with('/');
-        boxlite_shared::tar::unpack(
-            staged.path().to_path_buf(),
-            dest_root.clone(),
-            boxlite_shared::tar::UnpackContext {
-                overwrite,
-                mkdir_parents,
-                force_directory,
-            },
-        )
-        .await
-        .map_err(|e| Status::internal(e.to_string()))?;
-
-        // Hand the payload to the user the box actually runs as. tar preserves
-        // neither owner (it extracts as this process, root) nor any notion of
-        // who will read the file, so without this every copy_in lands
-        // root-owned and a non-root workload cannot open it.
-        self.chown_to_container_user(&container_id, dest_root.clone(), entry_paths, before)
-            .await;
-
-        info!(
             dest = %dest_root.display(),
-            bytes = total,
             container_id = %container_id,
             "upload completed"
         );
@@ -577,19 +621,13 @@ impl Files for GuestServer {
             src.refuse_shadowed_subtree()?;
         }
 
-        // Build tar into temp file. `StagedTar` owns the deletion: a failed
-        // pack leaves through a `?` and the streaming task below moves it in so
-        // the file outlives this call exactly as long as it is being read.
-        let staged = StagedTar::new(
-            std::env::temp_dir().join(format!("boxlite-download-{}.tar", uuid::Uuid::new_v4())),
-        );
-
         let include_parent = req.include_parent;
         let follow_symlinks = req.follow_symlinks;
 
-        boxlite_shared::tar::pack(
+        // Stream the tar directly from disk (no temp file); the first chunk
+        // carries the source_is_dir shape hint.
+        let (source_is_dir, tar_stream) = boxlite_shared::tar::pack_stream(
             src_path,
-            staged.path().to_path_buf(),
             boxlite_shared::tar::PackContext {
                 follow_symlinks,
                 include_parent,
@@ -598,43 +636,24 @@ impl Files for GuestServer {
         .await
         .map_err(|e| Status::internal(e.to_string()))?;
 
-        // Stream file contents
         let (tx, rx) = mpsc::channel::<Result<DownloadChunk, Status>>(4);
         tokio::spawn(async move {
-            let mut file = match File::open(staged.path()).await {
-                Ok(f) => f,
-                Err(e) => {
-                    let _ = tx
-                        .send(Err(Status::internal(format!(
-                            "open temp tar failed: {}",
-                            e
-                        ))))
-                        .await;
-                    return;
-                }
-            };
-            let mut buf = vec![0u8; CHUNK_SIZE];
-            loop {
-                match file.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if tx
-                            .send(Ok(DownloadChunk {
-                                data: buf[..n].to_vec(),
-                            }))
-                            .await
-                            .is_err()
-                        {
+            let mut first = true;
+            let mut stream = tar_stream;
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(data) => {
+                        let chunk = DownloadChunk {
+                            data,
+                            source_is_dir: if first { Some(source_is_dir) } else { None },
+                        };
+                        first = false;
+                        if tx.send(Ok(chunk)).await.is_err() {
                             break;
                         }
                     }
                     Err(e) => {
-                        let _ = tx
-                            .send(Err(Status::internal(format!(
-                                "read temp tar failed: {}",
-                                e
-                            ))))
-                            .await;
+                        let _ = tx.send(Err(Status::internal(e.to_string()))).await;
                         break;
                     }
                 }
