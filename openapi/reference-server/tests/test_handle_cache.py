@@ -29,19 +29,6 @@ def _install_boxlite_stub() -> None:
         def __init__(self, *args, **kwargs):
             pass
 
-    class _SecurityOptions:
-        @staticmethod
-        def development():
-            return object()
-
-        @staticmethod
-        def standard():
-            return object()
-
-        @staticmethod
-        def maximum():
-            return object()
-
     module.Boxlite = _Noop
     module.Options = _Noop
     module.BoxOptions = _Noop
@@ -51,7 +38,6 @@ def _install_boxlite_stub() -> None:
     module.ExportOptions = _Noop
     module.SnapshotOptions = _Noop
     module.CopyOptions = _Noop
-    module.SecurityOptions = _SecurityOptions
     sys.modules["boxlite"] = module
 
 
@@ -164,6 +150,17 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
             SERVER.CreateBoxRequest.model_validate(
                 {"ports": [{"guest_port": 3000}]}
             )
+
+    def test_create_request_rejects_client_security_policy(self) -> None:
+        for field in ("security", "security_settings"):
+            with self.subTest(field=field), self.assertRaises(ValidationError):
+                SERVER.CreateBoxRequest.model_validate({field: "development"})
+
+    async def test_config_does_not_advertise_client_security_controls(self) -> None:
+        config = await SERVER.get_config()
+
+        self.assertNotIn("security_preset", config["defaults"])
+        self.assertNotIn("supported_security_presets", config["capabilities"])
 
     def test_dedicated_ports_route_is_removed(self) -> None:
         paths = {route.path for route in SERVER.app.routes}

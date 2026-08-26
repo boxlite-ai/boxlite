@@ -176,7 +176,6 @@ class CreateBoxRequest(BaseModel):
     auto_resume: Optional[bool] = None
     detach: Optional[bool] = False
     advanced: Optional[CreateBoxAdvancedOptions] = None
-    security: Optional[str] = None
 
 
 class StopBoxRequest(BaseModel):
@@ -436,15 +435,6 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
             (v["host_path"], v["guest_path"], v.get("read_only", False))
             for v in req.volumes
         ]
-    if req.security:
-        presets = {
-            "development": boxlite.SecurityOptions.development,
-            "standard": boxlite.SecurityOptions.standard,
-            "maximum": boxlite.SecurityOptions.maximum,
-        }
-        if req.security in presets:
-            kwargs["security"] = presets[req.security]()
-
     return boxlite.BoxOptions(**kwargs)
 
 
@@ -593,7 +583,6 @@ async def get_config():
             "cpus": 2,
             "memory_mib": 512,
             "disk_size_gb": 10,
-            "security_preset": "standard",
             "auto_delete": 0,
         },
         "overrides": {},
@@ -612,7 +601,6 @@ async def get_config():
             "clone_enabled": True,
             "export_enabled": True,
             "import_enabled": True,
-            "supported_security_presets": ["development", "standard", "maximum"],
             "idempotency_key_lifetime": "PT24H",
         },
     }
