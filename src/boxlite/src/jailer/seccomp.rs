@@ -483,7 +483,8 @@ mod tests {
             if apply_filter(vmm_filter).is_err() {
                 unsafe { libc::_exit(2) };
             }
-            let ret = unsafe { libc::syscall(libc::SYS_time, std::ptr::null_mut::<libc::time_t>()) };
+            let ret =
+                unsafe { libc::syscall(libc::SYS_time, std::ptr::null_mut::<libc::time_t>()) };
             // `time` is allowlisted: the raw syscall returns the current time
             // (>= 0), not -1. `trap` would SIGSYS-kill the child before this
             // point; guard the errno-returning case so a future default-action
