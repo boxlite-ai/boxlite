@@ -894,7 +894,7 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
 ### Unreleased
 
 **Breaking Changes:**
-- `boxlite_options_add_volume` is renamed `boxlite_options_add_host_path`, and
+- `boxlite_options_add_volume` is renamed `boxlite_options_add_bind_mount`, and
   the new `boxlite_options_add_managed_volume` mounts a managed volume by its
   server-assigned id or its name. The two mount origins are distinct: a host
   path is local-runtime only, a managed volume REST-runtime only.
@@ -927,7 +927,7 @@ boxlite_volume_create(handle, on_created, user_data, &err);
 After:
 ```c
 /* host bind (local runtime) */
-boxlite_options_add_host_path(opts, "/host/data", "/data", 0);
+boxlite_options_add_bind_mount(opts, "/host/data", "/data", 0);
 /* managed volume by id or name (REST runtime) */
 boxlite_options_add_managed_volume(opts, "my-data", "/data", 0);
 

@@ -660,8 +660,12 @@ impl Default for RootfsSpec {
 ///
 /// A mount has exactly one origin: `managed_volume` for a server-side managed
 /// volume, or `host_path` for a bind mount from the machine running the box.
-/// Build one with [`VolumeSpec::managed_volume`] or [`VolumeSpec::host_path`] instead of
-/// filling the fields by hand.
+/// Build one with [`VolumeSpec::managed_volume`] or [`VolumeSpec::bind_mount`]
+/// instead of filling the fields by hand.
+///
+/// The `host_path` field keeps its name because it is persisted box config:
+/// boxes on disk carry a `host_path` key, so renaming the field — not the
+/// constructor — would strand every box written before such a rename.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct VolumeSpec {
     /// Managed volume to mount, addressed by its server-assigned id **or** by
@@ -686,7 +690,7 @@ pub struct VolumeSpec {
 
 impl VolumeSpec {
     /// Bind a host directory or file into the box.
-    pub fn host_path(host_path: impl Into<String>, guest_path: impl Into<String>) -> Self {
+    pub fn bind_mount(host_path: impl Into<String>, guest_path: impl Into<String>) -> Self {
         Self {
             managed_volume: None,
             host_path: host_path.into(),
@@ -1609,7 +1613,7 @@ mod tests {
         assert!(err.contains("not supported yet"));
     }
 
-    /// `VolumeSpec::managed_volume` and `VolumeSpec::host_path` cannot produce a mount
+    /// `VolumeSpec::managed_volume` and `VolumeSpec::bind_mount` cannot produce a mount
     /// with two origins or none, but a struct literal and the C/Go FFI both
     /// can, so sanitize() is the create-time backstop for those paths.
     #[test]
@@ -1666,7 +1670,7 @@ mod tests {
     #[test]
     fn host_volume_omits_managed_volume_key() {
         let opts = BoxOptions {
-            volumes: vec![VolumeSpec::host_path("/tmp/data", "/data")],
+            volumes: vec![VolumeSpec::bind_mount("/tmp/data", "/data")],
             ..Default::default()
         };
 

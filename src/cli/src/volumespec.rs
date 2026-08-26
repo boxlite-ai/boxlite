@@ -30,7 +30,7 @@ pub enum MountOrigin {
     /// A managed volume, by server-assigned id or by name.
     ManagedVolume(String),
     /// A host directory or file. Relative paths are resolved by the caller.
-    HostPath(String),
+    BindMount(String),
     /// No source given — the caller wants scratch space at `guest_path`.
     Anonymous,
 }
@@ -140,7 +140,7 @@ fn classify(source: &str) -> anyhow::Result<MountOrigin> {
     };
 
     Ok(if host_path {
-        MountOrigin::HostPath(source.to_string())
+        MountOrigin::BindMount(source.to_string())
     } else {
         MountOrigin::ManagedVolume(source.to_string())
     })
@@ -196,7 +196,7 @@ mod tests {
 
     fn host(spec: &str) -> String {
         match parse(spec).unwrap().origin {
-            MountOrigin::HostPath(path) => path,
+            MountOrigin::BindMount(path) => path,
             other => panic!("{spec:?} should be a host path, got {other:?}"),
         }
     }
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn windows_drive_path_still_takes_options() {
         let mount = parse(r"C:\data:/data:ro").unwrap();
-        assert_eq!(mount.origin, MountOrigin::HostPath(r"C:\data".to_string()));
+        assert_eq!(mount.origin, MountOrigin::BindMount(r"C:\data".to_string()));
         assert_eq!(mount.guest_path, "/data");
         assert!(mount.read_only);
     }

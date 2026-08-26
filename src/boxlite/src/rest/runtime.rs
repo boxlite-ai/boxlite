@@ -592,7 +592,7 @@ mod tests {
         let options = BoxliteRestOptions::new("http://localhost:1");
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
         let box_options = BoxOptions {
-            volumes: vec![VolumeSpec::host_path("/tmp/secrets", "/mnt/ro")],
+            volumes: vec![VolumeSpec::bind_mount("/tmp/secrets", "/mnt/ro")],
             ..Default::default()
         };
 

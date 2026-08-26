@@ -605,7 +605,7 @@ impl From<PyVolumeSpec> for VolumeSpec {
     fn from(v: PyVolumeSpec) -> Self {
         let spec = match v.managed_volume {
             Some(managed_volume) => VolumeSpec::managed_volume(managed_volume, v.guest_path),
-            None => VolumeSpec::host_path(v.host_path, v.guest_path),
+            None => VolumeSpec::bind_mount(v.host_path, v.guest_path),
         };
 
         VolumeSpec {

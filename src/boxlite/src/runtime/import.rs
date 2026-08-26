@@ -332,7 +332,9 @@ mod tests {
         let mut options = BoxOptions::default();
         options
             .volumes
-            .push(crate::runtime::options::VolumeSpec::host_path("/", "/host"));
+            .push(crate::runtime::options::VolumeSpec::bind_mount(
+                "/", "/host",
+            ));
 
         let error =
             options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)

@@ -614,7 +614,7 @@ let options = BoxOptions {
         ("PYTHONPATH".to_string(), "/app".to_string()),
     ],
     volumes: vec![
-        VolumeSpec::host_path("/home/user/project", "/app"),
+        VolumeSpec::bind_mount("/home/user/project", "/app"),
     ],
     ports: vec![
         PortSpec {
@@ -698,6 +698,11 @@ pub struct VolumeSpec {
 }
 ```
 
+The constructor names the operation; the `host_path` field names what it holds.
+The field keeps its name because it is persisted box config: boxes on disk carry
+a `host_path` key, so renaming the field would strand every box written before
+such a rename. Renaming the constructor, as here, does not touch what is stored.
+
 Build one with a constructor rather than by hand:
 
 ```rust
@@ -709,7 +714,7 @@ let by_name = VolumeSpec::managed_volume("my-data", "/data");
 // Host bind mount, read-only.
 let bind = VolumeSpec {
     read_only: true,
-    ..VolumeSpec::host_path("/tmp/data", "/data")
+    ..VolumeSpec::bind_mount("/tmp/data", "/data")
 };
 ```
 
@@ -721,7 +726,7 @@ The two origins are not interchangeable across runtimes:
 | Origin | Local runtime | REST runtime |
 | --- | --- | --- |
 | `VolumeSpec::managed_volume` | rejected — no volume backend | mounted |
-| `VolumeSpec::host_path` | mounted | rejected — the path is the server's, not yours |
+| `VolumeSpec::bind_mount` | mounted | rejected — the path is the server's, not yours |
 
 ### NetworkSpec
 
@@ -1193,7 +1198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         volumes: vec![
             VolumeSpec {
                 read_only: true,
-                ..VolumeSpec::host_path("/home/user/code", "/app")
+                ..VolumeSpec::bind_mount("/home/user/code", "/app")
             },
         ],
         advanced: AdvancedBoxOptions {

@@ -242,18 +242,18 @@ func WithEnv(key, value string) BoxOption {
 	}
 }
 
-// WithHostPath binds a host path into the box.
+// WithBindMount binds a host path into the box.
 //
 // Host binds are local-runtime only; a REST runtime rejects them at create.
 // Use [WithManagedVolume] against a REST runtime.
-func WithHostPath(hostPath, guestPath string) BoxOption {
+func WithBindMount(hostPath, guestPath string) BoxOption {
 	return func(c *boxConfig) {
 		c.volumes = append(c.volumes, volumeEntry{hostPath: hostPath, guestPath: guestPath})
 	}
 }
 
-// WithHostPathReadOnly binds a host path into the box as read-only.
-func WithHostPathReadOnly(hostPath, guestPath string) BoxOption {
+// WithBindMountReadOnly binds a host path into the box as read-only.
+func WithBindMountReadOnly(hostPath, guestPath string) BoxOption {
 	return func(c *boxConfig) {
 		c.volumes = append(c.volumes, volumeEntry{hostPath: hostPath, guestPath: guestPath, readOnly: true})
 	}
@@ -274,7 +274,7 @@ func WithManagedVolume(managedVolume, guestPath string) BoxOption {
 
 // Read-only managed volumes have no WithManagedVolumeReadOnly counterpart:
 // the server rejects read_only on a managed mount, so the option could only
-// ever produce an error. Host binds keep WithHostPathReadOnly.
+// ever produce an error. Host binds keep WithBindMountReadOnly.
 
 // WithPort publishes a guest port on a host port.
 //
@@ -448,7 +448,7 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 			C.free(unsafe.Pointer(cVolume))
 		} else {
 			cHost := toCString(volume.hostPath)
-			C.boxlite_options_add_host_path(cOpts, cHost, cGuest, readOnly)
+			C.boxlite_options_add_bind_mount(cOpts, cHost, cGuest, readOnly)
 			C.free(unsafe.Pointer(cHost))
 		}
 		C.free(unsafe.Pointer(cGuest))

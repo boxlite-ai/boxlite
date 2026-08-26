@@ -817,8 +817,8 @@ impl VolumeFlags {
                     VolumeSpec::managed_volume(volume, mount.guest_path)
                 }
 
-                crate::volumespec::MountOrigin::HostPath(path) => {
-                    VolumeSpec::host_path(resolve_host_path(path)?, mount.guest_path)
+                crate::volumespec::MountOrigin::BindMount(path) => {
+                    VolumeSpec::bind_mount(resolve_host_path(path)?, mount.guest_path)
                 }
 
                 crate::volumespec::MountOrigin::Anonymous => {
@@ -829,7 +829,7 @@ impl VolumeFlags {
                     std::fs::create_dir_all(&dir).map_err(|e| {
                         anyhow::anyhow!("failed to create anonymous volume dir {:?}: {}", dir, e)
                     })?;
-                    VolumeSpec::host_path(dir.to_string_lossy().into_owned(), mount.guest_path)
+                    VolumeSpec::bind_mount(dir.to_string_lossy().into_owned(), mount.guest_path)
                 }
             };
 

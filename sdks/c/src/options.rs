@@ -75,13 +75,13 @@ pub unsafe extern "C" fn boxlite_options_add_env(
 /// Host bind mounts are local-runtime only; a REST runtime rejects them at
 /// create. Use [`boxlite_options_add_managed_volume`] against a REST runtime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_options_add_host_path(
+pub unsafe extern "C" fn boxlite_options_add_bind_mount(
     opts: *mut CBoxliteOptions,
     host_path: *const c_char,
     guest_path: *const c_char,
     read_only: c_int,
 ) {
-    options_add_host_path(opts, host_path, guest_path, read_only)
+    options_add_bind_mount(opts, host_path, guest_path, read_only)
 }
 
 /// Mount a managed volume, addressed by its server-assigned id **or** by its
@@ -92,7 +92,7 @@ pub unsafe extern "C" fn boxlite_options_add_host_path(
 /// and rejects one at create.
 ///
 /// A NULL `opts`, `managed_volume`, or `guest_path` is ignored, matching
-/// [`boxlite_options_add_host_path`].
+/// [`boxlite_options_add_bind_mount`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_add_managed_volume(
     opts: *mut CBoxliteOptions,
@@ -366,7 +366,7 @@ pub unsafe fn options_add_env(handle: *mut OptionsHandle, key: *const c_char, va
     }
 }
 
-pub unsafe fn options_add_host_path(
+pub unsafe fn options_add_bind_mount(
     handle: *mut OptionsHandle,
     host_path: *const c_char,
     guest_path: *const c_char,
@@ -379,7 +379,7 @@ pub unsafe fn options_add_host_path(
         if let (Ok(h), Ok(g)) = (c_str_to_string(host_path), c_str_to_string(guest_path)) {
             (*handle).options.volumes.push(VolumeSpec {
                 read_only: read_only != 0,
-                ..VolumeSpec::host_path(h, g)
+                ..VolumeSpec::bind_mount(h, g)
             });
         }
     }

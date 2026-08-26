@@ -203,7 +203,7 @@ func TestWithManagedVolumeKeepsOriginsApart(t *testing.T) {
 	for _, reference := range []string{"vol_01K2EXAMPLE", "my-data"} {
 		cfg := &boxConfig{}
 		WithManagedVolume(reference, "/data")(cfg)
-		WithHostPath("/tmp/data", "/host-data")(cfg)
+		WithBindMount("/tmp/data", "/host-data")(cfg)
 
 		if len(cfg.volumes) != 2 {
 			t.Fatalf("volumes: got %d", len(cfg.volumes))
@@ -230,8 +230,8 @@ func TestBoxOptions(t *testing.T) {
 	WithCPUs(4)(cfg)
 	WithMemory(1024)(cfg)
 	WithEnv("FOO", "bar")(cfg)
-	WithHostPath("/host", "/guest")(cfg)
-	WithHostPathReadOnly("/ro-host", "/ro-guest")(cfg)
+	WithBindMount("/host", "/guest")(cfg)
+	WithBindMountReadOnly("/ro-host", "/ro-guest")(cfg)
 	WithPort(PortSpec{Host: 8080, Guest: 3000})(cfg)
 	WithWorkDir("/app")(cfg)
 	WithEntrypoint("/bin/sh")(cfg)

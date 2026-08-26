@@ -290,7 +290,7 @@ impl TryFrom<JsVolumeSpec> for VolumeSpec {
             (Some(managed_volume), None) => {
                 VolumeSpec::managed_volume(managed_volume, v.guest_path)
             }
-            (None, Some(host_path)) => VolumeSpec::host_path(host_path, v.guest_path),
+            (None, Some(host_path)) => VolumeSpec::bind_mount(host_path, v.guest_path),
             (None, None) => {
                 return Err(Self::Error::InvalidArgument(
                     "volume requires managedVolume or hostPath".into(),

@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn resolve_volume_nonexistent_path_errors() {
-        let volumes = vec![VolumeSpec::host_path("/nonexistent/path/12345", "/data")];
+        let volumes = vec![VolumeSpec::bind_mount("/nonexistent/path/12345", "/data")];
 
         let result = resolve_user_volumes(&volumes);
         assert!(result.is_err());

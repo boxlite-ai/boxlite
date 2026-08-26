@@ -4,7 +4,7 @@
  * Covers the three ABI breaks recorded in the README migration guide, from a
  * real C consumer rather than from Rust:
  *
- *   1. `boxlite_options_add_volume` split into `boxlite_options_add_host_path`
+ *   1. `boxlite_options_add_volume` split into `boxlite_options_add_bind_mount`
  *      (a path on this machine) and `boxlite_options_add_managed_volume`
  *      (a server-side volume, by id or name).
  *   2. `boxlite_volume_create` gained a `const char *name` second parameter.
@@ -19,7 +19,6 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdio.h>
-#include <string.h>
 
 static void on_volume_created(struct CVolumeInfo *info, CBoxliteError *error,
                               void *user_data) {
@@ -30,8 +29,7 @@ static void on_volume_created(struct CVolumeInfo *info, CBoxliteError *error,
 
 /* (3) The struct carries a name, and it sits between id and created_at. */
 static void test_volume_info_layout(void) {
-  struct CVolumeInfo info;
-  memset(&info, 0, sizeof(info));
+  struct CVolumeInfo info = {0};
 
   info.id = NULL;
   info.name = NULL;
@@ -46,26 +44,26 @@ static void test_volume_info_layout(void) {
 /* (1) Both mount origins are reachable, and neither crashes on a NULL handle.
  */
 static void test_mount_origin_entrypoints(void) {
-  boxlite_options_add_host_path(NULL, "/host/data", "/data", 0);
+  boxlite_options_add_bind_mount(NULL, "/host/data", "/data", 0);
   boxlite_options_add_managed_volume(NULL, "my-data", "/data", 0);
   printf(
-      "  ok: host-path and managed-volume entrypoints accept a NULL handle\n");
+      "  ok: bind-mount and managed-volume entrypoints accept a NULL handle\n");
 }
 
 /* (2) The name parameter exists, and a NULL handle is still rejected
  * synchronously rather than queueing work against nothing. */
 static void test_volume_create_rejects_null_handle(void) {
-  CBoxliteError error;
-  memset(&error, 0, sizeof(error));
+  CBoxliteError error = {0};
 
   enum BoxliteErrorCode named =
       boxlite_volume_create(NULL, "my-data", on_volume_created, NULL, &error);
   assert(named == InvalidArgument);
+  boxlite_error_free(&error);
 
-  memset(&error, 0, sizeof(error));
   enum BoxliteErrorCode unnamed =
       boxlite_volume_create(NULL, NULL, on_volume_created, NULL, &error);
   assert(unnamed == InvalidArgument);
+  boxlite_error_free(&error);
 
   printf(
       "  ok: boxlite_volume_create takes a name and rejects a NULL handle\n");

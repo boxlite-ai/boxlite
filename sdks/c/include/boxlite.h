@@ -805,10 +805,10 @@ void boxlite_options_add_env(CBoxliteOptions *opts, const char *key, const char 
 //
 // Host bind mounts are local-runtime only; a REST runtime rejects them at
 // create. Use [`boxlite_options_add_managed_volume`] against a REST runtime.
-void boxlite_options_add_host_path(CBoxliteOptions *opts,
-                                   const char *host_path,
-                                   const char *guest_path,
-                                   int read_only);
+void boxlite_options_add_bind_mount(CBoxliteOptions *opts,
+                                    const char *host_path,
+                                    const char *guest_path,
+                                    int read_only);
 
 // Mount a managed volume, addressed by its server-assigned id **or** by its
 // name — the server resolves either.
@@ -818,7 +818,7 @@ void boxlite_options_add_host_path(CBoxliteOptions *opts,
 // and rejects one at create.
 //
 // A NULL `opts`, `managed_volume`, or `guest_path` is ignored, matching
-// [`boxlite_options_add_host_path`].
+// [`boxlite_options_add_bind_mount`].
 void boxlite_options_add_managed_volume(CBoxliteOptions *opts,
                                         const char *managed_volume,
                                         const char *guest_path,

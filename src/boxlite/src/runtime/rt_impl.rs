@@ -1765,6 +1765,7 @@ async fn sanitize_local_options(
     features: &ExperimentalFeatures,
     options: BoxOptions,
 ) -> BoxliteResult<BoxOptions> {
+    reject_local_unsupported_options(&options)?;
     features.require_for_options(&options)?;
     tokio::task::spawn_blocking(move || {
         options.sanitize()?;
@@ -1781,7 +1782,6 @@ async fn sanitize_local_options(
 #[async_trait::async_trait]
 impl super::backend::RuntimeBackend for LocalRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
-        reject_local_unsupported_options(&options)?;
         let options = sanitize_local_options(&self.0.experimental_features, options).await?;
         self.0.create(options, name).await
     }
@@ -1791,7 +1791,6 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
-        reject_local_unsupported_options(&options)?;
         let options = sanitize_local_options(&self.0.experimental_features, options).await?;
         self.0.get_or_create(options, name).await
     }
@@ -1944,22 +1943,31 @@ mod tests {
         );
     }
 
-    #[test]
-    fn local_runtime_rejects_explicit_lifecycle_policy() {
+    #[tokio::test]
+    async fn local_runtime_rejects_explicit_lifecycle_policy() {
+        let features = ExperimentalFeatures::default();
         let mut options = BoxOptions::default();
-        assert!(reject_local_unsupported_options(&options).is_ok());
+        assert!(
+            sanitize_local_options(&features, options.clone())
+                .await
+                .is_ok()
+        );
 
         options.auto_stop = Some(0);
-        assert!(reject_local_unsupported_options(&options).is_ok());
+        assert!(
+            sanitize_local_options(&features, options.clone())
+                .await
+                .is_ok()
+        );
 
         options.auto_stop = Some(1);
         assert!(matches!(
-            reject_local_unsupported_options(&options),
+            sanitize_local_options(&features, options.clone()).await,
             Err(BoxliteError::Unsupported(_))
         ));
         options.auto_stop = None;
         options.auto_delete = Some(3600);
-        assert!(reject_local_unsupported_options(&options).is_ok());
+        assert!(sanitize_local_options(&features, options).await.is_ok());
     }
 
     /// The local runtime has no volume backend. `resolve_user_volumes` also
@@ -1967,21 +1975,23 @@ mod tests {
     /// image is pulled and the box record exists. This guard is the whole
     /// reason the failure is cheap, so it needs its own test: without it every
     /// suite still passes and the rejection silently moves back to boot time.
-    #[test]
-    fn local_runtime_rejects_managed_volumes_before_boot() {
+    #[tokio::test]
+    async fn local_runtime_rejects_managed_volumes_before_boot() {
         use crate::runtime::options::VolumeSpec;
 
+        let features = ExperimentalFeatures::default();
         let host_bind = BoxOptions {
-            volumes: vec![VolumeSpec::host_path("/tmp/data", "/data")],
+            volumes: vec![VolumeSpec::bind_mount("/tmp/data", "/data")],
             ..Default::default()
         };
-        assert!(reject_local_unsupported_options(&host_bind).is_ok());
+        assert!(sanitize_local_options(&features, host_bind).await.is_ok());
 
         let managed = BoxOptions {
             volumes: vec![VolumeSpec::managed_volume("my-data", "/data")],
             ..Default::default()
         };
-        let error = reject_local_unsupported_options(&managed)
+        let error = sanitize_local_options(&features, managed)
+            .await
             .expect_err("a managed volume has no local backend to resolve against");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");

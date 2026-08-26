@@ -255,7 +255,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	for _, vol := range volumeMounts {
 		// The bucket is already FUSE-mounted on this host, so the runner is a
 		// host-bind consumer even though the box is mounting a managed volume.
-		opts = append(opts, boxlite.WithHostPath(vol.hostPath, vol.mountPath))
+		opts = append(opts, boxlite.WithBindMount(vol.hostPath, vol.mountPath))
 	}
 
 	if len(volumeMounts) > 0 {
