@@ -464,4 +464,38 @@ mod tests {
             "vcpu filter is empty"
         );
     }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn test_vmm_filter_allows_time_syscall() {
+        // glibc's get_nprocs() calls time(NULL) during vCPU thread init; a
+        // missing `time` entry makes the vmm filter's `trap` default action
+        // SIGSYS-kill every thread. The raw syscall (not libc::time, which may
+        // resolve through the vDSO and bypass seccomp) must be allowed.
+        let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/seccomp_filter.bpf"));
+        let filters = deserialize_binary(&bytes[..]).expect("deserialize embedded filter");
+        let vmm_filter = get_filter(&filters, SeccompRole::Vmm).expect("vmm filter present");
+
+        // fork() so a SIGSYS from the `trap` default action kills only the child.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            if apply_filter(vmm_filter).is_err() {
+                unsafe { libc::_exit(2) };
+            }
+            unsafe {
+                libc::syscall(libc::SYS_time, std::ptr::null_mut::<libc::time_t>());
+                libc::_exit(0);
+            }
+        }
+
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        assert!(
+            libc::WIFEXITED(status),
+            "child killed by signal {} (SIGSYS=31)",
+            libc::WTERMSIG(status)
+        );
+        assert_eq!(libc::WEXITSTATUS(status), 0);
+    }
 }
