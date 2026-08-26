@@ -460,6 +460,18 @@ export BOXLITE_TMPDIR=/custom/tmp
 python script.py
 ```
 
+#### `BOXLITE_GUEST_READY_TIMEOUT_SECS`
+
+Set the guest-ready handshake timeout in seconds. The value must be a positive integer.
+
+**Default:** `30`
+
+**Example:**
+```bash
+export BOXLITE_GUEST_READY_TIMEOUT_SECS=90
+python script.py
+```
+
 ## Error Codes & Handling
 
 ### Error Types

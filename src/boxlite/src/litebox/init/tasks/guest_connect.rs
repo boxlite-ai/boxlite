@@ -16,6 +16,7 @@ use crate::vmm::exit_info::ExitErrorKind;
 use async_trait::async_trait;
 use boxlite_shared::BoxTransport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use std::num::NonZeroU64;
 use std::path::Path;
 use std::time::Duration;
 
@@ -74,7 +75,12 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
         if skip_guest_wait {
             tracing::debug!(box_id = %box_id, "Skipping guest ready wait (reattach)");
         } else {
-            tracing::debug!(box_id = %box_id, "Waiting for guest to be ready");
+            let timeout = guest_ready_timeout()?;
+            tracing::debug!(
+                box_id = %box_id,
+                timeout_secs = timeout.as_secs(),
+                "Waiting for guest to be ready"
+            );
             wait_for_guest_ready(
                 &ready_transport,
                 shim_pid,
@@ -82,7 +88,7 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
                 &console_log,
                 &stderr_file,
                 box_id.as_str(),
-                GUEST_READY_TIMEOUT,
+                timeout,
             )
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -102,12 +108,32 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
     }
 }
 
-/// Production timeout for the guest-ready handshake.
-///
-/// Exposed as a constant so tests can call `wait_for_guest_ready` with a
-/// short timeout and exercise the real timeout branch (including its
-/// diagnostic-collection logic) without waiting 30s.
-const GUEST_READY_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_GUEST_READY_TIMEOUT: Duration = Duration::from_secs(30);
+const GUEST_READY_TIMEOUT_ENV: &str = "BOXLITE_GUEST_READY_TIMEOUT_SECS";
+
+fn guest_ready_timeout() -> BoxliteResult<Duration> {
+    match std::env::var(GUEST_READY_TIMEOUT_ENV) {
+        Ok(value) => parse_guest_ready_timeout(Some(&value)),
+        Err(std::env::VarError::NotPresent) => parse_guest_ready_timeout(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(BoxliteError::InvalidArgument(format!(
+            "{GUEST_READY_TIMEOUT_ENV} must be valid Unicode"
+        ))),
+    }
+}
+
+fn parse_guest_ready_timeout(value: Option<&str>) -> BoxliteResult<Duration> {
+    let Some(value) = value else {
+        return Ok(DEFAULT_GUEST_READY_TIMEOUT);
+    };
+
+    let seconds = value.parse::<NonZeroU64>().map_err(|_| {
+        BoxliteError::InvalidArgument(format!(
+            "{GUEST_READY_TIMEOUT_ENV} must be a positive integer number of seconds, got {value:?}"
+        ))
+    })?;
+
+    Ok(Duration::from_secs(seconds.get()))
+}
 
 /// Wait for guest to signal readiness, racing against shim process death.
 ///
@@ -302,6 +328,68 @@ async fn wait_for_process_exit(pid: Option<u32>) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct GuestReadyTimeoutEnvGuard {
+        previous: Option<OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl GuestReadyTimeoutEnvGuard {
+        fn set(value: Option<&str>) -> Self {
+            let lock = ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let previous = std::env::var_os(GUEST_READY_TIMEOUT_ENV);
+            // SAFETY: tests serialize mutations of this variable on ENV_LOCK.
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(GUEST_READY_TIMEOUT_ENV, value),
+                    None => std::env::remove_var(GUEST_READY_TIMEOUT_ENV),
+                }
+            }
+            Self {
+                previous,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for GuestReadyTimeoutEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: the guard still holds ENV_LOCK.
+            unsafe {
+                match self.previous.take() {
+                    Some(value) => std::env::set_var(GUEST_READY_TIMEOUT_ENV, value),
+                    None => std::env::remove_var(GUEST_READY_TIMEOUT_ENV),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_guest_ready_timeout_defaults_to_thirty_seconds() {
+        let _env = GuestReadyTimeoutEnvGuard::set(None);
+        assert_eq!(guest_ready_timeout().unwrap(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_guest_ready_timeout_accepts_positive_seconds() {
+        let _env = GuestReadyTimeoutEnvGuard::set(Some("75"));
+        assert_eq!(guest_ready_timeout().unwrap(), Duration::from_secs(75));
+    }
+
+    #[test]
+    fn test_guest_ready_timeout_rejects_invalid_values() {
+        for value in ["0", "-1", "slow"] {
+            let error = parse_guest_ready_timeout(Some(value)).unwrap_err();
+            assert!(matches!(error, BoxliteError::InvalidArgument(_)));
+            assert!(error.to_string().contains(GUEST_READY_TIMEOUT_ENV));
+        }
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // wait_for_guest_ready tests
