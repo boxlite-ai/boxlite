@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { AUDIT_CONTEXT_KEY } from '../../audit/decorators/audit.decorator'
+import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AdminRunnerController } from './runner.controller'
 
 jest.mock('uuid', () => ({
@@ -55,5 +57,14 @@ describe('AdminRunnerController', () => {
     expect(list[0]).not.toHaveProperty('apiKey')
     expect(regionalList[0]).not.toHaveProperty('apiKey')
     expect(JSON.stringify({ detail, list, regionalList })).not.toContain('runner-secret-key')
+  })
+
+  it('BoxLite admin read audits both existing Runner GET handlers', () => {
+    expect(Reflect.getMetadata(AUDIT_CONTEXT_KEY, AdminRunnerController.prototype.findAll)).toEqual(
+      expect.objectContaining({ action: AuditAction.READ }),
+    )
+    expect(Reflect.getMetadata(AUDIT_CONTEXT_KEY, AdminRunnerController.prototype.getRunnerById)).toEqual(
+      expect.objectContaining({ action: AuditAction.READ }),
+    )
   })
 })

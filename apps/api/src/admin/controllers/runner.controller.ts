@@ -27,6 +27,7 @@ import { AuditTarget } from '../../audit/enums/audit-target.enum'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { SystemActionGuard } from '../../auth/system-action.guard'
 import { RequiredApiRole } from '../../common/decorators/required-role.decorator'
+import { safeAuditFilter } from '../../common/constants/backoffice.constants'
 import { RegionService } from '../../region/services/region.service'
 import { CreateRunnerResponseDto } from '../../box/dto/create-runner-response.dto'
 import { RunnerDto } from '../../box/dto/runner.dto'
@@ -109,6 +110,12 @@ export class AdminRunnerController {
     description: 'Runner ID',
     type: String,
   })
+  @Audit({
+    action: AuditAction.READ,
+    targetType: AuditTarget.RUNNER,
+    targetIdFromRequest: (req) => req.params.id,
+    requestMetadata: { operation: () => 'adminGetRunnerById' },
+  })
   async getRunnerById(@Param('id', ParseUUIDPipe) id: string): Promise<AdminRunnerDto> {
     return this.toAdminRunnerDto(await this.runnerService.findOneFullOrFail(id))
   }
@@ -128,6 +135,14 @@ export class AdminRunnerController {
     description: 'Filter runners by region ID',
     type: String,
     required: false,
+  })
+  @Audit({
+    action: AuditAction.READ,
+    targetType: AuditTarget.RUNNER,
+    requestMetadata: {
+      operation: () => 'adminListRunners',
+      filters: (req) => ({ regionId: safeAuditFilter(req.query.regionId) }),
+    },
   })
   async findAll(@Query('regionId') regionId?: string): Promise<AdminRunnerDto[]> {
     if (regionId) {

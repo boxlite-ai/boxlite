@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { CallHandler, ExecutionContext } from '@nestjs/common'
+import { BadRequestException, CallHandler, ExecutionContext } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import { firstValueFrom, of } from 'rxjs'
 import { AuditContext } from '../decorators/audit.decorator'
@@ -16,6 +16,91 @@ import { CustomHeaders } from '../../common/constants/header.constants'
 jest.mock('uuid', () => ({ v4: () => 'uuid-test' }))
 
 describe('AuditInterceptor', () => {
+  it('BoxLite admin read records the delegated employee and authenticated service principal', async () => {
+    const auditContext: AuditContext = {
+      action: AuditAction.READ,
+      targetType: AuditTarget.BOX,
+      targetIdFromRequest: (req) => req.params.boxId,
+    }
+    const reflector = { get: jest.fn().mockReturnValue(auditContext) } as unknown as Reflector
+    const auditService = {
+      createLog: jest.fn().mockResolvedValue({ id: 'audit-delegated' }),
+      updateLog: jest.fn().mockResolvedValue({ id: 'audit-delegated' }),
+    }
+    const interceptor = new AuditInterceptor(reflector, auditService as any, { get: jest.fn() } as any)
+    const headers: Record<string, string> = {
+      'x-backoffice-actor-subject': 'auth0|employee-1',
+      'x-backoffice-actor-email': 'employee@boxlite.io',
+      'x-backoffice-session-id': 'session-1',
+      'x-correlation-id': 'correlation-1',
+    }
+    const request = {
+      url: '/admin/boxes/Ab3xYz09LmN2',
+      ip: '127.0.0.1',
+      params: { boxId: 'Ab3xYz09LmN2' },
+      user: {
+        userId: 'backoffice-service',
+        email: 'backoffice-service@boxlite.invalid',
+        role: 'admin',
+        apiKey: { name: 'backoffice-service' },
+      },
+      get: jest.fn((name: string) => headers[name.toLowerCase()]),
+    }
+    const response = { statusCode: 200 }
+    const executionContext = {
+      getHandler: jest.fn(),
+      switchToHttp: () => ({ getRequest: () => request, getResponse: () => response }),
+    } as unknown as ExecutionContext
+    const next = { handle: jest.fn().mockReturnValue(of({ id: 'Ab3xYz09LmN2' })) } as unknown as CallHandler
+
+    await firstValueFrom(interceptor.intercept(executionContext, next))
+
+    expect(auditService.createLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: 'auth0|employee-1',
+        actorEmail: 'employee@boxlite.io',
+        metadata: expect.objectContaining({
+          serviceActor: 'backoffice-service',
+          delegatedBy: 'backoffice-service',
+          backofficeSessionId: 'session-1',
+          correlationId: 'correlation-1',
+        }),
+      }),
+    )
+  })
+
+  it('BoxLite admin read rejects incomplete delegation from the dedicated service principal', () => {
+    const reflector = {
+      get: jest.fn().mockReturnValue({ action: AuditAction.READ }),
+    } as unknown as Reflector
+    const interceptor = new AuditInterceptor(reflector, {} as any, { get: jest.fn() } as any)
+    const request = {
+      user: {
+        userId: 'backoffice-service',
+        email: 'backoffice-service@boxlite.invalid',
+        role: 'admin',
+        apiKey: { name: 'backoffice-service' },
+      },
+      get: jest.fn(),
+    }
+    const executionContext = {
+      getHandler: jest.fn(),
+      switchToHttp: () => ({ getRequest: () => request, getResponse: () => ({}) }),
+    } as unknown as ExecutionContext
+
+    expect(() => interceptor.intercept(executionContext, {} as CallHandler)).toThrow(BadRequestException)
+  })
+
+  it('BoxLite admin read ignores delegated headers from an ordinary admin', () => {
+    const interceptor = new AuditInterceptor({} as Reflector, {} as any, {} as any) as any
+    const actor = interceptor.resolveActor(
+      { userId: 'ordinary-admin', email: 'admin@boxlite.io', role: 'admin' },
+      { get: jest.fn().mockReturnValue('spoofed-employee') },
+    )
+
+    expect(actor).toEqual({ actorId: 'ordinary-admin', actorEmail: 'admin@boxlite.io', organizationId: undefined })
+  })
+
   // The context below is synthetic on purpose: since the admin observability
   // controller was deleted, no route emits AuditAction.READ. Metadata keys are
   // resolved generically (resolveRequestMetadata iterates the extractors), so

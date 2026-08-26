@@ -14,6 +14,7 @@ import {
   InternalServerErrorException,
   HttpException,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import { Request, Response } from 'express'
@@ -25,9 +26,17 @@ import { AuditService } from '../services/audit.service'
 import { AuthContextType, isAuthContext } from '../../common/interfaces/auth-context.interface'
 import { CustomHeaders } from '../../common/constants/header.constants'
 import { TypedConfigService } from '../../config/typed-config.service'
+import { BackofficeAuditHeaders, BOXLITE_BACKOFFICE_USER_ID } from '../../common/constants/backoffice.constants'
 
 type RequestWithUser = Request & {
   user?: AuthContextType
+}
+
+type AuditActor = {
+  actorId: string
+  actorEmail: string
+  organizationId?: string
+  metadata?: AuditLogMetadata
 }
 
 @Injectable()
@@ -61,8 +70,10 @@ export class AuditInterceptor implements NestInterceptor {
       throw new UnauthorizedException()
     }
 
+    const actor = this.resolveActor(request.user, request)
+
     return new Observable((observer) => {
-      this.handleAuditedRequest(auditContext, request, response, next, observer)
+      this.handleAuditedRequest(auditContext, actor, request, response, next, observer)
     })
   }
 
@@ -70,13 +81,13 @@ export class AuditInterceptor implements NestInterceptor {
   // After the request handler returns, the audit log is optimistically updated with the outcome
   private async handleAuditedRequest(
     auditContext: AuditContext,
+    actor: AuditActor,
     request: RequestWithUser,
     response: Response,
     next: CallHandler,
     observer: Subscriber<any>,
   ): Promise<void> {
     try {
-      const actor = this.resolveActor(request.user)
       const auditLog = await this.auditService.createLog({
         actorId: actor.actorId,
         actorEmail: actor.actorEmail,
@@ -87,13 +98,13 @@ export class AuditInterceptor implements NestInterceptor {
         ipAddress: request.ip,
         userAgent: request.get('user-agent'),
         source: request.get(CustomHeaders.SOURCE.name),
-        metadata: this.resolveRequestMetadata(auditContext, request),
+        metadata: this.resolveRequestMetadata(auditContext, request, actor.metadata),
       })
 
       try {
         const result = await firstValueFrom(next.handle())
 
-        const organizationId = this.resolveOrganizationId(request, result)
+        const organizationId = this.resolveOrganizationId(actor, result)
         const targetId = this.resolveTargetId(auditContext, request, result)
         const statusCode = response.statusCode || HttpStatus.NO_CONTENT
         await this.recordHandlerSuccess(auditLog, organizationId, targetId, statusCode)
@@ -114,8 +125,8 @@ export class AuditInterceptor implements NestInterceptor {
     }
   }
 
-  private resolveOrganizationId(request: RequestWithUser, result?: any): string | null {
-    return result?.organizationId || this.resolveActor(request.user).organizationId || null
+  private resolveOrganizationId(actor: AuditActor, result?: any): string | null {
+    return result?.organizationId || actor.organizationId || null
   }
 
   /**
@@ -126,11 +137,56 @@ export class AuditInterceptor implements NestInterceptor {
    * action into a 500 before the handler ever runs. The role name keeps the
    * caller distinguishable in the log instead.
    */
-  private resolveActor(user: AuthContextType): { actorId: string; actorEmail: string; organizationId?: string } {
+  private resolveActor(user: AuthContextType, request: RequestWithUser): AuditActor {
     if (isAuthContext(user)) {
+      if (user.userId === BOXLITE_BACKOFFICE_USER_ID && user.apiKey?.name === BOXLITE_BACKOFFICE_USER_ID) {
+        const actorId = this.requireDelegatedValue(
+          request,
+          BackofficeAuditHeaders.ACTOR_SUBJECT,
+          255,
+          /^[A-Za-z0-9._:@|/-]+$/,
+        )
+        const actorEmail = this.requireDelegatedValue(
+          request,
+          BackofficeAuditHeaders.ACTOR_EMAIL,
+          320,
+          /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+$/,
+        )
+        const sessionId = this.requireDelegatedValue(
+          request,
+          BackofficeAuditHeaders.SESSION_ID,
+          200,
+          /^[A-Za-z0-9._:@/-]+$/,
+        )
+        const correlationId = this.requireDelegatedValue(
+          request,
+          BackofficeAuditHeaders.CORRELATION_ID,
+          128,
+          /^[A-Za-z0-9._:@/-]+$/,
+        )
+        return {
+          actorId,
+          actorEmail,
+          organizationId: user.organizationId,
+          metadata: {
+            serviceActor: BOXLITE_BACKOFFICE_USER_ID,
+            delegatedBy: BOXLITE_BACKOFFICE_USER_ID,
+            backofficeSessionId: sessionId,
+            correlationId,
+          },
+        }
+      }
       return { actorId: user.userId, actorEmail: user.email, organizationId: user.organizationId }
     }
     return { actorId: `api-role:${user.role}`, actorEmail: '' }
+  }
+
+  private requireDelegatedValue(request: RequestWithUser, header: string, maxLength: number, pattern: RegExp): string {
+    const value = request.get(header)
+    if (!value || value.length > maxLength || !/^[\x20-\x7E]+$/.test(value) || !pattern.test(value)) {
+      throw new BadRequestException('Invalid delegated audit context')
+    }
+    return value
   }
 
   /**
@@ -164,14 +220,14 @@ export class AuditInterceptor implements NestInterceptor {
     return targetId ?? null
   }
 
-  private resolveRequestMetadata(auditContext: AuditContext, request: RequestWithUser): AuditLogMetadata | null {
-    if (!auditContext.requestMetadata) {
-      return null
-    }
+  private resolveRequestMetadata(
+    auditContext: AuditContext,
+    request: RequestWithUser,
+    actorMetadata?: AuditLogMetadata,
+  ): AuditLogMetadata | null {
+    const resolvedMetadata: AuditLogMetadata = { ...actorMetadata }
 
-    const resolvedMetadata: AuditLogMetadata = {}
-
-    for (const [key, resolver] of Object.entries(auditContext.requestMetadata)) {
+    for (const [key, resolver] of Object.entries(auditContext.requestMetadata ?? {})) {
       try {
         resolvedMetadata[key] = resolver(request)
       } catch (error) {

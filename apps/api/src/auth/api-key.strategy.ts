@@ -48,7 +48,6 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
 
   async validate(token: string): Promise<AuthContextType | null> {
     this.logger.debug('Validate method called')
-    this.logger.debug(`Validating API key: ${token.substring(0, 8)}...`)
 
     // Tokens matching JWT structure are not API keys. Return null so Passport can continue with the JWT strategy.
     if (JWT_REGEX.test(token)) {
@@ -88,7 +87,6 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
       if (!apiKey) {
         // Cache miss - validate from database
         apiKey = await this.apiKeyService.getApiKeyByValue(token)
-        this.logger.debug(`API key found for userId: ${apiKey.userId}`)
 
         // Check expiry BEFORE caching to prevent storing expired keys
         if (apiKey.expiresAt && apiKey.expiresAt < new Date()) {
@@ -103,14 +101,14 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
         throw new UnauthorizedException('This API key has expired')
       }
 
-      this.logger.debug(`Updating last used timestamp for API key: ${token.substring(0, 8)}...`)
+      this.logger.debug('Updating API key last-used timestamp')
       await this.apiKeyService.updateLastUsedAt(apiKey.organizationId, apiKey.userId, apiKey.name, new Date())
 
       let userCache = await this.getUserCache(apiKey.userId)
       if (!userCache) {
         const user = await this.userService.findOne(apiKey.userId)
         if (!user) {
-          this.logger.error(`Api key has invalid user: ${apiKey.keySuffix} - ${apiKey.userId}`)
+          this.logger.error(`API key has invalid user: ${apiKey.userId}`)
           throw new UnauthorizedException('User not found')
         }
         userCache = {
@@ -130,10 +128,10 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
         organizationId: apiKey.organizationId,
       }
 
-      this.logger.debug('Authentication successful', result)
+      this.logger.debug('API-key authentication successful')
       return result
-    } catch (error) {
-      this.logger.debug('Error checking user API key:', error)
+    } catch {
+      this.logger.debug('User API-key authentication failed')
       // Continue to check runner API keys if user check fails
     }
 
@@ -147,8 +145,8 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
           runner,
         }
       }
-    } catch (error) {
-      this.logger.debug('Error checking runner API key:', error)
+    } catch {
+      this.logger.debug('Runner API-key authentication failed')
     }
 
     try {
@@ -160,8 +158,8 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
           regionId: region.id,
         }
       }
-    } catch (error) {
-      this.logger.debug('Error checking region proxy API key:', error)
+    } catch {
+      this.logger.debug('Region proxy API-key authentication failed')
     }
 
     return null
@@ -174,8 +172,8 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
         return JSON.parse(userCacheRaw)
       }
       return null
-    } catch (error) {
-      this.logger.error('Error getting user cache:', error)
+    } catch {
+      this.logger.error('Error getting user cache')
       return null
     }
   }
@@ -200,8 +198,8 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
         return apiKey
       }
       return null
-    } catch (error) {
-      this.logger.error('Error getting API key cache:', error)
+    } catch {
+      this.logger.error('Error getting API key cache')
       return null
     }
   }

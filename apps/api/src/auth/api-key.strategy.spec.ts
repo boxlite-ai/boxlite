@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { Logger } from '@nestjs/common'
+
 jest.mock('../box/services/runner.service', () => ({
   RunnerService: class RunnerService {},
 }))
@@ -54,6 +56,80 @@ function createStrategy() {
 }
 
 describe('ApiKeyStrategy', () => {
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it('BoxLite admin read never logs API-key characters or credential metadata', async () => {
+    const debug = jest.spyOn(Logger.prototype, 'debug').mockImplementation()
+    const { strategy, mocks } = createStrategy()
+    const token = 'backoffice-secret-api-key-value'
+    mocks.apiKeyService.getApiKeyByValue.mockResolvedValue({
+      organizationId: '00000000-0000-4000-8000-000000000001',
+      userId: 'backoffice-service',
+      name: 'backoffice-service',
+      keyHash: 'credential-hash-must-not-be-logged',
+      keyPrefix: 'backoffice-prefix',
+      keySuffix: 'office-suffix',
+      permissions: [],
+      createdAt: new Date(),
+    })
+    mocks.userService.findOne.mockResolvedValue({
+      id: 'backoffice-service',
+      role: 'admin',
+      email: 'backoffice-service@boxlite.invalid',
+    })
+
+    await expect(strategy.validate(token)).resolves.toEqual(
+      expect.objectContaining({ userId: 'backoffice-service', role: 'admin' }),
+    )
+
+    const logs = JSON.stringify(debug.mock.calls)
+    expect(logs).not.toContain(token.substring(0, 8))
+    expect(logs).not.toContain('backoffice-prefix')
+    expect(logs).not.toContain('office-suffix')
+    expect(logs).not.toContain('credential-hash-must-not-be-logged')
+  })
+
+  it('BoxLite admin read does not log a rejected credential or its lookup error', async () => {
+    const debug = jest.spyOn(Logger.prototype, 'debug').mockImplementation()
+    const error = jest.spyOn(Logger.prototype, 'error').mockImplementation()
+    const { strategy, mocks } = createStrategy()
+    const token = 'rejected-backoffice-secret'
+    mocks.apiKeyService.getApiKeyByValue.mockRejectedValue(new Error(`lookup failed for ${token}`))
+
+    await expect(strategy.validate(token)).resolves.toBeNull()
+
+    const logs = JSON.stringify([...debug.mock.calls, ...error.mock.calls])
+    expect(logs).not.toContain(token)
+    expect(logs).not.toContain('lookup failed')
+  })
+
+  it('BoxLite admin read does not log an expired credential or its metadata', async () => {
+    const debug = jest.spyOn(Logger.prototype, 'debug').mockImplementation()
+    const error = jest.spyOn(Logger.prototype, 'error').mockImplementation()
+    const { strategy, mocks } = createStrategy()
+    const token = 'expired-backoffice-secret'
+    mocks.apiKeyService.getApiKeyByValue.mockResolvedValue({
+      organizationId: '00000000-0000-4000-8000-000000000001',
+      userId: 'backoffice-service',
+      name: 'backoffice-service',
+      keyHash: 'expired-credential-hash',
+      keyPrefix: 'expired-prefix',
+      keySuffix: 'expired-suffix',
+      permissions: [],
+      createdAt: new Date(),
+      expiresAt: new Date('2000-01-01T00:00:00.000Z'),
+    })
+
+    await expect(strategy.validate(token)).resolves.toBeNull()
+
+    const logs = JSON.stringify([...debug.mock.calls, ...error.mock.calls])
+    for (const secret of [token, 'expired-credential-hash', 'expired-prefix', 'expired-suffix']) {
+      expect(logs).not.toContain(secret)
+    }
+  })
+
   it('delegates JWT-shaped bearer tokens to the JWT strategy before reading API-key config', async () => {
     const { strategy, mocks } = createStrategy()
 

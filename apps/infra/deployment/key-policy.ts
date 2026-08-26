@@ -37,6 +37,7 @@ import { CLICKHOUSE_STAGE_CONFIG_KEYS } from './clickhouse.js'
 export const STORABLE_STAGE_CONFIG_KEYS: readonly string[] = [
   'ADMIN_API_KEY',
   'APP_URL',
+  'BACKOFFICE_ADMIN_API_KEY',
   'BILLING_API_URL',
   'BOXLITE_API_KEY',
   'BOXLITE_API_URL',

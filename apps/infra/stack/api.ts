@@ -276,6 +276,9 @@ const api = new sst.aws.Service('Api', {
 
     // Admin
     ADMIN_API_KEY: envOr('ADMIN_API_KEY', adminApiKey.result),
+    ...(process.env.BACKOFFICE_ADMIN_API_KEY && {
+      BACKOFFICE_ADMIN_API_KEY: process.env.BACKOFFICE_ADMIN_API_KEY,
+    }),
 
     // Observability read/write path. These stay server-side; never expose
     // ClickHouse credentials to the dashboard bundle.

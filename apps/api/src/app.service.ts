@@ -17,6 +17,7 @@ import { RunnerService } from './box/services/runner.service'
 import { RunnerAdapterFactory } from './box/runner-adapter/runnerAdapter'
 import { RegionType } from './region/enums/region-type.enum'
 import { RunnerState } from './box/enums/runner-state.enum'
+import { BOXLITE_BACKOFFICE_USER_ID } from './common/constants/backoffice.constants'
 
 export const BOXLITE_ADMIN_USER_ID = 'boxlite-admin'
 
@@ -50,6 +51,7 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
 
     await this.initializeDefaultRegion()
     await this.initializeAdminUser()
+    await this.initializeBackofficeService()
 
     // Default runner init is not awaited because v2 runners depend on the API to be ready
     // TODO(image-rewrite): system template seeding removed with box_template; rebuild here.
@@ -168,27 +170,35 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
     }
 
     const defaultOrg = await this.organizationService.findDefaultForUser(user.id)
-    const { value } = await this.apiKeyService.ensureApiKeyValue(
+    await this.apiKeyService.ensureApiKeyValue(
       defaultOrg.id,
       user.id,
       BOXLITE_ADMIN_USER_ID,
       [],
       this.configService.getOrThrow('admin.apiKey'),
     )
-    this.logger.log(
-      `
-=========================================
-=========================================
-Admin API key ensured: ${this.maskApiKeyForLog(value)}
-=========================================
-=========================================`,
-    )
+    this.logger.log('Admin API key ensured')
   }
 
-  private maskApiKeyForLog(value: string): string {
-    if (value.length <= 8) {
-      return '********'
+  private async initializeBackofficeService(): Promise<void> {
+    const apiKey = this.configService.get('backoffice.apiKey')
+    if (!apiKey) {
+      return
     }
-    return `${value.slice(0, 4)}...${value.slice(-4)}`
+
+    let user = await this.userService.findOne(BOXLITE_BACKOFFICE_USER_ID)
+    if (!user) {
+      user = await this.userService.create({
+        id: BOXLITE_BACKOFFICE_USER_ID,
+        name: 'Backoffice Service',
+        email: 'backoffice-service@boxlite.invalid',
+        defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
+        role: SystemRole.ADMIN,
+      })
+    }
+
+    const defaultOrg = await this.organizationService.findDefaultForUser(user.id)
+    await this.apiKeyService.ensureApiKeyValue(defaultOrg.id, user.id, BOXLITE_BACKOFFICE_USER_ID, [], apiKey)
+    this.logger.log('Backoffice service API key ensured')
   }
 }
