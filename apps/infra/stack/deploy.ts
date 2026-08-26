@@ -5,7 +5,7 @@
 
 /// <reference path="../.sst/platform/config.d.ts" />
 
-import { PRODUCTION_STAGE } from './settings.js'
+import { PRODUCTION_STAGE, envOr, requireEnv } from './settings.js'
 import { createFoundation } from './foundation.js'
 import { buildObservability } from './observability.js'
 import { buildApi } from './api.js'
@@ -35,6 +35,37 @@ export async function deployStack() {
     const runnerInventory = resolveRunnerInventory(process.env)
     const oidcIssuer = requireOidcIssuer()
     const publicOidcIssuer = optionalPublicOidcIssuer()
+    const clickStackGatewayFlag = envOr('CLICKSTACK_GATEWAY_ENABLED', 'false')
+    if (!['true', 'false'].includes(clickStackGatewayFlag)) {
+      throw new Error('CLICKSTACK_GATEWAY_ENABLED must be true or false')
+    }
+    const clickStackGatewayEnabled = clickStackGatewayFlag === 'true'
+    const cleanClickStackBackofficeUrl = (key: string, value: string): string => {
+      const parsed = new URL(value)
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
+        throw new Error(`${key} must be a credential-free HTTPS URL without a query or fragment`)
+      }
+      return parsed.href
+    }
+    const clickStackGatewayConfig = clickStackGatewayEnabled
+      ? {
+          backofficeRedeemUrl: cleanClickStackBackofficeUrl(
+            'CLICKSTACK_BACKOFFICE_REDEEM_URL',
+            requireEnv('CLICKSTACK_BACKOFFICE_REDEEM_URL', 'when the ClickStack gateway is enabled'),
+          ),
+          backofficeEntryUrl: cleanClickStackBackofficeUrl(
+            'CLICKSTACK_BACKOFFICE_ENTRY_URL',
+            requireEnv('CLICKSTACK_BACKOFFICE_ENTRY_URL', 'when the ClickStack gateway is enabled'),
+          ),
+        }
+      : undefined
+    if (
+      clickStackGatewayConfig &&
+      new URL(clickStackGatewayConfig.backofficeRedeemUrl).origin !==
+        new URL(clickStackGatewayConfig.backofficeEntryUrl).origin
+    ) {
+      throw new Error('ClickStack Backoffice redeem and entry URLs must share one origin')
+    }
 
     // Every role created by this stack must stay inside the boundary provisioned
     // with the GitHub deployment role. The raw-resource transform also covers IAM
@@ -85,6 +116,15 @@ export async function deployStack() {
     const oidcMgmtClientSecret = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_SECRET')
     const posthogApiKey = new sst.Secret('POSTHOG_API_KEY', '')
     const svixAuthToken = new sst.Secret('SVIX_AUTH_TOKEN', '')
+    const clickStackSessionKeys = clickStackGatewayEnabled
+      ? new sst.Secret('CLICKSTACK_SESSION_KEYS')
+      : undefined
+    // Keep the cross-stack runtime copy stable across feature disable/re-enable.
+    // Secrets Manager rejects an empty value, so the disabled stack stores an
+    // intentionally invalid sentinel. Enabling removes the fallback and makes
+    // a real key set mandatory during synth, before any task can start.
+    const clickStackRedeemFallback = clickStackGatewayEnabled ? undefined : 'clickstack-gateway-disabled'
+    const clickStackRedeemToken = new sst.Secret('CLICKSTACK_REDEEM_TOKEN', clickStackRedeemFallback)
     // The credential the usage exporter presents to Commerce's ingest route:
     // half of a shared secret whose other half is a Secrets Manager container
     // owned by boxlite-commerce's own stack, so both ends are set out of band
@@ -145,6 +185,9 @@ export async function deployStack() {
       region: REGION,
       accountId,
     })
+    if (clickStackGatewayEnabled && clickHouseResources.mode !== 'self-hosted') {
+      throw new Error('CLICKSTACK_GATEWAY_ENABLED requires self-hosted ClickHouse')
+    }
     // One list for all three pipelines: traces used to fan out to Jaeger as well,
     // which was a second copy of spans ClickHouse already held.
     const collectorExporters = clickHouseResources.active ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
@@ -287,6 +330,21 @@ export async function deployStack() {
       publicOidcIssuer,
       otelCollectorOtlpHttpUrl,
       stripTrailingSlash,
+      clickStackRedeemToken,
+      ...(clickStackGatewayConfig &&
+      clickStackSessionKeys &&
+      clickHouseResources.mode === 'self-hosted'
+        ? {
+            clickStackGateway: {
+              clickHouse: clickHouseResources,
+              writerReady: clickHouseWriterReadyDependency,
+              domain: serviceDomain('clickstack'),
+              backofficeRedeemUrl: clickStackGatewayConfig.backofficeRedeemUrl,
+              backofficeEntryUrl: clickStackGatewayConfig.backofficeEntryUrl,
+              sessionKeys: clickStackSessionKeys,
+            },
+          }
+        : {}),
     })
 
     // ─── 10. RUNNER (EC2 with nested KVM) ────────────────────────────────────

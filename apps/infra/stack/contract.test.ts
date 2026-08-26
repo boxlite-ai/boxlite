@@ -228,6 +228,34 @@ test('orders the API after ClickHouse writer readiness', () => {
   assert.doesNotMatch(liveConfig, /writerActivation|readerActivation|ClickHouseApiReaderReady/)
 })
 
+test('keeps the public ClickStack gateway default-off behind a Backoffice handoff', () => {
+  const deploy = configSection('export async function deployStack()')
+  const edge = liveText('scriptEmittingShell', readFileSync(new URL('./edge.ts', import.meta.url), 'utf8'))
+
+  assert.match(deploy, /envOr\('CLICKSTACK_GATEWAY_ENABLED', 'false'\)/)
+  assert.match(deploy, /CLICKSTACK_GATEWAY_ENABLED requires self-hosted ClickHouse/)
+  assert.match(deploy, /new sst\.Secret\('CLICKSTACK_SESSION_KEYS'\)/)
+  assert.match(
+    deploy,
+    /clickStackRedeemFallback = clickStackGatewayEnabled \? undefined : 'clickstack-gateway-disabled'/,
+  )
+  assert.match(deploy, /new sst\.Secret\('CLICKSTACK_REDEEM_TOKEN', clickStackRedeemFallback\)/)
+  assert.match(deploy, /CLICKSTACK_BACKOFFICE_REDEEM_URL/)
+  assert.match(deploy, /CLICKSTACK_BACKOFFICE_ENTRY_URL/)
+
+  assert.match(edge, /new sst\.aws\.Service\(\s*'ClickStackGateway'/)
+  assert.match(edge, /CLICKSTACK_PASSWORD: clickStackGateway\.clickHouse\.readerSecretArn/)
+  assert.match(edge, /CLICKSTACK_REDEEM_TOKEN: redeemSecret\.arn/)
+  assert.match(edge, /name: `\$\{\$app\.name\}-\$\{\$app\.stage\}-clickstack-redeem`/)
+  assert.match(edge, /CLICKSTACK_SESSION_KEYS: sessionSecret\.arn/)
+  assert.match(edge, /secretString: clickStackRedeemToken\.value/)
+  assert.match(edge, /secretString: clickStackGateway\.sessionKeys\.value/)
+  assert.match(edge, /CLICKSTACK_USERNAME: 'otel_reader'/)
+  assert.match(edge, /CLICKSTACK_BACKOFFICE_REDEEM_URL/)
+  assert.match(edge, /CLICKSTACK_BACKOFFICE_ENTRY_URL/)
+  assert.doesNotMatch(edge, /authenticate-oidc/)
+})
+
 test('encodes ClickHouse user data before EC2 launch', () => {
   const clickHouse = configSection('export async function buildClickHouseStorage', 'export function buildClickHouseWriterReady')
   const instance = extractSection(clickHouse, 'const userData =', 'const instance =')
