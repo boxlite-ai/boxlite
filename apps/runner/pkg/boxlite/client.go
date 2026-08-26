@@ -248,6 +248,22 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithEntrypoint(boxDto.Entrypoint...))
 	}
 
+	if len(boxDto.Cmd) > 0 {
+		opts = append(opts, boxlite.WithCmd(boxDto.Cmd...))
+	}
+
+	if boxDto.WorkingDir != "" {
+		opts = append(opts, boxlite.WithWorkDir(boxDto.WorkingDir))
+	}
+
+	// Only when the caller asked. 16d9248bb removed the unconditional
+	// WithUser(OsUser) because the default landed a USER override on images
+	// that never defined that account; an explicit RunAsUser is the caller's
+	// own choice and their image's problem if it is wrong.
+	if boxDto.RunAsUser != "" {
+		opts = append(opts, boxlite.WithUser(boxDto.RunAsUser))
+	}
+
 	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
 	if err != nil {
 		return "", "", err

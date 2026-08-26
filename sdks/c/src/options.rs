@@ -62,6 +62,11 @@ pub unsafe extern "C" fn boxlite_options_set_workdir(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_user(opts: *mut CBoxliteOptions, user: *const c_char) {
+    options_set_user(opts, user)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_add_env(
     opts: *mut CBoxliteOptions,
     key: *const c_char,
@@ -328,6 +333,19 @@ pub unsafe fn options_set_workdir(handle: *mut OptionsHandle, workdir: *const c_
         }
         if let Ok(s) = c_str_to_string(workdir) {
             (*handle).options.working_dir = Some(s);
+        }
+    }
+}
+
+/// Set the user the container process runs as (`<name|uid>[:<group|gid>]`).
+/// `None` leaves the image's USER directive in force.
+pub unsafe fn options_set_user(handle: *mut OptionsHandle, user: *const c_char) {
+    unsafe {
+        if handle.is_null() || user.is_null() {
+            return;
+        }
+        if let Ok(s) = c_str_to_string(user) {
+            (*handle).options.user = Some(s);
         }
     }
 }

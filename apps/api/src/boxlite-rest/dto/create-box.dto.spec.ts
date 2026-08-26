@@ -351,3 +351,26 @@ describe('CreateBoxDto legacy network compatibility through the request pipeline
     await expect(pipe.transform({ image: 'alpine:latest', network: [{ mode: 'enabled' }] }, meta)).rejects.toThrow()
   })
 })
+
+// The runner always detaches, so `detach` is accepted and ignored. Refusing
+// `false` is the tempting mistake and would be a breaking one:
+// CreateBoxRequest::from_options sends `detach` unconditionally and
+// BoxOptions::detach defaults to false, so the Rust core — and the CLI and
+// every SDK riding it — puts `"detach": false` on every create that did not
+// pass `-d`. Both values must validate.
+describe('CreateBoxDto detach policy', () => {
+  it.each([
+    ['true', true],
+    ['false, which is what an un-flagged first-party client sends', false],
+  ])('accepts detach: %s', async (_label, detach) => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { image: 'alpine:latest', detach }))
+
+    expect(errors).toHaveLength(0)
+  })
+
+  it('accepts a request that omits detach', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { image: 'alpine:latest' }))
+
+    expect(errors).toHaveLength(0)
+  })
+})

@@ -224,6 +224,16 @@ export class CreateBoxDto {
   @IsString()
   user?: string
 
+  // Accepted and ignored, deliberately. Cloud boxes always outlive the request
+  // that created them: the runner hardcodes WithDetach(true) and must, since a
+  // box tied to the runner process would vanish on every runner restart.
+  //
+  // Rejecting `false` looks right and is not: CreateBoxRequest::from_options
+  // sends `detach` unconditionally (src/boxlite/src/rest/types.rs) and
+  // BoxOptions::detach defaults to false, so the Rust core — and every SDK and
+  // the CLI riding it — puts `"detach": false` on every create that did not
+  // pass `-d`. There is no way to tell that apart from a caller who asked for
+  // it, so refusing it would 400 the default first-party path.
   @IsOptional()
   @IsBoolean()
   detach?: boolean
@@ -253,4 +263,46 @@ export class CreateBoxDto {
   @ValidateNested({ each: true })
   @Type(() => VolumeSpecDto)
   volumes?: VolumeSpecDto[]
+
+  // The remaining CreateBoxRequest fields this server does not implement.
+  // Without these, whitelisting reports them as a bare "property X should not
+  // exist", which tells a caller nothing about why or what to do instead.
+  //
+  // A PTY for the box's main command. The runner offers one for executions
+  // only (StartExecution's tty flag), never for the container's init, and the
+  // Go SDK has no WithTTY to carry it. `false` is a no-op so the flag can be
+  // sent unconditionally. Lift this once the runner can start an init on a
+  // terminal.
+  @ValidateIf((_, value) => value !== undefined)
+  @IsIn([false], {
+    message: 'tty is not supported for cloud boxes; request a tty on the execution instead',
+  })
+  tty?: false
+
+  // `secrets` matters most: the field carries real credential values, and this
+  // server dropped them silently for its whole life — the caller got a 201 and
+  // a box whose outbound requests still held the placeholder.
+  @ValidateIf((_, value) => value !== undefined)
+  @IsIn([undefined], {
+    message:
+      'secrets are not supported for cloud boxes; the MITM placeholder substitution runs host-side and has no cloud equivalent yet',
+  })
+  secrets?: never
+
+  // A path on the server's own filesystem. Meaningful for a single-tenant
+  // `boxlite serve`, never for a shared control plane.
+  @ValidateIf((_, value) => value !== undefined)
+  @IsIn([undefined], {
+    message: 'rootfs_path is local-only; use image instead',
+  })
+  rootfs_path?: never
+
+  // advanced.capabilities is implemented by `boxlite serve` and the reference
+  // server; the runner has no path for it yet. Lift this once the runner
+  // forwards a capability policy.
+  @ValidateIf((_, value) => value !== undefined)
+  @IsIn([undefined], {
+    message: 'advanced options are not supported for cloud boxes',
+  })
+  advanced?: never
 }

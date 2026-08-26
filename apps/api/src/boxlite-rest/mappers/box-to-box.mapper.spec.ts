@@ -113,3 +113,43 @@ describe('BoxLite lifecycle policy mapper', () => {
     expect(response.auto_resume).toBe(true)
   })
 })
+
+// These four validated, were audit-logged, and were then dropped on the floor
+// here: the mapper simply never read them, so a caller got a 201 and a box that
+// ignored the working directory, entrypoint, command and user they asked for.
+describe('BoxLite container process options mapper', () => {
+  it('carries the container process options into the control-plane DTO', () => {
+    const mapped = createBoxToCreateBox({
+      working_dir: '/app',
+      entrypoint: ['python'],
+      cmd: ['-c', 'print(1)'],
+      user: '1000:1000',
+    })
+
+    expect(mapped.workingDir).toBe('/app')
+    expect(mapped.entrypoint).toEqual(['python'])
+    expect(mapped.cmd).toEqual(['-c', 'print(1)'])
+    expect(mapped.runAsUser).toBe('1000:1000')
+  })
+
+  // `user` feeds two fields with different jobs. runAsUser is the real OCI
+  // process.user override; osUser is the Daytona-era warm-pool label, and
+  // box.service.ts still defaults it to 'boxlite' when absent.
+  it('feeds user to both the process override and the warm-pool label', () => {
+    const mapped = createBoxToCreateBox({ user: 'node' })
+
+    expect(mapped.runAsUser).toBe('node')
+    expect(mapped.user).toBe('node')
+  })
+
+  // The load-bearing case: an unset user must stay unset, so box.service.ts
+  // does not hand every box a USER override its image may never define.
+  it('leaves runAsUser undefined when the caller asks for no user', () => {
+    const mapped = createBoxToCreateBox({ image: 'alpine:latest' })
+
+    expect(mapped.runAsUser).toBeUndefined()
+    expect(mapped.workingDir).toBeUndefined()
+    expect(mapped.entrypoint).toBeUndefined()
+    expect(mapped.cmd).toBeUndefined()
+  })
+})

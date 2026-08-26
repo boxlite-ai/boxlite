@@ -797,6 +797,8 @@ void boxlite_options_set_disk_size_gb(CBoxliteOptions *opts, int disk_size_gb);
 
 void boxlite_options_set_workdir(CBoxliteOptions *opts, const char *workdir);
 
+void boxlite_options_set_user(CBoxliteOptions *opts, const char *user);
+
 void boxlite_options_add_env(CBoxliteOptions *opts, const char *key, const char *val);
 
 void boxlite_options_add_volume(CBoxliteOptions *opts,

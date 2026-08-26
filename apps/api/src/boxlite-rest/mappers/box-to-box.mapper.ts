@@ -37,7 +37,17 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   const createDto = new CreateBoxDto()
   createDto.name = dto.name
   createDto.image = dto.image
+  // `user` feeds two unrelated things. `osUser` is a Daytona-era provisioning
+  // label — it only ever became a DAYTONA_SANDBOX_USER env var, was never the
+  // container's process user, and today just keys the warm pool. `runAsUser`
+  // is the OCI process.user override (docker `-u`) that actually reaches the
+  // guest, and is left undefined when the caller did not ask for one so the
+  // image's own USER directive stands.
   createDto.user = dto.user
+  createDto.runAsUser = dto.user
+  createDto.workingDir = dto.working_dir
+  createDto.entrypoint = dto.entrypoint
+  createDto.cmd = dto.cmd
   createDto.env = dto.env
   createDto.cpu = dto.cpus
   createDto.memory = dto.memory_mib ? Math.ceil(dto.memory_mib / 1024) : undefined

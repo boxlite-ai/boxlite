@@ -408,6 +408,13 @@ pub(crate) struct PyBoxOptions {
     #[pyo3(get, set)]
     pub(crate) user: Option<String>,
 
+    /// Run the box's main command on a terminal (docker `run -t`).
+    ///
+    /// A property of the box, not of an attach: the main command is the
+    /// container's init, so whether it gets a terminal is fixed at create time.
+    #[pyo3(get, set)]
+    pub(crate) tty: Option<bool>,
+
     /// Advanced options for expert users (capabilities, security, mount isolation, health check).
     #[pyo3(get, set)]
     pub(crate) advanced: Option<PyAdvancedBoxOptions>,
@@ -439,6 +446,7 @@ impl PyBoxOptions {
         entrypoint=None,
         cmd=None,
         user=None,
+        tty=None,
         advanced=None,
         secrets=vec![],
     ))]
@@ -462,6 +470,7 @@ impl PyBoxOptions {
         entrypoint: Option<Vec<String>>,
         cmd: Option<Vec<String>>,
         user: Option<String>,
+        tty: Option<bool>,
         advanced: Option<PyAdvancedBoxOptions>,
         secrets: Vec<PySecret>,
     ) -> Self {
@@ -484,6 +493,7 @@ impl PyBoxOptions {
             entrypoint,
             cmd,
             user,
+            tty,
             advanced,
             secrets,
         }
@@ -555,6 +565,10 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
 
         if let Some(detach) = py_opts.detach {
             opts.detach = detach;
+        }
+
+        if let Some(tty) = py_opts.tty {
+            opts.tty = tty;
         }
 
         if let Some(advanced) = py_opts.advanced {
@@ -995,6 +1009,7 @@ mod tests {
             entrypoint: None,
             cmd: None,
             user: None,
+            tty: None,
             advanced: Some(advanced),
             secrets: vec![],
         }

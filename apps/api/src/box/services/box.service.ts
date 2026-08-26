@@ -78,6 +78,7 @@ import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidati
 import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
+import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
 import {
   AUTO_DELETE_DISABLED,
   AUTO_STOP_DISABLED,
@@ -215,17 +216,14 @@ export class BoxService {
       // Restrict box creation to the supported pinned images; reject anything else
       // at the request boundary (defaults undefined -> base image).
       const image = assertSupportedImage(createBoxDto.image)
-      const requiresFreshBoxForNetworkPolicy =
-        createBoxDto.networkBlockAll !== undefined ||
-        createBoxDto.networkAllowList !== undefined ||
-        organization.boxLimitedNetworkEgress
+      const needsFreshBox = requiresFreshBox(createBoxDto, organization)
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
         await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
-      } else if (image && !requiresFreshBoxForNetworkPolicy) {
+      } else if (image && !needsFreshBox) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec
         //  before creating a fresh one.
         const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
@@ -258,6 +256,13 @@ export class BoxService {
       box.class = boxClass
       //  TODO: default user should be configurable
       box.osUser = createBoxDto.user || 'boxlite'
+      // Only set when the caller actually asked. Collapsing "not supplied" into
+      // a default here would hand every box a USER override its image may not
+      // define — which is exactly what 16d9248bb removed.
+      box.runAsUser = createBoxDto.runAsUser
+      box.workingDir = createBoxDto.workingDir
+      box.entrypoint = createBoxDto.entrypoint
+      box.cmd = createBoxDto.cmd
       box.env = createBoxDto.env || {}
       box.labels = createBoxDto.labels || {}
 
