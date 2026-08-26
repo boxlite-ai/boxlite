@@ -33,6 +33,7 @@ import { OrganizationAuthContext } from '../common/interfaces/auth-context.inter
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import { BoxAutoResumeService } from './box-auto-resume.service'
+import { RestApiScope } from './api-scope'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -55,6 +56,7 @@ export class BoxliteProxyController {
   ) {}
 
   @All(':boxId/exec')
+  @RestApiScope('box:exec')
   async proxyExec(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -74,6 +76,7 @@ export class BoxliteProxyController {
   }
 
   @All(':boxId/executions/:execId/signal')
+  @RestApiScope('box:exec')
   async proxyExecSignal(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -94,6 +97,7 @@ export class BoxliteProxyController {
   }
 
   @All(':boxId/executions/:execId/resize')
+  @RestApiScope('box:exec')
   async proxyExecResize(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -114,6 +118,7 @@ export class BoxliteProxyController {
   }
 
   @Get(':boxId/executions/:execId')
+  @RestApiScope('box:exec')
   async proxyExecStatus(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -134,6 +139,7 @@ export class BoxliteProxyController {
   }
 
   @Delete(':boxId/executions/:execId')
+  @RestApiScope('box:exec')
   async proxyExecKill(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -160,6 +166,7 @@ export class BoxliteProxyController {
   // a NestJS 404, which is the correct answer.
 
   @All(':boxId/files')
+  @RestApiScope('box:write')
   async proxyFiles(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -181,6 +188,7 @@ export class BoxliteProxyController {
   }
 
   @All(':boxId/metrics')
+  @RestApiScope('box:read')
   async proxyMetrics(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -201,6 +209,7 @@ export class BoxliteProxyController {
 
   @Post(':boxId/network/tunnel')
   @HttpCode(HttpStatus.OK)
+  @RestApiScope('box:write')
   async proxyNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,

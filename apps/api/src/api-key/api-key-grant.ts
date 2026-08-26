@@ -10,7 +10,11 @@ import { OrganizationResourcePermission } from '../organization/enums/organizati
 import { SystemRole } from '../user/enums/system-role.enum'
 
 /**
- * The permissions a caller is allowed to put on a key it mints.
+ * The permissions the resource guard honours for this caller — what the caller
+ * effectively holds.
+ *
+ * Two callers read it: key issuance, which may not grant beyond it, and
+ * `GET /v1/me`, which reports the scopes it unlocks.
  *
  * An API key may only pass on what it already carries. Without that rule a
  * key minted for one resource could mint itself a key for every other one,
@@ -22,7 +26,7 @@ import { SystemRole } from '../user/enums/system-role.enum'
  * anything the organization has, other members grant what their roles carry.
  * `null` means the caller may grant anything.
  */
-export function grantablePermissions(authContext: OrganizationAuthContext): OrganizationResourcePermission[] | null {
+export function effectivePermissions(authContext: OrganizationAuthContext): OrganizationResourcePermission[] | null {
   if (authContext.role === SystemRole.ADMIN) {
     return null
   }
@@ -47,7 +51,7 @@ export function ungrantablePermissions(
   authContext: OrganizationAuthContext,
   requested: OrganizationResourcePermission[],
 ): OrganizationResourcePermission[] {
-  const grantable = grantablePermissions(authContext)
+  const grantable = effectivePermissions(authContext)
   if (grantable === null) {
     return []
   }

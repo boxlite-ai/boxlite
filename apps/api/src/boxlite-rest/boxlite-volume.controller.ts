@@ -9,6 +9,7 @@ import { RequiredOrganizationResourcePermissions } from '../organization/decorat
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { VolumeAccessGuard } from '../box/guards/volume-access.guard'
 import { VolumeState } from '../box/enums/volume-state.enum'
+import { RestApiScope } from './api-scope'
 
 type RestVolumeSummary = {
   id: string
@@ -31,6 +32,7 @@ export class BoxliteVolumeController {
 
   @Post()
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_VOLUMES])
+  @RestApiScope('volume:write')
   async create(@AuthContext() authContext: OrganizationAuthContext): Promise<RestVolumeResponse> {
     const volume = await this.volumeService.create(authContext.organization, {})
     return this.toResponse(await this.volumeService.waitForReady(volume.id, 30))
@@ -38,6 +40,7 @@ export class BoxliteVolumeController {
 
   @Get()
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.READ_VOLUMES])
+  @RestApiScope('volume:read')
   async list(@AuthContext() authContext: OrganizationAuthContext): Promise<{ volumes: RestVolumeSummary[] }> {
     const volumes = await this.volumeService.findAll(authContext.organizationId)
     return { volumes: volumes.map((volume) => this.toSummary(volume)) }
@@ -46,6 +49,7 @@ export class BoxliteVolumeController {
   @Get(':volumeId')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.READ_VOLUMES])
   @UseGuards(VolumeAccessGuard)
+  @RestApiScope('volume:read')
   async get(@Param('volumeId') volumeId: string): Promise<RestVolumeResponse> {
     return this.toResponse(await this.volumeService.findOne(volumeId))
   }
@@ -54,6 +58,7 @@ export class BoxliteVolumeController {
   @HttpCode(204)
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_VOLUMES])
   @UseGuards(VolumeAccessGuard)
+  @RestApiScope('volume:delete')
   async remove(@Param('volumeId') volumeId: string, @Query('force') force?: string): Promise<void> {
     await this.volumeService.delete(volumeId, force === 'true')
   }

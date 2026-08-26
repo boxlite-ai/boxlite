@@ -8,9 +8,12 @@ import { Controller, Get, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags, ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
-import { AuthContext as AuthCtx } from '../common/interfaces/auth-context.interface'
+import { AuthContext as AuthCtx, OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
+import { effectivePermissions } from '../api-key/api-key-grant'
+import { resolveApiScopes } from './api-scope'
 import { OrganizationService } from '../organization/services/organization.service'
 import { PrincipalDto } from './dto/principal.dto'
+import { RestApiScope } from './api-scope'
 
 /**
  * `GET /v1/me` — identity for the calling credential.
@@ -31,8 +34,10 @@ export class BoxliteMeController {
   constructor(private readonly organizationService: OrganizationService) {}
 
   @Get('me')
+  @RestApiScope('me:read')
   async getMe(@AuthContext() ctx: AuthCtx): Promise<PrincipalDto> {
     const pathPrefix = await this.resolvePathPrefix(ctx)
+    const scopes = resolveApiScopes(effectivePermissions(ctx as OrganizationAuthContext))
 
     const principalType: 'user' | 'service_account' = ctx.apiKey ? 'service_account' : 'user'
 
@@ -42,10 +47,11 @@ export class BoxliteMeController {
       email: ctx.email || undefined,
       display_name: undefined,
       path_prefix: pathPrefix,
-      // TODO: source scopes from ctx.apiKey?.scopes once the ApiKey entity
-      // has a `scopes` column. For now grant the full set used by the OpenAPI
-      // spec's documented scope vocabulary.
-      scopes: ['box:read', 'box:write', 'box:exec', 'box:delete', 'image:read', 'image:write', 'me:read'],
+      // Derived from what the resource guard will actually honour for this
+      // credential, so a scope is present exactly when the routes behind it
+      // are reachable. The previous constant claimed image scopes this
+      // deployment serves no route for, and never mentioned volumes at all.
+      scopes,
       // Source of truth for key expiry is ApiKey.expiresAt — the same column the
       // dashboard's `/api-keys` list renders. Returning a hardcoded null here let
       // clients believe a soon-to-expire key was permanent (P1-2). `null` stays

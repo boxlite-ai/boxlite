@@ -5,6 +5,8 @@
  */
 
 import { ApiKey } from '../api-key/api-key.entity'
+import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
+import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AuthContext } from '../common/interfaces/auth-context.interface'
 import { OrganizationService } from '../organization/services/organization.service'
 import { BoxliteMeController } from './boxlite-me.controller'
@@ -17,11 +19,12 @@ describe('BoxliteMeController', () => {
     return new BoxliteMeController(organizationService)
   }
 
-  function apiKeyContext(expiresAt?: Date): AuthContext {
+  function apiKeyContext(expiresAt?: Date, permissions: OrganizationResourcePermission[] = []): AuthContext {
     const apiKey = {
       organizationId: '11111111-1111-1111-1111-111111111111',
       userId: 'user-1',
       name: 'key-531',
+      permissions,
       expiresAt,
     } as ApiKey
     return {
@@ -30,8 +33,43 @@ describe('BoxliteMeController', () => {
       role: 'user' as AuthContext['role'],
       apiKey,
       organizationId: apiKey.organizationId,
-    }
+      // Owner membership on purpose: a key must be bounded by its own
+      // permissions, not widened by whoever happens to own it.
+      organizationUser: { role: OrganizationMemberRole.OWNER, assignedRoles: [] },
+    } as AuthContext
   }
+
+  describe('GET /v1/me — scopes describe what the credential can actually reach', () => {
+    it('withholds the volume scopes from a key without volume permissions', async () => {
+      const ctx = apiKeyContext(undefined, [
+        OrganizationResourcePermission.WRITE_BOXES,
+        OrganizationResourcePermission.DELETE_BOXES,
+      ])
+
+      const { scopes } = await makeController().getMe(ctx)
+
+      expect(scopes).not.toContain('volume:read')
+      expect(scopes).toContain('box:write')
+    })
+
+    it('reports the volume scopes a volume key can exercise', async () => {
+      const ctx = apiKeyContext(undefined, [
+        OrganizationResourcePermission.READ_VOLUMES,
+        OrganizationResourcePermission.WRITE_VOLUMES,
+        OrganizationResourcePermission.DELETE_VOLUMES,
+      ])
+
+      const { scopes } = await makeController().getMe(ctx)
+
+      expect(scopes).toEqual(expect.arrayContaining(['volume:read', 'volume:write', 'volume:delete']))
+    })
+
+    it('no longer claims image access this deployment serves no route for', async () => {
+      const { scopes } = await makeController().getMe(apiKeyContext())
+
+      expect(scopes.filter((scope) => scope.startsWith('image:'))).toEqual([])
+    })
+  })
 
   describe('GET /v1/me — expires_at is sourced from ApiKey.expiresAt', () => {
     it('returns the API key expiry as an ISO string (same field the dashboard renders)', async () => {

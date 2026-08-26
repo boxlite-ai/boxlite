@@ -18,6 +18,7 @@ import { Audit, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { RestCreateApiKeyDto } from './dto/create-api-key.dto'
+import { RestApiScope } from './api-scope'
 
 type RestApiKeySummary = {
   name: string
@@ -63,6 +64,7 @@ export class BoxliteApiKeyController {
       }),
     },
   })
+  @RestApiScope('api_key:write')
   async create(
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() dto: RestCreateApiKeyDto,
@@ -84,6 +86,7 @@ export class BoxliteApiKeyController {
   }
 
   @Get()
+  @RestApiScope('api_key:read')
   async list(@AuthContext() authContext: OrganizationAuthContext): Promise<{ api_keys: RestApiKeySummary[] }> {
     const apiKeys = await this.apiKeyService.getApiKeys(authContext.organizationId, authContext.userId)
     return { api_keys: apiKeys.map((apiKey) => this.toSummary(apiKey)) }
@@ -96,6 +99,7 @@ export class BoxliteApiKeyController {
     targetType: AuditTarget.API_KEY,
     targetIdFromRequest: (req) => req.params.name,
   })
+  @RestApiScope('api_key:delete')
   async remove(@AuthContext() authContext: OrganizationAuthContext, @Param('name') name: string): Promise<void> {
     await this.apiKeyService.deleteApiKey(authContext.organizationId, authContext.userId, name)
   }

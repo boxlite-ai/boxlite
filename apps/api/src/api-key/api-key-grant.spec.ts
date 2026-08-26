@@ -5,7 +5,7 @@
  */
 
 import { ApiKey } from './api-key.entity'
-import { grantablePermissions, ungrantablePermissions } from './api-key-grant'
+import { effectivePermissions, ungrantablePermissions } from './api-key-grant'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
@@ -37,13 +37,13 @@ function keyContext(permissions: OrganizationResourcePermission[]): Organization
   } as Partial<OrganizationAuthContext>)
 }
 
-describe('grantablePermissions', () => {
+describe('effectivePermissions', () => {
   it('bounds an API key by the permissions it carries, not by its owner role', () => {
-    expect(grantablePermissions(keyContext(VOLUME_LIFECYCLE))).toEqual(VOLUME_LIFECYCLE)
+    expect(effectivePermissions(keyContext(VOLUME_LIFECYCLE))).toEqual(VOLUME_LIFECYCLE)
   })
 
   it('lets a system admin grant anything', () => {
-    expect(grantablePermissions(context({ role: SystemRole.ADMIN }))).toBeNull()
+    expect(effectivePermissions(context({ role: SystemRole.ADMIN }))).toBeNull()
   })
 
   it('lets an interactive owner grant anything', () => {
@@ -51,7 +51,7 @@ describe('grantablePermissions', () => {
       organizationUser: { role: OrganizationMemberRole.OWNER, assignedRoles: [] },
     } as Partial<OrganizationAuthContext>)
 
-    expect(grantablePermissions(owner)).toBeNull()
+    expect(effectivePermissions(owner)).toBeNull()
   })
 
   it('bounds an interactive member by the roles assigned to them', () => {
@@ -62,11 +62,11 @@ describe('grantablePermissions', () => {
       },
     } as Partial<OrganizationAuthContext>)
 
-    expect(grantablePermissions(member)).toEqual([OrganizationResourcePermission.READ_VOLUMES])
+    expect(effectivePermissions(member)).toEqual([OrganizationResourcePermission.READ_VOLUMES])
   })
 
   it('grants nothing to a caller with no membership', () => {
-    expect(grantablePermissions(context({}))).toEqual([])
+    expect(effectivePermissions(context({}))).toEqual([])
   })
 })
 
