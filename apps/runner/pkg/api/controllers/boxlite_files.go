@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -102,13 +103,24 @@ func BoxliteFileDownload(ctx *gin.Context) {
 	err = r.Boxlite.CopyOutStream(ctx.Request.Context(), boxId, srcPath, ctx.Writer, func(sourceIsDir bool) {
 		ctx.Header("X-Boxlite-Source-Is-Dir", strconv.FormatBool(sourceIsDir))
 	})
-	if err != nil && !ctx.Writer.Written() {
+	if err == nil {
+		return
+	}
+	if !ctx.Writer.Written() {
 		// The copy failed before any body byte was produced (e.g. the source
 		// does not exist) — the response is not yet committed, so we can still
-		// surface an error status. Once bytes are streaming it is too late.
+		// surface an error status.
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("copy failed: %s", err)})
 		return
 	}
+	// A 200 is already on the wire and the archive is incomplete. Returning
+	// normally would finish the body cleanly, which the client cannot tell
+	// apart from a whole archive — a tar cut on a 512-byte block boundary
+	// extracts without error, just missing entries. Severing the connection is
+	// the only remaining way to say "this is not the whole thing".
+	slog.Error("boxlite copy_out failed mid-stream, aborting the response",
+		"boxId", boxId, "path", srcPath, "error", err)
+	panic(http.ErrAbortHandler)
 }
 
 // parseSourceIsDir reads the optional source_is_dir query parameter. The

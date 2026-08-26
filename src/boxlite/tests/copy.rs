@@ -48,6 +48,37 @@ async fn exec_exit_code(bx: &LiteBox, cmd: BoxCommand) -> i32 {
 // SINGLE TEST ENTRY POINT — one VM, all cases
 // ============================================================================
 
+/// A single file streamed into an *existing* directory must land inside it
+/// (Unix cp semantics), not try to overwrite the directory path. This is the
+/// destination-side signal that the streaming path used to drop.
+async fn streaming_single_file_into_existing_dir(bx: &LiteBox, tmp: &Path) {
+    let host_src = tmp.join("stream-into-dir.txt");
+    std::fs::write(&host_src, b"landed inside\n").unwrap();
+
+    let (source_is_dir, tar) = boxlite_shared::tar::pack_stream(
+        host_src.clone(),
+        boxlite_shared::tar::PackContext {
+            follow_symlinks: false,
+            include_parent: false,
+        },
+    )
+    .await
+    .expect("pack_stream");
+    assert!(!source_is_dir);
+
+    // `/root` already exists as a directory; the file must go inside it.
+    bx.copy_in_tar_stream(tar, "/root", source_is_dir, CopyOptions::default())
+        .await
+        .expect("copy_in_tar_stream into existing directory");
+
+    let out = exec_stdout(
+        bx,
+        BoxCommand::new("cat").args(["/root/stream-into-dir.txt"]),
+    )
+    .await;
+    assert_eq!(out, "landed inside\n");
+}
+
 /// Exercise the streaming entry points (`copy_in_tar_stream` / `copy_out_tar`)
 /// end-to-end: pack a host file into a tar stream, stream it into the guest,
 /// then stream it back out and unpack it — with no temp-file staging.
@@ -64,11 +95,19 @@ async fn streaming_roundtrip(bx: &LiteBox, tmp: &Path) {
     )
     .await
     .expect("pack_stream");
-    assert!(!source_is_dir, "single file must report source_is_dir=false");
+    assert!(
+        !source_is_dir,
+        "single file must report source_is_dir=false"
+    );
 
-    bx.copy_in_tar_stream(tar, "/root/stream-src.txt", source_is_dir, CopyOptions::default())
-        .await
-        .expect("copy_in_tar_stream");
+    bx.copy_in_tar_stream(
+        tar,
+        "/root/stream-src.txt",
+        source_is_dir,
+        CopyOptions::default(),
+    )
+    .await
+    .expect("copy_in_tar_stream");
 
     let out = exec_stdout(bx, BoxCommand::new("cat").args(["/root/stream-src.txt"])).await;
     assert_eq!(out, "streaming hello");
@@ -137,6 +176,7 @@ async fn copy_integration() {
     copy_in_landing_on_a_file_mount_is_refused(&bx, tmp.path()).await;
     copy_out_of_a_dir_containing_a_mount_is_refused(&bx, tmp.path()).await;
     streaming_roundtrip(&bx, tmp.path()).await;
+    streaming_single_file_into_existing_dir(&bx, tmp.path()).await;
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }

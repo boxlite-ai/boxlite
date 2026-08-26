@@ -175,8 +175,12 @@ func Recovery() gin.HandlerFunc {
 		defer func() {
 			if err := recover(); err != nil {
 				if errType, ok := err.(error); ok && errors.Is(errType, http.ErrAbortHandler) {
-					// Do nothing, the request was aborted
-					return
+					// net/http's contract for this sentinel is "sever the
+					// connection, log nothing". Recovering it here would let
+					// net/http finish the response normally, so a client
+					// reading a half-written streaming body would see a clean
+					// EOF and take the truncated payload for a complete one.
+					panic(errType)
 				}
 
 				slog.Error("panic recovered", "panic", err)

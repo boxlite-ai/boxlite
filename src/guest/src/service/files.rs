@@ -471,8 +471,14 @@ impl Files for GuestServer {
 
         match source_is_dir {
             // Streaming path: unpack directly from the byte stream. The hint
-            // makes the file-vs-directory shape authoritative (no tar peek).
-            Some(force_directory) => {
+            // carries the *source* shape, but the destination can still force
+            // directory mode — same as `detect_extraction_mode` in the legacy
+            // path. Fold the destination-side signals back in here so
+            // "single file → existing directory" keeps landing inside it
+            // (Unix cp semantics), not overwriting the directory path.
+            Some(source_is_dir) => {
+                let force_directory =
+                    source_is_dir || dest_path.ends_with('/') || dest_root.is_dir();
                 let tar_stream: BoxTarStream = Box::pin(async_stream::stream! {
                     if !first_data.is_empty() {
                         yield Ok(first_data);
