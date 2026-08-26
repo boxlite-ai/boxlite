@@ -15,6 +15,7 @@ interface ClickStackGatewayInputs {
   writerReady: any
   domain: { name: string; dns: ReturnType<typeof sst.cloudflare.dns> }
   backofficeRedeemUrl: string
+  backofficeIntrospectUrl: string
   backofficeEntryUrl: string
   sessionKeys: sst.Secret
 }
@@ -158,6 +159,7 @@ if (clickStackGateway) {
         CLICKSTACK_REDEEM_TOKEN_VERSION: redeemSecretVersion.versionId,
         CLICKSTACK_SESSION_KEY_VERSION: sessionSecretVersion.versionId,
         CLICKSTACK_BACKOFFICE_REDEEM_URL: clickStackGateway.backofficeRedeemUrl,
+        CLICKSTACK_BACKOFFICE_INTROSPECT_URL: clickStackGateway.backofficeIntrospectUrl,
         CLICKSTACK_BACKOFFICE_ENTRY_URL: clickStackGateway.backofficeEntryUrl,
       },
       transform: {

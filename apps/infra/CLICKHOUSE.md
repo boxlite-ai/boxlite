@@ -59,18 +59,25 @@ search and debugging; saved HyperDX state is not retained.
 
 The optional gateway makes the self-hosted ClickStack UI available without an
 operator workstation tunnel. ClickHouse port 8123 stays private. A logged-in
-Backoffice employee requests a 30-second, single-use handoff code; the browser
-posts it to the gateway, which redeems it with Backoffice and creates a
-five-minute HttpOnly session. The gateway strips browser-supplied credentials
-and injects the server-side `otel_reader` password. Backoffice logout or lost
-presence does not revoke an already-issued gateway cookie; its remaining access
-is bounded by the five-minute expiry.
+Backoffice employee opens ClickStack in a new tab with a 30-second, single-use
+handoff code. The gateway redeems that code for an opaque server-side session
+identifier and the parent Backoffice session's absolute expiry. Its signed
+HttpOnly cookie contains only that binding, never Backoffice or ClickHouse
+credentials. Before admitting a request, the gateway uses a Backoffice status
+confirmation no more than one minute old, refreshing it when stale, then strips
+browser-supplied credentials and injects the server-side `otel_reader`
+password. A Backoffice logout or lost-presence revocation therefore blocks new
+ClickStack requests within one minute. A response or upgraded connection that
+was already admitted is not interrupted mid-stream. Deploying this protocol
+invalidates the former unbound five-minute cookies and redirects those tabs
+through Backoffice once.
 
 Configure the public Backoffice endpoints in the BoxLite stage configuration:
 
 ```dotenv
 CLICKSTACK_GATEWAY_ENABLED=true
 CLICKSTACK_BACKOFFICE_REDEEM_URL=https://backoffice.dev.boxlite.ai/api/backoffice/v1/observability/clickstack/redeem
+CLICKSTACK_BACKOFFICE_INTROSPECT_URL=https://backoffice.dev.boxlite.ai/api/backoffice/v1/observability/clickstack/introspect
 CLICKSTACK_BACKOFFICE_ENTRY_URL=https://backoffice.dev.boxlite.ai/platform/observability
 ```
 
@@ -94,12 +101,14 @@ npm run deploy -- --stage <stage>
 
 Rotate session keys in three deployments so mixed ECS revisions accept each
 other's cookies: deploy `{current: old, previous: new}` and wait for convergence;
-then deploy `{current: new, previous: old}`; after another convergence plus five
-minutes, deploy `{current: new}`. Skipping the first phase can make old tasks
-reject cookies issued by new tasks.
+then deploy `{current: new, previous: old}`; after another convergence plus the
+maximum accepted binding lifetime (currently one hour and 30 seconds, including
+clock skew), deploy `{current: new}`. Skipping the first phase can make old tasks
+reject cookies issued by new tasks, and removing the previous key early
+invalidates still-active bindings.
 
 Rotate the redeem token with the same three phases. Unlike session cookies, no
-five-minute wait is needed before phase 3, but both Gateway and Backoffice must
+session-lifetime wait is needed before phase 3, but both Gateway and Backoffice must
 have fully converged on phase 2 before removing the previous token. Its stable
 Secrets Manager copy remains in the stack while the gateway flag is off, so a
 normal disable/re-enable cannot collide with a secret pending recovery.

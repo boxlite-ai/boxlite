@@ -25,8 +25,16 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 
 type grantRedeemerFunc func(context.Context, string) error
 
-func (function grantRedeemerFunc) Redeem(ctx context.Context, code string) error {
-	return function(ctx, code)
+func (function grantRedeemerFunc) Redeem(ctx context.Context, code string) (clickStackSessionBinding, error) {
+	err := function(ctx, code)
+	return clickStackSessionBinding{
+		ID:        strings.Repeat("s", 43),
+		ExpiresAt: time.Now().Add(30 * time.Minute).Truncate(time.Second),
+	}, err
+}
+
+func (function grantRedeemerFunc) Introspect(context.Context, string) (bool, error) {
+	return true, nil
 }
 
 func testClickStackSessionKeys() string {
@@ -40,13 +48,14 @@ func testClickStackRedeemToken() string {
 
 func testClickStackGatewayConfig() ClickStackGatewayConfig {
 	return ClickStackGatewayConfig{
-		UpstreamURL:         "http://clickhouse.internal:8123",
-		Username:            "otel_reader",
-		Password:            "reader-password",
-		BackofficeRedeemURL: "https://backoffice.example.test/api/backoffice/v1/observability/clickstack/redeem",
-		BackofficeEntryURL:  "https://backoffice.example.test/platform/observability",
-		RedeemToken:         testClickStackRedeemToken(),
-		SessionKeys:         testClickStackSessionKeys(),
+		UpstreamURL:             "http://clickhouse.internal:8123",
+		Username:                "otel_reader",
+		Password:                "reader-password",
+		BackofficeRedeemURL:     "https://backoffice.example.test/api/backoffice/v1/observability/clickstack/redeem",
+		BackofficeIntrospectURL: "https://backoffice.example.test/api/backoffice/v1/observability/clickstack/introspect",
+		BackofficeEntryURL:      "https://backoffice.example.test/platform/observability",
+		RedeemToken:             testClickStackRedeemToken(),
+		SessionKeys:             testClickStackSessionKeys(),
 	}
 }
 
@@ -121,9 +130,11 @@ func TestClickStackGatewayExchangesOneTimeHandoffForReaderSession(t *testing.T) 
 
 func TestClickStackGatewayRedeemsHandoffThroughBackoffice(t *testing.T) {
 	code := strings.Repeat("a", 43)
-	redeemer := &httpClickStackGrantRedeemer{
-		url:   "https://backoffice.example.test/api/backoffice/v1/observability/clickstack/redeem",
-		token: testClickStackRedeemToken(),
+	expiresAt := time.Now().Add(30 * time.Minute).Truncate(time.Second)
+	redeemer := &httpClickStackBackofficeClient{
+		redeemURL:     "https://backoffice.example.test/api/backoffice/v1/observability/clickstack/redeem",
+		introspectURL: "https://backoffice.example.test/api/backoffice/v1/observability/clickstack/introspect",
+		token:         testClickStackRedeemToken(),
 		client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			if request.Method != http.MethodPost || request.Header.Get("Content-Type") != "application/json" {
 				t.Fatalf("unexpected redemption request")
@@ -141,12 +152,20 @@ func TestClickStackGatewayRedeemsHandoffThroughBackoffice(t *testing.T) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": {"application/json"}},
-				Body:       io.NopCloser(strings.NewReader(`{"active":true}`)),
+				Body: io.NopCloser(strings.NewReader(fmt.Sprintf(
+					`{"active":true,"sessionId":%q,"expiresAt":%q}`,
+					strings.Repeat("s", 43),
+					expiresAt.Format(time.RFC3339),
+				))),
 			}, nil
 		})},
 	}
-	if err := redeemer.Redeem(context.Background(), code); err != nil {
+	binding, err := redeemer.Redeem(context.Background(), code)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if binding.ID != strings.Repeat("s", 43) || !binding.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("unexpected Backoffice binding: %#v", binding)
 	}
 }
 
@@ -209,18 +228,19 @@ func TestClickStackGatewaySessionRejectsTamperingAndExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cookie, err := sessions.Issue()
+	binding := clickStackSessionBinding{ID: strings.Repeat("s", 43), ExpiresAt: now.Add(30 * time.Minute)}
+	cookie, err := sessions.Issue(binding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sessions.Verify(cookie.Value) {
+	if verified, ok := sessions.Verify(cookie.Value); !ok || verified != binding {
 		t.Fatal("fresh session was rejected")
 	}
-	if sessions.Verify(cookie.Value + "x") {
+	if _, ok := sessions.Verify(cookie.Value + "x"); ok {
 		t.Fatal("tampered session was accepted")
 	}
-	now = now.Add(clickStackSessionTTL + time.Second)
-	if sessions.Verify(cookie.Value) {
+	now = binding.ExpiresAt.Add(time.Second)
+	if _, ok := sessions.Verify(cookie.Value); ok {
 		t.Fatal("expired session was accepted")
 	}
 }
@@ -233,7 +253,8 @@ func TestClickStackGatewaySessionKeysRemainCompatibleDuringThreePhaseRotation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldCookie, err := oldSessions.Issue()
+	oldBinding := clickStackSessionBinding{ID: strings.Repeat("o", 43), ExpiresAt: now.Add(30 * time.Minute)}
+	oldCookie, err := oldSessions.Issue(oldBinding)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +266,7 @@ func TestClickStackGatewaySessionKeysRemainCompatibleDuringThreePhaseRotation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !stagedSessions.Verify(oldCookie.Value) {
+	if _, ok := stagedSessions.Verify(oldCookie.Value); !ok {
 		t.Fatal("phase-one tasks rejected an old session")
 	}
 
@@ -256,11 +277,14 @@ func TestClickStackGatewaySessionKeysRemainCompatibleDuringThreePhaseRotation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	newCookie, err := rotatingSessions.Issue()
+	newBinding := clickStackSessionBinding{ID: strings.Repeat("n", 43), ExpiresAt: now.Add(30 * time.Minute)}
+	newCookie, err := rotatingSessions.Issue(newBinding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rotatingSessions.Verify(oldCookie.Value) || !stagedSessions.Verify(newCookie.Value) {
+	_, rotatingAcceptsOld := rotatingSessions.Verify(oldCookie.Value)
+	_, stagedAcceptsNew := stagedSessions.Verify(newCookie.Value)
+	if !rotatingAcceptsOld || !stagedAcceptsNew {
 		t.Fatal("phase-one and phase-two tasks did not accept each other's sessions")
 	}
 
@@ -268,10 +292,10 @@ func TestClickStackGatewaySessionKeysRemainCompatibleDuringThreePhaseRotation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if newSessions.Verify(oldCookie.Value) {
+	if _, ok := newSessions.Verify(oldCookie.Value); ok {
 		t.Fatal("session signed by removed key was accepted")
 	}
-	if !newSessions.Verify(newCookie.Value) {
+	if _, ok := newSessions.Verify(newCookie.Value); !ok {
 		t.Fatal("session signed by the retained key was rejected")
 	}
 }
@@ -376,6 +400,9 @@ func TestClickStackGatewayRejectsUnsafeConfiguration(t *testing.T) {
 		},
 		"unsafe redeem URL": func(config *ClickStackGatewayConfig) {
 			config.BackofficeRedeemURL = "http://backoffice.example.test/redeem"
+		},
+		"unsafe introspect URL": func(config *ClickStackGatewayConfig) {
+			config.BackofficeIntrospectURL = "https://other.example.test/introspect"
 		},
 		"unsafe entry URL": func(config *ClickStackGatewayConfig) {
 			config.BackofficeEntryURL = (&url.URL{

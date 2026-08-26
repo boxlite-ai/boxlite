@@ -241,6 +241,7 @@ test('keeps the public ClickStack gateway default-off behind a Backoffice handof
   )
   assert.match(deploy, /new sst\.Secret\('CLICKSTACK_REDEEM_TOKEN', clickStackRedeemFallback\)/)
   assert.match(deploy, /CLICKSTACK_BACKOFFICE_REDEEM_URL/)
+  assert.match(deploy, /CLICKSTACK_BACKOFFICE_INTROSPECT_URL/)
   assert.match(deploy, /CLICKSTACK_BACKOFFICE_ENTRY_URL/)
 
   assert.match(edge, /new sst\.aws\.Service\(\s*'ClickStackGateway'/)
@@ -252,6 +253,7 @@ test('keeps the public ClickStack gateway default-off behind a Backoffice handof
   assert.match(edge, /secretString: clickStackGateway\.sessionKeys\.value/)
   assert.match(edge, /CLICKSTACK_USERNAME: 'otel_reader'/)
   assert.match(edge, /CLICKSTACK_BACKOFFICE_REDEEM_URL/)
+  assert.match(edge, /CLICKSTACK_BACKOFFICE_INTROSPECT_URL/)
   assert.match(edge, /CLICKSTACK_BACKOFFICE_ENTRY_URL/)
   assert.doesNotMatch(edge, /authenticate-oidc/)
 })

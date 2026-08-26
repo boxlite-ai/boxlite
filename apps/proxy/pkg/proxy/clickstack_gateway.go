@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -29,47 +28,82 @@ import (
 )
 
 const (
-	clickStackGatewayDefaultPort    = 4000
-	clickStackReadinessTimeout      = 3 * time.Second
-	clickStackReadinessBodyLimit    = 1 << 20
-	clickStackRuntimeEnvBodyLimit   = 64 << 10
-	clickStackRuntimeEnvPath        = "/clickstack/__ENV.js"
-	clickStackResponseHeaderTimeout = 30 * time.Second
-	clickStackHandoffBodyLimit      = 2 << 10
-	clickStackHandoffRateLimit      = 20
-	clickStackHandoffMaxInFlight    = 8
-	clickStackRedeemBodyLimit       = 1 << 10
-	clickStackSessionTTL            = 5 * time.Minute
-	clickStackSessionCookie         = "__Host-boxlite_clickstack"
+	clickStackGatewayDefaultPort        = 4000
+	clickStackReadinessTimeout          = 3 * time.Second
+	clickStackReadinessBodyLimit        = 1 << 20
+	clickStackRuntimeEnvBodyLimit       = 64 << 10
+	clickStackRuntimeEnvPath            = "/clickstack/__ENV.js"
+	clickStackResponseHeaderTimeout     = 30 * time.Second
+	clickStackHandoffBodyLimit          = 2 << 10
+	clickStackHandoffRateLimit          = 20
+	clickStackHandoffMaxInFlight        = 8
+	clickStackRedeemBodyLimit           = 1 << 10
+	clickStackSessionMaximumTTL         = time.Hour
+	clickStackSessionClockSkew          = 30 * time.Second
+	clickStackSessionValidationInterval = time.Minute
+	clickStackSessionCacheMaxEntries    = 1024
+	clickStackSessionCookie             = "__Host-boxlite_clickstack"
 )
 
 var clickStackHandoffCodePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
 type ClickStackGatewayConfig struct {
-	UpstreamURL         string
-	Username            string
-	Password            string
-	Port                int
-	BackofficeRedeemURL string
-	BackofficeEntryURL  string
-	RedeemToken         string
-	SessionKeys         string
+	UpstreamURL             string
+	Username                string
+	Password                string
+	Port                    int
+	BackofficeRedeemURL     string
+	BackofficeIntrospectURL string
+	BackofficeEntryURL      string
+	RedeemToken             string
+	SessionKeys             string
 }
 
-type clickStackGrantRedeemer interface {
-	Redeem(context.Context, string) error
+type clickStackSessionBinding struct {
+	ID        string
+	ExpiresAt time.Time
 }
 
-type httpClickStackGrantRedeemer struct {
-	url    string
-	token  string
-	client *http.Client
+type clickStackBackofficeClient interface {
+	Redeem(context.Context, string) (clickStackSessionBinding, error)
+	Introspect(context.Context, string) (bool, error)
+}
+
+type clickStackSessionIntrospector interface {
+	Introspect(context.Context, string) (bool, error)
+}
+
+type httpClickStackBackofficeClient struct {
+	redeemURL     string
+	introspectURL string
+	token         string
+	client        *http.Client
 }
 
 type clickStackSessionManager struct {
 	current  []byte
 	previous []byte
 	now      func() time.Time
+}
+
+type clickStackSessionCacheEntry struct {
+	binding    clickStackSessionBinding
+	active     bool
+	validUntil time.Time
+}
+
+type clickStackSessionValidationFlight struct {
+	done   chan struct{}
+	active bool
+	err    error
+}
+
+type clickStackSessionAuthorizer struct {
+	mu           sync.Mutex
+	introspector clickStackSessionIntrospector
+	entries      map[string]clickStackSessionCacheEntry
+	flights      map[string]*clickStackSessionValidationFlight
+	now          func() time.Time
 }
 
 type clickStackHandoffLimiter struct {
@@ -99,14 +133,15 @@ func ClickStackGatewayConfigFromEnv() (ClickStackGatewayConfig, error) {
 		port = parsed
 	}
 	return ClickStackGatewayConfig{
-		UpstreamURL:         os.Getenv("CLICKSTACK_UPSTREAM_URL"),
-		Username:            os.Getenv("CLICKSTACK_USERNAME"),
-		Password:            os.Getenv("CLICKSTACK_PASSWORD"),
-		Port:                port,
-		BackofficeRedeemURL: os.Getenv("CLICKSTACK_BACKOFFICE_REDEEM_URL"),
-		BackofficeEntryURL:  os.Getenv("CLICKSTACK_BACKOFFICE_ENTRY_URL"),
-		RedeemToken:         os.Getenv("CLICKSTACK_REDEEM_TOKEN"),
-		SessionKeys:         os.Getenv("CLICKSTACK_SESSION_KEYS"),
+		UpstreamURL:             os.Getenv("CLICKSTACK_UPSTREAM_URL"),
+		Username:                os.Getenv("CLICKSTACK_USERNAME"),
+		Password:                os.Getenv("CLICKSTACK_PASSWORD"),
+		Port:                    port,
+		BackofficeRedeemURL:     os.Getenv("CLICKSTACK_BACKOFFICE_REDEEM_URL"),
+		BackofficeIntrospectURL: os.Getenv("CLICKSTACK_BACKOFFICE_INTROSPECT_URL"),
+		BackofficeEntryURL:      os.Getenv("CLICKSTACK_BACKOFFICE_ENTRY_URL"),
+		RedeemToken:             os.Getenv("CLICKSTACK_REDEEM_TOKEN"),
+		SessionKeys:             os.Getenv("CLICKSTACK_SESSION_KEYS"),
 	}, nil
 }
 
@@ -124,11 +159,21 @@ func validateClickStackGatewayConfig(config ClickStackGatewayConfig) (*url.URL, 
 	if config.Password == "" {
 		return nil, fmt.Errorf("CLICKSTACK_PASSWORD is required")
 	}
-	if _, err := cleanClickStackPublicURL(config.BackofficeRedeemURL, "CLICKSTACK_BACKOFFICE_REDEEM_URL"); err != nil {
+	redeemURL, err := cleanClickStackPublicURL(config.BackofficeRedeemURL, "CLICKSTACK_BACKOFFICE_REDEEM_URL")
+	if err != nil {
 		return nil, err
 	}
-	if _, err := cleanClickStackPublicURL(config.BackofficeEntryURL, "CLICKSTACK_BACKOFFICE_ENTRY_URL"); err != nil {
+	introspectURL, err := cleanClickStackPublicURL(config.BackofficeIntrospectURL, "CLICKSTACK_BACKOFFICE_INTROSPECT_URL")
+	if err != nil {
 		return nil, err
+	}
+	entryURL, err := cleanClickStackPublicURL(config.BackofficeEntryURL, "CLICKSTACK_BACKOFFICE_ENTRY_URL")
+	if err != nil {
+		return nil, err
+	}
+	if redeemURL.Scheme+"://"+redeemURL.Host != entryURL.Scheme+"://"+entryURL.Host ||
+		introspectURL.Scheme+"://"+introspectURL.Host != entryURL.Scheme+"://"+entryURL.Host {
+		return nil, fmt.Errorf("ClickStack Backoffice URLs must share one origin")
 	}
 	if _, err := currentClickStackRedeemToken(config.RedeemToken); err != nil {
 		return nil, err
@@ -200,47 +245,51 @@ func decodeClickStackSessionKey(value string) ([]byte, error) {
 	return decoded, nil
 }
 
-func (sessions *clickStackSessionManager) Issue() (*http.Cookie, error) {
-	nonce := make([]byte, 16)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("create ClickStack session nonce: %w", err)
+func (sessions *clickStackSessionManager) Issue(binding clickStackSessionBinding) (*http.Cookie, error) {
+	now := sessions.now()
+	if !clickStackHandoffCodePattern.MatchString(binding.ID) {
+		return nil, fmt.Errorf("Backoffice session id is invalid")
 	}
-	expires := sessions.now().Add(clickStackSessionTTL)
-	payload := fmt.Sprintf("v1.%d.%s", expires.Unix(), base64.RawURLEncoding.EncodeToString(nonce))
+	remaining := binding.ExpiresAt.Sub(now)
+	if remaining < time.Second || remaining > clickStackSessionMaximumTTL+clickStackSessionClockSkew {
+		return nil, fmt.Errorf("Backoffice session expiry is invalid")
+	}
+	payload := fmt.Sprintf("v2.%d.%s", binding.ExpiresAt.Unix(), binding.ID)
 	value := payload + "." + signClickStackSession(payload, sessions.current)
+	maxAge := int(remaining.Seconds())
 	return &http.Cookie{
 		Name:     clickStackSessionCookie,
 		Value:    value,
 		Path:     "/",
-		Expires:  expires,
-		MaxAge:   int(clickStackSessionTTL.Seconds()),
+		Expires:  binding.ExpiresAt,
+		MaxAge:   maxAge,
 		Secure:   true,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}, nil
 }
 
-func (sessions *clickStackSessionManager) Verify(value string) bool {
+func (sessions *clickStackSessionManager) Verify(value string) (clickStackSessionBinding, bool) {
 	parts := strings.Split(value, ".")
-	if len(parts) != 4 || parts[0] != "v1" {
-		return false
+	if len(parts) != 4 || parts[0] != "v2" {
+		return clickStackSessionBinding{}, false
 	}
 	expiresUnix, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil {
-		return false
+		return clickStackSessionBinding{}, false
 	}
 	now := sessions.now()
-	expires := time.Unix(expiresUnix, 0)
-	if !expires.After(now) || expires.After(now.Add(clickStackSessionTTL+time.Second)) {
-		return false
+	expires := time.Unix(expiresUnix, 0).UTC()
+	if !expires.After(now) || expires.After(now.Add(clickStackSessionMaximumTTL+clickStackSessionClockSkew)) {
+		return clickStackSessionBinding{}, false
 	}
-	if nonce, err := base64.RawURLEncoding.DecodeString(parts[2]); err != nil || len(nonce) != 16 {
-		return false
+	if !clickStackHandoffCodePattern.MatchString(parts[2]) {
+		return clickStackSessionBinding{}, false
 	}
 	payload := strings.Join(parts[:3], ".")
 	provided, err := base64.RawURLEncoding.DecodeString(parts[3])
 	if err != nil {
-		return false
+		return clickStackSessionBinding{}, false
 	}
 	for _, key := range [][]byte{sessions.current, sessions.previous} {
 		if len(key) == 0 {
@@ -248,10 +297,10 @@ func (sessions *clickStackSessionManager) Verify(value string) bool {
 		}
 		expected, _ := base64.RawURLEncoding.DecodeString(signClickStackSession(payload, key))
 		if hmac.Equal(provided, expected) {
-			return true
+			return clickStackSessionBinding{ID: parts[2], ExpiresAt: expires}, true
 		}
 	}
-	return false
+	return clickStackSessionBinding{}, false
 }
 
 func signClickStackSession(payload string, key []byte) string {
@@ -270,6 +319,111 @@ func clearClickStackSessionCookie(writer http.ResponseWriter) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
+}
+
+func newClickStackSessionAuthorizer(
+	introspector clickStackSessionIntrospector,
+	now func() time.Time,
+) *clickStackSessionAuthorizer {
+	return &clickStackSessionAuthorizer{
+		introspector: introspector,
+		entries:      make(map[string]clickStackSessionCacheEntry),
+		flights:      make(map[string]*clickStackSessionValidationFlight),
+		now:          now,
+	}
+}
+
+func (authorizer *clickStackSessionAuthorizer) Seed(binding clickStackSessionBinding) {
+	authorizer.mu.Lock()
+	defer authorizer.mu.Unlock()
+	now := authorizer.now()
+	if !binding.ExpiresAt.After(now) {
+		return
+	}
+	authorizer.storeLocked(clickStackSessionCacheEntry{
+		binding:    binding,
+		active:     true,
+		validUntil: minClickStackTime(now.Add(clickStackSessionValidationInterval), binding.ExpiresAt),
+	}, now)
+}
+
+func (authorizer *clickStackSessionAuthorizer) Authorize(
+	ctx context.Context,
+	binding clickStackSessionBinding,
+) (bool, error) {
+	authorizer.mu.Lock()
+	now := authorizer.now()
+	if !binding.ExpiresAt.After(now) {
+		authorizer.mu.Unlock()
+		return false, nil
+	}
+	if entry, ok := authorizer.entries[binding.ID]; ok && entry.binding.ExpiresAt.Equal(binding.ExpiresAt) && now.Before(entry.validUntil) {
+		authorizer.mu.Unlock()
+		return entry.active, nil
+	}
+	if flight, ok := authorizer.flights[binding.ID]; ok {
+		authorizer.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-flight.done:
+			return flight.active, flight.err
+		}
+	}
+	flight := &clickStackSessionValidationFlight{done: make(chan struct{})}
+	authorizer.flights[binding.ID] = flight
+	authorizer.mu.Unlock()
+
+	active, err := authorizer.introspector.Introspect(ctx, binding.ID)
+
+	authorizer.mu.Lock()
+	validatedAt := authorizer.now()
+	if err == nil {
+		authorizer.storeLocked(clickStackSessionCacheEntry{
+			binding:    binding,
+			active:     active,
+			validUntil: minClickStackTime(validatedAt.Add(clickStackSessionValidationInterval), binding.ExpiresAt),
+		}, validatedAt)
+	}
+	flight.active = active
+	flight.err = err
+	delete(authorizer.flights, binding.ID)
+	close(flight.done)
+	authorizer.mu.Unlock()
+	return active, err
+}
+
+func (authorizer *clickStackSessionAuthorizer) CacheSize() int {
+	authorizer.mu.Lock()
+	defer authorizer.mu.Unlock()
+	return len(authorizer.entries)
+}
+
+func (authorizer *clickStackSessionAuthorizer) storeLocked(entry clickStackSessionCacheEntry, now time.Time) {
+	for sessionID, candidate := range authorizer.entries {
+		if !candidate.binding.ExpiresAt.After(now) {
+			delete(authorizer.entries, sessionID)
+		}
+	}
+	if _, exists := authorizer.entries[entry.binding.ID]; !exists && len(authorizer.entries) >= clickStackSessionCacheMaxEntries {
+		var oldestSessionID string
+		var oldest time.Time
+		for sessionID, candidate := range authorizer.entries {
+			if oldestSessionID == "" || candidate.validUntil.Before(oldest) {
+				oldestSessionID = sessionID
+				oldest = candidate.validUntil
+			}
+		}
+		delete(authorizer.entries, oldestSessionID)
+	}
+	authorizer.entries[entry.binding.ID] = entry
+}
+
+func minClickStackTime(left, right time.Time) time.Time {
+	if left.Before(right) {
+		return left
+	}
+	return right
 }
 
 func newClickStackHandoffLimiter(now func() time.Time) *clickStackHandoffLimiter {
@@ -302,10 +456,15 @@ func (limiter *clickStackHandoffLimiter) Release() {
 	<-limiter.inFlight
 }
 
-func newHTTPClickStackGrantRedeemer(redeemURL, redeemToken string) *httpClickStackGrantRedeemer {
-	return &httpClickStackGrantRedeemer{
-		url:   redeemURL,
-		token: redeemToken,
+func newHTTPClickStackBackofficeClient(
+	redeemURL string,
+	introspectURL string,
+	redeemToken string,
+) *httpClickStackBackofficeClient {
+	return &httpClickStackBackofficeClient{
+		redeemURL:     redeemURL,
+		introspectURL: introspectURL,
+		token:         redeemToken,
 		client: &http.Client{
 			Transport: newClickStackTransport(5 * time.Second),
 			Timeout:   5 * time.Second,
@@ -316,33 +475,76 @@ func newHTTPClickStackGrantRedeemer(redeemURL, redeemToken string) *httpClickSta
 	}
 }
 
-func (redeemer *httpClickStackGrantRedeemer) Redeem(ctx context.Context, code string) error {
-	body, err := json.Marshal(map[string]string{"code": code})
-	if err != nil {
-		return errors.New("encode Backoffice handoff")
+func (client *httpClickStackBackofficeClient) Redeem(
+	ctx context.Context,
+	code string,
+) (clickStackSessionBinding, error) {
+	var result struct {
+		Active    *bool  `json:"active"`
+		SessionID string `json:"sessionId"`
+		ExpiresAt string `json:"expiresAt"`
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, redeemer.url, bytes.NewReader(body))
+	if err := client.post(ctx, client.redeemURL, map[string]string{"code": code}, &result); err != nil {
+		return clickStackSessionBinding{}, err
+	}
+	if result.Active == nil || !*result.Active || !clickStackHandoffCodePattern.MatchString(result.SessionID) {
+		return clickStackSessionBinding{}, errors.New("Backoffice handoff was rejected")
+	}
+	expiresAt, err := time.Parse(time.RFC3339, result.ExpiresAt)
 	if err != nil {
-		return errors.New("build Backoffice handoff request")
+		return clickStackSessionBinding{}, errors.New("Backoffice handoff was rejected")
+	}
+	return clickStackSessionBinding{ID: result.SessionID, ExpiresAt: expiresAt}, nil
+}
+
+func (client *httpClickStackBackofficeClient) Introspect(ctx context.Context, sessionID string) (bool, error) {
+	var result struct {
+		Active *bool `json:"active"`
+	}
+	if err := client.post(
+		ctx,
+		client.introspectURL,
+		map[string]string{"sessionId": sessionID},
+		&result,
+	); err != nil {
+		return false, err
+	}
+	if result.Active == nil {
+		return false, errors.New("Backoffice session response is invalid")
+	}
+	return *result.Active, nil
+}
+
+func (client *httpClickStackBackofficeClient) post(
+	ctx context.Context,
+	endpoint string,
+	payload map[string]string,
+	result any,
+) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return errors.New("encode Backoffice session request")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return errors.New("build Backoffice session request")
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Authorization", "Bearer "+redeemer.token)
-	response, err := redeemer.client.Do(request)
+	request.Header.Set("Authorization", "Bearer "+client.token)
+	response, err := client.client.Do(request)
 	if err != nil {
-		return errors.New("Backoffice handoff service is unavailable")
+		return errors.New("Backoffice session service is unavailable")
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, clickStackRedeemBodyLimit+1))
 	if err != nil || len(responseBody) > clickStackRedeemBodyLimit || response.StatusCode != http.StatusOK {
-		return errors.New("Backoffice handoff was rejected")
-	}
-	var result struct {
-		Active bool `json:"active"`
+		return errors.New("Backoffice session request was rejected")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(responseBody))
-	if err := decoder.Decode(&result); err != nil || decoder.Decode(&struct{}{}) != io.EOF || !result.Active {
-		return errors.New("Backoffice handoff was rejected")
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(result); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return errors.New("Backoffice session response is invalid")
 	}
 	return nil
 }
@@ -350,14 +552,14 @@ func (redeemer *httpClickStackGrantRedeemer) Redeem(ctx context.Context, code st
 func newClickStackGatewayHandler(
 	config ClickStackGatewayConfig,
 	transport http.RoundTripper,
-	redeemer clickStackGrantRedeemer,
+	backoffice clickStackBackofficeClient,
 ) (http.Handler, error) {
 	target, err := validateClickStackGatewayConfig(config)
 	if err != nil {
 		return nil, err
 	}
-	if redeemer == nil {
-		return nil, fmt.Errorf("ClickStack handoff redeemer is required")
+	if backoffice == nil {
+		return nil, fmt.Errorf("ClickStack Backoffice client is required")
 	}
 	sessions, err := newClickStackSessionManager(config.SessionKeys, time.Now)
 	if err != nil {
@@ -368,6 +570,7 @@ func newClickStackGatewayHandler(
 	}
 	backofficeEntry, _ := cleanClickStackPublicURL(config.BackofficeEntryURL, "CLICKSTACK_BACKOFFICE_ENTRY_URL")
 	handoffLimiter := newClickStackHandoffLimiter(time.Now)
+	authorizer := newClickStackSessionAuthorizer(backoffice, time.Now)
 
 	reverseProxy := newClickStackReverseProxy(target, config, transport)
 	mux := http.NewServeMux()
@@ -392,11 +595,12 @@ func newClickStackGatewayHandler(
 			request,
 			backofficeEntry.Scheme+"://"+backofficeEntry.Host,
 			sessions,
-			redeemer,
+			backoffice,
+			authorizer,
 			handoffLimiter,
 		)
 	})
-	mux.Handle("/", requireClickStackSession(sessions, config.BackofficeEntryURL, reverseProxy))
+	mux.Handle("/", requireClickStackSession(sessions, authorizer, config.BackofficeEntryURL, reverseProxy))
 	return mux, nil
 }
 
@@ -434,7 +638,8 @@ func handleClickStackHandoff(
 	request *http.Request,
 	backofficeOrigin string,
 	sessions *clickStackSessionManager,
-	redeemer clickStackGrantRedeemer,
+	backoffice clickStackBackofficeClient,
+	authorizer *clickStackSessionAuthorizer,
 	limiter *clickStackHandoffLimiter,
 ) {
 	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
@@ -458,15 +663,17 @@ func handleClickStackHandoff(
 		return
 	}
 	defer limiter.Release()
-	if err := redeemer.Redeem(request.Context(), code); err != nil {
+	binding, err := backoffice.Redeem(request.Context(), code)
+	if err != nil {
 		http.Error(writer, "ClickStack handoff was rejected", http.StatusUnauthorized)
 		return
 	}
-	cookie, err := sessions.Issue()
+	cookie, err := sessions.Issue(binding)
 	if err != nil {
-		http.Error(writer, "ClickStack session is unavailable", http.StatusServiceUnavailable)
+		http.Error(writer, "ClickStack handoff was rejected", http.StatusUnauthorized)
 		return
 	}
+	authorizer.Seed(binding)
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Referrer-Policy", "no-referrer")
 	http.SetCookie(writer, cookie)
@@ -475,15 +682,33 @@ func handleClickStackHandoff(
 
 func requireClickStackSession(
 	sessions *clickStackSessionManager,
+	authorizer *clickStackSessionAuthorizer,
 	backofficeEntryURL string,
 	next http.Handler,
 ) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		cookie, err := request.Cookie(clickStackSessionCookie)
-		if err != nil || !sessions.Verify(cookie.Value) {
+		var binding clickStackSessionBinding
+		var verified bool
+		if err == nil {
+			binding, verified = sessions.Verify(cookie.Value)
+		}
+		if err != nil || !verified {
 			if err == nil {
 				clearClickStackSessionCookie(writer)
 			}
+			writer.Header().Set("Cache-Control", "no-store")
+			http.Redirect(writer, request, backofficeEntryURL, http.StatusSeeOther)
+			return
+		}
+		active, err := authorizer.Authorize(request.Context(), binding)
+		if err != nil {
+			writer.Header().Set("Cache-Control", "no-store")
+			http.Error(writer, "Backoffice session validation is unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !active {
+			clearClickStackSessionCookie(writer)
 			writer.Header().Set("Cache-Control", "no-store")
 			http.Redirect(writer, request, backofficeEntryURL, http.StatusSeeOther)
 			return
@@ -622,7 +847,11 @@ func StartClickStackGateway(ctx context.Context, config ClickStackGatewayConfig)
 	handler, err := newClickStackGatewayHandler(
 		config,
 		nil,
-		newHTTPClickStackGrantRedeemer(config.BackofficeRedeemURL, redeemToken),
+		newHTTPClickStackBackofficeClient(
+			config.BackofficeRedeemURL,
+			config.BackofficeIntrospectURL,
+			redeemToken,
+		),
 	)
 	if err != nil {
 		return err

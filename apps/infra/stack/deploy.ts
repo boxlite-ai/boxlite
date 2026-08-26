@@ -53,18 +53,24 @@ export async function deployStack() {
             'CLICKSTACK_BACKOFFICE_REDEEM_URL',
             requireEnv('CLICKSTACK_BACKOFFICE_REDEEM_URL', 'when the ClickStack gateway is enabled'),
           ),
+          backofficeIntrospectUrl: cleanClickStackBackofficeUrl(
+            'CLICKSTACK_BACKOFFICE_INTROSPECT_URL',
+            requireEnv('CLICKSTACK_BACKOFFICE_INTROSPECT_URL', 'when the ClickStack gateway is enabled'),
+          ),
           backofficeEntryUrl: cleanClickStackBackofficeUrl(
             'CLICKSTACK_BACKOFFICE_ENTRY_URL',
             requireEnv('CLICKSTACK_BACKOFFICE_ENTRY_URL', 'when the ClickStack gateway is enabled'),
           ),
         }
       : undefined
-    if (
-      clickStackGatewayConfig &&
-      new URL(clickStackGatewayConfig.backofficeRedeemUrl).origin !==
-        new URL(clickStackGatewayConfig.backofficeEntryUrl).origin
-    ) {
-      throw new Error('ClickStack Backoffice redeem and entry URLs must share one origin')
+    if (clickStackGatewayConfig) {
+      const backofficeOrigin = new URL(clickStackGatewayConfig.backofficeEntryUrl).origin
+      if (
+        new URL(clickStackGatewayConfig.backofficeRedeemUrl).origin !== backofficeOrigin ||
+        new URL(clickStackGatewayConfig.backofficeIntrospectUrl).origin !== backofficeOrigin
+      ) {
+        throw new Error('ClickStack Backoffice URLs must share one origin')
+      }
     }
 
     // Every role created by this stack must stay inside the boundary provisioned
@@ -340,6 +346,7 @@ export async function deployStack() {
               writerReady: clickHouseWriterReadyDependency,
               domain: serviceDomain('clickstack'),
               backofficeRedeemUrl: clickStackGatewayConfig.backofficeRedeemUrl,
+              backofficeIntrospectUrl: clickStackGatewayConfig.backofficeIntrospectUrl,
               backofficeEntryUrl: clickStackGatewayConfig.backofficeEntryUrl,
               sessionKeys: clickStackSessionKeys,
             },
