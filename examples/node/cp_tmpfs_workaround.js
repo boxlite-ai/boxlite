@@ -82,10 +82,23 @@ async function main() {
     writeFileSync(hostFile, "you won't see me\n");
 
     try {
-      await box._box.copyIn(hostFile, '/tmp/ghost.txt');
-      console.log('copy_in to /tmp:     unexpectedly succeeded');
-    } catch (err) {
-      console.log(`copy_in to /tmp:     refused (expected)\n  ${err.message}`);
+      let refusal = null;
+      try {
+        await box._box.copyIn(hostFile, '/tmp/ghost.txt');
+      } catch (err) {
+        refusal = err;
+      }
+
+      // Fail closed. Match the mount phrase, not a bare "/tmp": the runtime's
+      // own staging tar also lives under a /tmp path, so a storage error would
+      // otherwise masquerade as the refusal.
+      if (refusal == null) {
+        throw new Error('copy_in to /tmp succeeded - the mount refusal is missing');
+      }
+      if (!String(refusal.message).includes("'/tmp' mount")) {
+        throw refusal;
+      }
+      console.log(`copy_in to /tmp:     refused (expected)\n  ${refusal.message}`);
     } finally {
       unlinkSync(hostFile);
     }

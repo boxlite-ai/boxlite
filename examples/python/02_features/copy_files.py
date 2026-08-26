@@ -103,10 +103,22 @@ async def example_tmpfs_workaround():
             host_file = f.name
 
         try:
-            await box.copy_in(host_file, "/tmp/ghost.txt")
-            print("copy_in to /tmp:     unexpectedly succeeded")
-        except Exception as e:
-            print(f"copy_in to /tmp:     refused (expected)\n  {e}")
+            refusal = None
+            try:
+                await box.copy_in(host_file, "/tmp/ghost.txt")
+            except Exception as e:
+                refusal = e
+
+            # Fail closed. Match the mount phrase, not a bare "/tmp": the
+            # runtime's own staging tar also lives under a /tmp path, so a
+            # storage error would otherwise masquerade as the refusal.
+            if refusal is None:
+                raise AssertionError(
+                    "copy_in to /tmp succeeded - the mount refusal is missing"
+                )
+            if "'/tmp' mount" not in str(refusal):
+                raise refusal
+            print(f"copy_in to /tmp:     refused (expected)\n  {refusal}")
         finally:
             os.unlink(host_file)
 
