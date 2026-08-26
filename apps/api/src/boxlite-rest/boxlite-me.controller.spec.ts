@@ -9,14 +9,21 @@ import { OrganizationMemberRole } from '../organization/enums/organization-membe
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AuthContext } from '../common/interfaces/auth-context.interface'
 import { OrganizationService } from '../organization/services/organization.service'
+import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { BoxliteMeController } from './boxlite-me.controller'
 
 describe('BoxliteMeController', () => {
   // resolvePathPrefix only touches OrganizationService on the user-session path;
   // API-key contexts short-circuit on apiKey.organizationId.
-  function makeController(orgFindByUser: jest.Mock = jest.fn()): BoxliteMeController {
+  function makeController(
+    orgFindByUser: jest.Mock = jest.fn(),
+    membership: unknown = { role: OrganizationMemberRole.OWNER, assignedRoles: [] },
+  ): BoxliteMeController {
     const organizationService = { findByUserWithDefaultFlag: orgFindByUser } as unknown as OrganizationService
-    return new BoxliteMeController(organizationService)
+    const organizationUserService = {
+      findOne: jest.fn().mockResolvedValue(membership),
+    } as unknown as OrganizationUserService
+    return new BoxliteMeController(organizationService, organizationUserService)
   }
 
   function apiKeyContext(expiresAt?: Date, permissions: OrganizationResourcePermission[] = []): AuthContext {
@@ -38,6 +45,49 @@ describe('BoxliteMeController', () => {
       organizationUser: { role: OrganizationMemberRole.OWNER, assignedRoles: [] },
     } as AuthContext
   }
+
+  // /v1/me is guarded by CombinedAuthGuard alone, so nothing on the request has
+  // resolved the caller's membership by the time the handler runs — the context
+  // carries a userId and nothing else. An interactive owner reaches every route,
+  // so every scope is theirs.
+  describe('GET /v1/me — interactive sessions, whose membership the guards never resolved', () => {
+    function sessionContext(): AuthContext {
+      return {
+        userId: 'user-1',
+        email: 'owner@example.com',
+        role: 'user' as AuthContext['role'],
+        organizationId: undefined,
+      } as AuthContext
+    }
+
+    it('reports the volume scopes an owner can in fact exercise', async () => {
+      const orgFindByUser = jest
+        .fn()
+        .mockResolvedValue([
+          { organization: { id: 'org-1' }, isDefaultForAuthenticatedUser: true, role: OrganizationMemberRole.OWNER },
+        ])
+
+      const { scopes } = await makeController(orgFindByUser).getMe(sessionContext())
+
+      expect(scopes).toEqual(expect.arrayContaining(['volume:read', 'volume:write', 'volume:delete']))
+    })
+
+    it('withholds them from a member whose roles do not carry them', async () => {
+      const orgFindByUser = jest
+        .fn()
+        .mockResolvedValue([
+          { organization: { id: 'org-1' }, isDefaultForAuthenticatedUser: true, role: OrganizationMemberRole.MEMBER },
+        ])
+
+      const { scopes } = await makeController(orgFindByUser, {
+        role: OrganizationMemberRole.MEMBER,
+        assignedRoles: [{ permissions: [OrganizationResourcePermission.READ_VOLUMES] }],
+      }).getMe(sessionContext())
+
+      expect(scopes).toContain('volume:read')
+      expect(scopes).not.toContain('volume:write')
+    })
+  })
 
   describe('GET /v1/me — scopes describe what the credential can actually reach', () => {
     it('withholds the volume scopes from a key without volume permissions', async () => {
