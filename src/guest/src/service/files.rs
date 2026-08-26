@@ -386,6 +386,7 @@ impl GuestServer {
     /// forever, reads come back stale or missing. Refusing is the only honest
     /// answer available from out here — silently transferring the shadow is
     /// what made this a bug rather than a limitation.
+    #[allow(clippy::result_large_err)]
     async fn container_rootfs(&self, container_id: &str, path: &str) -> Result<PathBuf, Status> {
         let in_container = to_container_path(path)?;
         let rel = in_container.strip_prefix("/").unwrap_or(&in_container);
@@ -488,6 +489,7 @@ impl GuestServer {
     /// (`/etc`, which holds the `/etc/hosts` bind) resolves to the right inode
     /// and is fine to name — what crosses it is checked separately, per
     /// direction, by [`Self::shadowed_payload`] and [`Self::shadowed_subtree`].
+    #[allow(clippy::result_large_err)]
     async fn shadowing_mount(
         &self,
         container_id: &str,
@@ -504,6 +506,7 @@ impl GuestServer {
     /// image's `/etc/hosts` beneath the bind, invisible to the box. Checked
     /// against the archive's own entries so a single file to `/etc` — which
     /// lands at `/etc/motd.txt`, under no mount — still works.
+    #[allow(clippy::result_large_err)]
     async fn shadowed_payload(
         &self,
         container_id: &str,
@@ -523,6 +526,7 @@ impl GuestServer {
     /// shadowed `/etc/hosts` rather than the bind the workload sees — handing
     /// back content no process in the box ever had. Same bug as POL-305, one
     /// level down, so it is refused the same way.
+    #[allow(clippy::result_large_err)]
     async fn shadowed_subtree(
         &self,
         container_id: &str,
@@ -536,6 +540,7 @@ impl GuestServer {
     }
 
     /// Mount destinations of the container, read from its applied OCI spec.
+    #[allow(clippy::result_large_err)]
     async fn container_mounts(&self, container_id: &str) -> Result<Vec<PathBuf>, Status> {
         let container_arc = {
             let containers = self.containers.lock().await;
