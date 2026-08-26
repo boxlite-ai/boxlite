@@ -32,6 +32,16 @@ Element.prototype.releasePointerCapture ??= () => {}
 
 const AVAILABLE = CREATE_API_KEY_PERMISSIONS_GROUPS.flatMap((group) => group.permissions)
 
+async function typeNameAndSubmit(name: string) {
+  await act(async () => {
+    typeIntoNameField(name)
+  })
+  await act(async () => {
+    document.querySelector<HTMLFormElement>('form#create-api-key-form')?.requestSubmit()
+  })
+  await flushReactWork()
+}
+
 /** React tracks the input's value setter, so a plain assignment would not fire onChange. */
 function typeIntoNameField(value: string) {
   const field = document.querySelector<HTMLInputElement>('input[placeholder="Name"]')
@@ -105,27 +115,38 @@ describe('CreateApiKeyDialog permissions', () => {
     expect([...rows.keys()]).toEqual(expect.arrayContaining(['Volumes Read', 'Volumes Write', 'Volumes Delete']))
   })
 
-  it('submits only the permissions left ticked', async () => {
+  it('does not ask about box access, which every key carries anyway', () => {
     const rows = permissionRows()
 
-    // Drop everything except the three volume permissions.
-    await act(async () => {
-      rows.get('Boxes Write')?.click()
-      rows.get('Boxes Delete')?.click()
-    })
-    await act(async () => {
-      typeIntoNameField('volumes-only')
-    })
-    await act(async () => {
-      document.querySelector<HTMLFormElement>('form#create-api-key-form')?.requestSubmit()
-    })
-    await flushReactWork()
+    expect([...rows.keys()].filter((label) => label.startsWith('Boxes'))).toEqual([])
+  })
+
+  it('submits box access alongside the volume permissions left ticked', async () => {
+    await typeNameAndSubmit('volumes-and-boxes')
 
     expect(createApiKeyMock).toHaveBeenCalledTimes(1)
     expect(createApiKeyMock.mock.calls[0][0].permissions).toEqual([
+      CreateApiKeyPermissionsEnum.WRITE_BOXES,
+      CreateApiKeyPermissionsEnum.DELETE_BOXES,
       CreateApiKeyPermissionsEnum.READ_VOLUMES,
       CreateApiKeyPermissionsEnum.WRITE_VOLUMES,
       CreateApiKeyPermissionsEnum.DELETE_VOLUMES,
+    ])
+  })
+
+  it('still issues a usable key when every optional permission is unticked', async () => {
+    const rows = permissionRows()
+
+    await act(async () => {
+      rows.get('Volumes Read')?.click()
+      rows.get('Volumes Write')?.click()
+      rows.get('Volumes Delete')?.click()
+    })
+    await typeNameAndSubmit('boxes-only')
+
+    expect(createApiKeyMock.mock.calls[0][0].permissions).toEqual([
+      CreateApiKeyPermissionsEnum.WRITE_BOXES,
+      CreateApiKeyPermissionsEnum.DELETE_BOXES,
     ])
   })
 })

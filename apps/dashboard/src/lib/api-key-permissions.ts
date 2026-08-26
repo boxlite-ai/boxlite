@@ -4,13 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
+import { ApiKeyPermissionGroup, CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
 import { CreateApiKeyPermissionsEnum } from '@boxlite-ai/api-client'
-
-export type ApiKeyPermissionGroup = {
-  name: string
-  permissions: CreateApiKeyPermissionsEnum[]
-}
 
 export type GroupSelectionState = 'all' | 'partial' | 'none'
 
@@ -21,15 +16,32 @@ const DECLARED_ORDER: CreateApiKeyPermissionsEnum[] = CREATE_API_KEY_PERMISSIONS
 )
 
 /**
- * The groups a member may actually grant, narrowed to the permissions they hold
+ * The groups the operator chooses from, narrowed to the permissions they hold
  * themselves. A member whose role carries no volume permissions cannot mint a
  * key that has them (the API rejects it), so the option must not be offered.
+ *
+ * Always-granted groups are excluded: they are not a choice.
  */
 export function selectableGroups(available: CreateApiKeyPermissionsEnum[]): ApiKeyPermissionGroup[] {
-  return CREATE_API_KEY_PERMISSIONS_GROUPS.map((group) => ({
-    name: group.name,
-    permissions: group.permissions.filter((permission) => available.includes(permission)),
-  })).filter((group) => group.permissions.length > 0)
+  return CREATE_API_KEY_PERMISSIONS_GROUPS.filter((group) => !group.alwaysGranted)
+    .map((group) => ({
+      name: group.name,
+      permissions: group.permissions.filter((permission) => available.includes(permission)),
+    }))
+    .filter((group) => group.permissions.length > 0)
+}
+
+/**
+ * What every key gets without being asked. Still narrowed to what the operator
+ * holds — adding a permission they cannot grant would come back 403 naming
+ * something they never chose.
+ */
+export function alwaysGrantedPermissions(available: CreateApiKeyPermissionsEnum[]): CreateApiKeyPermissionsEnum[] {
+  return inDeclaredOrder(
+    CREATE_API_KEY_PERMISSIONS_GROUPS.filter((group) => group.alwaysGranted).flatMap((group) =>
+      group.permissions.filter((permission) => available.includes(permission)),
+    ),
+  )
 }
 
 export function groupSelectionState(

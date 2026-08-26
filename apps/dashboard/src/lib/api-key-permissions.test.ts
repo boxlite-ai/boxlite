@@ -6,6 +6,7 @@
 
 import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
 import {
+  alwaysGrantedPermissions,
   groupSelectionState,
   permissionActionLabel,
   selectableGroups,
@@ -23,9 +24,15 @@ const VOLUMES = [
 ]
 
 describe('selectableGroups', () => {
-  it('offers every declared group to a member who holds all permissions', () => {
+  it('offers only the groups that are a choice', () => {
     expect(selectableGroups(ALL).map((group) => group.name)).toEqual(
-      CREATE_API_KEY_PERMISSIONS_GROUPS.map((group) => group.name),
+      CREATE_API_KEY_PERMISSIONS_GROUPS.filter((group) => !group.alwaysGranted).map((group) => group.name),
+    )
+  })
+
+  it('does not offer box access, which every key carries anyway', () => {
+    expect(selectableGroups(ALL).flatMap((group) => group.permissions)).not.toContain(
+      CreateApiKeyPermissionsEnum.WRITE_BOXES,
     )
   })
 
@@ -33,6 +40,19 @@ describe('selectableGroups', () => {
     const partial = selectableGroups([CreateApiKeyPermissionsEnum.READ_VOLUMES])
 
     expect(partial).toEqual([{ name: 'Volumes', permissions: [CreateApiKeyPermissionsEnum.READ_VOLUMES] }])
+  })
+})
+
+describe('alwaysGrantedPermissions', () => {
+  it('carries box access onto every key', () => {
+    expect(alwaysGrantedPermissions(ALL)).toEqual([
+      CreateApiKeyPermissionsEnum.WRITE_BOXES,
+      CreateApiKeyPermissionsEnum.DELETE_BOXES,
+    ])
+  })
+
+  it('never adds a permission the operator cannot grant', () => {
+    expect(alwaysGrantedPermissions([CreateApiKeyPermissionsEnum.READ_VOLUMES])).toEqual([])
   })
 })
 

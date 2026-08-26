@@ -6,14 +6,25 @@
 
 import { CreateApiKeyPermissionsEnum } from '@boxlite-ai/api-client'
 
-// The permissions the create-key dialog offers, grouped by the resource they
-// govern. A permission missing from this list is one no customer can obtain
-// from the console, however well the API supports it — the dialog only ever
-// submits what these groups declare.
-export const CREATE_API_KEY_PERMISSIONS_GROUPS: { name: string; permissions: CreateApiKeyPermissionsEnum[] }[] = [
+export type ApiKeyPermissionGroup = {
+  name: string
+  permissions: CreateApiKeyPermissionsEnum[]
+  /**
+   * Carried by every key without being asked for. Box access is what an API
+   * key is for — a key that cannot manage boxes has no use — so offering it as
+   * a choice only invites someone to create a key that does nothing.
+   */
+  alwaysGranted?: boolean
+}
+
+// The permissions involved in issuing a key. A permission missing from this
+// list is one no customer can obtain from the console, however well the API
+// supports it — the dialog only ever submits what these groups declare.
+export const CREATE_API_KEY_PERMISSIONS_GROUPS: ApiKeyPermissionGroup[] = [
   {
     name: 'Boxes',
     permissions: [CreateApiKeyPermissionsEnum.WRITE_BOXES, CreateApiKeyPermissionsEnum.DELETE_BOXES],
+    alwaysGranted: true,
   },
   {
     name: 'Volumes',

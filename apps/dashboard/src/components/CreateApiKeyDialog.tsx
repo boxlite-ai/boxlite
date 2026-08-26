@@ -19,6 +19,7 @@ import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
+  alwaysGrantedPermissions,
   groupSelectionState,
   permissionActionLabel,
   selectableGroups,
@@ -58,6 +59,9 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
   const [copied, copy] = useCopyToClipboard()
 
   const permissionGroups = useMemo(() => selectableGroups(availablePermissions), [availablePermissions])
+  // Box access rides along on every key; only the optional groups start ticked.
+  const grantedByDefault = useMemo(() => alwaysGrantedPermissions(availablePermissions), [availablePermissions])
+  const selectableDefaults = useMemo(() => permissionGroups.flatMap((group) => group.permissions), [permissionGroups])
 
   const { mutateAsync } = useCreateApiKeyMutation()
 
@@ -67,9 +71,9 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
       setExpiryIdx(0)
       setSubmitting(false)
       setRevealKey(null)
-      setSelectedPermissions(availablePermissions)
+      setSelectedPermissions(selectableDefaults)
     }
-  }, [open, availablePermissions])
+  }, [open, selectableDefaults])
 
   const handleCreate = async (event?: React.FormEvent<HTMLFormElement>) => {
     event?.preventDefault()
@@ -85,7 +89,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
       const created = await mutateAsync({
         organizationId,
         name: name.trim(),
-        permissions: selectedPermissions,
+        permissions: [...grantedByDefault, ...selectedPermissions],
         expiresAt,
       })
       toast.success('API key created successfully')
@@ -241,7 +245,10 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                   </div>
                   <div className="flex gap-2 text-[12px] text-muted-foreground">
                     <Info className="mt-[1px] size-[14px] shrink-0 text-brand" strokeWidth={2} />
-                    <span>Shared Linux base images are available to every key automatically.</span>
+                    <span>
+                      Every key can create and manage Boxes, and shared Linux base images are available to it
+                      automatically.
+                    </span>
                   </div>
                 </div>
               </div>
@@ -258,7 +265,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
               <button
                 type="submit"
                 form="create-api-key-form"
-                disabled={!name.trim() || submitting || !organizationId || selectedPermissions.length === 0}
+                disabled={!name.trim() || submitting || !organizationId}
                 className="bg-primary px-[26px] py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 {submitting ? 'Creating…' : 'Create'}

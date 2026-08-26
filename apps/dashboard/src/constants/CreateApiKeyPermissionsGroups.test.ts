@@ -22,6 +22,16 @@ describe('console-issuable API key permissions', () => {
     expect(offeredByConsole).toContain(permission)
   })
 
+  it('grants box access to every key without offering it as a choice', () => {
+    const boxes = CREATE_API_KEY_PERMISSIONS_GROUPS.find((group) => group.name === 'Boxes')
+
+    expect(boxes?.alwaysGranted).toBe(true)
+    expect(boxes?.permissions).toEqual([
+      CreateApiKeyPermissionsEnum.WRITE_BOXES,
+      CreateApiKeyPermissionsEnum.DELETE_BOXES,
+    ])
+  })
+
   it('offers each volume permission as an individually selectable option', () => {
     const volumeGroup = CREATE_API_KEY_PERMISSIONS_GROUPS.find((group) =>
       group.permissions.some((permission) => permission.endsWith(':volumes')),
