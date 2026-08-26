@@ -140,6 +140,20 @@ impl SharedContainerLayout {
         self.root.join("exit.json")
     }
 
+    /// This container's captured init output: {root}/output.log — written by
+    /// the guest, read by the host after the box stops.
+    ///
+    /// Beside [`Self::exit_file`] rather than under the box's `logs/`, which
+    /// holds host-written diagnostics the guest must not be able to touch. The
+    /// container's rootfs is `{root}/rootfs`, so this file is outside the
+    /// workload's own filesystem view.
+    ///
+    /// Unlike `exit.json` this is *not* scoped to one run: the file survives VM
+    /// restarts and each run identifies its records by run id.
+    pub fn output_log(&self) -> PathBuf {
+        self.root.join("output.log")
+    }
+
     /// Overlayfs directory: {root}/overlayfs
     pub fn overlayfs_dir(&self) -> PathBuf {
         self.root.join(dirs::OVERLAYFS)
@@ -298,6 +312,21 @@ mod tests {
 
         let parsed: ExitRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, ExitRecord { exit_code: 137 });
+    }
+
+    /// The guest writes this path and the host reads it, so both sides must
+    /// derive the same one from the container root — and it must stay outside
+    /// `rootfs/`, which the workload itself can reach.
+    #[test]
+    fn output_log_sits_beside_the_exit_file_and_outside_the_rootfs() {
+        let layout = SharedContainerLayout::new("/run/boxlite/shared/containers/cid");
+
+        assert_eq!(
+            layout.output_log(),
+            std::path::Path::new("/run/boxlite/shared/containers/cid/output.log")
+        );
+        assert_eq!(layout.output_log().parent(), layout.exit_file().parent());
+        assert!(!layout.output_log().starts_with(layout.rootfs_dir()));
     }
 
     /// Absent file is the "still running" signal, and must not be confused

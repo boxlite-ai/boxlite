@@ -5,8 +5,8 @@ use boxlite_shared::{
     ContainerAdvancedOptions as ProtoContainerAdvancedOptions,
     ContainerCapabilities as ProtoContainerCapabilities, ContainerClient,
     ContainerConfig as ProtoContainerConfig, ContainerDevice, ContainerInitErrorKind,
-    ContainerInitRequest, DiskRootfs, LinuxOptions, MergedRootfs, MountOptions, OverlayRootfs,
-    RootfsInit, container_init_response,
+    ContainerInitRequest, DiskRootfs, LinuxOptions, LogCapture, MergedRootfs, MountOptions,
+    OverlayRootfs, RootfsInit, container_init_response,
 };
 use tonic::transport::Channel;
 
@@ -90,6 +90,8 @@ pub struct ContainerInitConfig {
     pub tty: bool,
     /// Guest device nodes to reproduce inside the OCI workload.
     pub devices: Vec<ContainerDevice>,
+    /// Run id when durable output capture is enabled; `None` disables capture.
+    pub log_capture: Option<String>,
     pub advanced: ContainerAdvancedConfig,
 }
 
@@ -136,6 +138,7 @@ impl ContainerInterface {
             ca_certs,
             tty,
             devices,
+            log_capture,
             advanced,
         } = config;
 
@@ -191,6 +194,7 @@ impl ContainerInterface {
             rootfs = ?rootfs,
             mounts_count = proto_mounts.len(),
             device_count = devices.len(),
+            capture_logs = log_capture.is_some(),
             "Container configuration"
         );
 
@@ -205,6 +209,7 @@ impl ContainerInterface {
             // it sent, instead of both sides separately hard-coding it.
             execution_id: container_id.clone(),
             devices,
+            log_capture: log_capture.map(|run_id| LogCapture { run_id }),
         };
 
         let response = self
@@ -468,6 +473,7 @@ mod tests {
                     destination: "/dev/kvm".to_string(),
                     file_mode: Some(0o666),
                 }],
+                log_capture: None,
                 advanced: ContainerAdvancedConfig {
                     capabilities: crate::runtime::advanced_options::ContainerCapabilities {
                         add: vec!["ALL".into()],
@@ -519,5 +525,43 @@ mod tests {
         assert_eq!(mount.source, "/sys");
         assert_eq!(mount.destination, "/sys");
         assert!(!mount.options.contains(&"rro".to_string()));
+        assert!(
+            request.log_capture.is_none(),
+            "capture must stay off unless asked for"
+        );
+    }
+
+    /// The run id is what tells one run's records from another's in a log file
+    /// that outlives the VM, so it has to survive the crossing verbatim.
+    #[tokio::test]
+    async fn container_init_forwards_the_capture_run_id() {
+        let seen = Arc::new(Mutex::new(None));
+        let mut iface = interface_recording(StartReply::Success, Arc::clone(&seen)).await;
+        let run_id = "b3f1c0a4-7d2e-4a91-8c55-0e6f2ab41d90";
+
+        iface
+            .init(ContainerInitConfig {
+                container_id: "container-1".to_string(),
+                image: crate::images::ContainerImageConfig::default(),
+                rootfs: ContainerRootfsInitConfig::Merged,
+                mounts: Vec::new(),
+                ca_certs: Vec::new(),
+                tty: false,
+                devices: Vec::new(),
+                log_capture: Some(run_id.to_string()),
+                advanced: ContainerAdvancedConfig {
+                    capabilities: Default::default(),
+                    linux: Default::default(),
+                    mount: Default::default(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let request = seen.lock().unwrap().take().expect("guest saw Init");
+        assert_eq!(
+            request.log_capture.expect("capture requested").run_id,
+            run_id
+        );
     }
 }

@@ -17,6 +17,7 @@ use nix::mount::{mount, MsFlags};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
+use crate::capture::Capture;
 use crate::container::{
     validate_mount_override, CapabilitySet, Container, ContainerDevices, MountOverride, UserMount,
 };
@@ -165,6 +166,24 @@ impl ContainerService for GuestServer {
                 return Ok(Response::new(ContainerInitResponse {
                     result: Some(container_init_response::Result::Error(init_error(
                         "Invalid container device mapping",
+                        &error,
+                    ))),
+                }));
+            }
+        };
+
+        // Same reason as devices: a bad run id is caller input, so reject it
+        // before anything on disk changes.
+        let capture = match Capture::from_request(
+            init_req.log_capture,
+            self.layout.shared().container(&container_id).output_log(),
+        ) {
+            Ok(capture) => capture,
+            Err(error) => {
+                error!("Invalid log capture request: {error}");
+                return Ok(Response::new(ContainerInitResponse {
+                    result: Some(container_init_response::Result::Error(init_error(
+                        "Invalid log capture request",
                         &error,
                     ))),
                 }));
@@ -334,6 +353,22 @@ impl ContainerService for GuestServer {
                     ))),
                 }));
             }
+        }
+
+        // The barrier: `begin` is on disk and fsynced before the container is
+        // created, so a caller who asked for capture learns here that it is
+        // impossible, rather than after the workload has already run.
+        if let Some(capture) = &capture {
+            if let Err(error) = capture.write_begin() {
+                error!(run_id = %capture.run_id(), "Failed to arm log capture: {error}");
+                return Ok(Response::new(ContainerInitResponse {
+                    result: Some(container_init_response::Result::Error(init_error(
+                        "Failed to arm log capture",
+                        &error,
+                    ))),
+                }));
+            }
+            info!(run_id = %capture.run_id(), "Log capture armed");
         }
 
         // Start container using OCI bundle rootfs. Init is the box's main

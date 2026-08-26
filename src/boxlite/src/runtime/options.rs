@@ -366,6 +366,19 @@ pub struct BoxOptions {
     #[serde(default)]
     pub auto_delete: Option<u32>,
 
+    /// Capture the container init process's output to a durable log the host
+    /// can read after the box stops.
+    ///
+    /// Only the `begin` record is written so far: enough to prove capture was
+    /// armed for a run, and to fail `Container.Init` when it cannot be, but not
+    /// the output itself. Enabling this today yields a log a reader classifies
+    /// as interrupted, holding no stdout or stderr.
+    ///
+    /// Incompatible with remove-on-stop: removal deletes the box directory the
+    /// log lives in.
+    #[serde(default)]
+    pub capture_logs: bool,
+
     /// Whether the box should automatically resume when accessed after AutoStop.
     /// `None` lets the runtime/server pick its default (typically `true`).
     #[serde(default)]
@@ -537,6 +550,7 @@ impl Default for BoxOptions {
             auto_remove: default_auto_remove(),
             auto_stop: None,
             auto_delete: None,
+            capture_logs: false,
             auto_resume: None,
             detach: default_detach(),
             advanced: AdvancedBoxOptions::default(),
@@ -569,6 +583,7 @@ impl BoxOptions {
     /// Validates option combinations:
     /// - effective remove-on-stop (`auto_delete>0`, or deprecated `auto_remove`)
     ///   with `detach=true` is invalid
+    /// - `capture_logs=true` with effective remove-on-stop is invalid
     /// - `advanced.isolate_mounts=true` is only supported on Linux
     /// - `advanced.capabilities` contains well-formed Linux capability names
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
@@ -576,6 +591,14 @@ impl BoxOptions {
             return Err(boxlite_shared::errors::BoxliteError::Config(
                 "remove-on-stop is incompatible with detach=true. Detached boxes should use \
                  auto_delete=0 (or deprecated auto_remove=false) for manual lifecycle control."
+                    .to_string(),
+            ));
+        }
+
+        if self.capture_logs && self.removes_on_stop() {
+            return Err(boxlite_shared::errors::BoxliteError::Config(
+                "capture_logs is incompatible with remove-on-stop: removing the box deletes the \
+                 captured log. Use auto_delete=0 (or deprecated auto_remove=false) to keep it."
                     .to_string(),
             ));
         }
@@ -1567,6 +1590,41 @@ mod tests {
         };
         let err_msg = opts.sanitize().unwrap_err().to_string();
         assert!(err_msg.contains("incompatible"));
+    }
+
+    /// Removal deletes the box directory the captured log lives in, so honoring
+    /// both would mean silently dropping one of them.
+    #[test]
+    fn capture_logs_is_rejected_with_remove_on_stop() {
+        let opts = BoxOptions {
+            capture_logs: true,
+            auto_delete: Some(1),
+            ..Default::default()
+        };
+        let err_msg = opts.sanitize().unwrap_err().to_string();
+        assert!(err_msg.contains("capture_logs"), "{err_msg}");
+        assert!(err_msg.contains("incompatible"), "{err_msg}");
+
+        let kept = BoxOptions {
+            capture_logs: true,
+            auto_delete: Some(0),
+            ..Default::default()
+        };
+        assert!(kept.sanitize().is_ok());
+    }
+
+    /// The deprecated flag defaults to removing on stop, so capture must trip on
+    /// it too rather than only on explicit `auto_delete`.
+    #[test]
+    #[allow(deprecated)]
+    fn capture_logs_is_rejected_with_deprecated_auto_remove() {
+        let opts = BoxOptions {
+            capture_logs: true,
+            auto_remove: true,
+            auto_delete: None,
+            ..Default::default()
+        };
+        assert!(opts.sanitize().is_err());
     }
 
     #[test]
