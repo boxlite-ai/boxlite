@@ -77,11 +77,18 @@ test('deploys domain builders in dependency order without ComponentResource pare
 })
 
 test('hosts public status independently and exposes only its exact snapshot object', () => {
+  const deploy = liveText('scriptEmittingShell', readFileSync(new URL('./deploy.ts', import.meta.url), 'utf8'))
+  const edge = liveText('scriptEmittingShell', readFileSync(new URL('./edge.ts', import.meta.url), 'utf8'))
   const status = configSection('export function buildPublicStatus')
 
+  assert.match(deploy, /const isProd = \$app\.stage === PRODUCTION_STAGE[\s\S]*if \(isProd\) \{\s*buildPublicStatus\(\{/)
+  assert.match(deploy, /new sst\.aws\.Router\('ApiCdn',[\s\S]*domain: \{ name: stackDomain, dns: cloudflareDns \}/)
+  assert.match(edge, /router\.route\('\/', api\.url\)/)
   assert.match(status, /const statusDomain = `status\.\$\{input\.stackDomain\}`/)
   assert.match(status, /new sst\.aws\.StaticSite\('PublicStatusSite'/)
   assert.match(status, /path: '\.\.\/status'/)
+  assert.match(status, /VITE_CONSOLE_URL: `https:\/\/\$\{input\.stackDomain\}`/)
+  assert.doesNotMatch(status, /versioning:\s*true/)
   assert.match(status, /new sst\.aws\.Cron\('PublicStatusCollector'/)
   assert.match(status, /schedule: 'rate\(1 minute\)'/)
   assert.match(stackSource, /const STATUS_OBJECT_KEY = 'public-status\.json'/)

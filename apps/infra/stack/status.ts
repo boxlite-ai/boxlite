@@ -3,7 +3,7 @@
 
 /// <reference path="../.sst/platform/config.d.ts" />
 
-import { RUNNER_HEARTBEAT_NAMESPACE } from '../status/collector-core.js'
+export { RUNNER_HEARTBEAT_NAMESPACE } from '../status/collector-core.js'
 
 const STATUS_OBJECT_KEY = 'public-status.json'
 
@@ -18,7 +18,6 @@ export function buildPublicStatus(input: PublicStatusInputs) {
   const statusDomain = `status.${input.stackDomain}`
   const snapshotBucket = new sst.aws.Bucket('PublicStatusSnapshots', {
     access: 'cloudfront',
-    versioning: true,
   })
 
   new sst.aws.Cron('PublicStatusCollector', {
@@ -117,6 +116,5 @@ event.response.headers["content-security-policy"] = { value: "default-src 'self'
 
   return {
     url: site.url,
-    heartbeatNamespace: RUNNER_HEARTBEAT_NAMESPACE,
   }
 }

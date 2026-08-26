@@ -13,7 +13,7 @@ import { buildEdge } from './edge.js'
 import { buildRunners } from './runners.js'
 import { buildClickHouseStorage, buildClickHouseWriterReady } from './clickhouse.js'
 import { buildMail } from './mail.js'
-import { buildPublicStatus } from './status.js'
+import { buildPublicStatus, RUNNER_HEARTBEAT_NAMESPACE } from './status.js'
 
 export async function deployStack() {
     const {
@@ -36,6 +36,7 @@ export async function deployStack() {
     const runnerInventory = resolveRunnerInventory(process.env)
     const oidcIssuer = requireOidcIssuer()
     const publicOidcIssuer = optionalPublicOidcIssuer()
+    const isProd = $app.stage === PRODUCTION_STAGE
 
     // Every role created by this stack must stay inside the boundary provisioned
     // with the GitHub deployment role. The raw-resource transform also covers IAM
@@ -60,12 +61,14 @@ export async function deployStack() {
       name: `${name}.${stackDomain}`,
       dns: cloudflareDns,
     })
-    const publicStatus = buildPublicStatus({
-      region: REGION,
-      runnerNames: runnerInventory.map((runner) => runner.controlPlaneRunnerName),
-      stackDomain,
-      cloudflareDns,
-    })
+    if (isProd) {
+      buildPublicStatus({
+        region: REGION,
+        runnerNames: runnerInventory.map((runner) => runner.controlPlaneRunnerName),
+        stackDomain,
+        cloudflareDns,
+      })
+    }
 
     // ─── 1. SECRETS ──────────────────────────────────────────────────────────
     // Auto-generated — override any one by setting the matching env var.
@@ -135,7 +138,6 @@ export async function deployStack() {
     // S3 versioning is on in every stage: cheap, and the only guard against an
     // object-level overwrite/delete (which `removal` never covers). Redis is a
     // transient cache, so it needs neither.
-    const isProd = $app.stage === PRODUCTION_STAGE
     // Unique-but-stable suffix for the DB final snapshot: a fixed name would collide
     // with the snapshot a prior teardown of the same stage already created (RDS requires
     // unique final-snapshot ids). RandomId is stable across deploys (no drift) and is
@@ -323,6 +325,6 @@ export async function deployStack() {
       defaultRunnerApiKey,
       adminApiKey,
       randomKey,
-      statusHeartbeatNamespace: publicStatus.heartbeatNamespace,
+      statusHeartbeatNamespace: RUNNER_HEARTBEAT_NAMESPACE,
     })
 }

@@ -63,12 +63,12 @@ flowchart TB
 
 ## Independent public status site
 
-Every stage owns a public, unauthenticated site at
-`https://status.<STACK_DOMAIN>/`. It is a separate static-site CloudFront
+Only the production stage creates a public, unauthenticated site, at
+`https://status.app.boxlite.ai/` (`status.<STACK_DOMAIN>` for production's
+`STACK_DOMAIN=app.boxlite.ai`). It is a separate static-site CloudFront
 distribution backed by a private S3 bucket, so loading the page does not depend
-on the dashboard, API ECS service, or application authentication. Production is
-therefore `https://status.boxlite.ai/`; a development stage whose
-`STACK_DOMAIN=dev.boxlite.ai` uses `https://status.dev.boxlite.ai/`.
+on the dashboard, API ECS service, or application authentication. Non-production
+stages do not create a status site, collector, snapshot bucket, or DNS record.
 
 An EventBridge schedule runs the status collector Lambda once a minute. The
 collector reads AWS health directly and publishes only `region`, generated time,
@@ -96,11 +96,11 @@ snapshot cache lifetime is only 30 seconds and cannot extend `generatedAt`.
 Runner heartbeat writes are non-fatal to the Runner and are limited by IAM to
 the `BoxLite/PublicStatus` namespace.
 
-The status domain and DNS record are created by the normal stage deploy. After
-the first deployment, wait for the first successful collector invocation before
-expecting the page to show a verified state. Once published, the site continues
-to load without the API being healthy; deployment still uses the same guarded
-SST stack and stage configuration.
+The status domain and DNS record are created by the normal production deploy.
+After the first deployment, wait for the first successful collector invocation
+before expecting the page to show a verified state. Once published, the site
+continues to load without the API being healthy; deployment still uses the same
+guarded SST stack and stage configuration.
 
 ## Prerequisites
 

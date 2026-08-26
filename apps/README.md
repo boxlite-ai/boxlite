@@ -90,10 +90,11 @@ flowchart TB
 The deployment runbook and operational constraints live in
 [`infra/docs/deployment.md`](./infra/docs/deployment.md).
 
-Each hosted stage also deploys an unauthenticated static status site at
-`status.<STACK_DOMAIN>`. Its scheduled collector reads AWS health directly and
-publishes a sanitized API/Runner/Proxy snapshot; the site and snapshot origin do
-not depend on the API ECS service. See
+Production also deploys the single unauthenticated status site at
+`status.app.boxlite.ai`; non-production stages do not create status sites. Its
+scheduled collector reads AWS health directly and publishes a sanitized
+API/Runner/Proxy snapshot; the site and snapshot origin do not depend on the API
+ECS service. See
 [`infra/docs/deployment.md#independent-public-status-site`](./infra/docs/deployment.md#independent-public-status-site).
 
 ## API catalog
