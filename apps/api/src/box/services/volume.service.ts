@@ -4,14 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import {
-  ConflictException,
-  Injectable,
-  Logger,
-  NotFoundException,
-  RequestTimeoutException,
-  ServiceUnavailableException,
-} from '@nestjs/common'
+import { ConflictException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository, Not, In } from 'typeorm'
 import { Volume } from '../entities/volume.entity'
@@ -28,7 +21,6 @@ import { TypedConfigService } from '../../config/typed-config.service'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
-import { setTimeout as sleep } from 'timers/promises'
 
 @Injectable()
 export class VolumeService {
@@ -77,29 +69,6 @@ export class VolumeService {
     const savedVolume = await this.volumeRepository.save(volume)
     this.logger.debug(`Created volume ${savedVolume.id} for organization ${organization.id}`)
     return savedVolume
-  }
-
-  async waitForReady(volumeId: string, timeoutSeconds: number): Promise<Volume> {
-    const deadline = Date.now() + timeoutSeconds * 1000
-
-    while (true) {
-      const volume = await this.volumeRepository.findOne({ where: { id: volumeId } })
-      if (!volume) {
-        throw new NotFoundException(`Volume with ID ${volumeId} not found`)
-      }
-      if (volume.state === VolumeState.READY) {
-        return volume
-      }
-      if (volume.state === VolumeState.ERROR) {
-        throw new BadRequestError('Volume creation failed')
-      }
-
-      const remaining = deadline - Date.now()
-      if (remaining <= 0) {
-        throw new RequestTimeoutException(`Timed out waiting for volume ${volumeId} to become ready`)
-      }
-      await sleep(Math.min(500, remaining))
-    }
   }
 
   async delete(volumeId: string, force = false): Promise<void> {

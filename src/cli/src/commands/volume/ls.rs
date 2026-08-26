@@ -2,7 +2,7 @@ use std::io::Write;
 
 use crate::cli::GlobalFlags;
 use crate::formatter::{self, OutputFormat};
-use boxlite::runtime::types::VolumeInfo;
+use boxlite::runtime::types::{VolumeInfo, VolumeState};
 use clap::Args;
 use serde::Serialize;
 use tabled::Tabled;
@@ -26,6 +26,9 @@ pub struct VolumePresenter {
     #[tabled(rename = "ID")]
     #[serde(rename = "Id")]
     pub id: String,
+    #[tabled(rename = "STATE")]
+    #[serde(rename = "State")]
+    pub state: String,
     #[tabled(rename = "CREATED")]
     #[serde(rename = "CreatedAt")]
     pub created: String,
@@ -38,10 +41,26 @@ impl From<&VolumeInfo> for VolumePresenter {
     fn from(info: &VolumeInfo) -> Self {
         Self {
             id: info.id.clone(),
+            state: format_state(info.state),
             created: formatter::format_time(&info.created_at),
             size: format_size(info.size_bytes),
         }
     }
+}
+
+/// Render a [`VolumeState`] the way the table/JSON output expects: lowercase,
+/// underscore-separated, matching the API's own `snake_case` wire values.
+fn format_state(state: VolumeState) -> String {
+    match state {
+        VolumeState::Creating => "creating",
+        VolumeState::Ready => "ready",
+        VolumeState::PendingCreate => "pending_create",
+        VolumeState::PendingDelete => "pending_delete",
+        VolumeState::Deleting => "deleting",
+        VolumeState::Deleted => "deleted",
+        VolumeState::Error => "error",
+    }
+    .to_string()
 }
 
 /// Render an optional byte count as a short human string ("-" when unknown).
@@ -109,5 +128,16 @@ mod tests {
         assert_eq!(format_size(Some(1024)), "1.0KiB");
         assert_eq!(format_size(Some(1024 * 1024)), "1.0MiB");
         assert_eq!(format_size(Some(3 * 1024 * 1024 * 1024)), "3.0GiB");
+    }
+
+    #[test]
+    fn format_state_matches_api_wire_values() {
+        assert_eq!(format_state(VolumeState::Creating), "creating");
+        assert_eq!(format_state(VolumeState::Ready), "ready");
+        assert_eq!(format_state(VolumeState::PendingCreate), "pending_create");
+        assert_eq!(format_state(VolumeState::PendingDelete), "pending_delete");
+        assert_eq!(format_state(VolumeState::Deleting), "deleting");
+        assert_eq!(format_state(VolumeState::Deleted), "deleted");
+        assert_eq!(format_state(VolumeState::Error), "error");
     }
 }

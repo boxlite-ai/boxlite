@@ -8,20 +8,27 @@
 //! The trait is `#[async_trait]` like the other capability backends
 //! ([`ImageBackend`](crate::runtime::images::ImageBackend),
 //! [`AuthBackend`](crate::runtime::auth::AuthBackend)) so REST backends can
-//! perform network calls. The concrete backend is not implemented yet — every
-//! operation currently returns `Unsupported`.
+//! perform network calls. The REST backend implements it against the managed
+//! `/v1/volumes` API; the local backend (`LocalRuntime`) does not have a
+//! volume store wired up yet and returns `Unsupported`.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::BoxliteResult;
-use crate::volumes::VolumeInfo;
+use crate::volumes::{VolumeInfo, VolumeState};
+use crate::{BoxliteError, BoxliteResult};
+
+/// Poll interval for [`VolumeHandle::wait_until_ready`]. The backing bucket
+/// is provisioned by a 5s reconciler tick server-side, so anything much
+/// shorter than that just adds request volume without reducing latency.
+const WAIT_UNTIL_READY_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Internal trait for named-volume management.
 ///
-/// Implemented by both `LocalRuntime` and the REST runtime. Both return
-/// `Unsupported` until a managed volume backend is wired up.
+/// Implemented by both `LocalRuntime` (currently `Unsupported` — no local
+/// volume store yet) and the REST runtime (backed by `/v1/volumes`).
 #[async_trait]
 pub(crate) trait VolumeBackend: Send + Sync {
     /// Create a volume, returning its server-assigned metadata (including id).
@@ -69,5 +76,43 @@ impl VolumeHandle {
     /// Remove a volume by id. With `force`, a missing volume is a no-op.
     pub async fn remove(&self, id: &str, force: bool) -> BoxliteResult<()> {
         self.backend.remove_volume(id, force).await
+    }
+
+    /// Poll `get(id)` client-side until the volume reaches `Ready`, `Error`,
+    /// or `timeout` elapses.
+    ///
+    /// `create()` returns as soon as the volume is accepted (state
+    /// `PendingCreate`) — provisioning the backing object storage happens
+    /// asynchronously on the server. This is a convenience for callers that
+    /// want the old "create and block until usable" behavior without the
+    /// server itself holding the connection open (which risked client/gateway
+    /// timeouts for what both `boxlite`'s runner and API treat as inherently
+    /// async). Mirrors `ComputerBox`/`SkillBox`'s `waitUntilReady` in the
+    /// Node SDK (`sdks/node/lib/computerbox.ts`, `skillbox.ts`).
+    pub async fn wait_until_ready(&self, id: &str, timeout: Duration) -> BoxliteResult<VolumeInfo> {
+        let deadline = std::time::Instant::now() + timeout;
+
+        loop {
+            let info = self.get(id).await?;
+            match info.state {
+                VolumeState::Ready => return Ok(info),
+                VolumeState::Error => {
+                    return Err(BoxliteError::InvalidState(format!(
+                        "volume {id} failed to become ready: {}",
+                        info.error_reason.as_deref().unwrap_or("unknown error")
+                    )));
+                }
+                _ => {}
+            }
+
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(BoxliteError::InvalidState(format!(
+                    "timed out waiting for volume {id} to become ready (still {:?})",
+                    info.state
+                )));
+            }
+            tokio::time::sleep(WAIT_UNTIL_READY_POLL_INTERVAL.min(remaining)).await;
+        }
     }
 }

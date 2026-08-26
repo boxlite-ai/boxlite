@@ -30,10 +30,15 @@ export class BoxliteVolumeController {
   constructor(private readonly volumeService: VolumeService) {}
 
   @Post()
+  @HttpCode(202)
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_VOLUMES])
   async create(@AuthContext() authContext: OrganizationAuthContext): Promise<RestVolumeResponse> {
+    // Returns as soon as the volume row exists (state=pending_create) — provisioning
+    // the backing object storage happens asynchronously. Callers learn readiness via
+    // GET or the volume.state.updated webhook (apps/api/src/webhook), same as the
+    // pre-existing classic VolumeController.
     const volume = await this.volumeService.create(authContext.organization, {})
-    return this.toResponse(await this.volumeService.waitForReady(volume.id, 30))
+    return this.toResponse(volume)
   }
 
   @Get()

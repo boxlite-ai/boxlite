@@ -395,8 +395,11 @@ pub(crate) struct CreateVolumeRequest {}
 pub(crate) struct VolumeResponse {
     pub id: String,
     pub created_at: String,
+    pub state: crate::volumes::VolumeState,
     #[serde(default)]
     pub size_bytes: Option<u64>,
+    #[serde(default)]
+    pub error_reason: Option<String>,
 }
 
 impl VolumeResponse {
@@ -409,6 +412,8 @@ impl VolumeResponse {
             id: self.id.clone(),
             created_at,
             size_bytes: self.size_bytes,
+            state: self.state,
+            error_reason: self.error_reason.clone(),
         }
     }
 }

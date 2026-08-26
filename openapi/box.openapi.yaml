@@ -192,19 +192,22 @@ paths:
     post:
       operationId: createVolume
       summary: Create a managed persistent volume
-      description: Creates a volume and waits until its backing object storage is ready.
+      description: |
+        Accepts the volume for creation and returns immediately (state
+        `pending_create`); provisioning the backing object storage happens
+        asynchronously. Poll `GET /volumes/{volume_id}` or subscribe to the
+        `volume.state.updated` webhook to learn when it reaches `ready`
+        (or `error`).
       tags: [Volumes]
       responses:
-        "201":
-          description: Volume created and ready for use
+        "202":
+          description: Volume accepted for creation
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Volume"
         "400":
           $ref: "#/components/responses/BadRequestError"
-        "408":
-          $ref: "#/components/responses/RequestTimeoutError"
         "503":
           $ref: "#/components/responses/ServiceUnavailableError"
 
@@ -1294,13 +1297,6 @@ components:
               type: ImageError
               code: image_pull_failed
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
-
-    RequestTimeoutError:
-      description: The operation did not reach its target state before the timeout
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
 
     ServiceUnavailableError:
       description: A required backend service is not configured or available

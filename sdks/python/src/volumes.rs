@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use boxlite::runtime::VolumeHandle;
-use boxlite::runtime::types::VolumeInfo;
+use boxlite::runtime::types::{VolumeInfo, VolumeState};
 use pyo3::prelude::*;
 
 use crate::util::map_err;
@@ -19,14 +19,22 @@ pub(crate) struct PyVolumeInfo {
     /// Volume size in bytes when the backend can report it.
     #[pyo3(get)]
     pub(crate) size_bytes: Option<u64>,
+    /// Lifecycle state: one of "creating", "ready", "pending_create",
+    /// "pending_delete", "deleting", "deleted", "error". Creation is
+    /// asynchronous — poll `get()` until this is "ready" before mounting.
+    #[pyo3(get)]
+    pub(crate) state: String,
+    /// Failure detail when `state` is "error".
+    #[pyo3(get)]
+    pub(crate) error_reason: Option<String>,
 }
 
 #[pymethods]
 impl PyVolumeInfo {
     fn __repr__(&self) -> String {
         format!(
-            "VolumeInfo(id={:?}, created_at={:?})",
-            self.id, self.created_at
+            "VolumeInfo(id={:?}, state={:?}, created_at={:?})",
+            self.id, self.state, self.created_at
         )
     }
 }
@@ -37,8 +45,23 @@ impl From<VolumeInfo> for PyVolumeInfo {
             id: info.id,
             created_at: info.created_at.to_rfc3339(),
             size_bytes: info.size_bytes,
+            state: volume_state_to_string(info.state),
+            error_reason: info.error_reason,
         }
     }
+}
+
+fn volume_state_to_string(state: VolumeState) -> String {
+    match state {
+        VolumeState::Creating => "creating",
+        VolumeState::Ready => "ready",
+        VolumeState::PendingCreate => "pending_create",
+        VolumeState::PendingDelete => "pending_delete",
+        VolumeState::Deleting => "deleting",
+        VolumeState::Deleted => "deleted",
+        VolumeState::Error => "error",
+    }
+    .to_string()
 }
 
 /// Runtime-scoped handle for named-volume operations.
@@ -97,6 +120,30 @@ impl PyVolumeHandle {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             handle.remove(&id, force).await.map_err(map_err)?;
             Ok(())
+        })
+    }
+
+    /// Poll `get(id)` until the volume reaches "ready", raising on "error" or
+    /// once `timeout_secs` elapses.
+    ///
+    /// `create()` returns as soon as the volume is accepted (state
+    /// "pending_create") — provisioning happens asynchronously server-side.
+    /// This is a client-side convenience for callers that want to block
+    /// until the volume is actually usable.
+    #[pyo3(signature = (id, timeout_secs=30))]
+    fn wait_until_ready<'py>(
+        &self,
+        py: Python<'py>,
+        id: String,
+        timeout_secs: u64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let info = handle
+                .wait_until_ready(&id, std::time::Duration::from_secs(timeout_secs))
+                .await
+                .map_err(map_err)?;
+            Ok(PyVolumeInfo::from(info))
         })
     }
 
