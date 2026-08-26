@@ -167,11 +167,10 @@ impl ApiClient {
         }
         // Read the body as bytes once, then parse; this is what lets us
         // include the body in a parse-failure error without re-issuing the
-        // request.
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("reading response body: {}", e)))?;
+        // request. A failure at this point is a transport fault — this client's
+        // own total timeout expiring after the headers landed, a reset
+        // connection, a corrupt compressed body — never an internal bug.
+        let bytes = resp.bytes().await.map_err(transport_error)?;
         serde_json::from_slice::<T>(&bytes).map_err(|e| {
             let preview = String::from_utf8_lossy(&bytes);
             let preview = if preview.len() > 4096 {
@@ -420,25 +419,11 @@ impl ApiClient {
             uri: String,
         }
         let path = format!("/boxes/{}/network/tunnel?port={port}", box_id.as_ref());
-        let request = self
-            .authorize(
-                self.http
-                    .post(self.url(&path))
-                    .header(reqwest::header::ACCEPT, "application/json"),
-            )
-            .await?;
-        let response = request
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Network(e.to_string()))?;
-        let status = response.status();
-        if !status.is_success() {
-            return self.handle_error(status, response).await;
-        }
-        let descriptor: TunnelDescriptor = response
-            .json()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("invalid tunnel descriptor: {e}")))?;
+        let builder = self
+            .http
+            .post(self.url(&path))
+            .header(reqwest::header::ACCEPT, "application/json");
+        let descriptor: TunnelDescriptor = self.send_json(builder).await?;
         Ok(descriptor.uri)
     }
 
@@ -565,7 +550,7 @@ impl ApiClient {
 /// invaluable for diagnosing transparent-proxy regressions like the
 /// Clash `:7890` interception that produced bare 502s in
 /// production.
-fn transport_error(err: reqwest::Error) -> BoxliteError {
+pub(super) fn transport_error(err: reqwest::Error) -> BoxliteError {
     let url_hint = err.url().map(|u| u.as_str().to_string());
     let kind = if err.is_connect() {
         "connect failed"
@@ -821,6 +806,50 @@ mod tests {
             "unexpected error: {error}"
         );
 
+        server.await.unwrap();
+    }
+
+    /// `prepare_box_tunnel` sends its descriptor request through the shared
+    /// control-request path, so this pins the wire contract that path owes it:
+    /// POST to the prefixed tunnel URL, JSON accepted, descriptor parsed back.
+    #[tokio::test]
+    async fn prepare_box_tunnel_posts_descriptor_request_and_parses_uri() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                headers.push(socket.read_u8().await.unwrap());
+            }
+            let headers = String::from_utf8(headers).unwrap().to_lowercase();
+            assert!(
+                headers.starts_with("post /v1/boxes/box1/network/tunnel?port=8080 http/1.1"),
+                "unexpected request line: {headers}"
+            );
+            assert!(
+                headers.contains("accept: application/json"),
+                "descriptor request must ask for json: {headers}"
+            );
+            let body = r#"{"uri":"http://127.0.0.1:9/tunnel"}"#;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+
+        let client =
+            ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let uri = client.prepare_box_tunnel("box1", 8080).await.unwrap();
+
+        assert_eq!(uri, "http://127.0.0.1:9/tunnel");
         server.await.unwrap();
     }
 
