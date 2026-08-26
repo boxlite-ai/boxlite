@@ -178,6 +178,24 @@ export class VolumeSpecDto {
   read_only?: false
 }
 
+export class SecretSpecDto {
+  @IsString()
+  @IsNotEmpty()
+  name: string
+
+  @IsString()
+  value: string
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  hosts?: string[]
+
+  @IsOptional()
+  @IsString()
+  placeholder?: string
+}
+
 export class CreateBoxDto {
   @IsOptional()
   @IsString()
@@ -265,6 +283,12 @@ export class CreateBoxDto {
   @Type(() => VolumeSpecDto)
   volumes?: VolumeSpecDto[]
 
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SecretSpecDto)
+  secrets?: SecretSpecDto[]
+
   // The remaining CreateBoxRequest fields this server does not implement.
   // Without these, whitelisting reports them as a bare "property X should not
   // exist", which tells a caller nothing about why or what to do instead.
@@ -290,16 +314,6 @@ export class CreateBoxDto {
     message: 'tty is not supported for cloud boxes; request a tty on the execution instead',
   })
   tty?: false
-
-  // `secrets` matters most: the field carries real credential values, and this
-  // server dropped them silently for its whole life — the caller got a 201 and
-  // a box whose outbound requests still held the placeholder.
-  @ValidateIf((_, value) => value !== undefined)
-  @IsIn([undefined], {
-    message:
-      'secrets are not supported for cloud boxes; the MITM placeholder substitution runs host-side and has no cloud equivalent yet',
-  })
-  secrets?: never
 
   // A path on the server's own filesystem. Meaningful for a single-tenant
   // `boxlite serve`, never for a shared control plane.

@@ -37,6 +37,12 @@ describe('requiresFreshBox', () => {
     expect(requiresFreshBox({}, { boxLimitedNetworkEgress: true })).toBe(true)
   })
 
+  // Secrets become placeholder env vars + an MITM CA when the box is built; a
+  // warm box was built without them, so claiming one would silently drop them.
+  it('forces a fresh box when secrets are requested', () => {
+    expect(requiresFreshBox({ secrets: [{ name: 'openai', value: 'sk-test' }] }, NO_ORG_EGRESS_LIMIT)).toBe(true)
+  })
+
   // `false` is a value the caller supplied, not an absence — it still pins the
   // box to a network policy the pool was not provisioned for.
   it('treats an explicit networkBlockAll: false as a policy override', () => {

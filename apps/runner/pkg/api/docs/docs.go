@@ -708,6 +708,12 @@ const docTemplate = `{
                 "runAsUser": {
                     "type": "string"
                 },
+                "secrets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.SecretDTO"
+                    }
+                },
                 "skipStart": {
                     "type": "boolean"
                 },
@@ -820,6 +826,12 @@ const docTemplate = `{
                 },
                 "osUser": {
                     "type": "string"
+                },
+                "secrets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.SecretDTO"
+                    }
                 },
                 "storageQuota": {
                     "type": "integer",
@@ -957,6 +969,30 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "volumeId": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.SecretDTO": {
+            "type": "object",
+            "required": [
+                "name",
+                "value"
+            ],
+            "properties": {
+                "hosts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "placeholder": {
+                    "type": "string"
+                },
+                "value": {
                     "type": "string"
                 }
             }

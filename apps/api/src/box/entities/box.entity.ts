@@ -8,7 +8,7 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, OneToOne, Uniqu
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
-import { BoxVolume } from '../dto/box.dto'
+import { BoxSecret, BoxVolume } from '../dto/box.dto'
 import { nanoid } from 'nanoid'
 import { BoxLastActivity } from './box-last-activity.entity'
 import { BOX_ID_LENGTH, BOX_ID_REGEX, generateBoxId } from '../utils/box-id.util'
@@ -159,6 +159,12 @@ export class Box {
   })
   volumes: BoxVolume[] = []
 
+  @Column({
+    type: 'jsonb',
+    default: [],
+  })
+  secrets: BoxSecret[] = []
+
   @CreateDateColumn({
     type: 'timestamp with time zone',
   })
@@ -296,5 +302,16 @@ export class Box {
     }
 
     return changes
+  }
+
+  /**
+   * Redacts secret values whenever the entity is serialized with
+   * JSON.stringify — analytics debug logs and the Redis box-event channel both
+   * do this. Secrets are plaintext in this column by design (POL-303), so they
+   * must never ride a JSON dump out of the API process.
+   */
+  toJSON() {
+    const { secrets, ...rest } = this
+    return { ...rest, secrets: secrets?.length ? `[${secrets.length} secrets]` : undefined }
   }
 }

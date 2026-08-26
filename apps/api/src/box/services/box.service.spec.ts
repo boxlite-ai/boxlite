@@ -314,6 +314,31 @@ describe('BoxService public defaults', () => {
     expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }))
   })
 
+  it('persists secrets on a freshly created box', async () => {
+    const { service, boxRepository } = makeCreateService()
+
+    await service.create(
+      { name: 'secret-box', image: 'base', secrets: [{ name: 'openai', value: 'sk-test' }] } as any,
+      { id: 'org-1' } as any,
+    )
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ secrets: [{ name: 'openai', value: 'sk-test' }] }),
+    )
+  })
+
+  it('creates a fresh box instead of claiming a warm box when secrets are present', async () => {
+    const { service, boxRepository, warmPoolService } = makeCreateService()
+
+    await service.create(
+      { name: 'secret-box', image: 'base', secrets: [{ name: 'openai', value: 'sk-test' }] } as any,
+      { id: 'org-1' } as any,
+    )
+
+    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+    expect(boxRepository.insert).toHaveBeenCalled()
+  })
+
   it('rechecks runner eligibility under the assignment fence before inserting', async () => {
     const { service, boxRepository, runnerService, redisLockProvider } = makeCreateService()
     runnerService.findOneUncachedOrFail

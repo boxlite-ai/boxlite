@@ -775,6 +775,38 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
     // uniformly. Operators who want a different policy run the
     // server with a different default; clients cannot relax it.
 
+    if let Some(volumes) = &req.volumes {
+        if !volumes.is_empty() {
+            return Err(boxlite::BoxliteError::InvalidArgument(
+                "managed volumes are not supported by boxlite serve".into(),
+            ));
+        }
+    }
+
+    // Map secrets onto the core `Secret` type and apply the placeholder
+    // default. The local runtime does not synthesize `<BOXLITE_SECRET:{name}>`
+    // for an empty placeholder (unlike the Go SDK), so defaulting here is what
+    // keeps a placeholder-less secret from silently injecting an empty env var
+    // and no MITM substitution — the same failure class POL-303 fixes on Cloud.
+    let secrets: Vec<boxlite::runtime::options::Secret> = req
+        .secrets
+        .as_ref()
+        .map(|ss| {
+            ss.iter()
+                .map(|s| boxlite::runtime::options::Secret {
+                    name: s.name.clone(),
+                    value: s.value.clone(),
+                    hosts: s.hosts.clone(),
+                    placeholder: s
+                        .placeholder
+                        .clone()
+                        .filter(|p| !p.is_empty())
+                        .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", s.name)),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let auto_delete = req.auto_delete.unwrap_or(0);
     Ok(BoxOptions {
         rootfs,
@@ -783,6 +815,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         disk_size_gb: req.disk_size_gb,
         working_dir: req.working_dir.clone(),
         env,
+        secrets,
         network,
         entrypoint: req.entrypoint.clone(),
         cmd: req.cmd.clone(),
@@ -1360,6 +1393,63 @@ mod tests {
         assert!(
             !build_box_options(&without).expect("build").tty,
             "no tty asked for, none granted"
+        );
+    }
+
+    #[test]
+    fn build_box_options_carries_secrets_from_the_wire() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","secrets":[{"name":"openai","value":"sk-test","hosts":["api.openai.com"]}]}"#,
+        )
+        .expect("body with secrets must deserialize");
+
+        let opts = build_box_options(&req).expect("build with secrets");
+        assert_eq!(opts.secrets.len(), 1, "one secret in, one secret out");
+        let secret = &opts.secrets[0];
+        assert_eq!(secret.name, "openai");
+        assert_eq!(secret.value, "sk-test");
+        assert_eq!(secret.hosts, vec!["api.openai.com"]);
+        // Placeholder omitted on the wire: serve applies the same default the
+        // Go SDK does, so a placeholder-less secret still substitutes.
+        assert_eq!(secret.placeholder, "<BOXLITE_SECRET:openai>");
+    }
+
+    #[test]
+    fn build_box_options_preserves_explicit_secret_placeholder() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","secrets":[{"name":"httpbin","value":"v","placeholder":"<MY_TOKEN>"}]}"#,
+        )
+        .expect("body with explicit placeholder must deserialize");
+
+        let opts = build_box_options(&req).expect("build");
+        assert_eq!(opts.secrets[0].placeholder, "<MY_TOKEN>", "caller placeholder wins");
+    }
+
+    #[test]
+    fn build_box_options_defaults_an_empty_secret_placeholder() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","secrets":[{"name":"openai","value":"v","placeholder":""}]}"#,
+        )
+        .expect("body with empty placeholder must deserialize");
+
+        let opts = build_box_options(&req).expect("build");
+        assert_eq!(
+            opts.secrets[0].placeholder, "<BOXLITE_SECRET:openai>",
+            "an empty placeholder is as absent as an omitted one"
+        );
+    }
+
+    #[test]
+    fn build_box_options_rejects_nonempty_volumes() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","volumes":[{"managed_volume":"v1","guest_path":"/data"}]}"#,
+        )
+        .expect("body with volumes must deserialize (accepted, then rejected)");
+
+        let err = build_box_options(&req).expect_err("non-empty volumes must be rejected");
+        assert!(
+            matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("managed volumes")),
+            "unexpected error: {err}"
         );
     }
 

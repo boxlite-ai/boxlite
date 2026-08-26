@@ -1,5 +1,6 @@
 export * from './box-info-response';
 export * from './create-box-dto';
+export * from './dto-secret-dto';
 export * from './dto-volume-dto';
 export * from './enums-box-state';
 export * from './error-response';

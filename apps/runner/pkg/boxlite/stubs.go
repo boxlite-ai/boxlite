@@ -28,6 +28,7 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 		StorageQuota:     recoverDto.StorageQuota,
 		Env:              recoverDto.Env,
 		Volumes:          recoverDto.Volumes,
+		Secrets:          recoverDto.Secrets,
 		NetworkBlockAll:  recoverDto.NetworkBlockAll,
 		NetworkAllowList: recoverDto.NetworkAllowList,
 		FromVolumeId:     recoverDto.FromVolumeId,
