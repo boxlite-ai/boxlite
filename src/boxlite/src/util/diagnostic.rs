@@ -71,6 +71,13 @@ const CLIENT_FORBIDDEN_TOKENS: &[&str] = &[
     "/home/",
     "/boxes/",
     ".wslconfig",
+    // macOS host layout (this crate is a first-class macOS platform too).
+    // Only unambiguous home/system dirs — omitted /library/, /volumes/ and
+    // /network/, which collide with docker image refs and REST paths.
+    "/users/",
+    "/applications/",
+    "/system/",
+    "/private/",
     // On-disk diagnostic artifacts
     ".log",
     "stderr",
