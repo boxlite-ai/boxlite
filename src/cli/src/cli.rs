@@ -6,6 +6,7 @@ use boxlite::experimental::custom_kernel::{KernelFormat, KernelOptions, configur
 use boxlite::experimental::{
     EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
 };
+use boxlite::runtime::id::VolumeID;
 use boxlite::runtime::options::{NetworkConfig, NetworkMode, PortProtocol, PortSpec, VolumeSpec};
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime, ImageRegistry,
@@ -886,11 +887,7 @@ impl VolumeFlags {
         for s in self.volume.iter() {
             let spec = parse_volume_spec(s)?;
             let host_path = match spec.host_path {
-                // TODO(#942): when the host side of a `-v <src>:<guest>` spec is a
-                // bare name (not a path) that matches a named volume, resolve it
-                // to the volume's mountpoint here (via the volume backend) and
-                // bind that payload dir instead of treating the name as a literal
-                // host path.
+                Some(host) if VolumeID::is_valid(&host) => format!("volume://{}", host),
                 Some(host) => {
                     let mut path = host;
                     if std::path::Path::new(&path).is_relative() && !is_windows_absolute_path(&path)
