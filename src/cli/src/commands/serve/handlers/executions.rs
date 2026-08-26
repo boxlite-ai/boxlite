@@ -420,15 +420,20 @@ async fn run_attach_session(socket: WebSocket, active: Arc<ActiveExecution>, std
 
     let reader_active = Arc::clone(&active);
     let mut reader = tokio::spawn(async move {
+        // One rejection per socket: the reader keeps draining so the writer can
+        // flush and close (whichever task ends first aborts the other), and a
+        // peer that never reads must not queue a control frame per frame sent.
+        let mut stdin_rejected = false;
+
         while let Some(msg) = stream.next().await {
             match msg {
                 Ok(Message::Binary(bytes)) => {
-                    // The writer closes, not this task: whichever ends first
-                    // aborts the other, so returning here would kill the writer
-                    // before it flushed the rejection.
                     if stdin == StdinPolicy::Refuse {
-                        let _ = ctrl_tx
-                            .send(CtrlOut::ClosePolicyViolation(read_only_rejection("stdin")));
+                        if !stdin_rejected {
+                            stdin_rejected = true;
+                            let _ = ctrl_tx
+                                .send(CtrlOut::ClosePolicyViolation(read_only_rejection("stdin")));
+                        }
                         continue;
                     }
                     let mut guard = reader_active.stdin().lock().await;

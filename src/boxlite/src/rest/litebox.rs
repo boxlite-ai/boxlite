@@ -92,6 +92,7 @@ impl RestBox {
                 &ws_box_id,
                 &ws_exec_id,
                 stream,
+                wire_stdin,
                 stdin_rx,
                 stdout_tx,
                 stderr_tx,
@@ -656,6 +657,9 @@ async fn attach_ws(
         box_id,
         execution_id,
         stream,
+        // exec() creates the session it attaches to, so it is always writable;
+        // read-only is only reachable through attach().
+        true,
         stdin_rx,
         stdout_tx,
         stderr_tx,
@@ -679,6 +683,7 @@ async fn attach_ws_pump(
     box_id: &str,
     execution_id: &str,
     initial_stream: WsStream,
+    wire_stdin: bool,
     mut stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     stdout_tx: mpsc::UnboundedSender<String>,
     stderr_tx: mpsc::UnboundedSender<String>,
@@ -688,7 +693,15 @@ async fn attach_ws_pump(
     use std::time::Instant;
     use tokio_tungstenite::tungstenite::Message;
 
-    let path = format!("/boxes/{}/executions/{}/attach", box_id, execution_id);
+    // The query rides every reconnect: a replacement socket opened without it
+    // would be writable, and the server's refusal only binds the socket it was
+    // asked for.
+    let path = format!(
+        "/boxes/{}/executions/{}/attach{}",
+        box_id,
+        execution_id,
+        if wire_stdin { "" } else { "?stdin=0" }
+    );
 
     // State persisted across reconnects:
     //
@@ -723,7 +736,7 @@ async fn attach_ws_pump(
 
         // If the user closed stdin during a previous attach, propagate the
         // EOF to this fresh server-side handler immediately. Best-effort.
-        if user_closed_stdin {
+        if wire_stdin && user_closed_stdin {
             let _ = sink
                 .send(Message::Text(r#"{"type":"stdin_eof"}"#.to_string()))
                 .await;
@@ -741,7 +754,7 @@ async fn attach_ws_pump(
                 // Forward stdin bytes from the SDK consumer to the WS sink.
                 // Disabled once we've observed stdin EOF — the WS reader is
                 // still running so we keep waiting for the exit frame.
-                stdin_msg = stdin_rx.recv(), if !user_closed_stdin => {
+                stdin_msg = stdin_rx.recv(), if wire_stdin && !user_closed_stdin => {
                     match stdin_msg {
                         Some(bytes) => {
                             if sink.send(Message::Binary(bytes)).await.is_err() {
@@ -1273,6 +1286,8 @@ mod tests {
         status_calls: u32,
         /// Request-line paths the client asked for, in order.
         requested_paths: Vec<String>,
+        /// Text (control) frames the server received from the client.
+        received_text: Vec<String>,
         /// Headers to add to the WS handshake response — how the real
         /// server hands back the main session's execution id.
         ws_response_headers: Vec<(String, String)>,
@@ -1758,6 +1773,89 @@ mod tests {
     // The attach must address the container route (exec-attach cannot
     // reach init: the client has no id for it), adopt the execution id the
     // server hands back on the upgrade, and stream init's output and exit code.
+    /// A read-only attach must survive a dropped socket still read-only.
+    ///
+    /// Its stdin sender is dropped by construction, which the pump used to read
+    /// as the consumer closing stdin — so it announced `stdin_eof`, and the
+    /// reconnect rebuilt the URL without the query, giving that EOF a writable
+    /// socket to land on.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn read_only_attach_stays_read_only_across_a_reconnect() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        state.lock().await.ws_response_headers = vec![(
+            "x-boxlite-execution-id".to_string(),
+            "container-1".to_string(),
+        )];
+
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, None, |mut ws, state| async move {
+                // Record whatever the pump volunteers, then drop the socket so
+                // it has to reconnect.
+                let _ = tokio::time::timeout(Duration::from_millis(300), async {
+                    while let Some(Ok(msg)) = ws.next().await {
+                        if let Message::Text(text) = msg {
+                            state.lock().await.received_text.push(text.to_string());
+                        }
+                    }
+                })
+                .await;
+                let _ = ws.close(None).await;
+            })
+            .await;
+        });
+
+        let rest_box = rest_box_for(port, "box1");
+        let _execution = tokio::time::timeout(
+            Duration::from_secs(3),
+            rest_box.attach(AttachOptions::main().read_only()),
+        )
+        .await
+        .expect("attach timed out")
+        .expect("a read-only attach must connect");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        loop {
+            let seen = state
+                .lock()
+                .await
+                .requested_paths
+                .iter()
+                .filter(|p| p.contains("/attach"))
+                .count();
+            if seen >= 2 || std::time::Instant::now() > deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let seen = state.lock().await;
+        let attaches: Vec<&String> = seen
+            .requested_paths
+            .iter()
+            .filter(|p| p.contains("/attach"))
+            .collect();
+        assert!(
+            attaches.len() >= 2,
+            "the pump must reconnect after the drop; saw {attaches:?}"
+        );
+        for path in &attaches {
+            assert!(
+                path.contains("stdin=0"),
+                "every attach of a read-only session must carry the query, got {path:?}"
+            );
+        }
+        assert!(
+            seen.received_text.is_empty(),
+            "a read-only attach has no stdin to close and must never announce one, got {:?}",
+            seen.received_text
+        );
+
+        server.abort();
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn attach_streams_main_session_over_container_route() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

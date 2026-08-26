@@ -123,7 +123,7 @@ async fn read_only_attach_refuses_stdin_and_the_bytes_never_land() {
     );
 }
 
-/// Attach read-only and send the two control frames that write into the
+/// Attach read-only and send every control frame that writes into the
 /// workload. Returns the control frames the server sent back.
 async fn attach_and_send_controls(port: u16, box_id: &str) -> Vec<String> {
     let url = format!("ws://127.0.0.1:{port}/v1/boxes/{box_id}/attach?stdin=0");
@@ -134,6 +134,7 @@ async fn attach_and_send_controls(port: u16, box_id: &str) -> Vec<String> {
     for frame in [
         r#"{"type":"signal","sig":15}"#,
         r#"{"type":"resize","rows":10,"cols":40}"#,
+        r#"{"type":"stdin_eof"}"#,
     ] {
         ws.send(Message::Text(frame.to_string()))
             .await
@@ -142,7 +143,7 @@ async fn attach_and_send_controls(port: u16, box_id: &str) -> Vec<String> {
 
     let mut controls = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    while controls.len() < 2 && tokio::time::Instant::now() < deadline {
+    while controls.len() < 3 && tokio::time::Instant::now() < deadline {
         match tokio::time::timeout(Duration::from_secs(3), ws.next()).await {
             Ok(Some(Ok(Message::Text(text)))) => controls.push(text.to_string()),
             Ok(Some(Ok(_))) => {}
@@ -155,15 +156,15 @@ async fn attach_and_send_controls(port: u16, box_id: &str) -> Vec<String> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn read_only_attach_refuses_signal_and_resize() {
+async fn read_only_attach_refuses_signal_resize_and_stdin_eof() {
     let serve = ServeChild::start();
     let box_id = create_echo_box(&serve);
 
     let controls = attach_and_send_controls(serve.port(), &box_id).await;
 
-    // If SIGTERM had reached init the box would be gone, so a writable attach
-    // that still echoes is the proof the signal never landed — stronger than
-    // reading the rejection frame alone.
+    // A later writable attach that still echoes proves two things the rejection
+    // frames alone cannot: the SIGTERM never reached init, and stdin_eof never
+    // closed the workload's stdin.
     let (_c, stdout, _close) = attach_and_write(serve.port(), &box_id, "1").await;
     remove_box(&serve, &box_id);
 
@@ -172,12 +173,12 @@ async fn read_only_attach_refuses_signal_and_resize() {
             .iter()
             .filter(|c| c.contains("read_only_attach"))
             .count(),
-        2,
-        "both signal and resize must be refused, got {controls:?}"
+        3,
+        "signal, resize and stdin_eof must all be refused, got {controls:?}"
     );
     assert!(
         stdout.contains("ECHO:hello"),
-        "the box must still be alive after a refused SIGTERM, got {stdout:?}"
+        "the box must still read stdin after a refused SIGTERM and stdin_eof, got {stdout:?}"
     );
 }
 
