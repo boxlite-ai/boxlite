@@ -32,7 +32,6 @@ describe('BoxliteBoxController request validation', () => {
     ['a security preset', { security: 'development' }],
     ['a sandbox security object', { advanced: { security: { jailer_enabled: false } } }],
     ['privileged mode', { privileged: true }],
-    ['host port publication', { ports: [{ guest_port: 3000 }] }],
     ['an unrecognised field', { totally_made_up: 1 }],
   ])('rejects %s', async (_label, extra) => {
     await expect(pipe!.transform({ image: 'alpine:latest', ...extra }, meta)).rejects.toThrow()
@@ -48,6 +47,7 @@ describe('BoxliteBoxController request validation', () => {
     ['rootfs_path', { rootfs_path: '/srv/rootfs' }, 'local-only'],
     ['advanced', { advanced: { capabilities: { add: ['SYS_ADMIN'] } } }, 'not supported for cloud'],
     ['tty', { tty: true }, 'not supported for cloud'],
+    ['ports', { ports: [{ guest_port: 3000 }] }, 'local-only'],
   ])('rejects %s with an actionable message', async (_label, extra, fragment) => {
     // BadRequestException.message is the generic "Bad Request Exception";
     // class-validator's per-field messages live in the response body.

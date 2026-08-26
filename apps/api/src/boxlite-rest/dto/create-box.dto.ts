@@ -268,6 +268,17 @@ export class CreateBoxDto {
   // Without these, whitelisting reports them as a bare "property X should not
   // exist", which tells a caller nothing about why or what to do instead.
   //
+  // Host port publication. Absent from the spec by design and refused by the
+  // Rust preflight before it ever reaches the wire, so no in-repo client sends
+  // it — but a raw HTTP caller can, and whitelisting alone would answer with a
+  // bare "property ports should not exist". Mirror the guidance
+  // BoxOptions::sanitize_remote gives instead.
+  @ValidateIf((_, value) => value !== undefined)
+  @IsIn([undefined], {
+    message: 'host port publication is local-only; use the box network tunnel endpoint to reach a guest service',
+  })
+  ports?: never
+
   // A PTY for the box's main command. The runner offers one for executions
   // only (StartExecution's tty flag), never for the container's init, and the
   // Go SDK has no WithTTY to carry it. `false` is a no-op so the flag can be

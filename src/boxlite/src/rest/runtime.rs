@@ -79,74 +79,84 @@ fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
     LiteBox::new(box_backend, network_backend, snapshot_backend)
 }
 
-/// Options a REST server never accepts from a client: they configure the
-/// server's own host — its hardware, its filesystem, its sandbox policy — not
-/// the box the caller asked for. Rejected here, before any network I/O, so the
-/// caller gets a typed [`BoxliteError::Unsupported`] naming the knob instead of
-/// whatever status an individual server happens to return.
-///
-/// Sandbox security is the load-bearing one: a client that could hand the
-/// server a [`SecurityOptions`](crate::runtime::advanced_options::SecurityOptions)
-/// would be choosing its own isolation level, and `SecurityOptions::disabled()`
-/// turns jailer and seccomp off. The same refusal is spelled out on the wire
-/// types (`CreateBoxRequest::from_options`), in `boxlite serve`
-/// (`src/cli/src/commands/serve/types.rs`), and in the spec.
-fn reject_host_only_options(options: &BoxOptions) -> BoxliteResult<()> {
-    if !options.ports.is_empty() {
-        return Err(BoxliteError::Unsupported(
-            "Host port publication (-p/ports) is local-only for remote runtimes. \
-             Use box.network.tunnel(port) or `boxlite network tunnel BOX PORT` instead."
-                .to_string(),
-        ));
-    }
+impl BoxOptions {
+    /// The remote sibling of [`BoxOptions::sanitize`]: check these options
+    /// against what a REST server accepts from a client, before any network I/O.
+    ///
+    /// Separate from `sanitize` rather than folded into it because these rules
+    /// are not about validity — a local box may legitimately set every option
+    /// refused here. They configure the server's own host: its hardware, its
+    /// filesystem, its sandbox policy. The caller gets a typed
+    /// [`BoxliteError::Unsupported`] naming the specific knob instead of
+    /// whatever status an individual server happens to return.
+    ///
+    /// Rejects rather than strips, deliberately: quietly dropping these would
+    /// hand back a box that ignored the request, which is the failure this whole
+    /// admission path exists to prevent.
+    ///
+    /// Sandbox security is the load-bearing one: a client that could hand the
+    /// server a [`SecurityOptions`](crate::runtime::advanced_options::SecurityOptions)
+    /// would be choosing its own isolation level, and `SecurityOptions::disabled()`
+    /// turns jailer and seccomp off. The same refusal is spelled out on the wire
+    /// types (`CreateBoxRequest::from_options`), in `boxlite serve`
+    /// (`src/cli/src/commands/serve/types.rs`), and in the spec.
+    fn sanitize_remote(&self) -> BoxliteResult<()> {
+        if !self.ports.is_empty() {
+            return Err(BoxliteError::Unsupported(
+                "Host port publication (-p/ports) is local-only for remote runtimes. \
+                 Use box.network.tunnel(port) or `boxlite network tunnel BOX PORT` instead."
+                    .to_string(),
+            ));
+        }
 
-    if options.advanced.security != SecurityOptions::default() {
-        return Err(BoxliteError::Unsupported(
-            "sandbox security (advanced.security) is the remote server's own policy \
-             and is only configurable by the local runtime"
-                .to_string(),
-        ));
-    }
+        if self.advanced.security != SecurityOptions::default() {
+            return Err(BoxliteError::Unsupported(
+                "sandbox security (advanced.security) is the remote server's own policy \
+                 and is only configurable by the local runtime"
+                    .to_string(),
+            ));
+        }
 
-    if options.advanced.privileged {
-        return Err(BoxliteError::Unsupported(
-            "privileged mode is only supported by the local runtime".to_string(),
-        ));
-    }
+        if self.advanced.privileged {
+            return Err(BoxliteError::Unsupported(
+                "privileged mode is only supported by the local runtime".to_string(),
+            ));
+        }
 
-    if options.advanced.isolate_mounts {
-        return Err(BoxliteError::Unsupported(
-            "mount isolation (advanced.isolate_mounts) is only supported by the local runtime"
-                .to_string(),
-        ));
-    }
+        if self.advanced.isolate_mounts {
+            return Err(BoxliteError::Unsupported(
+                "mount isolation (advanced.isolate_mounts) is only supported by the local runtime"
+                    .to_string(),
+            ));
+        }
 
-    if options.advanced.health_check.is_some() {
-        return Err(BoxliteError::Unsupported(
-            "health checks (advanced.health_check) are only supported by the local runtime"
-                .to_string(),
-        ));
-    }
+        if self.advanced.health_check.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "health checks (advanced.health_check) are only supported by the local runtime"
+                    .to_string(),
+            ));
+        }
 
-    if options.advanced.kernel.is_some() {
-        return Err(BoxliteError::Unsupported(
-            "custom kernels are only supported by the local runtime".to_string(),
-        ));
-    }
+        if self.advanced.kernel.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "custom kernels are only supported by the local runtime".to_string(),
+            ));
+        }
 
-    if options.advanced.nested_virtualization {
-        return Err(BoxliteError::Unsupported(
-            "nested virtualization is only supported by the local runtime".to_string(),
-        ));
-    }
+        if self.advanced.nested_virtualization {
+            return Err(BoxliteError::Unsupported(
+                "nested virtualization is only supported by the local runtime".to_string(),
+            ));
+        }
 
-    Ok(())
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
-        reject_host_only_options(&options)?;
+        options.sanitize_remote()?;
 
         // Validate only the caller's requested policy. An unset auto_stop means
         // "no auto-stop", so it must not borrow the server's default here —
@@ -180,7 +190,7 @@ impl RuntimeBackend for RestRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
-        reject_host_only_options(&options)?;
+        options.sanitize_remote()?;
 
         // Try to get existing box by name first
         if let Some(ref box_name) = name
@@ -320,7 +330,7 @@ mod tests {
             ..Default::default()
         };
 
-        let err = reject_host_only_options(&options).unwrap_err();
+        let err = options.sanitize_remote().unwrap_err();
         assert!(err.to_string().contains("-p/ports"));
         assert!(err.to_string().contains("network.tunnel"));
         assert!(err.to_string().contains("boxlite network tunnel"));

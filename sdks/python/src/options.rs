@@ -1015,6 +1015,34 @@ mod tests {
         }
     }
 
+    /// Same "untouched defaults" shape as above, parameterised on `tty` — the
+    /// field the reference server forwards into `boxlite.BoxOptions(**kwargs)`.
+    fn py_box_options_with_tty(tty: Option<bool>) -> PyBoxOptions {
+        PyBoxOptions {
+            image: None,
+            rootfs_path: None,
+            cpus: None,
+            memory_mib: None,
+            disk_size_gb: None,
+            working_dir: None,
+            env: vec![],
+            volumes: vec![],
+            network: None,
+            ports: vec![],
+            auto_remove: None,
+            auto_stop: None,
+            auto_delete: None,
+            auto_resume: None,
+            detach: None,
+            entrypoint: None,
+            cmd: None,
+            user: None,
+            tty,
+            advanced: None,
+            secrets: vec![],
+        }
+    }
+
     fn default_py_security() -> PySecurityOptions {
         PySecurityOptions {
             jailer_enabled: false,
@@ -1096,5 +1124,32 @@ mod tests {
             let err = invalid.extract::<PyVolumeSpec>().unwrap_err();
             assert!(err.to_string().contains("volume:// scheme"));
         });
+    }
+
+    /// `tty` is a concrete `bool` on core `BoxOptions`, not an `Option`, so the
+    /// conversion has to distinguish "caller asked" from "caller said nothing".
+    /// Without the `if let Some(tty)` arm this silently stays false and
+    /// `boxlite run -t` against the reference server produces a box with no
+    /// terminal — the same class of silent drop this whole change closes.
+    #[test]
+    fn explicit_tty_reaches_core_box_options() {
+        let opts = BoxOptions::try_from(py_box_options_with_tty(Some(true)))
+            .expect("tty=True should convert");
+
+        assert!(opts.tty, "expected tty to reach core BoxOptions");
+    }
+
+    /// The other side: an unset `tty` must leave the core default alone rather
+    /// than writing `false` over whatever the core decides.
+    #[test]
+    fn unset_tty_preserves_the_core_default() {
+        let opts =
+            BoxOptions::try_from(py_box_options_with_tty(None)).expect("tty=None should convert");
+
+        assert_eq!(
+            opts.tty,
+            BoxOptions::default().tty,
+            "an unset tty must not overwrite the core default"
+        );
     }
 }
