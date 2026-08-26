@@ -785,9 +785,14 @@ paths:
             Read-only is a property of the individual WebSocket, not of the
             session: other clients attaching to the same session are
             unaffected.
+
+            A value outside this enum is rejected with `400`, never treated as
+            the writable default.
       responses:
         "101":
           description: WebSocket upgrade successful; bidirectional protocol begins.
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":

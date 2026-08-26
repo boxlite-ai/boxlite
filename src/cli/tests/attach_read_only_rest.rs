@@ -109,8 +109,8 @@ async fn read_only_attach_refuses_stdin_and_the_bytes_never_land() {
     remove_box(&serve, &box_id);
 
     assert!(
-        controls.iter().any(|c| c.contains("read-only")),
-        "expected a read-only rejection control frame, got {controls:?}"
+        controls.iter().any(|c| c.contains("read_only_attach")),
+        "expected a read_only_attach rejection control frame, got {controls:?}"
     );
     assert!(
         !stdout.contains("ECHO:hello"),
@@ -179,6 +179,34 @@ async fn read_only_attach_refuses_signal_and_resize() {
         stdout.contains("ECHO:hello"),
         "the box must still be alive after a refused SIGTERM, got {stdout:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unrecognized_stdin_value_is_refused_rather_than_opened_writable() {
+    let serve = ServeChild::start();
+    let box_id = create_echo_box(&serve);
+
+    let url = format!(
+        "ws://127.0.0.1:{}/v1/boxes/{}/attach?stdin=False",
+        serve.port(),
+        box_id
+    );
+    let outcome = tokio_tungstenite::connect_async(&url).await;
+    remove_box(&serve, &box_id);
+
+    // Failing open here would hand a writable socket to a client that asked,
+    // in a typo, for a read-only one.
+    match outcome {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            assert_eq!(
+                response.status(),
+                400,
+                "expected a 400 for an out-of-enum stdin value"
+            );
+        }
+        Err(other) => panic!("expected an HTTP 400, got transport error: {other}"),
+        Ok(_) => panic!("an out-of-enum stdin value must not upgrade to a writable socket"),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

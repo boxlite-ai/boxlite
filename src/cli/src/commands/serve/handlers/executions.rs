@@ -249,10 +249,16 @@ pub(in crate::commands::serve) struct AttachQuery {
 }
 
 impl AttachQuery {
-    fn policy(&self) -> StdinPolicy {
+    /// An unrecognized value is rejected rather than defaulting to Allow: a
+    /// typo in the one parameter that withholds write access must not quietly
+    /// grant it.
+    fn policy(&self) -> Result<StdinPolicy, String> {
         match self.stdin.as_deref() {
-            Some("0") | Some("false") => StdinPolicy::Refuse,
-            _ => StdinPolicy::Allow,
+            None | Some("1") | Some("true") => Ok(StdinPolicy::Allow),
+            Some("0") | Some("false") => Ok(StdinPolicy::Refuse),
+            Some(other) => Err(format!(
+                "stdin must be one of 0, 1, false, true; got {other:?}"
+            )),
         }
     }
 }
@@ -280,6 +286,18 @@ pub(in crate::commands::serve) async fn attach_execution(
     axum::extract::Query(query): axum::extract::Query<AttachQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    let stdin_policy = match query.policy() {
+        Ok(policy) => policy,
+        Err(message) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                message,
+                "InvalidArgumentError",
+                "invalid_argument",
+            );
+        }
+    };
+
     let executions = state.executions.read().await;
     let active = match get_active_for_box(&executions, &exec_id, &box_id) {
         Ok(a) => a,
@@ -298,7 +316,7 @@ pub(in crate::commands::serve) async fn attach_execution(
         );
     }
 
-    upgrade_to_attach_session(ws, active, query.policy())
+    upgrade_to_attach_session(ws, active, stdin_policy)
 }
 
 /// Attach to the box's **main command session** — the container's init.
@@ -318,6 +336,18 @@ pub(in crate::commands::serve) async fn attach_box(
     axum::extract::Query(query): axum::extract::Query<AttachQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    let stdin_policy = match query.policy() {
+        Ok(policy) => policy,
+        Err(message) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                message,
+                "InvalidArgumentError",
+                "invalid_argument",
+            );
+        }
+    };
+
     let active = match get_or_attach_main_session(&state, &box_id).await {
         Ok(a) => a,
         Err(resp) => return resp,
@@ -349,7 +379,7 @@ pub(in crate::commands::serve) async fn attach_box(
         }
     };
 
-    let mut response = upgrade_to_attach_session(ws, active, query.policy());
+    let mut response = upgrade_to_attach_session(ws, active, stdin_policy);
     response
         .headers_mut()
         .insert(MAIN_SESSION_ID_HEADER, header_value);

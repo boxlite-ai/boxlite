@@ -257,8 +257,12 @@ reattach to an `exec()` session instead.
 
 `attach(stdin=False)` attaches read-only — docker's `--no-stdin`. The returned
 execution exposes no stdin, and against a remote runtime the server refuses
-stdin, `signal` and `resize` on that socket. Use it to watch a box with no way
-to write into it.
+stdin, `signal` and `resize` sent over that socket. Use it to follow a box's
+output without a keystroke reaching the workload.
+
+The guarantee is scoped to the attach stream, as it is in docker: holding a box
+handle still lets you `stop()` it, and `Execution.kill()` / `.signal()` /
+`.resize_tty()` go over their own routes rather than this socket.
 
 ---
 
