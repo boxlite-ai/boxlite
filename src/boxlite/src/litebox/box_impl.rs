@@ -145,18 +145,6 @@ pub(crate) struct BoxImpl {
     /// reattach to a box whose init is already running.
     container_start: Arc<OnceCell<()>>,
 
-    /// Cancels the *spawned* container-start alone, and only from `stop()`.
-    ///
-    /// Deliberately not descended from `shutdown_token`: that one is a child of
-    /// the runtime's, so runtime shutdown cancels it — and runtime shutdown is
-    /// exactly when a detached box must be left alone
-    /// (`RuntimeImpl::shutdown_sync` skips detached boxes for that reason).
-    /// Cancelling its init anyway strands the container created-but-never-
-    /// started: the box never runs, never exits, and is reported Running
-    /// forever. Caller-owned starts keep using `shutdown_token` — their caller
-    /// is going away too.
-    container_start_cancel: CancellationToken,
-
     #[cfg(test)]
     background_starts_finished: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
@@ -200,7 +188,6 @@ impl BoxImpl {
             live: OnceCell::new(),
             watcher: std::sync::OnceLock::new(),
             container_start: Arc::new(OnceCell::new()),
-            container_start_cancel: CancellationToken::new(),
             #[cfg(test)]
             background_starts_finished: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
@@ -317,7 +304,7 @@ impl BoxImpl {
         let live = self.ensure_booted().await?;
         let guest_session = live.guest_session.clone();
         let container_start = Arc::clone(&self.container_start);
-        let shutdown_token = self.container_start_cancel.child_token();
+        let shutdown_token = self.shutdown_token.child_token();
         let container_id = self.container_id().to_owned();
         let box_id = self.config.id.clone();
         let event_listeners = self.event_listeners.clone();
@@ -711,7 +698,6 @@ impl BoxImpl {
 
         // Cancel the token - signals all in-flight operations to abort
         self.shutdown_token.cancel();
-        self.container_start_cancel.cancel();
 
         // Only attempt graceful shutdown for boxes that should have a live
         // shim. Calling live_state() on Configured/Failed would route
