@@ -48,6 +48,52 @@ async fn exec_exit_code(bx: &LiteBox, cmd: BoxCommand) -> i32 {
 // SINGLE TEST ENTRY POINT — one VM, all cases
 // ============================================================================
 
+/// Exercise the streaming entry points (`copy_in_tar_stream` / `copy_out_tar`)
+/// end-to-end: pack a host file into a tar stream, stream it into the guest,
+/// then stream it back out and unpack it — with no temp-file staging.
+async fn streaming_roundtrip(bx: &LiteBox, tmp: &Path) {
+    let host_src = tmp.join("stream-src.txt");
+    std::fs::write(&host_src, b"streaming hello").unwrap();
+
+    let (source_is_dir, tar) = boxlite_shared::tar::pack_stream(
+        host_src.clone(),
+        boxlite_shared::tar::PackContext {
+            follow_symlinks: false,
+            include_parent: false,
+        },
+    )
+    .await
+    .expect("pack_stream");
+    assert!(!source_is_dir, "single file must report source_is_dir=false");
+
+    bx.copy_in_tar_stream(tar, "/root/stream-src.txt", source_is_dir, CopyOptions::default())
+        .await
+        .expect("copy_in_tar_stream");
+
+    let out = exec_stdout(bx, BoxCommand::new("cat").args(["/root/stream-src.txt"])).await;
+    assert_eq!(out, "streaming hello");
+
+    let (tar, hint) = bx
+        .copy_out_tar("/root/stream-src.txt", CopyOptions::default())
+        .await
+        .expect("copy_out_tar");
+    assert_eq!(hint, Some(false), "guest must report source_is_dir=false");
+
+    let dest = tmp.join("stream-dest.txt");
+    boxlite_shared::tar::unpack_stream(
+        tar,
+        dest.clone(),
+        boxlite_shared::tar::UnpackContext {
+            overwrite: true,
+            mkdir_parents: true,
+            force_directory: false,
+        },
+    )
+    .await
+    .expect("unpack_stream");
+    assert_eq!(std::fs::read_to_string(&dest).unwrap(), "streaming hello");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn copy_integration() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
@@ -90,6 +136,7 @@ async fn copy_integration() {
     copy_in_beside_a_file_mount_is_allowed(&bx, tmp.path()).await;
     copy_in_landing_on_a_file_mount_is_refused(&bx, tmp.path()).await;
     copy_out_of_a_dir_containing_a_mount_is_refused(&bx, tmp.path()).await;
+    streaming_roundtrip(&bx, tmp.path()).await;
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
