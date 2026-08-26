@@ -213,7 +213,52 @@ func goBoxliteOnRemoveBox(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 
 //export goBoxliteOnCopy
 func goBoxliteOnCopy(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
-	deliverUnitResult(userData, errPtr)
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	// Claim before Value/Delete; see claimHandleForDispatch.
+	if !claimHandleForDispatch(h) {
+		return
+	}
+	defer h.Delete()
+	// The completion callback is shared by the path-based copy (whose handle
+	// value is a bare chan error) and the streaming copy (whose handle value is
+	// a *copyStreamState). Rust orders it strictly last for the streaming case,
+	// so deleting the handle here is safe.
+	switch v := h.Value().(type) {
+	case chan error:
+		v <- errorFromCError(errPtr)
+	case *copyStreamState:
+		v.deliverDone(errorFromCError(errPtr))
+	}
+}
+
+//export goBoxliteOnCopyMeta
+func goBoxliteOnCopyMeta(sourceIsDir C.bool, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	// Stream callbacks never delete the shared handle (only goBoxliteOnCopy
+	// does), so Value() is always safe here.
+	if state, ok := h.Value().(*copyStreamState); ok {
+		state.deliverMeta(bool(sourceIsDir))
+	}
+}
+
+//export goBoxliteOnCopyData
+func goBoxliteOnCopyData(data *C.uint8_t, length C.size_t, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if length == 0 || data == nil {
+		return
+	}
+	if state, ok := h.Value().(*copyStreamState); ok {
+		state.deliverData(C.GoBytes(unsafe.Pointer(data), C.int(length)))
+	}
 }
 
 // ─── Image callbacks ───────────────────────────────────────────────────────

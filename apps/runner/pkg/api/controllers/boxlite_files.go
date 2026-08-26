@@ -8,11 +8,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 )
+
+// maxUploadFallbackBytes caps the size-capped staging fallback used when an
+// older client omits the source_is_dir hint and cannot stream end-to-end.
+// Past this we reject rather than buffering unboundedly.
+const maxUploadFallbackBytes = 512 * 1024 * 1024 // 512 MiB
 
 func BoxliteFileUpload(ctx *gin.Context) {
 	r, err := runner.GetInstance(nil)
@@ -28,13 +34,19 @@ func BoxliteFileUpload(ctx *gin.Context) {
 		return
 	}
 
-	// The SDK uploads a tar archive (Content-Type: application/x-tar) so
-	// that copy_in(host_dir, ...) can move trees in a single request.
-	// We MUST extract the archive into a staging dir on the runner host
-	// before handing it to the Go SDK's CopyInto — that lower-level call
-	// expects a *real path*, not a tar file, and would otherwise dump the
-	// entire .tar blob into the guest as a single binary file (which
-	// silently breaks both single-file and directory uploads).
+	// Newer clients carry the archive shape so we can stream straight into the
+	// guest. Older clients omit it → size-capped staging fallback.
+	sourceIsDir, hasHint := parseSourceIsDir(ctx.Query("source_is_dir"))
+	if hasHint {
+		if err := r.Boxlite.CopyInStream(ctx.Request.Context(), boxId, destPath, sourceIsDir, ctx.Request.Body); err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("copy failed: %s", err)})
+			return
+		}
+		ctx.Status(http.StatusNoContent)
+		return
+	}
+
+	// Legacy fallback: stage the tar to disk, capped, then CopyInto the path.
 	stagingDir, err := os.MkdirTemp("", "boxlite-upload-stage-*")
 	if err != nil {
 		respondError(ctx, http.StatusInternalServerError, "failed to create staging dir", "InternalError", "internal")
@@ -42,16 +54,19 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	}
 	defer os.RemoveAll(stagingDir)
 
-	stagedPath, isSingleFile, err := extractTarToDir(ctx.Request.Body, stagingDir)
+	body := http.MaxBytesReader(ctx.Writer, ctx.Request.Body, maxUploadFallbackBytes)
+	stagedPath, isSingleFile, err := extractTarToDir(body, stagingDir)
 	if err != nil {
-		respondError(ctx, http.StatusBadRequest, fmt.Sprintf("failed to extract upload tar: %s", err), "InvalidArgumentError", "invalid_argument")
+		status := http.StatusBadRequest
+		if isBodyTooLarge(err) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		ctx.JSON(status, gin.H{"error": fmt.Sprintf("failed to extract upload tar: %s", err)})
 		return
 	}
 
-	// If the archive contained exactly one regular file, CopyInto its
-	// extracted path (a real file) so the guest sees the file at destPath.
-	// Otherwise CopyInto the staging dir as a whole — the Go SDK's
-	// recursive copy handles directories natively.
+	// A single regular file is copied as that exact path; a directory tree is
+	// copied as the staging dir as a whole.
 	src := stagingDir
 	if isSingleFile {
 		src = stagedPath
@@ -63,6 +78,55 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	}
 
 	ctx.Status(http.StatusNoContent)
+}
+
+func BoxliteFileDownload(ctx *gin.Context) {
+	r, err := runner.GetInstance(nil)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	boxId := ctx.Param("boxId")
+	srcPath := ctx.Query("path")
+	if srcPath == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "path query parameter required"})
+		return
+	}
+
+	ctx.Header("Content-Type", "application/x-tar")
+
+	// Stream straight from the guest into the response. onMeta sets the
+	// archive-shape header before the first body byte; it is not invoked when
+	// the guest predates the hint.
+	err = r.Boxlite.CopyOutStream(ctx.Request.Context(), boxId, srcPath, ctx.Writer, func(sourceIsDir bool) {
+		ctx.Header("X-Boxlite-Source-Is-Dir", strconv.FormatBool(sourceIsDir))
+	})
+	if err != nil && !ctx.Writer.Written() {
+		// The copy failed before any body byte was produced (e.g. the source
+		// does not exist) — the response is not yet committed, so we can still
+		// surface an error status. Once bytes are streaming it is too late.
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("copy failed: %s", err)})
+		return
+	}
+}
+
+// parseSourceIsDir reads the optional source_is_dir query parameter. The
+// second return is false when the parameter is absent or malformed.
+func parseSourceIsDir(raw string) (bool, bool) {
+	if raw == "" {
+		return false, false
+	}
+	b, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, false
+	}
+	return b, true
+}
+
+func isBodyTooLarge(err error) bool {
+	var maxErr *http.MaxBytesError
+	return errors.As(err, &maxErr)
 }
 
 // extractTarToDir reads a tar archive from r and writes every entry into
@@ -130,61 +194,6 @@ func extractTarToDir(r io.Reader, destDir string) (lastFilePath string, isSingle
 
 	isSingleFile = fileCount == 1 && otherCount == 0
 	return lastFilePath, isSingleFile, nil
-}
-
-func BoxliteFileDownload(ctx *gin.Context) {
-	r, err := runner.GetInstance(nil)
-	if err != nil {
-		respondError(ctx, http.StatusInternalServerError, err.Error(), "InternalError", "internal")
-		return
-	}
-
-	boxId := ctx.Param("boxId")
-	srcPath := ctx.Query("path")
-	if srcPath == "" {
-		respondError(ctx, http.StatusBadRequest, "path query parameter required", "InvalidArgumentError", "invalid_argument")
-		return
-	}
-
-	tmpDir, err := os.MkdirTemp("", "boxlite-download-*")
-	if err != nil {
-		respondError(ctx, http.StatusInternalServerError, "failed to create temp dir", "InternalError", "internal")
-		return
-	}
-	defer os.RemoveAll(tmpDir)
-
-	if err := r.Boxlite.CopyOut(ctx.Request.Context(), boxId, srcPath, tmpDir); err != nil {
-		respondCopyError(ctx, err)
-		return
-	}
-
-	ctx.Header("Content-Type", "application/x-tar")
-	ctx.Status(http.StatusOK)
-
-	tw := tar.NewWriter(ctx.Writer)
-	defer tw.Close()
-
-	filepath.Walk(tmpDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return err
-		}
-		relPath, _ := filepath.Rel(tmpDir, path)
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		header.Name = relPath
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		_, err = io.Copy(tw, f)
-		return err
-	})
 }
 
 // copyErrorClass is the (status, type, code) triple a BoxLite error crosses the

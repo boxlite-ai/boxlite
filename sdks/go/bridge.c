@@ -21,6 +21,8 @@ extern void goBoxliteOnStartBox(CBoxliteError *err, void *ud);
 extern void goBoxliteOnStopBox(CBoxliteError *err, void *ud);
 extern void goBoxliteOnRemoveBox(CBoxliteError *err, void *ud);
 extern void goBoxliteOnCopy(CBoxliteError *err, void *ud);
+extern void goBoxliteOnCopyMeta(bool source_is_dir, void *ud);
+extern void goBoxliteOnCopyData(uint8_t const *data, size_t len, void *ud);
 
 extern void goBoxliteOnImagePull(CImagePullResult *res, CBoxliteError *err, void *ud);
 extern void goBoxliteOnImageList(CImageInfoList *list, CBoxliteError *err, void *ud);
@@ -61,6 +63,8 @@ CBoxStartBoxCb cbStartBox(void) { return (CBoxStartBoxCb)goBoxliteOnStartBox; }
 CBoxStopBoxCb cbStopBox(void) { return (CBoxStopBoxCb)goBoxliteOnStopBox; }
 CBoxRemoveBoxCb cbRemoveBox(void) { return (CBoxRemoveBoxCb)goBoxliteOnRemoveBox; }
 CBoxCopyCb cbCopy(void) { return (CBoxCopyCb)goBoxliteOnCopy; }
+CBoxCopyMetaCb cbCopyMeta(void) { return (CBoxCopyMetaCb)goBoxliteOnCopyMeta; }
+CBoxCopyDataCb cbCopyData(void) { return (CBoxCopyDataCb)goBoxliteOnCopyData; }
 
 CBoxImagePullCb cbImagePull(void) { return (CBoxImagePullCb)goBoxliteOnImagePull; }
 CBoxImageListCb cbImageList(void) { return (CBoxImageListCb)goBoxliteOnImageList; }
