@@ -55,6 +55,17 @@ pub(crate) fn map_http_error(status: StatusCode, body: &ErrorModel) -> BoxliteEr
 /// produces a bare 5xx without our wire envelope.
 pub(crate) fn map_http_status(status: StatusCode, text: &str) -> BoxliteError {
     match status.as_u16() {
+        // A 4xx is the caller's situation by definition, so it must not land
+        // in the `Internal` catch-all below: that reads as "the server broke"
+        // and, worse, hides the response from retry logic keyed on typed
+        // variants. These arms only run when the body carried no `code` — the
+        // runner answers with a bare `{"error": ...}` and the control plane
+        // omits the code for any `HttpException` raised without one.
+        400 | 422 => BoxliteError::InvalidArgument(text.to_string()),
+        // The runner returns 409 for a box that exists but is not accepting
+        // the operation right now (stopped, or mid state change).
+        409 => BoxliteError::InvalidState(text.to_string()),
+        429 => BoxliteError::ResourceExhausted(text.to_string()),
         404 => BoxliteError::NotFound(text.to_string()),
         // Keep the `auth:` prefix (callers key on it) but state the actual
         // failure: 401 = credentials rejected (expired, or wrong credential
@@ -95,6 +106,10 @@ mod tests {
     /// snake_code, variant_predicate)`. Aliased so clippy doesn't
     /// flag the tuple as overly complex.
     type RoundTripRow = (u16, &'static str, &'static str, fn(&BoxliteError) -> bool);
+
+    /// One row of the bare-status table: `(http_status, variant_predicate)`.
+    /// Aliased for the same reason as [`RoundTripRow`].
+    type StatusRow = (u16, fn(&BoxliteError) -> bool);
 
     /// Canonical round-trip table — for every `(status, type, code)`
     /// the server can emit per `BoxliteError::http()`, the client must
@@ -204,6 +219,36 @@ mod tests {
                 );
             }
             other => panic!("expected Internal fallback, got {other:?}"),
+        }
+    }
+
+    /// A 4xx without an envelope must keep its class. Before this, every
+    /// arm below fell through to `Internal`, so a caller mistake and a
+    /// transient lifecycle conflict both surfaced as "internal error".
+    #[test]
+    fn bare_4xx_without_envelope_keeps_its_class() {
+        let cases: &[StatusRow] = &[
+            (400, |e| matches!(e, BoxliteError::InvalidArgument(_))),
+            (422, |e| matches!(e, BoxliteError::InvalidArgument(_))),
+            (409, |e| matches!(e, BoxliteError::InvalidState(_))),
+            (429, |e| matches!(e, BoxliteError::ResourceExhausted(_))),
+        ];
+
+        for (status_u16, predicate) in cases {
+            let status = StatusCode::from_u16(*status_u16).expect("valid HTTP status");
+            let err = map_http_status(status, "State change in progress");
+            assert!(
+                predicate(&err),
+                "bare HTTP {} mapped to unexpected variant: {:?}",
+                status_u16,
+                err
+            );
+            assert!(
+                format!("{err}").contains("State change in progress"),
+                "server message must survive HTTP {}: {:?}",
+                status_u16,
+                err
+            );
         }
     }
 

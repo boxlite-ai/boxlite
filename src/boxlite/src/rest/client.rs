@@ -215,7 +215,13 @@ impl ApiClient {
         if let Ok(err_resp) = serde_json::from_str::<ErrorResponse>(&text) {
             Err(map_http_error(status, &err_resp.error))
         } else if let Ok(err_resp) = serde_json::from_str::<FlatErrorResponse>(&text) {
-            Err(map_http_error(status, &err_resp.into_error_model()))
+            // A flat envelope without a `code` carries no machine identifier
+            // to dispatch on, so fall back to the status with the server's own
+            // message rather than guessing a code.
+            match err_resp.into_error_model() {
+                Ok(model) => Err(map_http_error(status, &model)),
+                Err(message) => Err(map_http_status(status, &message)),
+            }
         } else {
             Err(map_http_status(status, &text))
         }
@@ -907,13 +913,45 @@ mod tests {
         )
         .expect("flat error response");
 
-        let err = map_http_error(StatusCode::BAD_GATEWAY, &parsed.into_error_model());
+        let model = parsed
+            .into_error_model()
+            .expect("a flat envelope carrying a code maps by code");
+        let err = map_http_error(StatusCode::BAD_GATEWAY, &model);
 
         match err {
             BoxliteError::Network(message) => {
                 assert!(message.contains("Runner API returned a non-JSON error response"))
             }
             other => panic!("expected Network error for runner non-JSON response, got {other:?}"),
+        }
+    }
+
+    /// The control plane emits the flat envelope for any `HttpException`
+    /// raised without an explicit code — a transient lifecycle conflict on
+    /// stop/start being the common case. Defaulting the absent code to
+    /// `"internal"` turned that 400 into `BoxliteError::Internal`, which
+    /// reads as a server crash and is invisible to retry logic keyed on
+    /// typed variants.
+    #[test]
+    fn flat_error_response_without_code_maps_by_status_not_internal() {
+        let parsed: FlatErrorResponse = serde_json::from_str(
+            r#"{"statusCode":400,"error":"Bad Request","message":"State change in progress"}"#,
+        )
+        .expect("flat error response");
+
+        let err = match parsed.into_error_model() {
+            Ok(model) => map_http_error(StatusCode::BAD_REQUEST, &model),
+            Err(message) => map_http_status(StatusCode::BAD_REQUEST, &message),
+        };
+
+        match err {
+            BoxliteError::InvalidArgument(message) => {
+                assert!(
+                    message.contains("State change in progress"),
+                    "server message must survive: {message}"
+                );
+            }
+            other => panic!("expected InvalidArgument for an un-coded 400, got {other:?}"),
         }
     }
 

@@ -29,12 +29,25 @@ pub(crate) struct FlatErrorResponse {
 }
 
 impl FlatErrorResponse {
-    pub(crate) fn into_error_model(self) -> ErrorModel {
-        ErrorModel {
-            message: self.message,
-            error_type: "HttpError".to_string(),
-            code: self.code.unwrap_or_else(|| "internal".to_string()),
-            request_id: None,
+    /// The flat envelope into an [`ErrorModel`], or `Err(message)` when it
+    /// carries no `code` to dispatch on.
+    ///
+    /// A missing `code` must not be read as `"internal"`: the flat shape is
+    /// what the control plane emits for any `HttpException` raised without an
+    /// explicit code, so defaulting turned every such 4xx — a caller mistake,
+    /// or a transient lifecycle conflict — into `BoxliteError::Internal`. That
+    /// reads to the user as "the server broke", and hides the response from
+    /// retry logic that keys on typed variants. Returning the message instead
+    /// sends the caller to status-driven mapping, which preserves the class.
+    pub(crate) fn into_error_model(self) -> Result<ErrorModel, String> {
+        match self.code {
+            Some(code) => Ok(ErrorModel {
+                message: self.message,
+                error_type: "HttpError".to_string(),
+                code,
+                request_id: None,
+            }),
+            None => Err(self.message),
         }
     }
 }

@@ -355,7 +355,9 @@ export class BoxService {
     }
 
     if (!warmPoolBox.runnerId) {
-      throw new BoxError('Runner not found for warm pool box')
+      // Not a state-machine guard: the box is fine, the platform lost its
+      // runner. Keep it classified as a server-side fault.
+      throw new BoxError('Runner not found for warm pool box', 'internal')
     }
 
     // Resolve the name at persist time. A caller-provided name updates in one
