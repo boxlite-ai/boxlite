@@ -1,10 +1,11 @@
-import { Controller, Delete, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { VolumeService } from '../box/services/volume.service'
+import { CreateVolumeDto } from '../box/dto/create-volume.dto'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { VolumeAccessGuard } from '../box/guards/volume-access.guard'
@@ -31,8 +32,12 @@ export class BoxliteVolumeController {
 
   @Post()
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_VOLUMES])
-  async create(@AuthContext() authContext: OrganizationAuthContext): Promise<RestVolumeResponse> {
-    const volume = await this.volumeService.create(authContext.organization, {})
+  async create(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Body() dto?: CreateVolumeDto,
+  ): Promise<RestVolumeResponse> {
+    // An absent body is an unnamed volume; VolumeService falls back to the id.
+    const volume = await this.volumeService.create(authContext.organization, dto ?? {})
     return this.toResponse(await this.volumeService.waitForReady(volume.id, 30))
   }
 

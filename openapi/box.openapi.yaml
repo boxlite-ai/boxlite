@@ -194,6 +194,12 @@ paths:
       summary: Create a managed persistent volume
       description: Creates a volume and waits until its backing object storage is ready.
       tags: [Volumes]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVolumeRequest"
       responses:
         "201":
           description: Volume created and ready for use
@@ -1825,31 +1831,30 @@ components:
     VolumeSpec:
       type: object
       description: |
-        Filesystem mount attached to a box. One of `source` or the deprecated
-        `host_path` is required.
-      required: [guest_path]
+        Managed volume mounted into a box. Host bind mounts have no
+        representation here: the path would name the server's filesystem, not
+        the caller's, so the only mount source this API accepts is a managed
+        volume.
+      additionalProperties: false
+      required: [managed_volume, guest_path]
       properties:
-        source:
+        managed_volume:
           type: string
+          minLength: 1
           description: |
-            Scheme-qualified mount source. Use `volume://<volume_id>` for managed
-            volumes.
-          example: volume://vol_01K2EXAMPLE
-        host_path:
-          type: string
-          deprecated: true
-          description: |
-            Deprecated alias for `source`, kept for backward compatibility with
-            existing /v1 clients built against the pre-managed-volumes schema.
-            Use `source` with the `volume://<volume_id>` scheme instead; this
-            field will be removed in a future API version.
-          example: volume://vol_01K2EXAMPLE
+            The volume's server-assigned `id` or its `name` — both resolve to
+            the same volume, and a name is unique within the owning scope.
+          example: vol_01K2EXAMPLE
         guest_path:
           type: string
           description: Mount point inside the container
         read_only:
           type: boolean
           default: false
+          enum: [false]
+          description: |
+            Read-only managed mounts are not implemented yet; `true` is
+            rejected rather than silently downgraded to read-write.
 
     VolumeState:
       type: string
@@ -1874,6 +1879,20 @@ components:
           type: string
           format: date-time
           description: Volume creation timestamp (UTC)
+
+    CreateVolumeRequest:
+      type: object
+      description: Body for volume creation. Omit entirely to create an unnamed volume.
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: |
+            Volume name, unique within the owning scope. Mountable in place of
+            the volume's id. Defaults to the server-assigned id when omitted.
+          pattern: "^[a-zA-Z0-9][a-zA-Z0-9_.-]+$"
+          minLength: 2
+          example: my-data
 
     Volume:
       type: object

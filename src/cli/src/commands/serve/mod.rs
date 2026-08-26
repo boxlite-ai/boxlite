@@ -720,6 +720,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
 fn volume_info_to_response(info: &boxlite::runtime::types::VolumeInfo) -> types::VolumeResponse {
     types::VolumeResponse {
         id: info.id.clone(),
+        name: info.name.clone(),
         created_at: info.created_at.to_rfc3339(),
         size_bytes: info.size_bytes,
     }
@@ -1686,7 +1687,25 @@ mod tests {
                     "read_only": false
                 }]
             }),
-            "host volume mounts",
+            "volume mounts",
+        )
+        .await;
+    }
+
+    /// The managed-volume shape is refused by the same gate, and reaches it
+    /// through the same deserialization — an archive naming someone else's
+    /// volume must not provision a box either.
+    #[tokio::test]
+    async fn serve_import_rejects_managed_volume_archive_before_provisioning() {
+        assert_uploaded_archive_rejected_before_provisioning(
+            serde_json::json!({
+                "volumes": [{
+                    "managed_volume": "someone-elses-data",
+                    "guest_path": "/data",
+                    "read_only": false
+                }]
+            }),
+            "volume mounts",
         )
         .await;
     }

@@ -130,7 +130,7 @@ Configuration options for creating a box.
 | `disk_size_gb` | `int \| None` | `None` | Persistent disk size in GB (None = ephemeral) |
 | `working_dir` | `str` | `"/root"` | Working directory inside container |
 | `env` | `List[Tuple[str, str]]` | `[]` | Environment variables as (key, value) pairs |
-| `volumes` | `List[Tuple[str, str, str]]` | `[]` | Volume mounts as (host_path, guest_path, mode) |
+| `volumes` | `List[Tuple \| Dict]` | `[]` | Volume mounts; tuple = host bind, dict = `managed_volume` or `host_path` |
 | `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
 | `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
 | `secrets` | `List[Secret]` | `[]` | Outbound HTTP(S) secret substitution rules |
@@ -174,12 +174,28 @@ network = NetworkSpec(
 
 #### Volume Mount Format
 
+A mount has exactly one origin. A tuple is always a host bind:
+
 ```python
 volumes=[
-    ("/host/config", "/etc/app/config", "ro"),  # Read-only
-    ("/host/data", "/mnt/data", "rw"),          # Read-write
+    ("/host/config", "/etc/app/config", True),  # Read-only
+    ("/host/data", "/mnt/data", False),         # Read-write
 ]
 ```
+
+A dict takes `managed_volume` — the volume's server-assigned id **or** its
+name, the server resolves either — or `host_path`, never both:
+
+```python
+volumes=[
+    {"managed_volume": "my-data", "guest_path": "/data"},
+    {"managed_volume": "vol_01K2EXAMPLE", "guest_path": "/cache"},
+    {"host_path": "/host/config", "guest_path": "/etc/app/config"},
+]
+```
+
+Managed volumes require a REST runtime; host binds are local-runtime only.
+`read_only` is rejected on a managed mount - only host binds may be read-only.
 
 #### Port Forwarding Format
 

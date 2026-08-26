@@ -12,13 +12,24 @@ name = "boxlite_python"
 crate-type = ["cdylib"]
 
 [features]
-default = []
+# `extension-module` tells pyo3 not to link libpython, which is right for the
+# wheel maturin builds but makes `cargo test` unlinkable. Gating it lets the
+# binding's own unit tests run with --no-default-features while every normal
+# build keeps the wheel behaviour.
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
 
 [dependencies]
 boxlite = { path = "../../src/boxlite", features = ["rest"] }
-pyo3 = { version = "0.27.1", features = ["extension-module"] }
+pyo3 = { version = "0.27.1" }
 pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"] }
 tokio = { version = "1.37", features = ["io-util", "net", "sync"] }
 futures = "0.3.31"
 tracing = "0.1.44"
 serde_json = "1.0"
+
+[dev-dependencies]
+# `cargo test --no-default-features` links libpython but does not start an
+# interpreter; auto-initialize does that on first use so the binding's own
+# tests can build Python objects.
+pyo3 = { version = "0.27.1", features = ["auto-initialize"] }

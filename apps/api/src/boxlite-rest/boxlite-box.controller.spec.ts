@@ -98,7 +98,7 @@ describe('BoxliteBoxController request validation', () => {
         auto_delete: 0,
         auto_resume: true,
         network: { outbound: { mode: 'enabled', allow_net: ['api.openai.com'] }, inbound: { mode: 'disabled' } },
-        volumes: [{ source: 'volume://vol_01K2EXAMPLE', guest_path: '/data' }],
+        volumes: [{ managed_volume: 'vol_01K2EXAMPLE', guest_path: '/data' }],
       },
       meta,
     )
@@ -120,13 +120,18 @@ describe('BoxliteBoxController request validation', () => {
     expect(dto.network?.outbound?.mode).toBe('enabled')
   })
 
-  // Same reason: the deprecated pre-managed-volumes mount field.
-  it('still accepts the deprecated volume host_path field', async () => {
+  // #1350 dropped the `volume://` scheme and the `host_path` alias for a typed
+  // `managed_volume` the server resolves as either an id or a name. Both forms
+  // must survive the whitelist.
+  it.each([
+    ['an id', 'vol_01K2EXAMPLE'],
+    ['a name', 'my-volume'],
+  ])('accepts a managed volume addressed by %s', async (_label, selector) => {
     const dto: CreateBoxDto = await pipe!.transform(
-      { image: 'alpine:latest', volumes: [{ host_path: 'volume://vol_01K2EXAMPLE', guest_path: '/data' }] },
+      { image: 'alpine:latest', volumes: [{ managed_volume: selector, guest_path: '/data' }] },
       meta,
     )
 
-    expect(dto.volumes?.[0]?.host_path).toBe('volume://vol_01K2EXAMPLE')
+    expect(dto.volumes?.[0]?.managed_volume).toBe(selector)
   })
 })

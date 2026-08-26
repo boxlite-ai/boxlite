@@ -53,6 +53,30 @@ describe('BoxliteVolumeController', () => {
     expect(volumeService.waitForReady).toHaveBeenCalledWith(volume.id, 30)
   })
 
+  // A name is what makes `-v my-data:/data` work, so it has to survive the
+  // controller rather than being dropped the way the empty `{}` body used to.
+  it('forwards a requested volume name to the service', async () => {
+    const { controller, volumeService } = createController()
+    const organization = { id: 'org-1' }
+
+    await controller.create({ organization, organizationId: organization.id } as never, {
+      name: 'my-data',
+    })
+
+    expect(volumeService.create).toHaveBeenCalledWith(organization, { name: 'my-data' })
+  })
+
+  // The body is optional in the spec, so an absent one must still create an
+  // unnamed volume instead of throwing on a missing property.
+  it('creates an unnamed volume when no body is sent', async () => {
+    const { controller, volumeService } = createController()
+    const organization = { id: 'org-1' }
+
+    await controller.create({ organization, organizationId: organization.id } as never, undefined)
+
+    expect(volumeService.create).toHaveBeenCalledWith(organization, {})
+  })
+
   it('lists volumes for the authenticated organization', async () => {
     const { controller, volumeService } = createController()
 

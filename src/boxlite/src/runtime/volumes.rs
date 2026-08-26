@@ -25,7 +25,8 @@ use crate::volumes::VolumeInfo;
 #[async_trait]
 pub(crate) trait VolumeBackend: Send + Sync {
     /// Create a volume, returning its server-assigned metadata (including id).
-    async fn create_volume(&self) -> BoxliteResult<VolumeInfo>;
+    /// `name` is optional; the server names the volume after its id without one.
+    async fn create_volume(&self, name: Option<&str>) -> BoxliteResult<VolumeInfo>;
 
     /// List all volumes.
     async fn list_volumes(&self) -> BoxliteResult<Vec<VolumeInfo>>;
@@ -52,8 +53,11 @@ impl VolumeHandle {
     }
 
     /// Create a volume, returning its metadata (including the assigned id).
-    pub async fn create(&self) -> BoxliteResult<VolumeInfo> {
-        self.backend.create_volume().await
+    ///
+    /// A named volume can be mounted by that name instead of its id. Without
+    /// a name the server uses the id, so the volume is still mountable.
+    pub async fn create(&self, name: Option<&str>) -> BoxliteResult<VolumeInfo> {
+        self.backend.create_volume(name).await
     }
 
     /// List all volumes.

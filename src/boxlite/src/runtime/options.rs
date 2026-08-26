@@ -614,6 +614,10 @@ impl BoxOptions {
             port.validate_publishable()?;
         }
 
+        for volume in &self.volumes {
+            volume.validate()?;
+        }
+
         Ok(())
     }
 
@@ -653,11 +657,87 @@ impl Default for RootfsSpec {
 }
 
 /// Filesystem mount specification.
+///
+/// A mount has exactly one origin: `managed_volume` for a server-side managed
+/// volume, or `host_path` for a bind mount from the machine running the box.
+/// Build one with [`VolumeSpec::managed_volume`] or [`VolumeSpec::bind_mount`]
+/// instead of filling the fields by hand.
+///
+/// The `host_path` field keeps its name because it is persisted box config:
+/// boxes on disk carry a `host_path` key, so renaming the field — not the
+/// constructor — would strand every box written before such a rename.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct VolumeSpec {
+    /// Managed volume to mount, addressed by its server-assigned id **or** by
+    /// its name — the server resolves either.
+    ///
+    /// Managed volumes need a REST runtime, since the local runtime has no
+    /// volume backend to resolve a reference against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_volume: Option<String>,
+
+    /// Host directory or file to bind into the box. Empty when
+    /// `managed_volume` is set.
+    #[serde(default)]
     pub host_path: String,
+
+    /// Mount point inside the box.
     pub guest_path: String,
+
+    /// Mount without write access.
     pub read_only: bool,
+}
+
+impl VolumeSpec {
+    /// Bind a host directory or file into the box.
+    pub fn bind_mount(host_path: impl Into<String>, guest_path: impl Into<String>) -> Self {
+        Self {
+            managed_volume: None,
+            host_path: host_path.into(),
+            guest_path: guest_path.into(),
+            read_only: false,
+        }
+    }
+
+    /// Mount a managed volume, addressed by server-assigned id or by name.
+    pub fn managed_volume(volume: impl Into<String>, guest_path: impl Into<String>) -> Self {
+        Self {
+            managed_volume: Some(volume.into()),
+            host_path: String::new(),
+            guest_path: guest_path.into(),
+            read_only: false,
+        }
+    }
+
+    /// Reject a mount that names no origin, both origins, or an empty one.
+    ///
+    /// FFI callers (C/Go) and hand-built literals can reach either invalid
+    /// shape, so this runs at create rather than only in the constructors.
+    pub fn validate(&self) -> BoxliteResult<()> {
+        let guest_path = &self.guest_path;
+        match &self.managed_volume {
+            Some(volume) if !self.host_path.is_empty() => {
+                Err(boxlite_shared::errors::BoxliteError::Config(format!(
+                    "volume mount {guest_path:?} sets both managed_volume ({volume:?}) and \
+                     host_path; use exactly one"
+                )))
+            }
+            Some(volume) if volume.trim().is_empty() => {
+                Err(boxlite_shared::errors::BoxliteError::Config(format!(
+                    "volume mount {guest_path:?} has an empty managed_volume; pass a volume id \
+                     or name"
+                )))
+            }
+            Some(_) => Ok(()),
+            None if self.host_path.is_empty() => {
+                Err(boxlite_shared::errors::BoxliteError::Config(format!(
+                    "volume mount {guest_path:?} needs a managed_volume (volume id or name) or \
+                     a host_path"
+                )))
+            }
+            None => Ok(()),
+        }
+    }
 }
 
 /// Network mode for public box configuration surfaces.
@@ -1531,6 +1611,77 @@ mod tests {
         };
         let err = opts.sanitize().unwrap_err().to_string();
         assert!(err.contains("not supported yet"));
+    }
+
+    /// `VolumeSpec::managed_volume` and `VolumeSpec::bind_mount` cannot produce a mount
+    /// with two origins or none, but a struct literal and the C/Go FFI both
+    /// can, so sanitize() is the create-time backstop for those paths.
+    #[test]
+    fn test_sanitize_rejects_ambiguous_volume_origin() {
+        let both = BoxOptions {
+            volumes: vec![VolumeSpec {
+                managed_volume: Some("my-data".into()),
+                host_path: "/tmp/data".into(),
+                guest_path: "/data".into(),
+                read_only: false,
+            }],
+            ..Default::default()
+        };
+        let err = both.sanitize().unwrap_err().to_string();
+        assert!(err.contains("exactly one"), "{err}");
+
+        let neither = BoxOptions {
+            volumes: vec![VolumeSpec {
+                guest_path: "/data".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let err = neither.sanitize().unwrap_err().to_string();
+        assert!(err.contains("volume id or name"), "{err}");
+
+        let empty_reference = BoxOptions {
+            volumes: vec![VolumeSpec::managed_volume("   ", "/data")],
+            ..Default::default()
+        };
+        let err = empty_reference.sanitize().unwrap_err().to_string();
+        assert!(err.contains("empty managed_volume"), "{err}");
+    }
+
+    /// A box persisted before `managed_volume` existed carries only
+    /// `host_path`; it must still load, as a host bind, without a migration.
+    #[test]
+    fn legacy_volume_json_without_managed_volume_still_loads() {
+        let opts: BoxOptions = serde_json::from_str(
+            r#"{"volumes":[{"host_path":"/tmp/data","guest_path":"/data","read_only":true}]}"#,
+        )
+        .expect("pre-managed_volume box config must still deserialize");
+
+        let volume = &opts.volumes[0];
+        assert_eq!(volume.managed_volume, None);
+        assert_eq!(volume.host_path, "/tmp/data");
+        assert!(volume.read_only);
+        opts.sanitize().expect("a legacy host bind is still valid");
+    }
+
+    /// An ordinary host bind must not start writing a `managed_volume` key
+    /// into persisted configs and archives — an older reader has no field for
+    /// it. Same reasoning as `box_options_omits_capabilities_key_when_unspecified`.
+    #[test]
+    fn host_volume_omits_managed_volume_key() {
+        let opts = BoxOptions {
+            volumes: vec![VolumeSpec::bind_mount("/tmp/data", "/data")],
+            ..Default::default()
+        };
+
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&opts).unwrap()).unwrap();
+        let volume = &json["volumes"][0];
+
+        assert!(
+            !volume.as_object().unwrap().contains_key("managed_volume"),
+            "a host bind must omit the key, not serialize null: {volume}"
+        );
     }
 
     #[test]

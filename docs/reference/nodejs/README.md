@@ -147,13 +147,33 @@ interface JsEnvVar {
 
 #### `JsVolumeSpec`
 
+A mount has exactly one origin — a managed volume or a host bind path:
+
 ```typescript
-interface JsVolumeSpec {
-  hostPath: string;    // Path on host
-  guestPath: string;   // Path in container
-  readOnly?: boolean;  // Default: false
-}
+type JsVolumeSpec =
+  | {
+      // The volume's server-assigned id or its name - the server resolves either.
+      managedVolume: string;
+      guestPath: string;
+      // Read-only managed mounts are not implemented yet; `true` is rejected.
+      readOnly?: false;
+    }
+  | {
+      hostPath: string;    // Path on host
+      guestPath: string;   // Path in container
+      readOnly?: boolean;  // Default: false
+    };
 ```
+
+```typescript
+volumes: [
+  { managedVolume: "my-data", guestPath: "/data" },
+  { managedVolume: "vol_01K2EXAMPLE", guestPath: "/cache" },
+];
+```
+
+Setting both origins, or neither, is rejected. Host bind mounts are
+local-runtime only; a REST runtime refuses them.
 
 #### `JsPortSpec`
 
@@ -387,7 +407,7 @@ interface SimpleBoxOptions {
   detach?: boolean;       // Default: false
   workingDir?: string;    // Working directory
   env?: Record<string, string>;  // Environment variables
-  volumes?: VolumeSpec[]; // Volume mounts
+  volumes?: JsVolumeSpec[]; // Volume mounts (managedVolume or hostPath)
   network?: NetworkSpec;
   ports?: PortSpec[];     // Port mappings
   secrets?: Secret[];

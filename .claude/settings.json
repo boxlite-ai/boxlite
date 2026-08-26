@@ -2,18 +2,6 @@
   "env": {
     "VERDICT_GATE_HARD_BLOCK": "1"
   },
-  "extraKnownMarketplaces": {
-    "boxlite-agent-tooling": {
-      "source": {
-        "source": "github",
-        "repo": "boxlite-ai/agent-tooling",
-        "ref": "main"
-      }
-    }
-  },
-  "enabledPlugins": {
-    "boxlite-agent-tooling@boxlite-agent-tooling": true
-  },
   "hooks": {
     "SessionStart": [
       {
@@ -36,8 +24,8 @@
               "bash",
               "${CLAUDE_PROJECT_DIR}/.agent-tooling/claude-plugin-bootstrap.sh"
             ],
-            "statusMessage": "Checking BoxLite agent tooling",
-            "timeout": 180
+            "timeout": 180,
+            "statusMessage": "Checking BoxLite agent tooling"
           }
         ]
       }
@@ -60,5 +48,17 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "boxlite-agent-tooling@boxlite-agent-tooling": true
+  },
+  "extraKnownMarketplaces": {
+    "boxlite-agent-tooling": {
+      "source": {
+        "source": "github",
+        "repo": "boxlite-ai/agent-tooling",
+        "ref": "main"
+      }
+    }
   }
 }

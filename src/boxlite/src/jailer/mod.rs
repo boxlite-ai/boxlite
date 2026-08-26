@@ -332,7 +332,12 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
     // User volumes. Directories are shared directly, so grant the VMM access.
     // Single files are staged under shared_dir (granted above), so they need no
     // grant here — this also keeps the file's host siblings out of the sandbox.
+    // A managed volume names no host path, so there is nothing to grant; the
+    // local runtime rejects one before boot anyway (`resolve_user_volumes`).
     for vol in volumes {
+        if vol.managed_volume.is_some() {
+            continue;
+        }
         let p = PathBuf::from(&vol.host_path);
         if let Some(VolumeShare::Dir(dir)) = classify_volume_share(&p) {
             paths.push(PathAccess {
@@ -873,11 +878,13 @@ mod tests {
 
         let volumes = vec![
             VolumeSpec {
+                managed_volume: None,
                 host_path: vol_ro.to_string_lossy().to_string(),
                 guest_path: "/mnt/input".to_string(),
                 read_only: true,
             },
             VolumeSpec {
+                managed_volume: None,
                 host_path: vol_rw.to_string_lossy().to_string(),
                 guest_path: "/mnt/output".to_string(),
                 read_only: false,
@@ -905,6 +912,7 @@ mod tests {
         let layout = test_layout(dir.path().to_path_buf());
 
         let volumes = vec![VolumeSpec {
+            managed_volume: None,
             host_path: "/does/not/exist".to_string(),
             guest_path: "/mnt/data".to_string(),
             read_only: true,
@@ -929,6 +937,7 @@ mod tests {
         std::fs::write(&file, "k=v\n").unwrap();
 
         let volumes = vec![VolumeSpec {
+            managed_volume: None,
             host_path: file.to_string_lossy().to_string(),
             guest_path: "/etc/app.conf".to_string(),
             read_only: true,
@@ -1066,6 +1075,7 @@ mod tests {
             .with_layout(layout.clone())
             .with_security(security)
             .with_volumes(vec![VolumeSpec {
+                managed_volume: None,
                 host_path: vol_dir.to_string_lossy().to_string(),
                 guest_path: "/mnt/data".to_string(),
                 read_only: false,

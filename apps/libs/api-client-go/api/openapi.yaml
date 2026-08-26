@@ -6273,12 +6273,11 @@ components:
       type: object
     CreateVolume:
       example:
-        name: name
+        name: my-data
       properties:
         name:
+          example: my-data
           type: string
-      required:
-      - name
       type: object
     JobStatus:
       enum:

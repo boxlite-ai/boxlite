@@ -471,7 +471,7 @@ impl BoxliteRuntime {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let runtime = BoxliteRuntime::with_defaults()?;
     /// let volumes = runtime.volumes()?;
-    /// let info = volumes.create().await?;
+    /// let info = volumes.create(Some("my-data")).await?;
     /// println!("created volume {}", info.id);
     /// # Ok(())
     /// # }

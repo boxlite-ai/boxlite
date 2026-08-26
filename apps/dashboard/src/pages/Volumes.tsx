@@ -31,7 +31,11 @@ import { useQueryClient } from '@tanstack/react-query'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
-const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
+// Must match CreateVolumeDto.VOLUME_NAME_PATTERN on the server, including
+// its two-character minimum (`+`, not `*`): a one-character name is
+// indistinguishable from a Windows drive letter to any `-v` parser, so the
+// server rejects it and a `*` here would only turn that into a late 400.
+const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]+$/
 
 // One definition shared by the header and every row. The header and the rows
 // are separate grid containers, so a content-sized (`auto`) last column made
