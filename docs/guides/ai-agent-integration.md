@@ -306,6 +306,26 @@ options = boxlite.BoxOptions(
 )
 ```
 
+**Ownership:** files arrive owned by the box's exec user (the image's `USER`, or the
+`user` you set on `BoxOptions`), so an agent running as a non-root user can read them
+without any `chmod`/`chown` of its own. Directories created to hold the copy get the
+same owner.
+
+**Mounted destinations are refused.** `copy_in`/`copy_out` work on the rootfs layer from
+outside the container's mount namespace, so a path at or under a mount — `/tmp`,
+`/dev/shm`, or any volume — resolves to a different file than the one the workload sees.
+Rather than transfer something invisible, both calls fail with an error naming the mount.
+Copy to a path outside it (`/workspace` is a good default), or pipe a tar through `exec`,
+which runs inside the namespace:
+
+```python
+execution = await box.exec("tar", ["xf", "-", "-C", "/tmp"])
+stdin = execution.stdin()
+await stdin.send_input(tar_bytes)
+await stdin.close()
+await execution.wait()
+```
+
 **Recommendation:** Use `copy_in`/`copy_out` for dynamic per-request files. Use volume mounts for shared datasets. Use inline base64 only for trivially small payloads.
 
 ---

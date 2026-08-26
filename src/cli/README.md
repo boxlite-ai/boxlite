@@ -515,9 +515,17 @@ Copy files or directories between host and box.
 **Examples:**
 
 ```bash
-boxlite cp ./local.txt mybox:/tmp/
+boxlite cp ./local.txt mybox:/workspace/
 boxlite cp mybox:/app/out ./output
 ```
+
+Paths at or under a mount inside the box are refused in both directions — `/tmp`,
+`/dev/shm`, volumes, and the `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf` binds.
+So is a directory that contains one, which makes `boxlite cp box:/etc ./etc` a refusal
+too. `cp` works on the rootfs layer from outside the box's mount namespace, so such a
+copy would write where nothing in the box can see it, or read back the image's file
+rather than the one the box has. Copy a path outside the mount, or pipe a tar through
+`boxlite exec`. Files copied in are owned by the box's exec user.
 
 ### `boxlite info`
 

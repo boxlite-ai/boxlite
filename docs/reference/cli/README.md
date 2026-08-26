@@ -494,6 +494,13 @@ Copy files/folders between host and box. Exactly one of `SRC` or `DST` must be a
 
 If the box is stopped at copy time, it's started temporarily and stopped again afterwards.
 
+Paths at or under a mount inside the box (`/tmp`, `/dev/shm`, volumes) are refused in
+both directions, as is a directory that contains one. `cp` works on the rootfs layer
+from outside the box's mount namespace, so such a copy would write where nothing in the
+box can see it, or read back the image's file rather than the one the box has. Copy a
+path outside the mount, or pipe a tar through `boxlite exec`. Files copied in are owned
+by the box's exec user.
+
 **Examples:**
 
 ```bash

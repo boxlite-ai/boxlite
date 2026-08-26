@@ -1,9 +1,12 @@
 /**
  * Workaround: copy files into tmpfs destinations (e.g. /tmp) inside a container.
  *
- * copy_in() writes to the rootfs layer, so files destined for tmpfs mounts
- * are invisible to the running container. This is the same limitation as
- * `docker cp` (see https://github.com/moby/moby/issues/22020).
+ * copy_in() writes to the rootfs layer, from outside the container's mount
+ * namespace, so a destination under a mount (/tmp, /dev/shm, volumes) would
+ * land where no process in the box can see it. Rather than lose the file
+ * silently — which is what `docker cp` does, see
+ * https://github.com/moby/moby/issues/22020 — BoxLite refuses the copy and
+ * names the mount.
  *
  * The fix is the same as Docker's recommendation: pipe a tar archive through
  * a command running inside the container's mount namespace, which sees tmpfs.
@@ -74,17 +77,15 @@ async function main() {
     // Ensure box is created
     await box.getId();
 
-    // --- The problem: copy_in to /tmp silently fails ---
+    // --- The problem: /tmp is a tmpfs, so copy_in cannot reach it ---
     const hostFile = join(tmpdir(), `boxlite-test-${Date.now()}.txt`);
     writeFileSync(hostFile, "you won't see me\n");
 
     try {
       await box._box.copyIn(hostFile, '/tmp/ghost.txt');
-      const result = await box.exec('ls', '/tmp/ghost.txt');
-      console.log(
-        `copy_in to /tmp:     exit=${result.exitCode}  ` +
-        `${result.exitCode === 0 ? 'FOUND' : 'NOT FOUND (expected)'}`
-      );
+      console.log('copy_in to /tmp:     unexpectedly succeeded');
+    } catch (err) {
+      console.log(`copy_in to /tmp:     refused (expected)\n  ${err.message}`);
     } finally {
       unlinkSync(hostFile);
     }

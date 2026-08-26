@@ -12,6 +12,12 @@ import (
 )
 
 // CopyInto copies a host file or directory into the box.
+//
+// Copies land owned by the box's exec user, so a non-root workload can read
+// them. A destination at or under a mount inside the box (/tmp, /dev/shm,
+// volumes, the /etc/{hosts,hostname,resolv.conf} binds), or an archive entry
+// that would land on one, is refused: such a write would not be visible to
+// anything running in the box. Copy elsewhere, or pipe a tar through Exec.
 func (b *Box) CopyInto(ctx context.Context, hostSrc, guestDst string) error {
 	b.runtime.ensureDrainRunning()
 
@@ -43,6 +49,10 @@ func (b *Box) CopyInto(ctx context.Context, hostSrc, guestDst string) error {
 }
 
 // CopyOut copies a file or directory from the box to the host.
+//
+// A source at or under a mount inside the box, or a directory containing one,
+// is refused: the archive would carry the underlying files rather than the ones
+// processes in the box see.
 func (b *Box) CopyOut(ctx context.Context, guestSrc, hostDst string) error {
 	b.runtime.ensureDrainRunning()
 

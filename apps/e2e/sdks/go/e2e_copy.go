@@ -65,12 +65,12 @@ func main() {
 	}
 
 	// copy in
-	if err := box.CopyInto(ctx, uploadPath, "/tmp/e2e-copy-test.txt"); err != nil {
+	if err := box.CopyInto(ctx, uploadPath, "/workspace/e2e-copy-test.txt"); err != nil {
 		die("CopyInto: %v", err)
 	}
 
 	// verify via exec
-	result, err := box.Exec(ctx, "cat", "/tmp/e2e-copy-test.txt")
+	result, err := box.Exec(ctx, "cat", "/workspace/e2e-copy-test.txt")
 	if err != nil {
 		die("Exec cat: %v", err)
 	}
@@ -79,7 +79,7 @@ func main() {
 	}
 
 	// copy out
-	if err := box.CopyOut(ctx, "/tmp/e2e-copy-test.txt", downloadPath); err != nil {
+	if err := box.CopyOut(ctx, "/workspace/e2e-copy-test.txt", downloadPath); err != nil {
 		die("CopyOut: %v", err)
 	}
 	downloaded, err := os.ReadFile(downloadPath)

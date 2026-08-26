@@ -188,9 +188,17 @@ fn unpack_blocking(tar_path: &Path, dest: &Path, opts: &UnpackContext) -> Boxlit
                 BoxliteError::Storage(format!("failed to open tar {}: {}", tar_path.display(), e))
             })?;
             let mut archive = tar::Archive::new(tar_file);
-            archive
-                .unpack(dest)
-                .map_err(|e| BoxliteError::Storage(format!("failed to extract archive: {}", e)))
+            archive.unpack(dest).map_err(|e| {
+                // tar's Display carries only the operation, not the errno that
+                // caused it — walk the source chain so the real failure survives.
+                let mut detail = e.to_string();
+                let mut cause: Option<&dyn std::error::Error> = std::error::Error::source(&e);
+                while let Some(err) = cause {
+                    detail.push_str(&format!(": {}", err));
+                    cause = err.source();
+                }
+                BoxliteError::Storage(format!("failed to extract archive: {}", detail))
+            })
         }
     }
 }

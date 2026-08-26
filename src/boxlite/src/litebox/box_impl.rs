@@ -820,13 +820,19 @@ impl BoxImpl {
     // FILE COPY
     // ========================================================================
 
-    // NOTE(copy_in): copy_in cannot write to tmpfs-mounted destinations (e.g. /tmp, /dev/shm).
+    // NOTE(copy_in): destinations under a container mount (e.g. /tmp, /dev/shm,
+    // volumes) are refused, not transferred.
     //
-    // Extraction happens on the rootfs layer, but tmpfs mounts inside the container
-    // hide those files. This is the same limitation as `docker cp`.
-    // See: https://github.com/moby/moby/issues/22020
+    // Transfer works on the rootfs layer from outside the container's mount
+    // namespace, so a path under one of those mounts resolves to a different
+    // inode than the one the workload sees: writes would be invisible forever
+    // and reads would return the shadowed layer. `docker cp` has the same
+    // blind spot and answers from the shadow silently
+    // (https://github.com/moby/moby/issues/22020 — note that issue is the
+    // read direction); we refuse instead.
     //
-    // Workaround: use exec() to pipe tar into the container:
+    // Workaround: use exec() to pipe tar into the container, which runs inside
+    // the namespace and therefore sees the real mount:
     //   exec(["tar", "xf", "-", "-C", "/tmp"]) + stream tar bytes via stdin
     pub(crate) async fn copy_into(
         &self,

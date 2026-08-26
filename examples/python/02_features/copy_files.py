@@ -9,10 +9,13 @@ Demonstrates four approaches:
   4. File-to-file copy — copy a single file to a specific file path (with rename)
 
 Background on tmpfs:
-  copy_in() writes to the rootfs layer, so files destined for tmpfs mounts are
-  invisible to the running container.  This is the same limitation as `docker cp`
-  (see https://github.com/moby/moby/issues/22020).  The workaround pipes a tar
-  archive through a process running inside the container's mount namespace.
+  copy_in() writes to the rootfs layer, from outside the container's mount
+  namespace, so a destination under a mount (/tmp, /dev/shm, volumes) would
+  land where no process in the box can see it.  Rather than lose the file
+  silently — which is what `docker cp` does, see
+  https://github.com/moby/moby/issues/22020 — BoxLite refuses the copy and
+  names the mount.  The workaround pipes a tar archive through a process
+  running inside the container's mount namespace, which sees the real tmpfs.
 
 Requirements:
   pip install boxlite
@@ -93,7 +96,7 @@ async def example_tmpfs_workaround():
 
     async with SimpleBox("alpine:latest", name="tmpfs-cp-demo") as box:
 
-        # --- The problem: copy_in to /tmp silently fails ---
+        # --- The problem: /tmp is a tmpfs, so copy_in cannot reach it ---
         import tempfile, os
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("you won't see me\n")
@@ -101,9 +104,9 @@ async def example_tmpfs_workaround():
 
         try:
             await box.copy_in(host_file, "/tmp/ghost.txt")
-            result = await box.exec("ls", "/tmp/ghost.txt")
-            print(f"copy_in to /tmp:     exit={result.exit_code}  "
-                  f"{'FOUND' if result.exit_code == 0 else 'NOT FOUND (expected)'}")
+            print("copy_in to /tmp:     unexpectedly succeeded")
+        except Exception as e:
+            print(f"copy_in to /tmp:     refused (expected)\n  {e}")
         finally:
             os.unlink(host_file)
 

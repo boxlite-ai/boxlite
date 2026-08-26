@@ -14,6 +14,7 @@ use crate::service::exec::InitHealthCheck;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::Container as LibContainer;
 use libcontainer::signal::Signal;
+use oci_spec::runtime::Spec;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -302,6 +303,42 @@ impl Container {
     #[allow(dead_code)] // API completeness, may be used by future RPC handlers
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// The (uid, gid) every process in this container runs as.
+    ///
+    /// Resolved once at creation from the image's `USER` directive (or the
+    /// box-level override) and handed to init and every exec alike, so anything
+    /// that wants to match what the workload can read should ask here rather
+    /// than guessing.
+    pub fn user(&self) -> (u32, u32) {
+        self.user
+    }
+
+    /// Destinations of every mount the container was created with.
+    ///
+    /// Read from the OCI spec that was actually applied, so it covers the
+    /// standard tmpfs/pseudo mounts and user volumes alike and cannot drift
+    /// from what the runtime did. Callers use this to tell whether a path
+    /// inside the container is reachable through the rootfs directory: anything
+    /// at or below one of these destinations is covered by a mount in the
+    /// container's own namespace and is *not* the file a process in the box
+    /// would see at that path.
+    pub fn mount_destinations(&self) -> BoxliteResult<Vec<PathBuf>> {
+        let config_path = self.bundle_path.join("config.json");
+        let spec = Spec::load(&config_path).map_err(|e| {
+            BoxliteError::Internal(format!(
+                "Failed to load OCI spec {}: {}",
+                config_path.display(),
+                e
+            ))
+        })?;
+        Ok(spec
+            .mounts()
+            .iter()
+            .flatten()
+            .map(|mount| mount.destination().clone())
+            .collect())
     }
 
     /// PID of the container's init process, from libcontainer state.
