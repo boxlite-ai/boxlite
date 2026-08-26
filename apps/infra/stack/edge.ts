@@ -4,8 +4,22 @@
 /// <reference path="../.sst/platform/config.d.ts" />
 
 import type { ApiResources } from './api.js'
+import type { ClickHouseResources } from './clickhouse.js'
 import type { FoundationResources } from './foundation.js'
-import { PORTS, envOr } from './settings.js'
+import { PORTS, envOr, httpHealth } from './settings.js'
+
+type SelfHostedClickHouseResources = Extract<ClickHouseResources, { mode: 'self-hosted' }>
+
+interface ClickStackGatewayInputs {
+  clickHouse: SelfHostedClickHouseResources
+  domain: { name: string; dns: ReturnType<typeof sst.cloudflare.dns> }
+  oidcAudience: string
+  oidcClientId: sst.Secret
+  oidcClientSecret: sst.Secret
+  oidcIssuer: string
+  oidcRoleClaim: string
+  oidcAllowedRoleValues: string
+}
 
 export interface EdgeInputs {
   foundation: FoundationResources
@@ -20,6 +34,7 @@ export interface EdgeInputs {
   publicOidcIssuer: string | undefined
   otelCollectorOtlpHttpUrl: $util.Output<string>
   stripTrailingSlash: (url: $util.Output<string>) => $util.Output<string>
+  clickStackGateway?: ClickStackGatewayInputs
 }
 
 export function buildEdge(input: EdgeInputs): void {
@@ -36,7 +51,10 @@ export function buildEdge(input: EdgeInputs): void {
     publicOidcIssuer,
     otelCollectorOtlpHttpUrl,
     stripTrailingSlash,
+    clickStackGateway,
   } = input
+
+  const proxyImage = { context: '../..', dockerfile: 'apps/proxy/Dockerfile', cache: false }
 
 // Proxy: routes `<port>-<boxid>.<proxyDomain>` to the box port.
 // SST terminates TLS on the NLB listener and manages the proxy + wildcard
@@ -47,7 +65,7 @@ export function buildEdge(input: EdgeInputs): void {
 
 new sst.aws.Service('Proxy', {
   cluster,
-  image: { context: '../..', dockerfile: 'apps/proxy/Dockerfile', cache: false },
+  image: proxyImage,
   wait: true,
   loadBalancer: {
     domain: {
@@ -98,6 +116,62 @@ new sst.aws.Service('Proxy', {
   },
 })
 
+if (clickStackGateway) {
+  const issuer = new URL(clickStackGateway.oidcIssuer)
+  if (issuer.protocol !== 'https:' || issuer.username || issuer.password || issuer.search || issuer.hash) {
+    throw new Error('CLICKSTACK_OIDC_ISSUER_BASE_URL must be a clean HTTPS URL')
+  }
+
+  new sst.aws.Service('ClickStackGateway', {
+    cluster,
+    wait: true,
+    image: proxyImage,
+    loadBalancer: {
+      domain: clickStackGateway.domain,
+      rules: [{ listen: '443/https', forward: `${PORTS.PROXY}/http` }],
+      health: { [`${PORTS.PROXY}/http`]: httpHealth('/health') },
+    },
+    ssm: { CLICKSTACK_PASSWORD: clickStackGateway.clickHouse.readerSecretArn },
+    environment: {
+      PROXY_PORT: String(PORTS.PROXY),
+      CLICKSTACK_UPSTREAM_URL: clickStackGateway.clickHouse.url,
+      CLICKSTACK_USERNAME: 'otel_reader',
+      CLICKSTACK_CREDENTIAL_VERSION: clickStackGateway.clickHouse.readerSecretVersionId,
+      CLICKSTACK_OIDC_ISSUER: clickStackGateway.oidcIssuer,
+      CLICKSTACK_OIDC_AUDIENCE: clickStackGateway.oidcAudience,
+      CLICKSTACK_OIDC_ROLE_CLAIM: clickStackGateway.oidcRoleClaim,
+      CLICKSTACK_OIDC_ALLOWED_ROLE_VALUES: clickStackGateway.oidcAllowedRoleValues,
+    },
+    transform: {
+      loadBalancer: (lbArgs: any) => { lbArgs.loadBalancerType = 'application' },
+      listener: (listenerArgs: any) => {
+        const forwardActions = listenerArgs.defaultActions ?? []
+        listenerArgs.defaultActions = [
+          {
+            type: 'authenticate-oidc',
+            order: 1,
+            authenticateOidc: {
+              issuer: issuer.toString(),
+              authorizationEndpoint: new URL('/authorize', issuer).toString(),
+              tokenEndpoint: new URL('/oauth/token', issuer).toString(),
+              userInfoEndpoint: new URL('/userinfo', issuer).toString(),
+              clientId: clickStackGateway.oidcClientId.value,
+              clientSecret: clickStackGateway.oidcClientSecret.value,
+              scope: 'openid profile email boxlite-backoffice',
+              authenticationRequestExtraParams: { audience: clickStackGateway.oidcAudience },
+              sessionCookieName: 'BoxLiteClickStackSession',
+              sessionTimeout: 3600,
+              onUnauthenticatedRequest: 'authenticate',
+            },
+          },
+          ...forwardActions.map((action: any, index: number) => ({ ...action, order: index + 2 })),
+        ]
+      },
+    },
+  }, {
+    dependsOn: [clickStackGateway.clickHouse.ready],
+  })
+}
 // ─── 9. CDN ROUTES ───────────────────────────────────────────────────────
 // Router (declared in section 4) fronts the Api with HTTPS.
 router.route('/', api.url)

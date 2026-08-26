@@ -5,7 +5,7 @@
 
 /// <reference path="../.sst/platform/config.d.ts" />
 
-import { PRODUCTION_STAGE } from './settings.js'
+import { PRODUCTION_STAGE, envOr, requireEnv } from './settings.js'
 import { createFoundation } from './foundation.js'
 import { buildObservability } from './observability.js'
 import { buildApi } from './api.js'
@@ -35,6 +35,19 @@ export async function deployStack() {
     const runnerInventory = resolveRunnerInventory(process.env)
     const oidcIssuer = requireOidcIssuer()
     const publicOidcIssuer = optionalPublicOidcIssuer()
+    const clickStackGatewayFlag = envOr('CLICKSTACK_GATEWAY_ENABLED', 'false')
+    if (!['true', 'false'].includes(clickStackGatewayFlag)) {
+      throw new Error('CLICKSTACK_GATEWAY_ENABLED must be true or false')
+    }
+    const clickStackGatewayEnabled = clickStackGatewayFlag === 'true'
+    const clickStackOidcConfig = clickStackGatewayEnabled
+      ? {
+          issuer: requireEnv('CLICKSTACK_OIDC_ISSUER_BASE_URL', 'when the ClickStack gateway is enabled'),
+          audience: requireEnv('CLICKSTACK_OIDC_AUDIENCE', 'when the ClickStack gateway is enabled'),
+          roleClaim: requireEnv('CLICKSTACK_OIDC_ROLE_CLAIM', 'when the ClickStack gateway is enabled'),
+          allowedRoleValues: requireEnv('CLICKSTACK_OIDC_ALLOWED_ROLE_VALUES', 'when the ClickStack gateway is enabled'),
+        }
+      : undefined
 
     // Every role created by this stack must stay inside the boundary provisioned
     // with the GitHub deployment role. The raw-resource transform also covers IAM
@@ -85,6 +98,12 @@ export async function deployStack() {
     const oidcMgmtClientSecret = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_SECRET')
     const posthogApiKey = new sst.Secret('POSTHOG_API_KEY', '')
     const svixAuthToken = new sst.Secret('SVIX_AUTH_TOKEN', '')
+    const clickStackOidcSecrets = clickStackGatewayEnabled
+      ? {
+          clientId: new sst.Secret('CLICKSTACK_OIDC_CLIENT_ID'),
+          clientSecret: new sst.Secret('CLICKSTACK_OIDC_CLIENT_SECRET'),
+        }
+      : undefined
     // The credential the usage exporter presents to Commerce's ingest route:
     // half of a shared secret whose other half is a Secrets Manager container
     // owned by boxlite-commerce's own stack, so both ends are set out of band
@@ -147,6 +166,9 @@ export async function deployStack() {
     })
     // One list for all three pipelines: traces used to fan out to Jaeger as well,
     // which was a second copy of spans ClickHouse already held.
+    if (clickStackGatewayEnabled && clickHouseResources.mode !== 'self-hosted') {
+      throw new Error('CLICKSTACK_GATEWAY_ENABLED requires self-hosted ClickHouse')
+    }
     const collectorExporters = clickHouseResources.active ? '[boxlite_exporter,clickhouse]' : '[boxlite_exporter]'
 
     // ─── 3. IAM ──────────────────────────────────────────────────────────────
@@ -287,6 +309,19 @@ export async function deployStack() {
       publicOidcIssuer,
       otelCollectorOtlpHttpUrl,
       stripTrailingSlash,
+      clickStackGateway:
+        clickStackOidcConfig && clickStackOidcSecrets && clickHouseResources.mode === 'self-hosted'
+          ? {
+              clickHouse: clickHouseResources,
+              domain: serviceDomain('clickstack'),
+              oidcIssuer: clickStackOidcConfig.issuer,
+              oidcAudience: clickStackOidcConfig.audience,
+              oidcRoleClaim: clickStackOidcConfig.roleClaim,
+              oidcAllowedRoleValues: clickStackOidcConfig.allowedRoleValues,
+              oidcClientId: clickStackOidcSecrets.clientId,
+              oidcClientSecret: clickStackOidcSecrets.clientSecret,
+            }
+          : undefined,
     })
 
     // ─── 10. RUNNER (EC2 with nested KVM) ────────────────────────────────────

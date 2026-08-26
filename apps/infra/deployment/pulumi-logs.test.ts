@@ -32,6 +32,11 @@ function syntheticSecretList(manifest: readonly string[], values: Record<string,
 }
 
 const SYNTHETIC_PROVIDER_TOKEN = 'synthetic-provider-token-for-regression-only'
+const SYNTHETIC_AWS_CREDENTIALS = {
+  AWS_ACCESS_KEY_ID: 'SYNTHETIC_ACCESS_KEY_FOR_REGRESSION_ONLY',
+  AWS_SECRET_ACCESS_KEY: 'SYNTHETIC_SECRET_KEY_FOR_REGRESSION_ONLY',
+  AWS_SESSION_TOKEN: 'SYNTHETIC_SESSION_TOKEN_FOR_REGRESSION_ONLY',
+}
 const INFRA_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 function spawnWrapper(args: any, options: any) {
@@ -78,8 +83,13 @@ const ARTIFACT_SELECTOR_KEYS = [
   'RUNNER_ARTIFACT_REF',
 ]
 
-function inheritedEnvironment() {
-  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !ARTIFACT_SELECTOR_KEYS.includes(key)))
+function inheritedEnvironment(): NodeJS.ProcessEnv {
+  return {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !ARTIFACT_SELECTOR_KEYS.includes(key))),
+    // Keep wrapper fixtures independent of the host AWS profile. The login-session test below
+    // removes these values explicitly so it still crosses the real credential bridge.
+    ...SYNTHETIC_AWS_CREDENTIALS,
+  }
 }
 
 async function waitFor(predicate: any, description: any, timeoutMs = 5_000) {
@@ -1103,6 +1113,63 @@ test('package scripts do not bypass the cleanup wrapper or enable SST dev', asyn
   for (const [name, command] of Object.entries(packageJson.scripts) as Array<[string, string]>) {
     if (!command.includes('sst')) continue
     assert.match(command, /deployment\/sst\.ts/, `${name} bypasses the SST cleanup wrapper`)
+  }
+})
+
+test('materializes aws login credentials before spawning SST', async () => {
+  const fixture = await fixtureRoot()
+  const fakeAws = await writeFixture(
+    fixture,
+    'aws',
+    `#!/bin/sh
+if [ "$1 $2 $3" = "configure get login_session" ]; then
+  printf '%s\n' 'arn:aws:iam::123456789012:user/synthetic-console-session'
+  exit 0
+fi
+printf '%s\n' "$*" > "$SYNTHETIC_AWS_CALL_PATH"
+printf '%s\n' '{"Version":1,"AccessKeyId":"SYNTHETIC_ACCESS_KEY","SecretAccessKey":"SYNTHETIC_SECRET_KEY","SessionToken":"SYNTHETIC_SESSION_TOKEN","Expiration":"2099-01-01T00:00:00Z"}'
+`,
+  )
+  const fakeSst = await writeFixture(
+    fixture,
+    'sst',
+    `#!/bin/sh
+printf '%s|%s|%s|%s\n' "\${AWS_ACCESS_KEY_ID:-missing}" "\${AWS_SECRET_ACCESS_KEY:-missing}" "\${AWS_SESSION_TOKEN:-missing}" "\${AWS_PROFILE:-unset}" > "$SYNTHETIC_SST_ENV_PATH"
+`,
+  )
+  const awsCallPath = join(fixture, 'aws-call')
+  const sstEnvironmentPath = join(fixture, 'sst-environment')
+  await Promise.all([chmod(fakeAws, 0o755), chmod(fakeSst, 0o755)])
+
+  const environment = inheritedEnvironment()
+  for (const key of ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']) delete environment[key]
+  const wrapper = spawnWrapper(['secret', 'list', '--stage', 'ci'], {
+    env: {
+      ...environment,
+      AWS_PROFILE: 'console-session',
+      AWS_CLI_PATH: fakeAws,
+      SST_BIN_PATH: fakeSst,
+      CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
+      CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
+      SYNTHETIC_AWS_CALL_PATH: awsCallPath,
+      SYNTHETIC_SST_ENV_PATH: sstEnvironmentPath,
+    },
+    stdio: 'ignore',
+  })
+
+  try {
+    assert.deepEqual(await waitForExit(wrapper), { code: 0, signal: null })
+    assert.equal(
+      await readFile(awsCallPath, 'utf8'),
+      'configure export-credentials --format process --profile console-session\n',
+    )
+    assert.equal(
+      await readFile(sstEnvironmentPath, 'utf8'),
+      'SYNTHETIC_ACCESS_KEY|SYNTHETIC_SECRET_KEY|SYNTHETIC_SESSION_TOKEN|unset\n',
+    )
+  } finally {
+    if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL')
+    await rm(fixture, { recursive: true, force: true })
   }
 })
 
