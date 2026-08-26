@@ -214,7 +214,7 @@ async with boxlite.SimpleBox(
 ```python
 async with boxlite.SimpleBox(
     image="python:slim",
-    volumes=[("/host/data", "/mnt/data", "ro")]
+    volumes=[("/host/data", "/mnt/data", True)]
 ) as box:
     # ...
 ```
@@ -402,8 +402,8 @@ Mount host directories into boxes for data input/output.
 
 ```python
 volumes=[
-    ("/host/config", "/etc/app/config", "ro"),
-    ("/host/datasets", "/mnt/data", "ro"),
+    ("/host/config", "/etc/app/config", True),
+    ("/host/datasets", "/mnt/data", True),
 ]
 ```
 
@@ -411,8 +411,8 @@ volumes=[
 
 ```python
 volumes=[
-    ("/host/output", "/mnt/output", "rw"),
-    ("/host/logs", "/var/log/app", "rw"),
+    ("/host/output", "/mnt/output", False),
+    ("/host/logs", "/var/log/app", False),
 ]
 ```
 
@@ -428,7 +428,7 @@ import boxlite
 async with boxlite.SimpleBox(
     image="python:slim",
     volumes=[
-        (os.path.expanduser("~/.config/myapp"), "/etc/myapp", "ro")
+        (os.path.expanduser("~/.config/myapp"), "/etc/myapp", True)
     ]
 ) as box:
     result = await box.exec("cat", "/etc/myapp/config.yaml")
@@ -442,8 +442,8 @@ async with boxlite.SimpleBox(
 async with boxlite.SimpleBox(
     image="python:slim",
     volumes=[
-        ("/data/input", "/mnt/input", "ro"),
-        ("/data/output", "/mnt/output", "rw"),
+        ("/data/input", "/mnt/input", True),
+        ("/data/output", "/mnt/output", False),
     ]
 ) as box:
     await box.exec("python", "process.py", "--input", "/mnt/input", "--output", "/mnt/output")
@@ -456,7 +456,7 @@ async with boxlite.SimpleBox(
 async with boxlite.SimpleBox(
     image="python:slim",
     volumes=[
-        (os.getcwd(), "/workspace", "rw")
+        (os.getcwd(), "/workspace", False)
     ],
     working_dir="/workspace"
 ) as box:

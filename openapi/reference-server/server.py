@@ -432,8 +432,15 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
     if req.detach is not None:
         kwargs["detach"] = req.detach
     if req.volumes:
+        # The wire carries managed volumes only; a host path would name this
+        # server's filesystem rather than the caller's. Dict form, because a
+        # tuple is always a host bind in the Python SDK.
         kwargs["volumes"] = [
-            (v["host_path"], v["guest_path"], v.get("read_only", False))
+            {
+                "managed_volume": v["managed_volume"],
+                "guest_path": v["guest_path"],
+                "read_only": v.get("read_only", False),
+            }
             for v in req.volumes
         ]
     if req.security:

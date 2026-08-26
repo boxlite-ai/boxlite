@@ -311,11 +311,12 @@ env=[
 - Use to override image defaults (e.g., `PATH`)
 - Sensitive values (API keys, passwords) are visible in box metadata
 
-#### `volumes: List[Tuple[str, str, str]]`
+#### `volumes: List[Tuple | Dict]`
 
-Volume mounts as (host_path, guest_path, mode) tuples.
+Volume mounts. A tuple is always a host bind; a dict takes either
+`managed_volume` (a volume's id or name) or `host_path`, never both.
 
-**Format:** `(host_path, guest_path, "ro"|"rw")`
+**Format:** `(host_path, guest_path[, read_only])` - `read_only` is a bool, default `False`.
 
 **Default:** `[]` (no mounts)
 
@@ -323,13 +324,13 @@ Volume mounts as (host_path, guest_path, mode) tuples.
 ```python
 volumes=[
     # Read-only mount (data input)
-    ("/host/config", "/etc/app/config", "ro"),
+    ("/host/config", "/etc/app/config", True),
 
     # Read-write mount (data output)
-    ("/host/data", "/mnt/data", "rw"),
+    ("/host/data", "/mnt/data", False),
 
     # Home directory mount
-    (os.path.expanduser("~/Documents"), "/mnt/docs", "ro"),
+    (os.path.expanduser("~/Documents"), "/mnt/docs", True),
 ]
 ```
 

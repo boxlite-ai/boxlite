@@ -419,11 +419,13 @@ mod tests {
             .with_box_id("test-box")
             .with_layout(test_layout("/tmp/box"))
             .with_volume(VolumeSpec {
+                managed_volume: None,
                 host_path: "/data".to_string(),
                 guest_path: "/mnt/data".to_string(),
                 read_only: true,
             })
             .with_volume(VolumeSpec {
+                managed_volume: None,
                 host_path: "/output".to_string(),
                 guest_path: "/mnt/output".to_string(),
                 read_only: false,

@@ -194,14 +194,44 @@ func TestExecutionSignalAcceptsBoundarySignals(t *testing.T) {
 // Options
 // ============================================================================
 
+// A managed volume and a host bind are different origins, not two spellings of
+// one. WithManagedVolume must not land in hostPath, or the mount would be sent
+// to a REST runtime as a server-side path and refused.
+func TestWithManagedVolumeKeepsOriginsApart(t *testing.T) {
+	// By id and by name alike: the server resolves either, so the SDK stores
+	// whatever the caller passed without trying to tell them apart.
+	for _, reference := range []string{"vol_01K2EXAMPLE", "my-data"} {
+		cfg := &boxConfig{}
+		WithManagedVolume(reference, "/data")(cfg)
+		WithHostPath("/tmp/data", "/host-data")(cfg)
+
+		if len(cfg.volumes) != 2 {
+			t.Fatalf("volumes: got %d", len(cfg.volumes))
+		}
+		if cfg.volumes[0].managedVolume != reference || cfg.volumes[0].hostPath != "" {
+			t.Errorf("managed volume: got managedVolume=%q hostPath=%q",
+				cfg.volumes[0].managedVolume, cfg.volumes[0].hostPath)
+		}
+		// There is no read-only counterpart: the server rejects read_only on a
+		// managed mount, so a managed volume is always read-write here.
+		if cfg.volumes[0].readOnly {
+			t.Error("WithManagedVolume should be read-write")
+		}
+		if cfg.volumes[1].hostPath != "/tmp/data" || cfg.volumes[1].managedVolume != "" {
+			t.Errorf("host bind: got managedVolume=%q hostPath=%q",
+				cfg.volumes[1].managedVolume, cfg.volumes[1].hostPath)
+		}
+	}
+}
+
 func TestBoxOptions(t *testing.T) {
 	cfg := &boxConfig{}
 	WithName("test-box")(cfg)
 	WithCPUs(4)(cfg)
 	WithMemory(1024)(cfg)
 	WithEnv("FOO", "bar")(cfg)
-	WithVolume("/host", "/guest")(cfg)
-	WithVolumeReadOnly("/ro-host", "/ro-guest")(cfg)
+	WithHostPath("/host", "/guest")(cfg)
+	WithHostPathReadOnly("/ro-host", "/ro-guest")(cfg)
 	WithPort(PortSpec{Host: 8080, Guest: 3000})(cfg)
 	WithWorkDir("/app")(cfg)
 	WithEntrypoint("/bin/sh")(cfg)

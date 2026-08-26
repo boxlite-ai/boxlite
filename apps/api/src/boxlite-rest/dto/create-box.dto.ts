@@ -20,7 +20,6 @@ import {
   Validate,
   ValidateIf,
   ValidateNested,
-  ValidationArguments,
   ValidatorConstraint,
   ValidatorConstraintInterface,
 } from 'class-validator'
@@ -36,21 +35,6 @@ class IsNetworkAllowEntryConstraint implements ValidatorConstraintInterface {
 
   defaultMessage(): string {
     return 'each allow_net entry must be an IPv4 address, IPv4 CIDR, hostname, or wildcard hostname'
-  }
-}
-
-// Attached to `guest_path` (always validated) rather than `source`, since
-// `@IsOptional()` on `source` would skip a validator stacked on that same
-// property whenever `source` is absent - exactly the case this needs to see.
-@ValidatorConstraint({ name: 'hasVolumeSource', async: false })
-class HasVolumeSourceConstraint implements ValidatorConstraintInterface {
-  validate(_value: unknown, args: ValidationArguments): boolean {
-    const volume = args.object as VolumeSpecDto
-    return typeof volume.source === 'string' || typeof volume.host_path === 'string'
-  }
-
-  defaultMessage(): string {
-    return 'volume requires source (or the deprecated host_path)'
   }
 }
 
@@ -149,29 +133,46 @@ function normalizeNetworkShape(value: unknown): NetworkSpecDto | unknown {
   return plainToInstance(NetworkSpecDto, { ...rest, outbound })
 }
 
+/**
+ * A host path reaching this API is always a mistake, not a mount: the path
+ * would name the *server's* filesystem, not the caller's, and this API mounts
+ * managed volumes only. Recognised by the same first-character rule the CLI
+ * classifies `-v` sources with, so the two agree on what a path looks like.
+ */
+const HOST_PATH_SELECTOR = /^(\.|\/|~|\\\\|[a-zA-Z]:[\\/])/
+
+@ValidatorConstraint({ name: 'isNotHostPath', async: false })
+class IsNotHostPathConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    return typeof value !== 'string' || !HOST_PATH_SELECTOR.test(value)
+  }
+
+  defaultMessage(): string {
+    return 'host bind mounts are not supported by this API; managed_volume takes a ' + 'volume id or name, not a path'
+  }
+}
+
 export class VolumeSpecDto {
-  // IsNotEmpty (not just IsOptional + IsString) so an explicit `source: ''`
-  // is a validation error on its own rather than being treated as "absent"
-  // and silently falling through to host_path in the mapper.
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  source?: string
-
   /**
-   * @deprecated Use `source` with the `volume://<volume_id>` scheme instead.
-   * Accepted for backward compatibility with existing /v1 clients built
-   * against the pre-managed-volumes `VolumeSpec` schema; will be removed.
+   * The volume's server-assigned id or its name - the server resolves either.
+   *
+   * IsNotEmpty (not just IsString) so an explicit `managed_volume: ''` is a
+   * validation error on its own rather than reaching the mapper as a lookup
+   * that can never match.
    */
-  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  host_path?: string
+  @Validate(IsNotHostPathConstraint)
+  managed_volume: string
 
   @IsString()
-  @Validate(HasVolumeSourceConstraint)
   guest_path: string
 
+  /**
+   * Read-only managed mounts are not implemented yet. Rejected rather than
+   * silently downgraded to read-write, which would hand the caller a writable
+   * mount they believe is protected.
+   */
   @ValidateIf((_, value) => value !== undefined)
   @IsIn([false])
   read_only?: false

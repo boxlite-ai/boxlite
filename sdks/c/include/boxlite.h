@@ -421,6 +421,8 @@ typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
 // meaningful only when `has_size` is non-zero.
 typedef struct CVolumeInfo {
   char *id;
+  // Volume name, mountable in place of the id. Defaults to the id.
+  char *name;
   char *created_at;
   uint64_t size_bytes;
   int has_size;
@@ -799,10 +801,28 @@ void boxlite_options_set_workdir(CBoxliteOptions *opts, const char *workdir);
 
 void boxlite_options_add_env(CBoxliteOptions *opts, const char *key, const char *val);
 
-void boxlite_options_add_volume(CBoxliteOptions *opts,
-                                const char *host_path,
-                                const char *guest_path,
-                                int read_only);
+// Bind a host directory or file into the box.
+//
+// Host bind mounts are local-runtime only; a REST runtime rejects them at
+// create. Use [`boxlite_options_add_managed_volume`] against a REST runtime.
+void boxlite_options_add_host_path(CBoxliteOptions *opts,
+                                   const char *host_path,
+                                   const char *guest_path,
+                                   int read_only);
+
+// Mount a managed volume, addressed by its server-assigned id **or** by its
+// name — the server resolves either.
+//
+// `managed_volume` is the volume's id or name (`"my-data"`, `"vol_01K2…"`).
+// Managed volumes need a REST runtime; the local runtime has no volume backend
+// and rejects one at create.
+//
+// A NULL `opts`, `managed_volume`, or `guest_path` is ignored, matching
+// [`boxlite_options_add_host_path`].
+void boxlite_options_add_managed_volume(CBoxliteOptions *opts,
+                                        const char *managed_volume,
+                                        const char *guest_path,
+                                        int read_only);
 
 // Forward `host_port` on the host to `guest_port` inside the box.
 //
@@ -1021,6 +1041,7 @@ void boxlite_free_string(char *s);
 // remain valid until this function returns. A successful callback must release
 // its metadata with `boxlite_free_volume_info`; the error pointer is borrowed.
 enum BoxliteErrorCode boxlite_volume_create(CBoxliteVolumeHandle *handle,
+                                            const char *name,
                                             CBoxVolumeCreateCb cb,
                                             void *user_data,
                                             CBoxliteError *out_error);

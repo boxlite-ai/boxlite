@@ -297,7 +297,7 @@ See [Configuring Networking](./guides/README.md#configuring-networking) for deta
 **Alternatives:**
 1. **Share data via volumes:**
    ```python
-   volumes=[("/host/shared", "/mnt/shared", "rw")]
+   volumes=[("/host/shared", "/mnt/shared", False)]
    ```
 
 2. **Use host network:**

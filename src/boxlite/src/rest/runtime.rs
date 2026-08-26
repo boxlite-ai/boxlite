@@ -52,11 +52,11 @@ impl AuthBackend for RestRuntime {
 
 #[async_trait::async_trait]
 impl VolumeBackend for RestRuntime {
-    async fn create_volume(&self) -> BoxliteResult<VolumeInfo> {
-        let resp: VolumeResponse = self
-            .client
-            .post("/volumes", &CreateVolumeRequest {})
-            .await?;
+    async fn create_volume(&self, name: Option<&str>) -> BoxliteResult<VolumeInfo> {
+        let request = CreateVolumeRequest {
+            name: name.map(str::to_string),
+        };
+        let resp: VolumeResponse = self.client.post("/volumes", &request).await?;
         Ok(resp.to_volume_info())
     }
 
@@ -108,11 +108,57 @@ fn reject_remote_experimental_options(options: &BoxOptions) -> BoxliteResult<()>
     Ok(())
 }
 
+/// Check the mounts a REST runtime was asked for.
+///
+/// Two things happen here, and neither happens anywhere else on this path:
+/// `BoxOptions::sanitize` is local-only, so `VolumeSpec::validate` — the
+/// "exactly one origin" invariant that C and Go callers can violate by setting
+/// the fields directly — has no other chance to run before the request goes out.
+///
+/// A host bind then has no meaning against a REST runtime: the path names the
+/// *server's* filesystem, not the caller's. The rejected path is deliberately
+/// not quoted back — the caller already knows what they asked for, and echoing
+/// a server-side path into a client error is a leak, not a diagnostic.
+fn validate_remote_volumes(options: &BoxOptions) -> BoxliteResult<()> {
+    for volume in &options.volumes {
+        volume.validate()?;
+    }
+
+    if options
+        .volumes
+        .iter()
+        .any(|volume| volume.managed_volume.is_none())
+    {
+        return Err(BoxliteError::Unsupported(
+            "host bind mounts are only supported by the local runtime; mount a managed volume \
+             by id or name instead"
+                .to_string(),
+        ));
+    }
+
+    // The server rejects `read_only: true` on a managed mount. Refusing here
+    // says so plainly instead of surfacing a field-level 400, and — more to the
+    // point — never lets a caller believe a writable mount is protected.
+    if let Some(volume) = options
+        .volumes
+        .iter()
+        .find(|volume| volume.read_only)
+        .and_then(|volume| volume.managed_volume.as_deref())
+    {
+        return Err(BoxliteError::Unsupported(format!(
+            "read-only managed volumes are not supported yet; mount {volume:?} read-write"
+        )));
+    }
+
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
         validate_remote_box_options(&options)?;
         reject_remote_experimental_options(&options)?;
+        validate_remote_volumes(&options)?;
 
         // Validate only the caller's requested policy. An unset auto_stop means
         // "no auto-stop", so it must not borrow the server's default here —
@@ -148,6 +194,7 @@ impl RuntimeBackend for RestRuntime {
     ) -> BoxliteResult<(LiteBox, bool)> {
         validate_remote_box_options(&options)?;
         reject_remote_experimental_options(&options)?;
+        validate_remote_volumes(&options)?;
 
         // Try to get existing box by name first
         if let Some(ref box_name) = name
@@ -532,6 +579,88 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
         assert!(error.to_string().contains("local runtime"));
+    }
+
+    /// A host path has no meaning against a REST runtime — the server's
+    /// filesystem is not the caller's. The path must not leave the client at
+    /// all: it is the caller's own business, and a server-side "not found"
+    /// naming it would leak it into logs on the way back.
+    #[tokio::test]
+    async fn create_rejects_host_bind_mount_in_rest_mode() {
+        use crate::runtime::options::VolumeSpec;
+
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            volumes: vec![VolumeSpec::host_path("/tmp/secrets", "/mnt/ro")],
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("REST host bind mounts must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("host bind mounts"));
+        assert!(
+            !error.to_string().contains("/tmp/secrets"),
+            "the rejected host path must not be echoed back: {error}"
+        );
+    }
+
+    /// The server rejects `read_only: true` on a managed mount. Refusing it
+    /// here keeps a caller from believing a writable mount is protected — the
+    /// failure mode that matters is the silent downgrade, not the 400.
+    #[tokio::test]
+    async fn create_rejects_read_only_managed_volume() {
+        use crate::runtime::options::VolumeSpec;
+
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            volumes: vec![VolumeSpec {
+                read_only: true,
+                ..VolumeSpec::managed_volume("my-data", "/data")
+            }],
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("read-only managed volumes must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("read-only"), "{error}");
+    }
+
+    /// The guard is about host paths, not about mounts: a managed volume gets
+    /// past it and on to the request, addressed by id or by name alike.
+    #[tokio::test]
+    async fn create_accepts_managed_volume_by_id_or_name() {
+        use crate::runtime::options::VolumeSpec;
+
+        for reference in ["vol_01K2EXAMPLE", "my-data"] {
+            let options = BoxliteRestOptions::new("http://localhost:1");
+            let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+            let box_options = BoxOptions {
+                volumes: vec![VolumeSpec::managed_volume(reference, "/data")],
+                ..Default::default()
+            };
+
+            // localhost:1 refuses the connection, so reaching *any* transport
+            // error is the proof that the mount cleared client-side validation.
+            let error = RuntimeBackend::create(&runtime, box_options, None)
+                .await
+                .err()
+                .expect("no server is listening on localhost:1");
+
+            assert!(
+                !matches!(error, BoxliteError::Unsupported(_)),
+                "managed volume {reference:?} must not be refused client-side: {error:?}"
+            );
+        }
     }
 
     #[tokio::test]

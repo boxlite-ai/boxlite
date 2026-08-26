@@ -190,15 +190,19 @@ describe("SimpleBoxOptions", () => {
     expect(opts.network?.mode).toBe("disabled");
   });
 
-  test("accepts managed volume source mounts", async () => {
+  test("accepts managed volume mounts by id and by name", async () => {
     const { SimpleBox } = await import("../lib/simplebox.js");
     const box = new SimpleBox({
-      volumes: [{ source: "volume://vol_123", guestPath: "/data" }],
+      volumes: [
+        { managedVolume: "vol_01K2EXAMPLE", guestPath: "/data" },
+        { managedVolume: "my-data", guestPath: "/cache" },
+      ],
     });
     const nativeOptions = (box as any)._boxOpts;
 
     expect(nativeOptions.volumes).toEqual([
-      { source: "volume://vol_123", guestPath: "/data" },
+      { managedVolume: "vol_01K2EXAMPLE", guestPath: "/data" },
+      { managedVolume: "my-data", guestPath: "/cache" },
     ]);
   });
 

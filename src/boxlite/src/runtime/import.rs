@@ -116,8 +116,10 @@ fn options_from_manifest(
     if matches!(options.rootfs, RootfsSpec::RootfsPath(_)) {
         return Err(rejected_upload("host rootfs paths"));
     }
+    // Every mount, not just a host bind: a managed volume reference in an
+    // uploaded archive would also select storage the uploader does not own.
     if !options.volumes.is_empty() {
-        return Err(rejected_upload("host volume mounts"));
+        return Err(rejected_upload("volume mounts"));
     }
     options.advanced.security = SecurityOptions::default();
 
@@ -328,18 +330,37 @@ mod tests {
     #[test]
     fn untrusted_import_rejects_host_volumes() {
         let mut options = BoxOptions::default();
-        options.volumes.push(crate::runtime::options::VolumeSpec {
-            host_path: "/".to_string(),
-            guest_path: "/host".to_string(),
-            read_only: false,
-        });
+        options
+            .volumes
+            .push(crate::runtime::options::VolumeSpec::host_path("/", "/host"));
 
         let error =
             options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
                 .expect_err("untrusted archives must not select server host paths");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
-        assert!(error.to_string().contains("host volume mounts"));
+        assert!(error.to_string().contains("volume mounts"));
+    }
+
+    /// The second mount kind is refused by the same gate. A managed volume
+    /// names storage the uploader does not necessarily own, so an archive
+    /// arriving over REST must not be able to select one either.
+    #[test]
+    fn untrusted_import_rejects_managed_volumes() {
+        let mut options = BoxOptions::default();
+        options
+            .volumes
+            .push(crate::runtime::options::VolumeSpec::managed_volume(
+                "someone-elses-data",
+                "/data",
+            ));
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .expect_err("untrusted archives must not select managed volumes");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("volume mounts"));
     }
 
     #[test]

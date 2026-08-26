@@ -146,8 +146,16 @@ pub(super) struct ListBoxesResponse {
 #[derive(Serialize)]
 pub(super) struct VolumeResponse {
     pub id: String,
+    pub name: String,
     pub created_at: String,
     pub size_bytes: Option<u64>,
+}
+
+/// Body for `POST /v1/volumes`. An absent body means an unnamed volume.
+#[derive(Deserialize, Default)]
+pub(super) struct CreateVolumeRequest {
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Serialize)]

@@ -51,6 +51,18 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
     let mut resolved = Vec::with_capacity(volumes.len());
 
     for (i, vol) in volumes.iter().enumerate() {
+        // Managed volumes live on the server that owns the volume backend.
+        // Without this the reference falls through to the host-path checks
+        // below and surfaces as "host path does not exist: my-data", which
+        // points the caller at their own filesystem instead of at the
+        // runtime they used.
+        if let Some(reference) = &vol.managed_volume {
+            return Err(BoxliteError::Unsupported(format!(
+                "managed volume {reference:?} requires a REST runtime; the local runtime has no \
+                 volume backend to resolve it against"
+            )));
+        }
+
         let host_path = PathBuf::from(&vol.host_path);
 
         if !host_path.exists() {
@@ -362,6 +374,7 @@ mod tests {
     fn resolve_volume_gets_owner_uid() {
         let tmp = tempfile::tempdir().unwrap();
         let volumes = vec![VolumeSpec {
+            managed_volume: None,
             host_path: tmp.path().to_str().unwrap().to_string(),
             guest_path: "/data".to_string(),
             read_only: false,
@@ -383,14 +396,34 @@ mod tests {
 
     #[test]
     fn resolve_volume_nonexistent_path_errors() {
-        let volumes = vec![VolumeSpec {
-            host_path: "/nonexistent/path/12345".to_string(),
-            guest_path: "/data".to_string(),
-            read_only: false,
-        }];
+        let volumes = vec![VolumeSpec::host_path("/nonexistent/path/12345", "/data")];
 
         let result = resolve_user_volumes(&volumes);
         assert!(result.is_err());
+    }
+
+    /// The local runtime has no volume backend, so a managed volume has to say
+    /// so. Without the guard the reference falls through to the host-path
+    /// checks and reports "host path does not exist: my-data", which sends the
+    /// caller looking for a directory they never asked for.
+    #[test]
+    fn resolve_managed_volume_reports_the_missing_backend() {
+        let volumes = vec![VolumeSpec::managed_volume("my-data", "/data")];
+
+        let error = resolve_user_volumes(&volumes)
+            .expect_err("the local runtime cannot resolve a managed volume");
+
+        assert!(
+            matches!(error, BoxliteError::Unsupported(_)),
+            "{error:?} should be Unsupported, not a config error about a path"
+        );
+        let message = error.to_string();
+        assert!(message.contains("my-data"), "{message}");
+        assert!(message.contains("REST runtime"), "{message}");
+        assert!(
+            !message.contains("host path"),
+            "the error must not blame a host path: {message}"
+        );
     }
 
     #[test]
@@ -400,6 +433,7 @@ mod tests {
         std::fs::write(&file_path, "key=value\n").unwrap();
 
         let volumes = vec![VolumeSpec {
+            managed_volume: None,
             host_path: file_path.to_str().unwrap().to_string(),
             guest_path: "/etc/app.conf".to_string(),
             read_only: true,

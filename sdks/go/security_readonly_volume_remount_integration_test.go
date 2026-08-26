@@ -2,7 +2,7 @@
 
 // Regression test for GHSA-g6ww-w5j2-r7x3 (read-only volume remount bypass).
 //
-// A host directory mounted via WithVolumeReadOnly must stay read-only even
+// A host directory mounted via WithHostPathReadOnly must stay read-only even
 // against a malicious guest that runs `mount -o remount,rw`. Before v0.9.0
 // the guest could remount the virtiofs share read-write (it had
 // CAP_SYS_ADMIN) and write through to the host.
@@ -42,7 +42,7 @@ func TestSecurityReadonlyVolumeRemountBypass(t *testing.T) {
 	rt := newTestRuntime(t)
 	box := createStartedBoxOrSkip(t, rt, "alpine:latest",
 		WithAutoRemove(false),
-		WithVolumeReadOnly(hostDir, roGuestMount),
+		WithHostPathReadOnly(hostDir, roGuestMount),
 	)
 
 	ctx := context.Background()

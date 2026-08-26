@@ -6,12 +6,12 @@ allowed"). A REST-mode `BoxOptions` carrying `volumes=[(host_path,
 guest_path, ...)]` must not produce a box with that host path
 mounted.
 
-The rejection is explicit, not silent. Managed volumes (#1192) made
-`volumes[].source` a `volume://<id>` reference and the mapper now
-400s anything else, rather than dropping it on the floor. Failing
-loud is the contract worth pinning: a silently ignored bind mount
-leaves the caller believing the guest can see a host directory it
-cannot.
+The rejection is explicit, not silent, and it now happens in the
+client: the wire's only mount field is `volumes[].managed_volume`,
+so a host bind has nothing to serialize into and never leaves the
+SDK. Failing loud is the contract worth pinning: a silently ignored
+bind mount leaves the caller believing the guest can see a host
+directory it cannot.
 
 Day-1 RO semantics for *managed* volumes are covered separately;
 the GHSA-g6ww-w5j2-r7x3 remount-RW attack and per-virtiofs RO
@@ -31,9 +31,8 @@ import pytest
 @pytest.mark.asyncio
 async def test_host_bind_mount_via_rest_is_rejected(rt, image):
     """`BoxOptions(volumes=[(host_dir, "/mnt/ro")])` over REST must be
-    rejected at the request boundary. The Python SDK sends a bare host
-    path as `volumes[].host_path`; the mapper requires a `volume://`
-    managed-volume reference, so the box is never created and no host
+    rejected. A tuple is a host bind, and the REST runtime refuses one
+    before the request is built, so the box is never created and no host
     path can reach the guest."""
     with tempfile.TemporaryDirectory(prefix="boxlite_e2e_hostmount_") as host_dir:
         with pytest.raises(Exception, match="volume") as exc_info:
@@ -48,5 +47,5 @@ async def test_host_bind_mount_via_rest_is_rejected(rt, image):
             )
 
     # The host path itself must not be echoed back; the rejection is
-    # about the missing volume:// reference, not about that directory.
+    # about the mount kind, not about that directory.
     assert host_dir not in str(exc_info.value)
